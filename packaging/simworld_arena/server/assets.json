@@ -1,0 +1,80 @@
+{
+  "buildings": {
+    "description": "SimWorld residential/commercial buildings (BP_Building_01 to _127). Use spawn_blueprint_actor with _C suffix.",
+    "path_prefix": "/Game/CityDatabase/blueprints/BP_Building_",
+    "ids": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,121,122,123,124,125,126,127],
+    "example": "/Game/CityDatabase/blueprints/BP_Building_01.BP_Building_01_C",
+    "notes": "Residential: 01-30, Commercial/office: 31-70, Tall/skyscraper: 71-127"
+  },
+  "trees": {
+    "description": "6 tree varieties",
+    "items": [
+      "/Game/CityDatabase/blueprints/BP_Tree1.BP_Tree1_C",
+      "/Game/CityDatabase/blueprints/BP_Tree2.BP_Tree2_C",
+      "/Game/CityDatabase/blueprints/BP_Tree3.BP_Tree3_C",
+      "/Game/CityDatabase/blueprints/BP_Tree4.BP_Tree4_C",
+      "/Game/CityDatabase/blueprints/BP_Tree5.BP_Tree5_C",
+      "/Game/CityDatabase/blueprints/BP_Tree6.BP_Tree6_C"
+    ]
+  },
+  "vehicles": {
+    "description": "Scooters and carts",
+    "items": [
+      "/Game/CityDatabase/blueprints/BP_Scooter_01.BP_Scooter_01_C",
+      "/Game/CityDatabase/blueprints/BP_Scooter_02.BP_Scooter_02_C",
+      "/Game/CityDatabase/blueprints/BP_Scooter_03.BP_Scooter_03_C",
+      "/Game/CityDatabase/blueprints/BP_Scooter_04.BP_Scooter_04_C",
+      "/Game/CityDatabase/blueprints/BP_Cart.BP_Cart_C",
+      "/Game/CityDatabase/blueprints/BP_Cart2.BP_Cart2_C"
+    ]
+  },
+  "street_furniture": {
+    "description": "Urban props — benches, hydrants, trash, etc.",
+    "items": [
+      "/Game/CityDatabase/blueprints/BP_Table.BP_Table_C",
+      "/Game/CityDatabase/blueprints/BP_Table2.BP_Table2_C",
+      "/Game/CityDatabase/blueprints/BP_Table3.BP_Table3_C",
+      "/Game/CityDatabase/blueprints/BP_Hydrant.BP_Hydrant_C",
+      "/Game/CityDatabase/blueprints/BP_Trash_bin_a.BP_Trash_bin_a_C",
+      "/Game/CityDatabase/blueprints/BP_Trash_bin_b.BP_Trash_bin_b_C",
+      "/Game/CityDatabase/blueprints/BP_Trash_can.BP_Trash_can_C",
+      "/Game/CityDatabase/blueprints/BP_RoadBlocker.BP_RoadBlocker_C",
+      "/Game/CityDatabase/blueprints/BP_RoadCone.BP_RoadCone_C",
+      "/Game/CityDatabase/blueprints/BP_Box.BP_Box_C",
+      "/Game/CityDatabase/blueprints/BP_Box2.BP_Box2_C",
+      "/Game/CityDatabase/blueprints/BP_Box3.BP_Box3_C",
+      "/Game/CityDatabase/blueprints/BP_Can.BP_Can_C",
+      "/Game/CityDatabase/blueprints/BP_Can2.BP_Can2_C",
+      "/Game/CityDatabase/blueprints/BP_Couch.BP_Couch_C",
+      "/Game/CityDatabase/blueprints/BP_Rabbish.BP_Rabbish_C",
+      "/Game/CityDatabase/blueprints/BP_Soda1.BP_Soda1_C",
+      "/Game/CityDatabase/blueprints/BP_Soda2.BP_Soda2_C"
+    ]
+  },
+  "roads": {
+    "description": "Road segments",
+    "items": [
+      "/Game/CityDatabase/blueprints/BP_Road1.BP_Road1_C"
+    ],
+    "static_meshes": [
+      "/Game/CityDatabase/meshes/SM_Road.SM_Road",
+      "/Game/CityDatabase/meshes/SM_Road_Side.SM_Road_Side",
+      "/Game/CityDatabase/meshes/SM_Road_Side_2.SM_Road_Side_2"
+    ]
+  },
+  "static_meshes": {
+    "description": "Additional static meshes (use spawn_actor, not spawn_blueprint_actor)",
+    "items": [
+      "/Game/CityDatabase/meshes/SM_TrafficLight1.SM_TrafficLight1",
+      "/Game/CityDatabase/meshes/SM_hydrant_main.SM_hydrant_main",
+      "/Game/CityDatabase/meshes/SM_road_cone.SM_road_cone",
+      "/Game/CityDatabase/meshes/SM_road_blocker_b.SM_road_blocker_b",
+      "/Game/CityDatabase/meshes/SM_chair_b.SM_chair_b",
+      "/Game/CityDatabase/meshes/SM_rubbish_a.SM_rubbish_a",
+      "/Game/CityDatabase/meshes/SM_Chestnut_05_G.SM_Chestnut_05_G",
+      "/Game/CityDatabase/meshes/SM_Chestnut_11_G.SM_Chestnut_11_G",
+      "/Engine/BasicShapes/Cube.Cube",
+      "/Engine/BasicShapes/Plane.Plane"
+    ]
+  }
+}
