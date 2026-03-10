@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/placeholder-demo-video
 
 Run all cells in order. Setup takes ~5 minutes. Requires a free Colab GPU runtime and an Anthropic API key.
 
-### Option B: Local Setup (Linux + NVIDIA GPU)
+### Option B: Local / Remote GPU Server (Linux + NVIDIA GPU)
 
 #### Prerequisites
 
@@ -21,7 +21,7 @@ Run all cells in order. Setup takes ~5 minutes. Requires a free Colab GPU runtim
 - **NVIDIA drivers**: 525+ with Vulkan support
 - **Node.js**: 18+
 - **Python**: 3.9+
-- **Disk**: ~5 GB free (for the minimal SimWorld binary)
+- **Disk**: ~10 GB free (2.7 GB download + 7.6 GB extracted)
 
 #### 1. Download the Minimal SimWorld Binary
 
@@ -60,10 +60,12 @@ Get your key at [console.anthropic.com](https://console.anthropic.com).
 
 ```bash
 cd SimWorld-Studio-Minimal
-./SimWorld-Studio.sh --render-offscreen
+./SimWorld-Studio.sh --gpu 0 --render-offscreen
 ```
 
-Wait ~30-60 seconds for the MCP port (55559) to become available. You'll see log output in the terminal.
+> **Multi-GPU systems**: You **must** specify `--gpu INDEX` to select which GPU to use. Without it, Vulkan may crash trying to enumerate all GPUs.
+
+Wait ~30-60 seconds for the MCP port (55559) to become available.
 
 #### 5. Launch Studio (in a second terminal)
 
@@ -73,7 +75,16 @@ simworld-studio start --port 3002
 
 #### 6. Open in Browser
 
-Go to **http://localhost:3002** and start chatting!
+**If running locally:** Go to **http://localhost:3002**
+
+**If running on a remote GPU server:** Use SSH port forwarding:
+```bash
+# From your laptop (replace SERVER_IP with your GPU server's address)
+ssh -L 3002:localhost:3002 user@SERVER_IP
+```
+Then open **http://localhost:3002** in your laptop browser.
+
+Alternatively, access directly via **http://SERVER_IP:3002** if the port is open.
 
 Try: *"Set up the environment with a sunny sky, then build a small neighborhood with 4 houses and trees"*
 
@@ -94,16 +105,16 @@ Try: *"Set up the environment with a sunny sky, then build a small neighborhood 
 
 ```
 Browser (React UI)
-    │
-    ├── Chat with Claude ──→ Claude Code CLI ──→ MCP Tools
-    │                                              │
-    └── Pixel Streaming ◄── Unreal Engine 5.3 ◄───┘
+    |
+    |-- Chat with Claude --> Claude Code CLI --> MCP Tools
+    |                                              |
+    +-- Pixel Streaming <-- Unreal Engine 5.3 <----+
                               (headless GPU)
 ```
 
 - **Frontend**: React + TypeScript (pre-built, served by backend)
 - **Backend**: Node.js + Express (port 3002)
-- **MCP Server**: Bridges Claude ↔ UE via TCP (port 55559)
+- **MCP Server**: Bridges Claude <-> UE via TCP (port 55559)
 - **UE**: Headless Unreal Editor with UnrealMCP plugin
 
 ---
@@ -112,11 +123,13 @@ Browser (React UI)
 
 | Issue | Fix |
 |---|---|
+| `Vulkan memory crash` | Use `--gpu 0` flag; install `vulkan-tools mesa-vulkan-drivers` |
 | `MCP port not opening` | Wait 60s more; check GPU drivers with `nvidia-smi` |
 | `game module not found` | Ensure you extracted the full archive; check `gym_citynav/Binaries/Linux/` |
+| `CUDA context error` | Set `--gpu INDEX` to isolate a single GPU |
 | `Claude errors` | Run `claude login` or verify `ANTHROPIC_API_KEY` is set |
+| `Can't access UI remotely` | Use SSH tunnel: `ssh -L 3002:localhost:3002 user@server` |
 | `No GPU detected` | Install NVIDIA drivers 525+; verify with `nvidia-smi` |
-| `Screenshot fails` | Ensure UE has finished loading (wait for MCP port) |
 
 ### View Logs
 
@@ -141,7 +154,7 @@ tail -f simworld_studio_workspace/logs/server.log
 
 ### Release
 
-1. `./build.sh` → creates `dist/simworld_studio-{VERSION}.tar.gz`
+1. `./build.sh` -> creates `dist/simworld_studio-{VERSION}.tar.gz`
 2. Upload to GitHub Releases
 3. Update `version.json`
 
