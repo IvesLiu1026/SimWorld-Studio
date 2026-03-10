@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build SimWorld Coding Arena distributable package
+# Build SimWorld Studio distributable package
 #
 # 1. Builds frontend (Vite)
 # 2. Minifies backend JS files individually (esbuild)
@@ -20,7 +20,7 @@ PKG_CONFIG="$PKG_DIR/simworld_arena/config"
 DIST_DIR="$SCRIPT_DIR/dist"
 
 echo "============================================="
-echo "  Building SimWorld Coding Arena Package"
+echo "  Building SimWorld Studio Package"
 echo "============================================="
 
 # ── 0. Check prerequisites ─────────────────────────
@@ -93,7 +93,7 @@ cp "$SERVER_SRC/assets.json" "$PKG_SERVER/"
 # Package.json for npm install at runtime (express + cors only)
 cat > "$PKG_SERVER/package.json" << 'PKGJSON'
 {
-  "name": "simworld-arena-server",
+  "name": "simworld-studio-server",
   "version": "0.1.0",
   "private": true,
   "dependencies": {

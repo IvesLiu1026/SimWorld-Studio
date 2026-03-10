@@ -1,4 +1,4 @@
-# SimWorld Coding Arena
+# SimWorld Studio
 
 AI-powered 3D scene generation platform. Chat with Claude to build urban scenes in Unreal Engine — runs entirely in Google Colab.
 
@@ -6,12 +6,12 @@ AI-powered 3D scene generation platform. Chat with Claude to build urban scenes 
 
 **Open the notebook in Google Colab and run all cells:**
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SimWorld-AI/SimWorld-CodingArena/blob/main/SimWorld_CodingArena.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SimWorld-AI/SimWorld-Studio/blob/main/SimWorld_Studio.ipynb)
 
 The notebook will:
 1. Check your GPU (free T4 is fine)
 2. Install SimWorld from [HuggingFace](https://huggingface.co/datasets/SimWorld-AI/SimWorld)
-3. Install the Coding Arena platform
+3. Install the SimWorld Studio platform
 4. Ask for your [Anthropic API key](https://console.anthropic.com) (stays local — never sent to us)
 5. Launch everything and give you a browser URL
 6. Run verification checks + smoke test
@@ -40,13 +40,13 @@ This will:
 - Minify all backend JS with esbuild
 - Patch the server to serve the frontend statically
 - Bundle skills, assets, and config
-- Output `dist/simworld_coding_arena-{VERSION}.tar.gz`
+- Output `dist/simworld_studio-{VERSION}.tar.gz`
 
 ### Test Locally
 
 ```bash
-pip install dist/simworld_coding_arena-0.1.0.tar.gz
-simworld-arena start --ue-port 9000 --port 3002
+pip install dist/simworld_studio-0.1.0.tar.gz
+simworld-studio start --ue-port 9000 --port 3002
 ```
 
 ### Release
@@ -54,7 +54,7 @@ simworld-arena start --ue-port 9000 --port 3002
 1. Run `./build.sh`
 2. Upload `dist/*.tar.gz` to GitHub Releases
 3. Update `version.json` with the new version and download URL
-4. Update `ARENA_PKG_URL` in `SimWorld_CodingArena.ipynb` Cell 3
+4. Update `STUDIO_PKG_URL` in `SimWorld_Studio.ipynb` Cell 3
 
 ### Auto-Update
 
@@ -67,7 +67,7 @@ Users get updates automatically. On each notebook run, it checks `version.json` 
 ```
 User's Colab (T4 GPU)
 ├── SimWorld binary (HuggingFace)  ← headless UE renderer
-├── Coding Arena (pip package)     ← backend + frontend + MCP tools
+├── SimWorld Studio (pip package)  ← backend + frontend + MCP tools
 ├── Claude Code CLI (npm)          ← uses user's own API key
 └── cloudflared tunnel             ← public browser URL
 ```
@@ -79,15 +79,15 @@ All internal code ships as minified JS bundles — no source code is exposed.
 ## File Structure
 
 ```
-SimWorld-CodingArena-Release/
-├── SimWorld_CodingArena.ipynb   # Colab notebook for users
+SimWorld-Studio/
+├── SimWorld_Studio.ipynb        # Colab notebook for users
 ├── build.sh                     # Build pipeline
 ├── version.json                 # Release manifest (auto-update)
 ├── patch_server.js              # Adds frontend serving to backend
 ├── packaging/                   # pip package source
 │   ├── pyproject.toml
 │   ├── simworld_arena/
-│   │   ├── launcher.py          # CLI: simworld-arena start
+│   │   ├── launcher.py          # CLI: simworld-studio start
 │   │   ├── version.py           # Auto-update logic
 │   │   ├── server/              # Minified JS (backend + MCP)
 │   │   ├── skills/builtin/      # Skill definitions (.md)

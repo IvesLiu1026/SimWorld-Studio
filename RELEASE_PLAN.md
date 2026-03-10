@@ -1,8 +1,8 @@
-# SimWorld Coding Arena — Public Release Plan (Google Colab)
+# SimWorld Studio — Public Release Plan (Google Colab)
 
 ## Overview
 
-Release SimWorld Coding Arena as a **Google Colab notebook** that anyone can run for free. Users install SimWorld (official HuggingFace binary) + our Arena platform package, provide their own Claude API key, and get a full 3D scene generation playground in their browser. All internal Arena code (MCP tools, agent pipeline, skills) ships as **bundled/minified packages** — functional but not readable source.
+Release SimWorld Studio as a **Google Colab notebook** that anyone can run for free. Users install SimWorld (official HuggingFace binary) + our Arena platform package, provide their own Claude API key, and get a full 3D scene generation playground in their browser. All internal Arena code (MCP tools, agent pipeline, skills) ships as **bundled/minified packages** — functional but not readable source.
 
 ---
 
@@ -17,7 +17,7 @@ Release SimWorld Coding Arena as a **Google Colab notebook** that anyone can run
 │     ├── TCP plugin (port 9000)                   │
 │     └── Pixel Streaming (port 8586)              │
 │                                                  │
-│  2. SimWorld Coding Arena (pip package)           │
+│  2. SimWorld Studio (pip package)           │
 │     ├── Backend API (Express, bundled+minified)   │
 │     ├── MCP Server (bundled+minified)            │
 │     ├── Frontend (pre-built static files)        │
@@ -91,10 +91,10 @@ os.environ['DISPLAY'] = ':99'
 The Arena platform is distributed as a **single pip-installable package** hosted on a private GitHub Releases URL (or HuggingFace). No source code is exposed.
 
 ```
-simworld-coding-arena-{VERSION}.tar.gz
+simworld-studio-{VERSION}.tar.gz
 ├── simworld_arena/
 │   ├── __init__.py
-│   ├── launcher.py              # CLI entry point: `simworld-arena start`
+│   ├── launcher.py              # CLI entry point: `simworld-studio start`
 │   ├── version.py               # Version + auto-update check
 │   ├── server/
 │   │   ├── index.bundle.js      # Backend (esbuild bundled + minified)
@@ -123,7 +123,7 @@ npx esbuild web/server/index.js --bundle --platform=node --minify --outfile=dist
 npx esbuild web/server/mcp-server.js --bundle --platform=node --minify --outfile=dist/server/mcp-server.bundle.js
 
 # 3. Package into pip-installable tarball
-python -m build                  # → dist/simworld_coding_arena-{VERSION}.tar.gz
+python -m build                  # → dist/simworld_studio-{VERSION}.tar.gz
 
 # 4. Upload to GitHub Releases
 gh release create v{VERSION} dist/*.tar.gz
@@ -131,7 +131,7 @@ gh release create v{VERSION} dist/*.tar.gz
 
 ### Install in Colab
 ```bash
-!pip install -q https://github.com/SimWorld-AI/SimWorld-CodingArena/releases/download/v0.1.0/simworld_coding_arena-0.1.0.tar.gz
+!pip install -q https://github.com/SimWorld-AI/SimWorld-Studio/releases/download/v0.1.0/simworld_studio-0.1.0.tar.gz
 ```
 
 ---
@@ -144,13 +144,13 @@ When we push code changes internally, users automatically get them on next Colab
 # Auto-update cell (runs first in notebook)
 import subprocess, json, urllib.request
 
-MANIFEST_URL = "https://raw.githubusercontent.com/SimWorld-AI/SimWorld-CodingArena/main/version.json"
+MANIFEST_URL = "https://raw.githubusercontent.com/SimWorld-AI/SimWorld-Studio/main/version.json"
 
 manifest = json.loads(urllib.request.urlopen(MANIFEST_URL).read())
 latest = manifest["latest"]
 pkg_url = manifest["url"]
 
-result = subprocess.run(["pip", "show", "simworld-coding-arena"], capture_output=True, text=True)
+result = subprocess.run(["pip", "show", "simworld-studio"], capture_output=True, text=True)
 current = None
 for line in result.stdout.split('\n'):
     if line.startswith('Version:'):
@@ -161,7 +161,7 @@ if current != latest:
     subprocess.run(["pip", "install", "-q", pkg_url])
     print("Updated! Restart runtime and re-run all cells.")
 else:
-    print(f"simworld-coding-arena v{current} is up to date.")
+    print(f"simworld-studio v{current} is up to date.")
 ```
 
 **version.json** (hosted in public repo):
@@ -169,7 +169,7 @@ else:
 {
   "latest": "0.1.0",
   "min_supported": "0.1.0",
-  "url": "https://github.com/SimWorld-AI/SimWorld-CodingArena/releases/download/v0.1.0/simworld_coding_arena-0.1.0.tar.gz"
+  "url": "https://github.com/SimWorld-AI/SimWorld-Studio/releases/download/v0.1.0/simworld_studio-0.1.0.tar.gz"
 }
 ```
 
@@ -238,12 +238,12 @@ else:
     print("SimWorld binary already installed.")
 ```
 
-### Cell 3: Install Coding Arena Platform
+### Cell 3: Install Studio Platform
 ```python
-"""Install SimWorld Coding Arena (bundled platform — no source code)."""
-!pip install -q https://github.com/SimWorld-AI/SimWorld-CodingArena/releases/download/v0.1.0/simworld_coding_arena-0.1.0.tar.gz
+"""Install SimWorld Studio (bundled platform — no source code)."""
+!pip install -q https://github.com/SimWorld-AI/SimWorld-Studio/releases/download/v0.1.0/simworld_studio-0.1.0.tar.gz
 !npm install -g @anthropic-ai/claude-code 2>/dev/null
-print("Coding Arena + Claude Code CLI installed.")
+print("Studio + Claude Code CLI installed.")
 ```
 
 ### Cell 4: Enter API Key
@@ -260,7 +260,7 @@ print("API key set (stored only in this runtime's memory)")
 
 ### Cell 5: Launch SimWorld + Arena
 ```python
-"""Start SimWorld headless (GPU) and the Coding Arena platform."""
+"""Start SimWorld headless (GPU) and the Studio platform."""
 import subprocess, time, os
 
 # Install headless rendering dependencies
@@ -287,13 +287,13 @@ time.sleep(40)
 
 # Launch Arena platform
 arena_proc = subprocess.Popen(
-    ["simworld-arena", "start",
+    ["simworld-studio", "start",
      "--ue-host", "127.0.0.1", "--ue-port", "9000",
      "--port", "3002"],
     stdout=open("/content/arena.log", "w"), stderr=subprocess.STDOUT
 )
 time.sleep(5)
-print("Coding Arena platform starting...")
+print("Studio platform starting...")
 ```
 
 ### Cell 6: Create Public URL
@@ -320,7 +320,7 @@ url_match = re.search(r'https://[a-z0-9-]+\.trycloudflare\.com', output)
 if url_match:
     public_url = url_match.group(0)
     print(f"\n{'='*60}")
-    print(f"  SimWorld Coding Arena is live!")
+    print(f"  SimWorld Studio is live!")
     print(f"  Open in browser: {public_url}")
     print(f"{'='*60}\n")
 else:
@@ -406,7 +406,7 @@ for name, (ok, detail) in results.items():
 
 print()
 if all_ok:
-    print("ALL CHECKS PASSED — SimWorld Coding Arena is ready!")
+    print("ALL CHECKS PASSED — SimWorld Studio is ready!")
     print(f"Open {public_url} in your browser to start building 3D scenes.")
 else:
     print("SOME CHECKS FAILED — see above. Common fixes:")
@@ -494,7 +494,7 @@ The user interacts with the Arena through the browser UI. They see tool call nam
 - [ ] Create `setup.py` / `pyproject.toml` for pip package
 
 ### Afternoon: Colab Notebook + Testing
-- [ ] Write `SimWorld_CodingArena.ipynb` with all 8 cells above
+- [ ] Write `SimWorld_Studio.ipynb` with all 8 cells above
 - [ ] Test full pipeline in Colab: install → launch → chat → scene generation
 - [ ] Verify GPU rendering works on T4
 - [ ] Verify cloudflared tunnel works
@@ -511,10 +511,10 @@ The user interacts with the Arena through the browser UI. They see tool call nam
 ## File Structure
 
 ```
-SimWorld-CodingArena-Release/
+SimWorld-Studio-Release/
 ├── RELEASE_PLAN.md                    # This document
 ├── build.sh                           # Build + package script
-├── SimWorld_CodingArena.ipynb         # The Colab notebook
+├── SimWorld_Studio.ipynb         # The Colab notebook
 ├── version.json                       # Version manifest
 ├── packaging/
 │   ├── setup.py                       # pip package config

@@ -1,5 +1,5 @@
 """
-SimWorld Coding Arena Launcher
+SimWorld Studio Launcher
 
 Creates a runtime workspace that mirrors the original project layout,
 copies bundled server files in, and starts the backend.
@@ -55,7 +55,7 @@ def setup_workspace(workspace, pkg_dir):
     pkg_dir = Path(pkg_dir)
 
     # Version tracking
-    version_file = workspace / ".arena_version"
+    version_file = workspace / ".studio_version"
     current_version = version_file.read_text().strip() if version_file.exists() else ""
 
     needs_update = current_version != __version__
@@ -76,7 +76,7 @@ def setup_workspace(workspace, pkg_dir):
         (workspace / d).mkdir(parents=True, exist_ok=True)
 
     if needs_update:
-        print(f"[simworld-arena] Setting up workspace (v{__version__})...")
+        print(f"[simworld-studio] Setting up workspace (v{__version__})...")
 
         # Copy server JS files
         server_src = pkg_dir / "server"
@@ -114,7 +114,7 @@ def setup_workspace(workspace, pkg_dir):
         if pkg_json.exists():
             node_modules = server_dst / "node_modules"
             if not node_modules.exists():
-                print("[simworld-arena] Installing Node.js dependencies...")
+                print("[simworld-studio] Installing Node.js dependencies...")
                 subprocess.run(
                     ["npm", "install", "--production", "--no-optional", "--no-audit", "--no-fund"],
                     cwd=str(server_dst),
@@ -123,7 +123,7 @@ def setup_workspace(workspace, pkg_dir):
 
         # Write version marker
         version_file.write_text(__version__)
-        print(f"[simworld-arena] Workspace ready at {workspace}")
+        print(f"[simworld-studio] Workspace ready at {workspace}")
     else:
         # Still ensure npm deps exist
         server_dst = workspace / "web" / "server"
@@ -161,12 +161,12 @@ def generate_mcp_config(workspace, ue_host, ue_port):
 
 
 def start_server(args):
-    """Start the Arena backend server."""
+    """Start the Studio backend server."""
     pkg_dir = get_package_dir()
     node = find_node()
 
     # Workspace directory
-    workspace = Path(args.data_dir) if args.data_dir else Path.cwd() / "simworld_arena_workspace"
+    workspace = Path(args.data_dir) if args.data_dir else Path.cwd() / "simworld_studio_workspace"
 
     # Set up workspace
     workspace = setup_workspace(workspace, pkg_dir)
@@ -185,7 +185,7 @@ def start_server(args):
     entry = str(workspace / "web" / "server" / "index.js")
 
     print(f"\n{'='*50}")
-    print(f"  SimWorld Coding Arena v{__version__}")
+    print(f"  SimWorld Studio v{__version__}")
     print(f"  Backend:    http://0.0.0.0:{args.port}")
     print(f"  UE TCP:     {args.ue_host}:{args.ue_port}")
     print(f"  Workspace:  {workspace}")
@@ -199,7 +199,7 @@ def start_server(args):
     )
 
     def handle_signal(sig, frame):
-        print("\n[simworld-arena] Shutting down...")
+        print("\n[simworld-studio] Shutting down...")
         proc.terminate()
         try:
             proc.wait(timeout=10)
@@ -222,12 +222,12 @@ def start_server(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="simworld-arena",
-        description="SimWorld Coding Arena — AI-powered 3D scene generation",
+        prog="simworld-studio",
+        description="SimWorld Studio — AI-powered 3D scene generation",
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    sp_start = subparsers.add_parser("start", help="Start the Arena platform")
+    sp_start = subparsers.add_parser("start", help="Start the Studio platform")
     sp_start.add_argument("--port", type=int, default=3002)
     sp_start.add_argument("--ue-host", default="127.0.0.1")
     sp_start.add_argument("--ue-port", type=int, default=9000)
@@ -242,7 +242,7 @@ def main():
     if args.command == "start":
         start_server(args)
     elif args.command == "version":
-        print(f"simworld-arena v{__version__}")
+        print(f"simworld-studio v{__version__}")
     elif args.command == "update":
         from .version import auto_update
         auto_update()
