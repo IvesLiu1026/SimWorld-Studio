@@ -36,7 +36,7 @@ tar xzf SimWorld-Studio-Minimal.tar.gz
 #### 2. Install SimWorld Studio
 
 ```bash
-pip install simworld-studio
+pip install git+https://github.com/SimWorld-AI/SimWorld-Studio.git#subdirectory=packaging
 npm install -g @anthropic-ai/claude-code
 ```
 
