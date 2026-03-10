@@ -10,7 +10,7 @@ requires-python = ">=3.9"
 dependencies = [
     "pyyaml>=6.0",
 ]
-license = {text = "Proprietary"}
+license = {text = "Apache-2.0"}
 
 [project.scripts]
 simworld-studio = "simworld_arena.launcher:main"

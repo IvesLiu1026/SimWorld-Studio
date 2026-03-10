@@ -4,3 +4,6 @@ __pycache__/
 node_modules/
 .DS_Store
 *.log
+dist/
+*.tar.gz
+SimWorld-Studio-Minimal/

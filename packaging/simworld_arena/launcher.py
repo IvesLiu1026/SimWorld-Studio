@@ -230,7 +230,7 @@ def main():
     sp_start = subparsers.add_parser("start", help="Start the Studio platform")
     sp_start.add_argument("--port", type=int, default=3002)
     sp_start.add_argument("--ue-host", default="127.0.0.1")
-    sp_start.add_argument("--ue-port", type=int, default=9000)
+    sp_start.add_argument("--ue-port", type=int, default=55559)
     sp_start.add_argument("--data-dir", default=None, help="Workspace directory")
     sp_start.add_argument("--pixel-streaming-url", default="http://127.0.0.1:8080")
 
