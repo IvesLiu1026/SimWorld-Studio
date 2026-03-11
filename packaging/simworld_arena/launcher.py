@@ -255,7 +255,7 @@ def start_server(args):
         print("  [OK] Claude auth: OAuth (claude login)")
     else:
         print("  [!!] Claude not authenticated!")
-        print("       Set ANTHROPIC_API_KEY (get one at console.anthropic.com)")
+        print("       Set ANTHROPIC_API_KEY or run 'claude login'")
         if not args.skip_auth_check:
             sys.exit(1)
 
