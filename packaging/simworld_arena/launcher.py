@@ -321,6 +321,9 @@ def start_server(args):
         "-FPSMAX=15",
         f"-graphicsadapter={gpu_index}",
         "-RenderOffScreen",
+        # Pixel Streaming (built-in signaling on port 8080)
+        "-EditorPixelStreamingRes=1280x720",
+        "-EditorPixelStreamingStartOnLaunch=true",
         "-log",
     ]
 
@@ -348,6 +351,7 @@ def start_server(args):
     env["PORT"] = str(args.port)
     env["UNREAL_HOST"] = "127.0.0.1"
     env["UNREAL_PORT"] = str(args.mcp_port)
+    env["PIXEL_STREAMING_URL"] = "http://127.0.0.1:8080"
 
     entry = str(workspace / "web" / "server" / "index.js")
 
@@ -372,7 +376,7 @@ def start_server(args):
         print(f"  Remote access: http://{server_ip}:{args.port}")
         print()
         print(f"  Or use SSH tunnel from your laptop:")
-        print(f"    ssh -L {args.port}:localhost:{args.port} user@{server_ip}")
+        print(f"    ssh -L {args.port}:localhost:{args.port} -L 8080:localhost:8080 user@{server_ip}")
         print(f"    Then open: http://localhost:{args.port}")
     print()
     print(f"  GPU: {gpu_index}  |  MCP: {args.mcp_port}  |  Web: {args.port}")
