@@ -42,49 +42,39 @@ npm install -g @anthropic-ai/claude-code
 
 #### 3. Authenticate with Claude
 
-You have two options:
-
 **Option A — Claude Code Login (recommended, no API key needed):**
 ```bash
 claude login
 ```
-This opens a browser for OAuth login. Once authenticated, Claude Code (and SimWorld Studio) will use your Claude account automatically.
 
 **Option B — API Key:**
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
-Get your key at [console.anthropic.com](https://console.anthropic.com).
 
-#### 4. Launch SimWorld (headless)
-
-```bash
-cd SimWorld-Studio-Minimal
-./SimWorld-Studio.sh --gpu 0 --render-offscreen
-```
-
-> **Multi-GPU systems**: You **must** specify `--gpu INDEX` to select which GPU to use. Without it, Vulkan may crash trying to enumerate all GPUs.
-
-Wait ~30-60 seconds for the MCP port (55559) to become available.
-
-#### 5. Launch Studio (in a second terminal)
+#### 4. Launch (one command)
 
 ```bash
-simworld-studio start --port 3002
+simworld-studio start
 ```
 
-#### 6. Open in Browser
+This will:
+- Detect your GPU and authenticate with Claude
+- Launch Unreal Engine (headless)
+- Wait for the engine to be ready
+- Start the Studio web server
+- Print the URL to open in your browser
 
-**If running locally:** Go to **http://localhost:3002**
+On multi-GPU systems, it will ask which GPU to use (or pass `--gpu INDEX`).
 
-**If running on a remote GPU server:** Use SSH port forwarding:
-```bash
-# From your laptop (replace SERVER_IP with your GPU server's address)
-ssh -L 3002:localhost:3002 user@SERVER_IP
+For remote servers, it auto-detects your IP and prints SSH tunnel instructions.
+
+**Options:**
 ```
-Then open **http://localhost:3002** in your laptop browser.
-
-Alternatively, access directly via **http://SERVER_IP:3002** if the port is open.
+--gpu INDEX    GPU to use (auto-detected if omitted)
+--port PORT    Web UI port (default: 3002)
+--binary PATH  Path to SimWorld-Studio-Minimal directory
+```
 
 Try: *"Set up the environment with a sunny sky, then build a small neighborhood with 4 houses and trees"*
 

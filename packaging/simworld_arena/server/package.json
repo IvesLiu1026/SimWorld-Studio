@@ -1,5 +1,5 @@
 {
-  "name": "simworld-arena-server",
+  "name": "simworld-studio-server",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
