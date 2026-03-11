@@ -42,15 +42,10 @@ npm install -g @anthropic-ai/claude-code
 
 #### 3. Authenticate with Claude
 
-**Option A — Claude Code Login (recommended, no API key needed):**
-```bash
-claude login
-```
-
-**Option B — API Key:**
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+Get your key at [console.anthropic.com](https://console.anthropic.com).
 
 #### 4. Launch (one command)
 

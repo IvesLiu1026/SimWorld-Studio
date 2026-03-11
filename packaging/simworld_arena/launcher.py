@@ -50,7 +50,7 @@ def check_claude_auth():
                 [claude, "auth", "status"],
                 capture_output=True, text=True, timeout=10,
             )
-            if result.returncode == 0 and "authenticated" in result.stdout.lower():
+            if result.returncode == 0 and '"loggedIn": true' in result.stdout:
                 return "oauth"
         except Exception:
             pass
@@ -255,7 +255,7 @@ def start_server(args):
         print("  [OK] Claude auth: OAuth (claude login)")
     else:
         print("  [!!] Claude not authenticated!")
-        print("       Run 'claude login' or set ANTHROPIC_API_KEY")
+        print("       Set ANTHROPIC_API_KEY (get one at console.anthropic.com)")
         if not args.skip_auth_check:
             sys.exit(1)
 
