@@ -304,7 +304,20 @@ def start_server(args):
     cirrus_js = cirrus_dir / "cirrus.js"
     cirrus_proc = None
 
-    if cirrus_js.exists():
+    # Check if Cirrus is already running on the expected ports
+    cirrus_already_running = False
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        s.connect(("127.0.0.1", 8585))
+        s.close()
+        cirrus_already_running = True
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        pass
+
+    if cirrus_already_running:
+        print("  [OK] Cirrus already running (HTTP :8585, WS :8586)")
+    elif cirrus_js.exists():
         # Generate cirrus config
         cirrus_config = {
             "UseFrontend": False,
