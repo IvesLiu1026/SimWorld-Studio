@@ -1,20 +1,22 @@
 "use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||"55559",skillRegistry=new SkillRegistry,sceneManager=new SceneManager,arenaManager=new ArenaManager,agentManager=new AgentManager,SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
-`;try{fs.appendFileSync(getLogFilePath(),n)}catch{}console.log(`[${s}] ${e}`)}const ARENA_SYSTEM_PROMPT=`You are the SimWorld Arena scene-generation agent.
+`;try{fs.appendFileSync(getLogFilePath(),n)}catch{}console.log(`[${s}] ${e}`)}const ARENA_SYSTEM_PROMPT=`You are the SimWorld Studio scene-generation agent.
 You build city scenes in Unreal Engine 5 using MCP tools. The user sees a live viewport on the right.
 
 ## CRITICAL: HOW TO SPAWN OBJECTS
 
 SimWorld assets are Blueprint actors. You MUST use spawn_blueprint_actor (NOT spawn_actor) for buildings, trees, vehicles, and props.
 
-### Buildings (127 varieties)
-spawn_blueprint_actor with blueprint_id like "BP_Building_01" through "BP_Building_127".
+### Buildings (6 varieties — ONLY these exist in this package)
+spawn_blueprint_actor with blueprint_id: BP_Building_01 through BP_Building_06 ONLY.
 Full path format: /Game/CityDatabase/blueprints/BP_Building_XX.BP_Building_XX_C
 
-BUILDING SIZES VARY ENORMOUSLY \u2014 choose carefully:
-- Small/residential (height ~1000-3000 units): BP_Building_01 through BP_Building_09
-- Medium (height ~3000-9000 units): BP_Building_10 through BP_Building_30
-- Tall skyscrapers (height 10000-40000 units!): BP_Building_31+
-For residential neighborhoods, ONLY use BP_Building_01 through BP_Building_09.
+IMPORTANT: ONLY use BP_Building_01 through BP_Building_06. Do NOT use any building ID above 06 — those assets are not available and will appear as invisible/broken.
+- BP_Building_01: small residential
+- BP_Building_02: small residential
+- BP_Building_03: small residential
+- BP_Building_04: medium building
+- BP_Building_05: medium building
+- BP_Building_06: medium building
 
 Example \u2014 spawn a house:
   spawn_blueprint_actor(actor_name="House_1", blueprint_id="BP_Building_05", location=[0, 0, 0])
@@ -23,9 +25,10 @@ Example \u2014 spawn a house:
   spawn_blueprint_actor(actor_name="Tree_1", blueprint_id="BP_Tree1", location=[500, 200, 0])
   BP_Tree1 through BP_Tree6
 
-### Street furniture
+### Street furniture (ONLY these are available)
   BP_Hydrant, BP_Trash_bin_a, BP_Trash_bin_b, BP_Trash_can, BP_Table, BP_Table2, BP_Table3
-  BP_RoadBlocker, BP_RoadCone, BP_Box, BP_Box2, BP_Box3, BP_Couch
+  BP_RoadBlocker, BP_RoadCone, BP_Couch
+  Do NOT use: BP_Box, BP_Box2, BP_Box3, BP_Can, BP_Can2, BP_Rabbish, BP_Soda1, BP_Soda2 (meshes missing)
 
 ### Vehicles
   BP_Scooter_01 through BP_Scooter_04, BP_Cart, BP_Cart2
@@ -35,8 +38,8 @@ Example \u2014 spawn a house:
 
 ## UNITS & SPACING
 - UE uses centimeters: 1 meter = 100 units
-- Small buildings (01-09): ~1000-3000 units tall, ~1000-2000 wide. Space 3000-5000 apart.
-- Medium buildings (10-30): ~3000-9000 units tall. Space 5000-8000 apart.
+- Small buildings (01-03): ~1000-3000 units tall, ~1000-2000 wide. Space 3000-5000 apart.
+- Medium buildings (04-06): ~3000-6000 units tall. Space 5000-8000 apart.
 - Trees: 1000-2000 units apart
 - A small residential block: roughly 15000x10000 units
 
@@ -53,13 +56,13 @@ Example \u2014 spawn a house:
 ## EXAMPLE: "Build 6 houses with trees"
 1. delete_all_spawned()
 2. setup_environment()
-3. Spawn 6 SMALL buildings (01-09 only!) in a 2x3 grid, 4000 units apart:
+3. Spawn 6 buildings (01-06 only!) in a 2x3 grid, 4000 units apart:
    spawn_blueprint_actor(actor_name="House_1", blueprint_id="BP_Building_01", location=[0, 0, 0])
    spawn_blueprint_actor(actor_name="House_2", blueprint_id="BP_Building_03", location=[4000, 0, 0])
    spawn_blueprint_actor(actor_name="House_3", blueprint_id="BP_Building_05", location=[8000, 0, 0])
    spawn_blueprint_actor(actor_name="House_4", blueprint_id="BP_Building_02", location=[0, 5000, 0])
    spawn_blueprint_actor(actor_name="House_5", blueprint_id="BP_Building_06", location=[4000, 5000, 0])
-   spawn_blueprint_actor(actor_name="House_6", blueprint_id="BP_Building_08", location=[8000, 5000, 0])
+   spawn_blueprint_actor(actor_name="House_6", blueprint_id="BP_Building_04", location=[8000, 5000, 0])
 4. Add trees between houses:
    spawn_blueprint_actor(actor_name="Tree_1", blueprint_id="BP_Tree1", location=[2000, -800, 0])
    spawn_blueprint_actor(actor_name="Tree_2", blueprint_id="BP_Tree3", location=[6000, -800, 0])
@@ -111,5 +114,5 @@ The user is providing feedback on the current scene. Modify the scene based on t
 Feedback: ${i}`);const _=["-p",t,"--output-format","stream-json","--include-partial-messages","--verbose","--dangerously-skip-permissions","--mcp-config",MCP_CONFIG,"--append-system-prompt",m];n&&_.push("--resume",n);const h=Object.assign({},process.env);delete h.CLAUDECODE,delete h.CLAUDE_SESSION_ID,delete h.CLAUDE_CODE_ENTRYPOINT,logToFile("chat",`User: "${t.slice(0,200)}" sessionId=${n||"new"}`);try{fs.writeFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),"")}catch{}const g=spawn(CLAUDE_BIN,_,{cwd:path.resolve(__dirname,".."),env:h,stdio:["ignore","pipe","pipe"]});let f="",w=new Set,S=n||null,b=null;function j(d){if(d=d.trim(),!d)return;try{fs.appendFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),d+`
 `)}catch{}let r;try{r=JSON.parse(d)}catch{return}const u=r.type;if(u==="system"&&r.subtype==="init"){r.session_id&&(S=r.session_id);const p=(r.mcp_servers||[]).map(l=>`${l.name}:${l.status}`);a("system",{sessionId:r.session_id,mcpServers:r.mcp_servers||[]}),logToFile("claude",`Session ${r.session_id} | MCP: ${p.join(", ")}`)}else if(u==="stream_event"){const p=r.event||{};if(p.type==="content_block_delta"&&p.delta?.type==="text_delta"&&a("text",{delta:p.delta.text}),p.type==="content_block_start"&&p.content_block?.type==="tool_use"){const l=p.content_block;if(!w.has(l.id)){w.add(l.id);const y=l.name.replace(/^mcp__\w+__/,"");a("tool_start",{id:l.id,name:l.name,displayName:y}),logToFile("tool",`Starting: ${l.name}`)}}p.type==="content_block_delta"&&p.delta?.type==="input_json_delta"&&a("tool_input",{delta:p.delta.partial_json})}else if(u==="assistant"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_use"){const y=l.name.replace(/^mcp__\w+__/,"");a("tool_details",{id:l.id,name:l.name,displayName:y,input:l.input})}}else if(u==="user"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_result"){const y=Array.isArray(l.content)?l.content.map(P=>P.text||"").join(""):String(l.content||""),B=y.match(/([\/][\w\/\-._]+\.png)/);B&&fs.existsSync(B[1])&&(b=B[1],a("screenshot",{toolUseId:l.tool_use_id,filepath:`/api/screenshot/file?path=${encodeURIComponent(b)}`})),a("tool_result",{toolUseId:l.tool_use_id,result:y.slice(0,2e3),isError:l.is_error||!1}),logToFile("tool_result",`${l.tool_use_id?.slice(0,8)} \u2192 ${y.slice(0,300)}`)}}else if(u==="result"){S=r.session_id;const p=r.is_error||r.subtype==="error_during_turn";logToFile("claude",`Result: subtype=${r.subtype} session=${S} cost=$${r.total_cost_usd||"?"}`),logToFile("result",JSON.stringify({subtype:r.subtype,cost:r.total_cost_usd,duration:r.duration_ms}).slice(0,500)),T(),clearInterval(c),a("done",{sessionId:S,isError:p,costUsd:r.total_cost_usd,latestScreenshot:b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:k()}),e.end()}}function T(){let d=null;if(fs.existsSync(SCREENSHOT_DIR))try{const r=fs.readdirSync(SCREENSHOT_DIR).filter(u=>u.endsWith(".png")).map(u=>({fp:path.join(SCREENSHOT_DIR,u),time:fs.statSync(path.join(SCREENSHOT_DIR,u)).mtimeMs})).filter(({time:u})=>Date.now()-u<18e5);for(const u of r)(!d||u.time>d.time)&&(d=u)}catch{}d&&(b=d.fp)}function k(){return T(),b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:null}g.stdout.on("data",d=>{f+=d.toString();const r=f.split(`
 `);f=r.pop()??"";for(const u of r)j(u)}),g.stderr.on("data",d=>{const r=d.toString().trim();r&&logToFile("stderr",r.slice(0,300))}),g.on("close",d=>{clearInterval(c),f.trim()&&j(f),logToFile("claude",`Process exited with code ${d}`),e.writableEnded||(a("done",{sessionId:S,isError:d!==0,latestScreenshot:k()}),e.end())}),e.on("close",()=>{e.writableEnded||(clearInterval(c),g.killed||(g.kill("SIGTERM"),logToFile("claude","Browser closed connection, killed process")))})});const FRONTEND_DIR=path.resolve(__dirname,"../dist");fs.existsSync(FRONTEND_DIR)&&(app.use(express.static(FRONTEND_DIR)),app.get("*",(s,e)=>{!s.path.startsWith("/api/")&&!s.path.startsWith("/screenshots")&&!s.path.startsWith("/thumbnails")&&!s.path.startsWith("/ue")&&e.sendFile(path.join(FRONTEND_DIR,"index.html"))}),console.log("  Frontend served from:",FRONTEND_DIR)),app.listen(PORT,"0.0.0.0",()=>{console.log(`
-\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557`),console.log("\u2551       SimWorld Arena Backend                      \u2551"),console.log("\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563"),console.log(`\u2551  Listening : http://0.0.0.0:${PORT}                  \u2551`),console.log(`\u2551  Claude    : ${CLAUDE_BIN}                            \u2551`),console.log("\u2551  MCP config: mcp.json (local stdio)               \u2551"),console.log(`\u2551  UE TCP    : ${UNREAL_HOST}:${UNREAL_PORT}                 \u2551`),console.log(`\u2551  Logs      : ${LOG_DIR}          \u2551`),console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
+\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557`),console.log("\u2551       SimWorld Studio Backend                      \u2551"),console.log("\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563"),console.log(`\u2551  Listening : http://0.0.0.0:${PORT}                  \u2551`),console.log(`\u2551  Claude    : ${CLAUDE_BIN}                            \u2551`),console.log("\u2551  MCP config: mcp.json (local stdio)               \u2551"),console.log(`\u2551  UE TCP    : ${UNREAL_HOST}:${UNREAL_PORT}                 \u2551`),console.log(`\u2551  Logs      : ${LOG_DIR}          \u2551`),console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
 `)});

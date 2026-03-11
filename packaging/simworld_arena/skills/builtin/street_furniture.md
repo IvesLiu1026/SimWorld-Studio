@@ -1,7 +1,7 @@
 ---
 id: street_furniture
 name: Street Furniture & Props
-version: 2.0.0
+version: 2.1.0
 author: simworld-team
 tags: [props, furniture, trees, vehicles, decoration]
 dependencies: []
@@ -23,19 +23,27 @@ in parks, near buildings, and at intersections.
 - Height: ~500-1500 units
 - Spacing: 800-2000 units apart for natural look
 
+### Street Furniture (use spawn_blueprint_actor)
+Available:
+- `BP_Hydrant` — fire hydrant
+- `BP_Trash_bin_a`, `BP_Trash_bin_b` — trash bins
+- `BP_Trash_can` — trash can
+- `BP_Table`, `BP_Table2`, `BP_Table3` — outdoor tables
+- `BP_RoadBlocker` — road barrier
+- `BP_RoadCone` — traffic cone
+- `BP_Couch` — outdoor couch
+
+NOT available (do not use): BP_Box, BP_Box2, BP_Box3, BP_Can, BP_Can2, BP_Rabbish, BP_Soda1, BP_Soda2
+
 ### Vehicles
 - `BP_Scooter_01` through `BP_Scooter_04` — parked scooters
 - `BP_Cart`, `BP_Cart2` — pushcarts
 
-### Street Elements
-- Road segments and barriers
-- Best placed along building edges
-
-## Spawning Props
+## Spawning Trees
 ```
 Tool: spawn_blueprint_actor
   actor_name: "tree_01"
-  blueprint_name: "/Game/CityDatabase/blueprints/BP_Tree1.BP_Tree1_C"
+  blueprint_id: "BP_Tree1"
   location: [500, 200, 0]
 ```
 

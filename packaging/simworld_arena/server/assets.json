@@ -1,13 +1,13 @@
 {
   "buildings": {
-    "description": "SimWorld residential/commercial buildings (BP_Building_01 to _127). Use spawn_blueprint_actor with _C suffix.",
+    "description": "SimWorld buildings (BP_Building_01 to _06 only). Use spawn_blueprint_actor with _C suffix.",
     "path_prefix": "/Game/CityDatabase/blueprints/BP_Building_",
-    "ids": [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,121,122,123,124,125,126,127],
+    "ids": [1,2,3,4,5,6],
     "example": "/Game/CityDatabase/blueprints/BP_Building_01.BP_Building_01_C",
-    "notes": "Residential: 01-30, Commercial/office: 31-70, Tall/skyscraper: 71-127"
+    "notes": "Small residential: 01-03, Medium: 04-06. ONLY these 6 buildings are available in this package."
   },
   "trees": {
-    "description": "6 tree varieties",
+    "description": "6 tree varieties. Use spawn_blueprint_actor.",
     "items": [
       "/Game/CityDatabase/blueprints/BP_Tree1.BP_Tree1_C",
       "/Game/CityDatabase/blueprints/BP_Tree2.BP_Tree2_C",
@@ -29,7 +29,7 @@
     ]
   },
   "street_furniture": {
-    "description": "Urban props — benches, hydrants, trash, etc.",
+    "description": "Urban props — benches, hydrants, trash, etc. ONLY these items are available.",
     "items": [
       "/Game/CityDatabase/blueprints/BP_Table.BP_Table_C",
       "/Game/CityDatabase/blueprints/BP_Table2.BP_Table2_C",
@@ -40,16 +40,9 @@
       "/Game/CityDatabase/blueprints/BP_Trash_can.BP_Trash_can_C",
       "/Game/CityDatabase/blueprints/BP_RoadBlocker.BP_RoadBlocker_C",
       "/Game/CityDatabase/blueprints/BP_RoadCone.BP_RoadCone_C",
-      "/Game/CityDatabase/blueprints/BP_Box.BP_Box_C",
-      "/Game/CityDatabase/blueprints/BP_Box2.BP_Box2_C",
-      "/Game/CityDatabase/blueprints/BP_Box3.BP_Box3_C",
-      "/Game/CityDatabase/blueprints/BP_Can.BP_Can_C",
-      "/Game/CityDatabase/blueprints/BP_Can2.BP_Can2_C",
-      "/Game/CityDatabase/blueprints/BP_Couch.BP_Couch_C",
-      "/Game/CityDatabase/blueprints/BP_Rabbish.BP_Rabbish_C",
-      "/Game/CityDatabase/blueprints/BP_Soda1.BP_Soda1_C",
-      "/Game/CityDatabase/blueprints/BP_Soda2.BP_Soda2_C"
-    ]
+      "/Game/CityDatabase/blueprints/BP_Couch.BP_Couch_C"
+    ],
+    "unavailable_notes": "BP_Box, BP_Box2, BP_Box3, BP_Can, BP_Can2, BP_Rabbish, BP_Soda1, BP_Soda2 are NOT available in this package."
   },
   "roads": {
     "description": "Road segments",

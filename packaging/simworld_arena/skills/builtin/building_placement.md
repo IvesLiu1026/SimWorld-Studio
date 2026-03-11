@@ -1,13 +1,13 @@
 ---
 id: building_placement
 name: Building Placement & Spacing
-version: 2.0.0
+version: 2.1.0
 author: simworld-team
 tags: [buildings, placement, spacing, architecture]
 dependencies: []
 description: >
   Detailed guide for placing individual buildings with correct spacing,
-  rotation, and scale. Covers all 127 building types and their sizes.
+  rotation, and scale. Covers the 6 available building types and their sizes.
 ---
 
 # Building Placement & Spacing
@@ -15,6 +15,8 @@ description: >
 ## Overview
 Each building blueprint has different dimensions. Proper spacing prevents
 overlapping and creates realistic urban layouts.
+
+IMPORTANT: Only 6 building types are available in this package (BP_Building_01 through BP_Building_06). Do NOT use any building ID above 06.
 
 ## Spawning a Building
 ```
@@ -29,10 +31,8 @@ Tool: spawn_blueprint_actor
 
 | Range | Type | Approx Height | Spacing |
 |-------|------|---------------|---------|
-| 01-09 | Small residential | 1500-2500 | 2500-3500 |
-| 10-30 | Medium commercial | 3000-9000 | 4000-6000 |
-| 31-70 | Office towers | 8000-20000 | 6000-10000 |
-| 71-127 | Skyscrapers | 15000-38000 | 10000-15000 |
+| 01-03 | Small residential | 1500-3000 | 3000-5000 |
+| 04-06 | Medium building | 3000-6000 | 5000-8000 |
 
 ## Rotation Guide
 - `yaw: 0` — faces +X direction
@@ -51,19 +51,19 @@ Building C at (0, 3000, 0) yaw=90
 ```
 
 ### Mixed-Use Block
-Place tall commercial in the center, small residential around edges:
+Place medium buildings in the center, small residential around edges:
 ```
-Center: BP_Building_35 at (0, 0, 0)
-Edges:  BP_Building_01-09 at offsets of 5000-8000
+Center: BP_Building_04 at (0, 0, 0)
+Edges:  BP_Building_01-03 at offsets of 5000-8000
 ```
 
-### Dense Downtown
-Use skyscrapers (71+) with 10000+ unit spacing:
+### Neighborhood Grid
+Use varied buildings with proper spacing:
 ```
-BP_Building_75 at (0, 0, 0)
-BP_Building_80 at (12000, 0, 0)
-BP_Building_85 at (0, 12000, 0)
-BP_Building_90 at (12000, 12000, 0)
+BP_Building_01 at (0, 0, 0)
+BP_Building_03 at (5000, 0, 0)
+BP_Building_05 at (0, 6000, 0)
+BP_Building_02 at (5000, 6000, 0)
 ```
 
 ## Tips
@@ -71,3 +71,4 @@ BP_Building_90 at (12000, 12000, 0)
 - Z=0 is ground level — all buildings should be placed at z=0
 - Use unique `actor_name` for each building to manage them later
 - Combine with trees and street furniture for realism
+- Vary the building IDs (01-06) to create visual diversity
