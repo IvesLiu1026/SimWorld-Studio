@@ -8,3 +8,4 @@ dist/
 *.tar.gz
 SimWorld-Studio-Minimal/
 packaging/build/
+RELEASE_PLAN.md
