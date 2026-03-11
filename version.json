@@ -5,8 +5,8 @@
   "release_date": "2026-03-10",
   "simworld_binary": {
     "url": "https://huggingface.co/datasets/SimWorld-AI/SimWorld-Studio/resolve/main/SimWorld-Studio-Minimal.tar.gz",
-    "size_compressed": "2.7 GB",
-    "size_extracted": "7.6 GB",
+    "size_compressed": "4.6 GB",
+    "size_extracted": "9.7 GB",
     "sha256": ""
   }
 }

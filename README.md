@@ -21,12 +21,12 @@ Run all cells in order. Setup takes ~5 minutes. Requires a free Colab GPU runtim
 - **NVIDIA drivers**: 525+ with Vulkan support
 - **Node.js**: 18+
 - **Python**: 3.9+
-- **Disk**: ~10 GB free (2.7 GB download + 7.6 GB extracted)
+- **Disk**: ~15 GB free (4.6 GB download + 9.7 GB extracted)
 
 #### 1. Download the Minimal SimWorld Binary
 
 ```bash
-# Download (~2.7 GB compressed, ~7.6 GB extracted)
+# Download (~4.6 GB compressed, ~9.7 GB extracted)
 wget -O SimWorld-Studio-Minimal.tar.gz \
     https://huggingface.co/datasets/SimWorld-AI/SimWorld-Studio/resolve/main/SimWorld-Studio-Minimal.tar.gz
 
