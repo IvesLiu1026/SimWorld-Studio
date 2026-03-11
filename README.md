@@ -120,7 +120,7 @@ Browser (React UI)
 | `game module not found` | Ensure you extracted the full archive; check `gym_citynav/Binaries/Linux/` |
 | `CUDA context error` | Set `--gpu INDEX` to isolate a single GPU |
 | `Claude errors` | Run `claude login` or verify `ANTHROPIC_API_KEY` is set |
-| `Can't access UI remotely` | Use SSH tunnel: `ssh -L 3002:localhost:3002 -L 8080:localhost:8080 user@server` |
+| `Can't access UI remotely` | Use SSH tunnel: `ssh -L 3002:localhost:3002 -L 8585:localhost:8585 user@server` |
 | `No GPU detected` | Install NVIDIA drivers 525+; verify with `nvidia-smi` |
 
 ### View Logs

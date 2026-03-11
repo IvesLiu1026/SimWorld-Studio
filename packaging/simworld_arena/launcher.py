@@ -298,8 +298,42 @@ def start_server(args):
     generate_mcp_config(workspace, "127.0.0.1", str(args.mcp_port))
     print(f"  [OK] Workspace: {workspace}")
 
-    # ── Step 5: Launch UE ──
+    # ── Step 5: Start Cirrus signaling server ──
     print()
+    cirrus_dir = binary_dir / "Engine" / "Plugins" / "Media" / "PixelStreaming" / "Resources" / "WebServers" / "SignallingWebServer"
+    cirrus_js = cirrus_dir / "cirrus.js"
+    cirrus_proc = None
+
+    if cirrus_js.exists():
+        # Generate cirrus config
+        cirrus_config = {
+            "UseFrontend": False,
+            "UseMatchmaker": False,
+            "HttpPort": 8585,
+            "StreamerPort": 8586,
+            "SFUPort": 8889,
+        }
+        cirrus_config_path = workspace / "cirrus-config.json"
+        cirrus_config_path.write_text(json.dumps(cirrus_config, indent=2))
+
+        cirrus_log = workspace / "logs" / "cirrus.log"
+        cirrus_log_file = open(cirrus_log, "w")
+        cirrus_proc = subprocess.Popen(
+            [node, str(cirrus_js), f"--configFile={cirrus_config_path}"],
+            cwd=str(cirrus_dir),
+            stdout=cirrus_log_file,
+            stderr=subprocess.STDOUT,
+        )
+        time.sleep(2)
+        if cirrus_proc.poll() is None:
+            print("  [OK] Cirrus signaling server (HTTP :8585, WS :8586)")
+        else:
+            print("  [!!] Cirrus failed to start — Pixel Streaming may not work")
+            cirrus_proc = None
+    else:
+        print("  [!!] Cirrus not found — Pixel Streaming may not work")
+
+    # ── Step 6: Launch UE ──
     print("  Launching Unreal Engine (headless)...")
     ue_editor = str(binary_dir / "Engine" / "Binaries" / "Linux" / "UnrealEditor")
     project_file = str(binary_dir / "gym_citynav" / "gym_citynav.uproject")
@@ -321,9 +355,11 @@ def start_server(args):
         "-FPSMAX=15",
         f"-graphicsadapter={gpu_index}",
         "-RenderOffScreen",
-        # Pixel Streaming (built-in signaling on port 8080)
+        # Pixel Streaming via Cirrus signaling server
         "-EditorPixelStreamingRes=1280x720",
         "-EditorPixelStreamingStartOnLaunch=true",
+        "-EditorPixelStreamingUseRemoteSignallingServer=true",
+        "-PixelStreamingURL=ws://127.0.0.1:8586",
         "-log",
     ]
 
@@ -351,7 +387,7 @@ def start_server(args):
     env["PORT"] = str(args.port)
     env["UNREAL_HOST"] = "127.0.0.1"
     env["UNREAL_PORT"] = str(args.mcp_port)
-    env["PIXEL_STREAMING_URL"] = "http://127.0.0.1:8080"
+    env["PIXEL_STREAMING_URL"] = "http://127.0.0.1:8585"
 
     entry = str(workspace / "web" / "server" / "index.js")
 
@@ -376,7 +412,7 @@ def start_server(args):
         print(f"  Remote access: http://{server_ip}:{args.port}")
         print()
         print(f"  Or use SSH tunnel from your laptop:")
-        print(f"    ssh -L {args.port}:localhost:{args.port} -L 8080:localhost:8080 user@{server_ip}")
+        print(f"    ssh -L {args.port}:localhost:{args.port} -L 8585:localhost:8585 user@{server_ip}")
         print(f"    Then open: http://localhost:{args.port}")
     print()
     print(f"  GPU: {gpu_index}  |  MCP: {args.mcp_port}  |  Web: {args.port}")
@@ -392,6 +428,8 @@ def start_server(args):
         print("\n  Shutting down...")
         server_proc.terminate()
         ue_proc.terminate()
+        if cirrus_proc:
+            cirrus_proc.terminate()
         try:
             server_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -400,6 +438,11 @@ def start_server(args):
             ue_proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             ue_proc.kill()
+        if cirrus_proc:
+            try:
+                cirrus_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                cirrus_proc.kill()
         ue_log_file.close()
         print("  Done.")
         sys.exit(0)
