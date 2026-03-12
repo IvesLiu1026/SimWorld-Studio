@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simworld-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "SimWorld Studio — AI-powered 3D scene generation platform"
 requires-python = ">=3.9"
 dependencies = [
