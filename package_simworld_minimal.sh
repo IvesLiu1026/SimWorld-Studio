@@ -157,6 +157,22 @@ rsync -a \
     "$PROJECT_ROOT/Content/CityDatabase/" \
     "$PROJECT_STAGING/Content/CityDatabase/"
 
+# Additional content categories (crowds, avatars, characters, etc.)
+for CONTENT_DIR in CitySampleCrowd Human_Avatar Characters Robot_Dog TrafficSystem Agent; do
+    if [ -d "$PROJECT_ROOT/Content/$CONTENT_DIR" ]; then
+        echo "  Copying $CONTENT_DIR..."
+        rsync -a "$PROJECT_ROOT/Content/$CONTENT_DIR/" "$PROJECT_STAGING/Content/$CONTENT_DIR/"
+    fi
+done
+
+# Tree and vehicle asset sources (referenced by blueprints)
+for CONTENT_DIR in EuropeanHornbeam Scooters ScooterAssets Industrial_Carts GasStation Camping_Pack; do
+    if [ -d "$PROJECT_ROOT/Content/$CONTENT_DIR" ]; then
+        echo "  Copying $CONTENT_DIR..."
+        rsync -a "$PROJECT_ROOT/Content/$CONTENT_DIR/" "$PROJECT_STAGING/Content/$CONTENT_DIR/"
+    fi
+done
+
 # Copy essential engine-level content referenced by the project
 # (DefaultGameModeBP, basic BPs)
 for f in DefaultGameModeBP.uasset BP_Normal.uasset BP_Target.uasset; do

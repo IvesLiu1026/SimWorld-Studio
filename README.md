@@ -21,12 +21,12 @@ Run all cells in order. Setup takes ~5 minutes. Requires a free Colab GPU runtim
 - **NVIDIA drivers**: 525+ with Vulkan support
 - **Node.js**: 18+
 - **Python**: 3.9+
-- **Disk**: ~15 GB free (4.6 GB download + 9.7 GB extracted)
+- **Disk**: ~40 GB free (15 GB download + 21 GB extracted)
 
 #### 1. Download the Minimal SimWorld Binary
 
 ```bash
-# Download (~4.6 GB compressed, ~9.7 GB extracted)
+# Download (~15 GB compressed, ~21 GB extracted)
 wget -O SimWorld-Studio-Minimal.tar.gz \
     https://huggingface.co/datasets/SimWorld-AI/SimWorld-Studio/resolve/main/SimWorld-Studio-Minimal.tar.gz
 
@@ -84,8 +84,11 @@ Try: *"Set up the environment with a sunny sky, then build a small neighborhood 
 
 ## What Can SimWorld Studio Do?
 
-- **Spawn buildings** — 127 building varieties (residential to skyscrapers)
+- **Spawn buildings** — 6 building varieties (residential to commercial)
 - **Place props** — trees, vehicles, street furniture, and more
+- **Crowds & avatars** — MetaHuman pedestrians, human avatars, character models
+- **Traffic system** — vehicle traffic simulation
+- **Robot dog** — animated robot dog model
 - **Control lighting** — sun position, fog, atmosphere, time of day
 - **Take screenshots** — automated camera tours and captures
 - **Multi-turn sessions** — iteratively refine scenes through conversation

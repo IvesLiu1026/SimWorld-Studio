@@ -88,6 +88,54 @@ else:
     else:
         actor.set_actor_label("ThumbActor_Preview")
 
+        # Fix broken mesh references (CC0 Kenney replacement meshes)
+        MESH_FIX = {
+            "building_01": "/Game/CityDatabase/meshes/SM_building_01",
+            "building_02": "/Game/CityDatabase/meshes/SM_Building_02",
+            "SM_building_03": "/Game/CityDatabase/meshes/SM_building_03",
+            "building_04": "/Game/CityDatabase/meshes/SM_building_04",
+            "Building_05": "/Game/CityDatabase/meshes/SM_Building_05",
+            "Building_06": "/Game/CityDatabase/meshes/SM_Building_06",
+            "SM_EuropeanHornbeam_Field_01": "/Game/EuropeanHornbeam/Geometry/SimpleWind/SM_EuropeanHornbeam_Field_01",
+            "SM_EuropeanHornbeam_Field_03_PP": "/Game/EuropeanHornbeam/Geometry/PivotPainter/SM_EuropeanHornbeam_Field_03_PP",
+            "SM_EuropeanHornbeam_Forest_01": "/Game/EuropeanHornbeam/Geometry/SimpleWind/SM_EuropeanHornbeam_Forest_01",
+            "SM_EuropeanHornbeam_Forest_07": "/Game/EuropeanHornbeam/Geometry/SimpleWind/SM_EuropeanHornbeam_Forest_07",
+            "SM_EuropeanHornbeam_Field_02": "/Game/EuropeanHornbeam/Geometry/SimpleWind/SM_EuropeanHornbeam_Field_02",
+            "SM_EuropeanHornbeam_Field_04": "/Game/EuropeanHornbeam/Geometry/SimpleWind/SM_EuropeanHornbeam_Field_04",
+            "SM_Scooter_01_Base": "/Game/Scooters/Assets/Scooter_01/Static_Mesh/SM_Scooter_01_Base",
+            "SM_Scooter_02_Base": "/Game/Scooters/Assets/Scooter_02/Static_Mesh/SM_Scooter_02_Base",
+            "SM_Scooter_03_Base": "/Game/Scooters/Assets/Scooter_03/Static_Mesh/SM_Scooter_03_Base",
+            "SM_Scooter_04_Base": "/Game/Scooters/Assets/Scooter_04/Static_Mesh/SM_Scooter_04_Base",
+            "SM_Industrial_Carts_Service_Carts_3": "/Game/Industrial_Carts/Meshes/SM_Industrial_Carts_Service_Carts",
+            "SM_Industrial_Carts_Static_Carts_2": "/Game/Industrial_Carts/Meshes/SM_Industrial_Carts_Static_Carts",
+            "SM_table_a": "/Game/CityDatabase/meshes/SM_table_a",
+            "SM_chair_b": "/Game/CityDatabase/meshes/SM_chair_b",
+            "SM_chair_b1": "/Game/CityDatabase/meshes/SM_chair_b",
+            "SM_SeatTable_01a": "/Game/CityDatabase/meshes/SM_TrafficLight1",
+            "SM_CampingTable_01a": "/Game/CityDatabase/meshes/SM_TrafficLight1",
+            "SM_hydrant_main": "/Game/CityDatabase/meshes/SM_hydrant_main",
+            "SM_trash_bin_a": "/Game/CityDatabase/meshes/SM_trash_bin_a",
+            "SM_trash_bin_b": "/Game/CityDatabase/meshes/SM_trash_bin_b",
+            "SM_TrashCan_01": "/Game/GasStation/Models/SM_TrashCan_01",
+            "SM_road_blocker_b": "/Game/CityDatabase/meshes/SM_road_blocker_b",
+            "SM_road_cone": "/Game/CityDatabase/meshes/SM_road_cone",
+            "Couch1": "/Game/CityDatabase/meshes/Couch1",
+            "roadlines": "/Game/CityDatabase/meshes/roadlines",
+            "sidewalks": "/Game/CityDatabase/meshes/sidewalks",
+            "street_lights": "/Game/CityDatabase/meshes/street_lights",
+        }
+        # Scooter sub-parts to clear (replaced with combined car mesh)
+        CLEAR_COMPS = {"SM_Scooter_01_WheelB","SM_Scooter_01_Join","SM_Scooter_01_Handlebar","SM_Scooter_01_WheelF","SM_Scooter_01_Leg","SM_Scooter_02_wheel_Base","SM_Scooter_02_Lock","SM_Scooter_02_Wheel_F","SM_Scooter_02_Handlebar","SM_Scooter_02_Leg","SM_Scooter_02_Wheel_B","SM_Scooter_03_Holder_02","SM_Scooter_03_Leg","SM_Scooter_03_wheel_B","SM_Scooter_03_Wheel_Base","SM_Scooter_03_Holder_03","SM_Scooter_03_Holder_01","SM_Scooter_03_Handlebar","SM_Scooter_03_wheel_F","SM_Scooter_04_wheel_B","SM_Scooter_04_Handlebar","SM_Scooter_04_wheel_F"}
+        eal = unreal.EditorAssetLibrary
+        for comp in actor.get_components_by_class(unreal.StaticMeshComponent):
+            cn = comp.get_name()
+            if cn in CLEAR_COMPS:
+                comp.set_static_mesh(None)
+            elif cn in MESH_FIX:
+                m = eal.load_asset(MESH_FIX[cn])
+                if m:
+                    comp.set_static_mesh(m)
+
         # Get bounds for camera positioning
         (origin, extent) = actor.get_actor_bounds(False)
         cx, cy, cz = origin.x, origin.y, origin.z
