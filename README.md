@@ -2,7 +2,7 @@
 
 Vibe code the physical world for embodied agents. Chat with coding agent to build and simulate virtual environments in Unreal Engine.
 
-<video src="assets/compressed_SimWorld_Studio.mp4" controls width="100%"></video>
+https://github.com/user-attachments/assets/eba23f43-092f-4fea-a640-4ed51c254b52
 
 ## Quick Start
 
