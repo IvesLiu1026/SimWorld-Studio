@@ -1,8 +1,8 @@
 # SimWorld Studio
 
-AI-powered 3D scene generation platform. Chat with Claude to build virtual urban scenes in Unreal Engine.
+Vibe code the physical world for embodied agents. Chat with coding agent to build and simulate virtual environments in Unreal Engine.
 
-https://github.com/user-attachments/assets/placeholder-demo-video
+<video src="assets/compressed_SimWorld_Studio.mp4" controls width="100%"></video>
 
 ## Quick Start
 
@@ -84,15 +84,14 @@ Try: *"Set up the environment with a sunny sky, then build a small neighborhood 
 
 ## What Can SimWorld Studio Do?
 
-- **Spawn buildings** — 6 building varieties (residential to commercial)
-- **Place props** — trees, vehicles, street furniture, and more
-- **Crowds & avatars** — MetaHuman pedestrians, human avatars, character models
-- **Traffic system** — vehicle traffic simulation
-- **Robot dog** — animated robot dog model
-- **Control lighting** — sun position, fog, atmosphere, time of day
-- **Take screenshots** — automated camera tours and captures
-- **Multi-turn sessions** — iteratively refine scenes through conversation
-- **Built-in skills** — city layout patterns, weather moods, building guides
+SimWorld Studio lets you build 3D physical scenes by chatting with a coding agent. Describe what you want in natural language and watch the scene come together in real time.
+
+- **Spawn buildings** — place residential houses, commercial buildings, and more to lay out neighborhoods and city blocks
+- **Place props and vegetation** — add trees, vehicles, street furniture, fences, and other objects to fill your scene
+- **Multi-turn sessions** — iteratively refine scenes through conversation; add, move, remove, or rearrange objects across multiple turns
+- **Built-in skills** — pre-made prompts for common tasks like city layout patterns, weather moods, and building placement guides
+
+> **Note on demo assets:** The demo video above showcases scenes built with high-quality commercial 3D assets (buildings, vehicles, characters, etc.) that are **not included** in the open-source release due to licensing restrictions. The redistributable Minimal build ships with a different set of freely licensed assets, so the visual appearance will differ from the demo. The functionality and workflow remain the same.
 
 ---
 
