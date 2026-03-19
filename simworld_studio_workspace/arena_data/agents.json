@@ -1,0 +1,26 @@
+[
+  {
+    "id": "claude-code",
+    "name": "Claude Code",
+    "type": "claude-code",
+    "model": "claude-sonnet-4-20250514",
+    "enabled": true,
+    "description": "Anthropic Claude Code CLI with MCP tools"
+  },
+  {
+    "id": "claude-code-opus",
+    "name": "Claude Code (Opus)",
+    "type": "claude-code",
+    "model": "claude-opus-4-20250514",
+    "enabled": false,
+    "description": "Claude Opus for higher quality (slower, more expensive)"
+  },
+  {
+    "id": "codex",
+    "name": "OpenAI Codex",
+    "type": "codex",
+    "model": "o3",
+    "enabled": false,
+    "description": "OpenAI Codex / o3 agent (requires OPENAI_API_KEY)"
+  }
+]

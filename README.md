@@ -73,9 +73,13 @@ For remote servers, it auto-detects your IP and prints SSH tunnel instructions.
 
 **Options:**
 ```
---gpu INDEX    GPU to use (auto-detected if omitted)
---port PORT    Web UI port (default: 3002)
---binary PATH  Path to SimWorld-Studio-Minimal directory
+--gpu INDEX          GPU to use (auto-detected if omitted)
+--port PORT          Web UI port (default: 3002)
+--binary PATH        Path to SimWorld-Studio-Minimal directory
+--ue-path PATH       Path to UnrealEditor binary (overrides auto-detection)
+--project PATH       Path to .uproject file (overrides auto-detection)
+--mock               Enable mock mode (replay pre-recorded responses, no GPU needed)
+--mock-file PATH     Path to mock responses file (used with --mock)
 ```
 
 Try: *"Set up the environment with a sunny sky, then build a small neighborhood with 4 houses and trees"*
@@ -90,6 +94,35 @@ SimWorld Studio lets you build 3D physical scenes by chatting with a coding agen
 - **Place props and vegetation** — add trees, vehicles, street furniture, fences, and other objects to fill your scene
 - **Multi-turn sessions** — iteratively refine scenes through conversation; add, move, remove, or rearrange objects across multiple turns
 - **Built-in skills** — pre-made prompts for common tasks like city layout patterns, weather moods, and building placement guides
+- **Scene verification** — `verify_scene` tool takes a screenshot and asks Claude to evaluate placement quality, returning structured feedback (PASS / NEEDS_IMPROVEMENT / FAIL) with actionable suggestions
+- **Mock mode** — record a real agent session and replay it as a demo without a GPU
+
+---
+
+## Mock Mode (Demo Recording & Playback)
+
+Mock mode lets you record a real agent run and replay it as a demo — no GPU or Unreal Engine required.
+
+### Record a session
+
+Run normally; the agent's tool calls and responses are automatically logged to the workspace `logs/` directory.
+
+### Replay as a demo
+
+```bash
+simworld-studio start \
+  --mock \
+  --mock-file /path/to/mock_responses.txt \
+  --gpu 6   # ignored in mock mode, but accepted
+```
+
+In mock mode:
+- The web UI loads and plays back the recorded agent trajectory in real time
+- Screenshots captured during the original run are served from the logs
+- Click **Play Demo** in the UI to start playback
+- No Unreal Engine process is launched; the server replays MCP tool responses from the file
+
+This is useful for creating reproducible demos, presentations, or CI smoke tests.
 
 > **Note on demo assets:** The demo video above showcases scenes built with high-quality commercial 3D assets (buildings, vehicles, characters, etc.) that are **not included** in the open-source release due to licensing restrictions. The redistributable Minimal build ships with a different set of freely licensed assets, so the visual appearance will differ from the demo. The functionality and workflow remain the same.
 
@@ -110,6 +143,22 @@ Browser (React UI)
 - **Backend**: Node.js + Express (port 3002)
 - **MCP Server**: Bridges Claude <-> UE via TCP (port 55559)
 - **UE**: Headless Unreal Editor with UnrealMCP plugin
+
+### Custom UE / Project Paths
+
+By default `simworld-studio start` looks for the engine and project inside the `--binary` directory. You can override either path:
+
+```bash
+# via CLI flags
+simworld-studio start \
+  --ue-path /opt/UnrealEngine/Engine/Binaries/Linux/UnrealEditor \
+  --project /home/user/MyProject/MyProject.uproject
+
+# or via environment variables
+export SIMWORLD_UE_PATH=/opt/UnrealEngine/Engine/Binaries/Linux/UnrealEditor
+export SIMWORLD_PROJECT_PATH=/home/user/MyProject/MyProject.uproject
+simworld-studio start
+```
 
 ---
 
