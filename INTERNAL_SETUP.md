@@ -1,68 +1,66 @@
 # SimWorld Studio — Internal Server Setup Guide
 
-This guide is for team members running SimWorld Studio on our shared server (`sn4622121915`).
+This guide is for team members running SimWorld Studio on our shared server.
 
-## Shared Resources
+- **Server IP:** `132.239.95.132`
+- **GPU:** Everyone uses GPU 0 (`--gpu 0`)
+
+## Shared Resources (DO NOT MODIFY)
 
 | Resource | Path |
 |---|---|
 | UE Engine | `/data/murray/ue/UE_5.3.2` |
 | UE Project | `/data/murray/simworld_projects/SimWorld.uproject` |
 
-**Do NOT modify files under these paths.** They are shared by all users.
-
 ## Port Assignments
 
-Each person **must** use unique ports to avoid conflicts. Pick an unused slot from the table below and add your name:
+Each person **must** use their assigned ports to avoid conflicts. Find your name below:
 
-| User | GPU | Web UI | MCP | Cirrus HTTP | Cirrus WS | Cirrus SFU |
-|------|-----|--------|-----|-------------|-----------|------------|
-| murray | 0 | 3002 | 55560 | 8685 | 8686 | 8989 |
-| james | 0 | 3003 | 55779 | 8585 | 8586 | 8889 |
-| (your name) | 1 | 3004 | 55561 | 8687 | 8688 | 8990 |
-| (your name) | 2 | 3005 | 55562 | 8689 | 8690 | 8991 |
-| (your name) | 3 | 3006 | 55563 | 8691 | 8692 | 8992 |
-| (your name) | 4 | 3007 | 55564 | 8693 | 8694 | 8993 |
-| (your name) | 5 | 3008 | 55565 | 8695 | 8696 | 8994 |
-| (your name) | 6 | 3009 | 55566 | 8697 | 8698 | 8995 |
-| (your name) | 7 | 3010 | 55567 | 8699 | 8700 | 8996 |
+| User | Web UI | MCP | Cirrus HTTP | Cirrus WS | Cirrus SFU |
+|------|--------|-----|-------------|-----------|------------|
+| murray | 3002 | 55560 | 8685 | 8686 | 8989 |
+| james | 3003 | 55779 | 8585 | 8586 | 8889 |
+| (available) | 3004 | 55561 | 8687 | 8688 | 8990 |
+| (available) | 3005 | 55562 | 8689 | 8690 | 8991 |
+| (available) | 3006 | 55563 | 8691 | 8692 | 8992 |
+| (available) | 3007 | 55564 | 8693 | 8694 | 8993 |
+| (available) | 3008 | 55565 | 8695 | 8696 | 8994 |
+| (available) | 3009 | 55566 | 8697 | 8698 | 8995 |
+| (available) | 3010 | 55567 | 8699 | 8700 | 8996 |
 
-**Rules:**
-- Each GPU can only run **one** UE instance at a time
-- Check GPU availability before launching: `nvidia-smi`
-- If a GPU is occupied, pick a different one
+Tell Murray which slot you're taking so the table stays up to date.
 
 ## Setup (One-Time)
 
-### 1. Install SimWorld Studio
+### 1. Extract the code
+
+You'll receive a zip file. Extract it to your home directory:
 
 ```bash
-pip install git+https://github.com/SimWorld-AI/SimWorld-Studio-Internal.git#subdirectory=packaging
+cd ~
+unzip SimWorld-Studio.zip
+cd SimWorld-Studio
+```
+
+### 2. Install
+
+```bash
+pip install ./packaging
 npm install -g @anthropic-ai/claude-code
 ```
 
-### 2. Authenticate with Claude
+### 3. Authenticate with Claude
 
-**Option A — API Key (recommended for server):**
+**Option A — API Key (recommended):**
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+Get your key at https://console.anthropic.com
 
 **Option B — Claude Code Login:**
 ```bash
 claude
 ```
-
-### 3. Set Up Your Workspace
-
-Each user needs their own workspace directory. Clone the repo under your home directory:
-
-```bash
-cd ~
-git clone git@github.com:SimWorld-AI/SimWorld-Studio-Internal.git SimWorld-Studio
-```
-
-Your workspace will be created at `~/SimWorld-Studio/simworld_studio_workspace/` on first launch.
 
 ### 4. Build the Frontend (first time only)
 
@@ -74,7 +72,7 @@ npm run build
 
 ## Launch
 
-Replace the port numbers below with **your assigned ports** from the table above:
+Replace the port numbers with **your assigned ports** from the table above:
 
 ```bash
 export UE_ROOT=/data/murray/ue/UE_5.3.2
@@ -82,7 +80,7 @@ export UE_PROJECT_PATH=/data/murray/simworld_projects
 
 simworld-studio start \
   --data-dir ~/SimWorld-Studio/simworld_studio_workspace \
-  --gpu <YOUR_GPU> \
+  --gpu 0 \
   --port <YOUR_WEB_PORT> \
   --mcp-port <YOUR_MCP_PORT> \
   --cirrus-http-port <YOUR_CIRRUS_HTTP> \
@@ -90,7 +88,7 @@ simworld-studio start \
   --cirrus-sfu-port <YOUR_CIRRUS_SFU>
 ```
 
-**Example (using slot 3, GPU 1):**
+**Example (slot 3, ports 3004/55561/8687/8688/8990):**
 
 ```bash
 export UE_ROOT=/data/murray/ue/UE_5.3.2
@@ -98,7 +96,7 @@ export UE_PROJECT_PATH=/data/murray/simworld_projects
 
 simworld-studio start \
   --data-dir ~/SimWorld-Studio/simworld_studio_workspace \
-  --gpu 1 \
+  --gpu 0 \
   --port 3004 \
   --mcp-port 55561 \
   --cirrus-http-port 8687 \
@@ -108,24 +106,30 @@ simworld-studio start \
 
 ## Access the UI
 
-### From your local machine (SSH tunnel)
+Open in your browser directly:
 
-Replace ports with your assigned values:
-
-```bash
-ssh -L 3004:localhost:3004 -L 8687:localhost:8687 <your_user>@sn4622121915
+```
+http://132.239.95.132:<YOUR_WEB_PORT>
 ```
 
-Then open http://localhost:3004 in your browser.
+For example, if your Web UI port is 3004:
+
+```
+http://132.239.95.132:3004
+```
 
 ### Pixel Streaming (live UE viewport)
 
-The Pixel Streaming tab in the UI connects to the Cirrus HTTP port. The SSH tunnel above forwards both the web UI and Cirrus ports, so it should work automatically.
+The Pixel Streaming panel in the UI connects to the Cirrus HTTP port. For it to work from your browser, you need to access the Cirrus port as well.
 
 If you see **"WebSocket disconnected"** in the Pixel Streaming panel:
-1. Make sure your SSH tunnel includes the Cirrus HTTP port (`-L <cirrus_http>:localhost:<cirrus_http>`)
-2. Wait ~60 seconds after launch for UE to fully initialize and connect to Cirrus
-3. Check that no one else is using your assigned ports: `ss -tlnp | grep <your_port>`
+1. Wait ~60 seconds after launch for UE to fully initialize and connect to Cirrus
+2. Make sure the Cirrus HTTP port is accessible — try opening `http://132.239.95.132:<YOUR_CIRRUS_HTTP>` directly
+3. If the server firewall blocks the Cirrus port, use an SSH tunnel as a fallback:
+   ```bash
+   ssh -L <YOUR_WEB_PORT>:localhost:<YOUR_WEB_PORT> -L <YOUR_CIRRUS_HTTP>:localhost:<YOUR_CIRRUS_HTTP> <your_user>@132.239.95.132
+   ```
+   Then open `http://localhost:<YOUR_WEB_PORT>` instead.
 
 ## Troubleshooting
 
@@ -133,12 +137,6 @@ If you see **"WebSocket disconnected"** in the Pixel Streaming panel:
 
 ```bash
 ss -tlnp | grep -E '<your_web_port>|<your_mcp_port>|<your_cirrus_http>'
-```
-
-### Check GPU availability
-
-```bash
-nvidia-smi
 ```
 
 ### View logs
@@ -149,9 +147,6 @@ tail -f ~/SimWorld-Studio/simworld_studio_workspace/logs/ue.log
 
 # Cirrus (pixel streaming) log
 tail -f ~/SimWorld-Studio/simworld_studio_workspace/logs/cirrus.log
-
-# Server log (web backend)
-# Check terminal output where simworld-studio is running
 ```
 
 ### Common issues
@@ -159,11 +154,10 @@ tail -f ~/SimWorld-Studio/simworld_studio_workspace/logs/cirrus.log
 | Issue | Fix |
 |---|---|
 | `ENOENT: web/dist/index.html` | Run `cd ~/SimWorld-Studio/simworld_studio_workspace/web && npm install && npm run build` |
-| WebSocket disconnected | Wait for UE to finish loading (~60s). Check Cirrus log for `streamer connected`. |
-| Port already in use | Someone else is using your port. Check with `ss -tlnp \| grep <port>` and pick a free slot. |
-| Cirrus says "already running" | Another user's Cirrus is on the default ports. Make sure you pass `--cirrus-http-port` etc. |
-| No GPU available | Run `nvidia-smi` and pick a GPU with enough free VRAM (~4 GB minimum). |
-| `PixelStreaming not working` | Ensure the UE project has `PixelStreaming` plugin enabled in `.uproject`. It's already enabled in the shared project. |
+| WebSocket disconnected | Wait ~60s for UE to load. Check Cirrus log: `tail -f ~/SimWorld-Studio/simworld_studio_workspace/logs/cirrus.log` — look for `streamer connected`. |
+| Port already in use | Someone is using your port. Check with `ss -tlnp \| grep <port>`. Make sure you're using your assigned ports. |
+| Cirrus says "already running" | Another user's Cirrus is on the same ports. Make sure you pass your unique `--cirrus-*-port` flags. |
+| PixelStreaming not working | Already fixed in the shared project. If using a different `.uproject`, add `{"Name": "PixelStreaming", "Enabled": true}` to its Plugins list. |
 
 ## Stopping
 
