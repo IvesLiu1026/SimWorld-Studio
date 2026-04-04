@@ -3,11 +3,11 @@
     "simworld": {
       "command": "node",
       "args": [
-        "/home/lingjun/coding-agent/SimWorld-Studio/SimWorld-Studio/simworld_studio_workspace/web/server/mcp-server.js"
+        "/home/koe/SimWorld-Studio-Dev/simworld_studio_workspace/web/server/mcp-server.js"
       ],
       "env": {
         "UNREAL_HOST": "127.0.0.1",
-        "UNREAL_PORT": "55560"
+        "UNREAL_PORT": "55561"
       }
     }
   }

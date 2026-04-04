@@ -1,7 +1,7 @@
 {
   "UseFrontend": false,
   "UseMatchmaker": false,
-  "HttpPort": 8585,
-  "StreamerPort": 8586,
-  "SFUPort": 8889
+  "HttpPort": 8687,
+  "StreamerPort": 8688,
+  "SFUPort": 8990
 }

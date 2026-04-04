@@ -9,3 +9,6 @@ dist/
 SimWorld-Studio-Minimal/
 packaging/build/
 RELEASE_PLAN.md
+simworld_studio_workspace/tmp/
+simworld_studio_workspace/logs/
+simworld_studio_workspace/arena_data/

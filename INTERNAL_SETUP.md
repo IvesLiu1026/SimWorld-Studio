@@ -75,17 +75,17 @@ npm run build
 Replace the port numbers with **your assigned ports** from the table above:
 
 ```bash
-export UE_ROOT=/data/murray/ue/UE_5.3.2
-export UE_PROJECT_PATH=/data/murray/simworld_projects
+export UE_ROOT=/data/koe/UE_5.3.2
+export UE_PROJECT_PATH=/data/koe/simworld_studio_projects
 
 simworld-studio start \
-  --data-dir ~/SimWorld-Studio/simworld_studio_workspace \
+  --data-dir ~/SimWorld-Studio-Dev/simworld_studio_workspace \
   --gpu 0 \
-  --port <YOUR_WEB_PORT> \
-  --mcp-port <YOUR_MCP_PORT> \
-  --cirrus-http-port <YOUR_CIRRUS_HTTP> \
-  --cirrus-ws-port <YOUR_CIRRUS_WS> \
-  --cirrus-sfu-port <YOUR_CIRRUS_SFU>
+  --port 3004 \
+  --mcp-port 55561 \
+  --cirrus-http-port 8687 \
+  --cirrus-ws-port 8688 \
+  --cirrus-sfu-port 8990
 ```
 
 **Example (slot 3, ports 3004/55561/8687/8688/8990):**
@@ -95,7 +95,7 @@ export UE_ROOT=/data/murray/ue/UE_5.3.2
 export UE_PROJECT_PATH=/data/murray/simworld_projects
 
 simworld-studio start \
-  --data-dir ~/SimWorld-Studio/simworld_studio_workspace \
+  --data-dir ~/SimWorld-Studio-Dev/simworld_studio_workspace \
   --gpu 0 \
   --port 3004 \
   --mcp-port 55561 \

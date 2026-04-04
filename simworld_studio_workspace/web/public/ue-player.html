@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html style="width:100%;height:100%;margin:0">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SimWorld Viewport</title>
+<style>
+/* ── Base ── */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+
+/* ── Video: UE renders at container size via MatchViewportResolution, so contain is perfect ── */
+#playerUI{width:100%!important;height:100%!important}
+#videoElementParent{width:100%!important;height:100%!important;background:#000!important}
+#streamingVideo{object-fit:contain!important;width:100%!important;height:100%!important}
+
+/* ── Controls: compact horizontal row, top-right corner ── */
+#controls{
+  position:absolute!important;top:6px!important;right:6px!important;left:auto!important;
+  display:flex!important;flex-direction:row!important;gap:3px!important;
+  background:rgba(0,0,0,0.5)!important;border-radius:6px!important;padding:3px!important;
+  backdrop-filter:blur(8px)!important;-webkit-backdrop-filter:blur(8px)!important;
+  pointer-events:all!important;
+}
+#controls>*{
+  margin:0!important;width:1.4rem!important;height:1.4rem!important;
+  padding:0.2rem!important;border-radius:4px!important;
+  display:flex!important;align-items:center!important;justify-content:center!important;
+  line-height:1!important;
+}
+#controls #additionalinfo{display:none!important}
+#controls .tooltiptext{display:none!important}
+
+/* ── Connection quality indicator: bottom-right, tiny ── */
+#connection{
+  position:absolute!important;bottom:6px!important;right:6px!important;left:auto!important;
+  width:1.2rem!important;height:1.2rem!important;pointer-events:all!important;
+}
+#connection .tooltiptext{font-size:10px!important}
+#qualityStatus{font-size:20px!important;padding:0!important}
+
+/* ── Settings/Stats panels: compact ── */
+.panel-wrap{min-width:240px!important;max-width:300px!important;font-size:12px!important}
+.panel{padding:0.6em!important}
+#settingsHeading,#statsHeading{font-size:1.3em!important;padding:0 0 0 1rem!important}
+.setting{padding:0.1rem 6px!important}
+.form-group{padding:2px 6px!important}
+
+/* ── Overlays: smaller text ── */
+#connectOverlay,#playOverlay,#infoOverlay,#errorOverlay,#disconnectOverlay{
+  font-size:1.1em!important;
+}
+
+/* ── Hide fullscreen btn (we're embedded in an iframe) ── */
+#fullscreen-btn{display:none!important}
+</style>
+
+<script>
+// Auto-set signalling server URL parameter based on host
+(function(){
+  var p = new URLSearchParams(location.search);
+  var cirrusPort = p.get('cirrus') || location.port;
+  var target = 'ws://' + location.hostname + ':' + cirrusPort;
+  var changed = false;
+  if (p.get('ss') !== target) { p.set('ss', target); changed = true; }
+  // Tell UE to render at the browser viewport size (no black bars)
+  if (!p.has('MatchViewportRes')) { p.set('MatchViewportRes', 'true'); changed = true; }
+  if (!p.has('HoveringMouse')) { p.set('HoveringMouse', 'true'); changed = true; }
+  if (changed) { location.replace(location.pathname + '?' + p.toString()); }
+})();
+</script>
+
+<!-- Load the stock UE player.js from the Cirrus server -->
+<script>
+(function(){
+  var p = new URLSearchParams(location.search);
+  var cirrusPort = p.get('cirrus') || location.port;
+  var s = document.createElement('script');
+  s.defer = true;
+  s.src = location.protocol + '//' + location.hostname + ':' + cirrusPort + '/player.js';
+  document.head.appendChild(s);
+})();
+</script>
+</head>
+<body style="width:100%;height:100%"></body>
+</html>
