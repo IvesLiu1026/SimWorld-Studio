@@ -1,6 +1,10 @@
-# SimWorld Studio — Internal Server Setup Guide
+# SimWorld Studio — Internal Setup Guide
 
-This guide is for team members running SimWorld Studio on our shared server.
+This guide covers setup for both **Linux (shared server)** and **Windows (local dev)**.
+
+---
+
+## Linux — Shared Server
 
 - **Server IP:** `132.239.95.132`
 - **GPU:** Everyone uses GPU 0 (`--gpu 0`)
@@ -172,3 +176,118 @@ ps aux | grep $USER | grep -E 'UnrealEditor|cirrus|node.*server'
 # Kill them
 kill <pid>
 ```
+
+---
+
+## Windows — Local Development
+
+### Prerequisites
+
+- **Unreal Engine 5.3** installed via Epic Games Launcher
+- **Node.js** (v18+): https://nodejs.org
+- **Claude Code** or **Anthropic API Key**
+
+### 1. Extract the code
+
+Unzip `SimWorld-Studio.zip` to any directory, e.g. `C:\SimWorld-Studio`.
+
+### 2. Install dependencies
+
+```powershell
+# Install Claude Code
+npm install -g @anthropic-ai/claude-code
+
+# Install pip package (for MCP server)
+pip install ./packaging
+
+# Install web dependencies
+cd SimWorld-Studio\simworld_studio_workspace\web
+npm install
+```
+
+### 3. Authenticate with Claude
+
+**Option A — API Key (recommended):**
+```powershell
+set ANTHROPIC_API_KEY=sk-ant-...
+```
+Get your key at https://console.anthropic.com
+
+**Option B — Claude Code Login:**
+```powershell
+claude
+```
+
+### 4. Build the Frontend (first time only)
+
+```powershell
+cd SimWorld-Studio\simworld_studio_workspace\web
+npm install
+npm run build
+```
+
+### 5. Configure the launch script
+
+Edit `SimWorld-Studio.bat` at the top — set these three paths:
+
+```bat
+REM Path to UE installation root
+set "UE_ROOT=C:\Program Files\Epic Games\UE_5.3"
+
+REM Path to UE project file (.uproject)
+set "UE_PROJECT=E:\UE\SimWorld\SimWorld.uproject"
+
+REM Workspace directory
+set "WORKSPACE=%~dp0simworld_studio_workspace"
+```
+
+### 6. Launch
+
+Double-click `SimWorld-Studio.bat`, or from terminal:
+
+```powershell
+SimWorld-Studio.bat
+```
+
+With custom ports (same port scheme as Linux):
+
+```powershell
+SimWorld-Studio.bat --port 3002 --mcp-port 55560 --cirrus-http-port 8685 --cirrus-ws-port 8686 --cirrus-sfu-port 8989
+```
+
+The script will:
+1. Start Cirrus signaling server (Pixel Streaming)
+2. Launch UE Editor with MCP + Pixel Streaming
+3. Wait for MCP port to be ready
+4. Start the web server
+
+### Access the UI
+
+```
+http://localhost:3002
+```
+
+(Replace `3002` with your `--port` value if changed.)
+
+### Stopping
+
+Close the command prompt window, then end any remaining processes in Task Manager:
+- `UnrealEditor.exe`
+- `node.exe` (Cirrus and Web Server)
+
+Or from PowerShell:
+
+```powershell
+taskkill /im UnrealEditor.exe /f
+taskkill /im node.exe /f
+```
+
+### Windows Troubleshooting
+
+| Issue | Fix |
+|---|---|
+| `UnrealEditor.exe not found` | Edit `UE_ROOT` in `SimWorld-Studio.bat` to your UE install path |
+| `node not found` | Install Node.js and restart your terminal |
+| MCP port timeout | UE is slow to start — wait longer, or check if `UnrealEditor.exe` crashed in Task Manager |
+| `ENOENT: web/dist/index.html` | Run `cd simworld_studio_workspace\web && npm install && npm run build` |
+| Port already in use | Another process is using the port. Check with `netstat -ano | findstr <port>` |
