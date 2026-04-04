@@ -167,19 +167,43 @@ REM ============================================================
 set "CIRRUS_DIR=%UE_ROOT%\Engine\Plugins\Media\PixelStreaming\Resources\WebServers\SignallingWebServer"
 set "CIRRUS_JS=%CIRRUS_DIR%\cirrus.js"
 
-if exist "%CIRRUS_JS%" (
-    REM Generate cirrus config
-    set "CIRRUS_CONFIG=%WORKSPACE%\cirrus-config.json"
-    echo {"UseFrontend":false,"UseMatchmaker":false,"HttpPort":%CIRRUS_HTTP_PORT%,"StreamerPort":%CIRRUS_WS_PORT%,"SFUPort":%CIRRUS_SFU_PORT%} > "!CIRRUS_CONFIG!"
-
-    echo   Starting Cirrus signaling server...
-    start "Cirrus" /min cmd /c "cd /d !CIRRUS_DIR! && node cirrus.js --configFile=!CIRRUS_CONFIG! > !WORKSPACE!\logs\cirrus.log 2>&1"
-    ping -n 3 127.0.0.1 >nul
-    echo   [OK] Cirrus ^(HTTP :%CIRRUS_HTTP_PORT%, WS :%CIRRUS_WS_PORT%^)
-) else (
+if not exist "%CIRRUS_JS%" (
     echo   [!!] Cirrus not found at %CIRRUS_DIR%
     echo        Pixel Streaming may not work.
+    goto :after_cirrus
 )
+
+REM Install Cirrus dependencies if needed
+if not exist "%CIRRUS_DIR%\node_modules" (
+    echo   Installing Cirrus dependencies...
+    pushd "%CIRRUS_DIR%"
+    call npm install --no-audit --no-fund >nul 2>&1
+    popd
+)
+
+REM Generate cirrus config
+set "CIRRUS_CONFIG=%WORKSPACE%\cirrus-config.json"
+echo {"UseFrontend":false,"UseMatchmaker":false,"HttpPort":%CIRRUS_HTTP_PORT%,"StreamerPort":%CIRRUS_WS_PORT%,"SFUPort":%CIRRUS_SFU_PORT%} > "%CIRRUS_CONFIG%"
+
+echo   Starting Cirrus signaling server...
+start "Cirrus" /min cmd /c "cd /d %CIRRUS_DIR% && node cirrus.js --configFile=%CIRRUS_CONFIG% > %WORKSPACE%\logs\cirrus.log 2>&1"
+
+REM Wait for Cirrus WS port to be ready
+set "CIRRUS_WAIT=0"
+:wait_cirrus
+set /a CIRRUS_WAIT+=1
+if %CIRRUS_WAIT% gtr 15 (
+    echo   [!!] Cirrus failed to start. Check logs\cirrus.log
+    goto :after_cirrus
+)
+powershell -Command "try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', %CIRRUS_WS_PORT%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>&1
+if errorlevel 1 (
+    ping -n 2 127.0.0.1 >nul
+    goto :wait_cirrus
+)
+echo   [OK] Cirrus (HTTP :%CIRRUS_HTTP_PORT%, WS :%CIRRUS_WS_PORT%)
+
+:after_cirrus
 
 REM ============================================================
 REM  STEP 2: LAUNCH UE EDITOR
@@ -235,6 +259,7 @@ set "PORT=%WEB_PORT%"
 set "UNREAL_HOST=127.0.0.1"
 set "UNREAL_PORT=%MCP_PORT%"
 set "PIXEL_STREAMING_URL=http://127.0.0.1:%CIRRUS_HTTP_PORT%"
+if not defined CLAUDE_MODEL set "CLAUDE_MODEL=sonnet"
 
 set "SERVER_ENTRY=%WORKSPACE%\web\server\index.js"
 

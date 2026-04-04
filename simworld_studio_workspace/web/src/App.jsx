@@ -215,18 +215,28 @@ async function fetchAssets() {
 }
 
 async function sendChat(message, sessionId, onEvent, signal, options) {
-  const response = await fetch(`${API_BASE}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message,
-      sessionId,
-      skills: options?.skills,
-      feedback: options?.feedback,
-      skillSelectionMode: options?.skillSelectionMode,
-    }),
-    signal,
-  });
+  // Timeout for initial connection — if the server doesn't respond in 30s, fail
+  const controller = signal ? undefined : new AbortController();
+  const effectiveSignal = signal || controller?.signal;
+  const connectTimeout = setTimeout(() => controller?.abort(), 30000);
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        sessionId,
+        skills: options?.skills,
+        feedback: options?.feedback,
+        skillSelectionMode: options?.skillSelectionMode,
+      }),
+      signal: effectiveSignal,
+    });
+  } finally {
+    clearTimeout(connectTimeout);
+  }
 
   if (!response.ok || !response.body) {
     throw new Error(`Server error: ${response.status}`);
@@ -235,11 +245,36 @@ async function sendChat(message, sessionId, onEvent, signal, options) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let lastDataTime = Date.now();
+  const IDLE_TIMEOUT = 180000; // 3 minutes without any data = dead connection
 
   for (;;) {
-    const { done, value } = await reader.read();
+    // Race between read and idle timeout
+    const readPromise = reader.read();
+    const timeoutPromise = new Promise((_, reject) => {
+      const check = setInterval(() => {
+        if (Date.now() - lastDataTime > IDLE_TIMEOUT) {
+          clearInterval(check);
+          reader.cancel();
+          reject(new Error("Connection idle timeout"));
+        }
+      }, 5000);
+      readPromise.then(() => clearInterval(check)).catch(() => clearInterval(check));
+    });
+
+    let result;
+    try {
+      result = await Promise.race([readPromise, timeoutPromise]);
+    } catch (err) {
+      // Idle timeout — treat as done
+      onEvent({ type: "done", data: { sessionId: null, isError: true, latestScreenshot: null } });
+      break;
+    }
+
+    const { done, value } = result;
     if (done) break;
 
+    lastDataTime = Date.now();
     buffer += decoder.decode(value, { stream: true });
     const chunks = buffer.split("\n\n");
     buffer = chunks.pop() ?? "";
@@ -2069,13 +2104,13 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                   const sid = event.data.sessionId;
                   const isErr = event.data.isError;
                   console.log("[CTX-DEBUG] done event, sessionId:", sid, "isError:", isErr);
-                  if (sid) {
-                    setSessionId(sid);
-                    onSessionChange?.(sid);
-                  } else if (isErr) {
-                    // Session is gone — reset so next send starts fresh
+                  if (isErr) {
+                    // On error, always reset session so next send starts fresh
                     setSessionId(null);
                     onSessionChange?.(null);
+                  } else if (sid) {
+                    setSessionId(sid);
+                    onSessionChange?.(sid);
                   }
                   const screenshot = event.data.latestScreenshot;
                   if (screenshot) {
