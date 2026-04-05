@@ -2103,12 +2103,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                 case "done": {
                   const sid = event.data.sessionId;
                   const isErr = event.data.isError;
-                  console.log("[CTX-DEBUG] done event, sessionId:", sid, "isError:", isErr);
-                  if (isErr) {
-                    // On error, always reset session so next send starts fresh
-                    setSessionId(null);
-                    onSessionChange?.(null);
-                  } else if (sid) {
+                  // Always keep sessionId — it's the stable studio session, not Claude's transient one
+                  if (sid) {
                     setSessionId(sid);
                     onSessionChange?.(sid);
                   }
@@ -2117,12 +2113,11 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                     onScreenshotUpdate(screenshot);
                     setLatestScreenshot(screenshot);
                   }
-                  // If no content was streamed at all, always show fallback
+                  // If no content was streamed at all, show fallback but keep session
                   if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
                     msg.content = isErr
-                      ? "⚠️ Agent exited unexpectedly. The session has been reset — your next message will start fresh."
-                      : "⚠️ No response received. Your next message will start fresh.";
-                    if (!isErr) { setSessionId(null); onSessionChange?.(null); }
+                      ? "⚠️ Agent exited unexpectedly. Try again — each message starts a fresh process."
+                      : "⚠️ No response received. Try sending your message again.";
                   }
                   onChatDone?.();
                   break;
@@ -7058,11 +7053,14 @@ function App() {
   const artifactToastSeqRef = useRef(0);
   const artifactToastTimersRef = useRef(new Map());
 
-  // Health check
+  // Health check + fetch stable session
   useEffect(() => {
     fetchHealth()
       .then(setHealth)
       .catch(() => setHealthError(true));
+    fetch(`${API_BASE}/session`).then(r => r.json()).then(d => {
+      if (d.sessionId) setCurrentSessionId(d.sessionId);
+    }).catch(() => {});
   }, []);
 
   const dismissArtifactToast = useCallback((id) => {
