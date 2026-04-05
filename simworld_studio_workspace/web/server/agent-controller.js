@@ -5,6 +5,7 @@ const path = require('path');
 const net = require('net');
 
 const fs = require('fs');
+const log = require('./logger');
 
 const MCP_CONFIG = path.resolve(__dirname, '../mcp.json');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
@@ -180,10 +181,12 @@ class AgentSession {
     this.lastReasoning = '';
     this.lastTools = [];
     this.history.push({ role: 'user', content: message, timestamp: Date.now() });
+    log.agent('info', `${this.agentName} turn start`, { message: message.slice(0, 200), historyLen: this.history.length });
 
     // Get fresh observation before running
     const obs = await getObservation(this.agentName);
     if (obs.location) this.location = obs.location;
+    log.agent('debug', `${this.agentName} observation`, obs);
 
     const systemPrompt = this._systemPrompt();
 
@@ -222,6 +225,7 @@ class AgentSession {
         try { msg = JSON.parse(line); } catch { return; }
 
         if (msg.type === 'system' && msg.subtype === 'init') {
+          log.agent('info', `${this.agentName} claude session`, { sessionId: msg.session_id });
           onEvent('system', { sessionId: msg.session_id });
         } else if (msg.type === 'stream_event') {
           const ev = msg.event || {};
@@ -257,6 +261,7 @@ class AgentSession {
         } else if (msg.type === 'result') {
           this.lastReasoning = assistantText;
           this.history.push({ role: 'assistant', content: assistantText, timestamp: Date.now() });
+          log.agent('info', `${this.agentName} turn done`, { cost: msg.total_cost_usd, tools: this.lastTools.length, textLen: assistantText.length });
           onEvent('done', {
             isError: msg.is_error || msg.subtype === 'error_during_turn',
             costUsd: msg.total_cost_usd,
@@ -287,11 +292,12 @@ class AgentSession {
         if (txt) onEvent('stderr', { text: txt });
       });
 
-      proc.on('close', () => {
+      proc.on('close', (code) => {
         clearInterval(idleTimer);
         if (buf.trim()) flush(buf);
         this.status = 'idle';
         this.proc = null;
+        log.agent('debug', `${this.agentName} process exited`, { code });
         resolve();
       });
 
@@ -366,6 +372,7 @@ class AgentController {
 
   sendMessage(from, to, text) {
     const msg = { from, to: to || 'all', text, timestamp: Date.now() };
+    log.agent('info', `msg ${from} → ${to || 'all'}`, { text: text.slice(0, 100) });
     this._publicChat.push(msg);
     if (this._publicChat.length > 200) this._publicChat.splice(0, this._publicChat.length - 200);
 

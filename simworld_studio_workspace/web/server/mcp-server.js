@@ -306,14 +306,17 @@ async function ensurePIE(){
   throw new Error("PIE mode is not active. Please start Play-In-Editor (PIE) mode in Unreal Engine first, then try again. You can start PIE by clicking the Play button in the UE toolbar.")
 }
 
-async function ucvCommandRetry(cmd,retries=3,delay=2000,timeout=10000){
+async function ucvCommandRetry(cmd,retries=3,delay=2000,timeout=10000){mcpLog('debug','ucv: '+cmd.slice(0,80));
   for(let i=0;i<retries;i++){
     try{return await ucvCommand(cmd,timeout)}
     catch(e){if(i<retries-1){await new Promise(r=>setTimeout(r,delay))}else{throw e}}
   }
 }
 
+function mcpLog(level,msg,data){process.stderr.write(`[${new Date().toISOString()}] [${level}] [mcp] ${msg}${data?' '+JSON.stringify(data):''}\n`)}
+
 async function toolSpawnAgent({agent_name,agent_type,location,rotation}){
+  mcpLog('info','spawn_agent',{agent_name,agent_type,location});
   await ensurePIE();
   const type=resolveAgentType(agent_type||"pedestrian");
   const typeDef=getAgentType(type);
@@ -355,7 +358,7 @@ async function toolAgentRotate({agent_name,angle,direction,agent_type}){
   catch(e){return{status:"error",message:e.message}}
 }
 
-async function toolAgentAction({agent_name,action,agent_type,params}){
+async function toolAgentAction({agent_name,action,agent_type,params}){mcpLog('info','agent_action',{agent_name,action,agent_type});
   const type=resolveAgentType(agent_type||"humanoid");
   const typeDef=getAgentType(type);
   if(!typeDef)return{status:"error",message:`Unknown agent type: ${agent_type}`};
