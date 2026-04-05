@@ -208,7 +208,7 @@ class AgentSession {
       await this._spawnClaude(message, systemPrompt, onEvent);
     } catch (err) {
       log.agent('error', `${this.agentName} run error: ${err.message}`);
-      onEvent('error', { message: err.message });
+      try { onEvent('error', { message: err.message }); } catch {};
     } finally {
       // ALWAYS reset status
       this.status = 'idle';
@@ -238,9 +238,10 @@ class AgentSession {
       if (model) args.push('--model', model);
 
       const env = { ...process.env };
-      delete env.CLAUDECODE;
-      delete env.CLAUDE_SESSION_ID;
-      delete env.CLAUDE_CODE_ENTRYPOINT;
+      // Remove ALL Claude-related env vars to prevent SDK/extension mode interference
+      for (const key of Object.keys(env)) {
+        if (key.startsWith('CLAUDE')) delete env[key];
+      }
 
       const proc = spawn(CLAUDE_BIN, args, {
         cwd: path.resolve(__dirname, '..'),
@@ -254,6 +255,12 @@ class AgentSession {
       let lastOutput = Date.now();
       const act = this._currentActivity;
 
+      const safeEvent = (type, data) => {
+        try { onEvent(type, data); } catch (err) {
+          log.agent('warn', `${this.agentName} onEvent error: ${err.message}`);
+        }
+      };
+
       const flush = (line) => {
         if (!line.trim()) return;
         let msg;
@@ -261,30 +268,30 @@ class AgentSession {
 
         if (msg.type === 'system' && msg.subtype === 'init') {
           log.agent('debug', `${this.agentName} session: ${msg.session_id}`);
-          onEvent('system', { sessionId: msg.session_id });
+          safeEvent('system', { sessionId: msg.session_id });
 
         } else if (msg.type === 'stream_event') {
           const ev = msg.event || {};
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
             assistantText += ev.delta.text;
             if (act) act.thought += ev.delta.text;
-            onEvent('text', { delta: ev.delta.text });
+            safeEvent('text', { delta: ev.delta.text });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta') {
             if (act) act.thought += ev.delta.thinking;
-            onEvent('thinking', { delta: ev.delta.thinking });
+            safeEvent('thinking', { delta: ev.delta.thinking });
           }
           if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
             const tc = ev.content_block;
             const displayName = tc.name.replace(/^mcp__\w+__/, '');
             if (act) act.actions.push({ tool: displayName, input: '', result: '', ok: null });
-            onEvent('tool_start', { id: tc.id, name: tc.name, displayName });
+            safeEvent('tool_start', { id: tc.id, name: tc.name, displayName });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta') {
             if (act && act.actions.length > 0) {
               act.actions[act.actions.length - 1].input += ev.delta.partial_json;
             }
-            onEvent('tool_input', { delta: ev.delta.partial_json });
+            safeEvent('tool_input', { delta: ev.delta.partial_json });
           }
 
         } else if (msg.type === 'user') {
@@ -299,7 +306,7 @@ class AgentSession {
                 last.result = text.slice(0, 500);
                 last.ok = !isErr;
               }
-              onEvent('tool_result', { toolUseId: p.tool_use_id, result: text.slice(0, 2000), isError: isErr });
+              safeEvent('tool_result', { toolUseId: p.tool_use_id, result: text.slice(0, 2000), isError: isErr });
             }
           }
 
@@ -310,7 +317,7 @@ class AgentSession {
           }
           this.history.push({ role: 'assistant', content: assistantText, timestamp: Date.now() });
           log.agent('info', `${this.agentName} done`, { cost: msg.total_cost_usd, actions: act?.actions?.length });
-          onEvent('done', {
+          safeEvent('done', {
             isError: msg.is_error || msg.subtype === 'error_during_turn',
             costUsd: msg.total_cost_usd,
             text: assistantText,
@@ -341,10 +348,10 @@ class AgentSession {
         if (txt) log.agent('debug', `${this.agentName} stderr: ${txt.slice(0, 200)}`);
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', (code, signal) => {
         clearInterval(idleTimer);
         if (buf.trim()) flush(buf);
-        log.agent('debug', `${this.agentName} exit code=${code}`);
+        log.agent('debug', `${this.agentName} exit code=${code} signal=${signal}`);
         resolve();
       });
 
@@ -423,7 +430,9 @@ class AgentController {
       this.getOrCreate(a.name, a.cls, a.location);
     }
     for (const name of this._sessions.keys()) {
-      if (!seen.has(name)) this.remove(name);
+      // Don't remove agents that are currently running
+      const session = this._sessions.get(name);
+      if (!seen.has(name) && session?.status !== 'running') this.remove(name);
     }
   }
 

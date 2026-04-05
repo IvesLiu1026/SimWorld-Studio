@@ -91,7 +91,7 @@ Example — spawn 2 pedestrians:
 - Use varied blueprint_ids (don't use the same building for everything)
 - After placing objects, ALWAYS take_screenshot so the user sees results
 - DO NOT set or move the camera. DO NOT use execute_python_script to change camera position/rotation. The camera is controlled by the user via the viewport. Just call take_screenshot directly.
-- Keep it simple: spawn objects, screenshot. Don't overthink it.`,app=express();app.use(cors()),app.use(express.json({limit:"10mb"})),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
+- Keep it simple: spawn objects, screenshot. Don't overthink it.`,app=express();app.use(cors()),app.use(express.json({limit:"10mb"})),app.use((req,res,next)=>{if(req.method==="POST")logToFile("http",`${req.method} ${req.path} body=${JSON.stringify(req.body||{}).slice(0,200)}`);res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
 <html style="width:100%;height:100%;margin:0;background:#000">
 <head><meta charset="utf-8"><title>UE Pixel Stream</title>
 <style>
@@ -156,6 +156,44 @@ app.get("/api/session",(s,e)=>{e.json({sessionId:STUDIO_SESSION})});
 
 app.get("/api/context",(s,e)=>{const st=ctxManager.getState(STUDIO_SESSION);e.set("Cache-Control","no-store");e.json(st||{agents:[],objects:[],environment:{ready:false},round:0,updatedAt:null})});
 
+// ── Unified poll endpoint — ONE request for ALL status data ─────────────
+app.get("/api/poll",async(s,e)=>{
+  const since=parseInt(s.query.since||"0",10);
+  // Context
+  const ctx=ctxManager.getState(STUDIO_SESSION);
+  // Agent sessions
+  if(ctx)agentCtrl.syncWithContext(ctx);
+  const sessions=agentCtrl.list();
+  // Agent activities
+  const activities={};
+  for(const sess of sessions){
+    activities[sess.agentName]=agentCtrl.getActivity(sess.agentName);
+  }
+  // Chat log
+  const chatLog=agentCtrl.getPublicChat(since);
+  // PIE status (non-blocking, use cached)
+  const tryPort=(port)=>new Promise(resolve=>{
+    const sock=new(require("net").Socket)();
+    const timer=setTimeout(()=>{sock.destroy();resolve(false)},1500);
+    sock.connect(port,"127.0.0.1",()=>{clearTimeout(timer);sock.destroy();resolve(true)});
+    sock.on("error",()=>{clearTimeout(timer);resolve(false)});
+  });
+  let pie=false;
+  try{pie=await tryPort(parseInt(process.env.UCV_PORT||"9000",10));if(!pie)pie=await tryPort(parseInt(UNREAL_PORT,10))}catch{}
+  // Health
+  let ueConnected=false;
+  try{const sock=new(require("net").Socket)();await new Promise((resolve)=>{const t=setTimeout(()=>{sock.destroy();resolve()},1500);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{ueConnected=true;sock.destroy();clearTimeout(t);resolve()});sock.on("error",()=>{clearTimeout(t);resolve()})})}catch{}
+  e.set("Cache-Control","no-store");
+  e.json({
+    context:ctx||{agents:[],objects:[],environment:{ready:false},round:0,updatedAt:null},
+    sessions,
+    activities,
+    chatLog,
+    pieActive:pie,
+    health:{ueConnected,mcpConnected:ueConnected,pixelStreamingUrl:PIXEL_STREAMING_URL},
+  });
+});
+
 // ── Agent Controller API ──────────────────────────────────────────────────
 app.get("/api/agent-sessions",(s,e)=>{
   // Sync with latest context before returning
@@ -167,11 +205,14 @@ app.get("/api/agent-sessions",(s,e)=>{
 
 app.post("/api/agent-chat",(s,e)=>{
   const{agentName,message,sessionId}=s.body;
+  logToFile("agent-chat",`REQUEST: agentName=${agentName} message=${(message||"").slice(0,100)} sessionId=${sessionId}`);
   if(!agentName||!message)return e.status(400).json({error:"agentName and message required"});
   const ctx=ctxManager.getState(sessionId);
+  logToFile("agent-chat",`context lookup: sessionId=${sessionId} hasCtx=${!!ctx} agents=${ctx?.agents?.length||0}`);
   if(ctx)agentCtrl.syncWithContext(ctx);
+  logToFile("agent-chat",`after sync: sessions=[${agentCtrl.list().map(a=>a.agentName).join(",")}]`);
   const agent=agentCtrl.get(agentName);
-  if(!agent)return e.status(404).json({error:`Agent "${agentName}" not found in scene`});
+  if(!agent){logToFile("agent-chat",`AGENT NOT FOUND: "${agentName}"`);return e.status(404).json({error:`Agent "${agentName}" not found in scene`})}
 
   log.agent('info',`user→${agentName}: ${message.slice(0,100)}`);
   agentCtrl.sendMessage("user",agentName,message);
@@ -182,7 +223,12 @@ app.post("/api/agent-chat",(s,e)=>{
   e.setHeader("X-Accel-Buffering","no");
   e.flushHeaders();
 
-  function send(type,data){if(!e.writableEnded)e.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)}
+  let clientGone=false;
+  function send(type,data){
+    if(clientGone||e.writableEnded)return;
+    try{e.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)}
+    catch(err){clientGone=true;log.agent('warn',`${agentName} SSE write error: ${err.message}`)}
+  }
 
   agent.run(message,(type,data)=>{
     send(type,data);
@@ -198,7 +244,11 @@ app.post("/api/agent-chat",(s,e)=>{
     if(!e.writableEnded)e.end();
   });
 
-  e.on("close",()=>{if(agent.status==="running")agent.stop()});
+  e.on("close",()=>{
+    clientGone=true;
+    log.agent('info',`${agentName} SSE closed (agent status: ${agent.status})`);
+    // Don't kill the agent — let it finish in background so UE actions complete
+  });
 });
 
 app.post("/api/agent-stop",(s,e)=>{
@@ -220,11 +270,19 @@ app.get("/api/agent-activity/:name",(s,e)=>{
 
 // ── PIE status ────────────────────────────────────────────────────────────
 app.get("/api/pie-status",async(s,e)=>{
-  try{
+  // Try UnrealCV (9000) first, then fall back to MCP port as PIE indicator
+  const tryPort=(port)=>new Promise(resolve=>{
     const sock=new(require("net").Socket)();
-    const timer=setTimeout(()=>{sock.destroy();e.json({active:false})},3000);
-    sock.connect(9000,"127.0.0.1",()=>{clearTimeout(timer);sock.destroy();e.json({active:true})});
-    sock.on("error",()=>{clearTimeout(timer);e.json({active:false})});
+    const timer=setTimeout(()=>{sock.destroy();resolve(false)},2000);
+    sock.connect(port,"127.0.0.1",()=>{clearTimeout(timer);sock.destroy();resolve(true)});
+    sock.on("error",()=>{clearTimeout(timer);resolve(false)});
+  });
+  try{
+    const ucv=await tryPort(parseInt(process.env.UCV_PORT||"9000",10));
+    if(ucv){e.json({active:true});return}
+    // Fallback: if MCP/UE port responds, PIE is likely active
+    const mcp=await tryPort(parseInt(UNREAL_PORT,10));
+    e.json({active:mcp});
   }catch(_){e.json({active:false})}
 });
 
@@ -258,7 +316,7 @@ data: ${JSON.stringify(r)}
 
 ## USER FEEDBACK ON CURRENT SCENE
 The user is providing feedback on the current scene. Modify the scene based on this feedback. Do NOT start from scratch \u2014 refine what exists.
-Feedback: ${i}`);const _=["-p",t,"--output-format","stream-json","--include-partial-messages","--verbose","--dangerously-skip-permissions","--mcp-config",MCP_CONFIG,"--append-system-prompt",m];const CLAUDE_MODEL=process.env.CLAUDE_MODEL||"";if(CLAUDE_MODEL)_.push("--model",CLAUDE_MODEL);const h=Object.assign({},process.env);delete h.CLAUDECODE,delete h.CLAUDE_SESSION_ID,delete h.CLAUDE_CODE_ENTRYPOINT,logToFile("chat",`User: "${t.slice(0,200)}" sessionId=${n||"new"}`);try{fs.writeFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),"")}catch{}const g=spawn(CLAUDE_BIN,_,{cwd:path.resolve(__dirname,".."),env:h,stdio:["ignore","pipe","pipe"]});let f="",w=new Set,v=new Set,S=n||null,b=null;const toolInputs=new Map;function j(d){if(d=d.trim(),!d)return;try{fs.appendFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),d+`
+Feedback: ${i}`);const _=["-p",t,"--output-format","stream-json","--include-partial-messages","--verbose","--dangerously-skip-permissions","--mcp-config",MCP_CONFIG,"--append-system-prompt",m];const CLAUDE_MODEL=process.env.CLAUDE_MODEL||"";if(CLAUDE_MODEL)_.push("--model",CLAUDE_MODEL);const h=Object.assign({},process.env);Object.keys(h).forEach(k=>{if(k.startsWith("CLAUDE"))delete h[k]});logToFile("chat",`User: "${t.slice(0,200)}" sessionId=${n||"new"}`);try{fs.writeFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),"")}catch{}const g=spawn(CLAUDE_BIN,_,{cwd:path.resolve(__dirname,".."),env:h,stdio:["ignore","pipe","pipe"]});let f="",w=new Set,v=new Set,S=n||null,b=null;const toolInputs=new Map;function j(d){if(d=d.trim(),!d)return;try{fs.appendFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),d+`
 `)}catch{}let r;try{r=JSON.parse(d)}catch{return}const u=r.type;if(u==="system"&&r.subtype==="init"){r.session_id&&(S=r.session_id);ctxManager.resolveSession(STUDIO_SESSION);ctxManager.beginRound(STUDIO_SESSION);const p=(r.mcp_servers||[]).map(l=>`${l.name}:${l.status}`);a("system",{sessionId:r.session_id,mcpServers:r.mcp_servers||[]}),logToFile("claude",`Session ${r.session_id} | MCP: ${p.join(", ")}`)}else if(u==="stream_event"){const p=r.event||{};if(p.type==="content_block_delta"&&p.delta?.type==="text_delta"&&a("text",{delta:p.delta.text}),p.type==="content_block_delta"&&p.delta?.type==="thinking_delta"&&a("text",{delta:p.delta.thinking}),p.type==="content_block_start"&&p.content_block?.type==="tool_use"){const l=p.content_block;if(!w.has(l.id)){w.add(l.id);const y=l.name.replace(/^mcp__\w+__/,"");a("tool_start",{id:l.id,name:l.name,displayName:y}),logToFile("tool",`Starting: ${l.name}`);if(y==="verify_scene"){v.add(l.id);a("verifier_start",{toolUseId:l.id})}}}p.type==="content_block_delta"&&p.delta?.type==="input_json_delta"&&a("tool_input",{delta:p.delta.partial_json})}else if(u==="assistant"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_use"){const y=l.name.replace(/^mcp__\w+__/,"");a("tool_details",{id:l.id,name:l.name,displayName:y,input:l.input});if(["spawn_blueprint_actor","spawn_actor","spawn_agent","delete_actor","delete_all_spawned","setup_environment"].includes(y)){logToFile("ctx","cached tool_use: "+y+" id="+l.id+" input="+JSON.stringify(l.input).slice(0,200));toolInputs.set(l.id,{name:y,input:l.input})}}else l.type==="text"&&l.text&&a("text",{delta:l.text})}else if(u==="user"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_result"){const y=Array.isArray(l.content)?l.content.map(P=>P.text||"").join(""):String(l.content||""),B=y.match(/([\/][\w\/\-._]+\.png)/);B&&fs.existsSync(B[1])&&(b=B[1],a("screenshot",{toolUseId:l.tool_use_id,filepath:`/api/screenshot/file?path=${encodeURIComponent(b)}`})),a("tool_result",{toolUseId:l.tool_use_id,result:y.slice(0,2e3),isError:l.is_error||!1}),logToFile("tool_result",`${l.tool_use_id?.slice(0,8)} \u2192 ${y.slice(0,300)}`);{const _st=toolInputs.get(l.tool_use_id);if(_st){logToFile("ctx","tool_result for "+_st.name+" toolUseId="+l.tool_use_id+" is_error="+l.is_error+" S="+S);if(!l.is_error&&S){try{const _tr=JSON.parse(y);logToFile("ctx",_st.name+" status="+_tr.status);if(_tr.status==="success"){if(_st.name==="spawn_blueprint_actor"||_st.name==="spawn_actor"||_st.name==="spawn_agent"){const _an=_st.input.actor_name||_st.input.agent_name||_st.input.name;const _cls=_st.input.blueprint_id||_st.input.static_mesh||_st.input.agent_type||"";const _cat=_st.name==="spawn_agent"?"agent":undefined;logToFile("ctx","addActor: "+_an+" cls="+_cls+" cat="+(_cat||"auto"));ctxManager.addActor(STUDIO_SESSION,{name:_an,cls:_cls,category:_cat,location:_st.input.location})}else if(_st.name==="delete_actor")ctxManager.removeActor(STUDIO_SESSION,_st.input.name);else if(_st.name==="delete_all_spawned")ctxManager.clearAllSpawned(STUDIO_SESSION);else if(_st.name==="setup_environment"){logToFile("ctx","setEnvironmentReady");ctxManager.setEnvironmentReady(STUDIO_SESSION)}const _state=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","state after update: agents="+(_state?.agents?.length)+" objects="+(_state?.objects?.length)+" updatedAt="+_state?.updatedAt)}}catch(_e){logToFile("ctx","parse error: "+_e.message)}}toolInputs.delete(l.tool_use_id)}}if(v.has(l.tool_use_id)){let _fb="",_ss="";try{const _ro=JSON.parse(y);_fb=_ro.feedback||"";_ss=_ro.screenshot||""}catch(_e){}a("verifier_result",{toolUseId:l.tool_use_id,feedback:_fb,screenshot:_ss?`/api/screenshot/file?path=${encodeURIComponent(_ss)}`:""})}}}else if(u==="result"){gotResultEvent=true;clearInterval(idleTimer);S=r.session_id;const p=r.is_error||r.subtype==="error_during_turn";r.result&&typeof r.result==="string"&&a("text",{delta:r.result+"\n"}),logToFile("claude",`Result: subtype=${r.subtype} session=${S} cost=$${r.total_cost_usd||"?"}`),logToFile("result",JSON.stringify({subtype:r.subtype,cost:r.total_cost_usd,duration:r.duration_ms}).slice(0,500)),T(),clearInterval(c);const _finish=()=>{const _st=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","DONE: session="+S+" agents="+(_st?.agents?.length)+" objects="+(_st?.objects?.length)+" updatedAt="+_st?.updatedAt);a("done",{sessionId:STUDIO_SESSION,isError:p,costUsd:r.total_cost_usd,latestScreenshot:b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:k()});e.end()};if(!MOCK_MODE){logToFile("ctx","calling snapshotScene for "+S);snapshotScene(STUDIO_SESSION).then(r=>{logToFile("ctx","snapshotScene result: "+(r?"success":"null"));_finish()}).catch(err=>{logToFile("ctx","snapshotScene error: "+err.message);_finish()})}else _finish()}}function T(){let d=null;if(fs.existsSync(SCREENSHOT_DIR))try{const r=fs.readdirSync(SCREENSHOT_DIR).filter(u=>u.endsWith(".png")).map(u=>({fp:path.join(SCREENSHOT_DIR,u),time:fs.statSync(path.join(SCREENSHOT_DIR,u)).mtimeMs})).filter(({time:u})=>Date.now()-u<18e5);for(const u of r)(!d||u.time>d.time)&&(d=u)}catch{}d&&(b=d.fp)}function k(){return T(),b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:null}let lastOutputTime=Date.now();const idleTimer=setInterval(()=>{if(Date.now()-lastOutputTime>300000&&!gotResultEvent){logToFile("claude","Idle timeout (300s no output), killing process");clearInterval(idleTimer);g.kill("SIGTERM")}},10000);g.stdout.on("data",d=>{lastOutputTime=Date.now();f+=d.toString();const r=f.split(`
 `);f=r.pop()??"";for(const u of r)j(u)});let stderrBuf="";g.stderr.on("data",d=>{lastOutputTime=Date.now();const r=d.toString().trim();if(r){stderrBuf+=r+"\n";logToFile("stderr",r.slice(0,300))}});let gotResultEvent=false;g.on("close",d=>{clearInterval(c),clearInterval(idleTimer),f.trim()&&j(f),logToFile("claude",`Process exited with code ${d} gotResult=${gotResultEvent}`);if(gotResultEvent)return;if(!e.writableEnded){const errDetail=stderrBuf.slice(0,400).trim()||(d!==0?`exit code ${d}`:`no output received`);a("text",{delta:`\n\n⚠️ Agent exited unexpectedly: ${errDetail}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:k()});e.end()}}),e.on("close",()=>{e.writableEnded||(clearInterval(c),g.killed||(g.kill("SIGTERM"),logToFile("claude","Browser closed connection, killed process")))})});const FRONTEND_DIR=path.resolve(__dirname,"../dist");fs.existsSync(FRONTEND_DIR)&&(app.use(express.static(FRONTEND_DIR)),app.get("*",(s,e)=>{!s.path.startsWith("/api/")&&!s.path.startsWith("/screenshots")&&!s.path.startsWith("/thumbnails")&&!s.path.startsWith("/ue")&&e.sendFile(path.join(FRONTEND_DIR,"index.html"))}),console.log("  Frontend served from:",FRONTEND_DIR)),app.listen(PORT,"0.0.0.0",()=>{console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557`),console.log("\u2551       SimWorld Studio Backend                      \u2551"),console.log("\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563"),console.log(`\u2551  Listening : http://0.0.0.0:${PORT}                  \u2551`),console.log(`\u2551  Claude    : ${CLAUDE_BIN}                            \u2551`),console.log("\u2551  MCP config: mcp.json (local stdio)               \u2551"),console.log(`\u2551  UE TCP    : ${UNREAL_HOST}:${UNREAL_PORT}                 \u2551`),console.log(`\u2551  Logs      : ${LOG_DIR}          \u2551`),console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D

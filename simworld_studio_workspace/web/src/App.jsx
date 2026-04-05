@@ -2,6 +2,107 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+// ─── Unified Poll System ────────────────────────────────────────────────────
+// Single GET /api/poll replaces ALL individual polling endpoints.
+// Browser HTTP/1.1 limit = 6 concurrent connections per origin.
+// Multiple independent polls saturate the pool and block real requests (chat, agent-chat).
+
+const PollContext = React.createContext({
+  context: { agents: [], objects: [], environment: { ready: false }, round: 0, updatedAt: null },
+  sessions: [],
+  activities: {},
+  chatLog: [],
+  pieActive: false,
+  health: null,
+});
+
+function PollProvider({ children }) {
+  const [data, setData] = useState({
+    context: { agents: [], objects: [], environment: { ready: false }, round: 0, updatedAt: null },
+    sessions: [],
+    activities: {},
+    chatLog: [],
+    pieActive: false,
+    health: null,
+  });
+  const sinceRef = useRef(0);
+
+  useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/poll?since=${sinceRef.current}`);
+        if (r.ok && !stopped) {
+          const d = await r.json();
+          if (d.chatLog?.length > 0) {
+            sinceRef.current = Math.max(...d.chatLog.map(m => m.timestamp));
+          }
+          setData(d);
+        }
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => { stopped = true; clearInterval(id); };
+  }, []);
+
+  return React.createElement(PollContext.Provider, { value: data }, children);
+}
+
+function usePoll() { return React.useContext(PollContext); }
+
+// ─── Inline SVG Icons (flat colorful cartoon style) ─────────────────────────
+
+function SvgIcon({ children, size = "1em", style, ...props }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width={size} height={size} fill="none" style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0, ...style }} {...props}>
+      {children}
+    </svg>
+  );
+}
+
+const ICONS = {
+  clipboard: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="2" fill="#3fb950" /><rect x="8" y="1" width="8" height="3" rx="1" fill="#2ea043" /><rect x="8" y="8" width="8" height="1.5" rx=".75" fill="#fff" /><rect x="8" y="11.5" width="6" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="8" y="15" width="7" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
+  search: (s) => <SvgIcon size={s}><circle cx="10.5" cy="10.5" r="6" stroke="#58a6ff" strokeWidth="2.2" /><line x1="15" y1="15" x2="20" y2="20" stroke="#58a6ff" strokeWidth="2.5" strokeLinecap="round" /></SvgIcon>,
+  plus: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="9" fill="#3fb950" /><line x1="12" y1="7.5" x2="12" y2="16.5" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /><line x1="7.5" y1="12" x2="16.5" y2="12" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /></SvgIcon>,
+  trash: (s) => <SvgIcon size={s}><path d="M6 7h12l-1 13H7L6 7z" fill="#f85149" /><rect x="4" y="4.5" width="16" height="2.5" rx="1" fill="#da3633" /><rect x="9" y="2" width="6" height="3" rx="1" fill="#f85149" /></SvgIcon>,
+  transform: (s) => <SvgIcon size={s}><line x1="4" y1="12" x2="20" y2="12" stroke="#d29922" strokeWidth="2" strokeLinecap="round" /><polyline points="7,8.5 4,12 7,15.5" fill="none" stroke="#d29922" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><polyline points="17,8.5 20,12 17,15.5" fill="none" stroke="#d29922" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></SvgIcon>,
+  document: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="2" fill="#8b949e" /><path d="M5 2h9l5 5v15a2 2 0 01-2 2H7a2 2 0 01-2-2V2z" fill="#8b949e" /><path d="M14 2v5h5" fill="#656d76" /><rect x="8" y="10" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="8" y="13" width="5" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
+  video: (s) => <SvgIcon size={s}><rect x="2" y="5" width="14" height="14" rx="2" fill="#a371f7" /><polygon points="18,7 22,5 22,19 18,17" fill="#8957e5" /><circle cx="9" cy="12" r="2.5" fill="#fff" opacity=".5" /></SvgIcon>,
+  camera: (s) => <SvgIcon size={s}><rect x="2" y="6" width="20" height="14" rx="3" fill="#58a6ff" /><circle cx="12" cy="13" r="4" fill="#1f6feb" /><circle cx="12" cy="13" r="2" fill="#a5d6ff" /><rect x="8" y="3.5" width="8" height="3" rx="1" fill="#1f6feb" /></SvgIcon>,
+  python: (s) => <SvgIcon size={s}><path d="M12 2c-3 0-5 1.5-5 4v2h5v1H6c-2 0-4 1.5-4 4.5S4 18 6 18h2v-3c0-2 1.5-3.5 3.5-3.5h5c1.5 0 3-1.2 3-3V6c0-2.2-2-4-5-4z" fill="#3fb950" /><path d="M12 22c3 0 5-1.5 5-4v-2h-5v-1h6c2 0 4-1.5 4-4.5S18 6 16 6h-2v3c0 2-1.5 3.5-3.5 3.5h-5c-1.5 0-3 1.2-3 3v3.5c0 2.2 2 4 5 4z" fill="#1f6feb" /><circle cx="8.5" cy="5" r="1" fill="#fff" /><circle cx="15.5" cy="19" r="1" fill="#fff" /></SvgIcon>,
+  wrench: (s) => <SvgIcon size={s}><path d="M14.5 3a6 6 0 00-5.7 7.9L3.3 16.4a2.2 2.2 0 003.1 3.1l5.5-5.5A6 6 0 1014.5 3z" fill="#d29922" /><circle cx="14.5" cy="9" r="2.5" fill="#f0883e" /></SvgIcon>,
+  gear: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="4" fill="#8b949e" /><path d="M12 1l1.5 3.2a7.5 7.5 0 012.3 1.3L19 4.5l1 2.5-2.8 1.5a7.5 7.5 0 01.3 2.5H21v2.5h-3.5a7.5 7.5 0 01-.3 2.5l2.8 1.5-1 2.5-3.2-1a7.5 7.5 0 01-2.3 1.3L12 23l-1.5-3.2a7.5 7.5 0 01-2.3-1.3L5 19.5l-1-2.5 2.8-1.5a7.5 7.5 0 01-.3-2.5H3v-2.5h3.5a7.5 7.5 0 01.3-2.5L4 6.5l1-2.5 3.2 1a7.5 7.5 0 012.3-1.3L12 1z" fill="#656d76" /><circle cx="12" cy="12" r="3" fill="#e6edf3" /></SvgIcon>,
+  palette: (s) => <SvgIcon size={s}><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1 0 1.5-.7 1.5-1.5 0-.4-.1-.7-.3-1-.2-.3-.3-.6-.3-1 0-1 .7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-5-4.5-9-10-9z" fill="#a371f7" /><circle cx="7" cy="12" r="1.8" fill="#f85149" /><circle cx="9" cy="8" r="1.8" fill="#d29922" /><circle cx="14" cy="7" r="1.8" fill="#3fb950" /><circle cx="17.5" cy="10" r="1.8" fill="#58a6ff" /></SvgIcon>,
+  plug: (s) => <SvgIcon size={s}><rect x="7" y="2" width="3" height="8" rx="1" fill="#58a6ff" /><rect x="14" y="2" width="3" height="8" rx="1" fill="#58a6ff" /><path d="M6 10h12v3a6 6 0 01-5 5.9V22h-2v-3.1A6 6 0 016 13V10z" fill="#1f6feb" /></SvgIcon>,
+  eye: (s) => <SvgIcon size={s}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" fill="#a371f7" /><circle cx="12" cy="12" r="4" fill="#fff" /><circle cx="12" cy="12" r="2" fill="#8957e5" /></SvgIcon>,
+  map: (s) => <SvgIcon size={s}><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3V6z" fill="#1f6feb" /><path d="M9 3v15" stroke="#58a6ff" strokeWidth="1.5" /><path d="M15 6v15" stroke="#58a6ff" strokeWidth="1.5" /><circle cx="8" cy="10" r="1.2" fill="#f85149" /><circle cx="16" cy="12" r="1.2" fill="#3fb950" /></SvgIcon>,
+  building: (s) => <SvgIcon size={s}><rect x="4" y="4" width="16" height="18" rx="1" fill="#1f6feb" /><rect x="7" y="7" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="14" y="7" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="7" y="13" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="14" y="13" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="10" y="18" width="4" height="4" fill="#58a6ff" /></SvgIcon>,
+  tree: (s) => <SvgIcon size={s}><rect x="10.5" y="15" width="3" height="7" fill="#8b6914" /><polygon points="12,2 4,15 20,15" fill="#3fb950" /><polygon points="12,6 6,15 18,15" fill="#2ea043" /></SvgIcon>,
+  car: (s) => <SvgIcon size={s}><rect x="2" y="10" width="20" height="7" rx="2" fill="#f0883e" /><path d="M5 10l2-5h10l2 5" fill="#d29922" /><circle cx="7" cy="17" r="2.2" fill="#484f58" /><circle cx="7" cy="17" r="1" fill="#8b949e" /><circle cx="17" cy="17" r="2.2" fill="#484f58" /><circle cx="17" cy="17" r="1" fill="#8b949e" /><rect x="7" y="7" width="4" height="3" rx=".5" fill="#a5d6ff" opacity=".7" /><rect x="13" y="7" width="4" height="3" rx=".5" fill="#a5d6ff" opacity=".7" /></SvgIcon>,
+  hydrant: (s) => <SvgIcon size={s}><rect x="4" y="12" width="16" height="10" rx="1" fill="#8b949e" /><rect x="6" y="8" width="12" height="4" rx="1" fill="#656d76" /><rect x="2" y="14" width="4" height="3" rx="1" fill="#656d76" /><rect x="18" y="14" width="4" height="3" rx="1" fill="#656d76" /><rect x="8" y="4" width="8" height="5" rx="2" fill="#8b949e" /><circle cx="12" cy="6" r="1.5" fill="#484f58" /></SvgIcon>,
+  road: (s) => <SvgIcon size={s}><polygon points="1,22 8,2 16,2 23,22" fill="#656d76" /><rect x="11" y="4" width="2" height="3.5" rx=".5" fill="#d29922" /><rect x="11" y="10" width="2" height="3.5" rx=".5" fill="#d29922" /><rect x="11" y="16" width="2" height="3.5" rx=".5" fill="#d29922" /></SvgIcon>,
+  cube: (s) => <SvgIcon size={s}><rect x="4" y="4" width="16" height="16" rx="2" fill="#484f58" /><rect x="6" y="6" width="12" height="12" rx="1" fill="#656d76" /></SvgIcon>,
+  hammer: (s) => <SvgIcon size={s}><rect x="10" y="10" width="3" height="12" rx="1" fill="#8b6914" transform="rotate(-45 12 16)" /><rect x="5" y="2" width="12" height="7" rx="2" fill="#8b949e" transform="rotate(-45 11 5.5)" /></SvgIcon>,
+  box: (s) => <SvgIcon size={s}><rect x="3" y="8" width="18" height="14" rx="1" fill="#d29922" /><path d="M3 8l9-6 9 6" fill="#f0883e" /><line x1="12" y1="2" x2="12" y2="22" stroke="#8b6914" strokeWidth="1" opacity=".3" /><rect x="9" y="8" width="6" height="4" rx="1" fill="#8b6914" opacity=".4" /></SvgIcon>,
+  chat: (s) => <SvgIcon size={s}><rect x="2" y="3" width="20" height="15" rx="3" fill="#58a6ff" /><path d="M6 18l-2 4v-4" fill="#58a6ff" /><rect x="6" y="8" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="6" y="11.5" width="5" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
+  robot: (s) => <SvgIcon size={s}><rect x="4" y="7" width="16" height="13" rx="3" fill="#8b949e" /><rect x="7" y="10" width="4" height="3" rx="1" fill="#58a6ff" /><rect x="13" y="10" width="4" height="3" rx="1" fill="#58a6ff" /><rect x="9" y="16" width="6" height="2" rx="1" fill="#656d76" /><line x1="12" y1="3" x2="12" y2="7" stroke="#8b949e" strokeWidth="2" /><circle cx="12" cy="2.5" r="1.5" fill="#58a6ff" /><rect x="1" y="12" width="3" height="4" rx="1" fill="#656d76" /><rect x="20" y="12" width="3" height="4" rx="1" fill="#656d76" /></SvgIcon>,
+  swords: (s) => <SvgIcon size={s}><line x1="5" y1="19" x2="18" y2="5" stroke="#f0883e" strokeWidth="2.5" strokeLinecap="round" /><polygon points="18,5 21,3 22,6 19,7" fill="#d29922" /><line x1="19" y1="19" x2="6" y2="5" stroke="#58a6ff" strokeWidth="2.5" strokeLinecap="round" /><polygon points="6,5 3,3 2,6 5,7" fill="#1f6feb" /><circle cx="12" cy="12" r="1.5" fill="#e6edf3" /></SvgIcon>,
+  frame: (s) => <SvgIcon size={s}><rect x="3" y="3" width="18" height="18" rx="2" fill="#a371f7" /><rect x="5" y="5" width="14" height="14" rx="1" fill="#0d1117" /><circle cx="9" cy="11" r="3" fill="#3fb950" /><polygon points="6,17 11,11 14,14 17,10 19,17" fill="#1f6feb" opacity=".8" /></SvgIcon>,
+  tools: (s) => <SvgIcon size={s}><path d="M14.5 3a6 6 0 00-5.7 7.9L3.3 16.4a2.2 2.2 0 003.1 3.1l5.5-5.5A6 6 0 1014.5 3z" fill="#d29922" /><path d="M4 4l3 3M2 8l4 1M8 2l1 4" stroke="#8b949e" strokeWidth="1.5" strokeLinecap="round" /><rect x="13" y="13" width="3" height="9" rx="1" fill="#8b949e" transform="rotate(-45 14.5 17.5)" /><rect x="14" y="11" width="8" height="4" rx="1" fill="#656d76" transform="rotate(-45 18 13)" /></SvgIcon>,
+  trophy: (s) => <SvgIcon size={s}><path d="M7 4h10v7a5 5 0 01-10 0V4z" fill="#d29922" /><path d="M7 6H4a2 2 0 00-2 2v1a3 3 0 003 3h2" fill="#f0883e" /><path d="M17 6h3a2 2 0 012 2v1a3 3 0 01-3 3h-2" fill="#f0883e" /><rect x="10" y="15" width="4" height="3" fill="#d29922" /><rect x="7" y="18" width="10" height="2.5" rx="1" fill="#f0883e" /></SvgIcon>,
+  gamepad: (s) => <SvgIcon size={s}><rect x="2" y="7" width="20" height="12" rx="5" fill="#484f58" /><circle cx="8" cy="13" r="3.5" fill="#656d76" /><line x1="8" y1="10.5" x2="8" y2="15.5" stroke="#8b949e" strokeWidth="1.5" strokeLinecap="round" /><line x1="5.5" y1="13" x2="10.5" y2="13" stroke="#8b949e" strokeWidth="1.5" strokeLinecap="round" /><circle cx="15" cy="11" r="1.3" fill="#3fb950" /><circle cx="18" cy="13" r="1.3" fill="#f85149" /><circle cx="15" cy="15" r="1.3" fill="#58a6ff" /><circle cx="18" cy="11" r="1.3" fill="#d29922" /></SvgIcon>,
+  mouse: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="7" fill="#8b949e" /><line x1="12" y1="2" x2="12" y2="10" stroke="#656d76" strokeWidth="1.5" /><rect x="10.5" y="5" width="3" height="4" rx="1.5" fill="#e6edf3" /></SvgIcon>,
+  keyboard: (s) => <SvgIcon size={s}><rect x="1" y="6" width="22" height="13" rx="2" fill="#484f58" /><rect x="3" y="8" width="3" height="2.5" rx=".5" fill="#8b949e" /><rect x="7.5" y="8" width="3" height="2.5" rx=".5" fill="#8b949e" /><rect x="12" y="8" width="3" height="2.5" rx=".5" fill="#8b949e" /><rect x="16.5" y="8" width="4.5" height="2.5" rx=".5" fill="#8b949e" /><rect x="3" y="12" width="4" height="2.5" rx=".5" fill="#8b949e" /><rect x="8.5" y="12" width="7" height="2.5" rx=".5" fill="#8b949e" /><rect x="17" y="12" width="4" height="2.5" rx=".5" fill="#8b949e" /><rect x="6" y="16" width="12" height="2" rx=".5" fill="#656d76" /></SvgIcon>,
+  liveCircle: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="6" fill="#f85149" /><circle cx="12" cy="12" r="3" fill="#ff7b72" /></SvgIcon>,
+  warning: (s) => <SvgIcon size={s}><path d="M12 2L1 21h22L12 2z" fill="#d29922" /><rect x="11" y="9" width="2" height="6" rx="1" fill="#fff" /><circle cx="12" cy="17.5" r="1.2" fill="#fff" /></SvgIcon>,
+  gold: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#d29922" /><circle cx="12" cy="10" r="6" fill="#f0883e" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">1</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#d29922" /></SvgIcon>,
+  silver: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#8b949e" /><circle cx="12" cy="10" r="6" fill="#c0c0c0" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">2</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#8b949e" /></SvgIcon>,
+  bronze: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#8b6914" /><circle cx="12" cy="10" r="6" fill="#cd7f32" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">3</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#8b6914" /></SvgIcon>,
+  book: (s) => <SvgIcon size={s}><rect x="4" y="3" width="16" height="18" rx="2" fill="#1f6feb" /><rect x="4" y="3" width="4" height="18" fill="#163d6f" /><rect x="10" y="7" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="10" y="10.5" width="6" height="1.5" rx=".75" fill="#fff" opacity=".5" /><rect x="10" y="14" width="7" height="1.5" rx=".75" fill="#fff" opacity=".4" /></SvgIcon>,
+  brain: (s) => <SvgIcon size={s}><path d="M12 4c-2 0-3.5.8-4.2 2-.8-.3-1.8-.2-2.5.4-1 .8-1.3 2.2-.8 3.3-.8.8-1.2 2-1 3.2.3 1.5 1.3 2.5 2.5 2.8.2 1.5 1.2 2.8 2.8 3.3.8.2 1.6.3 2.2.1V4z" fill="#a371f7" /><path d="M12 4c2 0 3.5.8 4.2 2 .8-.3 1.8-.2 2.5.4 1 .8 1.3 2.2.8 3.3.8.8 1.2 2 1 3.2-.3 1.5-1.3 2.5-2.5 2.8-.2 1.5-1.2 2.8-2.8 3.3-.8.2-1.6.3-2.2.1V4z" fill="#8957e5" /><line x1="12" y1="4" x2="12" y2="20" stroke="#c9a0ff" strokeWidth="1" /></SvgIcon>,
+};
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
@@ -10,22 +111,22 @@ const EVOLUTION_TOAST_MAX = 2;
 const EVOLUTION_TOAST_TTL_MS = 5200;
 
 const TOOL_ICONS = {
-  get_actors_in_level: "📋",
-  find_actors_by_name: "🔍",
-  spawn_actor: "➕",
-  delete_actor: "🗑️",
-  set_actor_transform: "↔️",
-  get_actor_properties: "📄",
-  focus_viewport: "🎥",
-  take_screenshot: "📸",
-  get_camera_0_view: "📸",
-  execute_python_script: "🐍",
-  create_blueprint: "🔧",
-  compile_blueprint: "⚙️",
-  apply_material_to_actor: "🎨",
-  initialize: "🔌",
-  observe_scene: "👁️",
-  get_scene_overview: "🗺️",
+  get_actors_in_level: ICONS.clipboard,
+  find_actors_by_name: ICONS.search,
+  spawn_actor: ICONS.plus,
+  delete_actor: ICONS.trash,
+  set_actor_transform: ICONS.transform,
+  get_actor_properties: ICONS.document,
+  focus_viewport: ICONS.video,
+  take_screenshot: ICONS.camera,
+  get_camera_0_view: ICONS.camera,
+  execute_python_script: ICONS.python,
+  create_blueprint: ICONS.wrench,
+  compile_blueprint: ICONS.gear,
+  apply_material_to_actor: ICONS.palette,
+  initialize: ICONS.plug,
+  observe_scene: ICONS.eye,
+  get_scene_overview: ICONS.map,
 };
 
 const TAG_COLORS = {
@@ -53,12 +154,12 @@ const TAG_COLORS = {
 };
 
 const CATEGORY_ICONS = {
-  buildings: "🏢",
-  trees: "🌳",
-  vehicles: "🚗",
-  street_furniture: "🚰",
-  roads: "🛣️",
-  static_meshes: "⬜",
+  buildings: ICONS.building,
+  trees: ICONS.tree,
+  vehicles: ICONS.car,
+  street_furniture: ICONS.hydrant,
+  roads: ICONS.road,
+  static_meshes: ICONS.cube,
 };
 
 const CATEGORY_COLORS = {
@@ -468,7 +569,7 @@ function headerButtonStyle(color) {
 function ToolCallBlock({ tool }) {
   const [expanded, setExpanded] = useState(false);
 
-  const icon = TOOL_ICONS[tool.displayName] || "🔨";
+  const iconFn = TOOL_ICONS[tool.displayName] || ICONS.hammer;
   const statusColor = {
     starting: "#8b949e",
     running: "#d29922",
@@ -531,7 +632,7 @@ function ToolCallBlock({ tool }) {
               : {}),
           }}
         />
-        <span style={{ fontSize: 13 }}>{icon}</span>
+        <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center" }}>{iconFn(13)}</span>
         <span style={{ fontFamily: "monospace", color: "#79c0ff", fontWeight: 500 }}>
           {displayName}
         </span>
@@ -1178,14 +1279,13 @@ function SkillsPanel({
       .catch(() => {});
   };
 
-  useEffect(reload, []);
+  // Delay initial load so it doesn't compete with critical requests at startup
+  useEffect(() => { const t = setTimeout(reload, 5000); return () => clearTimeout(t); }, []);
 
   useEffect(() => {
     if (!expanded) return;
-
-    // Keep learned skills in sync while users are actively viewing this panel.
     reload();
-    const timer = setInterval(reload, 8000);
+    const timer = setInterval(reload, 30000);
     return () => clearInterval(timer);
   }, [expanded]);
 
@@ -2143,8 +2243,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                   // If no content was streamed at all, show fallback but keep session
                   if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
                     msg.content = isErr
-                      ? "⚠️ Agent exited unexpectedly. Try again — each message starts a fresh process."
-                      : "⚠️ No response received. Try sending your message again.";
+                      ? "**Warning:** Agent exited unexpectedly. Try again — each message starts a fresh process."
+                      : "**Warning:** No response received. Try sending your message again.";
                   }
                   onChatDone?.();
                   break;
@@ -2667,7 +2767,7 @@ function PixelStreamView({ playerUrl }) {
             gap: 16,
           }}
         >
-          <div style={{ fontSize: 48 }}>🎮</div>
+          <div style={{ fontSize: 48 }}>{ICONS.gamepad(48)}</div>
           <div style={{ color: "#e6edf3", fontSize: 18, fontWeight: 600 }}>
             Click to Activate Stream
           </div>
@@ -2693,8 +2793,8 @@ function PixelStreamView({ playerUrl }) {
               fontSize: 12,
             }}
           >
-            <KeyHint icon="🖱️" label="Click & drag to look" />
-            <KeyHint icon="⌨️" label="WASD to move" />
+            <KeyHint icon={ICONS.mouse(14)} label="Click & drag to look" />
+            <KeyHint icon={ICONS.keyboard(14)} label="WASD to move" />
             <KeyHint icon="Esc" label="Release mouse" />
           </div>
         </div>
@@ -2717,7 +2817,7 @@ function PixelStreamView({ playerUrl }) {
             border: "1px solid #30363d",
           }}
         >
-          <KeyHint icon="🖱️" label="Click & drag to look" />
+          <KeyHint icon={ICONS.mouse(14)} label="Click & drag to look" />
           <KeyHint icon="WASD" label="Move" />
           <KeyHint icon="Esc" label="Release mouse" />
           <KeyHint icon="F" label="Fullscreen" />
@@ -2839,7 +2939,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
         color: "#656d76",
       }}
     >
-      <div style={{ fontSize: 44 }}>📸</div>
+      <div style={{ fontSize: 44 }}>{ICONS.camera(44)}</div>
       <div style={{ fontSize: 13 }}>No screenshot yet</div>
       <div
         style={{
@@ -2874,13 +2974,13 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
 // ─── ContextPanel ────────────────────────────────────────────────────────────
 
 function EntityRow({ entity }) {
-  const icon = CATEGORY_ICONS[entity.category] || "📦";
+  const iconFn = CATEGORY_ICONS[entity.category] || ICONS.box;
   const loc = Array.isArray(entity.location) && entity.location.length >= 3
     ? entity.location.map((v) => Math.round(v)).join(", ")
     : null;
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", borderBottom: "1px solid #21262d" }}>
-      <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1 }}>{icon}</span>
+      <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1, display: "inline-flex", alignItems: "center" }}>{iconFn(14)}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ color: "#e6edf3", fontSize: 12, fontWeight: 500 }}>{entity.name}</span>
@@ -2897,45 +2997,13 @@ function EntityRow({ entity }) {
 }
 
 function ContextPanel({ sessionId, refreshKey }) {
-  const [state, setState] = useState(null);
+  const poll = usePoll();
+  const state = poll.context?.updatedAt ? poll.context : null;
   const [lastUpdated, setLastUpdated] = useState(null);
-  const sessionRef = useRef(sessionId);
-  sessionRef.current = sessionId;
 
-  // Poll context — works with or without sessionId (backend falls back to latest)
   useEffect(() => {
-    let stopped = false;
-    const poll = async () => {
-      const sid = sessionRef.current;
-      try {
-        const url = sid
-          ? `${API_BASE}/context?sessionId=${encodeURIComponent(sid)}`
-          : `${API_BASE}/context`;
-        const res = await fetch(url);
-        if (!res.ok || stopped) return;
-        const data = await res.json();
-        if (!stopped && data.updatedAt) { setState(data); setLastUpdated(new Date()); }
-      } catch (err) { console.error("[CTX-DEBUG] poll error:", err); }
-    };
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => { stopped = true; clearInterval(id); };
-  }, [sessionId]);
-
-  // When refreshKey bumps (chat turn finished), do one immediate fetch
-  useEffect(() => {
-    if (!sessionId || refreshKey === 0) return;
-    const fetchOnce = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/context?sessionId=${encodeURIComponent(sessionId)}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        setState(data);
-        setLastUpdated(new Date());
-      } catch {}
-    };
-    fetchOnce();
-  }, [refreshKey, sessionId]);
+    if (state?.updatedAt) setLastUpdated(new Date());
+  }, [state?.updatedAt]);
 
   const containerStyle = {
     height: "100%", display: "flex", flexDirection: "column",
@@ -2992,7 +3060,7 @@ function ContextPanel({ sessionId, refreshKey }) {
         {/* Agents section */}
         <div style={sectionStyle}>
           <div style={sectionTitleStyle}>
-            🤖 Agents &nbsp;<span style={{ color: "#58a6ff" }}>{(state.agents || []).length}</span>
+            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "#58a6ff" }}>{(state.agents || []).length}</span>
           </div>
           {(state.agents || []).length === 0
             ? <div style={{ fontSize: 12, color: "#656d76", paddingBottom: 8 }}>No agents in scene</div>
@@ -3003,14 +3071,14 @@ function ContextPanel({ sessionId, refreshKey }) {
         {/* Objects section, grouped by category */}
         <div style={{ ...sectionStyle, marginTop: 12 }}>
           <div style={sectionTitleStyle}>
-            📦 Objects &nbsp;<span style={{ color: "#58a6ff" }}>{(state.objects || []).length}</span>
+            {ICONS.box(13)} Objects &nbsp;<span style={{ color: "#58a6ff" }}>{(state.objects || []).length}</span>
           </div>
           {(state.objects || []).length === 0
             ? <div style={{ fontSize: 12, color: "#656d76" }}>No objects in scene</div>
             : Object.entries(byCategory).map(([cat, items]) => (
                 <div key={cat} style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 4 }}>
-                    {CATEGORY_ICONS[cat] || "📦"} {cat}s ({items.length})
+                    {(CATEGORY_ICONS[cat] || ICONS.box)(11)} {cat}s ({items.length})
                   </div>
                   {items.map((o) => <EntityRow key={o.name} entity={o} />)}
                 </div>
@@ -3027,22 +3095,50 @@ function ContextPanel({ sessionId, refreshKey }) {
 const AGENT_COLORS = ["#58a6ff", "#3fb950", "#d29922", "#f778ba", "#bc8cff", "#f0883e", "#79c0ff", "#56d364"];
 
 async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
+  console.log("[sendAgentChat] START", { agentName, message, sessionId });
   const response = await fetch(`${API_BASE}/agent-chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agentName, message, sessionId }),
     signal,
   });
+  console.log("[sendAgentChat] fetch response", { status: response.status, ok: response.ok, hasBody: !!response.body });
   if (!response.ok || !response.body) {
     const err = await response.json().catch(() => ({ error: response.statusText }));
+    console.error("[sendAgentChat] ERROR response", err);
     throw new Error(err.error || `Server error: ${response.status}`);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let lastDataTime = Date.now();
+  const IDLE_TIMEOUT = 120000; // 2 min idle = dead
+
   for (;;) {
-    const { done, value } = await reader.read();
+    const readPromise = reader.read();
+    const timeoutPromise = new Promise((_, reject) => {
+      const check = setInterval(() => {
+        if (Date.now() - lastDataTime > IDLE_TIMEOUT) {
+          clearInterval(check);
+          reader.cancel();
+          reject(new Error("Agent response timeout"));
+        }
+      }, 5000);
+      readPromise.then(() => clearInterval(check)).catch(() => clearInterval(check));
+    });
+
+    let result;
+    try {
+      result = await Promise.race([readPromise, timeoutPromise]);
+    } catch {
+      onEvent({ type: "done", data: { isError: true, text: "Agent timed out." } });
+      break;
+    }
+
+    const { done, value } = result;
     if (done) break;
+
+    lastDataTime = Date.now();
     buffer += decoder.decode(value, { stream: true });
     const chunks = buffer.split("\n\n");
     buffer = chunks.pop() ?? "";
@@ -3066,26 +3162,20 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
   const [thought, setThought] = useState(""); // Current reasoning text
   const [actions, setActions] = useState([]); // [{tool, ok}]
   const [input, setInput] = useState("");
-  const [pastActivities, setPastActivities] = useState([]); // Previous turns
   const abortRef = useRef(null);
   const activityRef = useRef(null);
   const color = AGENT_COLORS[colorIdx % AGENT_COLORS.length];
 
-  // Poll last activity from server (catches completed turns)
-  useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch(`${API_BASE}/agent-activity/${agent.name}`);
-        if (r.ok) setPastActivities(await r.json());
-      } catch {}
-    };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => clearInterval(id);
-  }, [agent.name]);
+  // Get activities from unified poll
+  const pollData = usePoll();
+  const pastActivities = pollData.activities?.[agent.name] || [];
 
   const handleSend = useCallback(async (text) => {
-    if (!text.trim() || status === "running" || !pieActive) return;
+    console.log("[AgentCard] handleSend called", { text, status, agentName: agent.name, sessionId, pieActive });
+    if (!text.trim() || status === "running") {
+      console.log("[AgentCard] handleSend BLOCKED", { empty: !text.trim(), running: status === "running" });
+      return;
+    }
     setInput("");
     setStatus("running");
     setThought("");
@@ -3094,7 +3184,9 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
+      console.log("[AgentCard] calling sendAgentChat...", { agentName: agent.name, sessionId });
       await sendAgentChat(agent.name, text, sessionId, (event) => {
+        console.log("[AgentCard] event received", event.type, event.data);
         switch (event.type) {
           case "text":
             setThought(prev => prev + event.data.delta);
@@ -3112,8 +3204,10 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
             break;
         }
       }, controller.signal);
+      console.log("[AgentCard] sendAgentChat resolved OK");
       setStatus("done");
     } catch (err) {
+      console.error("[AgentCard] sendAgentChat ERROR", err.name, err.message);
       if (err.name !== "AbortError") {
         setThought(prev => prev || `Error: ${err.message}`);
         setStatus("error");
@@ -3190,13 +3284,13 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
       <div style={{ display: "flex", gap: 4, padding: "6px 8px", borderTop: "1px solid #21262d" }}>
         <input value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSend(input); } }}
-          placeholder={pieActive ? `Command ${agent.name}...` : "PIE required"}
-          disabled={status === "running" || !pieActive}
+          placeholder={`Command ${agent.name}...`}
+          disabled={status === "running"}
           style={{ flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 4, padding: "5px 8px", color: "#e6edf3", fontSize: 11, outline: "none" }}
         />
         <button onClick={() => handleSend(input)}
-          disabled={!input.trim() || status === "running" || !pieActive}
-          style={{ background: input.trim() && status !== "running" && pieActive ? "#238636" : "#21262d", border: "none", borderRadius: 4, padding: "5px 10px", color: "#fff", fontSize: 10, cursor: input.trim() && status !== "running" && pieActive ? "pointer" : "default", opacity: input.trim() && status !== "running" && pieActive ? 1 : 0.5 }}
+          disabled={!input.trim() || status === "running"}
+          style={{ background: input.trim() && status !== "running" ? "#238636" : "#21262d", border: "none", borderRadius: 4, padding: "5px 10px", color: "#fff", fontSize: 10, cursor: input.trim() && status !== "running" ? "pointer" : "default", opacity: input.trim() && status !== "running" ? 1 : 0.5 }}
         >Go</button>
       </div>
     </div>
@@ -3209,31 +3303,21 @@ function CommHistory({ agents }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [target, setTarget] = useState("all");
-  const lastTsRef = useRef(0);
   const scrollRef = useRef(null);
 
+  // Get chat log from unified poll
+  const pollData = usePoll();
   useEffect(() => {
-    const poll = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/agent-chat-log?since=${lastTsRef.current}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.length > 0) {
-          setMessages(prev => {
-            const existing = new Set(prev.map(m => `${m.from}-${m.timestamp}`));
-            const newMsgs = data.filter(m => !existing.has(`${m.from}-${m.timestamp}`));
-            if (!newMsgs.length) return prev;
-            const merged = [...prev, ...newMsgs].slice(-100);
-            lastTsRef.current = Math.max(...merged.map(m => m.timestamp));
-            return merged;
-          });
-        }
-      } catch {}
-    };
-    poll();
-    const id = setInterval(poll, 2000);
-    return () => clearInterval(id);
-  }, []);
+    const data = pollData.chatLog || [];
+    if (data.length > 0) {
+      setMessages(prev => {
+        const existing = new Set(prev.map(m => `${m.from}-${m.timestamp}`));
+        const newMsgs = data.filter(m => !existing.has(`${m.from}-${m.timestamp}`));
+        if (!newMsgs.length) return prev;
+        return [...prev, ...newMsgs].slice(-100);
+      });
+    }
+  }, [pollData.chatLog]);
 
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
 
@@ -3306,42 +3390,15 @@ function CommHistory({ agents }) {
 }
 
 function AgentPanel({ sessionId }) {
-  const [contextAgents, setContextAgents] = useState([]);
-  const [pieActive, setPieActive] = useState(false);
-  const sessionRef = useRef(sessionId);
-  sessionRef.current = sessionId;
-
-  useEffect(() => {
-    const poll = async () => {
-      try { const r = await fetch(`${API_BASE}/pie-status`); if (r.ok) setPieActive((await r.json()).active); } catch {}
-    };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    let stopped = false;
-    const poll = async () => {
-      try {
-        const r = await fetch(`${API_BASE}/agent-sessions`);
-        if (r.ok && !stopped) {
-          const sessions = await r.json();
-          if (sessions.length > 0) {
-            setContextAgents(sessions.map(s => ({ name: s.agentName, cls: s.agentClass, location: s.location, status: s.status })));
-            return;
-          }
-        }
-        const sid = sessionRef.current;
-        const url = sid ? `${API_BASE}/context?sessionId=${encodeURIComponent(sid)}` : `${API_BASE}/context`;
-        const cr = await fetch(url);
-        if (cr.ok && !stopped) setContextAgents((await cr.json()).agents || []);
-      } catch {}
-    };
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => { stopped = true; clearInterval(id); };
-  }, [sessionId]);
+  const poll = usePoll();
+  const pieActive = poll.pieActive;
+  const contextAgents = useMemo(() => {
+    const sessions = poll.sessions || [];
+    if (sessions.length > 0) {
+      return sessions.map(s => ({ name: s.agentName, cls: s.agentClass, location: s.location, status: s.status }));
+    }
+    return (poll.context?.agents || []);
+  }, [poll.sessions, poll.context?.agents]);
 
   if (contextAgents.length === 0) {
     return (
@@ -3496,7 +3553,7 @@ function ViewportPanel({ latestScreenshot }) {
           userSelect: "none",
         }}
       >
-        <span style={{ fontSize: 15 }}>🎮</span>
+        <span style={{ fontSize: 15, display: "inline-flex", alignItems: "center" }}>{ICONS.gamepad(15)}</span>
         <span style={{ fontWeight: 600, fontSize: 13, color: "#e6edf3" }}>UE Viewport</span>
 
         {/* Mode toggle */}
@@ -3516,7 +3573,7 @@ function ViewportPanel({ latestScreenshot }) {
                 cursor: "pointer",
               }}
             >
-              {m === "pixelstream" ? "🔴 Live Stream" : "📸 Screenshot"}
+              {m === "pixelstream" ? <>{ICONS.liveCircle(11)} Live Stream</> : <>{ICONS.camera(11)} Screenshot</>}
             </button>
           ))}
         </div>
@@ -3702,7 +3759,7 @@ function AssetPlaceholder({ id, category }) {
         gap: 4,
       }}
     >
-      <span style={{ fontSize: 28, opacity: 0.6 }}>{CATEGORY_ICONS[category] || "⬜"}</span>
+      <span style={{ fontSize: 28, opacity: 0.6, display: "inline-flex" }}>{(CATEGORY_ICONS[category] || ICONS.cube)(28)}</span>
       <span
         style={{
           fontSize: 9,
@@ -3814,7 +3871,7 @@ function AssetListItem({ item, category, onInsert }) {
         }}
       >
         {imgError ? (
-          <span style={{ fontSize: 16 }}>{CATEGORY_ICONS[category] || "⬜"}</span>
+          <span style={{ fontSize: 16, display: "inline-flex" }}>{(CATEGORY_ICONS[category] || ICONS.cube)(16)}</span>
         ) : (
           <img
             src={thumbnailUrl}
@@ -3954,7 +4011,7 @@ function AssetBrowser({ onInsert }) {
               cursor: "pointer",
             }}
           >
-            {CATEGORY_ICONS[cat] || ""} {cat.replace(/_/g, " ")}
+            {(CATEGORY_ICONS[cat] || ICONS.cube)(12)} {cat.replace(/_/g, " ")}
           </button>
         ))}
       </div>
@@ -4425,7 +4482,7 @@ function ArenaPage() {
           gap: 12,
         }}
       >
-        <span style={{ fontSize: 24 }}>⚔️</span>
+        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.swords(24)}</span>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Arena Battle</div>
           <div style={{ fontSize: 12, color: "#8b949e" }}>
@@ -4582,7 +4639,7 @@ function ArenaPage() {
         {/* Generating phase */}
         {phase === "generating" && (
           <div style={{ textAlign: "center", padding: 80 }}>
-            <div style={{ fontSize: 40, marginBottom: 16 }}>⚔️</div>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>{ICONS.swords(40)}</div>
             <div style={{ fontSize: 16, color: "#e6edf3", fontWeight: 600 }}>
               Generating scenes...
             </div>
@@ -4801,7 +4858,7 @@ function LeaderboardPage() {
           gap: 12,
         }}
       >
-        <span style={{ fontSize: 24 }}>🏆</span>
+        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.trophy(24)}</span>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Leaderboard</div>
           <div style={{ fontSize: 12, color: "#8b949e" }}>
@@ -4820,7 +4877,7 @@ function LeaderboardPage() {
           <div style={{ textAlign: "center", padding: 60, color: "#8b949e" }}>Loading...</div>
         ) : entries.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>🏆</div>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.trophy(40)}</div>
             <div
               style={{
                 fontSize: 16,
@@ -4888,7 +4945,7 @@ function LeaderboardPage() {
                               : "#484f58",
                     }}
                   >
-                    {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}
+                    {i === 0 ? ICONS.gold(18) : i === 1 ? ICONS.silver(18) : i === 2 ? ICONS.bronze(18) : i + 1}
                   </span>
                   <div>
                     <span style={{ fontSize: 14, fontWeight: 600, color: "#e6edf3" }}>
@@ -5334,7 +5391,7 @@ function GalleryPage() {
           gap: 12,
         }}
       >
-        <span style={{ fontSize: 24 }}>🖼️</span>
+        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.frame(24)}</span>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Gallery</div>
           <div style={{ fontSize: 12, color: "#8b949e" }}>
@@ -5424,7 +5481,7 @@ function GalleryPage() {
           <div style={{ textAlign: "center", padding: 60, color: "#8b949e" }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>🖼️</div>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.frame(40)}</div>
             <div
               style={{
                 fontSize: 16,
@@ -6081,7 +6138,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
           gap: 12,
         }}
       >
-        <span style={{ fontSize: 24 }}>🛠️</span>
+        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.tools(24)}</span>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Skills</div>
           <div style={{ fontSize: 12, color: "#8b949e" }}>
@@ -6164,7 +6221,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
           <div style={{ textAlign: "center", padding: 60, color: "#8b949e" }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>🛠️</div>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.tools(40)}</div>
             <div style={{ fontSize: 16, color: "#e6edf3", fontWeight: 600, marginBottom: 8 }}>
               No skills found
             </div>
@@ -6655,7 +6712,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
 
   useEffect(() => {
     reload();
-    const timer = setInterval(reload, 15000);
+    const timer = setInterval(reload, 60000);
     return () => clearInterval(timer);
   }, [reload]);
 
@@ -6793,7 +6850,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
           gap: 12,
         }}
       >
-        <span style={{ fontSize: 24 }}>🔧</span>
+        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.wrench(24)}</span>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Tools</div>
           <div style={{ fontSize: 12, color: "#8b949e" }}>
@@ -6835,7 +6892,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
               background: "#161b22",
             }}
           >
-            <span style={{ fontSize: 14 }}>📚</span>
+            <span style={{ fontSize: 14, display: "inline-flex", alignItems: "center" }}>{ICONS.book(14)}</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3" }}>
               Static MCP Tools (Reference)
             </span>
@@ -6877,7 +6934,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
               background: "#161b22",
             }}
           >
-            <span style={{ fontSize: 14 }}>🧠</span>
+            <span style={{ fontSize: 14, display: "inline-flex", alignItems: "center" }}>{ICONS.brain(14)}</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3" }}>
               Dynamic Learned Tools
             </span>
@@ -6916,7 +6973,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
               <div style={{ color: "#8b949e", padding: 20 }}>Loading…</div>
             ) : filteredTools.length === 0 ? (
               <div style={{ textAlign: "center", padding: 40 }}>
-                <div style={{ fontSize: 32, marginBottom: 10 }}>🔧</div>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>{ICONS.wrench(32)}</div>
                 <div style={{ fontSize: 15, color: "#e6edf3", fontWeight: 600, marginBottom: 6 }}>
                   No learned tools found
                 </div>
@@ -7282,10 +7339,12 @@ function App() {
       }
     };
 
-    syncLearnedArtifacts();
-    const intervalId = window.setInterval(syncLearnedArtifacts, EVOLUTION_ARTIFACT_POLL_MS);
+    // Delay initial sync to avoid connection saturation at startup
+    const startTimer = setTimeout(syncLearnedArtifacts, 10000);
+    const intervalId = window.setInterval(syncLearnedArtifacts, 60000);
     return () => {
       cancelled = true;
+      clearTimeout(startTimer);
       window.clearInterval(intervalId);
     };
   }, [activePage, pushArtifactToast]);
@@ -7341,18 +7400,19 @@ function App() {
   }, []);
 
   const NAV_ITEMS = [
-    { id: "generate", label: "Generate", icon: "💬" },
-    { id: "context", label: "Context", icon: "🗺️" },
-    { id: "agent", label: "Agent", icon: "🤖" },
-    { id: "arena", label: "Arena", icon: "⚔️" },
-    { id: "gallery", label: "Gallery", icon: "🖼️" },
-    { id: "skills", label: "Skills", icon: "🛠️" },
-    { id: "tools", label: "Tools", icon: "🔧" },
-    { id: "leaderboard", label: "Leaderboard", icon: "🏆" },
+    { id: "generate", label: "Generate", icon: ICONS.chat },
+    { id: "context", label: "Context", icon: ICONS.map },
+    { id: "agent", label: "Agent", icon: ICONS.robot },
+    { id: "arena", label: "Arena", icon: ICONS.swords },
+    { id: "gallery", label: "Gallery", icon: ICONS.frame },
+    { id: "skills", label: "Skills", icon: ICONS.tools },
+    { id: "tools", label: "Tools", icon: ICONS.wrench },
+    { id: "leaderboard", label: "Leaderboard", icon: ICONS.trophy },
   ];
   const SPLIT_PAGES = ["generate", "context", "agent"];
 
   return (
+    <PollProvider>
     <div
       style={{
         display: "flex",
@@ -7412,7 +7472,7 @@ function App() {
                 fontWeight: activePage === id ? 600 : 400,
               }}
             >
-              <span style={{ fontSize: 13 }}>{icon}</span>
+              <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center" }}>{icon(13)}</span>
               <span>{label}</span>
               {((id === "skills" && artifactUnread.skills) || (id === "tools" && artifactUnread.tools)) && (
                 <span
@@ -7626,6 +7686,7 @@ function App() {
         {activePage === "gallery" && <GalleryPage />}
       </div>
     </div>
+    </PollProvider>
   );
 }
 
