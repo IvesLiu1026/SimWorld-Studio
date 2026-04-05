@@ -162,12 +162,14 @@ app.get("/api/agent-sessions",(s,e)=>{
 app.post("/api/agent-chat",(s,e)=>{
   const{agentName,message,sessionId}=s.body;
   if(!agentName||!message)return e.status(400).json({error:"agentName and message required"});
-  // Sync with context to ensure agent session exists
   const ctx=ctxManager.getState(sessionId);
   if(ctx)agentCtrl.syncWithContext(ctx);
   const agent=agentCtrl.get(agentName);
   if(!agent)return e.status(404).json({error:`Agent "${agentName}" not found in scene`});
   if(agent.status==="running")return e.status(409).json({error:`Agent "${agentName}" is already running`});
+
+  // Log user→agent message in public chat
+  agentCtrl.sendMessage("user",agentName,message);
 
   e.setHeader("Content-Type","text/event-stream");
   e.setHeader("Cache-Control","no-cache");
@@ -177,7 +179,14 @@ app.post("/api/agent-chat",(s,e)=>{
 
   function send(type,data){if(!e.writableEnded)e.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`)}
 
-  agent.run(message,(type,data)=>{send(type,data)}).then(()=>{
+  agent.run(message,(type,data)=>{
+    send(type,data);
+    // When agent finishes, log response + parse @mentions
+    if(type==="done"&&data.text){
+      agentCtrl.sendMessage(agentName,null,data.text.slice(0,500));
+      agentCtrl.parseAndForwardMentions(agentName,data.text);
+    }
+  }).then(()=>{
     if(!e.writableEnded)e.end();
   }).catch(err=>{
     send("error",{message:err.message});

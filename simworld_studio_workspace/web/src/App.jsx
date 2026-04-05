@@ -3001,6 +3001,8 @@ function ContextPanel({ sessionId, refreshKey }) {
 
 // ─── AgentPanel ──────────────────────────────────────────────────────────────
 
+const AGENT_COLORS = ["#58a6ff", "#3fb950", "#d29922", "#f778ba", "#bc8cff", "#f0883e", "#79c0ff", "#56d364"];
+
 async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
   const response = await fetch(`${API_BASE}/agent-chat`, {
     method: "POST",
@@ -3036,157 +3038,114 @@ async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
   }
 }
 
-function AgentCard({ agent, sessionId, pieActive }) {
-  const [status, setStatus] = useState("idle"); // idle | running | done | error
-  const [lastAction, setLastAction] = useState(null); // { text, tools: [{name, ok}], response }
+function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
+  const [status, setStatus] = useState("idle");
+  const [reasoning, setReasoning] = useState("");
+  const [tools, setTools] = useState([]);
   const [input, setInput] = useState("");
   const abortRef = useRef(null);
+  const reasonRef = useRef(null);
+  const color = AGENT_COLORS[colorIdx % AGENT_COLORS.length];
 
   const handleSend = useCallback(async (text) => {
-    if (!text.trim() || status === "running") return;
+    if (!text.trim() || status === "running" || !pieActive) return;
     setInput("");
     setStatus("running");
-    setLastAction({ text, tools: [], response: "" });
+    setReasoning("");
+    setTools([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
-
     try {
       await sendAgentChat(agent.name, text, sessionId, (event) => {
-        setLastAction((prev) => {
-          if (!prev) return prev;
-          const a = { ...prev };
-          switch (event.type) {
-            case "text":
-              a.response = (a.response || "") + event.data.delta;
-              break;
-            case "tool_start":
-              a.tools = [...(a.tools || []), { name: event.data.displayName, ok: null }];
-              break;
-            case "tool_result": {
-              a.tools = (a.tools || []).map((t, i) =>
-                i === a.tools.length - 1 ? { ...t, ok: !event.data.isError } : t
-              );
-              break;
-            }
-            case "done":
-              break;
-          }
-          return a;
-        });
+        switch (event.type) {
+          case "text":
+            setReasoning(prev => prev + event.data.delta);
+            break;
+          case "tool_start":
+            setTools(prev => [...prev, { name: event.data.displayName, ok: null }]);
+            break;
+          case "tool_result":
+            setTools(prev => prev.map((t, i) => i === prev.length - 1 ? { ...t, ok: !event.data.isError } : t));
+            break;
+          case "done":
+            break;
+        }
       }, controller.signal);
       setStatus("done");
     } catch (err) {
-      if (err.name !== "AbortError") {
-        setLastAction((prev) => prev ? { ...prev, response: prev.response || `Error: ${err.message}` } : prev);
-        setStatus("error");
-      } else {
-        setStatus("idle");
-      }
-    } finally {
-      abortRef.current = null;
-    }
-  }, [agent.name, sessionId, status]);
+      if (err.name !== "AbortError") { setReasoning(prev => prev || `Error: ${err.message}`); setStatus("error"); }
+      else setStatus("idle");
+    } finally { abortRef.current = null; }
+  }, [agent.name, sessionId, status, pieActive]);
 
   const handleStop = () => {
     abortRef.current?.abort();
-    fetch(`${API_BASE}/agent-stop`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agentName: agent.name }),
-    }).catch(() => {});
+    fetch(`${API_BASE}/agent-stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentName: agent.name }) }).catch(() => {});
     setStatus("idle");
   };
 
-  const loc = Array.isArray(agent.location) && agent.location.length >= 3
-    ? `(${agent.location.map((v) => Math.round(v)).join(", ")})`
-    : null;
+  useEffect(() => { if (reasonRef.current) reasonRef.current.scrollTop = reasonRef.current.scrollHeight; }, [reasoning]);
 
-  const statusColor = { idle: "#8b949e", running: "#d29922", done: "#3fb950", error: "#f85149" }[status];
+  const loc = Array.isArray(agent.location) && agent.location.length >= 3 ? agent.location.map(v => Math.round(v)).join(", ") : null;
+  const statusColors = { idle: "#8b949e", running: "#d29922", done: "#3fb950", error: "#f85149" };
 
   return (
-    <div style={{
-      border: "1px solid #21262d", borderRadius: 6, background: "#161b22",
-      padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6,
-    }}>
-      {/* Row 1: identity + status */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusColor, flexShrink: 0 }} />
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>{agent.name}</span>
-        <span style={{ fontSize: 10, color: "#58a6ff", background: "#1f3a5f", borderRadius: 3, padding: "0 4px" }}>
-          {agent.cls}
-        </span>
-        {loc && <span style={{ fontSize: 9, color: "#656d76" }}>{loc}</span>}
+    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#161b22", minWidth: 220, flex: "1 1 220px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* Header */}
+      <div style={{ padding: "8px 10px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 6, background: `${color}0a` }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status], flexShrink: 0 }} />
+        <span style={{ fontSize: 13, fontWeight: 700, color }}>{agent.name}</span>
+        <span style={{ fontSize: 9, color: "#8b949e", background: "#0d1117", borderRadius: 3, padding: "1px 5px" }}>{agent.cls}</span>
         <div style={{ flex: 1 }} />
-        {status === "running" && (
-          <button onClick={handleStop} style={{
-            background: "none", border: "1px solid #da3633", borderRadius: 3,
-            padding: "1px 6px", color: "#f85149", fontSize: 10, cursor: "pointer",
-          }}>stop</button>
-        )}
+        {status === "running" && <button onClick={handleStop} style={{ background: "none", border: "1px solid #da3633", borderRadius: 3, padding: "1px 6px", color: "#f85149", fontSize: 10, cursor: "pointer" }}>stop</button>}
       </div>
 
-      {/* Row 2: last action summary (compact) */}
-      {lastAction && (
-        <div style={{ fontSize: 10, color: "#8b949e", display: "flex", flexDirection: "column", gap: 2 }}>
-          {lastAction.tools.length > 0 && (
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {lastAction.tools.map((t, i) => (
-                <span key={i} style={{
-                  background: "#0d1117", borderRadius: 3, padding: "1px 5px",
-                  color: t.ok === null ? "#d29922" : t.ok ? "#3fb950" : "#f85149",
-                }}>
-                  {t.ok === null ? "..." : t.ok ? "ok" : "err"} {t.name}
-                </span>
-              ))}
-            </div>
-          )}
-          {lastAction.response && (
-            <div style={{ color: "#656d76", whiteSpace: "pre-wrap", maxHeight: 40, overflow: "hidden", lineHeight: "1.3" }}>
-              {lastAction.response.slice(0, 150)}
-            </div>
-          )}
+      {/* Location */}
+      {loc && <div style={{ padding: "2px 10px", fontSize: 9, color: "#656d76" }}>@ ({loc})</div>}
+
+      {/* Reasoning */}
+      <div ref={reasonRef} style={{ flex: 1, padding: "6px 10px", fontSize: 11, color: "#c9d1d9", overflowY: "auto", minHeight: 60, maxHeight: 150, whiteSpace: "pre-wrap", lineHeight: "1.4" }}>
+        {reasoning || <span style={{ color: "#484f58", fontStyle: "italic" }}>No activity yet</span>}
+      </div>
+
+      {/* Tools */}
+      {tools.length > 0 && (
+        <div style={{ padding: "4px 10px", borderTop: "1px solid #21262d", display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {tools.map((t, i) => (
+            <span key={i} style={{ fontSize: 9, background: "#0d1117", borderRadius: 3, padding: "1px 5px", color: t.ok === null ? "#d29922" : t.ok ? "#3fb950" : "#f85149" }}>
+              {t.ok === null ? "..." : t.ok ? "ok" : "err"} {t.name}
+            </span>
+          ))}
         </div>
       )}
 
-      {/* Row 3: input */}
-      <div style={{ display: "flex", gap: 4 }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSend(input); } }}
-          placeholder={pieActive ? `Command ${agent.name}...` : "Start PIE to control agents"}
+      {/* Input */}
+      <div style={{ display: "flex", gap: 4, padding: "6px 8px", borderTop: "1px solid #21262d" }}>
+        <input value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSend(input); } }}
+          placeholder={pieActive ? `Command ${agent.name}...` : "PIE required"}
           disabled={status === "running" || !pieActive}
-          style={{
-            flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 4,
-            padding: "4px 6px", color: "#e6edf3", fontSize: 11, outline: "none",
-          }}
+          style={{ flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 4, padding: "5px 8px", color: "#e6edf3", fontSize: 11, outline: "none" }}
         />
-        <button
-          onClick={() => handleSend(input)}
-          disabled={!input.trim() || status === "running"}
-          style={{
-            background: input.trim() && status !== "running" ? "#238636" : "#21262d",
-            border: "none", borderRadius: 4, padding: "4px 8px", color: "#fff", fontSize: 10,
-            cursor: input.trim() && status !== "running" ? "pointer" : "default",
-            opacity: input.trim() && status !== "running" ? 1 : 0.5,
-          }}
+        <button onClick={() => handleSend(input)}
+          disabled={!input.trim() || status === "running" || !pieActive}
+          style={{ background: input.trim() && status !== "running" && pieActive ? "#238636" : "#21262d", border: "none", borderRadius: 4, padding: "5px 10px", color: "#fff", fontSize: 10, cursor: input.trim() && status !== "running" && pieActive ? "pointer" : "default", opacity: input.trim() && status !== "running" && pieActive ? 1 : 0.5 }}
         >Go</button>
       </div>
     </div>
   );
 }
 
-// ─── AgentChatLog (public inter-agent chat) ─────────────────────────────────
+// ─── Communication History (group chat sidebar) ─────────────────────────────
 
-function AgentChatLog({ agents }) {
+function CommHistory({ agents }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [target, setTarget] = useState("all");
   const lastTsRef = useRef(0);
   const scrollRef = useRef(null);
 
-  // Poll for new messages
   useEffect(() => {
     const poll = async () => {
       try {
@@ -3194,12 +3153,12 @@ function AgentChatLog({ agents }) {
         if (!res.ok) return;
         const data = await res.json();
         if (data.length > 0) {
-          setMessages((prev) => {
-            const existing = new Set(prev.map((m) => `${m.from}-${m.timestamp}`));
-            const newMsgs = data.filter((m) => !existing.has(`${m.from}-${m.timestamp}`));
-            if (newMsgs.length === 0) return prev;
-            const merged = [...prev, ...newMsgs].slice(-50);
-            lastTsRef.current = Math.max(...merged.map((m) => m.timestamp));
+          setMessages(prev => {
+            const existing = new Set(prev.map(m => `${m.from}-${m.timestamp}`));
+            const newMsgs = data.filter(m => !existing.has(`${m.from}-${m.timestamp}`));
+            if (!newMsgs.length) return prev;
+            const merged = [...prev, ...newMsgs].slice(-100);
+            lastTsRef.current = Math.max(...merged.map(m => m.timestamp));
             return merged;
           });
         }
@@ -3210,67 +3169,70 @@ function AgentChatLog({ agents }) {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages]);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages]);
 
   const handleSend = () => {
     const text = input.trim();
     if (!text) return;
-    // User sends as "user" to a specific agent or broadcast
     fetch(`${API_BASE}/agent-message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ from: "user", to: target === "all" ? null : target, text }),
     }).catch(() => {});
-    setMessages((prev) => [...prev, { from: "user", to: target, text, timestamp: Date.now() }]);
+    setMessages(prev => [...prev, { from: "user", to: target, text, timestamp: Date.now() }]);
     setInput("");
   };
 
-  const agentColors = {};
-  const palette = ["#58a6ff", "#3fb950", "#d29922", "#f778ba", "#bc8cff", "#f0883e"];
-  (agents || []).forEach((a, i) => { agentColors[a.name] = palette[i % palette.length]; });
-  agentColors["user"] = "#e6edf3";
+  const colors = { user: "#e6edf3" };
+  (agents || []).forEach((a, i) => { colors[a.name] = AGENT_COLORS[i % AGENT_COLORS.length]; });
+
+  // Render @mentions in text with color
+  const renderText = (text) => {
+    const parts = text.split(/(@\w+)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith("@")) {
+        const name = part.slice(1);
+        return <span key={i} style={{ color: colors[name] || "#58a6ff", fontWeight: 600 }}>{part}</span>;
+      }
+      return part;
+    });
+  };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", borderTop: "1px solid #21262d", height: 200, flexShrink: 0 }}>
-      <div style={{ padding: "4px 10px", background: "#161b22", fontSize: 11, fontWeight: 600, color: "#8b949e", borderBottom: "1px solid #21262d" }}>
-        Agent Chat
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0d1117" }}>
+      <div style={{ padding: "10px 12px", borderBottom: "1px solid #21262d", fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>
+        Communication
       </div>
-      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "4px 8px", fontSize: 11 }}>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
         {messages.length === 0 ? (
-          <div style={{ color: "#656d76", textAlign: "center", marginTop: 16 }}>No messages yet</div>
+          <div style={{ color: "#484f58", fontSize: 11, textAlign: "center", marginTop: 40 }}>
+            Messages between you and agents will appear here.
+          </div>
         ) : messages.map((m, i) => (
-          <div key={i} style={{ marginBottom: 3, lineHeight: "1.4" }}>
-            <span style={{ color: agentColors[m.from] || "#8b949e", fontWeight: 600 }}>{m.from}</span>
-            {m.to && m.to !== "all" && (
-              <span style={{ color: "#656d76" }}> @<span style={{ color: agentColors[m.to] || "#58a6ff" }}>{m.to}</span></span>
-            )}
-            <span style={{ color: "#656d76" }}>: </span>
-            <span style={{ color: "#e6edf3" }}>{m.text}</span>
+          <div key={i} style={{ marginBottom: 8, fontSize: 12, lineHeight: "1.5" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ fontWeight: 700, color: colors[m.from] || "#8b949e" }}>{m.from === "user" ? "You" : m.from}</span>
+              {m.to && m.to !== "all" && <span style={{ fontSize: 10, color: "#656d76" }}>to <span style={{ color: colors[m.to] || "#58a6ff" }}>@{m.to}</span></span>}
+              <span style={{ fontSize: 9, color: "#484f58", marginLeft: "auto" }}>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            </div>
+            <div style={{ color: "#c9d1d9", marginTop: 2 }}>{renderText(m.text)}</div>
           </div>
         ))}
       </div>
-      <div style={{ display: "flex", gap: 4, padding: "4px 8px", borderTop: "1px solid #21262d" }}>
-        <select
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          style={{ background: "#0d1117", border: "1px solid #30363d", borderRadius: 4, color: "#8b949e", fontSize: 10, padding: "2px 4px" }}
-        >
+      <div style={{ padding: "8px 12px", borderTop: "1px solid #21262d", display: "flex", gap: 6 }}>
+        <select value={target} onChange={e => setTarget(e.target.value)}
+          style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 4, color: "#8b949e", fontSize: 11, padding: "4px 6px" }}>
           <option value="all">@all</option>
-          {(agents || []).map((a) => <option key={a.name} value={a.name}>@{a.name}</option>)}
+          {(agents || []).map(a => <option key={a.name} value={a.name}>@{a.name}</option>)}
         </select>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSend(); } }}
-          placeholder="Message agents..."
-          style={{ flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 4, padding: "3px 6px", color: "#e6edf3", fontSize: 11, outline: "none" }}
+        <input value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSend(); } }}
+          placeholder="Message..."
+          style={{ flex: 1, background: "#161b22", border: "1px solid #30363d", borderRadius: 4, padding: "5px 8px", color: "#e6edf3", fontSize: 11, outline: "none" }}
         />
         <button onClick={handleSend} disabled={!input.trim()} style={{
           background: input.trim() ? "#238636" : "#21262d", border: "none", borderRadius: 4,
-          padding: "3px 8px", color: "#fff", fontSize: 10, cursor: input.trim() ? "pointer" : "default",
-          opacity: input.trim() ? 1 : 0.5,
+          padding: "5px 10px", color: "#fff", fontSize: 11, cursor: input.trim() ? "pointer" : "default", opacity: input.trim() ? 1 : 0.5,
         }}>Send</button>
       </div>
     </div>
@@ -3283,50 +3245,31 @@ function AgentPanel({ sessionId }) {
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
 
-  // Poll PIE status
   useEffect(() => {
     const poll = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/pie-status`);
-        if (res.ok) { const d = await res.json(); setPieActive(d.active); }
-      } catch {}
+      try { const r = await fetch(`${API_BASE}/pie-status`); if (r.ok) setPieActive((await r.json()).active); } catch {}
     };
     poll();
     const id = setInterval(poll, 5000);
     return () => clearInterval(id);
   }, []);
 
-  // Poll from TWO sources: context for agents list, agent-sessions for status
   useEffect(() => {
     let stopped = false;
     const poll = async () => {
       try {
-        // Try agent-sessions first (has status info)
-        const sessRes = await fetch(`${API_BASE}/agent-sessions`);
-        if (sessRes.ok && !stopped) {
-          const sessions = await sessRes.json();
+        const r = await fetch(`${API_BASE}/agent-sessions`);
+        if (r.ok && !stopped) {
+          const sessions = await r.json();
           if (sessions.length > 0) {
-            // Convert session format to agent format for AgentCard
-            setContextAgents(sessions.map(s => ({
-              name: s.agentName,
-              cls: s.agentClass,
-              location: s.location,
-              status: s.status,
-              category: "agent",
-            })));
+            setContextAgents(sessions.map(s => ({ name: s.agentName, cls: s.agentClass, location: s.location, status: s.status })));
             return;
           }
         }
-        // Fallback: get agents from context
         const sid = sessionRef.current;
-        const url = sid
-          ? `${API_BASE}/context?sessionId=${encodeURIComponent(sid)}`
-          : `${API_BASE}/context`;
-        const res = await fetch(url);
-        if (res.ok && !stopped) {
-          const data = await res.json();
-          setContextAgents(data.agents || []);
-        }
+        const url = sid ? `${API_BASE}/context?sessionId=${encodeURIComponent(sid)}` : `${API_BASE}/context`;
+        const cr = await fetch(url);
+        if (cr.ok && !stopped) setContextAgents((await cr.json()).agents || []);
       } catch {}
     };
     poll();
@@ -3334,49 +3277,45 @@ function AgentPanel({ sessionId }) {
     return () => { stopped = true; clearInterval(id); };
   }, [sessionId]);
 
-  const pieBar = (
-    <div style={{ padding: "6px 14px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: pieActive ? "#3fb950" : "#f85149" }} />
-      <span style={{ color: pieActive ? "#3fb950" : "#f85149" }}>PIE {pieActive ? "Active" : "Inactive"}</span>
-      <span style={{ marginLeft: "auto", color: "#656d76", fontSize: 10 }}>
-        {pieActive ? "Agents controllable" : "Start PIE in UE viewport to control agents"}
-      </span>
-    </div>
-  );
-
   if (contextAgents.length === 0) {
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#0d1117", color: "#e6edf3" }}>
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid #21262d", flexShrink: 0 }}>
+        <div style={{ padding: "10px 14px", borderBottom: "1px solid #21262d" }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
         </div>
-        {pieBar}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
-          <span style={{ fontSize: 24 }}>🤖</span>
-          <span style={{ fontSize: 12, color: "#8b949e" }}>No agents in scene</span>
-          <span style={{ fontSize: 10, color: "#656d76" }}>
-            {pieActive ? "Use spawn_agent to add pedestrians or humanoids." : "Start PIE mode first, then spawn agents."}
-          </span>
+        <div style={{ padding: "6px 14px", borderBottom: "1px solid #21262d", fontSize: 11, color: "#656d76" }}>
+          {pieActive ? "PIE active. Spawn agents to control them." : "Start PIE in Unreal Engine to enable agent control."}
+        </div>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ color: "#484f58", fontSize: 12 }}>No agents in scene</span>
         </div>
       </div>
     );
   }
 
+  // Split layout: left = comm history, right = agent cards
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#0d1117", color: "#e6edf3", overflow: "hidden" }}>
-      <div style={{ padding: "8px 14px", borderBottom: "1px solid #21262d", flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
-        <span style={{ fontSize: 10, color: "#3fb950", background: "#1a3a2a", borderRadius: 3, padding: "1px 6px" }}>
-          {contextAgents.length}
-        </span>
+    <div style={{ height: "100%", display: "flex", background: "#0d1117", color: "#e6edf3", overflow: "hidden" }}>
+      {/* Left: Communication History */}
+      <div style={{ width: 300, minWidth: 240, borderRight: "1px solid #21262d", display: "flex", flexDirection: "column" }}>
+        <CommHistory agents={contextAgents} />
       </div>
-      {pieBar}
-      <div style={{ flex: 1, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-        {contextAgents.map((a) => (
-          <AgentCard key={a.name} agent={a} sessionId={sessionId} pieActive={pieActive} />
-        ))}
+
+      {/* Right: Agent Cards */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ padding: "8px 14px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
+          <span style={{ fontSize: 10, color: "#3fb950", background: "#1a3a2a", borderRadius: 3, padding: "1px 6px" }}>{contextAgents.length}</span>
+          <div style={{ flex: 1 }} />
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: pieActive ? "#3fb950" : "#f85149" }} />
+          <span style={{ fontSize: 10, color: pieActive ? "#3fb950" : "#f85149" }}>PIE</span>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: 10, display: "flex", flexWrap: "wrap", gap: 10, alignContent: "flex-start" }}>
+          {contextAgents.map((a, i) => (
+            <AgentCard key={a.name} agent={a} sessionId={sessionId} pieActive={pieActive} colorIdx={i} />
+          ))}
+        </div>
       </div>
-      <AgentChatLog agents={contextAgents} />
     </div>
   );
 }

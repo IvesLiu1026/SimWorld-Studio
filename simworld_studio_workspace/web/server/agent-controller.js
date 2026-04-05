@@ -2,9 +2,86 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const net = require('net');
 
 const MCP_CONFIG = path.resolve(__dirname, '../mcp.json');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+const UCV_PORT = parseInt(process.env.UCV_PORT || '9000', 10);
+const UCV_HOST = process.env.UCV_HOST || '127.0.0.1';
+const UCV_MAGIC = 0x9E2B83C1;
+
+// ---------------------------------------------------------------------------
+// UnrealCV helper — one-shot TCP per call (connect → send → recv → close)
+// ---------------------------------------------------------------------------
+
+let ucvMsgId = 100; // offset from mcp-server's counter
+
+function ucvCommand(cmd, timeout = 8000) {
+  return new Promise((resolve, reject) => {
+    const sock = new net.Socket();
+    const timer = setTimeout(() => { sock.destroy(); reject(new Error('UCV timeout')); }, timeout);
+    let buf = Buffer.alloc(0);
+    let gotBanner = false;
+    const id = ucvMsgId++;
+
+    function parse(b) {
+      if (b.length < 8) return null;
+      if (b.readUInt32LE(0) !== UCV_MAGIC) return null;
+      const sz = b.readUInt32LE(4);
+      if (b.length < 8 + sz) return null;
+      return { payload: b.slice(8, 8 + sz).toString('utf-8'), remaining: b.slice(8 + sz) };
+    }
+    function sendMsg(msg) {
+      const p = Buffer.from(msg, 'utf-8');
+      const h = Buffer.alloc(8);
+      h.writeUInt32LE(UCV_MAGIC, 0);
+      h.writeUInt32LE(p.length, 4);
+      sock.write(Buffer.concat([h, p]));
+    }
+
+    sock.connect(UCV_PORT, UCV_HOST, () => {});
+    sock.on('data', d => {
+      buf = Buffer.concat([buf, d]);
+      let p;
+      while ((p = parse(buf)) !== null) {
+        buf = p.remaining;
+        if (!gotBanner) {
+          gotBanner = true;
+          sendMsg(`${id}:${cmd}`);
+        } else {
+          clearTimeout(timer);
+          sock.destroy();
+          let result = p.payload;
+          const ci = result.indexOf(':');
+          if (ci > 0 && ci < 6) result = result.slice(ci + 1);
+          resolve(result);
+          return;
+        }
+      }
+    });
+    sock.on('end', () => { clearTimeout(timer); resolve(''); });
+    sock.on('error', e => { clearTimeout(timer); reject(e); });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Get observation for an agent (position + nearby actors)
+// ---------------------------------------------------------------------------
+
+async function getObservation(agentName) {
+  try {
+    const loc = await ucvCommand(`vget /object/${agentName}/location`);
+    const rot = await ucvCommand(`vget /object/${agentName}/rotation`);
+    const locParts = loc.trim().split(/\s+/).map(Number);
+    const rotParts = rot.trim().split(/\s+/).map(Number);
+    return {
+      location: locParts.length === 3 ? locParts : null,
+      rotation: rotParts.length === 3 ? rotParts : null,
+    };
+  } catch {
+    return { location: null, rotation: null };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Per-agent session
@@ -15,71 +92,69 @@ class AgentSession {
     this.agentName = agentName;
     this.agentClass = agentClass;
     this.location = location;
-    this.sessionId = null;   // Claude session_id once known
-    this.status = 'idle';    // idle | running | stopped
-    this.proc = null;        // child process
-    this.history = [];       // { role, content, timestamp }
-    this.inbox = [];         // Messages from other agents (inter-agent communication)
+    this.status = 'idle';
+    this.proc = null;
+    this.history = [];
+    this.inbox = [];
+    this.lastReasoning = '';
+    this.lastTools = [];
   }
 
-  /** Build the system prompt that tells Claude who this agent is. */
   _systemPrompt() {
     const loc = Array.isArray(this.location)
       ? `(${this.location.map(v => Math.round(v)).join(', ')})`
       : 'unknown';
     const isHumanoid = /humanoid|user_agent|robot/i.test(this.agentClass || '');
-    const agentType = isHumanoid ? 'humanoid' : 'pedestrian';
+    const type = isHumanoid ? 'humanoid' : 'pedestrian';
+
     const lines = [
-      `You are the controller for agent "${this.agentName}" (class: ${this.agentClass}, type: ${agentType}) in a SimWorld scene.`,
-      `Your current location is ${loc}.`,
+      `You control agent "${this.agentName}" (${type}) at ${loc}.`,
       '',
-      '## Available Movement Tools',
-      `- agent_move_forward(agent_name="${this.agentName}") — start moving forward continuously`,
-      `- agent_stop(agent_name="${this.agentName}", agent_type="${agentType}") — stop movement`,
-      `- agent_rotate(agent_name="${this.agentName}", angle=90, direction="right", agent_type="${agentType}") — turn`,
-      `- agent_set_speed(agent_name="${this.agentName}", speed=200) — set speed (100=slow, 200=normal, 400=run)`,
-      `- agent_step_forward(agent_name="${this.agentName}", duration=2) — move forward for N seconds then stop`,
+      '## Tools',
+      `- agent_move_forward(agent_name="${this.agentName}")`,
+      `- agent_stop(agent_name="${this.agentName}", agent_type="${type}")`,
+      `- agent_rotate(agent_name="${this.agentName}", angle=N, direction="left"|"right", agent_type="${type}")`,
+      `- agent_set_speed(agent_name="${this.agentName}", speed=200)`,
+      `- agent_step_forward(agent_name="${this.agentName}", duration=2)`,
+      `- agent_action(agent_name="${this.agentName}", action="sit_down"|"stand_up"|"wave"|"pick_up"|"drop_off")`,
+      `- get_agent_state(agent_name="${this.agentName}")`,
+      '- get_actors_in_level()',
+      '- take_screenshot()',
       '',
-      '## Available Actions',
-      `- agent_action(agent_name="${this.agentName}", action="sit_down") — sit, stand_up, wave, discuss, listen, pick_up, drop_off`,
-      '',
-      '## Perception',
-      `- get_agent_state(agent_name="${this.agentName}") — get your position and rotation`,
-      '- get_actors_in_level() — see all objects and agents in the scene',
-      '- take_screenshot() — see the viewport',
+      '## Communication',
+      'To message another agent, include @AgentName in your response text.',
+      'Example: "@Ped_2 let\'s walk forward together"',
       '',
       '## Rules',
-      `- Always use agent_name="${this.agentName}" in all commands`,
-      '- Only control YOUR agent. Never modify other agents or scene objects.',
-      '- Break goals into steps: move, verify position, adjust.',
-      '- Be concise.',
+      `- Always use agent_name="${this.agentName}"`,
+      '- Only control YOUR agent.',
+      '- Be concise. Act, then report what you did.',
     ];
-    // Add messages from other agents
-    if (this.inbox && this.inbox.length > 0) {
-      lines.push('', '## Messages From Other Agents');
+
+    if (this.inbox.length > 0) {
+      lines.push('', '## Incoming Messages');
       for (const msg of this.inbox) {
-        lines.push(`- @${msg.from}: "${msg.text}" (${new Date(msg.timestamp).toLocaleTimeString()})`);
+        lines.push(`- ${msg.from}: "${msg.text}"`);
       }
-      this.inbox = []; // Clear after injecting
+      this.inbox = [];
     }
+
     return lines.join('\n');
   }
 
-  /**
-   * Send a message to this agent. Returns an event emitter-like callback
-   * approach: call `onEvent(type, data)` for each SSE event.
-   *
-   * @param {string} message   User instruction or "auto" for autonomous step
-   * @param {function} onEvent (type: string, data: object) => void
-   * @returns {Promise<void>}  resolves when turn finishes
-   */
-  run(message, onEvent) {
+  async run(message, onEvent) {
     if (this.status === 'running') {
-      return Promise.reject(new Error('Agent is already running'));
+      throw new Error('Agent is already running');
     }
 
     this.status = 'running';
+    this.lastReasoning = '';
+    this.lastTools = [];
     this.history.push({ role: 'user', content: message, timestamp: Date.now() });
+
+    // Get fresh observation before running
+    const obs = await getObservation(this.agentName);
+    if (obs.location) this.location = obs.location;
 
     const systemPrompt = this._systemPrompt();
 
@@ -93,9 +168,8 @@ class AgentSession {
         '--mcp-config', MCP_CONFIG,
         '--append-system-prompt', systemPrompt,
       ];
-
-      const CLAUDE_MODEL = process.env.CLAUDE_MODEL || '';
-      if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
+      const model = process.env.CLAUDE_MODEL || '';
+      if (model) args.push('--model', model);
 
       const env = { ...process.env };
       delete env.CLAUDECODE;
@@ -108,7 +182,6 @@ class AgentSession {
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 300_000,
       });
-
       this.proc = proc;
 
       let buf = '';
@@ -118,56 +191,47 @@ class AgentSession {
         if (!line.trim()) return;
         let msg;
         try { msg = JSON.parse(line); } catch { return; }
-        const type = msg.type;
 
-        if (type === 'system' && msg.subtype === 'init' && msg.session_id) {
-          this.sessionId = msg.session_id;
+        if (msg.type === 'system' && msg.subtype === 'init') {
           onEvent('system', { sessionId: msg.session_id });
-        } else if (type === 'stream_event') {
+        } else if (msg.type === 'stream_event') {
           const ev = msg.event || {};
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
-            onEvent('text', { delta: ev.delta.text });
             assistantText += ev.delta.text;
+            onEvent('text', { delta: ev.delta.text });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta') {
             onEvent('thinking', { delta: ev.delta.thinking });
           }
           if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
             const tc = ev.content_block;
-            onEvent('tool_start', {
-              id: tc.id,
-              name: tc.name,
-              displayName: tc.name.replace(/^mcp__\w+__/, ''),
-            });
+            const displayName = tc.name.replace(/^mcp__\w+__/, '');
+            this.lastTools.push({ name: displayName, ok: null });
+            onEvent('tool_start', { id: tc.id, name: tc.name, displayName });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta') {
             onEvent('tool_input', { delta: ev.delta.partial_json });
           }
-        } else if (type === 'user') {
-          const parts = msg.message?.content || [];
-          for (const p of parts) {
+        } else if (msg.type === 'user') {
+          for (const p of (msg.message?.content || [])) {
             if (p.type === 'tool_result') {
               const text = Array.isArray(p.content)
                 ? p.content.map(c => c.text || '').join('')
                 : String(p.content || '');
-              onEvent('tool_result', {
-                toolUseId: p.tool_use_id,
-                result: text.slice(0, 2000),
-                isError: p.is_error || false,
-              });
+              const isErr = p.is_error || false;
+              // Update last tool status
+              const last = this.lastTools[this.lastTools.length - 1];
+              if (last) last.ok = !isErr;
+              onEvent('tool_result', { toolUseId: p.tool_use_id, result: text.slice(0, 2000), isError: isErr });
             }
           }
-        } else if (type === 'result') {
-          if (msg.session_id) this.sessionId = msg.session_id;
-          this.history.push({
-            role: 'assistant',
-            content: assistantText,
-            timestamp: Date.now(),
-          });
+        } else if (msg.type === 'result') {
+          this.lastReasoning = assistantText;
+          this.history.push({ role: 'assistant', content: assistantText, timestamp: Date.now() });
           onEvent('done', {
-            sessionId: this.sessionId,
             isError: msg.is_error || msg.subtype === 'error_during_turn',
             costUsd: msg.total_cost_usd,
+            text: assistantText,
           });
         }
       };
@@ -177,11 +241,11 @@ class AgentSession {
         if (Date.now() - lastOutput > 90000) {
           clearInterval(idleTimer);
           proc.kill('SIGTERM');
-          onEvent('error', { message: 'Agent idle timeout (90s no output)' });
+          onEvent('error', { message: 'Agent idle timeout (90s)' });
         }
       }, 10000);
 
-      proc.stdout.on('data', (chunk) => {
+      proc.stdout.on('data', chunk => {
         lastOutput = Date.now();
         buf += chunk.toString();
         const lines = buf.split('\n');
@@ -189,12 +253,12 @@ class AgentSession {
         for (const ln of lines) flush(ln);
       });
 
-      proc.stderr.on('data', (d) => {
+      proc.stderr.on('data', d => {
         const txt = d.toString().trim();
         if (txt) onEvent('stderr', { text: txt });
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', () => {
         clearInterval(idleTimer);
         if (buf.trim()) flush(buf);
         this.status = 'idle';
@@ -202,7 +266,8 @@ class AgentSession {
         resolve();
       });
 
-      proc.on('error', (err) => {
+      proc.on('error', err => {
+        clearInterval(idleTimer);
         this.status = 'idle';
         this.proc = null;
         reject(err);
@@ -210,11 +275,8 @@ class AgentSession {
     });
   }
 
-  /** Kill the running process. */
   stop() {
-    if (this.proc && !this.proc.killed) {
-      this.proc.kill('SIGTERM');
-    }
+    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
     this.status = 'idle';
     this.proc = null;
   }
@@ -224,111 +286,86 @@ class AgentSession {
       agentName: this.agentName,
       agentClass: this.agentClass,
       location: this.location,
-      sessionId: this.sessionId,
       status: this.status,
       historyLength: this.history.length,
+      lastReasoning: this.lastReasoning?.slice(0, 300) || '',
+      lastTools: this.lastTools,
     };
   }
 }
 
 // ---------------------------------------------------------------------------
-// Controller — manages all agent sessions
+// Controller — manages all agent sessions + communication
 // ---------------------------------------------------------------------------
 
 class AgentController {
   constructor() {
-    /** @type {Map<string, AgentSession>} keyed by agent name */
     this._sessions = new Map();
+    this._publicChat = [];
   }
 
-  /** Get or create a session for the given agent. */
-  getOrCreate(agentName, agentClass, location) {
-    if (!this._sessions.has(agentName)) {
-      this._sessions.set(
-        agentName,
-        new AgentSession({ agentName, agentClass, location })
-      );
+  getOrCreate(name, cls, location) {
+    if (!this._sessions.has(name)) {
+      this._sessions.set(name, new AgentSession({ agentName: name, agentClass: cls, location }));
     }
-    const s = this._sessions.get(agentName);
-    // Update location in case it moved
+    const s = this._sessions.get(name);
     if (location) s.location = location;
-    if (agentClass) s.agentClass = agentClass;
+    if (cls) s.agentClass = cls;
     return s;
   }
 
-  get(agentName) {
-    return this._sessions.get(agentName) || null;
-  }
+  get(name) { return this._sessions.get(name) || null; }
+  list() { return [...this._sessions.values()].map(s => s.toJSON()); }
 
-  /** List all sessions. */
-  list() {
-    return [...this._sessions.values()].map(s => s.toJSON());
-  }
+  stop(name) { const s = this._sessions.get(name); if (s) s.stop(); }
+  stopAll() { for (const s of this._sessions.values()) s.stop(); }
+  remove(name) { this.stop(name); this._sessions.delete(name); }
 
-  /** Stop a specific agent. */
-  stop(agentName) {
-    const s = this._sessions.get(agentName);
-    if (s) s.stop();
-  }
-
-  /** Stop all agents. */
-  stopAll() {
-    for (const s of this._sessions.values()) s.stop();
-  }
-
-  /** Remove session entirely. */
-  remove(agentName) {
-    this.stop(agentName);
-    this._sessions.delete(agentName);
-  }
-
-  /** Sync with ContextManager — add/remove sessions based on scene state. */
   syncWithContext(contextState) {
     if (!contextState) return;
-    const sceneAgents = new Set();
+    const seen = new Set();
     for (const a of contextState.agents || []) {
-      sceneAgents.add(a.name);
+      seen.add(a.name);
       this.getOrCreate(a.name, a.cls, a.location);
     }
-    // Remove sessions for agents no longer in scene
     for (const name of this._sessions.keys()) {
-      if (!sceneAgents.has(name)) {
-        this.remove(name);
-      }
+      if (!seen.has(name)) this.remove(name);
     }
   }
 
-  // ── Inter-agent communication ──────────────────────────────────────────
+  // ── Communication ──
 
-  /** Public message log visible to all */
-  _publicChat = [];
-
-  /** Send a message from one agent to another (or broadcast). */
   sendMessage(from, to, text) {
     const msg = { from, to: to || 'all', text, timestamp: Date.now() };
     this._publicChat.push(msg);
-    // Keep last 100 messages
-    if (this._publicChat.length > 100) this._publicChat.splice(0, this._publicChat.length - 100);
-    // Deliver to target agent's inbox
+    if (this._publicChat.length > 200) this._publicChat.splice(0, this._publicChat.length - 200);
+
     if (to && to !== 'all') {
       const target = this._sessions.get(to);
-      if (target) {
-        target.inbox = target.inbox || [];
-        target.inbox.push(msg);
-      }
+      if (target) target.inbox.push(msg);
     } else {
-      // Broadcast to all agents except sender
       for (const [name, session] of this._sessions) {
-        if (name !== from) {
-          session.inbox = session.inbox || [];
-          session.inbox.push(msg);
-        }
+        if (name !== from) session.inbox.push(msg);
       }
     }
     return msg;
   }
 
-  /** Get public chat log. */
+  /** Parse @mentions from agent output and auto-forward. */
+  parseAndForwardMentions(fromAgent, text) {
+    const mentions = text.match(/@(\w+)/g);
+    if (!mentions) return [];
+    const forwarded = [];
+    for (const m of mentions) {
+      const targetName = m.slice(1);
+      if (this._sessions.has(targetName) && targetName !== fromAgent) {
+        this.sendMessage(fromAgent, targetName, text);
+        forwarded.push(targetName);
+      }
+    }
+    return forwarded;
+  }
+
   getPublicChat(since = 0) {
     return this._publicChat.filter(m => m.timestamp > since);
   }
