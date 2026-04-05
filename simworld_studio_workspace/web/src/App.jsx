@@ -246,7 +246,7 @@ async function sendChat(message, sessionId, onEvent, signal, options) {
   const decoder = new TextDecoder();
   let buffer = "";
   let lastDataTime = Date.now();
-  const IDLE_TIMEOUT = 180000; // 3 minutes without any data = dead connection
+  const IDLE_TIMEOUT = 330000; // 5.5 minutes without any data = dead connection
 
   for (;;) {
     // Race between read and idle timeout
@@ -631,7 +631,7 @@ function ToolCallBlock({ tool }) {
         </div>
       )}
 
-      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} } @keyframes spin { to{transform:rotate(360deg)} }`}</style>
     </div>
   );
 }
@@ -1678,6 +1678,12 @@ function ChatMessage({ message }) {
           </div>
         ) : (
           <>
+            {message.waiting && (
+              <div style={{ color: "#8b949e", fontSize: 13, display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+                <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", border: "2px solid #58a6ff", borderTopColor: "transparent", animation: "spin 1s linear infinite" }} />
+                Waiting for Claude...
+              </div>
+            )}
             {message.blocks
               ? message.blocks.map((block, idx) =>
                   block.type === "text" ? (
@@ -1958,6 +1964,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         id: assistantId,
         role: "assistant",
         content: "",
+        waiting: true,  // Show "Waiting for Claude..." until first event
         toolCalls: [],
         timestamp: Date.now(),
       };
@@ -1970,7 +1977,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       abortRef.current = controller;
       const inputBuffers = new Map();
 
-      // Safety: force-reset loading after 4 minutes no matter what
+      // Safety: force-reset loading after 6 minutes no matter what
       const safetyTimer = setTimeout(() => {
         if (abortRef.current === controller) {
           controller.abort();
@@ -1979,12 +1986,12 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             const updated = [...prev];
             const idx = updated.findIndex((m) => m.id === assistantId);
             if (idx !== -1 && !updated[idx].content) {
-              updated[idx] = { ...updated[idx], content: "Request timed out. Try again." };
+              updated[idx] = { ...updated[idx], content: "Request timed out after 6 minutes. Please try again." };
             }
             return updated;
           });
         }
-      }, 240000);
+      }, 360000);
 
       try {
         await sendChat(
@@ -1996,6 +2003,10 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               const idx = updated.findIndex((m) => m.id === assistantId);
               if (idx === -1) return prev;
               const msg = { ...updated[idx] };
+              // Clear waiting flag on first real event
+              if (msg.waiting && (event.type === "text" || event.type === "tool_start" || event.type === "system")) {
+                msg.waiting = false;
+              }
 
               switch (event.type) {
                 case "skill_selection_start": {
