@@ -150,6 +150,16 @@ class AgentSession {
       '- Be concise. Act, then report.',
     );
 
+    // Inject conversation history (last 6 turns for context)
+    if (this.history.length > 0) {
+      lines.push('', '## Conversation History');
+      const recent = this.history.slice(-6);
+      for (const h of recent) {
+        const prefix = h.role === 'user' ? 'User' : 'You';
+        lines.push(`${prefix}: ${h.content.slice(0, 300)}`);
+      }
+    }
+
     if (this.inbox.length > 0) {
       lines.push('', '## Incoming Messages');
       for (const msg of this.inbox) {
