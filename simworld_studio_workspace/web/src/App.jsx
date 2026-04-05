@@ -1970,6 +1970,22 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       abortRef.current = controller;
       const inputBuffers = new Map();
 
+      // Safety: force-reset loading after 4 minutes no matter what
+      const safetyTimer = setTimeout(() => {
+        if (abortRef.current === controller) {
+          controller.abort();
+          setLoading(false);
+          setMessages((prev) => {
+            const updated = [...prev];
+            const idx = updated.findIndex((m) => m.id === assistantId);
+            if (idx !== -1 && !updated[idx].content) {
+              updated[idx] = { ...updated[idx], content: "Request timed out. Try again." };
+            }
+            return updated;
+          });
+        }
+      }, 240000);
+
       try {
         await sendChat(
           text,
@@ -2150,6 +2166,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           });
         }
       } finally {
+        clearTimeout(safetyTimer);
         setLoading(false);
         setAutoSelectingSkills(false);
         abortRef.current = null;
