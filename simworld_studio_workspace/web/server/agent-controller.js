@@ -2,9 +2,8 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
-const net = require('net');
-
 const fs = require('fs');
+const net = require('net');
 const log = require('./logger');
 
 const MCP_CONFIG = path.resolve(__dirname, '../mcp.json');
@@ -15,10 +14,10 @@ const UCV_MAGIC = 0x9E2B83C1;
 const REGISTRY = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'agent-registry.json'), 'utf-8'));
 
 // ---------------------------------------------------------------------------
-// UnrealCV helper — one-shot TCP per call (connect → send → recv → close)
+// UnrealCV helper — one-shot TCP per call
 // ---------------------------------------------------------------------------
 
-let ucvMsgId = 100; // offset from mcp-server's counter
+let ucvMsgId = 200;
 
 function ucvCommand(cmd, timeout = 8000) {
   return new Promise((resolve, reject) => {
@@ -68,24 +67,27 @@ function ucvCommand(cmd, timeout = 8000) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Get observation for an agent (position + nearby actors)
-// ---------------------------------------------------------------------------
-
 async function getObservation(agentName) {
   try {
     const loc = await ucvCommand(`vget /object/${agentName}/location`);
     const rot = await ucvCommand(`vget /object/${agentName}/rotation`);
-    const locParts = loc.trim().split(/\s+/).map(Number);
-    const rotParts = rot.trim().split(/\s+/).map(Number);
     return {
-      location: locParts.length === 3 ? locParts : null,
-      rotation: rotParts.length === 3 ? rotParts : null,
+      location: loc.trim().split(/\s+/).map(Number),
+      rotation: rot.trim().split(/\s+/).map(Number),
     };
   } catch {
     return { location: null, rotation: null };
   }
 }
+
+// ---------------------------------------------------------------------------
+// ReAct activity log entry
+// ---------------------------------------------------------------------------
+
+/**
+ * Activity log entry — one per agent turn, captures the full ReAct cycle.
+ * { thought, actions: [{tool, input, result, ok}], response, timestamp, cost }
+ */
 
 // ---------------------------------------------------------------------------
 // Per-agent session
@@ -96,12 +98,12 @@ class AgentSession {
     this.agentName = agentName;
     this.agentClass = agentClass;
     this.location = location;
-    this.status = 'idle';
+    this.status = 'idle';    // idle | running
     this.proc = null;
-    this.history = [];
-    this.inbox = [];
-    this.lastReasoning = '';
-    this.lastTools = [];
+    this.history = [];       // conversation history
+    this.inbox = [];         // inter-agent messages
+    this.activity = [];      // ReAct activity log (last N turns)
+    this._currentActivity = null; // in-progress activity
   }
 
   _resolveType() {
@@ -125,7 +127,6 @@ class AgentSession {
       '## Actions (use agent_action tool)',
     ];
 
-    // List available actions from registry
     if (typeDef?.actions) {
       for (const [name, def] of Object.entries(typeDef.actions)) {
         const paramStr = def.params ? `, params: {${def.params.join(', ')}}` : '';
@@ -143,21 +144,19 @@ class AgentSession {
       '- take_screenshot()',
       '',
       '## Communication',
-      'To message another agent, include @AgentName in your response text.',
+      'To message another agent, include @AgentName in your response.',
       '',
       '## Rules',
       `- Always use agent_name="${this.agentName}"`,
       '- Only control YOUR agent.',
-      '- Be concise. Act, then report.',
+      '- Think step by step: observe → think → act → verify.',
+      '- Be concise.',
     );
 
-    // Inject conversation history (last 6 turns for context)
     if (this.history.length > 0) {
-      lines.push('', '## Conversation History');
-      const recent = this.history.slice(-6);
-      for (const h of recent) {
-        const prefix = h.role === 'user' ? 'User' : 'You';
-        lines.push(`${prefix}: ${h.content.slice(0, 300)}`);
+      lines.push('', '## Recent History');
+      for (const h of this.history.slice(-6)) {
+        lines.push(`${h.role === 'user' ? 'User' : 'You'}: ${h.content.slice(0, 300)}`);
       }
     }
 
@@ -172,24 +171,59 @@ class AgentSession {
     return lines.join('\n');
   }
 
+  /**
+   * Run a turn. Streams ReAct events to onEvent callback.
+   * ALWAYS resets status to 'idle' when done, even on error.
+   */
   async run(message, onEvent) {
-    if (this.status === 'running') {
-      throw new Error('Agent is already running');
+    // Force-reset if stuck (safety valve)
+    if (this.status === 'running' && this.proc) {
+      log.agent('warn', `${this.agentName} force-killing stuck process`);
+      try { this.proc.kill('SIGTERM'); } catch {}
+      this.proc = null;
     }
 
     this.status = 'running';
-    this.lastReasoning = '';
-    this.lastTools = [];
     this.history.push({ role: 'user', content: message, timestamp: Date.now() });
-    log.agent('info', `${this.agentName} turn start`, { message: message.slice(0, 200), historyLen: this.history.length });
 
-    // Get fresh observation before running
+    // Init activity entry for this turn
+    this._currentActivity = {
+      thought: '',
+      actions: [],
+      response: '',
+      timestamp: Date.now(),
+      cost: null,
+    };
+
+    log.agent('info', `${this.agentName} turn start`, { message: message.slice(0, 200) });
+
+    // Get observation
     const obs = await getObservation(this.agentName);
     if (obs.location) this.location = obs.location;
-    log.agent('debug', `${this.agentName} observation`, obs);
+    log.agent('debug', `${this.agentName} obs`, obs);
 
     const systemPrompt = this._systemPrompt();
 
+    try {
+      await this._spawnClaude(message, systemPrompt, onEvent);
+    } catch (err) {
+      log.agent('error', `${this.agentName} run error: ${err.message}`);
+      onEvent('error', { message: err.message });
+    } finally {
+      // ALWAYS reset status
+      this.status = 'idle';
+      this.proc = null;
+
+      // Finalize activity
+      if (this._currentActivity) {
+        this.activity.push(this._currentActivity);
+        if (this.activity.length > 20) this.activity.splice(0, this.activity.length - 20);
+        this._currentActivity = null;
+      }
+    }
+  }
+
+  _spawnClaude(message, systemPrompt, onEvent) {
     return new Promise((resolve, reject) => {
       const args = [
         '-p', message,
@@ -212,12 +246,13 @@ class AgentSession {
         cwd: path.resolve(__dirname, '..'),
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 300_000,
       });
       this.proc = proc;
 
       let buf = '';
       let assistantText = '';
+      let lastOutput = Date.now();
+      const act = this._currentActivity;
 
       const flush = (line) => {
         if (!line.trim()) return;
@@ -225,26 +260,33 @@ class AgentSession {
         try { msg = JSON.parse(line); } catch { return; }
 
         if (msg.type === 'system' && msg.subtype === 'init') {
-          log.agent('info', `${this.agentName} claude session`, { sessionId: msg.session_id });
+          log.agent('debug', `${this.agentName} session: ${msg.session_id}`);
           onEvent('system', { sessionId: msg.session_id });
+
         } else if (msg.type === 'stream_event') {
           const ev = msg.event || {};
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
             assistantText += ev.delta.text;
+            if (act) act.thought += ev.delta.text;
             onEvent('text', { delta: ev.delta.text });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta') {
+            if (act) act.thought += ev.delta.thinking;
             onEvent('thinking', { delta: ev.delta.thinking });
           }
           if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
             const tc = ev.content_block;
             const displayName = tc.name.replace(/^mcp__\w+__/, '');
-            this.lastTools.push({ name: displayName, ok: null });
+            if (act) act.actions.push({ tool: displayName, input: '', result: '', ok: null });
             onEvent('tool_start', { id: tc.id, name: tc.name, displayName });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta') {
+            if (act && act.actions.length > 0) {
+              act.actions[act.actions.length - 1].input += ev.delta.partial_json;
+            }
             onEvent('tool_input', { delta: ev.delta.partial_json });
           }
+
         } else if (msg.type === 'user') {
           for (const p of (msg.message?.content || [])) {
             if (p.type === 'tool_result') {
@@ -252,16 +294,22 @@ class AgentSession {
                 ? p.content.map(c => c.text || '').join('')
                 : String(p.content || '');
               const isErr = p.is_error || false;
-              // Update last tool status
-              const last = this.lastTools[this.lastTools.length - 1];
-              if (last) last.ok = !isErr;
+              if (act && act.actions.length > 0) {
+                const last = act.actions[act.actions.length - 1];
+                last.result = text.slice(0, 500);
+                last.ok = !isErr;
+              }
               onEvent('tool_result', { toolUseId: p.tool_use_id, result: text.slice(0, 2000), isError: isErr });
             }
           }
+
         } else if (msg.type === 'result') {
-          this.lastReasoning = assistantText;
+          if (act) {
+            act.response = assistantText;
+            act.cost = msg.total_cost_usd;
+          }
           this.history.push({ role: 'assistant', content: assistantText, timestamp: Date.now() });
-          log.agent('info', `${this.agentName} turn done`, { cost: msg.total_cost_usd, tools: this.lastTools.length, textLen: assistantText.length });
+          log.agent('info', `${this.agentName} done`, { cost: msg.total_cost_usd, actions: act?.actions?.length });
           onEvent('done', {
             isError: msg.is_error || msg.subtype === 'error_during_turn',
             costUsd: msg.total_cost_usd,
@@ -270,12 +318,12 @@ class AgentSession {
         }
       };
 
-      let lastOutput = Date.now();
+      // Idle timer — 90s no output = kill
       const idleTimer = setInterval(() => {
         if (Date.now() - lastOutput > 90000) {
           clearInterval(idleTimer);
+          log.agent('warn', `${this.agentName} idle timeout`);
           proc.kill('SIGTERM');
-          onEvent('error', { message: 'Agent idle timeout (90s)' });
         }
       }, 10000);
 
@@ -288,30 +336,30 @@ class AgentSession {
       });
 
       proc.stderr.on('data', d => {
+        lastOutput = Date.now(); // stderr counts as activity
         const txt = d.toString().trim();
-        if (txt) onEvent('stderr', { text: txt });
+        if (txt) log.agent('debug', `${this.agentName} stderr: ${txt.slice(0, 200)}`);
       });
 
       proc.on('close', (code) => {
         clearInterval(idleTimer);
         if (buf.trim()) flush(buf);
-        this.status = 'idle';
-        this.proc = null;
-        log.agent('debug', `${this.agentName} process exited`, { code });
+        log.agent('debug', `${this.agentName} exit code=${code}`);
         resolve();
       });
 
-      proc.on('error', err => {
+      proc.on('error', (err) => {
         clearInterval(idleTimer);
-        this.status = 'idle';
-        this.proc = null;
         reject(err);
       });
     });
   }
 
   stop() {
-    if (this.proc && !this.proc.killed) this.proc.kill('SIGTERM');
+    if (this.proc && !this.proc.killed) {
+      this.proc.kill('SIGTERM');
+      log.agent('info', `${this.agentName} stopped by user`);
+    }
     this.status = 'idle';
     this.proc = null;
   }
@@ -323,14 +371,15 @@ class AgentSession {
       location: this.location,
       status: this.status,
       historyLength: this.history.length,
-      lastReasoning: this.lastReasoning?.slice(0, 300) || '',
-      lastTools: this.lastTools,
+      // Last activity for display
+      lastActivity: this.activity.length > 0 ? this.activity[this.activity.length - 1] : null,
+      activityCount: this.activity.length,
     };
   }
 }
 
 // ---------------------------------------------------------------------------
-// Controller — manages all agent sessions + communication
+// Controller
 // ---------------------------------------------------------------------------
 
 class AgentController {
@@ -351,10 +400,15 @@ class AgentController {
 
   get(name) { return this._sessions.get(name) || null; }
   list() { return [...this._sessions.values()].map(s => s.toJSON()); }
-
   stop(name) { const s = this._sessions.get(name); if (s) s.stop(); }
   stopAll() { for (const s of this._sessions.values()) s.stop(); }
   remove(name) { this.stop(name); this._sessions.delete(name); }
+
+  /** Get full activity log for an agent */
+  getActivity(name) {
+    const s = this._sessions.get(name);
+    return s ? s.activity : [];
+  }
 
   syncWithContext(contextState) {
     if (!contextState) return;
@@ -387,7 +441,6 @@ class AgentController {
     return msg;
   }
 
-  /** Parse @mentions from agent output and auto-forward. */
   parseAndForwardMentions(fromAgent, text) {
     const mentions = text.match(/@(\w+)/g);
     if (!mentions) return [];

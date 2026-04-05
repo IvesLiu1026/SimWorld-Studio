@@ -3035,19 +3035,33 @@ async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
 
 function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
   const [status, setStatus] = useState("idle");
-  const [reasoning, setReasoning] = useState("");
-  const [tools, setTools] = useState([]);
+  const [thought, setThought] = useState(""); // Current reasoning text
+  const [actions, setActions] = useState([]); // [{tool, ok}]
   const [input, setInput] = useState("");
+  const [pastActivities, setPastActivities] = useState([]); // Previous turns
   const abortRef = useRef(null);
-  const reasonRef = useRef(null);
+  const activityRef = useRef(null);
   const color = AGENT_COLORS[colorIdx % AGENT_COLORS.length];
+
+  // Poll last activity from server (catches completed turns)
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/agent-activity/${agent.name}`);
+        if (r.ok) setPastActivities(await r.json());
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, [agent.name]);
 
   const handleSend = useCallback(async (text) => {
     if (!text.trim() || status === "running" || !pieActive) return;
     setInput("");
     setStatus("running");
-    setReasoning("");
-    setTools([]);
+    setThought("");
+    setActions([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -3055,13 +3069,16 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
       await sendAgentChat(agent.name, text, sessionId, (event) => {
         switch (event.type) {
           case "text":
-            setReasoning(prev => prev + event.data.delta);
+            setThought(prev => prev + event.data.delta);
+            break;
+          case "thinking":
+            setThought(prev => prev + event.data.delta);
             break;
           case "tool_start":
-            setTools(prev => [...prev, { name: event.data.displayName, ok: null }]);
+            setActions(prev => [...prev, { tool: event.data.displayName, ok: null }]);
             break;
           case "tool_result":
-            setTools(prev => prev.map((t, i) => i === prev.length - 1 ? { ...t, ok: !event.data.isError } : t));
+            setActions(prev => prev.map((a, i) => i === prev.length - 1 ? { ...a, ok: !event.data.isError } : a));
             break;
           case "done":
             break;
@@ -3069,8 +3086,12 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
       }, controller.signal);
       setStatus("done");
     } catch (err) {
-      if (err.name !== "AbortError") { setReasoning(prev => prev || `Error: ${err.message}`); setStatus("error"); }
-      else setStatus("idle");
+      if (err.name !== "AbortError") {
+        setThought(prev => prev || `Error: ${err.message}`);
+        setStatus("error");
+      } else {
+        setStatus("idle");
+      }
     } finally { abortRef.current = null; }
   }, [agent.name, sessionId, status, pieActive]);
 
@@ -3080,40 +3101,62 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
     setStatus("idle");
   };
 
-  useEffect(() => { if (reasonRef.current) reasonRef.current.scrollTop = reasonRef.current.scrollHeight; }, [reasoning]);
+  useEffect(() => { if (activityRef.current) activityRef.current.scrollTop = activityRef.current.scrollHeight; }, [thought, actions]);
 
   const loc = Array.isArray(agent.location) && agent.location.length >= 3 ? agent.location.map(v => Math.round(v)).join(", ") : null;
   const statusColors = { idle: "#8b949e", running: "#d29922", done: "#3fb950", error: "#f85149" };
 
+  // Render a single activity (ReAct format)
+  const renderActivity = (act, isLive) => {
+    const t = act.thought || act.response || "";
+    const acts = isLive ? actions : (act.actions || []);
+    return (
+      <div style={{ fontSize: 11, lineHeight: "1.5" }}>
+        {/* Thought */}
+        {t && (
+          <div style={{ color: "#c9d1d9", whiteSpace: "pre-wrap", marginBottom: 4 }}>
+            <span style={{ color: "#8b949e", fontWeight: 600 }}>Thought: </span>{t.slice(0, 500)}
+          </div>
+        )}
+        {/* Actions */}
+        {acts.length > 0 && acts.map((a, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2, paddingLeft: 8 }}>
+            <span style={{ color: a.ok === null ? "#d29922" : a.ok ? "#3fb950" : "#f85149", fontWeight: 600 }}>
+              {a.ok === null ? "..." : a.ok ? "ok" : "err"}
+            </span>
+            <span style={{ color: "#79c0ff" }}>{a.tool || a.name}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
-    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#161b22", minWidth: 220, flex: "1 1 220px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#161b22", minWidth: 240, flex: "1 1 280px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* Header */}
       <div style={{ padding: "8px 10px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 6, background: `${color}0a` }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status], flexShrink: 0 }} />
         <span style={{ fontSize: 13, fontWeight: 700, color }}>{agent.name}</span>
         <span style={{ fontSize: 9, color: "#8b949e", background: "#0d1117", borderRadius: 3, padding: "1px 5px" }}>{agent.cls}</span>
+        {loc && <span style={{ fontSize: 9, color: "#484f58" }}>({loc})</span>}
         <div style={{ flex: 1 }} />
         {status === "running" && <button onClick={handleStop} style={{ background: "none", border: "1px solid #da3633", borderRadius: 3, padding: "1px 6px", color: "#f85149", fontSize: 10, cursor: "pointer" }}>stop</button>}
       </div>
 
-      {/* Location */}
-      {loc && <div style={{ padding: "2px 10px", fontSize: 9, color: "#656d76" }}>@ ({loc})</div>}
-
-      {/* Reasoning */}
-      <div ref={reasonRef} style={{ flex: 1, padding: "6px 10px", fontSize: 11, color: "#c9d1d9", overflowY: "auto", minHeight: 60, maxHeight: 150, whiteSpace: "pre-wrap", lineHeight: "1.4" }}>
-        {reasoning || <span style={{ color: "#484f58", fontStyle: "italic" }}>No activity yet</span>}
+      {/* Activity log (ReAct) */}
+      <div ref={activityRef} style={{ flex: 1, overflowY: "auto", padding: "6px 10px", minHeight: 80, maxHeight: 200 }}>
+        {/* Past activities */}
+        {pastActivities.slice(-3).map((act, i) => (
+          <div key={i} style={{ marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid #21262d" }}>
+            {renderActivity(act, false)}
+          </div>
+        ))}
+        {/* Live activity */}
+        {(thought || actions.length > 0) ? renderActivity({ thought, response: thought }, true) : (
+          pastActivities.length === 0 && <span style={{ color: "#484f58", fontSize: 11, fontStyle: "italic" }}>No activity yet</span>
+        )}
+        {status === "running" && <span style={{ color: "#d29922", fontSize: 10 }}> thinking...</span>}
       </div>
-
-      {/* Tools */}
-      {tools.length > 0 && (
-        <div style={{ padding: "4px 10px", borderTop: "1px solid #21262d", display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {tools.map((t, i) => (
-            <span key={i} style={{ fontSize: 9, background: "#0d1117", borderRadius: 3, padding: "1px 5px", color: t.ok === null ? "#d29922" : t.ok ? "#3fb950" : "#f85149" }}>
-              {t.ok === null ? "..." : t.ok ? "ok" : "err"} {t.name}
-            </span>
-          ))}
-        </div>
-      )}
 
       {/* Input */}
       <div style={{ display: "flex", gap: 4, padding: "6px 8px", borderTop: "1px solid #21262d" }}>

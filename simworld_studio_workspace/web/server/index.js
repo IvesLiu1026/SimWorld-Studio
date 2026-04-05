@@ -172,7 +172,6 @@ app.post("/api/agent-chat",(s,e)=>{
   if(ctx)agentCtrl.syncWithContext(ctx);
   const agent=agentCtrl.get(agentName);
   if(!agent)return e.status(404).json({error:`Agent "${agentName}" not found in scene`});
-  if(agent.status==="running")return e.status(409).json({error:`Agent "${agentName}" is already running`});
 
   log.agent('info',`user→${agentName}: ${message.slice(0,100)}`);
   agentCtrl.sendMessage("user",agentName,message);
@@ -213,6 +212,10 @@ app.get("/api/agent-history/:name",(s,e)=>{
   const agent=agentCtrl.get(s.params.name);
   if(!agent)return e.status(404).json({error:"Agent not found"});
   e.json({agentName:agent.agentName,history:agent.history});
+});
+
+app.get("/api/agent-activity/:name",(s,e)=>{
+  e.json(agentCtrl.getActivity(s.params.name));
 });
 
 // ── PIE status ────────────────────────────────────────────────────────────
