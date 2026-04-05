@@ -217,8 +217,16 @@ _notifyBackend({type:'screenshot',data:sp});const actorsList=JSON.stringify(ar,n
 const UCV_PORT=parseInt(process.env.UCV_PORT||"9000",10);
 const UCV_HOST=process.env.UCV_HOST||UE_HOST;
 
-const BP_HUMANOID="/Game/TrafficSystem/Pedestrian/Base_User_Agent.Base_User_Agent_C";
-const BP_PEDESTRIAN="/Game/TrafficSystem/Pedestrian/Base_Pedestrian.Base_Pedestrian_C";
+const AGENT_REGISTRY=JSON.parse(fs.readFileSync(path.resolve(__dirname,"agent-registry.json"),"utf-8"));
+
+function getAgentType(agentType){return AGENT_REGISTRY.agentTypes[agentType]||null}
+function resolveAgentType(nameOrType){
+  if(AGENT_REGISTRY.agentTypes[nameOrType])return nameOrType;
+  for(const[t,def]of Object.entries(AGENT_REGISTRY.agentTypes)){
+    if(def.namePatterns.some(p=>nameOrType.toLowerCase().includes(p)))return t;
+  }
+  return"pedestrian";
+}
 
 const UCV_MAGIC=0x9E2B83C1;
 let ucvMsgId=0;
@@ -307,8 +315,11 @@ async function ucvCommandRetry(cmd,retries=3,delay=2000,timeout=10000){
 
 async function toolSpawnAgent({agent_name,agent_type,location,rotation}){
   await ensurePIE();
-  const bp=agent_type==="pedestrian"?BP_PEDESTRIAN:BP_HUMANOID;
-  const loc=location||[0,0,110];
+  const type=resolveAgentType(agent_type||"pedestrian");
+  const typeDef=getAgentType(type);
+  if(!typeDef)return{status:"error",message:`Unknown agent type: ${agent_type}. Available: ${Object.keys(AGENT_REGISTRY.agentTypes).join(", ")}`};
+  const bp=typeDef.blueprintPath;
+  const loc=location||[0,0,typeDef.spawnZ||110];
   const rot=rotation||[0,0,0];
   try{
     // Spawn may cause UE to reset the socket — retry after delay
@@ -322,49 +333,48 @@ async function toolSpawnAgent({agent_name,agent_type,location,rotation}){
     await ucvCommandRetry(`vset /object/${agent_name}/collision true`);
     await ucvCommandRetry(`vset /object/${agent_name}/object_mobility true`);
     spawnedActors.add(agent_name);
-    return{status:"success",agent_name,agent_type,location:loc,rotation:rot,blueprint:bp}
+    return{status:"success",agent_name,agent_type:type,location:loc,rotation:rot,blueprint:bp,available_actions:Object.keys(typeDef.actions)}
   }catch(e){return{status:"error",message:e.message}}
 }
 
-async function toolAgentMoveForward({agent_name}){
-  try{await ucvCommandRetry(`vbp ${agent_name} MoveForward`);return{status:"success",action:"move_forward",agent:agent_name}}
-  catch(e){return{status:"error",message:e.message}}
-}
-
 async function toolAgentStop({agent_name,agent_type}){
-  const cmd=agent_type==="pedestrian"?`vbp ${agent_name} StopPedestrian`:`vbp ${agent_name} StopAgent`;
-  try{await ucvCommandRetry(cmd);return{status:"success",action:"stop",agent:agent_name}}
+  const type=resolveAgentType(agent_type||"humanoid");
+  const typeDef=getAgentType(type);
+  const cmd=typeDef?.stopCmd||"StopAgent";
+  try{await ucvCommandRetry(`vbp ${agent_name} ${cmd}`);return{status:"success",action:"stop",agent:agent_name}}
   catch(e){return{status:"error",message:e.message}}
 }
 
 async function toolAgentRotate({agent_name,angle,direction,agent_type}){
+  const type=resolveAgentType(agent_type||"humanoid");
+  const typeDef=getAgentType(type);
+  const rotCmd=typeDef?.rotateCmd||"TurnAround";
   const dir=direction==="right"?1:-1;
   const a=direction==="right"?angle:-angle;
-  const cmd=agent_type==="pedestrian"
-    ?`vbp ${agent_name} Rotate_Angle 1 ${a} ${dir}`
-    :`vbp ${agent_name} TurnAround 1 ${a} ${dir}`;
-  try{await ucvCommandRetry(cmd);return{status:"success",action:"rotate",agent:agent_name,angle,direction}}
+  try{await ucvCommandRetry(`vbp ${agent_name} ${rotCmd} 1 ${a} ${dir}`);return{status:"success",action:"rotate",agent:agent_name,angle,direction}}
   catch(e){return{status:"error",message:e.message}}
 }
 
-async function toolAgentSetSpeed({agent_name,speed}){
-  try{await ucvCommandRetry(`vbp ${agent_name} SetMaxSpeed ${speed}`);return{status:"success",action:"set_speed",agent:agent_name,speed}}
-  catch(e){return{status:"error",message:e.message}}
-}
-
-async function toolAgentAction({agent_name,action,target}){
-  const cmds={
-    sit_down:`vbp ${agent_name} SitDown`,
-    stand_up:`vbp ${agent_name} StandUp`,
-    pick_up:`vbp ${agent_name} PickUp ${target||""}`,
-    drop_off:`vbp ${agent_name} DropOff`,
-    wave:`vbp ${agent_name} Wave2Dog`,
-    discuss:`vbp ${agent_name} Discussion 0`,
-    listen:`vbp ${agent_name} Listening`,
-  };
-  const cmd=cmds[action];
-  if(!cmd)return{status:"error",message:`Unknown action: ${action}. Available: ${Object.keys(cmds).join(", ")}`};
-  try{const resp=await ucvCommandRetry(cmd);return{status:"success",action,agent:agent_name,response:resp}}
+async function toolAgentAction({agent_name,action,agent_type,params}){
+  const type=resolveAgentType(agent_type||"humanoid");
+  const typeDef=getAgentType(type);
+  if(!typeDef)return{status:"error",message:`Unknown agent type: ${agent_type}`};
+  const actionDef=typeDef.actions[action];
+  if(!actionDef){
+    const available=Object.keys(typeDef.actions).join(", ");
+    return{status:"error",message:`Unknown action '${action}' for ${type}. Available: ${available}`}
+  }
+  // Build command: "vbp {name} {cmd} {param1} {param2} ..."
+  let cmdStr=`vbp ${agent_name} ${actionDef.cmd}`;
+  if(actionDef.params){
+    const p=params||{};
+    const defaults=actionDef.defaults||[];
+    for(let i=0;i<actionDef.params.length;i++){
+      const val=p[actionDef.params[i]]??defaults[i]??"";
+      cmdStr+=` ${val}`;
+    }
+  }
+  try{const resp=await ucvCommandRetry(cmdStr.trim());return{status:"success",action,agent:agent_name,response:resp}}
   catch(e){return{status:"error",message:e.message}}
 }
 
@@ -378,14 +388,7 @@ async function toolGetAgentState({agent_name}){
   }catch(e){return{status:"error",message:e.message}}
 }
 
-async function toolAgentStepForward({agent_name,duration,direction}){
-  const dur=duration||2;
-  const dir=direction||0;
-  try{await ucvCommandRetry(`vbp ${agent_name} StepForward ${dur} ${dir}`);return{status:"success",action:"step_forward",agent:agent_name,duration:dur}}
-  catch(e){return{status:"error",message:e.message}}
-}
-
-const TOOL_DEFS=[{name:"spawn_blueprint_actor",description:"Spawn a SimWorld Blueprint actor (building, tree, vehicle, prop). Use this for all CityDatabase assets. The blueprint_id can be a full path like '/Game/CityDatabase/blueprints/BP_Building_01.BP_Building_01_C', or a shorthand like 'BP_Building_01', 'BP_Tree1', etc. For buildings you can even use just the number like '01' through '06'.",inputSchema:{type:"object",properties:{actor_name:{type:"string",description:"Unique name for this actor (e.g. 'House_01', 'Tree_Left_1')"},blueprint_id:{type:"string",description:"Blueprint path or shorthand. Buildings: 'BP_Building_01' to 'BP_Building_06' (ONLY 01-06 available) (or just number). Trees: 'BP_Tree1'-'BP_Tree6'. Vehicles: 'BP_Scooter_01'-'BP_Scooter_04', 'BP_Cart'. Props: 'BP_Hydrant', 'BP_Trash_bin_a', 'BP_Table', etc."},location:{type:"array",items:{type:"number"},description:"[x, y, z] in UE units (cm). 1m=100 units. Ground is 200m x 200m centered at origin, so keep X and Y between -9500 and 9500. Values outside this range will be clamped to stay on the ground."},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll] in degrees"},scale:{type:"array",items:{type:"number"},description:"[x, y, z] scale multipliers, default [1,1,1]"}},required:["actor_name","blueprint_id","location"]}},{name:"spawn_actor",description:"Spawn a static mesh actor. Use for basic shapes (/Engine/BasicShapes/Cube, Plane, etc.) or SM_ meshes. For SimWorld buildings/trees/props, prefer spawn_blueprint_actor instead.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Unique actor name"},static_mesh:{type:"string",description:"Full mesh path, e.g. '/Engine/BasicShapes/Cube.Cube' or '/Game/CityDatabase/meshes/SM_Road.SM_Road'"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name","static_mesh","location"]}},{name:"delete_actor",description:"Delete an actor by its name.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name to delete"}},required:["name"]}},{name:"delete_all_spawned",description:"Delete ALL actors spawned in this session. Use to clear the scene before rebuilding.",inputSchema:{type:"object",properties:{}}},{name:"get_actors_in_level",description:"List all actors currently in the UE level.",inputSchema:{type:"object",properties:{}}},{name:"find_actors_by_name",description:"Search for actors whose name matches a pattern.",inputSchema:{type:"object",properties:{pattern:{type:"string",description:"Name pattern to search"}},required:["pattern"]}},{name:"set_actor_transform",description:"Move, rotate, or scale an existing actor.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name"]}},{name:"take_screenshot",description:"Capture a screenshot of the current UE viewport and save it as PNG.",inputSchema:{type:"object",properties:{filename:{type:"string",description:"Output filename (optional, auto-generated if omitted)"}}}},{name:"execute_python_script",description:"Execute arbitrary Unreal Engine Python script. Use for advanced operations not covered by other tools.",inputSchema:{type:"object",properties:{script:{type:"string",description:"Python code to execute in UE"}},required:["script"]}},{name:"list_assets",description:"List available SimWorld assets. Returns buildings, trees, vehicles, street furniture, roads, and static meshes with their paths.",inputSchema:{type:"object",properties:{category:{type:"string",description:"Optional: 'buildings', 'trees', 'vehicles', 'street_furniture', 'roads', 'static_meshes'. Omit for all."}}}},{name:"setup_environment",description:"CALL THIS FIRST before spawning any objects! Sets up the scene environment: directional light (sun), sky atmosphere, sky light, fog, ground plane, and increases view distance. Without this, the scene will be black/empty.",inputSchema:{type:"object",properties:{ground_size:{type:"number",description:"Ground plane scale (default 200 = 20km x 20km). Use 100 for small scenes, 300 for large cities."},time_of_day:{type:"string",description:"'morning', 'noon', 'afternoon' (default), 'sunset', or 'night'"}}}},{name:"verify_scene",description:"Call a verifier AI (Claude) to analyze the current scene. Takes a screenshot, gets all actors, then asks Claude to evaluate if placement is correct and matches the original request. Returns structured feedback with status (PASS/NEEDS_IMPROVEMENT/FAIL), issues found, and actionable suggestions. Use this after placing objects to check quality before finishing.",inputSchema:{type:"object",properties:{original_request:{type:"string",description:"The original scene generation request to verify against (e.g. 'a suburban street with 3 houses and 2 trees')"},focus_areas:{type:"string",description:"Optional: specific aspects to focus on (e.g. 'check building spacing', 'verify tree placement')"}},required:[]}},{name:"spawn_agent",description:"Spawn a controllable humanoid or pedestrian agent in the scene. Requires PIE mode (auto-started). Use agent_type 'humanoid' for robot agents or 'pedestrian' for human characters.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Unique name for the agent (e.g. 'Agent_0', 'Pedestrian_1')"},agent_type:{type:"string",enum:["humanoid","pedestrian"],description:"'humanoid' for robot/user agent, 'pedestrian' for human NPC"},location:{type:"array",items:{type:"number"},description:"[x, y, z] spawn location. Z should be ~110 for ground level."},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll] initial rotation"}},required:["agent_name","agent_type"]}},{name:"agent_move_forward",description:"Make an agent start moving forward continuously. Call agent_stop to halt.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Name of the agent to move"}},required:["agent_name"]}},{name:"agent_stop",description:"Stop an agent's movement.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Name of the agent"},agent_type:{type:"string",enum:["humanoid","pedestrian"],description:"Agent type (determines stop command)"}},required:["agent_name"]}},{name:"agent_rotate",description:"Rotate an agent by a specified angle.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Name of the agent"},angle:{type:"number",description:"Rotation angle in degrees"},direction:{type:"string",enum:["left","right"],description:"Direction to rotate"},agent_type:{type:"string",enum:["humanoid","pedestrian"],description:"Agent type"}},required:["agent_name","angle","direction"]}},{name:"agent_set_speed",description:"Set an agent's maximum movement speed.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Name of the agent"},speed:{type:"number",description:"Speed in UE units/sec (100=slow walk, 200=normal, 400=run)"}},required:["agent_name","speed"]}},{name:"agent_action",description:"Make an agent perform an action/animation.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Name of the agent"},action:{type:"string",enum:["sit_down","stand_up","pick_up","drop_off","wave","discuss","listen"],description:"Action to perform"},target:{type:"string",description:"Target object name (for pick_up action)"}},required:["agent_name","action"]}},{name:"get_agent_state",description:"Get an agent's current position and rotation.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Name of the agent"}},required:["agent_name"]}},{name:"agent_step_forward",description:"Make an agent step forward for a specified duration then stop.",inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Name of the agent"},duration:{type:"number",description:"Duration in seconds (default 2)"},direction:{type:"number",description:"0=forward (default), 1=backward"}},required:["agent_name"]}}],TOOL_HANDLERS={spawn_blueprint_actor:toolSpawnBlueprintActor,spawn_actor:toolSpawnActor,delete_actor:toolDeleteActor,delete_all_spawned:toolDeleteAllSpawned,get_actors_in_level:toolGetActors,find_actors_by_name:toolFindActors,set_actor_transform:toolSetActorTransform,take_screenshot:toolTakeScreenshot,execute_python_script:toolExecutePython,list_assets:toolListAssets,setup_environment:toolSetupEnvironment,verify_scene:toolVerifyScene,spawn_agent:toolSpawnAgent,agent_move_forward:toolAgentMoveForward,agent_stop:toolAgentStop,agent_rotate:toolAgentRotate,agent_set_speed:toolAgentSetSpeed,agent_action:toolAgentAction,get_agent_state:toolGetAgentState,agent_step_forward:toolAgentStepForward};function sendResponse(e,t){const s=JSON.stringify({jsonrpc:"2.0",id:e,result:t});process.stdout.write(s+`
+const TOOL_DEFS=[{name:"spawn_blueprint_actor",description:"Spawn a SimWorld Blueprint actor (building, tree, vehicle, prop). Use this for all CityDatabase assets. The blueprint_id can be a full path like '/Game/CityDatabase/blueprints/BP_Building_01.BP_Building_01_C', or a shorthand like 'BP_Building_01', 'BP_Tree1', etc. For buildings you can even use just the number like '01' through '06'.",inputSchema:{type:"object",properties:{actor_name:{type:"string",description:"Unique name for this actor (e.g. 'House_01', 'Tree_Left_1')"},blueprint_id:{type:"string",description:"Blueprint path or shorthand. Buildings: 'BP_Building_01' to 'BP_Building_06' (ONLY 01-06 available) (or just number). Trees: 'BP_Tree1'-'BP_Tree6'. Vehicles: 'BP_Scooter_01'-'BP_Scooter_04', 'BP_Cart'. Props: 'BP_Hydrant', 'BP_Trash_bin_a', 'BP_Table', etc."},location:{type:"array",items:{type:"number"},description:"[x, y, z] in UE units (cm). 1m=100 units. Ground is 200m x 200m centered at origin, so keep X and Y between -9500 and 9500. Values outside this range will be clamped to stay on the ground."},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll] in degrees"},scale:{type:"array",items:{type:"number"},description:"[x, y, z] scale multipliers, default [1,1,1]"}},required:["actor_name","blueprint_id","location"]}},{name:"spawn_actor",description:"Spawn a static mesh actor. Use for basic shapes (/Engine/BasicShapes/Cube, Plane, etc.) or SM_ meshes. For SimWorld buildings/trees/props, prefer spawn_blueprint_actor instead.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Unique actor name"},static_mesh:{type:"string",description:"Full mesh path, e.g. '/Engine/BasicShapes/Cube.Cube' or '/Game/CityDatabase/meshes/SM_Road.SM_Road'"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name","static_mesh","location"]}},{name:"delete_actor",description:"Delete an actor by its name.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name to delete"}},required:["name"]}},{name:"delete_all_spawned",description:"Delete ALL actors spawned in this session. Use to clear the scene before rebuilding.",inputSchema:{type:"object",properties:{}}},{name:"get_actors_in_level",description:"List all actors currently in the UE level.",inputSchema:{type:"object",properties:{}}},{name:"find_actors_by_name",description:"Search for actors whose name matches a pattern.",inputSchema:{type:"object",properties:{pattern:{type:"string",description:"Name pattern to search"}},required:["pattern"]}},{name:"set_actor_transform",description:"Move, rotate, or scale an existing actor.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name"]}},{name:"take_screenshot",description:"Capture a screenshot of the current UE viewport and save it as PNG.",inputSchema:{type:"object",properties:{filename:{type:"string",description:"Output filename (optional, auto-generated if omitted)"}}}},{name:"execute_python_script",description:"Execute arbitrary Unreal Engine Python script. Use for advanced operations not covered by other tools.",inputSchema:{type:"object",properties:{script:{type:"string",description:"Python code to execute in UE"}},required:["script"]}},{name:"list_assets",description:"List available SimWorld assets. Returns buildings, trees, vehicles, street furniture, roads, and static meshes with their paths.",inputSchema:{type:"object",properties:{category:{type:"string",description:"Optional: 'buildings', 'trees', 'vehicles', 'street_furniture', 'roads', 'static_meshes'. Omit for all."}}}},{name:"setup_environment",description:"CALL THIS FIRST before spawning any objects! Sets up the scene environment: directional light (sun), sky atmosphere, sky light, fog, ground plane, and increases view distance. Without this, the scene will be black/empty.",inputSchema:{type:"object",properties:{ground_size:{type:"number",description:"Ground plane scale (default 200 = 20km x 20km). Use 100 for small scenes, 300 for large cities."},time_of_day:{type:"string",description:"'morning', 'noon', 'afternoon' (default), 'sunset', or 'night'"}}}},{name:"verify_scene",description:"Call a verifier AI (Claude) to analyze the current scene. Takes a screenshot, gets all actors, then asks Claude to evaluate if placement is correct and matches the original request. Returns structured feedback with status (PASS/NEEDS_IMPROVEMENT/FAIL), issues found, and actionable suggestions. Use this after placing objects to check quality before finishing.",inputSchema:{type:"object",properties:{original_request:{type:"string",description:"The original scene generation request to verify against (e.g. 'a suburban street with 3 houses and 2 trees')"},focus_areas:{type:"string",description:"Optional: specific aspects to focus on (e.g. 'check building spacing', 'verify tree placement')"}},required:[]}},{name:"spawn_agent",description:"Spawn a controllable agent. Requires PIE mode. Types: "+Object.keys(AGENT_REGISTRY.agentTypes).join(", "),inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Unique name"},agent_type:{type:"string",description:"Agent type: "+Object.keys(AGENT_REGISTRY.agentTypes).join(", ")},location:{type:"array",items:{type:"number"},description:"[x, y, z] spawn location"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"}},required:["agent_name","agent_type"]}},{name:"agent_stop",description:"Stop an agent's movement.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},agent_type:{type:"string",description:"Agent type (determines stop command)"}},required:["agent_name"]}},{name:"agent_rotate",description:"Rotate an agent.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},angle:{type:"number",description:"Degrees"},direction:{type:"string",enum:["left","right"]},agent_type:{type:"string"}},required:["agent_name","angle","direction"]}},{name:"agent_action",description:"Perform an action. Actions vary by agent type — call with an invalid action to see available ones.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},action:{type:"string",description:"Action name (e.g. move_forward, set_speed, sit_down, pick_up, wave, etc.)"},agent_type:{type:"string",description:"Agent type"},params:{type:"object",description:"Action parameters (e.g. {speed:200}, {target:'Box_1'}, {duration:3})"}},required:["agent_name","action"]}},{name:"get_agent_state",description:"Get agent position and rotation.",inputSchema:{type:"object",properties:{agent_name:{type:"string"}},required:["agent_name"]}}],TOOL_HANDLERS={spawn_blueprint_actor:toolSpawnBlueprintActor,spawn_actor:toolSpawnActor,delete_actor:toolDeleteActor,delete_all_spawned:toolDeleteAllSpawned,get_actors_in_level:toolGetActors,find_actors_by_name:toolFindActors,set_actor_transform:toolSetActorTransform,take_screenshot:toolTakeScreenshot,execute_python_script:toolExecutePython,list_assets:toolListAssets,setup_environment:toolSetupEnvironment,verify_scene:toolVerifyScene,spawn_agent:toolSpawnAgent,agent_stop:toolAgentStop,agent_rotate:toolAgentRotate,agent_action:toolAgentAction,get_agent_state:toolGetAgentState};function sendResponse(e,t){const s=JSON.stringify({jsonrpc:"2.0",id:e,result:t});process.stdout.write(s+`
 `)}function sendError(e,t,s){const n=JSON.stringify({jsonrpc:"2.0",id:e,error:{code:t,message:s}});process.stdout.write(n+`
 `)}async function handleRequest(e){const{id:t,method:s,params:n}=e;if(s==="initialize")return sendResponse(t,{protocolVersion:"2024-11-05",capabilities:{tools:{listChanged:!1}},serverInfo:{name:"simworld-arena-mcp",version:"1.0.0"}});if(s!=="notifications/initialized"){if(s==="tools/list")return sendResponse(t,{tools:TOOL_DEFS});if(s==="tools/call"){const o=n?.name,r=n?.arguments||{},c=TOOL_HANDLERS[o];if(!c)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:`Unknown tool: ${o}`})}],isError:!0});try{const a=await c(r);return sendResponse(t,{content:[{type:"text",text:JSON.stringify(a,null,2)}],isError:!1})}catch(a){return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:a.message})}],isError:!0})}}if(s==="resources/list")return sendResponse(t,{resources:[]});if(s==="prompts/list")return sendResponse(t,{prompts:[]});t!==void 0&&sendError(t,-32601,`Method not found: ${s}`)}}const rl=readline.createInterface({input:process.stdin,terminal:!1});rl.on("line",e=>{const t=e.trim();if(t)try{const s=JSON.parse(t);handleRequest(s).catch(n=>{process.stderr.write(`[mcp-server] Error: ${n.message}
 `),s.id!==void 0&&sendError(s.id,-32603,n.message)})}catch{process.stderr.write(`[mcp-server] Invalid JSON: ${t.slice(0,100)}

@@ -1,27 +1,21 @@
 'use strict';
 
+const fs = require('fs');
+const pathMod = require('path');
+
 // ---------------------------------------------------------------------------
-// Scene entity classification
+// Scene entity classification — driven by agent-registry.json
 // ---------------------------------------------------------------------------
 
-// Actor labels/class names that identify autonomous agents (AI-controlled,
-// mobile, or interactive entities that operate in the world).
+const REGISTRY = JSON.parse(fs.readFileSync(pathMod.resolve(__dirname, 'agent-registry.json'), 'utf-8'));
+
+// Build patterns from registry + some universal fallbacks
 const AGENT_PATTERNS = [
-  /^BP_Scooter_/i,
-  /^BP_Cart/i,
-  /^BP_Character_/i,
-  /^BP_Robot_/i,
-  /^BP_Agent_/i,
-  /^BP_NPC_/i,
-  /^BP_Pedestrian_/i,
-  /^Agent_/i,           // Custom agent names: Agent_0, Agent_Walker, etc.
-  /^Pedestrian_/i,      // Custom pedestrian names
-  /^Humanoid_/i,        // Custom humanoid names
-  /^TestAgent_/i,       // Test agent names
-  /^GEN_BP_Humanoid_/i, // SimWorld traffic system naming
-  /^GEN_BP_Pedestrian_/i,
-  /Base_User_Agent/i,   // Blueprint class match
-  /Base_Pedestrian/i,   // Blueprint class match
+  ...(REGISTRY.classifyPatterns || []).map(p => new RegExp(p.regex, 'i')),
+  /^Agent_/i,
+  /^Pedestrian_/i,
+  /^Humanoid_/i,
+  /^TestAgent_/i,
 ];
 
 // Blueprint short-id → semantic category for objects

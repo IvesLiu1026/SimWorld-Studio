@@ -4,11 +4,14 @@ const { spawn } = require('child_process');
 const path = require('path');
 const net = require('net');
 
+const fs = require('fs');
+
 const MCP_CONFIG = path.resolve(__dirname, '../mcp.json');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const UCV_PORT = parseInt(process.env.UCV_PORT || '9000', 10);
 const UCV_HOST = process.env.UCV_HOST || '127.0.0.1';
 const UCV_MAGIC = 0x9E2B83C1;
+const REGISTRY = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'agent-registry.json'), 'utf-8'));
 
 // ---------------------------------------------------------------------------
 // UnrealCV helper — one-shot TCP per call (connect → send → recv → close)
@@ -100,36 +103,52 @@ class AgentSession {
     this.lastTools = [];
   }
 
+  _resolveType() {
+    const cls = (this.agentClass || '').toLowerCase();
+    for (const [typeName, def] of Object.entries(REGISTRY.agentTypes)) {
+      if (def.namePatterns.some(p => cls.includes(p))) return typeName;
+    }
+    return 'pedestrian';
+  }
+
   _systemPrompt() {
     const loc = Array.isArray(this.location)
       ? `(${this.location.map(v => Math.round(v)).join(', ')})`
       : 'unknown';
-    const isHumanoid = /humanoid|user_agent|robot/i.test(this.agentClass || '');
-    const type = isHumanoid ? 'humanoid' : 'pedestrian';
+    const type = this._resolveType();
+    const typeDef = REGISTRY.agentTypes[type];
 
     const lines = [
       `You control agent "${this.agentName}" (${type}) at ${loc}.`,
       '',
-      '## Tools',
-      `- agent_move_forward(agent_name="${this.agentName}")`,
+      '## Actions (use agent_action tool)',
+    ];
+
+    // List available actions from registry
+    if (typeDef?.actions) {
+      for (const [name, def] of Object.entries(typeDef.actions)) {
+        const paramStr = def.params ? `, params: {${def.params.join(', ')}}` : '';
+        lines.push(`- agent_action(agent_name="${this.agentName}", action="${name}", agent_type="${type}"${paramStr}) — ${def.description}`);
+      }
+    }
+
+    lines.push(
+      '',
+      '## Other Tools',
       `- agent_stop(agent_name="${this.agentName}", agent_type="${type}")`,
       `- agent_rotate(agent_name="${this.agentName}", angle=N, direction="left"|"right", agent_type="${type}")`,
-      `- agent_set_speed(agent_name="${this.agentName}", speed=200)`,
-      `- agent_step_forward(agent_name="${this.agentName}", duration=2)`,
-      `- agent_action(agent_name="${this.agentName}", action="sit_down"|"stand_up"|"wave"|"pick_up"|"drop_off")`,
       `- get_agent_state(agent_name="${this.agentName}")`,
       '- get_actors_in_level()',
       '- take_screenshot()',
       '',
       '## Communication',
       'To message another agent, include @AgentName in your response text.',
-      'Example: "@Ped_2 let\'s walk forward together"',
       '',
       '## Rules',
       `- Always use agent_name="${this.agentName}"`,
       '- Only control YOUR agent.',
-      '- Be concise. Act, then report what you did.',
-    ];
+      '- Be concise. Act, then report.',
+    );
 
     if (this.inbox.length > 0) {
       lines.push('', '## Incoming Messages');
