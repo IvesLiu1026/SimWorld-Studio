@@ -2879,19 +2879,19 @@ function ContextPanel({ sessionId, refreshKey }) {
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
 
-  // Single polling effect keyed only on sessionId — refreshKey triggers an
-  // immediate extra fetch without tearing down the interval.
+  // Poll context — works with or without sessionId (backend falls back to latest)
   useEffect(() => {
-    if (!sessionId) return;
     let stopped = false;
     const poll = async () => {
       const sid = sessionRef.current;
-      if (!sid) return;
       try {
-        const res = await fetch(`${API_BASE}/context?sessionId=${encodeURIComponent(sid)}`);
+        const url = sid
+          ? `${API_BASE}/context?sessionId=${encodeURIComponent(sid)}`
+          : `${API_BASE}/context`;
+        const res = await fetch(url);
         if (!res.ok || stopped) return;
         const data = await res.json();
-        if (!stopped) { setState(data); setLastUpdated(new Date()); }
+        if (!stopped && data.updatedAt) { setState(data); setLastUpdated(new Date()); }
       } catch (err) { console.error("[CTX-DEBUG] poll error:", err); }
     };
     poll();
@@ -2928,21 +2928,13 @@ function ContextPanel({ sessionId, refreshKey }) {
     textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6,
   };
 
-  if (!sessionId) {
+  if (!state || !state.updatedAt) {
     return (
       <div style={containerStyle}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "#656d76", fontSize: 13 }}>Start a chat session to see scene context.</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!state || state.updatedAt === null) {
-    return (
-      <div style={containerStyle}>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "#656d76", fontSize: 13 }}>No scene data yet — complete a round to populate.</span>
+          <span style={{ color: "#656d76", fontSize: 13 }}>
+            {sessionId ? "No scene data yet — complete a round to populate." : "Start a chat session to see scene context."}
+          </span>
         </div>
       </div>
     );
@@ -3044,7 +3036,7 @@ async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
   }
 }
 
-function AgentCard({ agent, sessionId }) {
+function AgentCard({ agent, sessionId, pieActive }) {
   const [status, setStatus] = useState("idle"); // idle | running | done | error
   const [lastAction, setLastAction] = useState(null); // { text, tools: [{name, ok}], response }
   const [input, setInput] = useState("");
@@ -3163,8 +3155,8 @@ function AgentCard({ agent, sessionId }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSend(input); } }}
-          placeholder={`Command ${agent.name}...`}
-          disabled={status === "running"}
+          placeholder={pieActive ? `Command ${agent.name}...` : "Start PIE to control agents"}
+          disabled={status === "running" || !pieActive}
           style={{
             flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 4,
             padding: "4px 6px", color: "#e6edf3", fontSize: 11, outline: "none",
@@ -3185,39 +3177,172 @@ function AgentCard({ agent, sessionId }) {
   );
 }
 
-function AgentPanel({ sessionId }) {
-  const [contextAgents, setContextAgents] = useState([]);
-  const sessionRef = useRef(sessionId);
-  sessionRef.current = sessionId;
+// ─── AgentChatLog (public inter-agent chat) ─────────────────────────────────
 
-  // Single robust poll — same pattern as ContextPanel
+function AgentChatLog({ agents }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [target, setTarget] = useState("all");
+  const lastTsRef = useRef(0);
+  const scrollRef = useRef(null);
+
+  // Poll for new messages
   useEffect(() => {
-    if (!sessionId) return;
-    let stopped = false;
     const poll = async () => {
-      const sid = sessionRef.current;
-      if (!sid) return;
       try {
-        const res = await fetch(`${API_BASE}/context?sessionId=${encodeURIComponent(sid)}`);
-        if (!res.ok || stopped) return;
+        const res = await fetch(`${API_BASE}/agent-chat-log?since=${lastTsRef.current}`);
+        if (!res.ok) return;
         const data = await res.json();
-        if (!stopped) setContextAgents(data.agents || []);
+        if (data.length > 0) {
+          setMessages((prev) => {
+            const existing = new Set(prev.map((m) => `${m.from}-${m.timestamp}`));
+            const newMsgs = data.filter((m) => !existing.has(`${m.from}-${m.timestamp}`));
+            if (newMsgs.length === 0) return prev;
+            const merged = [...prev, ...newMsgs].slice(-50);
+            lastTsRef.current = Math.max(...merged.map((m) => m.timestamp));
+            return merged;
+          });
+        }
       } catch {}
     };
     poll();
-    const id = setInterval(poll, 4000);
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages]);
+
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text) return;
+    // User sends as "user" to a specific agent or broadcast
+    fetch(`${API_BASE}/agent-message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "user", to: target === "all" ? null : target, text }),
+    }).catch(() => {});
+    setMessages((prev) => [...prev, { from: "user", to: target, text, timestamp: Date.now() }]);
+    setInput("");
+  };
+
+  const agentColors = {};
+  const palette = ["#58a6ff", "#3fb950", "#d29922", "#f778ba", "#bc8cff", "#f0883e"];
+  (agents || []).forEach((a, i) => { agentColors[a.name] = palette[i % palette.length]; });
+  agentColors["user"] = "#e6edf3";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", borderTop: "1px solid #21262d", height: 200, flexShrink: 0 }}>
+      <div style={{ padding: "4px 10px", background: "#161b22", fontSize: 11, fontWeight: 600, color: "#8b949e", borderBottom: "1px solid #21262d" }}>
+        Agent Chat
+      </div>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "4px 8px", fontSize: 11 }}>
+        {messages.length === 0 ? (
+          <div style={{ color: "#656d76", textAlign: "center", marginTop: 16 }}>No messages yet</div>
+        ) : messages.map((m, i) => (
+          <div key={i} style={{ marginBottom: 3, lineHeight: "1.4" }}>
+            <span style={{ color: agentColors[m.from] || "#8b949e", fontWeight: 600 }}>{m.from}</span>
+            {m.to && m.to !== "all" && (
+              <span style={{ color: "#656d76" }}> @<span style={{ color: agentColors[m.to] || "#58a6ff" }}>{m.to}</span></span>
+            )}
+            <span style={{ color: "#656d76" }}>: </span>
+            <span style={{ color: "#e6edf3" }}>{m.text}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 4, padding: "4px 8px", borderTop: "1px solid #21262d" }}>
+        <select
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          style={{ background: "#0d1117", border: "1px solid #30363d", borderRadius: 4, color: "#8b949e", fontSize: 10, padding: "2px 4px" }}
+        >
+          <option value="all">@all</option>
+          {(agents || []).map((a) => <option key={a.name} value={a.name}>@{a.name}</option>)}
+        </select>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSend(); } }}
+          placeholder="Message agents..."
+          style={{ flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 4, padding: "3px 6px", color: "#e6edf3", fontSize: 11, outline: "none" }}
+        />
+        <button onClick={handleSend} disabled={!input.trim()} style={{
+          background: input.trim() ? "#238636" : "#21262d", border: "none", borderRadius: 4,
+          padding: "3px 8px", color: "#fff", fontSize: 10, cursor: input.trim() ? "pointer" : "default",
+          opacity: input.trim() ? 1 : 0.5,
+        }}>Send</button>
+      </div>
+    </div>
+  );
+}
+
+function AgentPanel({ sessionId }) {
+  const [contextAgents, setContextAgents] = useState([]);
+  const [pieActive, setPieActive] = useState(false);
+  const sessionRef = useRef(sessionId);
+  sessionRef.current = sessionId;
+
+  // Poll PIE status
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/pie-status`);
+        if (res.ok) { const d = await res.json(); setPieActive(d.active); }
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Poll from TWO sources: context for agents list, agent-sessions for status
+  useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      try {
+        // Try agent-sessions first (has status info)
+        const sessRes = await fetch(`${API_BASE}/agent-sessions`);
+        if (sessRes.ok && !stopped) {
+          const sessions = await sessRes.json();
+          if (sessions.length > 0) {
+            // Convert session format to agent format for AgentCard
+            setContextAgents(sessions.map(s => ({
+              name: s.agentName,
+              cls: s.agentClass,
+              location: s.location,
+              status: s.status,
+              category: "agent",
+            })));
+            return;
+          }
+        }
+        // Fallback: get agents from context
+        const sid = sessionRef.current;
+        const url = sid
+          ? `${API_BASE}/context?sessionId=${encodeURIComponent(sid)}`
+          : `${API_BASE}/context`;
+        const res = await fetch(url);
+        if (res.ok && !stopped) {
+          const data = await res.json();
+          setContextAgents(data.agents || []);
+        }
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 3000);
     return () => { stopped = true; clearInterval(id); };
   }, [sessionId]);
 
-  if (!sessionId) {
-    return (
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#0d1117", color: "#e6edf3" }}>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "#656d76", fontSize: 13 }}>Start a chat session to manage agents.</span>
-        </div>
-      </div>
-    );
-  }
+  const pieBar = (
+    <div style={{ padding: "6px 14px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: pieActive ? "#3fb950" : "#f85149" }} />
+      <span style={{ color: pieActive ? "#3fb950" : "#f85149" }}>PIE {pieActive ? "Active" : "Inactive"}</span>
+      <span style={{ marginLeft: "auto", color: "#656d76", fontSize: 10 }}>
+        {pieActive ? "Agents controllable" : "Start PIE in UE viewport to control agents"}
+      </span>
+    </div>
+  );
 
   if (contextAgents.length === 0) {
     return (
@@ -3225,10 +3350,13 @@ function AgentPanel({ sessionId }) {
         <div style={{ padding: "10px 14px", borderBottom: "1px solid #21262d", flexShrink: 0 }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
         </div>
+        {pieBar}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <span style={{ fontSize: 24 }}>🤖</span>
           <span style={{ fontSize: 12, color: "#8b949e" }}>No agents in scene</span>
-          <span style={{ fontSize: 10, color: "#656d76" }}>Spawn a vehicle or character first.</span>
+          <span style={{ fontSize: 10, color: "#656d76" }}>
+            {pieActive ? "Use spawn_agent to add pedestrians or humanoids." : "Start PIE mode first, then spawn agents."}
+          </span>
         </div>
       </div>
     );
@@ -3242,11 +3370,13 @@ function AgentPanel({ sessionId }) {
           {contextAgents.length}
         </span>
       </div>
+      {pieBar}
       <div style={{ flex: 1, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
         {contextAgents.map((a) => (
-          <AgentCard key={a.name} agent={a} sessionId={sessionId} />
+          <AgentCard key={a.name} agent={a} sessionId={sessionId} pieActive={pieActive} />
         ))}
       </div>
+      <AgentChatLog agents={contextAgents} />
     </div>
   );
 }

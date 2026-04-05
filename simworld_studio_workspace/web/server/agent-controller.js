@@ -19,6 +19,7 @@ class AgentSession {
     this.status = 'idle';    // idle | running | stopped
     this.proc = null;        // child process
     this.history = [];       // { role, content, timestamp }
+    this.inbox = [];         // Messages from other agents (inter-agent communication)
   }
 
   /** Build the system prompt that tells Claude who this agent is. */
@@ -26,25 +27,42 @@ class AgentSession {
     const loc = Array.isArray(this.location)
       ? `(${this.location.map(v => Math.round(v)).join(', ')})`
       : 'unknown';
-    return [
-      `You are the autonomous controller for agent "${this.agentName}" (class: ${this.agentClass}) in a SimWorld scene.`,
+    const isHumanoid = /humanoid|user_agent|robot/i.test(this.agentClass || '');
+    const agentType = isHumanoid ? 'humanoid' : 'pedestrian';
+    const lines = [
+      `You are the controller for agent "${this.agentName}" (class: ${this.agentClass}, type: ${agentType}) in a SimWorld scene.`,
       `Your current location is ${loc}.`,
       '',
-      'Your job is to reason about what this agent should do and then execute actions using the SimWorld MCP tools.',
+      '## Available Movement Tools',
+      `- agent_move_forward(agent_name="${this.agentName}") — start moving forward continuously`,
+      `- agent_stop(agent_name="${this.agentName}", agent_type="${agentType}") — stop movement`,
+      `- agent_rotate(agent_name="${this.agentName}", angle=90, direction="right", agent_type="${agentType}") — turn`,
+      `- agent_set_speed(agent_name="${this.agentName}", speed=200) — set speed (100=slow, 200=normal, 400=run)`,
+      `- agent_step_forward(agent_name="${this.agentName}", duration=2) — move forward for N seconds then stop`,
       '',
-      'Available actions:',
-      '- set_actor_transform — move / rotate this agent. Always use your own name as the actor name.',
-      '- take_screenshot — see the world from the viewport.',
-      '- get_actors_in_level — perceive nearby objects and other agents.',
-      '- find_actors_by_name — search for specific actors.',
-      '- execute_python_script — run arbitrary UE Python for advanced control.',
+      '## Available Actions',
+      `- agent_action(agent_name="${this.agentName}", action="sit_down") — sit, stand_up, wave, discuss, listen, pick_up, drop_off`,
       '',
-      'Rules:',
+      '## Perception',
+      `- get_agent_state(agent_name="${this.agentName}") — get your position and rotation`,
+      '- get_actors_in_level() — see all objects and agents in the scene',
+      '- take_screenshot() — see the viewport',
+      '',
+      '## Rules',
+      `- Always use agent_name="${this.agentName}" in all commands`,
       '- Only control YOUR agent. Never modify other agents or scene objects.',
-      '- When given a goal, break it into steps and execute them.',
-      '- After moving, take a screenshot to verify your new position.',
-      '- Be concise in your reasoning.',
-    ].join('\n');
+      '- Break goals into steps: move, verify position, adjust.',
+      '- Be concise.',
+    ];
+    // Add messages from other agents
+    if (this.inbox && this.inbox.length > 0) {
+      lines.push('', '## Messages From Other Agents');
+      for (const msg of this.inbox) {
+        lines.push(`- @${msg.from}: "${msg.text}" (${new Date(msg.timestamp).toLocaleTimeString()})`);
+      }
+      this.inbox = []; // Clear after injecting
+    }
+    return lines.join('\n');
   }
 
   /**
@@ -69,14 +87,15 @@ class AgentSession {
       const args = [
         '-p', message,
         '--output-format', 'stream-json',
+        '--include-partial-messages',
+        '--verbose',
         '--dangerously-skip-permissions',
         '--mcp-config', MCP_CONFIG,
         '--append-system-prompt', systemPrompt,
       ];
 
-      if (this.sessionId) {
-        args.push('--session-id', this.sessionId);
-      }
+      const CLAUDE_MODEL = process.env.CLAUDE_MODEL || '';
+      if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
 
       const env = { ...process.env };
       delete env.CLAUDECODE;
@@ -86,7 +105,7 @@ class AgentSession {
       const proc = spawn(CLAUDE_BIN, args, {
         cwd: path.resolve(__dirname, '..'),
         env,
-        stdio: ['ignore', 'stdout', 'stderr'],
+        stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 300_000,
       });
 
@@ -153,7 +172,17 @@ class AgentSession {
         }
       };
 
+      let lastOutput = Date.now();
+      const idleTimer = setInterval(() => {
+        if (Date.now() - lastOutput > 90000) {
+          clearInterval(idleTimer);
+          proc.kill('SIGTERM');
+          onEvent('error', { message: 'Agent idle timeout (90s no output)' });
+        }
+      }, 10000);
+
       proc.stdout.on('data', (chunk) => {
+        lastOutput = Date.now();
         buf += chunk.toString();
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
@@ -166,6 +195,7 @@ class AgentSession {
       });
 
       proc.on('close', (code) => {
+        clearInterval(idleTimer);
         if (buf.trim()) flush(buf);
         this.status = 'idle';
         this.proc = null;
@@ -266,6 +296,41 @@ class AgentController {
         this.remove(name);
       }
     }
+  }
+
+  // ── Inter-agent communication ──────────────────────────────────────────
+
+  /** Public message log visible to all */
+  _publicChat = [];
+
+  /** Send a message from one agent to another (or broadcast). */
+  sendMessage(from, to, text) {
+    const msg = { from, to: to || 'all', text, timestamp: Date.now() };
+    this._publicChat.push(msg);
+    // Keep last 100 messages
+    if (this._publicChat.length > 100) this._publicChat.splice(0, this._publicChat.length - 100);
+    // Deliver to target agent's inbox
+    if (to && to !== 'all') {
+      const target = this._sessions.get(to);
+      if (target) {
+        target.inbox = target.inbox || [];
+        target.inbox.push(msg);
+      }
+    } else {
+      // Broadcast to all agents except sender
+      for (const [name, session] of this._sessions) {
+        if (name !== from) {
+          session.inbox = session.inbox || [];
+          session.inbox.push(msg);
+        }
+      }
+    }
+    return msg;
+  }
+
+  /** Get public chat log. */
+  getPublicChat(since = 0) {
+    return this._publicChat.filter(m => m.timestamp > since);
   }
 }
 

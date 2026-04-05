@@ -69,5 +69,13 @@
       "/Engine/BasicShapes/Cube.Cube",
       "/Engine/BasicShapes/Plane.Plane"
     ]
+  },
+  "agents": {
+    "description": "Controllable humanoid and pedestrian agents. Use spawn_agent tool (NOT spawn_blueprint_actor). Requires PIE mode (auto-started).",
+    "items": [
+      {"id": "Base_User_Agent", "type": "humanoid", "path": "/Game/TrafficSystem/Pedestrian/Base_User_Agent.Base_User_Agent_C", "description": "Robot/humanoid agent — can walk, sit, pick up objects, interact"},
+      {"id": "Base_Pedestrian", "type": "pedestrian", "path": "/Game/TrafficSystem/Pedestrian/Base_Pedestrian.Base_Pedestrian_C", "description": "Human pedestrian NPC — walks, turns, follows paths"}
+    ],
+    "notes": "After spawning agents, they appear in the Agent Panel where users can control them via natural language."
   }
 }

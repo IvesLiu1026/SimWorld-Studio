@@ -14,6 +14,14 @@ const AGENT_PATTERNS = [
   /^BP_Agent_/i,
   /^BP_NPC_/i,
   /^BP_Pedestrian_/i,
+  /^Agent_/i,           // Custom agent names: Agent_0, Agent_Walker, etc.
+  /^Pedestrian_/i,      // Custom pedestrian names
+  /^Humanoid_/i,        // Custom humanoid names
+  /^TestAgent_/i,       // Test agent names
+  /^GEN_BP_Humanoid_/i, // SimWorld traffic system naming
+  /^GEN_BP_Pedestrian_/i,
+  /Base_User_Agent/i,   // Blueprint class match
+  /Base_Pedestrian/i,   // Blueprint class match
 ];
 
 // Blueprint short-id → semantic category for objects
@@ -164,6 +172,15 @@ class ContextManager {
       (isAgent ? agents : objects).push(entity);
     }
 
+    // Preserve agents that were explicitly added via addActor (e.g. spawn_agent)
+    // but not seen in the MCP snapshot (PIE agents are invisible to editor snapshot)
+    const snapshotNames = new Set([...agents, ...objects].map(e => e.name));
+    for (const existingAgent of state.agents) {
+      if (!snapshotNames.has(existingAgent.name)) {
+        agents.push(existingAgent);
+      }
+    }
+
     state.agents = agents;
     state.objects = objects;
     state.updatedAt = new Date().toISOString();
@@ -175,8 +192,9 @@ class ContextManager {
    */
   addActor(sessionId, { name, cls, category, location }) {
     const state = this._state(sessionId);
-    const { isAgent, category: derivedCat } = classifyActor(name, cls || '');
+    const { isAgent: autoAgent, category: derivedCat } = classifyActor(name, cls || '');
     const cat = category || derivedCat;
+    const isAgent = autoAgent || category === 'agent';
     const entity = new SceneEntity({ name, cls: blueprintShortId(cls || ''), category: cat, location: location || null });
     // Replace if same name already exists
     state.agents = state.agents.filter((a) => a.name !== name);
@@ -217,12 +235,29 @@ class ContextManager {
    * Migrate state accumulated under `'__new__'` to the real session_id once
    * Claude Code returns it in the `system/init` event.
    */
-  resolveSession(realSessionId) {
+  resolveSession(realSessionId, previousSessionId) {
     if (!realSessionId) return;
     const key = String(realSessionId);
+    // Migrate __new__ state
     if (this._sessions.has('__new__') && !this._sessions.has(key)) {
       this._sessions.set(key, this._sessions.get('__new__'));
       this._sessions.delete('__new__');
+    }
+    // Carry over state from previous session (when not using --resume,
+    // each turn creates a new session but the scene state persists)
+    if (previousSessionId && previousSessionId !== realSessionId) {
+      const prevKey = String(previousSessionId);
+      const prev = this._sessions.get(prevKey);
+      if (prev && !this._sessions.has(key)) {
+        // Deep copy the previous state to the new session
+        const newState = new SceneState();
+        newState.agents = [...prev.agents];
+        newState.objects = [...prev.objects];
+        newState.environment = { ...prev.environment };
+        newState.round = prev.round;
+        newState.updatedAt = prev.updatedAt;
+        this._sessions.set(key, newState);
+      }
     }
   }
 
@@ -231,7 +266,18 @@ class ContextManager {
   /** Return the raw SceneState for a session (null if unknown). */
   getState(sessionId) {
     const key = String(sessionId || '__new__');
-    return this._sessions.get(key) || null;
+    const state = this._sessions.get(key);
+    if (state) return state;
+    // Fallback: return the most recently updated session's state
+    let latest = null;
+    let latestTime = null;
+    for (const s of this._sessions.values()) {
+      if (s.updatedAt && (!latestTime || s.updatedAt > latestTime)) {
+        latest = s;
+        latestTime = s.updatedAt;
+      }
+    }
+    return latest;
   }
 
   /**

@@ -105,6 +105,14 @@ exit /b 0
 :done_args
 
 REM ============================================================
+REM  RELEASE PORTS (kill stale processes from previous runs)
+REM ============================================================
+for %%P in (%WEB_PORT% %MCP_PORT% %CIRRUS_HTTP_PORT% %CIRRUS_WS_PORT% 9000) do (
+    powershell -Command "Get-NetTCPConnection -LocalPort %%P -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+)
+ping -n 2 127.0.0.1 >nul
+
+REM ============================================================
 REM  VALIDATE
 REM ============================================================
 set "UE_EDITOR=%UE_ROOT%\Engine\Binaries\Win64\UnrealEditor.exe"
