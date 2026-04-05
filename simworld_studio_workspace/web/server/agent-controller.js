@@ -362,6 +362,11 @@ class AgentSession {
     }
     this.status = 'idle';
     this.proc = null;
+    // Also stop the agent in UE
+    const type = this._resolveType();
+    const typeDef = REGISTRY.agentTypes[type];
+    const stopCmd = typeDef?.stopCmd || 'StopAgent';
+    ucvCommand(`vbp ${this.agentName} ${stopCmd}`).catch(() => {});
   }
 
   toJSON() {
