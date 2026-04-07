@@ -1,5 +1,86 @@
-"use strict";const net=require("net"),fs=require("fs"),path=require("path"),readline=require("readline"),UE_HOST=process.env.UNREAL_HOST||"127.0.0.1",UE_PORT=parseInt(process.env.UNREAL_PORT||"55559",10),SCREENSHOT_DIR=path.resolve(__dirname,"../../tmp/screens"),ASSETS=JSON.parse(fs.readFileSync(path.resolve(__dirname,"assets.json"),"utf-8"));fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0});const spawnedActors=new Set,cmdQueue=[];let cmdRunning=!1;function ueCommand(e,t,s=3e4){return new Promise((n,o)=>{cmdQueue.push({type:e,params:t,timeoutMs:s,resolve:n,reject:o}),processQueue()})}function processQueue(){if(cmdRunning||cmdQueue.length===0)return;cmdRunning=!0;const{type:e,params:t,timeoutMs:s,resolve:n,reject:o}=cmdQueue.shift(),r=new net.Socket,c=setTimeout(()=>{r.destroy(),cmdRunning=!1,o(new Error(`UE command '${e}' timed out after ${s}ms`)),processQueue()},s);r.connect(UE_PORT,UE_HOST,()=>{r.write(JSON.stringify({type:e,params:t})+`
-`)});let a="";r.on("data",i=>{a+=i.toString();try{const p=JSON.parse(a);clearTimeout(c),r.destroy(),cmdRunning=!1,n(p),processQueue()}catch{}}),r.on("error",i=>{clearTimeout(c),cmdRunning=!1,o(new Error(`UE connection error: ${i.message}`)),processQueue()}),r.on("close",()=>{if(clearTimeout(c),a.trim())try{cmdRunning=!1,n(JSON.parse(a)),processQueue()}catch{cmdRunning=!1,o(new Error("Incomplete response from UE")),processQueue()}})}async function toolSpawnBlueprintActor({actor_name:e,blueprint_id:t,location:s,rotation:n,scale:o}){let r=t;if(!r.startsWith("/Game/")){let a=!1;for(const i of["trees","vehicles","street_furniture","roads"]){const l=(ASSETS[i]?.items||[]).find(_=>{const u=_.split("/").pop().split(".")[0];return u===r||u.toLowerCase()===r.toLowerCase()});if(l){r=l,a=!0;break}}if(!a){const i=parseInt(r.replace(/\D/g,""),10);if((/^(BP_Building_)?\d+$/.test(r)||/^Building_\d+$/.test(r))&&!isNaN(i)&&ASSETS.buildings.ids.includes(i)){const l=String(i).padStart(2,"0");r=`/Game/CityDatabase/blueprints/BP_Building_${l}.BP_Building_${l}_C`}else if((!isNaN(i)&&(/^(BP_Building_)?\d+$/.test(r)||/^Building_\d+$/.test(r)))){return{status:"error",message:`Building ${i} is not available. Only buildings 01-06 are included in this package. Use BP_Building_01 through BP_Building_06.`}}else{for(const l of["trees","vehicles","street_furniture","roads"]){const u=(ASSETS[l]?.items||[]).find(m=>m.toLowerCase().includes(r.toLowerCase()));if(u){r=u,a=!0;break}}a||(r=`/Game/CityDatabase/blueprints/${r}.${r}_C`)}}}if(r.startsWith("/Game/")&&!r.endsWith("_C")){const a=r.split(".");if(a.length===2)r=`${a[0]}.${a[1]}_C`;else{const i=r.split("/").pop();r=`${r}.${i}_C`}}const loc=s||[0,0,0],GROUND_HALF=9500;loc[0]=Math.max(-GROUND_HALF,Math.min(GROUND_HALF,loc[0]));loc[1]=Math.max(-GROUND_HALF,Math.min(GROUND_HALF,loc[1]));if(loc[2]<0)loc[2]=0;const c=await ueCommand("spawn_blueprint_actor",{actor_name:e,blueprint_name:r,location:loc,rotation:n||[0,0,0]});if(c.status==="success"){spawnedActors.add(e);const ueActorName=c.result?.name||e;try{await ueCommand("execute_python_script",{script:`
+"use strict";const net=require("net"),fs=require("fs"),path=require("path"),readline=require("readline"),UE_HOST=process.env.UNREAL_HOST||"127.0.0.1",UE_PORT=parseInt(process.env.UNREAL_PORT||"55559",10),SCREENSHOT_DIR=path.resolve(__dirname,"../../tmp/screens"),ASSETS=JSON.parse(fs.readFileSync(path.resolve(__dirname,"assets.json"),"utf-8"));fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0});const spawnedActors=new Set,cmdQueue=[];let cmdRunning=!1;
+
+// ---------------------------------------------------------------------------
+// Command queue with adaptive cooldown + retry
+// ---------------------------------------------------------------------------
+// UE's MCP server: one TCP connection per command, accepts → reads → responds.
+// After responding it needs time to re-enter its accept loop, especially after
+// heavy commands (spawn, python_script) that block the game thread.
+//
+// Queue is serial: wait for UE response → cooldown → next command.
+// Cooldown is adaptive: heavy commands get more breathing room.
+// Retry with backoff on transient connection failures.
+// ---------------------------------------------------------------------------
+const COOLDOWN={
+  spawn_blueprint_actor:200, // UE loads BP + instantiates — needs time
+  execute_python_script:200, // Python runs on game thread
+  spawn_actor:200,
+  delete_all_spawned:300,    // bulk delete is heavy
+  setup_environment:300,
+  delete_actor:100,
+  _default:50,               // reads / queries are light
+};
+let _lastCmdEnd=0,_lastCooldown=50;
+
+function ueCommand(e,t,s=3e4){return new Promise((n,o)=>{cmdQueue.push({type:e,params:t,timeoutMs:s,resolve:n,reject:o}),processQueue()})}
+
+function processQueue(){
+  if(cmdRunning||cmdQueue.length===0)return;
+  // Wait for cooldown from previous command
+  const elapsed=Date.now()-_lastCmdEnd;
+  if(elapsed<_lastCooldown){
+    setTimeout(processQueue,_lastCooldown-elapsed);
+    return;
+  }
+  cmdRunning=!0;
+  const cmd=cmdQueue.shift();
+  _lastCooldown=COOLDOWN[cmd.type]||COOLDOWN._default;
+  _execWithRetry(cmd.type,cmd.params,cmd.timeoutMs,3)
+    .then(r=>{cmd.resolve(r)})
+    .catch(e=>{cmd.reject(e)})
+    .finally(()=>{_lastCmdEnd=Date.now();cmdRunning=!1;processQueue()});
+}
+
+function _execOnce(type,params,timeoutMs){
+  return new Promise((resolve,reject)=>{
+    const sock=new net.Socket();
+    const timer=setTimeout(()=>{sock.destroy();reject(new Error(`UE command '${type}' timed out after ${timeoutMs}ms`))},timeoutMs);
+    sock.connect(UE_PORT,UE_HOST,()=>{sock.write(JSON.stringify({type,params})+"\n")});
+    let buf="";
+    sock.on("data",d=>{buf+=d.toString();try{const p=JSON.parse(buf);clearTimeout(timer);sock.destroy();resolve(p)}catch{}});
+    sock.on("error",e=>{clearTimeout(timer);reject(new Error(`UE connection error: ${e.message}`))});
+    sock.on("close",()=>{clearTimeout(timer);if(buf.trim())try{resolve(JSON.parse(buf))}catch{reject(new Error("Incomplete response from UE"))}});
+  });
+}
+
+async function _execWithRetry(type,params,timeoutMs,retries){
+  let lastErr;
+  for(let i=0;i<retries;i++){
+    try{return await _execOnce(type,params,timeoutMs)}
+    catch(e){
+      lastErr=e;
+      if(i<retries-1){
+        const delay=300*(i+1); // 300ms, 600ms backoff
+        process.stderr.write(`[mcp-server] Retry ${i+1}/${retries} for '${type}' after ${delay}ms: ${e.message}\n`);
+        await new Promise(r=>setTimeout(r,delay));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+// Ensure actor names are unique by appending a short suffix if already used
+const _usedNames=new Set();
+function _uniqueName(name){
+  if(!_usedNames.has(name)){_usedNames.add(name);return name}
+  // Append short numeric suffix: House_1 → House_1_a3
+  const suffix=Date.now().toString(36).slice(-3);
+  const unique=`${name}_${suffix}`;
+  _usedNames.add(unique);
+  return unique;
+}
+
+async function toolSpawnBlueprintActor({actor_name:e,blueprint_id:t,location:s,rotation:n,scale:o}){e=_uniqueName(e);let r=t;if(!r.startsWith("/Game/")){let a=!1;for(const i of["trees","vehicles","street_furniture","roads"]){const l=(ASSETS[i]?.items||[]).find(_=>{const u=_.split("/").pop().split(".")[0];return u===r||u.toLowerCase()===r.toLowerCase()});if(l){r=l,a=!0;break}}if(!a){const i=parseInt(r.replace(/\D/g,""),10);if((/^(BP_Building_)?\d+$/.test(r)||/^Building_\d+$/.test(r))&&!isNaN(i)&&ASSETS.buildings.ids.includes(i)){const l=String(i).padStart(2,"0");r=`/Game/CityDatabase/blueprints/BP_Building_${l}.BP_Building_${l}_C`}else if((!isNaN(i)&&(/^(BP_Building_)?\d+$/.test(r)||/^Building_\d+$/.test(r)))){return{status:"error",message:`Building ${i} is not available. Only buildings 01-06 are included in this package. Use BP_Building_01 through BP_Building_06.`}}else{for(const l of["trees","vehicles","street_furniture","roads"]){const u=(ASSETS[l]?.items||[]).find(m=>m.toLowerCase().includes(r.toLowerCase()));if(u){r=u,a=!0;break}}a||(r=`/Game/CityDatabase/blueprints/${r}.${r}_C`)}}}if(r.startsWith("/Game/")&&!r.endsWith("_C")){const a=r.split(".");if(a.length===2)r=`${a[0]}.${a[1]}_C`;else{const i=r.split("/").pop();r=`${r}.${i}_C`}}const loc=s||[0,0,0],GROUND_HALF=9500;loc[0]=Math.max(-GROUND_HALF,Math.min(GROUND_HALF,loc[0]));loc[1]=Math.max(-GROUND_HALF,Math.min(GROUND_HALF,loc[1]));if(loc[2]<0)loc[2]=0;const c=await ueCommand("spawn_blueprint_actor",{actor_name:e,blueprint_name:r,location:loc,rotation:n||[0,0,0]});if(c.status==="success"){spawnedActors.add(e);const ueActorName=c.result?.name||e;try{await ueCommand("execute_python_script",{script:`
 import unreal
 eal = unreal.EditorAssetLibrary
 subsys = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -21,7 +102,7 @@ if actor:
             if m:
                 comp.set_static_mesh(m)
     print("MESH_FIX_OK")
-`},15000)}catch(fixErr){}if(o&&(o[0]!==1||o[1]!==1||o[2]!==1))await ueCommand("set_actor_transform",{name:e,scale:o})}return c}async function toolSpawnActor({name:e,static_mesh:t,location:s,rotation:n,scale:o}){const loc2=s||[0,0,0],GH2=9500;loc2[0]=Math.max(-GH2,Math.min(GH2,loc2[0]));loc2[1]=Math.max(-GH2,Math.min(GH2,loc2[1]));try{await ueCommand("execute_python_script",{script:`import unreal\nsubsys=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)\nfor a in subsys.get_all_level_actors():\n    if a.get_name()=="${e}" or a.get_actor_label()=="${e}":\n        subsys.destroy_actor(a)\n        break\nunreal.SystemLibrary.collect_garbage()\nprint("pre_clear_done")`},5000)}catch(_){}const r=await ueCommand("spawn_actor",{name:e,type:"StaticMeshActor",location:loc2,rotation:n||[0,0,0],scale:o||[1,1,1],static_mesh:t});if(r.status==="success"&&t){const ue_name=r.result?.name||e;const sc=o||[1,1,1];const mesh_path=t;try{await ueCommand("execute_python_script",{script:`import unreal\nsubsys=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)\nmesh=unreal.load_asset("${mesh_path}")\nactor=None\nfor a in subsys.get_all_level_actors():\n    if a.get_name()=="${ue_name}" or a.get_actor_label()=="${e}":\n        actor=a\n        break\nif actor and mesh:\n    comp=actor.get_component_by_class(unreal.StaticMeshComponent)\n    if comp: comp.set_static_mesh(mesh)\n    actor.set_actor_location(unreal.Vector(${loc2[0]},${loc2[1]},${loc2[2]}),False,False)\n    actor.set_actor_rotation(unreal.Rotator(${(n||[0,0,0])[0]},${(n||[0,0,0])[2]},${(n||[0,0,0])[1]}),False)\n    actor.set_actor_scale3d(unreal.Vector(${sc[0]},${sc[1]},${sc[2]}))\n    print("mesh_set_ok")\nelse:\n    print("mesh_set_failed: actor="+str(actor)+" mesh="+str(mesh))`},15000)}catch(fixErr){}}return r.status==="success"&&spawnedActors.add(e),r}async function toolDeleteActor({name:e}){const t=await ueCommand("delete_actor",{name:e});if(t.status==="success")return spawnedActors.delete(e),t;const s=await ueCommand("execute_python_script",{script:`
+`},15000)}catch(fixErr){}if(o&&(o[0]!==1||o[1]!==1||o[2]!==1))await ueCommand("set_actor_transform",{name:e,scale:o})}return c}async function toolSpawnActor({name:e,static_mesh:t,location:s,rotation:n,scale:o}){e=_uniqueName(e);const loc2=s||[0,0,0],GH2=9500;loc2[0]=Math.max(-GH2,Math.min(GH2,loc2[0]));loc2[1]=Math.max(-GH2,Math.min(GH2,loc2[1]));try{await ueCommand("execute_python_script",{script:`import unreal\nsubsys=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)\nfor a in subsys.get_all_level_actors():\n    if a.get_name()=="${e}" or a.get_actor_label()=="${e}":\n        subsys.destroy_actor(a)\n        break\nunreal.SystemLibrary.collect_garbage()\nprint("pre_clear_done")`},5000)}catch(_){}const r=await ueCommand("spawn_actor",{name:e,type:"StaticMeshActor",location:loc2,rotation:n||[0,0,0],scale:o||[1,1,1],static_mesh:t});if(r.status==="success"&&t){const ue_name=r.result?.name||e;const sc=o||[1,1,1];const mesh_path=t;try{await ueCommand("execute_python_script",{script:`import unreal\nsubsys=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)\nmesh=unreal.load_asset("${mesh_path}")\nactor=None\nfor a in subsys.get_all_level_actors():\n    if a.get_name()=="${ue_name}" or a.get_actor_label()=="${e}":\n        actor=a\n        break\nif actor and mesh:\n    comp=actor.get_component_by_class(unreal.StaticMeshComponent)\n    if comp: comp.set_static_mesh(mesh)\n    actor.set_actor_location(unreal.Vector(${loc2[0]},${loc2[1]},${loc2[2]}),False,False)\n    actor.set_actor_rotation(unreal.Rotator(${(n||[0,0,0])[0]},${(n||[0,0,0])[1]},${(n||[0,0,0])[2]}),False)\n    actor.set_actor_scale3d(unreal.Vector(${sc[0]},${sc[1]},${sc[2]}))\n    print("mesh_set_ok")\nelse:\n    print("mesh_set_failed: actor="+str(actor)+" mesh="+str(mesh))`},15000)}catch(fixErr){}}return r.status==="success"&&spawnedActors.add(e),r}async function toolDeleteActor({name:e}){const t=await ueCommand("delete_actor",{name:e});if(t.status==="success")return spawnedActors.delete(e),t;const s=await ueCommand("execute_python_script",{script:`
 import unreal
 deleted = False
 for a in unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors():
@@ -65,7 +146,7 @@ for a in subsys.get_all_level_actors():
 
 print(f"Deleted {len(deleted)} actors: {deleted}")
 print(f"Kept {len(kept)} infrastructure actors")
-`});spawnedActors.clear();const s=t?.result?.python_logs||[];return{result:t?.result,logs:s}}async function toolGetActors(){return ueCommand("get_actors_in_level",{})}async function toolFindActors({pattern:e}){return ueCommand("find_actors_by_name",{pattern:e})}async function toolSetActorTransform({name:e,location:t,rotation:s,scale:n}){const o={name:e};return t&&(o.location=t),s&&(o.rotation=s),n&&(o.scale=n),ueCommand("set_actor_transform",o)}async function toolTakeScreenshot({filename:e}){const t=e||`screenshot_${Date.now()}.png`,s=path.join(SCREENSHOT_DIR,t);return ueCommand("take_screenshot",{filepath:s})}async function toolSetCamera({location:e,rotation:t}){if(e&&t){const o=`
+`});spawnedActors.clear();_usedNames.clear();const s=t?.result?.python_logs||[];return{result:t?.result,logs:s}}async function toolGetActors(){return ueCommand("get_actors_in_level",{})}async function toolFindActors({pattern:e}){return ueCommand("find_actors_by_name",{pattern:e})}async function toolSetActorTransform({name:e,location:t,rotation:s,scale:n}){const o={name:e};return t&&(o.location=t),s&&(o.rotation=s),n&&(o.scale=n),ueCommand("set_actor_transform",o)}async function toolTakeScreenshot({filename:e}){const t=e||`screenshot_${Date.now()}.png`,s=path.join(SCREENSHOT_DIR,t);return ueCommand("take_screenshot",{filepath:s})}async function toolSetCamera({location:e,rotation:t}){if(e&&t){const o=`
 import unreal
 subsys = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 loc = unreal.Vector(${e[0]}, ${e[1]}, ${e[2]})

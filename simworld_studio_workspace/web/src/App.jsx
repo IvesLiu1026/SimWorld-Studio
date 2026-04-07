@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-// ─── Unified Poll System ────────────────────────────────────────────────────
-// Single GET /api/poll replaces ALL individual polling endpoints.
-// Browser HTTP/1.1 limit = 6 concurrent connections per origin.
-// Multiple independent polls saturate the pool and block real requests (chat, agent-chat).
+// ─── SSE Status Stream ─────────────────────────────────────────────────────
+// ONE persistent EventSource connection replaces all HTTP polling.
+// Server pushes status every 3s over a single SSE stream.
+// This leaves all HTTP connections free for agent-chat and other API calls —
+// no more connection-pool saturation under HTTP/1.1's 6-connection limit.
 
 const PollContext = React.createContext({
   context: { agents: [], objects: [], environment: { ready: false }, round: 0, updatedAt: null },
@@ -25,25 +26,19 @@ function PollProvider({ children }) {
     pieActive: false,
     health: null,
   });
-  const sinceRef = useRef(0);
 
   useEffect(() => {
-    let stopped = false;
-    const poll = async () => {
+    let es = new EventSource(`${API_BASE}/events`);
+    es.onmessage = (evt) => {
       try {
-        const r = await fetch(`${API_BASE}/poll?since=${sinceRef.current}`);
-        if (r.ok && !stopped) {
-          const d = await r.json();
-          if (d.chatLog?.length > 0) {
-            sinceRef.current = Math.max(...d.chatLog.map(m => m.timestamp));
-          }
-          setData(d);
-        }
+        const d = JSON.parse(evt.data);
+        setData(d);
       } catch {}
     };
-    poll();
-    const id = setInterval(poll, 3000);
-    return () => { stopped = true; clearInterval(id); };
+    es.onerror = () => {
+      // EventSource auto-reconnects; nothing extra needed
+    };
+    return () => { es.close(); };
   }, []);
 
   return React.createElement(PollContext.Provider, { value: data }, children);
@@ -3112,7 +3107,7 @@ async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
   const decoder = new TextDecoder();
   let buffer = "";
   let lastDataTime = Date.now();
-  const IDLE_TIMEOUT = 120000; // 2 min idle = dead
+  const IDLE_TIMEOUT = 210000; // 3.5 min — allow time for long MCP tool calls
 
   for (;;) {
     const readPromise = reader.read();
@@ -3166,9 +3161,15 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
   const activityRef = useRef(null);
   const color = AGENT_COLORS[colorIdx % AGENT_COLORS.length];
 
-  // Get activities from unified poll
+  // Get activities + messages from unified poll
   const pollData = usePoll();
   const pastActivities = pollData.activities?.[agent.name] || [];
+  // Messages where this agent was mentioned or targeted
+  const agentMessages = useMemo(() => {
+    return (pollData.chatLog || []).filter(m =>
+      m.from !== agent.name && (m.to === agent.name || m.to === "all" || !m.to)
+    ).slice(-5);
+  }, [pollData.chatLog, agent.name]);
 
   const handleSend = useCallback(async (text) => {
     console.log("[AgentCard] handleSend called", { text, status, agentName: agent.name, sessionId, pieActive });
@@ -3206,6 +3207,9 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
       }, controller.signal);
       console.log("[AgentCard] sendAgentChat resolved OK");
       setStatus("done");
+      // Clear live thought so it doesn't duplicate pastActivities from SSE
+      setThought("");
+      setActions([]);
     } catch (err) {
       console.error("[AgentCard] sendAgentChat ERROR", err.name, err.message);
       if (err.name !== "AbortError") {
@@ -3254,19 +3258,41 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
   };
 
   return (
-    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#161b22", minWidth: 240, flex: "1 1 280px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#161b22", minWidth: 200, flex: "1 1 calc(50% - 5px)", maxWidth: "calc(50% - 5px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* Header */}
       <div style={{ padding: "8px 10px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 6, background: `${color}0a` }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status], flexShrink: 0 }} />
         <span style={{ fontSize: 13, fontWeight: 700, color }}>{agent.name}</span>
         <span style={{ fontSize: 9, color: "#8b949e", background: "#0d1117", borderRadius: 3, padding: "1px 5px" }}>{agent.cls}</span>
-        {loc && <span style={{ fontSize: 9, color: "#484f58" }}>({loc})</span>}
         <div style={{ flex: 1 }} />
+        {/* Camera focus button */}
+        {loc && <button onClick={() => {
+          const [x, y, z] = agent.location;
+          // Position camera offset behind-left and above, compute yaw/pitch to look at agent
+          const camX = x - 400, camY = y - 400, camZ = z + 350;
+          const dx = x - camX, dy = y - camY, dz = z - camZ;
+          const horiz = Math.sqrt(dx * dx + dy * dy);
+          const pitch = horiz > 1 ? Math.atan2(dz, horiz) * (180 / Math.PI) : -45;
+          const yaw = Math.atan2(dy, dx) * (180 / Math.PI);
+          fetch(`${API_BASE}/camera`, { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cmd: "set_camera", args: [camX, camY, camZ, pitch, yaw, 0] })
+          }).catch(() => {});
+        }} title={`Focus camera on ${agent.name}`}
+          style={{ background: "none", border: "1px solid #30363d", borderRadius: 3, padding: "2px 5px", color: "#8b949e", fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", lineHeight: 1 }}>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M15 3.5a1.5 1.5 0 0 0-2.29-1.27L10 3.99V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2v-.99l2.71 1.76A1.5 1.5 0 0 0 15 9.5v-6z"/></svg>
+        </button>}
         {status === "running" && <button onClick={handleStop} style={{ background: "none", border: "1px solid #da3633", borderRadius: 3, padding: "1px 6px", color: "#f85149", fontSize: 10, cursor: "pointer" }}>stop</button>}
       </div>
 
       {/* Activity log (ReAct) */}
       <div ref={activityRef} style={{ flex: 1, overflowY: "auto", padding: "6px 10px", minHeight: 80, maxHeight: 200 }}>
+        {/* Incoming messages */}
+        {agentMessages.map((m, i) => (
+          <div key={`msg-${i}`} style={{ marginBottom: 4, fontSize: 10, color: "#8b949e", borderLeft: "2px solid #30363d", paddingLeft: 6 }}>
+            <span style={{ fontWeight: 600, color: "#58a6ff" }}>@{m.from}</span>: {m.text.slice(0, 120)}
+          </div>
+        ))}
+        {agentMessages.length > 0 && pastActivities.length > 0 && <div style={{ borderBottom: "1px solid #21262d", marginBottom: 6 }} />}
         {/* Past activities */}
         {pastActivities.slice(-3).map((act, i) => (
           <div key={i} style={{ marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid #21262d" }}>
@@ -3275,7 +3301,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
         ))}
         {/* Live activity */}
         {(thought || actions.length > 0) ? renderActivity({ thought, response: thought }, true) : (
-          pastActivities.length === 0 && <span style={{ color: "#484f58", fontSize: 11, fontStyle: "italic" }}>No activity yet</span>
+          pastActivities.length === 0 && agentMessages.length === 0 && <span style={{ color: "#484f58", fontSize: 11, fontStyle: "italic" }}>No activity yet</span>
         )}
         {status === "running" && <span style={{ color: "#d29922", fontSize: 10 }}> thinking...</span>}
       </div>
@@ -3324,10 +3350,11 @@ function CommHistory({ agents }) {
   const handleSend = () => {
     const text = input.trim();
     if (!text) return;
-    fetch(`${API_BASE}/agent-message`, {
+    // Use broadcast endpoint — triggers agent turns automatically
+    fetch(`${API_BASE}/agent-broadcast`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ from: "user", to: target === "all" ? null : target, text }),
+      body: JSON.stringify({ text, target: target === "all" ? "all" : target }),
     }).catch(() => {});
     setMessages(prev => [...prev, { from: "user", to: target, text, timestamp: Date.now() }]);
     setInput("");

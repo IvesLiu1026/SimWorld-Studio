@@ -11,7 +11,11 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const UCV_PORT = parseInt(process.env.UCV_PORT || '9000', 10);
 const UCV_HOST = process.env.UCV_HOST || '127.0.0.1';
 const UCV_MAGIC = 0x9E2B83C1;
+const { SkillRegistry } = require('./skills');
 const REGISTRY = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'agent-registry.json'), 'utf-8'));
+
+// Shared skill registry — panel agents get agent-relevant skills auto-injected
+const skillRegistry = new SkillRegistry();
 
 // ---------------------------------------------------------------------------
 // UnrealCV helper — one-shot TCP per call
@@ -153,6 +157,15 @@ class AgentSession {
       '- Be concise.',
     );
 
+    // Inject agent-relevant skills (movement, navigation, facing, etc.)
+    const agentSkills = skillRegistry.search('agent', ['agent', 'movement', 'navigation']);
+    if (agentSkills.length > 0) {
+      const composed = skillRegistry.compose(agentSkills.map(s => s.id));
+      if (composed) {
+        lines.push('', '## SKILLS (reference documentation)', composed);
+      }
+    }
+
     if (this.history.length > 0) {
       lines.push('', '## Recent History');
       for (const h of this.history.slice(-6)) {
@@ -253,6 +266,7 @@ class AgentSession {
       let buf = '';
       let assistantText = '';
       let lastOutput = Date.now();
+      let toolInProgress = false;   // true while a tool call is executing
       const act = this._currentActivity;
 
       const safeEvent = (type, data) => {
@@ -285,6 +299,7 @@ class AgentSession {
             const tc = ev.content_block;
             const displayName = tc.name.replace(/^mcp__\w+__/, '');
             if (act) act.actions.push({ tool: displayName, input: '', result: '', ok: null });
+            toolInProgress = true;
             safeEvent('tool_start', { id: tc.id, name: tc.name, displayName });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta') {
@@ -295,6 +310,7 @@ class AgentSession {
           }
 
         } else if (msg.type === 'user') {
+          toolInProgress = false;   // tool result arrived → no longer in-progress
           for (const p of (msg.message?.content || [])) {
             if (p.type === 'tool_result') {
               const text = Array.isArray(p.content)
@@ -325,11 +341,18 @@ class AgentSession {
         }
       };
 
-      // Idle timer — 90s no output = kill
+      // Idle timer — kill only when genuinely idle (no tool running)
+      // Tool calls (MCP→UE) can easily take 2+ minutes, so skip check while tool is in progress
+      const IDLE_LIMIT = 180000; // 3 min with no output AND no tool running
       const idleTimer = setInterval(() => {
-        if (Date.now() - lastOutput > 90000) {
+        if (toolInProgress) {
+          // Tool is executing — reset timer so we don't kill mid-tool
+          lastOutput = Date.now();
+          return;
+        }
+        if (Date.now() - lastOutput > IDLE_LIMIT) {
           clearInterval(idleTimer);
-          log.agent('warn', `${this.agentName} idle timeout`);
+          log.agent('warn', `${this.agentName} idle timeout (${IDLE_LIMIT/1000}s, no tool active)`);
           proc.kill('SIGTERM');
         }
       }, 10000);
