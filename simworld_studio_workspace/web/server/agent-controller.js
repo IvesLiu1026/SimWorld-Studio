@@ -3,14 +3,11 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const net = require('net');
 const log = require('./logger');
+const { getBroker } = require('./unreal-bridge');
 
 const MCP_CONFIG = path.resolve(__dirname, '../mcp.json');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
-const UCV_PORT = parseInt(process.env.UCV_PORT || '9000', 10);
-const UCV_HOST = process.env.UCV_HOST || '127.0.0.1';
-const UCV_MAGIC = 0x9E2B83C1;
 const { SkillRegistry } = require('./skills');
 const REGISTRY = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'agent-registry.json'), 'utf-8'));
 
@@ -18,68 +15,35 @@ const REGISTRY = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'agent-regis
 const skillRegistry = new SkillRegistry();
 
 // ---------------------------------------------------------------------------
-// UnrealCV helper — one-shot TCP per call
+// UnrealCV access — all UCV traffic in this process goes through the singleton
+// UcvBroker (see unreal-bridge.js). The old per-call one-shot TCP implementation
+// raced with mcp-server subprocesses on port 9000 and silently dropped commands
+// when spawn_agent reset the connection. The broker owns one persistent
+// connection, serializes commands FIFO, retries on disconnect.
 // ---------------------------------------------------------------------------
 
-let ucvMsgId = 200;
+const broker = getBroker();
 
-function ucvCommand(cmd, timeout = 8000) {
-  return new Promise((resolve, reject) => {
-    const sock = new net.Socket();
-    const timer = setTimeout(() => { sock.destroy(); reject(new Error('UCV timeout')); }, timeout);
-    let buf = Buffer.alloc(0);
-    let gotBanner = false;
-    const id = ucvMsgId++;
-
-    function parse(b) {
-      if (b.length < 8) return null;
-      if (b.readUInt32LE(0) !== UCV_MAGIC) return null;
-      const sz = b.readUInt32LE(4);
-      if (b.length < 8 + sz) return null;
-      return { payload: b.slice(8, 8 + sz).toString('utf-8'), remaining: b.slice(8 + sz) };
-    }
-    function sendMsg(msg) {
-      const p = Buffer.from(msg, 'utf-8');
-      const h = Buffer.alloc(8);
-      h.writeUInt32LE(UCV_MAGIC, 0);
-      h.writeUInt32LE(p.length, 4);
-      sock.write(Buffer.concat([h, p]));
-    }
-
-    sock.connect(UCV_PORT, UCV_HOST, () => {});
-    sock.on('data', d => {
-      buf = Buffer.concat([buf, d]);
-      let p;
-      while ((p = parse(buf)) !== null) {
-        buf = p.remaining;
-        if (!gotBanner) {
-          gotBanner = true;
-          sendMsg(`${id}:${cmd}`);
-        } else {
-          clearTimeout(timer);
-          sock.destroy();
-          let result = p.payload;
-          const ci = result.indexOf(':');
-          if (ci > 0 && ci < 6) result = result.slice(ci + 1);
-          resolve(result);
-          return;
-        }
-      }
-    });
-    sock.on('end', () => { clearTimeout(timer); resolve(''); });
-    sock.on('error', e => { clearTimeout(timer); reject(e); });
-  });
+/** Compat shim — preserves old `ucvCommand(cmd, timeoutMs)` signature so any
+ *  existing call site (e.g. AgentSession.stop) works unchanged. */
+function ucvCommand(cmd, timeoutMs = 10000) {
+  return broker.send(cmd, { timeoutMs });
 }
 
 async function getObservation(agentName) {
+  // Broker handles retry+reconnect; we set a generous queue deadline so a brief
+  // UCV stall (e.g. another agent spawning) doesn't make us silently return null.
   try {
-    const loc = await ucvCommand(`vget /object/${agentName}/location`);
-    const rot = await ucvCommand(`vget /object/${agentName}/rotation`);
+    const [loc, rot] = await Promise.all([
+      broker.send(`vget /object/${agentName}/location`, { timeoutMs: 8000, retries: 3, queueDeadlineMs: 30000 }),
+      broker.send(`vget /object/${agentName}/rotation`, { timeoutMs: 8000, retries: 3, queueDeadlineMs: 30000 }),
+    ]);
     return {
       location: loc.trim().split(/\s+/).map(Number),
       rotation: rot.trim().split(/\s+/).map(Number),
     };
-  } catch {
+  } catch (err) {
+    log.agent('warn', `getObservation(${agentName}) failed: ${err.message}`);
     return { location: null, rotation: null };
   }
 }
