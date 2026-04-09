@@ -150,7 +150,7 @@ print(f"Kept {len(kept)} infrastructure actors")
 import unreal
 subsys = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 loc = unreal.Vector(${e[0]}, ${e[1]}, ${e[2]})
-rot = unreal.Rotator(${t[0]}, ${t[1]}, 0.0)
+rot = unreal.Rotator(pitch=${t[0]}, yaw=${t[1]}, roll=0.0)
 subsys.set_level_viewport_camera_info(loc, rot)
 `;return ueCommand("execute_python_script",{script:o})}const n=`
 import unreal, math
@@ -183,7 +183,7 @@ loc_override = ${e?`unreal.Vector(${e[0]}, ${e[1]}, ${e[2]})`:"None"}
 
 if count == 0:
     cam_loc = loc_override if loc_override else unreal.Vector(0, 0, 5000)
-    cam_rot = unreal.Rotator(-90, 0, 0)
+    cam_rot = unreal.Rotator(pitch=-90, yaw=0, roll=0)
 else:
     cx = (min_x + max_x) / 2.0
     cy = (min_y + max_y) / 2.0
@@ -207,7 +207,7 @@ else:
     horiz = math.sqrt(dx*dx + dy*dy)
     pitch = math.degrees(math.atan2(dz, horiz)) if horiz > 0.01 else -90.0
     yaw = math.degrees(math.atan2(dy, dx))
-    cam_rot = unreal.Rotator(pitch, yaw, 0.0)
+    cam_rot = unreal.Rotator(pitch=pitch, yaw=yaw, roll=0.0)
 
 subsys.set_level_viewport_camera_info(cam_loc, cam_rot)
 print(f"Camera: loc=({cam_loc.x:.0f},{cam_loc.y:.0f},{cam_loc.z:.0f}) rot=({cam_rot.pitch:.1f},{cam_rot.yaw:.1f},0.0) scene_actors={count}")

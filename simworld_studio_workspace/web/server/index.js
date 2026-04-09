@@ -147,7 +147,7 @@ location.replace(location.pathname+'?'+p.toString());}})();
 import unreal
 subsys = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 loc = unreal.Vector(${n[0]}, ${n[1]}, ${n[2]})
-rot = unreal.Rotator(${n[3]}, ${n[4]}, ${n[5]})
+rot = unreal.Rotator(pitch=${n[3]}, yaw=${n[4]}, roll=${n[5]})
 subsys.set_level_viewport_camera_info(loc, rot)
 `},a.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{a.write(JSON.stringify({type:"execute_python_script",params:m})+`
 `)});else return clearTimeout(c),e.json({ok:!0,result:"no-op"});let _="";a.on("data",h=>{_+=h.toString();try{const g=JSON.parse(_);clearTimeout(c),a.destroy(),e.json({ok:!0,result:g})}catch{}}),a.on("error",h=>{clearTimeout(c),e.status(500).json({error:h.message})})}),app.get("/api/skills",(s,e)=>{e.json(skillRegistry.list())}),app.get("/api/skills/:id",(s,e)=>{const t=skillRegistry.get(s.params.id);if(!t)return e.status(404).json({error:"Skill not found"});e.json(t)}),app.get("/api/skills/search/:query",(s,e)=>{e.json(skillRegistry.search(s.params.query))}),app.post("/api/skills/reload",(s,e)=>{skillRegistry.reload(),e.json({ok:!0,count:skillRegistry.list().length})}),app.post("/api/skills",(s,e)=>{const{id:t,name:n,description:o,tags:i,dependencies:a,content:c}=s.body;if(!t||!n||!c)return e.status(400).json({error:"id, name, and content are required"});const m=["---",`id: ${t}`,`name: ${n}`,"version: 1.0.0","author: custom",`tags: [${(i||[]).join(", ")}]`,`dependencies: [${(a||[]).join(", ")}]`,`description: ${o||n}`,"---","",c].join(`

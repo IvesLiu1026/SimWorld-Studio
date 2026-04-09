@@ -16,7 +16,7 @@ GPU_INDEX=""
 RENDER_OFFSCREEN=""
 RESOLUTION="-ResX=1280 -ResY=720"
 PIXEL_STREAMING_ARGS=""
-FPSMAX="-FPSMAX=15"
+FPSMAX=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -31,6 +31,9 @@ while [[ $# -gt 0 ]]; do
             ;;
         --render-offscreen)
             RENDER_OFFSCREEN="-RenderOffScreen"
+            # In headless server mode, throttle the editor to save GPU.
+            # Interactive editing should NOT have this — it makes Slate UI laggy.
+            FPSMAX="-FPSMAX=15"
             shift
             ;;
         --pixel-streaming)
@@ -125,10 +128,8 @@ echo ""
 exec "$UE_EDITOR" "$PROJECT_FILE" \
     /Game/Maps/Empty.umap \
     -MCPPort=$MCP_PORT \
-    -Unattended \
     -NOSPLASH \
     -NOSOUND \
-    -Messaging \
     $RESOLUTION \
     $FPSMAX \
     $GPU_ADAPTER \

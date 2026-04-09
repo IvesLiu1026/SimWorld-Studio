@@ -221,9 +221,8 @@ echo   Launching Unreal Engine...
 start "UnrealEditor" "%UE_EDITOR%" "%UE_PROJECT%" ^
     %UE_MAP% ^
     -MCPPort=%MCP_PORT% ^
-    -Unattended -NOSPLASH -NOSOUND -Messaging ^
+    -NOSPLASH -NOSOUND ^
     -ResX=1280 -ResY=720 ^
-    -FPSMAX=15 ^
     -graphicsadapter=%GPU_INDEX% ^
     %RENDER_OFFSCREEN% ^
     -EditorPixelStreamingRes=1280x720 ^
