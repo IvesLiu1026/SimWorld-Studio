@@ -233,6 +233,20 @@ class AgentSession {
       let toolInProgress = false;   // true while a tool call is executing
       const act = this._currentActivity;
 
+      // ── Observability (Phase 1.5) ────────────────────────────────────────
+      // Track Claude subprocess lifecycle so we can diagnose silent hangs
+      // (the Pedestrian_1 case: init received → 3.5min silence → SIGTERM with
+      // no clue what Claude was doing). On idle-timeout we now dump:
+      //   - elapsed since spawn / since last stream event
+      //   - init→first-output gap (proxy for Claude API startup latency)
+      //   - tail of unparsed stdout buffer
+      //   - tail of recent stderr (was previously dropped after debug log)
+      const spawnedAt = Date.now();
+      let initAt = null;          // when system/init JSON arrived
+      let firstStreamAt = null;   // when first stream_event arrived
+      let lastStreamAt = null;    // when most recent stream_event arrived
+      let stderrTail = '';        // ring buffer of recent stderr (last 4KB)
+
       const safeEvent = (type, data) => {
         try { onEvent(type, data); } catch (err) {
           log.agent('warn', `${this.agentName} onEvent error: ${err.message}`);
@@ -245,10 +259,18 @@ class AgentSession {
         try { msg = JSON.parse(line); } catch { return; }
 
         if (msg.type === 'system' && msg.subtype === 'init') {
-          log.agent('debug', `${this.agentName} session: ${msg.session_id}`);
+          initAt = Date.now();
+          log.agent('debug', `${this.agentName} session: ${msg.session_id} (init ${initAt - spawnedAt}ms after spawn)`);
           safeEvent('system', { sessionId: msg.session_id });
 
         } else if (msg.type === 'stream_event') {
+          const now = Date.now();
+          if (!firstStreamAt) {
+            firstStreamAt = now;
+            const initGap = initAt ? now - initAt : -1;
+            log.agent('debug', `${this.agentName} first stream_event ${initGap}ms after init`);
+          }
+          lastStreamAt = now;
           const ev = msg.event || {};
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
             assistantText += ev.delta.text;
@@ -316,7 +338,19 @@ class AgentSession {
         }
         if (Date.now() - lastOutput > IDLE_LIMIT) {
           clearInterval(idleTimer);
-          log.agent('warn', `${this.agentName} idle timeout (${IDLE_LIMIT/1000}s, no tool active)`);
+          // Dump everything we know about subprocess state before killing.
+          // This is the diagnostic the Pedestrian_1 hang case was missing.
+          const now = Date.now();
+          const diag = {
+            sinceSpawn: now - spawnedAt,
+            sinceInit: initAt ? now - initAt : null,
+            sinceFirstStream: firstStreamAt ? now - firstStreamAt : null,
+            sinceLastStream: lastStreamAt ? now - lastStreamAt : null,
+            initToFirstStream: (initAt && firstStreamAt) ? firstStreamAt - initAt : null,
+            stdoutBufferTail: buf.slice(-512),
+            stderrTail: stderrTail.slice(-1024),
+          };
+          log.agent('warn', `${this.agentName} idle timeout (${IDLE_LIMIT/1000}s) diag: ${JSON.stringify(diag)}`);
           proc.kill('SIGTERM');
         }
       }, 10000);
@@ -331,8 +365,11 @@ class AgentSession {
 
       proc.stderr.on('data', d => {
         lastOutput = Date.now(); // stderr counts as activity
-        const txt = d.toString().trim();
-        if (txt) log.agent('debug', `${this.agentName} stderr: ${txt.slice(0, 200)}`);
+        const txt = d.toString();
+        // Keep a rolling 4KB tail so we can attach it to idle-timeout diagnostics
+        stderrTail = (stderrTail + txt).slice(-4096);
+        const trimmed = txt.trim();
+        if (trimmed) log.agent('debug', `${this.agentName} stderr: ${trimmed.slice(0, 200)}`);
       });
 
       proc.on('close', (code, signal) => {

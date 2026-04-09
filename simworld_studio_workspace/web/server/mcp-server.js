@@ -293,10 +293,16 @@ for a in subsys.get_all_level_actors():
 print("Culling disabled on all spawned actors")
 `});return spawnedActors.add("Arena_Env_Ground"),{status:"success",message:`Environment set up: sun (${n}), sky atmosphere, sky light, fog, ground (${s*100}m x ${s*100}m), view distance culling disabled`,steps:{atmosphere:c?.result?.python_logs,sun:a?.result?.python_logs,skylight:i?.result?.python_logs,fog:p?.result?.python_logs},ground:l?.result?.python_logs}}function _notifyBackend(body){try{const http=require('http');const data=JSON.stringify(body);const req=http.request({host:'127.0.0.1',port:parseInt(process.env.PORT||'3002'),path:'/api/verifier-update',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(data)}});req.on('error',()=>{});req.write(data);req.end();}catch(e){}}async function toolVerifyScene({original_request:R,focus_areas:F}){const ts='verify_'+Date.now()+'.png',sp=path.join(SCREENSHOT_DIR,ts);try{await ueCommand('take_screenshot',{filepath:sp})}catch(e){return{status:'error',message:'Screenshot failed: '+e.message}}let ar;try{ar=await toolGetActors()}catch(e){ar={status:'error'}}// Notify backend: screenshot ready (show panel immediately)
 _notifyBackend({type:'screenshot',data:sp});const actorsList=JSON.stringify(ar,null,2);const uc=[];try{if(fs.existsSync(sp)){const imgData=fs.readFileSync(sp);const isJpeg=imgData[0]===255&&imgData[1]===216;const mediaType=isJpeg?'image/jpeg':'image/png';uc.push({type:'image',source:{type:'base64',media_type:mediaType,data:imgData.toString('base64')}})}}catch(e){}const promptText='Please verify this 3D scene in SimWorld Studio (Unreal Engine 5).\n\n'+(R?'Original scene request: "'+R+'"\n\n':'')+'Current actors in the scene:\n'+actorsList+(F?'\n\nFocus on: '+F:'');uc.push({type:'text',text:promptText});const sysPrompt='You are a 3D scene verification expert for SimWorld Studio (Unreal Engine 5).\nAnalyze the scene screenshot and actor list, then provide concise actionable feedback.\n\nEvaluate:\n1. Completeness: Are all requested objects present?\n2. Placement: Are objects in good positions? (X/Y within -9500 to 9500, not overlapping, not outside ground)\n3. Scale: Do objects look appropriately sized relative to each other?\n4. Realism: Does the scene match the original request?\n5. Issues: Any obvious problems (floating, buried, misaligned)?\n\nFormat your response as:\n- **Status**: PASS / NEEDS_IMPROVEMENT / FAIL\n- **Issues**: (bullet list of specific problems, or "None" if PASS)\n- **Suggestions**: (bullet list of specific actionable improvements the agent should make)';const CLAUDE=process.env.CLAUDE_BIN||'claude';const args=['--input-format','stream-json','--output-format','stream-json','--verbose','--dangerously-skip-permissions','--append-system-prompt',sysPrompt];return new Promise((resolve)=>{const p=require('child_process').spawn(CLAUDE,args,{stdio:['pipe','pipe','pipe'],env:process.env});p.stdin.write(JSON.stringify({type:'user',message:{role:'user',content:uc}})+'\n');p.stdin.end();let buf='',feedback='';p.stdout.on('data',d=>{buf+=d.toString();const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.trim())continue;try{const ev=JSON.parse(line);if(ev.type==='result'&&typeof ev.result==='string'&&ev.result){feedback=ev.result}else if(ev.type==='assistant'){for(const b of(ev.message&&ev.message.content||[])){if(b.type==='text'&&b.text){feedback+=b.text;_notifyBackend({type:'delta',data:b.text})}}}else if(ev.type==='stream_event'){const evt=ev.event||{};if(evt.type==='content_block_delta'&&evt.delta&&evt.delta.type==='text_delta'&&evt.delta.text){feedback+=evt.delta.text;_notifyBackend({type:'delta',data:evt.delta.text})}}}catch{}}});p.stderr.on('data',d=>process.stderr.write('[verifier] '+d));p.on('close',()=>{resolve({status:'success',screenshot:sp,actors_count:(ar&&ar.result&&ar.result.actors&&ar.result.actors.length)||0,feedback:feedback||'No feedback generated'})})});}// ---------------------------------------------------------------------------
-// UnrealCV TCP client (port 9000) — for agent control in PIE mode
+// UnrealCV access (Phase 2) — UCV traffic now goes through the main server's
+// singleton UcvBroker via HTTP RPC, instead of each mcp-server subprocess
+// opening its own TCP socket to UE port 9000. This eliminates the cross-process
+// race on UCV that was silently dropping commands when one agent's spawn reset
+// the connection mid-flight for everyone else. The broker (in unreal-bridge.js)
+// handles the persistent socket, FIFO queue, retries, and reconnect.
 // ---------------------------------------------------------------------------
-const UCV_PORT=parseInt(process.env.UCV_PORT||"9000",10);
-const UCV_HOST=process.env.UCV_HOST||UE_HOST;
+const BROKER_HOST=process.env.SIMWORLD_BROKER_HOST||"127.0.0.1";
+const BROKER_PORT=process.env.PORT||"3002";
+const BROKER_URL=`http://${BROKER_HOST}:${BROKER_PORT}/api/internal/ucv`;
 
 const AGENT_REGISTRY=JSON.parse(fs.readFileSync(path.resolve(__dirname,"agent-registry.json"),"utf-8"));
 
@@ -309,65 +315,28 @@ function resolveAgentType(nameOrType){
   return"pedestrian";
 }
 
-const UCV_MAGIC=0x9E2B83C1;
-let ucvMsgId=0;
-
-function ucvSendMsg(sock,msg){
-  const payload=Buffer.from(msg,'utf-8');
-  const header=Buffer.alloc(8);
-  header.writeUInt32LE(UCV_MAGIC,0);
-  header.writeUInt32LE(payload.length,4);
-  sock.write(Buffer.concat([header,payload]));
-}
-
-function ucvParseMsg(buf){
-  // Returns {payload, remaining} or null if incomplete
-  if(buf.length<8)return null;
-  const magic=buf.readUInt32LE(0);
-  if(magic!==UCV_MAGIC){
-    const idx=buf.indexOf(Buffer.from([0xC1,0x83,0x2B,0x9E]),1);
-    if(idx>0)return ucvParseMsg(buf.slice(idx));
-    return null;
+async function ucvCommand(cmd,timeout=10000,opts={}){
+  const retries=typeof opts.retries==="number"?opts.retries:1;
+  const queueDeadlineMs=typeof opts.queueDeadlineMs==="number"
+    ?opts.queueDeadlineMs
+    :Math.max(timeout*2,15000);
+  let res;
+  try{
+    res=await fetch(BROKER_URL,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({cmd,timeoutMs:timeout,retries,queueDeadlineMs}),
+    });
+  }catch(err){
+    throw new Error(`UCV broker unreachable at ${BROKER_URL}: ${err.message}`);
   }
-  const size=buf.readUInt32LE(4);
-  if(buf.length<8+size)return null;
-  return{payload:buf.slice(8,8+size).toString('utf-8'),remaining:buf.slice(8+size)};
+  let json;
+  try{json=await res.json()}catch{json={ok:false,error:`broker returned non-JSON (HTTP ${res.status})`}}
+  if(!json.ok){
+    throw new Error(`UCV ${cmd.slice(0,60)}: ${json.error||"unknown error"}`);
+  }
+  return json.result;
 }
-
-function ucvCommand(cmd,timeout=10000){return new Promise((resolve,reject)=>{
-  const sock=new net.Socket;
-  const timer=setTimeout(()=>{sock.destroy();reject(new Error(`UCV timeout: ${cmd.slice(0,80)}`))},timeout);
-  let buf=Buffer.alloc(0);
-  let gotBanner=false;
-  const msgId=ucvMsgId++;
-
-  sock.connect(UCV_PORT,UCV_HOST,()=>{});
-
-  sock.on("data",d=>{
-    buf=Buffer.concat([buf,d]);
-    let parsed;
-    while((parsed=ucvParseMsg(buf))!==null){
-      buf=parsed.remaining;
-      if(!gotBanner){
-        gotBanner=true;
-        // Send command with message ID prefix: "id:command"
-        ucvSendMsg(sock,`${msgId}:${cmd}`);
-      }else{
-        // Response: "id:result"
-        clearTimeout(timer);
-        sock.destroy();
-        let result=parsed.payload;
-        // Strip message ID prefix if present
-        const colonIdx=result.indexOf(':');
-        if(colonIdx>0&&colonIdx<6){result=result.slice(colonIdx+1)}
-        resolve(result);
-        return;
-      }
-    }
-  });
-  sock.on("end",()=>{clearTimeout(timer);resolve("")});
-  sock.on("error",e=>{clearTimeout(timer);reject(new Error(`UCV error: ${e.message}`))});
-})}
 
 
 let pieStarted=false;
@@ -387,11 +356,11 @@ async function ensurePIE(){
   throw new Error("PIE mode is not active. Please start Play-In-Editor (PIE) mode in Unreal Engine first, then try again. You can start PIE by clicking the Play button in the UE toolbar.")
 }
 
-async function ucvCommandRetry(cmd,retries=3,delay=2000,timeout=10000){mcpLog('debug','ucv: '+cmd.slice(0,80));
-  for(let i=0;i<retries;i++){
-    try{return await ucvCommand(cmd,timeout)}
-    catch(e){if(i<retries-1){await new Promise(r=>setTimeout(r,delay))}else{throw e}}
-  }
+async function ucvCommandRetry(cmd,retries=3,delay=2000,timeout=10000){
+  mcpLog('debug','ucv: '+cmd.slice(0,80));
+  // The broker handles retries+reconnect internally now (Phase 2). We just
+  // pass `retries` through. `delay` is unused — broker uses its own backoff.
+  return ucvCommand(cmd,timeout,{retries});
 }
 
 function mcpLog(level,msg,data){process.stderr.write(`[${new Date().toISOString()}] [${level}] [mcp] ${msg}${data?' '+JSON.stringify(data):''}\n`)}
