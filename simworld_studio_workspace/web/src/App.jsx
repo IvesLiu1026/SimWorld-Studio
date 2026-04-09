@@ -342,7 +342,11 @@ async function sendChat(message, sessionId, onEvent, signal, options) {
   const decoder = new TextDecoder();
   let buffer = "";
   let lastDataTime = Date.now();
-  const IDLE_TIMEOUT = 330000; // 5.5 minutes without any data = dead connection
+  // Server sends a `: ping` heartbeat every 15s, so 2 min of total silence
+  // (heartbeats AND real events both gone) means the connection is genuinely dead.
+  // This must NOT be used to bound how long agent work can take — only to detect
+  // a silently-dropped SSE stream (tab throttled, network drop, proxy idle-cut).
+  const IDLE_TIMEOUT = 120000;
 
   for (;;) {
     // Race between read and idle timeout
@@ -2072,21 +2076,10 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       abortRef.current = controller;
       const inputBuffers = new Map();
 
-      // Safety: force-reset loading after 6 minutes no matter what
-      const safetyTimer = setTimeout(() => {
-        if (abortRef.current === controller) {
-          controller.abort();
-          setLoading(false);
-          setMessages((prev) => {
-            const updated = [...prev];
-            const idx = updated.findIndex((m) => m.id === assistantId);
-            if (idx !== -1 && !updated[idx].content) {
-              updated[idx] = { ...updated[idx], content: "Request timed out after 6 minutes. Please try again." };
-            }
-            return updated;
-          });
-        }
-      }, 360000);
+      // NOTE: no absolute time limit on agent runs. Long scenes can legitimately
+      // take 10+ minutes. Dead-connection detection lives inside sendChat's
+      // reader-level idle timer (refreshed by server `: ping` heartbeats).
+      // To stop a runaway agent, use the Stop button (handleStop → controller.abort).
 
       try {
         await sendChat(
@@ -2272,7 +2265,6 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           });
         }
       } finally {
-        clearTimeout(safetyTimer);
         setLoading(false);
         setAutoSelectingSkills(false);
         abortRef.current = null;
@@ -2282,6 +2274,10 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
   );
 
   const handleStop = () => {
+    // Tell the server to actually kill the Claude subprocess. Without this,
+    // aborting the SSE alone just leaves the agent running in background
+    // (server-side e.on("close") no longer kills on disconnect).
+    fetch(`${API_BASE}/chat-stop`, { method: "POST" }).catch(() => {});
     abortRef.current?.abort();
     setLoading(false);
   };
@@ -2294,6 +2290,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
   };
 
   const handleReset = () => {
+    fetch(`${API_BASE}/chat-stop`, { method: "POST" }).catch(() => {});
     abortRef.current?.abort();
     setInput("");
     setLoading(false);
