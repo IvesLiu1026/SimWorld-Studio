@@ -12,8 +12,8 @@ RELEASE_PLAN.md
 simworld_studio_workspace/tmp/
 simworld_studio_workspace/logs/
 simworld_studio_workspace/arena_data/
-experiments/
-simworld_studio_workspace/experiments/
+simworld_studio_workspace/experiments/*
+!simworld_studio_workspace/experiments/README.md
 simworld_studio_workspace/runs/
 simworld_studio_workspace/gym_env/.venv/
 simworld_studio_workspace/probe_frames/
