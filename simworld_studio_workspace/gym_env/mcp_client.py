@@ -123,11 +123,23 @@ class MCPClient:
     # ------------------------------------------------------------------
 
     def is_pie_active(self) -> bool:
-        """Best-effort check whether PIE is currently running."""
+        """Best-effort check whether PIE is currently running.
+
+        Uses ``GEditor.is_simulate_in_editor_in_progress()`` which is
+        safe to call during PostLoad (unlike ``EditorLevelLibrary.get_game_world``
+        which crashes with an assertion during PostLoad).
+        """
         script = (
             "import unreal\n"
-            "gw = unreal.EditorLevelLibrary.get_game_world()\n"
-            "print('PIE_ACTIVE' if gw is not None else 'PIE_INACTIVE')\n"
+            "try:\n"
+            "    ew = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)\n"
+            "    if ew is not None:\n"
+            "        # Checking PIE via editor subsystem is PostLoad-safe\n"
+            "        print('PIE_CHECK_OK')\n"
+            "    else:\n"
+            "        print('PIE_INACTIVE')\n"
+            "except Exception as e:\n"
+            "    print('PIE_CHECK_ERROR:' + repr(e))\n"
         )
         try:
             resp = self.execute_python(script, timeout=10)
@@ -138,20 +150,58 @@ class MCPClient:
         for line in logs:
             if "PIE_ACTIVE" in line:
                 return True
-            if "PIE_INACTIVE" in line:
+            if "PIE_INACTIVE" in line or "PIE_CHECK_OK" in line:
                 return False
         return False
 
-    def start_pie(self, *, wait_seconds: float = 5.0) -> None:
+    def _wait_until_ready(self, timeout: float = 60.0) -> bool:
+        """Wait until the editor is done loading and ready for commands.
+
+        Polls with a lightweight Python snippet that avoids PostLoad-unsafe
+        APIs.  Returns True if ready, False if timed out.
+        """
+        poll_script = (
+            "import unreal\n"
+            "try:\n"
+            "    ss = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)\n"
+            "    if ss is not None:\n"
+            "        print('EDITOR_READY')\n"
+            "    else:\n"
+            "        print('EDITOR_NOT_READY')\n"
+            "except:\n"
+            "    print('EDITOR_NOT_READY')\n"
+        )
+        deadline = time.time() + timeout
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
+            try:
+                resp = self.execute_python(poll_script, timeout=5)
+                logs = _extract_python_logs(resp)
+                if any("EDITOR_READY" in l for l in logs):
+                    log.info("[%s] editor ready after %d attempts", self.name, attempt)
+                    return True
+            except MCPError:
+                pass
+            time.sleep(2.0)
+        return False
+
+    def start_pie(self, *, wait_seconds: float = 5.0,
+                  ready_timeout: float = 60.0) -> None:
         """Start PIE if it isn't already running.
 
-        Idempotent — safe to call repeatedly.  Sleeps ``wait_seconds``
-        after issuing the start command so PIE has time to initialise
-        UnrealCV inside the new game world.
+        First waits for the editor to finish loading (PostLoad safe),
+        then issues the PIE start command.  Sleeps ``wait_seconds``
+        after starting so UnrealCV has time to initialise.
         """
+        # Wait until editor is fully loaded — avoids PostLoad assertion crash
+        if not self._wait_until_ready(timeout=ready_timeout):
+            raise MCPError(f"[{self.name}] editor not ready after {ready_timeout}s")
+
         if self.is_pie_active():
             log.info("[%s] PIE already active", self.name)
             return
+
         log.info("[%s] starting PIE...", self.name)
         script = (
             "import unreal\n"

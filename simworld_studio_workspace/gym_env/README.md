@@ -1,255 +1,396 @@
-# gym_env — SimWorld Nav Experiment Harness
+# gym_env — SimWorld Embodied Agent Experiment Harness
 
-A Gym-style Python wrapper around the SimWorld UE simulator for
-running reproducible LLM navigation experiments. Built to bypass the
-JS server / agent panel — talks UE directly via UnrealCV.
+Gym-style Python environment for running reproducible LLM navigation
+experiments in Unreal Engine.  Talks UE directly via UnrealCV + MCP —
+no JS server needed.
 
-## Setup
-
-### Linux (recommended for headless experiments)
+## Quick Start (Windows)
 
 ```bash
-cd simworld_studio_workspace/gym_env
-
-# 1. One-time environment setup (creates venv, installs deps + task_gen)
-#    Set TASK_GEN_DIR if your task_gen repo is not at ../../task_gen
-source scripts/setup_env.sh
-
-# 2. Set whichever model API key you plan to use
-export ANTHROPIC_API_KEY=...    # --model claude
-export OPENAI_API_KEY=...       # --model gpt
-export GEMINI_API_KEY=...       # --model gemini
-export DASHSCOPE_API_KEY=...    # --model qwen
-```
-
-### Windows
-
-```powershell
-# 1. Install the forked task_gen as an editable dependency
-pip install -e ..\task_gen          # adjust path to your local task_gen clone
-
-# 2. Install gym_env requirements
+# 1. Install dependencies (one-time)
+pip install -e C:\path\to\task_gen
 pip install -r simworld_studio_workspace\gym_env\requirements.txt
 
-# 3. Set API keys (same as above, use $env:VAR = "..." in PowerShell)
+# 2. Launch UE (set UnrealCV port in unrealcv.ini next to UnrealEditor.exe)
+#    Port 9001 avoids VS Code conflicts on 9000
+"C:\Program Files\Epic Games\UE_5.3\Engine\Binaries\Win64\UnrealEditor.exe" ^
+    "E:\UE\SimWorld\SimWorld.uproject" /Game/Maps/Empty ^
+    -MCPPort=55557 -NOSPLASH -NOSOUND -log
+
+# 3. Run a single PointNav episode with Qwen-VL
+cd simworld_studio_workspace
+set PYTHONPATH=C:\path\to\task_gen
+python -m gym_env.runner ^
+    --model qwen ^
+    --model-id "Qwen/Qwen3-VL-30B-A3B-Instruct" ^
+    --base-url "http://your-gpu-server:8000/v1" ^
+    --api-key EMPTY ^
+    --ucv-port 9001 ^
+    --max-steps 20 ^
+    --record-trajectory
 ```
 
-### Common: API keys
+---
 
-| Model flag     | Env var              | Notes                                  |
-|----------------|----------------------|----------------------------------------|
-| `--model claude` | `ANTHROPIC_API_KEY`  | Anthropic SDK, supports vision         |
-| `--model claude-sdk` | _(none)_        | Routes through local Claude Code CLI   |
-| `--model gpt`  | `OPENAI_API_KEY`     | OpenAI SDK                             |
-| `--model gemini`| `GEMINI_API_KEY`    | Via OpenAI-compat endpoint             |
-| `--model qwen` | `DASHSCOPE_API_KEY`  | Via OpenAI-compat endpoint             |
+## Supported Tasks
 
-## Pre-flight (UE side)
+| Task | Agent Sees | Goal | Difficulty |
+|------|-----------|------|------------|
+| **PointNav** | GPS + compass + (distance, bearing) to goal + optional RGB | Navigate to (x,y) coordinate | Low — pure numeric navigation |
+| **ObjectNav** | GPS + compass + category ID + **RGB required** | Find and reach a named object | High — must visually explore |
 
-**Headless experiment mode** — do NOT run the Studio JS server
-(`node server/index.js` / `SimWorld-Studio.bat`).
+---
 
-The minimum to launch:
+## Supported Models
 
-1. Open the SimWorld UE editor with the project loaded.
-2. Make sure UnrealCV is reachable on `127.0.0.1:9000`
-   and UE editor MCP TCP server on `127.0.0.1:55557`.
-3. Spawn the static scene you want. Leave the editor in **edit
-   mode** — the runner will request PIE itself via MCP on first
-   `env.reset()`.
+| `--model` flag | Backend | Vision | Tool Calls | Notes |
+|---|---|---|---|---|
+| `claude` | Anthropic SDK | Yes | Yes | Best quality; needs `ANTHROPIC_API_KEY` |
+| `claude-sdk` | Claude Code CLI | No | Yes | Free via local Claude Code; slow (~14s/step) |
+| `gpt` | OpenAI SDK | Yes | Yes | Needs `OPENAI_API_KEY` |
+| `gemini` | OpenAI-compat | Yes | Yes | Needs `GEMINI_API_KEY` |
+| `qwen` | OpenAI-compat | Yes | Fallback* | Any vLLM/OpenAI-compat endpoint |
 
-Pass `--no-start-pie` if PIE is already running.
+*Qwen text-action fallback: if the server doesn't support `--enable-auto-tool-choice`,
+the client auto-switches to a text-based action mode with strict if-else prompting.
+
+---
+
+## UE Setup
+
+**Do NOT run** `SimWorld-Studio.bat` or the JS web server — those add
+unnecessary health-check polling.
+
+### UnrealCV Port Configuration
+
+Edit `unrealcv.ini` next to `UnrealEditor.exe`:
+
+```ini
+[UnrealCV.Core]
+Port=9001
+Width=640
+Height=480
+FOV=90
+EnableInput=True
+EnableRightEye=False
+```
+
+### Launch UE
+
+```bash
+# Windows
+"C:\Program Files\Epic Games\UE_5.3\Engine\Binaries\Win64\UnrealEditor.exe" ^
+    "E:\UE\SimWorld\SimWorld.uproject" ^
+    /Game/Maps/Empty ^
+    -MCPPort=55557 -NOSPLASH -NOSOUND -log
+
+# The runner auto-starts PIE mode via MCP on first env.reset().
+# Pass --no-start-pie if PIE is already running.
+```
+
+### Requirements
+
+- UnrealCV plugin listening on configured port (default 9001)
+- UE MCP TCP server on port 55557
+- `Base_User_Agent` Blueprint with working FusionCamSensor
+  (verified: `EnableController True` must be called after spawn)
 
 ---
 
 ## Running Experiments
 
-### Quick smoke test (no LLM needed)
+### Single episode (smoke test)
 
 ```bash
-# Linux
-bash scripts/run_smoke_test.sh
-bash scripts/run_smoke_test.sh --no-rgb --steps 10
-
-# Windows / manual
-cd simworld_studio_workspace
-python -m gym_env.smoke_test --steps 8
-```
-
-### Single episode
-
-```bash
-# Linux
-bash scripts/run_experiment.sh --model claude --task pointnav --target-distance 2000 --max-steps 30
-
-# Windows / manual
-cd simworld_studio_workspace
-set PYTHONPATH=C:\path\to\task_gen;%CD%
-python -m gym_env.runner --model claude --task pointnav --target-distance 2000 --max-steps 30
-```
-
-### Multi-episode (with memory)
-
-Run N episodes back-to-back. The agent accumulates experience across episodes.
-
-```bash
-# 10 episodes, text memory enabled
-bash scripts/run_experiment.sh \
-    --model qwen \
-    --n-episodes 10 \
-    --memory text \
-    --max-steps 40 \
-    --target-distance 2000
-
-# Same but without memory (baseline)
-bash scripts/run_experiment.sh \
-    --model qwen \
-    --n-episodes 10 \
-    --memory none \
-    --max-steps 40
-```
-
-### Batch (multiple UE instances in parallel)
-
-Start multiple UE instances on different ports, then:
-
-```bash
-# Linux
-bash scripts/run_batch.sh \
-    --models claude,qwen \
-    --ucv-ports 9000,9001 \
-    --parallel 2 \
-    --max-steps 30
-
-# Windows / manual
-python -m gym_env.batch --models claude,gpt --ucv-ports 9000,9001 --parallel 2
-```
-
-### Custom LLM endpoint (e.g. local vLLM)
-
-```bash
-bash scripts/run_experiment.sh \
+python -m gym_env.runner \
     --model qwen \
     --model-id "Qwen/Qwen3-VL-30B-A3B-Instruct" \
-    --base-url "http://your-gpu-server:8000/v1" \
-    --api-key "token-abc123" \
-    --n-episodes 5
+    --base-url "http://132.239.95.133:8000/v1" \
+    --api-key EMPTY \
+    --ucv-port 9001 \
+    --task pointnav \
+    --max-steps 20 \
+    --seed 42
+```
+
+### Multi-episode comparison (no-memory vs with-memory)
+
+```bash
+# Baseline: no memory, 30 episodes
+python -m gym_env.runner \
+    --model qwen \
+    --model-id "Qwen/Qwen3-VL-30B-A3B-Instruct" \
+    --base-url "http://132.239.95.133:8000/v1" \
+    --api-key EMPTY \
+    --ucv-port 9001 \
+    --n-episodes 30 \
+    --memory none \
+    --max-steps 20 \
+    --record-trajectory \
+    --seed 300 \
+    --run-name qwen_no_memory
+
+# With memory: text-based lesson accumulation
+python -m gym_env.runner \
+    --model qwen \
+    --model-id "Qwen/Qwen3-VL-30B-A3B-Instruct" \
+    --base-url "http://132.239.95.133:8000/v1" \
+    --api-key EMPTY \
+    --ucv-port 9001 \
+    --n-episodes 30 \
+    --memory text \
+    --max-steps 20 \
+    --record-trajectory \
+    --seed 300 \
+    --run-name qwen_with_memory
+```
+
+### Claude comparison
+
+```bash
+python -m gym_env.runner \
+    --model claude-sdk \
+    --ucv-port 9001 \
+    --n-episodes 5 \
+    --max-steps 12 \
+    --record-trajectory \
+    --seed 42
 ```
 
 ---
 
 ## Key CLI Flags
 
-| Flag                | Default   | Description                                      |
-|---------------------|-----------|--------------------------------------------------|
-| `--model`           | `claude`  | LLM: claude / claude-sdk / gpt / gemini / qwen   |
-| `--model-id`        | _(auto)_  | Override model ID for the endpoint                |
-| `--base-url`        | _(auto)_  | Override LLM API base URL                         |
-| `--n-episodes`      | `1`       | Episodes to run back-to-back                      |
-| `--memory`          | `none`    | Memory backend: none / text / mem0                |
-| `--task`            | `pointnav`| Task type: pointnav / objectnav                   |
-| `--target-distance` | `2000`    | PointNav target distance in cm                    |
-| `--max-steps`       | `40`      | Max steps per episode                             |
-| `--vision-depth`    | `3`       | Recent frames kept in LLM context                 |
-| `--record-trajectory` | off     | Save PNG frames for every step                    |
-| `--no-rgb`          | off       | Text-only ablation (skip images)                  |
-| `--seed`            | `42`      | Random seed (increments per episode)              |
-| `--no-start-pie`    | off       | Skip auto PIE start via MCP                       |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `claude` | Model backend: claude / claude-sdk / gpt / gemini / qwen |
+| `--model-id` | _(auto)_ | Override model ID sent to the endpoint |
+| `--base-url` | _(auto)_ | Override API base URL (for vLLM etc.) |
+| `--api-key` | _(env var)_ | API key (or `EMPTY` for no-auth endpoints) |
+| `--ucv-port` | `9000` | UnrealCV TCP port |
+| `--n-episodes` | `1` | Episodes to run sequentially |
+| `--memory` | `none` | Memory: none / text |
+| `--task` | `pointnav` | Task: pointnav / objectnav |
+| `--target-distance` | `2000` | PointNav goal distance (cm) |
+| `--max-steps` | `40` | Steps before episode is truncated |
+| `--record-trajectory` | off | Save annotated PNG frame per step |
+| `--no-rgb` | off | Skip camera capture (text-only obs) |
+| `--seed` | `42` | RNG seed (increments per episode) |
+| `--run-name` | _(auto)_ | Custom name for the run directory |
 
 ---
 
-## Output Structure
+## Output
 
-Each run produces a timestamped directory under `runs/`:
+Each episode produces a directory under `runs/`:
 
 ```
 runs/<timestamp>_<run_name>/
-  meta.json           # config snapshot, model name, episode ID, git SHA
-  episode.jsonl       # one JSON line per env step (action, reward, obs, distance)
-  llm_raw.jsonl       # full vendor API responses (reasoning, token usage)
-  summary.json        # final metrics: SR, SPL, SoftSPL, cumulative reward
-  run.log             # Python logging output
-  frames/             # (if --record-trajectory) PNG screenshot per step
-```
-
-## Analyzing Results
-
-```bash
-# Print step-by-step report for all runs
-bash scripts/analyze.sh
-
-# Filter to specific runs
-bash scripts/analyze.sh runs/20260410_*claude*
-
-# Plot learning curves (memory vs no-memory comparison)
-bash scripts/analyze.sh --plot
+    meta.json           # config snapshot, model, episode ID, git SHA
+    episode.jsonl       # per-step: action, reward, obs (bearing, distance), info
+    llm_raw.jsonl       # per-step: full LLM response, reasoning text, token usage
+    summary.json        # final: SR, SPL, SoftSPL, path_length, cumulative_reward
+    run.log             # Python logging
+    frames/             # (--record-trajectory) annotated PNG per step
+        step_0000.png   #   240x320 RGB + black bar with action/reward/distance
+        step_0001.png
+        ...
 ```
 
 ---
 
-## Reproducing Published Experiments
+## Analysis
 
-### exp01 — Claude SDK baseline
 ```bash
-bash scripts/run_experiment.sh --model claude-sdk --no-rgb --max-steps 30
+# Per-step trace of specific runs
+python -m gym_env.analyze_runs runs/*qwen_no_memory*
+
+# Plot learning curves for an experiment
+python -m gym_env.plot_learning_curve \
+    --no-memory experiments/exp06/.../no_memory \
+    --with-memory experiments/exp06/.../with_memory \
+    --output experiments/exp06/comparison.png
 ```
 
-### exp02 — Qwen no-memory (5 episodes)
-```bash
-bash scripts/run_experiment.sh \
-    --model qwen --n-episodes 5 --memory none --max-steps 40
+---
+
+## Observation Space
+
+| Key | Type | Shape | Source |
+|-----|------|-------|--------|
+| `rgb` | uint8 | (240, 320, 3) | `vget /camera/0/lit png` (agent first-person) |
+| `gps` | float32 | (2,) | displacement from spawn in cm |
+| `compass` | float32 | (1,) | yaw in radians |
+| `pointgoal_with_gps_compass` | float32 | (2,) | (distance_cm, bearing_rad) to goal |
+| `objectgoal` | int32 | (1,) | category ID (ObjectNav only) |
+
+## Action Space
+
+4 discrete actions (Habitat-aligned):
+
+| Action | UE Command | Effect |
+|--------|-----------|--------|
+| `MOVE_FORWARD` | `vbp {agent} StepForward 2 0` | Walk forward ~350cm |
+| `TURN_LEFT` | `vbp {agent} TurnAround 1 -30 -1` | Rotate left 30 deg |
+| `TURN_RIGHT` | `vbp {agent} TurnAround 1 30 1` | Rotate right 30 deg |
+| `STOP` | `vbp {agent} StopAgent` | Declare goal reached |
+
+## Reward
+
+```
+r_t = (d_{t-1} - d_t)     # Euclidean distance shaping
+    - 0.01                  # step cost
+    + 2.5 (once)            # success bonus when d_goal < 200cm
 ```
 
-### exp04 — PointNav 20v20 (memory vs no-memory)
-```bash
-# Without memory
-bash scripts/run_experiment.sh \
-    --model qwen --n-episodes 20 --memory none \
-    --max-steps 40 --run-name qwen_batch_no_mem
+## Metrics (Anderson et al. 2018)
 
-# With memory
-bash scripts/run_experiment.sh \
-    --model qwen --n-episodes 20 --memory text \
-    --max-steps 40 --run-name qwen_with_memory
+| Metric | Formula | Meaning |
+|--------|---------|---------|
+| **SR** | 1 if final d_goal < 200cm | Success Rate |
+| **SPL** | SR * l_i / max(p_i, l_i) | Success weighted by Path Length |
+| **SoftSPL** | progress * l_i / max(p_i, l_i) | Partial credit for getting closer |
+
+---
+
+## Task Generation (NavMesh-validated)
+
+Two pipelines for generating navigation episodes:
+
+### Offline (Scene Graph A*)
+
+Uses a 2D occupancy grid built from `scene_graph.json`. No UE required.
+
+```python
+from nav_task.scene_graph_interface import SceneGraphNavigationInterface
+
+sg = SceneGraphNavigationInterface(
+    "scene_graph.json",
+    resolution_cm=500,
+    agent_radius_cm=80,
+    background_classes=frozenset({
+        "StaticMeshActor", "Floor_C",
+        "NavMeshBoundsVolume", "RecastNavMesh",
+    }),
+)
+positions = sg.get_navigable_positions()  # grid cells outside obstacles
+path = sg.get_reference_path(start, goal) # A* waypoints
+geo = sg.get_geodesic_distance(start, goal)
 ```
 
-### exp05 — PointNav 30-episode RGB
-```bash
-# Without memory
-bash scripts/run_experiment.sh \
-    --model qwen --n-episodes 30 --memory none \
-    --max-steps 40 --record-trajectory --run-name 30ep_no_mem
+### Online (UE NavMesh)
 
-# With memory
-bash scripts/run_experiment.sh \
-    --model qwen --n-episodes 30 --memory text \
-    --max-steps 40 --record-trajectory --run-name 30ep_with_mem
+Uses UE's Recast/Detour navmesh for true polygon-mesh shortest paths.
+Requires PIE running + NavigationHandler in UnrealCV plugin.
+
+```python
+from nav_task.navmesh_interface import NavmeshNavigationInterface
+
+nav = NavmeshNavigationInterface("scene_graph.json", ucv_client)
+nav.build_navmesh(padding_cm=500)         # vset /nav/build
+path = nav.get_reference_path(start, goal) # vget /nav/path
+reachable = nav.is_reachable(start, goal)  # vget /nav/reachable
 ```
+
+### Episode Generation
+
+```python
+from gym_env.episode_builder import (
+    sample_pointnav_episode_navmesh,
+    sample_objectnav_episode_navmesh,
+)
+
+# PointNav: random start/goal with navmesh-validated reachability
+result = sample_pointnav_episode_navmesh(
+    ucv, "scene_graph.json",
+    min_geodesic_cm=2000,  # minimum path distance
+    max_geodesic_cm=8000,  # maximum path distance
+)
+
+# ObjectNav: navigate to a specific object
+result = sample_objectnav_episode_navmesh(
+    ucv, "scene_graph.json",
+    target_filter=lambda n: "Tree" in n,
+    object_category="tree",
+    object_description="a large green tree with spreading branches",
+)
+```
+
+Both return a dict with:
+
+| Field | Description |
+|-------|-------------|
+| `episode` | `NavigationEpisode` with start, goal, GT reference path |
+| `start_heading_deg` | Random initial heading (0-360) |
+| `difficulty` | `{distance_m, detour_ratio, heading_offset_deg, difficulty_score}` |
+| `gt_path_waypoints` | List of (x, y) from navmesh path |
+| `prompt` | (ObjectNav only) Agent prompt with direction + object description |
+
+### Difficulty Score
+
+Composite 0-1 score based on:
+- **Distance** (40%): geodesic path length, normalised to 0-100m
+- **Detour ratio** (35%): geodesic / euclidean — higher means more obstacle avoidance
+- **Heading offset** (25%): angle between start heading and target direction
+
+### Scene Graph Generation
+
+Generate `scene_graph.json` from the current UE scene via MCP:
+
+```python
+from gym_env.mcp_client import MCPClient
+mcp = MCPClient(port=55557)
+with open("scripts/query_actors_2d.py") as f:
+    script = f"SAVE_PATH = 'scene_graph.json'\n" + f.read()
+mcp.execute_python(script)
+```
+
+### UnrealCV Navigation Commands
+
+| Command | Description |
+|---------|-------------|
+| `vset /nav/build minX minY minZ maxX maxY maxZ` | Build navmesh in bounding box |
+| `vset /nav/build_from_actor name [padding]` | Build from actor bounds |
+| `vget /nav/path x1 y1 z1 x2 y2 z2` | Query path (returns `length\|x,y,z\|...` or `-1`) |
+| `vget /nav/reachable x1 y1 z1 x2 y2 z2` | Lightweight reachability test |
+| `vget /nav/status` | NavMesh readiness JSON |
+| `vget /nav/project x y z` | Project point onto navmesh |
+| `vget /nav/random_points N` | Sample N random navigable points |
+| `vget /nav/random_reachable x y z radius N` | Sample N points reachable from origin |
+| `vget /nav/poly_centers minX minY minZ maxX maxY maxZ` | NavMesh polygon centers in box |
+| `vset /nav/fix_blueprints /Game/CityDatabase` | Fix Building BP NavModifier extents |
 
 ---
 
 ## Architecture
 
 ```
-              +--------------------------------------+
-              | gym_env (this package)               |
-              |                                      |
-   episode -->| episode_builder --> NavigationEpisode |
-              |                                      |
-              | SimWorldNavEnv <---- runner ---- LLMClient
-              |      |                               |
-              |      v                               |
-              | UCVClient <---- observation           |
-              |      |           builder             |
-              +------|----- -------------------------+
-                     |
-                     v
-              UnrealCV TCP :9000  (PIE)
-                     |
-                     v
-                Unreal Engine
+Python Experiment Runner
+    |
+    +-- episode_builder -----> NavigationEpisode (from task_gen)
+    |
+    +-- SimWorldNavEnv
+    |       |-- UCVClient --------TCP:9001-------> UnrealCV (PIE)
+    |       |-- MCPClient --------TCP:55557------> UE Python (edit mode)
+    |       |-- EuclideanNavigationInterface       (reward + measures)
+    |       +-- ObservationBuilder                 (RGB + GPS + compass)
+    |
+    +-- LLMClient (claude / gpt / gemini / qwen)
+    |
+    +-- EpisodeLogger (JSONL + PNG + summary)
 ```
 
-Reward / SR / SPL / SoftSPL come from `nav_task` (forked) backed by
-`EuclideanNavigationInterface` — geodesic distance falls back to
-straight-line because this repo's scenes have no road graph.
+## Known Issues
+
+- **unrealcv cp1252 crash**: Windows Chinese locale causes the unrealcv
+  receive thread to crash on socket errors. Fixed by `gym_env/__init__.py`
+  which forces stdout to UTF-8 and monkey-patches `SocketMessage.ReceivePayload`.
+
+- **UE idle socket reset**: UE drops UnrealCV connections after ~10s idle
+  (during LLM inference). Fixed by `hard_reconnect` on any send failure.
+
+- **VS Code port conflict**: VS Code may listen on port 9000. Configure
+  UnrealCV to use 9001 via `unrealcv.ini`.
+
+- **Spawn is slow**: First `Base_User_Agent` spawn takes ~90s (BP loading).
+  Subsequent resets reuse the existing actor (instant).

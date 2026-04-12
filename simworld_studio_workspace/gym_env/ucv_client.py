@@ -299,3 +299,39 @@ class UCVClient:
     def vbp(self, actor: str, command: str) -> str:
         """Send a Blueprint function call to a named actor."""
         return self.send(f"vbp {actor} {command}")
+
+    # ------------------------------------------------------------------
+    # Navigation commands (requires NavigationHandler in UnrealCV plugin)
+    # ------------------------------------------------------------------
+
+    def nav_build(self, min_x: float, min_y: float, min_z: float,
+                  max_x: float, max_y: float, max_z: float) -> str:
+        """Build navmesh over a bounding box."""
+        return self.send(
+            f"vset /nav/build {min_x} {min_y} {min_z} {max_x} {max_y} {max_z}"
+        )
+
+    def nav_build_from_actor(self, actor: str, padding: float = 0.0) -> str:
+        """Build navmesh from an actor's bounds (e.g. floor mesh)."""
+        if padding > 0:
+            return self.send(f"vset /nav/build_from_actor {actor} {padding}")
+        return self.send(f"vset /nav/build_from_actor {actor}")
+
+    def nav_status(self) -> str:
+        """Check if navmesh is built and ready (returns JSON string)."""
+        return self.send("vget /nav/status")
+
+    def nav_reachable(self, x1: float, y1: float, z1: float,
+                      x2: float, y2: float, z2: float) -> bool:
+        """Lightweight reachability test (no full path computed)."""
+        resp = self.send(
+            f"vget /nav/reachable {x1} {y1} {z1} {x2} {y2} {z2}"
+        )
+        return resp.strip() == "true"
+
+    def nav_path(self, x1: float, y1: float, z1: float,
+                 x2: float, y2: float, z2: float) -> str:
+        """Query navmesh path. Returns 'length|x,y,z|...' or '-1'."""
+        return self.send(
+            f"vget /nav/path {x1} {y1} {z1} {x2} {y2} {z2}"
+        )
