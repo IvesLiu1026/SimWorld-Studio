@@ -1,0 +1,162 @@
+"""Strategy memory: episode-level reflection that produces transferable navigation principles.
+
+Unlike mem0 (per-step fact extraction, slow, noisy), this backend:
+
+1. Records raw trajectory during an episode (zero LLM calls).
+2. At episode end, asks the LLM to reflect on the FULL trajectory and
+   distill 1-2 transferable navigation principles.
+3. Stores at most `max_strategies` principles (sliding window).
+4. On recall, returns ALL stored principles (they're few and high-quality).
+5. Principles are injected into the system prompt as "Navigation Lessons",
+   not mixed into the user turn.
+
+Zero extra dependencies (no chromadb, no fastembed, no mem0).
+One LLM call per episode (not per step).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+log = logging.getLogger(__name__)
+
+REFLECTION_PROMPT = """\
+You are analyzing a navigation episode where an agent tried to reach a goal in a 3D city scene.
+
+Here is the episode trajectory:
+{trajectory}
+
+Episode outcome: {outcome}
+
+Your task: Based on the FULL trajectory above, extract 1-2 **transferable navigation principles** that would help this agent perform better in FUTURE episodes (not just this one).
+
+Rules:
+- Each principle must be a general strategy, NOT tied to specific coordinates or step numbers.
+- Focus on WHEN to use each action (MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, STOP) based on observable signals (bearing, distance trend, reward trend).
+- If the episode succeeded, explain what strategy worked and why.
+- If the episode failed, identify the root cause (e.g. spinning in place, walking away from goal, not stopping when close) and what should be done differently.
+- Be concise: each principle should be 1-2 sentences max.
+- Write principles as actionable rules the agent can directly follow.
+
+Return ONLY a JSON array of strings:
+["principle 1", "principle 2"]"""
+
+
+class StrategyMemory:
+    """Episode-level strategy memory with LLM reflection."""
+
+    name = "strategy"
+
+    def __init__(
+        self,
+        path: str = "strategy_memory.json",
+        max_strategies: int = 5,
+        llm_call: Optional[Callable] = None,
+    ) -> None:
+        self._path = Path(path)
+        self._max = max_strategies
+        self._strategies: List[str] = []
+        self._trajectory: List[str] = []
+        self._llm_call = llm_call
+        self._load()
+
+    def _load(self) -> None:
+        if self._path.exists():
+            try:
+                data = json.loads(self._path.read_text(encoding="utf-8"))
+                self._strategies = data.get("strategies", [])[-self._max:]
+                log.info("StrategyMemory: loaded %d strategies from %s",
+                         len(self._strategies), self._path)
+            except Exception as exc:
+                log.warning("StrategyMemory: failed to load %s: %s", self._path, exc)
+
+    def _save(self) -> None:
+        self._path.write_text(
+            json.dumps({"strategies": self._strategies[-self._max:]}, indent=2),
+            encoding="utf-8",
+        )
+
+    def insert(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Buffer a step record into the current episode trajectory."""
+        self._trajectory.append(text)
+
+    def query(self, text: str, k: int = 5) -> List[str]:
+        """Return all stored strategies (they're few and high-quality)."""
+        return list(self._strategies[-k:])
+
+    def reset(self) -> None:
+        """Clear trajectory buffer for new episode (strategies persist)."""
+        self._trajectory = []
+
+    def clear(self) -> None:
+        """Wipe all strategies (for fresh experiments)."""
+        self._strategies = []
+        self._trajectory = []
+        self._save()
+
+    def reflect(self, outcome: str) -> Optional[str]:
+        """Call LLM to reflect on the episode and extract principles.
+
+        Should be called at episode end, AFTER all steps have been
+        inserted. Returns the raw LLM response for logging.
+        """
+        if not self._llm_call or not self._trajectory:
+            return None
+
+        # Build a condensed trajectory (skip redundant info)
+        traj_text = "\n".join(self._trajectory)
+
+        prompt = REFLECTION_PROMPT.format(
+            trajectory=traj_text,
+            outcome=outcome,
+        )
+
+        try:
+            raw = self._llm_call(prompt)
+            principles = self._parse_principles(raw)
+            if principles:
+                for p in principles:
+                    self._strategies.append(p)
+                # Keep only the most recent max_strategies
+                self._strategies = self._strategies[-self._max:]
+                self._save()
+                log.info("StrategyMemory: extracted %d principles, total=%d",
+                         len(principles), len(self._strategies))
+            return raw
+        except Exception as exc:
+            log.warning("StrategyMemory: reflection failed: %s", exc)
+            return None
+
+    def _parse_principles(self, raw: str) -> List[str]:
+        """Parse JSON array from LLM response, tolerant of markdown."""
+        text = raw.strip()
+        # Strip markdown code fences
+        if "```" in text:
+            lines = text.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+        # Find JSON array
+        start = text.find("[")
+        end = text.rfind("]")
+        if start == -1 or end == -1:
+            return []
+        try:
+            arr = json.loads(text[start:end + 1])
+            return [str(s).strip() for s in arr if isinstance(s, str) and s.strip()]
+        except json.JSONDecodeError:
+            log.warning("StrategyMemory: failed to parse: %s", text[:200])
+            return []
+
+    def get_system_prompt_section(self) -> str:
+        """Format strategies as a system prompt section."""
+        if not self._strategies:
+            return ""
+        lines = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(self._strategies))
+        return (
+            "\n\nNavigation Lessons (from previous episodes):\n"
+            f"{lines}\n"
+            "Apply these lessons to improve your navigation decisions."
+        )
