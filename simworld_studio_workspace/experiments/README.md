@@ -119,9 +119,45 @@ bash gym_env/scripts/run_experiment.sh \
     --memory text
 ```
 
-### 5. Batch (parallel UE instances)
+### 5. Batch with ghost agents (single UE instance)
 
-Start multiple UE instances on different ports, then:
+Run multiple tasks concurrently using ghost-mode agents. Ghost agents
+are invisible to each other, pass through each other (zero collision),
+but still collide with buildings and objects normally.
+
+```bash
+# 6 tasks, 3 concurrent ghost agents per wave, local vLLM
+python -m gym_env.batch_runner --mode batch \
+    --n-tasks 6 --wave-size 3 \
+    --model qwen \
+    --base-url http://localhost:8000/v1 \
+    --task pointnav --max-steps 40
+
+# Single task with trajectory recording (normal agent, not ghost)
+python -m gym_env.batch_runner --mode single \
+    --n-tasks 1 --model claude \
+    --task pointnav --max-steps 40
+```
+
+**Batch mode** spawns N ghost agents per wave in one UE instance — no
+need for multiple UE instances. Each ghost agent has its own camera,
+episode, and reward tracking. LLM calls are sequential per agent per
+step (vLLM batch API support is planned).
+
+**Single mode** uses a normal (non-ghost) agent with full trajectory +
+frame saving under `runs/`.
+
+| | Batch | Single |
+|---|---|---|
+| Agent type | Ghost (hidden, pass-through) | Normal (visible, full collision) |
+| Concurrency | wave_size agents per UE instance | 1 agent |
+| Trajectory | Not saved | Saved (frames/ + JSONL) |
+| RGB capture | On | On |
+| Use case | Fast evaluation over many tasks | Debugging / recording |
+
+### 6. Legacy batch (parallel UE instances)
+
+For running different models in parallel, each on its own UE instance:
 
 ```bash
 bash gym_env/scripts/run_batch.sh \
