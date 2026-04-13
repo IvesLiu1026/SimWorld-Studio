@@ -432,7 +432,6 @@ def sample_objectnav_episode_navmesh(
 
 def sample_objectnav_search_batch(
     ucv,
-    scene_graph_file: str = "",
     *,
     base_seed: int,
     n_targets: int,
@@ -637,7 +636,6 @@ _OBJECTNAV_SEARCH_CACHE: Dict[Any, Any] = {}
 
 def sample_objectnav_search_episode(
     ucv,
-    scene_graph_file: str = "",
     *,
     seed: int = 42,
     idx: int = 0,

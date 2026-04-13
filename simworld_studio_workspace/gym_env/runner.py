@@ -407,18 +407,16 @@ def main(argv: Optional[List[str]] = None) -> None:
     ucv.connect()
 
     # ── NavMesh interface: build once, reuse across all episodes.
-    # Required for sample_*_episode_navmesh; if no scene_graph is
-    # supplied we silently fall back to the legacy origin-based
-    # sampler (documented in --scene-graph help).
+    # Build navmesh interface if --use-navmesh or --scene-graph provided.
+    # The navmesh interface no longer needs a scene graph file — all
+    # sampling comes from UE navmesh directly.
     nav_interface = None
-    if args.scene_graph:
+    if getattr(args, 'use_navmesh', False) or args.scene_graph:
         from nav_task.navmesh_interface import NavmeshNavigationInterface
-        nav_interface = NavmeshNavigationInterface(
-            args.scene_graph, ucv, agent_name=args.agent_name,
-        )
-        print(f"Building navmesh for {args.scene_graph}...", file=sys.stderr)
-        nav_interface.build_navmesh(padding_cm=500.0)
-        print(f"NavMesh status: {nav_interface.status()}", file=sys.stderr)
+        nav_interface = NavmeshNavigationInterface(ucv)
+        print("Building navmesh...", file=sys.stderr)
+        resp = nav_interface.build_navmesh()
+        print(f"NavMesh built: {resp}", file=sys.stderr)
 
     # --record-trajectory wins over --no-rgb.
     capture_rgb = args.record_trajectory or not args.no_rgb
@@ -509,7 +507,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             if args.task == "pointnav":
                 if nav_interface is not None:
                     result = sample_pointnav_episode_navmesh(
-                        ucv, args.scene_graph,
+                        ucv,
                         seed=seed, idx=ep_idx,
                         min_geodesic_cm=args.nav_min_cm,
                         max_geodesic_cm=args.nav_max_cm,
@@ -534,7 +532,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                 # batch of small objects (one spawn + one navmesh
                 # rebuild on ep_idx=0, then per-episode cache lookups).
                 result = sample_objectnav_search_episode(
-                    ucv, args.scene_graph,
+                    ucv,
                     seed=args.seed,          # shared across episodes
                     idx=ep_idx,
                     describer=describer,
@@ -562,7 +560,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                 substr = args.target_filter
                 if nav_interface is not None:
                     result = sample_objectnav_episode_navmesh(
-                        ucv, args.scene_graph,
+                        ucv,
                         seed=seed, idx=ep_idx,
                         target_filter=lambda name, s=substr: s in name,
                         object_category=args.object_category,
