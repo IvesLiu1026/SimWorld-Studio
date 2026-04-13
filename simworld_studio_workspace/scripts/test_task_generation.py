@@ -7,7 +7,7 @@ import os, sys, math, json, time
 
 # Setup paths
 _root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, os.path.join(_root, "..", "task_gen"))
+sys.path.insert(0, os.path.join(_root, "simworld_studio_workspace"))
 sys.path.insert(0, os.path.join(_root, "simworld_studio_workspace"))
 
 from gym_env.ucv_client import UCVClient

@@ -35,7 +35,8 @@ _HERE = Path(__file__).resolve()
 _WORKSPACE = _HERE.parents[1]
 if str(_WORKSPACE) not in sys.path:
     sys.path.insert(0, str(_WORKSPACE))
-_TASK_GEN = Path(os.environ.get("TASK_GEN_DIR", _WORKSPACE.parent / "task_gen"))
+# nav_task lives inside simworld_studio_workspace/ — no external task_gen needed
+_TASK_GEN = Path(os.environ.get("TASK_GEN_DIR", _WORKSPACE))
 if _TASK_GEN.exists() and str(_TASK_GEN) not in sys.path:
     sys.path.insert(0, str(_TASK_GEN))
 
