@@ -209,7 +209,7 @@ def main():
         print(f"  Generated {len(sg_items)} objects in {SCENE_GRAPH}")
 
     from nav_task.navmesh_interface import NavmeshNavigationInterface
-    nav = NavmeshNavigationInterface(SCENE_GRAPH, ucv)
+    nav = NavmeshNavigationInterface(ucv)
 
     all_episodes = []
 
@@ -225,7 +225,7 @@ def main():
     ]):
         try:
             result = sample_pointnav_episode_navmesh(
-                ucv, SCENE_GRAPH, seed=42, idx=i,
+                ucv, seed=42, idx=i,
                 min_geodesic_cm=min_d, max_geodesic_cm=max_d,
                 build_navmesh=False, nav_interface=nav,
             )
@@ -249,7 +249,7 @@ def main():
     for i, (name, filt, cat, desc) in enumerate(object_targets):
         try:
             result = sample_objectnav_episode_navmesh(
-                ucv, SCENE_GRAPH, seed=100, idx=i,
+                ucv, seed=100, idx=i,
                 target_filter=filt, object_category=cat,
                 object_description=desc,
                 build_navmesh=False, nav_interface=nav,
