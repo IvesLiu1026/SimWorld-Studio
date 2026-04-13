@@ -44,8 +44,17 @@ ONE navigation action per turn from this set:
   - TURN_RIGHT   : rotate 30 degrees right
   - STOP         : declare you have reached the goal
 
-Think briefly, then call exactly one tool.  Stop calling tools when
-you believe you are within 2 meters of the goal."""
+Each step you receive the bearing to the goal (in degrees) and the
+distance.  The sign convention of bearing is NOT stated — discover
+it by observing how your TURN actions change it, then remember
+which sign means "goal to my right" and which means "left".  If you
+notice a flip-flop pattern (turning and bearing sign alternates),
+commit to one turn direction for several consecutive steps until
+|bearing| clearly decreases toward 0.
+
+STOP when distance < 200 cm.
+
+Think briefly, then call exactly one tool."""
 
 
 def _build_user_text(info: Dict[str, Any], obs: Dict[str, Any]) -> str:
@@ -95,9 +104,18 @@ def run_episode(
     max_steps: Optional[int] = None,
     vision_history_depth: Optional[int] = 3,
     max_tokens: int = 1024,
+    task_prompt_override: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run one episode end-to-end.  Returns the final metrics dict."""
+    """Run one episode end-to-end.  Returns the final metrics dict.
+
+    ``task_prompt_override`` — if provided, replaces the default
+    ``info['task_prompt']`` that the env generates from the
+    NavigationEpisode.  Used by ``objectnav-search`` to inject the
+    LLM-generated landmark-relative hint.
+    """
     obs, info = env.reset(episode)
+    if task_prompt_override is not None:
+        info["task_prompt"] = task_prompt_override
     logger.log_step(0, None, obs, 0.0, False, False, info)
 
     if max_steps is None:
@@ -106,13 +124,33 @@ def run_episode(
     memory = memory or NullMemory()
     memory.reset()
 
+    # Build system prompt: base instructions + L3 skills (if hierarchical)
+    system_text = _NAV_SYSTEM_PROMPT
+    if hasattr(memory, "get_system_prompt_section"):
+        l3_section = memory.get_system_prompt_section()
+        if l3_section:
+            system_text += l3_section
+
     history: List[LLMMessage] = [
-        LLMMessage.text("system", _NAV_SYSTEM_PROMPT),
+        LLMMessage.text("system", system_text),
     ]
 
     final_metrics: Dict[str, Any] = {}
     for t in range(1, max_steps + 1):
+        # Keep the task prompt override stable across env.step calls
+        # (env regenerates task_prompt each step from the episode).
+        if task_prompt_override is not None:
+            info["task_prompt"] = task_prompt_override
         user_text = _build_user_text(info, obs)
+
+        # Rethink check: detect failure patterns (oscillation/stuck/backtrack).
+        # Only reports the observation — lets the agent reason about what to do.
+        rethink_text = ""
+        if hasattr(memory, "check_rethink"):
+            rethink = memory.check_rethink()
+            if rethink:
+                log.warning("[runner t=%d] rethink triggered: %s", t, rethink.reason)
+                rethink_text = rethink.prompt + "\n\n"
 
         # Memory recall: ask the backend for relevant past items and
         # prepend them to the user turn as plain text.  NullMemory
@@ -123,6 +161,10 @@ def run_episode(
                 f"- {m}" for m in recalled
             )
             user_text = memo_block + "\n\n" + user_text
+
+        # Prepend rethink observation if triggered
+        if rethink_text:
+            user_text = rethink_text + user_text
 
         # Attach image only if RGB capture is on AND the LLM actually
         # consumes images.  ClaudeAgentSDKClient is text-only.
@@ -173,10 +215,15 @@ def run_episode(
             ))
 
             # Memory insert: record what we tried and what happened.
-            # Kept as a short natural-language blurb so mem0's extractor
-            # has something to chew on.
             new_d = info.get("distance_to_goal_cm")
             delta = (prev_d - new_d) if (prev_d is not None and new_d is not None) else 0.0
+
+            # Extract bearing for hierarchical memory
+            bearing_deg = 0.0
+            if "pointgoal_with_gps_compass" in obs:
+                _, ang_rad = obs["pointgoal_with_gps_compass"].tolist()
+                bearing_deg = math.degrees(ang_rad)
+
             memory.insert(
                 (
                     f"step={t} action={tc.name} reward={reward:+.3f} "
@@ -190,6 +237,10 @@ def run_episode(
                     "d_goal_cm": float(new_d) if new_d is not None else None,
                     "delta_cm": float(delta),
                     "done": bool(done),
+                    "bearing_deg": bearing_deg,
+                    "distance_cm": float(new_d) if new_d is not None else 0.0,
+                    "prev_distance_cm": float(prev_d) if prev_d is not None else 0.0,
+                    "yaw_deg": float(obs.get("agent_yaw_deg", 0)),
                 },
             )
 
@@ -201,6 +252,9 @@ def run_episode(
             break
 
     # End-of-episode memory: insert a concise lesson learned.
+    # Tag these with event_type="episode_summary" so structured
+    # backends (hierarchical) can skip them from the per-step SAO
+    # extraction — they aren't single-step records.
     sr = final_metrics.get("SR", 0)
     path_cm = final_metrics.get("path_length_cm", 0)
     cum_r = final_metrics.get("cumulative_reward", 0)
@@ -208,23 +262,35 @@ def run_episode(
         memory.insert(
             f"EPISODE SUCCESS: reached goal in {env.step_count} steps, "
             f"path={path_cm:.0f}cm, reward={cum_r:+.0f}. "
-            f"Strategy: align bearing to ~0 then MOVE_FORWARD repeatedly."
+            f"Strategy: align bearing to ~0 then MOVE_FORWARD repeatedly.",
+            metadata={"event_type": "episode_summary", "success": True},
         )
     else:
-        # Describe what went wrong
         if env.step_count >= (max_steps or 999):
             memory.insert(
                 f"EPISODE FAIL: ran out of steps ({env.step_count}). "
                 f"d_goal={info.get('distance_to_goal_cm', '?')}cm still far. "
                 f"Lesson: don't turn more than 2-3 times in a row; "
                 f"switch to MOVE_FORWARD once bearing is within ±45°. "
-                f"Use STOP when distance < 200cm."
+                f"Use STOP when distance < 200cm.",
+                metadata={"event_type": "episode_summary", "success": False},
             )
         else:
             memory.insert(
                 f"EPISODE FAIL: d_goal={info.get('distance_to_goal_cm', '?')}cm. "
-                f"reward={cum_r:+.0f}."
+                f"reward={cum_r:+.0f}.",
+                metadata={"event_type": "episode_summary", "success": False},
             )
+
+    # Flush this episode's L1 into L2 (for backends that support it).
+    # Without this, the last episode's steps are lost because compaction
+    # normally fires at the START of the next reset().
+    if hasattr(memory, "end_episode"):
+        memory.end_episode(
+            success=bool(sr > 0),
+            total_steps=env.step_count,
+            final_distance_cm=float(info.get("distance_to_goal_cm", 0) or 0),
+        )
 
     logger.log_summary(final_metrics or {"note": "loop exited without done"})
     return final_metrics
@@ -257,12 +323,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-start-pie", action="store_true",
                    help="Skip the auto PIE-start on first reset (assume PIE is already running)")
     p.add_argument("--agent-name", default="GymNavAgent_0")
-    p.add_argument("--task", choices=["pointnav", "objectnav"], default="pointnav")
+    p.add_argument("--task",
+                   choices=["pointnav", "objectnav", "objectnav-search"],
+                   default="pointnav")
     p.add_argument("--target-distance", type=float, default=2000.0,
                    help="Target distance in cm (PointNav)")
     p.add_argument("--target-filter", default=None,
                    help="Substring an actor name must contain (ObjectNav)")
     p.add_argument("--object-category", default="OBJECT")
+    p.add_argument("--n-search-targets", type=int, default=5,
+                   help="How many small objects to spawn for "
+                        "objectnav-search (one episode per target).")
+    p.add_argument("--describer-model", default=None,
+                   help="LLM short name used to generate the natural-"
+                        "language target descriptions.  Defaults to the "
+                        "same model as --model.")
+    p.add_argument("--describer-model-id", default=None)
+    p.add_argument("--describer-base-url", default=None)
+    p.add_argument("--describer-api-key", default=None)
+    p.add_argument("--scene-graph", default=None,
+                   help="Path to scene_graph.json used for NavMesh "
+                        "task generation. If omitted, falls back to "
+                        "legacy origin-based random-goal sampling.")
+    p.add_argument("--nav-min-cm", type=float, default=1000.0,
+                   help="Min geodesic distance (cm) for NavMesh PointNav")
+    p.add_argument("--nav-max-cm", type=float, default=4000.0,
+                   help="Max geodesic distance (cm) for NavMesh PointNav")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-steps", type=int, default=40)
     p.add_argument("--vision-depth", type=int, default=3,
@@ -276,10 +362,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         "runs/<id>/frames/. Forces RGB capture on, even "
                         "for text-only LLMs (claude-sdk).")
     p.add_argument("--memory", default="none",
-                   choices=["none", "text", "mem0"],
+                   choices=["none", "text", "mem0", "hierarchical"],
                    help="Agent memory backend. 'none' disables memory. "
                         "'text' uses a simple JSON file (no extra deps). "
-                        "'mem0' uses mem0ai (pip install mem0ai).")
+                        "'mem0' uses mem0ai (pip install mem0ai). "
+                        "'hierarchical' uses 3-level memory (L1/L2/L3).")
     p.add_argument("--log-level", default="INFO")
     return p
 
@@ -293,7 +380,15 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     from .ucv_client import UCVClient
     from .mcp_client import MCPClient
-    from .episode_builder import sample_pointnav_episode, sample_objectnav_episode
+    from .episode_builder import (
+        sample_pointnav_episode,
+        sample_objectnav_episode,
+        sample_pointnav_episode_navmesh,
+        sample_objectnav_episode_navmesh,
+        sample_objectnav_search_episode,
+        clear_objectnav_search_cache,
+        cleanup_spawned_actors,
+    )
 
     ucv = UCVClient(host=args.ucv_host, port=args.ucv_port, name="env-0")
     mcp = MCPClient(host=args.mcp_host, port=args.mcp_port, name="env-0-mcp")
@@ -310,6 +405,20 @@ def main(argv: Optional[List[str]] = None) -> None:
             print(f"WARN: PIE auto-start failed ({exc}); proceeding anyway",
                   file=sys.stderr)
     ucv.connect()
+
+    # ── NavMesh interface: build once, reuse across all episodes.
+    # Required for sample_*_episode_navmesh; if no scene_graph is
+    # supplied we silently fall back to the legacy origin-based
+    # sampler (documented in --scene-graph help).
+    nav_interface = None
+    if args.scene_graph:
+        from nav_task.navmesh_interface import NavmeshNavigationInterface
+        nav_interface = NavmeshNavigationInterface(
+            args.scene_graph, ucv, agent_name=args.agent_name,
+        )
+        print(f"Building navmesh for {args.scene_graph}...", file=sys.stderr)
+        nav_interface.build_navmesh(padding_cm=500.0)
+        print(f"NavMesh status: {nav_interface.status()}", file=sys.stderr)
 
     # --record-trajectory wins over --no-rgb.
     capture_rgb = args.record_trajectory or not args.no_rgb
@@ -337,30 +446,144 @@ def main(argv: Optional[List[str]] = None) -> None:
         llm_api_key=args.api_key,
     )
 
+    # Wire the agent LLM into hierarchical memory so its L3 skill
+    # distillation can use it.  Using the same LLM keeps a single
+    # source of truth for the experiment.
+    from .memory.hierarchical import HierarchicalMemory
+    if isinstance(memory, HierarchicalMemory) and memory._llm_call is None:
+        def _hier_llm_call(prompt: str) -> str:
+            resp = llm.chat(
+                [LLMMessage.text("user", prompt)],
+                tools=[],
+                max_tokens=1024,
+            )
+            return resp.text or ""
+        memory._llm_call = _hier_llm_call
+        log.info("HierarchicalMemory: wired LLM distillation via %s", llm.name)
+
+    # ── ObjectNav search: build describer + clear cache.
+    describer = None
+    if args.task == "objectnav-search":
+        if not args.scene_graph:
+            print("ERROR: --scene-graph is required for objectnav-search",
+                  file=sys.stderr)
+            sys.exit(2)
+        from .scene_context import load_scene_graph
+        from .describer import TargetDescriber
+        sg_actors = load_scene_graph(args.scene_graph)
+        log.info("loaded scene graph with %d actors", len(sg_actors))
+
+        # Build the describer LLM (optionally decoupled from agent LLM).
+        describer_short = args.describer_model or args.model
+        describer_llm = make_llm(
+            describer_short,
+            model=args.describer_model_id or args.model_id,
+            base_url=args.describer_base_url or args.base_url,
+            api_key=args.describer_api_key or args.api_key,
+        )
+
+        def _describer_call(prompt: str) -> str:
+            resp = describer_llm.chat(
+                [LLMMessage.text("user", prompt)],
+                tools=[],
+                max_tokens=200,
+            )
+            return resp.text or ""
+
+        describer = TargetDescriber(
+            llm_call=_describer_call,
+            scene_graph=sg_actors,
+            landmark_radius_cm=5000.0,
+            landmark_top_k=6,
+            categories=("building", "tree"),
+        )
+        clear_objectnav_search_cache()
+
     # ── Multi-episode loop ───────────────────────────────────────────
     all_metrics: List[Dict[str, Any]] = []
 
     try:
         for ep_idx in range(args.n_episodes):
             seed = args.seed + ep_idx
+            episode_extra = {}
             if args.task == "pointnav":
-                episode = sample_pointnav_episode(
-                    ucv, seed=seed,
-                    target_distance_cm=args.target_distance,
+                if nav_interface is not None:
+                    result = sample_pointnav_episode_navmesh(
+                        ucv, args.scene_graph,
+                        seed=seed, idx=ep_idx,
+                        min_geodesic_cm=args.nav_min_cm,
+                        max_geodesic_cm=args.nav_max_cm,
+                        max_steps=args.max_steps,
+                        build_navmesh=False,
+                        nav_interface=nav_interface,
+                    )
+                    episode = result["episode"]
+                    episode_extra = {
+                        "start_heading_deg": result["start_heading_deg"],
+                        "difficulty": result["difficulty"],
+                        "gt_path_waypoints": result["gt_path_waypoints"],
+                    }
+                else:
+                    episode = sample_pointnav_episode(
+                        ucv, seed=seed,
+                        target_distance_cm=args.target_distance,
+                        max_steps=args.max_steps,
+                    )
+            elif args.task == "objectnav-search":
+                # All episodes in one run share a single pre-spawned
+                # batch of small objects (one spawn + one navmesh
+                # rebuild on ep_idx=0, then per-episode cache lookups).
+                result = sample_objectnav_search_episode(
+                    ucv, args.scene_graph,
+                    seed=args.seed,          # shared across episodes
+                    idx=ep_idx,
+                    describer=describer,
+                    n_targets=max(args.n_search_targets, args.n_episodes),
+                    nav_interface=nav_interface,
+                    min_geodesic_cm=args.nav_min_cm,
+                    max_geodesic_cm=args.nav_max_cm,
                     max_steps=args.max_steps,
+                    build_navmesh=False,
                 )
-            else:
+                episode = result["episode"]
+                episode_extra = {
+                    "start_heading_deg": result["start_heading_deg"],
+                    "difficulty": result["difficulty"],
+                    "gt_path_waypoints": result["gt_path_waypoints"],
+                    "target_actor_name": result["target_actor_name"],
+                    "task_prompt": result["prompt"],
+                    "description_generator": result["description"].generator,
+                }
+            else:  # objectnav (classic, uses pre-existing scene actors)
                 if not args.target_filter:
                     print("ERROR: --target-filter required for objectnav",
                           file=sys.stderr)
                     sys.exit(2)
                 substr = args.target_filter
-                episode = sample_objectnav_episode(
-                    ucv, seed=seed,
-                    target_filter=lambda name, s=substr: s in name,
-                    object_category=args.object_category,
-                    max_steps=args.max_steps,
-                )
+                if nav_interface is not None:
+                    result = sample_objectnav_episode_navmesh(
+                        ucv, args.scene_graph,
+                        seed=seed, idx=ep_idx,
+                        target_filter=lambda name, s=substr: s in name,
+                        object_category=args.object_category,
+                        max_steps=args.max_steps,
+                        build_navmesh=False,
+                        nav_interface=nav_interface,
+                    )
+                    episode = result["episode"]
+                    episode_extra = {
+                        "start_heading_deg": result["start_heading_deg"],
+                        "difficulty": result["difficulty"],
+                        "gt_path_waypoints": result["gt_path_waypoints"],
+                        "target_actor_name": result.get("target_actor_name"),
+                    }
+                else:
+                    episode = sample_objectnav_episode(
+                        ucv, seed=seed,
+                        target_filter=lambda name, s=substr: s in name,
+                        object_category=args.object_category,
+                        max_steps=args.max_steps,
+                    )
 
             run_tag = (
                 args.run_name
@@ -380,6 +603,8 @@ def main(argv: Optional[List[str]] = None) -> None:
                     "n_episodes": args.n_episodes,
                     "memory": args.memory,
                     "args": vars(args),
+                    "task_source": "navmesh" if nav_interface else "legacy",
+                    **episode_extra,
                 },
             )
 
@@ -389,6 +614,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                     memory=memory,
                     max_steps=args.max_steps,
                     vision_history_depth=args.vision_depth,
+                    task_prompt_override=episode_extra.get("task_prompt"),
                 )
             finally:
                 logger.close()

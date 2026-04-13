@@ -18,7 +18,7 @@ import logging
 import math
 import random
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from nav_task.episode import (
     EvaluationMetrics,
@@ -415,6 +415,333 @@ def sample_objectnav_episode_navmesh(
     raise RuntimeError(
         f"Failed to sample objectnav episode after {max_sampling_attempts} attempts"
     )
+
+
+# ---------------------------------------------------------------------------
+# ObjectNav search — spawn a batch of small objects, one episode per target
+# ---------------------------------------------------------------------------
+
+def sample_objectnav_search_batch(
+    ucv,
+    scene_graph_file: str,
+    *,
+    base_seed: int,
+    n_targets: int,
+    describer,                      # TargetDescriber instance
+    nav_interface=None,
+    min_target_spacing_cm: float = 500.0,
+    min_geodesic_cm: float = 1500.0,
+    max_geodesic_cm: float = 6000.0,
+    success_distance_cm: float = 200.0,
+    max_steps: int = 40,
+    max_episode_time_s: float = 300.0,
+    max_sampling_attempts: int = 500,
+    reward_config=None,
+    build_navmesh: bool = True,
+    navmesh_padding_cm: float = 500.0,
+) -> tuple:
+    """Spawn ``n_targets`` small objects and build one episode per target.
+
+    The returned tuple is ``(episodes, spawned_actors, descriptions)``:
+        * ``episodes`` — list of NavigationEpisode, one per target.
+        * ``spawned_actors`` — list of (actor_name, (x, y, z)) tuples
+          for cleanup.
+        * ``descriptions`` — list of TargetDescription objects, matched
+          by index to ``episodes``.
+
+    The caller is expected to pass the episodes to the runner one at a
+    time (each constitutes a full navigation episode).  The small
+    objects remain in the scene across episodes (single spawn + single
+    navmesh rebuild) — between episodes the agent simply teleports to
+    a fresh start point and searches for the next target.
+    """
+    from nav_task.navmesh_interface import NavmeshNavigationInterface
+    from .object_pool import get_pool, canonical_noun
+    from .scene_context import load_scene_graph
+
+    if nav_interface is None:
+        nav_interface = NavmeshNavigationInterface(scene_graph_file, ucv)
+        if build_navmesh:
+            nav_interface.build_navmesh(padding_cm=navmesh_padding_cm)
+
+    rng = random.Random(base_seed)
+    pool = get_pool()
+    if len(pool) < n_targets:
+        raise ValueError(
+            f"object pool has {len(pool)} specs but {n_targets} targets requested"
+        )
+    chosen_specs = rng.sample(pool, n_targets)
+
+    # Sample candidate positions on the navmesh and pick N that are
+    # pairwise at least ``min_target_spacing_cm`` apart.
+    cand_positions = nav_interface.get_navigable_positions(
+        count=n_targets * 8, rng=rng,
+    )
+    selected: List[Position] = []
+    for pos in cand_positions:
+        if all(
+            math.sqrt((pos.x - s.x) ** 2 + (pos.y - s.y) ** 2)
+            >= min_target_spacing_cm
+            for s in selected
+        ):
+            selected.append(pos)
+        if len(selected) >= n_targets:
+            break
+    if len(selected) < n_targets:
+        raise RuntimeError(
+            f"Could not find {n_targets} well-spaced spawn points "
+            f"(got {len(selected)})"
+        )
+
+    # Spawn each target.
+    spawned: List[Tuple[str, Tuple[float, float, float]]] = []
+    for idx, (spec, pos) in enumerate(zip(chosen_specs, selected)):
+        actor_name = f"task_target_{base_seed}_{idx}"
+        location = (pos.x, pos.y, _DEFAULT_SPAWN_Z)
+        try:
+            if spec.kind == "blueprint":
+                ucv.spawn_bp_asset(spec.asset_path, actor_name, location=location)
+            else:
+                ucv.spawn_static_mesh(spec.asset_path, actor_name, location=location)
+        except Exception as exc:
+            log.warning("spawn failed for %s (%s): %s", actor_name, spec.asset_path, exc)
+            continue
+        spawned.append((actor_name, location))
+
+    log.info("spawned %d / %d target objects", len(spawned), n_targets)
+
+    # Rebuild navmesh AFTER spawn so geodesic / path queries see the
+    # new obstacles.  This is unconditional — the ``build_navmesh``
+    # flag only controls the *initial* build at the start of the
+    # function; the post-spawn rebuild must always happen when we
+    # have a nav interface, otherwise the path queries below would
+    # use a stale navmesh that doesn't know about the targets.
+    log.info("rebuilding navmesh after target spawn...")
+    nav_interface.build_navmesh(padding_cm=navmesh_padding_cm)
+
+    # For description generation we need a loaded scene graph (used
+    # separately from the navmesh for landmark context).
+    scene_graph = load_scene_graph(scene_graph_file)
+
+    rc = reward_config or RewardConfig()
+    episodes: List[NavigationEpisode] = []
+    descriptions = []
+    positions_for_start = nav_interface.get_navigable_positions(
+        count=len(spawned) * 10, rng=rng,
+    )
+
+    for ep_idx, ((actor_name, (tx, ty, tz)), spec) in enumerate(
+        zip(spawned, chosen_specs)
+    ):
+        goal_pos = Position(x=tx, y=ty, node_type="object")
+
+        # Sample a start position within the geodesic window.
+        start_pos: Optional[Position] = None
+        geo: Optional[float] = None
+        ref_waypoints = None
+        for attempt in range(max_sampling_attempts):
+            candidate = rng.choice(positions_for_start)
+            geo = nav_interface.get_geodesic_distance(candidate, goal_pos)
+            if geo is None:
+                continue
+            if not (min_geodesic_cm <= geo <= max_geodesic_cm):
+                continue
+            ref_waypoints = nav_interface.get_reference_path(candidate, goal_pos)
+            if ref_waypoints is None:
+                continue
+            start_pos = candidate
+            break
+        if start_pos is None:
+            log.warning(
+                "skip target %s: no reachable start in [%d, %d]cm",
+                actor_name, min_geodesic_cm, max_geodesic_cm,
+            )
+            continue
+
+        ref_path = ReferencePath(
+            waypoints=tuple(ref_waypoints),
+            shortest_path_length_cm=geo,
+        )
+        obj_goal = ObjectGoal(
+            object_id=actor_name,
+            object_type=spec.category,
+            object_category=spec.category,
+            position=goal_pos,
+            view_points=(ObjectViewPoint(position=goal_pos, iou=None),),
+        )
+        description = describer.describe(
+            target_spec=spec,
+            target_name=actor_name,
+            target_xy=(tx, ty),
+            start_xy=(start_pos.x, start_pos.y),
+        )
+        ep = NavigationEpisode(
+            episode_id=_new_episode_id(base_seed, ep_idx),
+            seed=base_seed,
+            world=_make_world("live_ue_scene"),
+            start_position=start_pos,
+            goal_position=goal_pos,
+            reference_path=ref_path,
+            success_criteria=SuccessCriteria(
+                success_distance_cm=success_distance_cm,
+                max_steps=max_steps,
+                max_episode_time_s=max_episode_time_s,
+            ),
+            evaluation_metrics=EvaluationMetrics(
+                success_distance_cm=success_distance_cm,
+                shortest_path_length_cm=geo,
+            ),
+            generated_at=_now_iso(),
+            reward_config=rc,
+            task_type="objectnav",
+            object_category=spec.category,
+            object_goal=obj_goal,
+        )
+        episodes.append(ep)
+        descriptions.append(description)
+        log.info(
+            "objectnav_search ep %s: target=%s (%s) geo=%.0fcm hint=%r",
+            ep.episode_id,
+            canonical_noun(spec),
+            description.generator,
+            geo,
+            description.prompt[:80],
+        )
+
+    return episodes, spawned, descriptions
+
+
+def cleanup_spawned_actors(ucv, spawned_actors) -> None:
+    """Destroy a list of spawned actors; safe to call on already-gone names."""
+    for name, _ in spawned_actors:
+        try:
+            ucv.destroy_actor(name)
+        except Exception as exc:
+            log.debug("destroy %s failed: %s", name, exc)
+
+
+# ── Per-call interface that mirrors sample_pointnav_episode_navmesh ──
+#
+# Runners already call sample_pointnav_episode_navmesh once per
+# episode (see ``gym_env/runner.py``).  The ObjectNav search variant
+# keeps the same signature — ``seed + idx`` identifies which target
+# out of a pre-spawned batch to return.  The first call with a given
+# ``seed`` does the spawn; subsequent calls reuse the cached batch.
+
+_OBJECTNAV_SEARCH_CACHE: Dict[Any, Any] = {}
+
+
+def sample_objectnav_search_episode(
+    ucv,
+    scene_graph_file: str,
+    *,
+    seed: int = 42,
+    idx: int = 0,
+    describer=None,
+    n_targets: int = 5,
+    nav_interface=None,
+    min_target_spacing_cm: float = 500.0,
+    min_geodesic_cm: float = 1500.0,
+    max_geodesic_cm: float = 6000.0,
+    success_distance_cm: float = 200.0,
+    max_steps: int = 40,
+    max_episode_time_s: float = 300.0,
+    reward_config=None,
+    build_navmesh: bool = True,
+    navmesh_padding_cm: float = 500.0,
+) -> dict:
+    """Sample one ObjectNav search episode from a shared batch of targets.
+
+    Same return shape as :func:`sample_pointnav_episode_navmesh`:
+
+        {
+            "episode": NavigationEpisode,
+            "start_heading_deg": float,
+            "difficulty": dict,
+            "gt_path_waypoints": list[(x, y)],
+            "description": TargetDescription,
+            "target_actor_name": str,
+            "spawned_actors": list[(name, (x,y,z))],  # pool reference, shared
+        }
+
+    The spawn happens on the first call with a given ``seed`` (so
+    ``idx=0``).  Subsequent calls with the same seed return the next
+    pre-spawned target from the cached batch.
+    """
+    if describer is None:
+        raise ValueError("sample_objectnav_search_episode requires a describer")
+
+    cache_key = (seed, n_targets, min_target_spacing_cm, scene_graph_file)
+    cache = _OBJECTNAV_SEARCH_CACHE.get(cache_key)
+
+    if cache is None:
+        episodes, spawned, descriptions = sample_objectnav_search_batch(
+            ucv, scene_graph_file,
+            base_seed=seed,
+            n_targets=n_targets,
+            describer=describer,
+            nav_interface=nav_interface,
+            min_target_spacing_cm=min_target_spacing_cm,
+            min_geodesic_cm=min_geodesic_cm,
+            max_geodesic_cm=max_geodesic_cm,
+            success_distance_cm=success_distance_cm,
+            max_steps=max_steps,
+            max_episode_time_s=max_episode_time_s,
+            reward_config=reward_config,
+            build_navmesh=build_navmesh,
+            navmesh_padding_cm=navmesh_padding_cm,
+        )
+        cache = {
+            "episodes": episodes,
+            "spawned": spawned,
+            "descriptions": descriptions,
+        }
+        _OBJECTNAV_SEARCH_CACHE[cache_key] = cache
+
+    episodes = cache["episodes"]
+    descriptions = cache["descriptions"]
+    spawned = cache["spawned"]
+    if not episodes:
+        raise RuntimeError("ObjectNav search batch produced zero episodes")
+
+    # idx is circular so callers can request arbitrary ep_idx values.
+    pick = idx % len(episodes)
+    ep = episodes[pick]
+    desc = descriptions[pick]
+
+    # Build difficulty & gt_path_waypoints for parity with PointNav.
+    eucl = _euclidean(
+        ep.start_position.x, ep.start_position.y,
+        ep.goal_position.x, ep.goal_position.y,
+    )
+    geo = ep.reference_path.shortest_path_length_cm
+    start_heading_deg = random.Random(seed + idx).uniform(0, 360)
+    target_angle_deg = _angle_to_target(
+        ep.start_position.x, ep.start_position.y,
+        ep.goal_position.x, ep.goal_position.y,
+    )
+    difficulty = compute_difficulty(eucl, geo, start_heading_deg, target_angle_deg)
+    gt_wps = [(p.x, p.y) for p in ep.reference_path.waypoints]
+
+    return {
+        "episode": ep,
+        "start_heading_deg": round(start_heading_deg, 1),
+        "difficulty": difficulty,
+        "gt_path_waypoints": gt_wps,
+        "description": desc,
+        "target_actor_name": desc.target_name,
+        "spawned_actors": spawned,
+        "prompt": desc.prompt,
+    }
+
+
+def clear_objectnav_search_cache() -> None:
+    """Clear the cached spawned-object batches.
+
+    Call at the start of a new run if you want a fresh spawn instead
+    of reusing the previous run's pool.
+    """
+    _OBJECTNAV_SEARCH_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------

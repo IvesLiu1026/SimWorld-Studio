@@ -157,6 +157,16 @@ def visualize_episodes(episodes, scene_graph_file, output_file="task_gen_viz.png
 
 
 def main():
+    # UnrealCV needs a live game world (PIE) for /nav/* and /objects
+    # commands, so make sure PIE is running before any UCV queries.
+    from gym_env.mcp_client import MCPClient
+    mcp = MCPClient(port=55557, name="taskgen-mcp")
+    try:
+        mcp.start_pie(wait_seconds=8.0)
+        print("PIE started")
+    except Exception as exc:
+        print(f"WARN: PIE start failed ({exc}); proceeding anyway")
+
     ucv = UCVClient(port=UCV_PORT, name="taskgen")
     ucv.connect()
     print("Connected to UnrealCV")
