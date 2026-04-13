@@ -143,7 +143,6 @@ def filter_actors(
 
 def sample_pointnav_episode_navmesh(
     ucv: UCVClient,
-    scene_graph_file: str,
     *,
     seed: int = 42,
     idx: int = 0,
@@ -155,10 +154,10 @@ def sample_pointnav_episode_navmesh(
     max_sampling_attempts: int = 200,
     reward_config: Optional[RewardConfig] = None,
     build_navmesh: bool = True,
-    navmesh_padding_cm: float = 500.0,
     nav_interface=None,
+    sample_count: int = 500,
 ) -> dict:
-    """Sample a PointNav episode with navmesh-validated reachability.
+    """Sample a PointNav episode — all sampling from UE navmesh, no scene graph.
 
     Returns a dict containing:
         episode: NavigationEpisode
@@ -169,16 +168,22 @@ def sample_pointnav_episode_navmesh(
     from nav_task.navmesh_interface import NavmeshNavigationInterface
 
     if nav_interface is None:
-        nav = NavmeshNavigationInterface(scene_graph_file, ucv)
+        nav = NavmeshNavigationInterface(ucv)
         if build_navmesh:
-            resp = nav.build_navmesh(padding_cm=navmesh_padding_cm)
+            resp = nav.build_navmesh()
             log.info("navmesh build: %s", resp)
     else:
         nav = nav_interface
 
     rng = random.Random(seed + idx)
-    positions = nav.get_navigable_positions()
+    positions = nav.get_navigable_positions(count=sample_count, rng=rng)
     rc = reward_config or RewardConfig()
+
+    if len(positions) < 2:
+        raise RuntimeError(
+            f"NavMesh returned only {len(positions)} navigable points. "
+            "Is navmesh built? Check vget /nav/status."
+        )
 
     for attempt in range(max_sampling_attempts):
         start_pos = rng.choice(positions)
@@ -262,7 +267,6 @@ def sample_pointnav_episode_navmesh(
 
 def sample_objectnav_episode_navmesh(
     ucv: UCVClient,
-    scene_graph_file: str,
     *,
     seed: int = 42,
     idx: int = 0,
@@ -277,10 +281,10 @@ def sample_objectnav_episode_navmesh(
     max_sampling_attempts: int = 100,
     reward_config: Optional[RewardConfig] = None,
     build_navmesh: bool = True,
-    navmesh_padding_cm: float = 500.0,
     nav_interface=None,
+    sample_count: int = 500,
 ) -> dict:
-    """Sample an ObjectNav episode with navmesh-validated reachability.
+    """Sample an ObjectNav episode — all sampling from UE navmesh, no scene graph.
 
     The agent must navigate to a specific object. Prompt includes rough
     direction + detailed object description. Success requires reaching
@@ -292,14 +296,19 @@ def sample_objectnav_episode_navmesh(
     from nav_task.navmesh_interface import NavmeshNavigationInterface
 
     if nav_interface is None:
-        nav = NavmeshNavigationInterface(scene_graph_file, ucv)
+        nav = NavmeshNavigationInterface(ucv)
         if build_navmesh:
-            nav.build_navmesh(padding_cm=navmesh_padding_cm)
+            nav.build_navmesh()
     else:
         nav = nav_interface
 
     rng = random.Random(seed + idx)
-    positions = nav.get_navigable_positions()
+    positions = nav.get_navigable_positions(count=sample_count, rng=rng)
+
+    if len(positions) < 2:
+        raise RuntimeError(
+            f"NavMesh returned only {len(positions)} navigable points."
+        )
 
     # Find target objects in the scene
     actors = snapshot_scene(ucv)
@@ -423,7 +432,7 @@ def sample_objectnav_episode_navmesh(
 
 def sample_objectnav_search_batch(
     ucv,
-    scene_graph_file: str,
+    scene_graph_file: str = "",
     *,
     base_seed: int,
     n_targets: int,
@@ -457,10 +466,9 @@ def sample_objectnav_search_batch(
     """
     from nav_task.navmesh_interface import NavmeshNavigationInterface
     from .object_pool import get_pool, canonical_noun
-    from .scene_context import load_scene_graph
 
     if nav_interface is None:
-        nav_interface = NavmeshNavigationInterface(scene_graph_file, ucv)
+        nav_interface = NavmeshNavigationInterface(ucv)
         if build_navmesh:
             nav_interface.build_navmesh(padding_cm=navmesh_padding_cm)
 
@@ -518,10 +526,6 @@ def sample_objectnav_search_batch(
     # use a stale navmesh that doesn't know about the targets.
     log.info("rebuilding navmesh after target spawn...")
     nav_interface.build_navmesh(padding_cm=navmesh_padding_cm)
-
-    # For description generation we need a loaded scene graph (used
-    # separately from the navmesh for landmark context).
-    scene_graph = load_scene_graph(scene_graph_file)
 
     rc = reward_config or RewardConfig()
     episodes: List[NavigationEpisode] = []
@@ -633,7 +637,7 @@ _OBJECTNAV_SEARCH_CACHE: Dict[Any, Any] = {}
 
 def sample_objectnav_search_episode(
     ucv,
-    scene_graph_file: str,
+    scene_graph_file: str = "",
     *,
     seed: int = 42,
     idx: int = 0,
@@ -671,12 +675,12 @@ def sample_objectnav_search_episode(
     if describer is None:
         raise ValueError("sample_objectnav_search_episode requires a describer")
 
-    cache_key = (seed, n_targets, min_target_spacing_cm, scene_graph_file)
+    cache_key = (seed, n_targets, min_target_spacing_cm)
     cache = _OBJECTNAV_SEARCH_CACHE.get(cache_key)
 
     if cache is None:
         episodes, spawned, descriptions = sample_objectnav_search_batch(
-            ucv, scene_graph_file,
+            ucv,
             base_seed=seed,
             n_targets=n_targets,
             describer=describer,
