@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -236,24 +237,78 @@ class UCVClient:
         return b""
 
 
-    def spawn_bp_asset(self, blueprint_path: str, name: str) -> None:
-        """Spawn a blueprint actor.
+    def spawn_bp_asset(
+        self,
+        blueprint_path: str,
+        name: str,
+        location: Optional[tuple] = None,
+        rotation: Optional[tuple] = None,
+    ) -> None:
+        """Spawn a blueprint actor, optionally at a specific transform.
 
         Spawn-heavy commands can drop the underlying TCP socket.  We
         therefore (a) ignore any error raised by the request, (b)
         sleep so UE finishes loading the BP, and (c) **hard-reset**
         the unrealcv Client so we don't carry a stale receive-queue
-        into subsequent requests (a real failure mode where later
-        ``vget`` calls return the spawn's ``True``/``Success`` reply).
+        into subsequent requests.
         """
+        if location is not None:
+            x, y, z = location
+            pitch, yaw, roll = rotation if rotation is not None else (0.0, 0.0, 0.0)
+            cmd = (
+                f"vset /objects/spawn_bp_asset {blueprint_path} {name} "
+                f"{x} {y} {z} {pitch} {yaw} {roll}"
+            )
+        else:
+            cmd = f"vset /objects/spawn_bp_asset {blueprint_path} {name}"
+
         try:
-            self.send(f"vset /objects/spawn_bp_asset {blueprint_path} {name}")
+            self.send(cmd)
         except UCVError as exc:
             log.debug("[%s] spawn raised %s — UE often resets socket",
                       self.name, exc)
         time.sleep(2.0)
         self.hard_reconnect()
-        log.info("[%s] spawned %s as %s", self.name, blueprint_path, name)
+        log.info("[%s] spawned BP %s as %s at %s",
+                 self.name, blueprint_path, name, location)
+
+    def spawn_static_mesh(
+        self,
+        mesh_path: str,
+        name: str,
+        location: tuple,
+        rotation: tuple = (0.0, 0.0, 0.0),
+        auto_repair_collision: bool = True,
+    ) -> None:
+        """Spawn a StaticMeshActor pointing at a StaticMesh asset.
+
+        Requires the UnrealCV plugin with the ``spawn_static_mesh``
+        command registered (added alongside the Linux listener fix
+        in mid-April 2026).
+        """
+        x, y, z = location
+        pitch, yaw, roll = rotation
+        flag = 1 if auto_repair_collision else 0
+        cmd = (
+            f"vset /objects/spawn_static_mesh {mesh_path} {name} "
+            f"{x} {y} {z} {pitch} {yaw} {roll} {flag}"
+        )
+        try:
+            self.send(cmd)
+        except UCVError as exc:
+            log.debug("[%s] spawn_static_mesh raised %s", self.name, exc)
+        time.sleep(1.0)
+        self.hard_reconnect()
+        log.info("[%s] spawned SM %s as %s at %s",
+                 self.name, mesh_path, name, location)
+
+    def destroy_actor(self, name: str) -> str:
+        """Destroy an actor by name.  No-op if it doesn't exist."""
+        try:
+            return self.send(f"vset /object/{name}/destroy")
+        except UCVError as exc:
+            log.debug("[%s] destroy %s: %s", self.name, name, exc)
+            return ""
 
     def hard_reconnect(self) -> None:
         """Drop the unrealcv Client and create a fresh one.

@@ -221,6 +221,34 @@ class MCPClient:
             raise MCPError(f"[{self.name}] PIE start failed: {exc}") from exc
         time.sleep(wait_seconds)
 
+    def stop_pie(self, *, wait_seconds: float = 2.0) -> None:
+        """Request PIE to end (editor returns to edit mode).
+
+        No-op if PIE isn't running.  Uses
+        ``LevelEditorSubsystem.editor_request_end_play()``.
+        """
+        if not self.is_pie_active():
+            log.info("[%s] PIE not active, nothing to stop", self.name)
+            return
+        log.info("[%s] stopping PIE...", self.name)
+        script = (
+            "import unreal\n"
+            "le = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)\n"
+            "if le is None:\n"
+            "    print('NO_LEVEL_EDITOR_SUBSYSTEM')\n"
+            "else:\n"
+            "    try:\n"
+            "        le.editor_request_end_play()\n"
+            "        print('PIE_END_REQUESTED')\n"
+            "    except Exception as e:\n"
+            "        print('PIE_END_FAILED:' + repr(e))\n"
+        )
+        try:
+            self.execute_python(script, timeout=15)
+        except MCPError as exc:
+            log.warning("[%s] PIE stop failed: %s", self.name, exc)
+        time.sleep(wait_seconds)
+
 
 def _extract_python_logs(resp: Optional[dict]) -> list:
     """Pull the ``python_logs`` array out of an execute_python_script reply.

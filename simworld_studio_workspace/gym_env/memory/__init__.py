@@ -73,4 +73,15 @@ def build_memory(
             llm_base_url=llm_base_url,
             llm_api_key=llm_api_key,
         )
+    if kind == "strategy":
+        from .strategy_backend import StrategyMemory
+        path = (config or {}).get("path", "strategy_memory.json")
+        return StrategyMemory(path=path)
+    if kind == "hierarchical":
+        from .hierarchical import HierarchicalMemory
+        cfg = config or {}
+        return HierarchicalMemory(
+            persist_dir=cfg.get("persist_dir", "./nav_memory"),
+            llm_call=cfg.get("llm_call"),
+        )
     raise ValueError(f"Unknown memory kind: {kind!r}")
