@@ -26,6 +26,7 @@ and the UnrealCV protocol itself is request/response.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -34,6 +35,37 @@ log = logging.getLogger(__name__)
 _RESPONSE_PREVIEW_LEN = 200
 _RECONNECT_DELAY_S = 1.5
 _RECONNECT_MAX_ATTEMPTS = 10
+
+
+def _force_unrealcv_threads_daemon() -> None:
+    """Make unrealcv's receive threads daemon so Python can exit cleanly.
+
+    The upstream unrealcv library creates its receive_loop_queue thread
+    without ``daemon=True`` (see unrealcv/__init__.py, BaseClient.connect).
+    Combined with :meth:`UCVClient.hard_reconnect` — which intentionally
+    orphans stale clients to dodge a different unrealcv deadlock — every
+    reconnect leaks a non-daemon thread blocked on ``socket.recv``.  At
+    end-of-process those threads keep the interpreter alive forever, so
+    ``python -m gym_env.batch_runner`` prints "results saved" and hangs.
+
+    We patch ``threading.Thread`` inside the unrealcv module namespace so
+    any thread unrealcv spawns inherits ``daemon=True``.  Idempotent; has
+    no effect on threads created outside that module.
+    """
+    import unrealcv
+    ucv_threading = getattr(unrealcv, "threading", None)
+    if ucv_threading is None or getattr(ucv_threading.Thread, "_gymenv_daemon_patched", False):
+        return
+    _OrigThread = ucv_threading.Thread
+
+    class _DaemonThread(_OrigThread):
+        _gymenv_daemon_patched = True
+
+        def __init__(self, *args, **kwargs):
+            kwargs.setdefault("daemon", True)
+            super().__init__(*args, **kwargs)
+
+    ucv_threading.Thread = _DaemonThread
 
 
 class UCVError(RuntimeError):
@@ -69,6 +101,7 @@ class UCVClient:
 
     def connect(self) -> None:
         import unrealcv  # local — keeps import cost out of module load
+        _force_unrealcv_threads_daemon()
         self._client = unrealcv.Client((self.host, self.port))
         self._client.connect()
         if not self._client.isconnected():
@@ -98,6 +131,7 @@ class UCVClient:
             time.sleep(_RECONNECT_DELAY_S)
             try:
                 import unrealcv
+                _force_unrealcv_threads_daemon()
                 self._client = unrealcv.Client((self.host, self.port))
                 self._client.connect()
                 if self.is_connected():
@@ -344,6 +378,7 @@ class UCVClient:
         self._client = None
         time.sleep(0.5)
         import unrealcv
+        _force_unrealcv_threads_daemon()
         for attempt in range(1, _RECONNECT_MAX_ATTEMPTS + 1):
             try:
                 self._client = unrealcv.Client((self.host, self.port))
