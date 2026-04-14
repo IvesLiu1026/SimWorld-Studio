@@ -110,20 +110,20 @@ class OpenAICompatClient(LLMClient):
                 else:
                     raise
 
-        # ── Text-action fallback: inject action list + nav strategy into
-        # system prompt so the model understands bearing semantics.
+        # ── Text-action fallback: tell the model which action names are
+        # valid and how to format its answer.  Do NOT inject a navigation
+        # strategy / decision tree — the model should decide based on
+        # the observation (text + image), and any domain guidance
+        # belongs in the upstream system prompt (e.g. the navigation
+        # agent's base prompt) or in the memory / rethink hints the
+        # runner already prepends.  Embedding a hard bearing rule here
+        # would turn every fallback-mode run into a rule-based baseline
+        # regardless of whether RGB, thinking, or memory is in play.
         tool_names = [t["name"] for t in tools]
         tool_desc = ", ".join(tool_names)
         inject = (
-            f"\n\nAvailable actions: {tool_desc}\n"
-            "\nYou MUST follow these rules EXACTLY:\n"
-            "1. Read the 'bearing' number from the user message.\n"
-            "2. If distance < 200 → reply: STOP\n"
-            "3. If bearing is between -45 and +45 → reply: MOVE_FORWARD\n"
-            "4. If bearing > +45 → reply: TURN_LEFT\n"
-            "5. If bearing < -45 → reply: TURN_RIGHT\n"
-            "\nReply with ONLY the action name. Nothing else. One word.\n"
-            "Example: MOVE_FORWARD"
+            f"\n\nAvailable actions (reply with exactly one of these "
+            f"names, nothing else): {tool_desc}"
         )
         patched = list(oai_messages)
         if patched and patched[0].get("role") == "system":
@@ -193,11 +193,14 @@ class OpenAICompatClient(LLMClient):
 
         log.debug("[%s] text-action mode: %d messages", self.name, len(patched))
         # Cap output tokens in text-action mode.  Thinking models
-        # (e.g. Qwen3-VL-*-Thinking) emit <think>…</think> before the
-        # action, so they need a much larger budget than the ~3 tokens
-        # a non-thinking model requires.
+        # (e.g. Qwen3-VL-*-Thinking) emit a full <think>…</think> chain
+        # before the action and easily need 2–4k tokens; capping them
+        # tightly truncates the reasoning mid-thought and the parser
+        # finds no action name (step becomes "no_tool_call").  Non
+        # thinking models need ~3 tokens for the action word and a
+        # small cap saves latency.
         is_thinking = "thinking" in self.model.lower()
-        text_max = min(max_tokens, 512) if is_thinking else min(max_tokens, 32)
+        text_max = max(max_tokens, 4096) if is_thinking else min(max_tokens, 32)
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=patched,
