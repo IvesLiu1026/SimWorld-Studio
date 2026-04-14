@@ -33,10 +33,12 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from nav_task.episode import NavigationEpisode
+from tqdm.auto import tqdm
 
 from .action_space import nav_tool_schemas
 from .llm import LLMClient, LLMMessage, make_llm
@@ -79,9 +81,12 @@ class AgentSlot:
     agent_name: str
     episode: NavigationEpisode
     env: SimWorldNavEnv
+    logger: Optional[EpisodeLogger] = None
     history: List[LLMMessage] = field(default_factory=list)
     step: int = 0
     done: bool = False
+    ended_reason: str = "max_steps"  # "success" | "truncated" | "max_steps" | "llm_error" | "no_tool_call"
+    cumulative_reward: float = 0.0
     metrics: Dict[str, Any] = field(default_factory=dict)
     task_prompt: str = ""
     _obs: Dict[str, Any] = field(default_factory=dict)
@@ -214,19 +219,23 @@ def run_wave(
     llm: LLMClient,
     episodes: List[NavigationEpisode],
     *,
-    wave_offset: int = 0,
     max_steps: int = 40,
     vision_depth: int = 3,
     spawn_z: float = _DEFAULT_SPAWN_Z,
     memory: Optional[AgentMemory] = None,
     wandb_run=None,
     global_step: int = 0,
+    batch_dir: Optional[Path] = None,
+    save_frames: bool = False,
+    capture_rgb: bool = True,
 ) -> Tuple[List[Dict[str, Any]], int]:
-    """Run a wave of ghost agents concurrently in one UE instance.
+    """Run one batch of ghost agents concurrently in one UE instance.
 
-    Each agent gets its own ``SimWorldNavEnv`` with a unique name and
-    camera ID.  LLM requests are issued sequentially (one per active
-    agent per step).
+    **One UE instance runs exactly one wave.**  Each agent gets its
+    own ``SimWorldNavEnv`` with a unique name and camera ID, plus its
+    own :class:`EpisodeLogger` writing per-step JSONL + frames +
+    summary under ``batch_dir/ep_XXX_<name>/``.  LLM requests are
+    issued sequentially (one per active agent per step).
 
     Returns (list of metrics dicts, updated global_step).
     """
@@ -235,7 +244,7 @@ def run_wave(
     mem = memory or NullMemory()
 
     # --- Phase 1: spawn all ghost agents via UnrealCV ---
-    agent_names = [f"GhostAgent_{wave_offset + i}" for i in range(n)]
+    agent_names = [f"GhostAgent_{i}" for i in range(n)]
     for i, ep in enumerate(episodes):
         name = agent_names[i]
         x, y, z = ep.start_position.x, ep.start_position.y, spawn_z
@@ -256,8 +265,8 @@ def run_wave(
             ucv_client=ucv,
             mcp_client=mcp,
             agent_name=agent_name,
-            camera_id=i,            # spawn-order camera index
-            capture_rgb=True,
+            camera_id=i,            # spawn-order camera index (fresh UE → starts at 0)
+            capture_rgb=capture_rgb,
             spawn_on_reset=False,   # already spawned as ghost
             ensure_pie=False,       # PIE already running
             spawn_z=spawn_z,
@@ -265,11 +274,30 @@ def run_wave(
         # Mark as already spawned so reset() doesn't re-spawn
         env._spawned = True
 
+        ep_logger: Optional[EpisodeLogger] = None
+        if batch_dir is not None:
+            ep_logger = EpisodeLogger(
+                run_name=f"ep_{i:03d}_{agent_name}",
+                root=str(batch_dir),
+                save_frames=save_frames,
+                annotate_frames=False,
+                timestamp_dir=False,
+                install_log_handler=False,  # batch-level handler already installed
+                meta={
+                    "episode_id": ep.episode_id,
+                    "episode_idx": i,
+                    "agent_name": agent_name,
+                    "camera_id": i,
+                    "task_type": getattr(ep, "task_type", "pointnav"),
+                },
+            )
+
         slot = AgentSlot(
             idx=i,
             agent_name=agent_name,
             episode=ep,
             env=env,
+            logger=ep_logger,
         )
         slot.history = [LLMMessage.text("system", _NAV_SYSTEM_PROMPT)]
         slots.append(slot)
@@ -280,10 +308,18 @@ def run_wave(
         slot.task_prompt = info.get("task_prompt", "")
         slot._obs = obs
         slot._info = info
+        if slot.logger is not None:
+            slot.logger.log_step(0, None, obs, 0.0, False, False, info)
 
     time.sleep(2)  # let cameras initialize
 
     # --- Step loop ---
+    step_bar = tqdm(
+        total=max_steps,
+        desc=f"batch ({n} ghosts)",
+        unit="step",
+        leave=True,
+    )
     for t in range(1, max_steps + 1):
         active = [s for s in slots if not s.done]
         if not active:
@@ -315,11 +351,17 @@ def run_wave(
                 resp = llm.chat(slot.history, nav_tool_schemas(), max_tokens=1024)
             except Exception as exc:
                 log.error("LLM error for %s: %s", slot.agent_name, exc)
+                slot.ended_reason = "llm_error"
                 slot.done = True
                 continue
 
+            if slot.logger is not None:
+                slot.logger.log_llm(t, llm.name, resp)
+
             if not resp.tool_calls:
-                log.info("%s: LLM returned no tool calls at t=%d", slot.agent_name, t)
+                log.info("%s: LLM returned no tool calls at t=%d",
+                         slot.agent_name, t)
+                slot.ended_reason = "no_tool_call"
                 slot.done = True
                 continue
 
@@ -333,6 +375,12 @@ def run_wave(
                 prev_d = info.get("distance_to_goal_cm")
                 obs, reward, done, truncated, info = slot.env.step(tc.to_action_dict())
                 global_step += 1
+                slot.cumulative_reward += float(reward)
+
+                if slot.logger is not None:
+                    slot.logger.log_step(
+                        t, tc.to_action_dict(), obs, reward, done, truncated, info,
+                    )
 
                 slot.history.append(LLMMessage(
                     role="tool",
@@ -356,8 +404,9 @@ def run_wave(
                 if wandb_run:
                     import wandb
                     wandb.log({
-                        "batch/step_reward": reward,
-                        "batch/distance_to_goal": info["distance_to_goal_cm"],
+                        "batch/step_reward": float(reward),
+                        "batch/cumulative_reward": float(slot.cumulative_reward),
+                        "batch/distance_to_goal": float(info["distance_to_goal_cm"]),
                         "batch/action": tc.name,
                         "batch/agent": slot.agent_name,
                         "batch/episode_idx": slot.idx,
@@ -366,6 +415,7 @@ def run_wave(
 
                 if done or truncated:
                     slot.metrics = info.get("metrics", {}) or {}
+                    slot.ended_reason = "success" if done else "truncated"
                     slot.done = True
                     break
 
@@ -373,25 +423,78 @@ def run_wave(
             slot._info = info
 
         n_done = sum(1 for s in slots if s.done)
-        log.info("wave t=%d: %d/%d done", t, n_done, n)
+        step_bar.set_postfix(done=f"{n_done}/{n}")
+        step_bar.update(1)
+        log.info("batch t=%d: %d/%d done", t, n_done, n)
+    step_bar.close()
 
-    # --- Collect results & cleanup ---
+    # --- Finalize timed-out slots: compute metrics from env state ---
+    for slot in slots:
+        if slot.metrics:
+            continue
+        try:
+            final_metrics = slot.env._final_metrics(slot.env._last_xy)
+        except Exception as exc:
+            log.warning("%s: _final_metrics failed (%s)", slot.agent_name, exc)
+            final_metrics = {}
+        final_metrics.setdefault("cumulative_reward", slot.cumulative_reward)
+        slot.metrics = final_metrics
+
+    # --- Collect results, write per-episode summary, cleanup ---
     results = []
     for slot in slots:
-        sr = slot.metrics.get("SR", 0)
+        sr = float(slot.metrics.get("SR", 0) or 0)
+        spl = float(slot.metrics.get("SPL", 0) or 0)
+        softspl = float(slot.metrics.get("SoftSPL", 0) or 0)
+        path_cm = float(slot.metrics.get("path_length_cm", 0) or 0)
+        cum_r = float(slot.metrics.get("cumulative_reward", slot.cumulative_reward) or 0)
+
         log.info(
-            "%s episode=%s SR=%.0f steps=%d",
-            slot.agent_name, slot.episode.episode_id, sr, slot.step,
+            "%s episode=%s SR=%.0f SPL=%.3f steps=%d reason=%s",
+            slot.agent_name, slot.episode.episode_id, sr, spl,
+            slot.step, slot.ended_reason,
         )
-        results.append({
+
+        summary = {
             "episode_id": slot.episode.episode_id,
+            "episode_idx": slot.idx,
             "agent_name": slot.agent_name,
             "SR": sr,
-            "SPL": slot.metrics.get("SPL", 0),
-            "SoftSPL": slot.metrics.get("SoftSPL", 0),
+            "SPL": spl,
+            "SoftSPL": softspl,
             "steps": slot.step,
+            "path_length_cm": path_cm,
+            "cumulative_reward": cum_r,
+            "ended_reason": slot.ended_reason,
             "metrics": slot.metrics,
-        })
+        }
+
+        if slot.logger is not None:
+            try:
+                slot.logger.log_summary(summary)
+            except Exception as exc:
+                log.warning("log_summary failed for %s: %s",
+                            slot.agent_name, exc)
+            slot.logger.close()
+
+        # WandB per-episode rollup (one point per episode, keyed to final step)
+        if wandb_run:
+            import wandb
+            wandb.log({
+                "episode/SR": sr,
+                "episode/SPL": spl,
+                "episode/SoftSPL": softspl,
+                "episode/steps": slot.step,
+                "episode/path_length_cm": path_cm,
+                "episode/cumulative_reward": cum_r,
+                "episode/idx": slot.idx,
+                "episode/ended_reason_code": {
+                    "success": 0, "truncated": 1, "max_steps": 2,
+                    "llm_error": 3, "no_tool_call": 4,
+                }.get(slot.ended_reason, -1),
+            }, step=global_step)
+
+        results.append(summary)
         # Destroy ghost agent
         try:
             ucv.send(f"vset /object/{slot.agent_name}/destroy")
@@ -454,19 +557,29 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mode", choices=["batch", "single"], default="batch",
                    help="batch = ghost agents; single = normal agent, save traj")
     p.add_argument("--n-tasks", type=int, default=4,
-                   help="Total number of tasks to generate and run")
-    p.add_argument("--wave-size", type=int, default=3,
-                   help="Concurrent ghost agents per wave (batch mode)")
+                   help=(
+                       "Number of concurrent ghost agents (and episodes) "
+                       "to run in this UE instance.  One UE instance runs "
+                       "exactly one wave — spawn more UE instances for "
+                       "more concurrency."
+                   ))
+    # Kept for back-compat; if supplied, must equal --n-tasks.
+    p.add_argument("--wave-size", type=int, default=None,
+                   help="Deprecated alias for --n-tasks (must equal --n-tasks if set).")
     # LLM
     p.add_argument("--model", default="claude")
     p.add_argument("--model-id", default=None)
     p.add_argument("--base-url", default=None)
     p.add_argument("--api-key", default=None)
-    # UE connection
-    p.add_argument("--ucv-host", default="127.0.0.1")
-    p.add_argument("--ucv-port", type=int, default=9001)
-    p.add_argument("--mcp-host", default="127.0.0.1")
-    p.add_argument("--mcp-port", type=int, default=55557)
+    # UE connection — defaults honour env vars so one `export` can
+    # flip an entire shell session to a different UE instance.
+    import os as _os
+    p.add_argument("--ucv-host", default=_os.environ.get("UNREALCV_HOST", "127.0.0.1"))
+    p.add_argument("--ucv-port", type=int,
+                   default=int(_os.environ.get("UNREALCV_PORT", "9001")))
+    p.add_argument("--mcp-host", default=_os.environ.get("UNREAL_MCP_HOST", "127.0.0.1"))
+    p.add_argument("--mcp-port", type=int,
+                   default=int(_os.environ.get("UNREAL_MCP_PORT", "55557")))
     # Episode generation
     p.add_argument("--scene-graph", default=None)
     p.add_argument("--nav-min-cm", type=float, default=1000.0)
@@ -474,6 +587,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-steps", type=int, default=40)
     p.add_argument("--vision-depth", type=int, default=3)
+    # Trajectory recording — batch defaults to no frames (fast eval),
+    # single-mode always keeps frames on.
+    p.add_argument("--save-frames", action="store_true", default=False,
+                   help="Save RGB frames per step (default off in batch mode; "
+                        "single mode always saves).")
+    p.add_argument("--no-rgb", action="store_true", default=False,
+                   help="Disable RGB capture entirely (faster, smaller logs).")
     # Memory
     p.add_argument("--memory", default="none",
                    choices=["none", "text", "mem0", "strategy"],
@@ -497,6 +617,16 @@ def main(argv: Optional[List[str]] = None) -> None:
         format="%(asctime)s %(levelname)-5s %(name)s | %(message)s",
     )
 
+    # --wave-size is a deprecated alias for --n-tasks.  One UE instance
+    # runs exactly one wave; to run more ghost agents you launch another
+    # UE instance.
+    if args.wave_size is not None and args.wave_size != args.n_tasks:
+        log.warning(
+            "--wave-size=%d ignored — one UE instance runs one wave. "
+            "Setting --n-tasks=%d is what controls concurrency.",
+            args.wave_size, args.n_tasks,
+        )
+
     from .episode_builder import (
         sample_pointnav_episode,
         sample_pointnav_episode_navmesh,
@@ -504,9 +634,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     mcp = MCPClient(host=args.mcp_host, port=args.mcp_port, name="batch-mcp")
 
-    # Start PIE
+    # Start PIE.  Need a longer wait when --scene-graph is set because
+    # the navmesh plugin's game-world binding takes ~10s after PIE
+    # transition to be queryable; 5s is enough for spawn_bp_asset but
+    # not for `vset /nav/build`.
+    pie_wait = 12.0 if args.scene_graph else 5.0
     try:
-        mcp.start_pie(wait_seconds=5.0)
+        mcp.start_pie(wait_seconds=pie_wait)
     except Exception as exc:
         log.warning("PIE auto-start failed (%s); proceeding anyway", exc)
 
@@ -553,13 +687,24 @@ def main(argv: Optional[List[str]] = None) -> None:
         else:
             log.info("WandB disabled (no API key)")
 
-    # Build navmesh once, then generate all episodes
+    # Build navmesh once, then generate all episodes.  The plugin's
+    # game-world binding is racy right after PIE starts — retry on
+    # "No game world available" or any error containing PIE-start hints.
     nav_interface = None
     if args.scene_graph:
         from nav_task.navmesh_interface import NavmeshNavigationInterface
         nav_interface = NavmeshNavigationInterface(ucv)
-        resp = nav_interface.build_navmesh()
-        log.info("navmesh built: %s", resp)
+        for attempt in range(6):
+            resp = nav_interface.build_navmesh()
+            log.info("navmesh build attempt %d: %s", attempt + 1, resp)
+            if "error" not in resp.lower():
+                break
+            log.warning("navmesh build returned error; sleeping 3s and retrying")
+            time.sleep(3.0)
+        else:
+            raise RuntimeError(
+                f"navmesh build failed after 6 attempts; last response: {resp}"
+            )
 
     log.info("Generating %d pointnav episodes (seed=%d)", args.n_tasks, args.seed)
     episodes: List[NavigationEpisode] = []
@@ -593,51 +738,149 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
         print(f"\n[SINGLE] {metrics}")
     else:
-        log.info("=== BATCH MODE: %d tasks, wave_size=%d, ghost agents ===",
-                 args.n_tasks, args.wave_size)
-        all_results = []
+        # Create a single batch-level directory housing one subdir per
+        # episode.  Install ONE FileHandler here so the whole batch run
+        # is captured in ``batch_run.log`` — per-episode EpisodeLoggers
+        # are created with ``install_log_handler=False`` to avoid
+        # duplicating every log record N times.
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        batch_run_id = f"batch_{ts}_{args.run_name or 'results'}"
+        batch_dir = Path("runs") / batch_run_id
+        batch_dir.mkdir(parents=True, exist_ok=True)
+
+        batch_log_path = batch_dir / "batch_run.log"
+        batch_fh = logging.FileHandler(batch_log_path, encoding="utf-8")
+        batch_fh.setLevel(logging.DEBUG)
+        batch_fh.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)-5s %(name)s | %(message)s"
+        ))
+        logging.getLogger().addHandler(batch_fh)
+
+        def _git_sha() -> Optional[str]:
+            import subprocess
+            try:
+                return subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"],
+                    stderr=subprocess.DEVNULL, text=True,
+                ).strip()
+            except Exception:
+                return None
+
+        batch_meta = {
+            "batch_run_id": batch_run_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "git_sha": _git_sha(),
+            "mode": args.mode,
+            "model": args.model,
+            "model_id": args.model_id,
+            "memory": args.memory,
+            "n_tasks": args.n_tasks,
+            "max_steps": args.max_steps,
+            "vision_depth": args.vision_depth,
+            "seed": args.seed,
+            "ucv_port": args.ucv_port,
+            "mcp_port": args.mcp_port,
+            "nav_min_cm": args.nav_min_cm,
+            "nav_max_cm": args.nav_max_cm,
+            "scene_graph": args.scene_graph,
+            "save_frames": args.save_frames,
+            "capture_rgb": not args.no_rgb,
+            "run_name": args.run_name,
+            "wandb_project": args.wandb_project if not args.no_wandb else None,
+            "episode_ids": [ep.episode_id for ep in episodes],
+        }
+        (batch_dir / "batch_meta.json").write_text(
+            json.dumps(batch_meta, indent=2), encoding="utf-8"
+        )
+        log.info("=== BATCH MODE: %d concurrent ghost agents in one UE instance ===",
+                 args.n_tasks)
+        log.info("batch output dir: %s", batch_dir)
+
+        # One UE instance runs exactly one wave.  No loop — if you want
+        # more concurrency, spawn more UE instances (see run_batch.sh).
         global_step = 0
-        for wave_start in range(0, len(episodes), args.wave_size):
-            wave_eps = episodes[wave_start:wave_start + args.wave_size]
-            log.info("--- Wave %d-%d ---", wave_start, wave_start + len(wave_eps) - 1)
-            results, global_step = run_wave(
-                ucv, mcp, llm, wave_eps,
-                wave_offset=wave_start,
+        try:
+            all_results, global_step = run_wave(
+                ucv, mcp, llm, episodes,
                 max_steps=args.max_steps,
                 vision_depth=args.vision_depth,
                 memory=memory,
                 wandb_run=wandb_run,
                 global_step=global_step,
+                batch_dir=batch_dir,
+                save_frames=args.save_frames,
+                capture_rgb=not args.no_rgb,
             )
-            all_results.extend(results)
+        except Exception:
+            log.exception("batch crashed")
+            raise
 
-        # Summary
+        # Batch summary
+        n = len(all_results)
         n_success = sum(1 for r in all_results if r.get("SR", 0) > 0)
-        avg_spl = sum(r.get("SPL", 0) for r in all_results) / len(all_results)
+        avg_sr = n_success / n if n else 0.0
+        avg_spl = sum(r.get("SPL", 0) for r in all_results) / n if n else 0.0
+        avg_softspl = sum(r.get("SoftSPL", 0) for r in all_results) / n if n else 0.0
+        avg_cum_r = sum(r.get("cumulative_reward", 0) for r in all_results) / n if n else 0.0
+        avg_path = sum(r.get("path_length_cm", 0) for r in all_results) / n if n else 0.0
+
+        batch_summary = {
+            "batch_run_id": batch_run_id,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "n_episodes": n,
+            "n_success": n_success,
+            "SR": avg_sr,
+            "SPL": avg_spl,
+            "SoftSPL": avg_softspl,
+            "cumulative_reward_mean": avg_cum_r,
+            "path_length_cm_mean": avg_path,
+            "episodes": all_results,
+        }
+        (batch_dir / "batch_summary.json").write_text(
+            json.dumps(batch_summary, indent=2), encoding="utf-8"
+        )
+
+        # Keep the legacy flat JSON for back-compat with analyze_runs.
+        legacy_path = Path("runs") / f"batch_{args.run_name or 'results'}.json"
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(legacy_path, "w") as f:
+            json.dump(all_results, f, indent=2)
+
         print(f"\n{'='*50}")
-        print(f"BATCH RESULTS: {len(all_results)} episodes")
-        print(f"  SR:  {n_success}/{len(all_results)} ({100*n_success/len(all_results):.0f}%)")
-        print(f"  SPL: {avg_spl:.3f}")
+        print(f"BATCH RESULTS: {n} episodes")
+        print(f"  SR:      {n_success}/{n} ({100*avg_sr:.0f}%)")
+        print(f"  SPL:     {avg_spl:.3f}")
+        print(f"  SoftSPL: {avg_softspl:.3f}")
+        print(f"  cum_r:   {avg_cum_r:+.1f} avg")
         print(f"{'='*50}")
         for r in all_results:
-            print(f"  {r['episode_id']}: SR={r['SR']:.0f} SPL={r['SPL']:.3f} steps={r['steps']}")
-
-        # Save results to JSON
-        results_path = Path("runs") / f"batch_{args.run_name or 'results'}.json"
-        results_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(results_path, "w") as f:
-            json.dump(all_results, f, indent=2)
-        log.info("results saved to %s", results_path)
+            print(
+                f"  {r['episode_id']}: SR={r['SR']:.0f} "
+                f"SPL={r['SPL']:.3f} steps={r['steps']} "
+                f"cum_r={r['cumulative_reward']:+.1f} "
+                f"end={r['ended_reason']}"
+            )
+        log.info("batch summary written to %s", batch_dir / "batch_summary.json")
 
         # WandB final summary
         if wandb_run:
             import wandb
             wandb.log({
-                "batch/SR": n_success / len(all_results),
+                "batch/SR": avg_sr,
                 "batch/SPL": avg_spl,
-                "batch/n_episodes": len(all_results),
+                "batch/SoftSPL": avg_softspl,
+                "batch/cumulative_reward_mean": avg_cum_r,
+                "batch/path_length_cm_mean": avg_path,
+                "batch/n_episodes": n,
                 "batch/n_success": n_success,
             })
+
+        # Remove the batch-level file handler before we exit.
+        try:
+            logging.getLogger().removeHandler(batch_fh)
+            batch_fh.close()
+        except Exception:
+            pass
 
     ucv.disconnect()
     if wandb_run:

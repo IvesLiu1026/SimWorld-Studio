@@ -78,9 +78,14 @@ class EpisodeLogger:
         save_frames: bool = True,
         annotate_frames: bool = False,
         meta: Optional[Dict[str, Any]] = None,
+        timestamp_dir: bool = True,
+        install_log_handler: bool = True,
     ) -> None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_id = f"{ts}_{run_name}"
+        if timestamp_dir:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.run_id = f"{ts}_{run_name}"
+        else:
+            self.run_id = run_name
         self.dir = Path(root) / self.run_id
         self.frames_dir = self.dir / "frames"
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -94,13 +99,18 @@ class EpisodeLogger:
         self._meta_path = self.dir / "meta.json"
         self._log_path = self.dir / "run.log"
 
-        # Pipe python logging into run.log
-        self._fh = logging.FileHandler(self._log_path, encoding="utf-8")
-        self._fh.setLevel(logging.DEBUG)
-        self._fh.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)-5s %(name)s | %(message)s"
-        ))
-        logging.getLogger().addHandler(self._fh)
+        # Pipe python logging into run.log.  Batch mode installs one
+        # shared handler at the batch-root level and creates many
+        # per-episode loggers with install_log_handler=False so messages
+        # are not duplicated N times.
+        self._fh: Optional[logging.FileHandler] = None
+        if install_log_handler:
+            self._fh = logging.FileHandler(self._log_path, encoding="utf-8")
+            self._fh.setLevel(logging.DEBUG)
+            self._fh.setFormatter(logging.Formatter(
+                "%(asctime)s %(levelname)-5s %(name)s | %(message)s"
+            ))
+            logging.getLogger().addHandler(self._fh)
 
         meta = dict(meta or {})
         meta.setdefault("run_id", self.run_id)
@@ -266,8 +276,11 @@ class EpisodeLogger:
         return canvas
 
     def close(self) -> None:
+        if self._fh is None:
+            return
         try:
             logging.getLogger().removeHandler(self._fh)
             self._fh.close()
         except Exception:
             pass
+        self._fh = None

@@ -315,10 +315,15 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Override the API key for the LLM endpoint")
     p.add_argument("--n-episodes", type=int, default=1,
                    help="Number of episodes to run back-to-back (multi-episode experiment)")
-    p.add_argument("--ucv-host", default="127.0.0.1")
-    p.add_argument("--ucv-port", type=int, default=9001)
-    p.add_argument("--mcp-host", default="127.0.0.1")
-    p.add_argument("--mcp-port", type=int, default=55557,
+    # UE connection — defaults honour env vars (UNREALCV_HOST/PORT,
+    # UNREAL_MCP_HOST/PORT) so one `export` reroutes an entire session.
+    import os as _os
+    p.add_argument("--ucv-host", default=_os.environ.get("UNREALCV_HOST", "127.0.0.1"))
+    p.add_argument("--ucv-port", type=int,
+                   default=int(_os.environ.get("UNREALCV_PORT", "9001")))
+    p.add_argument("--mcp-host", default=_os.environ.get("UNREAL_MCP_HOST", "127.0.0.1"))
+    p.add_argument("--mcp-port", type=int,
+                   default=int(_os.environ.get("UNREAL_MCP_PORT", "55557")),
                    help="UE editor MCP TCP port (used to start PIE)")
     p.add_argument("--no-start-pie", action="store_true",
                    help="Skip the auto PIE-start on first reset (assume PIE is already running)")

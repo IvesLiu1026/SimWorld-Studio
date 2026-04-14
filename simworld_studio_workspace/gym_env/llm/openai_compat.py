@@ -110,20 +110,20 @@ class OpenAICompatClient(LLMClient):
                 else:
                     raise
 
-        # ── Text-action fallback: inject action list + nav strategy into
-        # system prompt so the model understands bearing semantics.
+        # ── Text-action fallback: tell the model which action names are
+        # valid and how to format its answer.  Do NOT inject a navigation
+        # strategy / decision tree — the model should decide based on
+        # the observation (text + image), and any domain guidance
+        # belongs in the upstream system prompt (e.g. the navigation
+        # agent's base prompt) or in the memory / rethink hints the
+        # runner already prepends.  Embedding a hard bearing rule here
+        # would turn every fallback-mode run into a rule-based baseline
+        # regardless of whether RGB, thinking, or memory is in play.
         tool_names = [t["name"] for t in tools]
         tool_desc = ", ".join(tool_names)
         inject = (
-            f"\n\nAvailable actions: {tool_desc}\n"
-            "\nYou MUST follow these rules EXACTLY:\n"
-            "1. Read the 'bearing' number from the user message.\n"
-            "2. If distance < 200 → reply: STOP\n"
-            "3. If bearing is between -45 and +45 → reply: MOVE_FORWARD\n"
-            "4. If bearing > +45 → reply: TURN_LEFT\n"
-            "5. If bearing < -45 → reply: TURN_RIGHT\n"
-            "\nReply with ONLY the action name. Nothing else. One word.\n"
-            "Example: MOVE_FORWARD"
+            f"\n\nAvailable actions (reply with exactly one of these "
+            f"names, nothing else): {tool_desc}"
         )
         patched = list(oai_messages)
         if patched and patched[0].get("role") == "system":
@@ -135,46 +135,72 @@ class OpenAICompatClient(LLMClient):
         # In text-action mode there are no real tool_call_ids.  Convert
         # role=tool → role=user and role=assistant with tool_calls →
         # plain assistant text so the model sees a clean user/assistant
-        # alternation with action feedback.
+        # alternation with action feedback.  IMPORTANT: we preserve
+        # list-form content (text + image_url blocks) — vision models
+        # like Qwen-VL accept mixed content on OpenAI-compatible
+        # endpoints without any tool-choice plumbing, and dropping the
+        # image here was silently turning RGB runs into text-only.
         cleaned: List[Dict[str, Any]] = []
         for m in patched:
             if m.get("role") == "tool":
-                # Merge tool result into a user message
+                # Merge tool result into a user message; keep content as-is
+                # whether it's a plain string or a list of blocks.
                 cleaned.append({"role": "user", "content": m.get("content", "ok")})
             elif m.get("role") == "assistant" and m.get("tool_calls"):
-                # Strip tool_calls; keep only the text
+                # Strip tool_calls; keep the text portion as plain string.
                 cleaned.append({"role": "assistant", "content": m.get("content") or ""})
             else:
-                cleaned.append(m)
-        # Merge consecutive same-role messages (required by many providers)
-        def _to_str(c) -> str:
+                cleaned.append(dict(m))
+
+        # Merge consecutive same-role messages.  Many providers (Anthropic,
+        # Google, some vLLM configs) require strict user/assistant
+        # alternation, so we concatenate adjacent messages of the same
+        # role.  Text ↔ text concatenates with a newline; anything
+        # involving a list (image blocks) normalises both sides to lists
+        # so image_url dicts survive.
+        def _as_blocks(c) -> List[Dict[str, Any]]:
+            """Normalise content into a list of message blocks."""
+            if c is None or c == "":
+                return []
             if isinstance(c, str):
-                return c
+                return [{"type": "text", "text": c}]
             if isinstance(c, list):
-                return "\n".join(
-                    b.get("text", "") for b in c if isinstance(b, dict)
-                )
-            return str(c) if c else ""
+                out: List[Dict[str, Any]] = []
+                for b in c:
+                    if isinstance(b, dict):
+                        out.append(b)
+                    elif isinstance(b, str):
+                        out.append({"type": "text", "text": b})
+                return out
+            return [{"type": "text", "text": str(c)}]
+
+        def _merge_content(a, b):
+            # If both are plain strings, keep string form (smaller).
+            if isinstance(a, str) and isinstance(b, str):
+                return a + "\n" + b
+            ab = _as_blocks(a) + _as_blocks(b)
+            return ab if ab else ""
 
         merged: List[Dict[str, Any]] = []
         for m in cleaned:
             if merged and merged[-1]["role"] == m["role"]:
-                merged[-1]["content"] = _to_str(merged[-1]["content"]) + "\n" + _to_str(m.get("content"))
+                merged[-1]["content"] = _merge_content(
+                    merged[-1].get("content"), m.get("content"),
+                )
             else:
-                mc = dict(m)
-                # Flatten list content to string for text-action mode
-                if isinstance(mc.get("content"), list):
-                    mc["content"] = _to_str(mc["content"])
-                merged.append(mc)
+                merged.append(dict(m))
         patched = merged
 
         log.debug("[%s] text-action mode: %d messages", self.name, len(patched))
         # Cap output tokens in text-action mode.  Thinking models
-        # (e.g. Qwen3-VL-*-Thinking) emit <think>…</think> before the
-        # action, so they need a much larger budget than the ~3 tokens
-        # a non-thinking model requires.
+        # (e.g. Qwen3-VL-*-Thinking) emit a full <think>…</think> chain
+        # before the action and easily need 2–4k tokens; capping them
+        # tightly truncates the reasoning mid-thought and the parser
+        # finds no action name (step becomes "no_tool_call").  Non
+        # thinking models need ~3 tokens for the action word and a
+        # small cap saves latency.
         is_thinking = "thinking" in self.model.lower()
-        text_max = min(max_tokens, 512) if is_thinking else min(max_tokens, 32)
+        text_max = max(max_tokens, 4096) if is_thinking else min(max_tokens, 32)
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=patched,
