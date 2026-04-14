@@ -135,37 +135,60 @@ class OpenAICompatClient(LLMClient):
         # In text-action mode there are no real tool_call_ids.  Convert
         # role=tool → role=user and role=assistant with tool_calls →
         # plain assistant text so the model sees a clean user/assistant
-        # alternation with action feedback.
+        # alternation with action feedback.  IMPORTANT: we preserve
+        # list-form content (text + image_url blocks) — vision models
+        # like Qwen-VL accept mixed content on OpenAI-compatible
+        # endpoints without any tool-choice plumbing, and dropping the
+        # image here was silently turning RGB runs into text-only.
         cleaned: List[Dict[str, Any]] = []
         for m in patched:
             if m.get("role") == "tool":
-                # Merge tool result into a user message
+                # Merge tool result into a user message; keep content as-is
+                # whether it's a plain string or a list of blocks.
                 cleaned.append({"role": "user", "content": m.get("content", "ok")})
             elif m.get("role") == "assistant" and m.get("tool_calls"):
-                # Strip tool_calls; keep only the text
+                # Strip tool_calls; keep the text portion as plain string.
                 cleaned.append({"role": "assistant", "content": m.get("content") or ""})
             else:
-                cleaned.append(m)
-        # Merge consecutive same-role messages (required by many providers)
-        def _to_str(c) -> str:
+                cleaned.append(dict(m))
+
+        # Merge consecutive same-role messages.  Many providers (Anthropic,
+        # Google, some vLLM configs) require strict user/assistant
+        # alternation, so we concatenate adjacent messages of the same
+        # role.  Text ↔ text concatenates with a newline; anything
+        # involving a list (image blocks) normalises both sides to lists
+        # so image_url dicts survive.
+        def _as_blocks(c) -> List[Dict[str, Any]]:
+            """Normalise content into a list of message blocks."""
+            if c is None or c == "":
+                return []
             if isinstance(c, str):
-                return c
+                return [{"type": "text", "text": c}]
             if isinstance(c, list):
-                return "\n".join(
-                    b.get("text", "") for b in c if isinstance(b, dict)
-                )
-            return str(c) if c else ""
+                out: List[Dict[str, Any]] = []
+                for b in c:
+                    if isinstance(b, dict):
+                        out.append(b)
+                    elif isinstance(b, str):
+                        out.append({"type": "text", "text": b})
+                return out
+            return [{"type": "text", "text": str(c)}]
+
+        def _merge_content(a, b):
+            # If both are plain strings, keep string form (smaller).
+            if isinstance(a, str) and isinstance(b, str):
+                return a + "\n" + b
+            ab = _as_blocks(a) + _as_blocks(b)
+            return ab if ab else ""
 
         merged: List[Dict[str, Any]] = []
         for m in cleaned:
             if merged and merged[-1]["role"] == m["role"]:
-                merged[-1]["content"] = _to_str(merged[-1]["content"]) + "\n" + _to_str(m.get("content"))
+                merged[-1]["content"] = _merge_content(
+                    merged[-1].get("content"), m.get("content"),
+                )
             else:
-                mc = dict(m)
-                # Flatten list content to string for text-action mode
-                if isinstance(mc.get("content"), list):
-                    mc["content"] = _to_str(mc["content"])
-                merged.append(mc)
+                merged.append(dict(m))
         patched = merged
 
         log.debug("[%s] text-action mode: %d messages", self.name, len(patched))
