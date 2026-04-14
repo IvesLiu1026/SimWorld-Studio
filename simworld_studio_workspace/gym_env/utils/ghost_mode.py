@@ -81,9 +81,9 @@ class GhostCommunicator(Communicator):
           Vehicle, PhysicsBody, etc.
         """
         ucv: GhostUnrealCV = self.unrealcv
-        ucv.set_hidden(actor_name, True)
-        # Disable collision while reconfiguring channels
+        # Disable collision first to prevent any interaction during setup
         ucv.set_collision(actor_name, False)
+        ucv.set_hidden(actor_name, True)
         ucv.set_collision_object_type(actor_name, GHOST_COLLISION_CHANNEL)
         ucv.set_collision_response(actor_name, GHOST_COLLISION_CHANNEL, 'ignore')
         ucv.set_collision_response(actor_name, 2, 'ignore')  # ECC_Pawn
