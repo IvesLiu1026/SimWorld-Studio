@@ -53,6 +53,8 @@ python -m gym_env.runner ^
 
 *Qwen text-action fallback: if the server doesn't support `--enable-auto-tool-choice`,
 the client auto-switches to a text-based action mode with strict if-else prompting.
+Thinking models (e.g. `Qwen3-VL-32B-Thinking`) automatically get a larger token budget
+(512 vs 32) to accommodate `<think>...</think>` reasoning blocks.
 
 ---
 
@@ -167,9 +169,9 @@ python -m gym_env.runner \
 | `--model-id` | _(auto)_ | Override model ID sent to the endpoint |
 | `--base-url` | _(auto)_ | Override API base URL (for vLLM etc.) |
 | `--api-key` | _(env var)_ | API key (or `EMPTY` for no-auth endpoints) |
-| `--ucv-port` | `9000` | UnrealCV TCP port |
+| `--ucv-port` | `9001` | UnrealCV TCP port |
 | `--n-episodes` | `1` | Episodes to run sequentially |
-| `--memory` | `none` | Memory: none / text |
+| `--memory` | `none` | Memory: none / text / mem0 / strategy |
 | `--task` | `pointnav` | Task: pointnav / objectnav |
 | `--target-distance` | `2000` | PointNav goal distance (cm) |
 | `--max-steps` | `40` | Steps before episode is truncated |
@@ -380,6 +382,35 @@ Python Experiment Runner
     +-- EpisodeLogger (JSONL + PNG + summary)
 ```
 
+## Ghost Mode (Batch Runner)
+
+The `batch_runner` can run multiple episodes concurrently using ghost agents
+in a single UE instance.
+
+Ghost agents:
+- Are **hidden** from all cameras (`SetActorHiddenInGame`)
+- Use collision channel 8 (`GhostAgent` / `ECC_GameTraceChannel1`)
+- **Ignore** each other (channel 8) and normal Pawns (channel 2)
+- **Still collide** with buildings, terrain, vehicles, and objects
+
+```bash
+# 6 tasks, 3 concurrent ghost agents per wave
+python -m gym_env.batch_runner --mode batch \
+    --n-tasks 6 --wave-size 3 \
+    --model qwen \
+    --model-id "Qwen/Qwen3-VL-32B-Thinking" \
+    --base-url http://gpu-server:8000/v1 \
+    --api-key EMPTY \
+    --memory strategy \
+    --max-steps 40
+```
+
+Each wave spawns N agents, runs them in parallel (sequential LLM calls),
+then destroys them before the next wave. Requires the `collision_channel`,
+`collision_response`, and `hide`/`show` commands in the UnrealCV plugin.
+
+---
+
 ## Known Issues
 
 - **unrealcv cp1252 crash**: Windows Chinese locale causes the unrealcv
@@ -390,7 +421,19 @@ Python Experiment Runner
   (during LLM inference). Fixed by `hard_reconnect` on any send failure.
 
 - **VS Code port conflict**: VS Code may listen on port 9000. Configure
-  UnrealCV to use 9001 via `unrealcv.ini`.
+  UnrealCV to use 9001 via `unrealcv.ini`. All runners now default to 9001.
 
-- **Spawn is slow**: First `Base_User_Agent` spawn takes ~90s (BP loading).
-  Subsequent resets reuse the existing actor (instant).
+- **Spawn socket timeout**: UnrealCV's `spawn_bp_asset` command triggers a
+  TCP socket reset (UE drops the connection while loading the BP). The client
+  sleeps 2s then reconnects. First spawn takes ~90s (BP loading); subsequent
+  spawns ~90s each due to the socket timeout cycle. Subsequent `env.reset()`
+  calls reuse the existing actor (instant).
+
+- **NavMesh rebuild on spawn**: Each spawned actor triggers an automatic
+  navmesh rebuild. The `batch_runner` mitigates this by spawning all agents
+  with collision disabled, then enabling collision in one batch (single rebuild).
+
+- **Thinking model token budget**: Models like `Qwen3-VL-*-Thinking` emit
+  `<think>...</think>` reasoning tokens before the action name. The text-action
+  fallback mode automatically allocates 512 tokens (vs 32 for non-thinking models)
+  to ensure the action name fits in the output.

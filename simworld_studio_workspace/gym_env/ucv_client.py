@@ -243,6 +243,7 @@ class UCVClient:
         name: str,
         location: Optional[tuple] = None,
         rotation: Optional[tuple] = None,
+        auto_repair_collision: bool = True,
     ) -> None:
         """Spawn a blueprint actor, optionally at a specific transform.
 
@@ -251,13 +252,19 @@ class UCVClient:
         sleep so UE finishes loading the BP, and (c) **hard-reset**
         the unrealcv Client so we don't carry a stale receive-queue
         into subsequent requests.
+
+        Args:
+            auto_repair_collision: If False, skip UE's post-spawn
+                ``AdjustActorLocationForCollision`` which can push the
+                actor thousands of units away from the requested position.
         """
         if location is not None:
             x, y, z = location
             pitch, yaw, roll = rotation if rotation is not None else (0.0, 0.0, 0.0)
+            flag = 1 if auto_repair_collision else 0
             cmd = (
                 f"vset /objects/spawn_bp_asset {blueprint_path} {name} "
-                f"{x} {y} {z} {pitch} {yaw} {roll}"
+                f"{x} {y} {z} {pitch} {yaw} {roll} {flag}"
             )
         else:
             cmd = f"vset /objects/spawn_bp_asset {blueprint_path} {name}"

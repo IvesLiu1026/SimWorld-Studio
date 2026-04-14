@@ -185,6 +185,30 @@ def sample_pointnav_episode_navmesh(
             "Is navmesh built? Check vget /nav/status."
         )
 
+    # Filter out positions in the outer 10% of the navmesh bounding box.
+    # Edge positions are often outside the playable area or in degenerate
+    # navmesh polygons that produce unreachable episodes.
+    xs = [p.x for p in positions]
+    ys = [p.y for p in positions]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    margin_x = (x_max - x_min) * 0.10
+    margin_y = (y_max - y_min) * 0.10
+    positions = [
+        p for p in positions
+        if (x_min + margin_x <= p.x <= x_max - margin_x
+            and y_min + margin_y <= p.y <= y_max - margin_y)
+    ]
+    log.info(
+        "navmesh edge filter: %d -> %d positions (margin %.0fx%.0f cm)",
+        len(xs), len(positions), margin_x, margin_y,
+    )
+    if len(positions) < 2:
+        raise RuntimeError(
+            "After edge filtering, fewer than 2 positions remain. "
+            "Navmesh may be too small or fragmented."
+        )
+
     for attempt in range(max_sampling_attempts):
         start_pos = rng.choice(positions)
         goal_pos = rng.choice(positions)

@@ -169,13 +169,16 @@ class OpenAICompatClient(LLMClient):
         patched = merged
 
         log.debug("[%s] text-action mode: %d messages", self.name, len(patched))
-        # Cap output tokens tightly in text-action mode — the model
-        # should emit at most one action name (~3 tokens).  Larger
-        # budgets cause small models to hallucinate entire trajectories.
+        # Cap output tokens in text-action mode.  Thinking models
+        # (e.g. Qwen3-VL-*-Thinking) emit <think>…</think> before the
+        # action, so they need a much larger budget than the ~3 tokens
+        # a non-thinking model requires.
+        is_thinking = "thinking" in self.model.lower()
+        text_max = min(max_tokens, 512) if is_thinking else min(max_tokens, 32)
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=patched,
-            max_tokens=min(max_tokens, 32),
+            max_tokens=text_max,
             temperature=temperature,
         )
         return self._parse_text_action(resp, tool_names)

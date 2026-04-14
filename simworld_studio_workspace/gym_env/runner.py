@@ -316,7 +316,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--n-episodes", type=int, default=1,
                    help="Number of episodes to run back-to-back (multi-episode experiment)")
     p.add_argument("--ucv-host", default="127.0.0.1")
-    p.add_argument("--ucv-port", type=int, default=9000)
+    p.add_argument("--ucv-port", type=int, default=9001)
     p.add_argument("--mcp-host", default="127.0.0.1")
     p.add_argument("--mcp-port", type=int, default=55557,
                    help="UE editor MCP TCP port (used to start PIE)")

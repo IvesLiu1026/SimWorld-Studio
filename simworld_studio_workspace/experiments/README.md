@@ -9,7 +9,7 @@ End-to-end guide for running LLM navigation experiments in SimWorld.
 ## Prerequisites
 
 1. **Unreal Engine** with SimWorld project loaded (editor open, not PIE)
-2. **UnrealCV plugin** listening on `127.0.0.1:9000`
+2. **UnrealCV plugin** listening on `127.0.0.1:9001`
 3. **UE MCP TCP server** on `127.0.0.1:55557`
 4. **task_gen** repo cloned alongside this project (or set `TASK_GEN_DIR`)
 5. **Python 3.10+** with dependencies installed
@@ -38,7 +38,7 @@ export OPENAI_API_KEY=...        # --model gpt
 ```
 1. Open UE Editor (map already loaded with buildings/props)
         │
-2. Runner connects UnrealCV (:9000) + MCP (:55557)
+2. Runner connects UnrealCV (:9001) + MCP (:55557)
         │
 3. Runner calls MCP → start PIE (Play-In-Editor)
         │
@@ -130,19 +130,26 @@ but still collide with buildings and objects normally.
 python -m gym_env.batch_runner --mode batch \
     --n-tasks 6 --wave-size 3 \
     --model qwen \
-    --base-url http://localhost:8000/v1 \
-    --task pointnav --max-steps 40
+    --model-id "Qwen/Qwen3-VL-32B-Thinking" \
+    --base-url http://gpu-server:8000/v1 \
+    --api-key EMPTY \
+    --max-steps 40
+
+# With memory + WandB
+python -m gym_env.batch_runner --mode batch \
+    --n-tasks 6 --wave-size 3 \
+    --model qwen --memory strategy \
+    --base-url http://gpu-server:8000/v1
 
 # Single task with trajectory recording (normal agent, not ghost)
 python -m gym_env.batch_runner --mode single \
-    --n-tasks 1 --model claude \
-    --task pointnav --max-steps 40
+    --n-tasks 1 --model claude --max-steps 40
 ```
 
 **Batch mode** spawns N ghost agents per wave in one UE instance — no
 need for multiple UE instances. Each ghost agent has its own camera,
-episode, and reward tracking. LLM calls are sequential per agent per
-step (vLLM batch API support is planned).
+episode, and reward tracking. Supports `--memory` for experience
+accumulation and `--wandb-project` for experiment tracking.
 
 **Single mode** uses a normal (non-ghost) agent with full trajectory +
 frame saving under `runs/`.
@@ -153,6 +160,8 @@ frame saving under `runs/`.
 | Concurrency | wave_size agents per UE instance | 1 agent |
 | Trajectory | Not saved | Saved (frames/ + JSONL) |
 | RGB capture | On | On |
+| Memory | Supported (--memory) | Supported (--memory) |
+| WandB | Supported (--wandb-project) | Not yet |
 | Use case | Fast evaluation over many tasks | Debugging / recording |
 
 ### 6. Legacy batch (parallel UE instances)
