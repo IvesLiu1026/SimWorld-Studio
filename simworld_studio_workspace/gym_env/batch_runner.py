@@ -219,7 +219,6 @@ def run_wave(
     llm: LLMClient,
     episodes: List[NavigationEpisode],
     *,
-    wave_offset: int = 0,
     max_steps: int = 40,
     vision_depth: int = 3,
     spawn_z: float = _DEFAULT_SPAWN_Z,
@@ -227,25 +226,25 @@ def run_wave(
     wandb_run=None,
     global_step: int = 0,
     batch_dir: Optional[Path] = None,
-    wave_idx: int = 0,
-    wave_total: int = 1,
+    save_frames: bool = False,
+    capture_rgb: bool = True,
 ) -> Tuple[List[Dict[str, Any]], int]:
-    """Run a wave of ghost agents concurrently in one UE instance.
+    """Run one batch of ghost agents concurrently in one UE instance.
 
-    Each agent gets its own ``SimWorldNavEnv`` with a unique name and
-    camera ID, plus its own :class:`EpisodeLogger` writing per-step
-    JSONL + frames + summary under ``batch_dir/ep_XXX_<name>/``.  LLM
-    requests are issued sequentially (one per active agent per step).
+    **One UE instance runs exactly one wave.**  Each agent gets its
+    own ``SimWorldNavEnv`` with a unique name and camera ID, plus its
+    own :class:`EpisodeLogger` writing per-step JSONL + frames +
+    summary under ``batch_dir/ep_XXX_<name>/``.  LLM requests are
+    issued sequentially (one per active agent per step).
 
     Returns (list of metrics dicts, updated global_step).
     """
     n = len(episodes)
-    log.info("wave %d/%d: %d ghost agents, max_steps=%d",
-             wave_idx + 1, wave_total, n, max_steps)
+    log.info("wave: %d ghost agents, max_steps=%d", n, max_steps)
     mem = memory or NullMemory()
 
     # --- Phase 1: spawn all ghost agents via UnrealCV ---
-    agent_names = [f"GhostAgent_{wave_offset + i}" for i in range(n)]
+    agent_names = [f"GhostAgent_{i}" for i in range(n)]
     for i, ep in enumerate(episodes):
         name = agent_names[i]
         x, y, z = ep.start_position.x, ep.start_position.y, spawn_z
@@ -266,8 +265,8 @@ def run_wave(
             ucv_client=ucv,
             mcp_client=mcp,
             agent_name=agent_name,
-            camera_id=i,            # spawn-order camera index
-            capture_rgb=True,
+            camera_id=i,            # spawn-order camera index (fresh UE → starts at 0)
+            capture_rgb=capture_rgb,
             spawn_on_reset=False,   # already spawned as ghost
             ensure_pie=False,       # PIE already running
             spawn_z=spawn_z,
@@ -278,23 +277,23 @@ def run_wave(
         ep_logger: Optional[EpisodeLogger] = None
         if batch_dir is not None:
             ep_logger = EpisodeLogger(
-                run_name=f"ep_{wave_offset + i:03d}_{agent_name}",
+                run_name=f"ep_{i:03d}_{agent_name}",
                 root=str(batch_dir),
-                save_frames=True,
+                save_frames=save_frames,
                 annotate_frames=False,
                 timestamp_dir=False,
                 install_log_handler=False,  # batch-level handler already installed
                 meta={
                     "episode_id": ep.episode_id,
-                    "episode_idx": wave_offset + i,
+                    "episode_idx": i,
                     "agent_name": agent_name,
-                    "wave_idx": wave_idx,
+                    "camera_id": i,
                     "task_type": getattr(ep, "task_type", "pointnav"),
                 },
             )
 
         slot = AgentSlot(
-            idx=wave_offset + i,
+            idx=i,
             agent_name=agent_name,
             episode=ep,
             env=env,
@@ -317,10 +316,9 @@ def run_wave(
     # --- Step loop ---
     step_bar = tqdm(
         total=max_steps,
-        desc=f"wave {wave_idx + 1}/{wave_total}",
+        desc=f"batch ({n} ghosts)",
         unit="step",
-        leave=False,
-        position=1,
+        leave=True,
     )
     for t in range(1, max_steps + 1):
         active = [s for s in slots if not s.done]
@@ -427,7 +425,7 @@ def run_wave(
         n_done = sum(1 for s in slots if s.done)
         step_bar.set_postfix(done=f"{n_done}/{n}")
         step_bar.update(1)
-        log.info("wave t=%d: %d/%d done", t, n_done, n)
+        log.info("batch t=%d: %d/%d done", t, n_done, n)
     step_bar.close()
 
     # --- Finalize timed-out slots: compute metrics from env state ---
@@ -461,7 +459,6 @@ def run_wave(
             "episode_id": slot.episode.episode_id,
             "episode_idx": slot.idx,
             "agent_name": slot.agent_name,
-            "wave_idx": wave_idx,
             "SR": sr,
             "SPL": spl,
             "SoftSPL": softspl,
@@ -560,19 +557,29 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mode", choices=["batch", "single"], default="batch",
                    help="batch = ghost agents; single = normal agent, save traj")
     p.add_argument("--n-tasks", type=int, default=4,
-                   help="Total number of tasks to generate and run")
-    p.add_argument("--wave-size", type=int, default=3,
-                   help="Concurrent ghost agents per wave (batch mode)")
+                   help=(
+                       "Number of concurrent ghost agents (and episodes) "
+                       "to run in this UE instance.  One UE instance runs "
+                       "exactly one wave — spawn more UE instances for "
+                       "more concurrency."
+                   ))
+    # Kept for back-compat; if supplied, must equal --n-tasks.
+    p.add_argument("--wave-size", type=int, default=None,
+                   help="Deprecated alias for --n-tasks (must equal --n-tasks if set).")
     # LLM
     p.add_argument("--model", default="claude")
     p.add_argument("--model-id", default=None)
     p.add_argument("--base-url", default=None)
     p.add_argument("--api-key", default=None)
-    # UE connection
-    p.add_argument("--ucv-host", default="127.0.0.1")
-    p.add_argument("--ucv-port", type=int, default=9001)
-    p.add_argument("--mcp-host", default="127.0.0.1")
-    p.add_argument("--mcp-port", type=int, default=55557)
+    # UE connection — defaults honour env vars so one `export` can
+    # flip an entire shell session to a different UE instance.
+    import os as _os
+    p.add_argument("--ucv-host", default=_os.environ.get("UNREALCV_HOST", "127.0.0.1"))
+    p.add_argument("--ucv-port", type=int,
+                   default=int(_os.environ.get("UNREALCV_PORT", "9001")))
+    p.add_argument("--mcp-host", default=_os.environ.get("UNREAL_MCP_HOST", "127.0.0.1"))
+    p.add_argument("--mcp-port", type=int,
+                   default=int(_os.environ.get("UNREAL_MCP_PORT", "55557")))
     # Episode generation
     p.add_argument("--scene-graph", default=None)
     p.add_argument("--nav-min-cm", type=float, default=1000.0)
@@ -580,6 +587,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-steps", type=int, default=40)
     p.add_argument("--vision-depth", type=int, default=3)
+    # Trajectory recording — batch defaults to no frames (fast eval),
+    # single-mode always keeps frames on.
+    p.add_argument("--save-frames", action="store_true", default=False,
+                   help="Save RGB frames per step (default off in batch mode; "
+                        "single mode always saves).")
+    p.add_argument("--no-rgb", action="store_true", default=False,
+                   help="Disable RGB capture entirely (faster, smaller logs).")
     # Memory
     p.add_argument("--memory", default="none",
                    choices=["none", "text", "mem0", "strategy"],
@@ -603,6 +617,16 @@ def main(argv: Optional[List[str]] = None) -> None:
         format="%(asctime)s %(levelname)-5s %(name)s | %(message)s",
     )
 
+    # --wave-size is a deprecated alias for --n-tasks.  One UE instance
+    # runs exactly one wave; to run more ghost agents you launch another
+    # UE instance.
+    if args.wave_size is not None and args.wave_size != args.n_tasks:
+        log.warning(
+            "--wave-size=%d ignored — one UE instance runs one wave. "
+            "Setting --n-tasks=%d is what controls concurrency.",
+            args.wave_size, args.n_tasks,
+        )
+
     from .episode_builder import (
         sample_pointnav_episode,
         sample_pointnav_episode_navmesh,
@@ -610,9 +634,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     mcp = MCPClient(host=args.mcp_host, port=args.mcp_port, name="batch-mcp")
 
-    # Start PIE
+    # Start PIE.  Need a longer wait when --scene-graph is set because
+    # the navmesh plugin's game-world binding takes ~10s after PIE
+    # transition to be queryable; 5s is enough for spawn_bp_asset but
+    # not for `vset /nav/build`.
+    pie_wait = 12.0 if args.scene_graph else 5.0
     try:
-        mcp.start_pie(wait_seconds=5.0)
+        mcp.start_pie(wait_seconds=pie_wait)
     except Exception as exc:
         log.warning("PIE auto-start failed (%s); proceeding anyway", exc)
 
@@ -659,13 +687,24 @@ def main(argv: Optional[List[str]] = None) -> None:
         else:
             log.info("WandB disabled (no API key)")
 
-    # Build navmesh once, then generate all episodes
+    # Build navmesh once, then generate all episodes.  The plugin's
+    # game-world binding is racy right after PIE starts — retry on
+    # "No game world available" or any error containing PIE-start hints.
     nav_interface = None
     if args.scene_graph:
         from nav_task.navmesh_interface import NavmeshNavigationInterface
         nav_interface = NavmeshNavigationInterface(ucv)
-        resp = nav_interface.build_navmesh()
-        log.info("navmesh built: %s", resp)
+        for attempt in range(6):
+            resp = nav_interface.build_navmesh()
+            log.info("navmesh build attempt %d: %s", attempt + 1, resp)
+            if "error" not in resp.lower():
+                break
+            log.warning("navmesh build returned error; sleeping 3s and retrying")
+            time.sleep(3.0)
+        else:
+            raise RuntimeError(
+                f"navmesh build failed after 6 attempts; last response: {resp}"
+            )
 
     log.info("Generating %d pointnav episodes (seed=%d)", args.n_tasks, args.seed)
     episodes: List[NavigationEpisode] = []
@@ -736,7 +775,6 @@ def main(argv: Optional[List[str]] = None) -> None:
             "model_id": args.model_id,
             "memory": args.memory,
             "n_tasks": args.n_tasks,
-            "wave_size": args.wave_size,
             "max_steps": args.max_steps,
             "vision_depth": args.vision_depth,
             "seed": args.seed,
@@ -745,6 +783,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             "nav_min_cm": args.nav_min_cm,
             "nav_max_cm": args.nav_max_cm,
             "scene_graph": args.scene_graph,
+            "save_frames": args.save_frames,
+            "capture_rgb": not args.no_rgb,
             "run_name": args.run_name,
             "wandb_project": args.wandb_project if not args.no_wandb else None,
             "episode_ids": [ep.episode_id for ep in episodes],
@@ -752,44 +792,28 @@ def main(argv: Optional[List[str]] = None) -> None:
         (batch_dir / "batch_meta.json").write_text(
             json.dumps(batch_meta, indent=2), encoding="utf-8"
         )
-        log.info("=== BATCH MODE: %d tasks, wave_size=%d, ghost agents ===",
-                 args.n_tasks, args.wave_size)
+        log.info("=== BATCH MODE: %d concurrent ghost agents in one UE instance ===",
+                 args.n_tasks)
         log.info("batch output dir: %s", batch_dir)
 
-        all_results: List[Dict[str, Any]] = []
+        # One UE instance runs exactly one wave.  No loop — if you want
+        # more concurrency, spawn more UE instances (see run_batch.sh).
         global_step = 0
-        wave_plan = list(range(0, len(episodes), args.wave_size))
-        wave_total = len(wave_plan)
-        wave_bar = tqdm(
-            wave_plan, desc="batch waves", unit="wave", position=0,
-        )
-        for wave_idx, wave_start in enumerate(wave_bar):
-            wave_eps = episodes[wave_start:wave_start + args.wave_size]
-            wave_bar.set_postfix(
-                wave=f"{wave_idx + 1}/{wave_total}",
-                eps=f"{wave_start}-{wave_start + len(wave_eps) - 1}",
+        try:
+            all_results, global_step = run_wave(
+                ucv, mcp, llm, episodes,
+                max_steps=args.max_steps,
+                vision_depth=args.vision_depth,
+                memory=memory,
+                wandb_run=wandb_run,
+                global_step=global_step,
+                batch_dir=batch_dir,
+                save_frames=args.save_frames,
+                capture_rgb=not args.no_rgb,
             )
-            log.info("--- Wave %d/%d (ep %d-%d) ---",
-                     wave_idx + 1, wave_total,
-                     wave_start, wave_start + len(wave_eps) - 1)
-            try:
-                results, global_step = run_wave(
-                    ucv, mcp, llm, wave_eps,
-                    wave_offset=wave_start,
-                    max_steps=args.max_steps,
-                    vision_depth=args.vision_depth,
-                    memory=memory,
-                    wandb_run=wandb_run,
-                    global_step=global_step,
-                    batch_dir=batch_dir,
-                    wave_idx=wave_idx,
-                    wave_total=wave_total,
-                )
-            except Exception:
-                log.exception("wave %d crashed; aborting batch", wave_idx)
-                raise
-            all_results.extend(results)
-        wave_bar.close()
+        except Exception:
+            log.exception("batch crashed")
+            raise
 
         # Batch summary
         n = len(all_results)
