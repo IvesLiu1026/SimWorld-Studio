@@ -186,6 +186,58 @@ tail -f simworld_studio_workspace/logs/server.log
 
 ---
 
+## Embodied Navigation Experiments
+
+The `gym_env` harness runs reproducible LLM navigation experiments in UE
+via UnrealCV + MCP. See [`gym_env/README.md`](simworld_studio_workspace/gym_env/README.md)
+for the full reference.
+
+### Pre-generated Task Sets
+
+Generate a fixed, seeded batch of episodes offline (no UE required) and
+split into train/test. All geodesic paths are baked into the file, so
+runtime skips navmesh construction entirely.
+
+```bash
+cd simworld_studio_workspace
+
+# Generate 30 PointNav episodes, split 22 train / 8 test
+python -m nav_task \
+    --map ../SimWorld/simworld/data/roads.json \
+    --seed 42 --n-episodes 30 \
+    --min-path-length 1000 --max-path-length 4000 \
+    --split 22,8 \
+    --train-out tasks/pointnav_train.json \
+    --test-out tasks/pointnav_test.json
+```
+
+### Train / Test Workflow
+
+```bash
+# 1. Train — memory accumulates across episodes
+python -m gym_env.batch_runner --mode batch \
+    --episodes-file tasks/pointnav_train.json \
+    --n-tasks 22 --eval-mode train \
+    --memory strategy --model qwen \
+    --base-url http://gpu-server:8000/v1 --api-key EMPTY
+
+# 2. Test — frozen memory, no new writes
+python -m gym_env.batch_runner --mode batch \
+    --episodes-file tasks/pointnav_test.json \
+    --n-tasks 8 --eval-mode test \
+    --memory strategy --model qwen \
+    --base-url http://gpu-server:8000/v1 --api-key EMPTY
+```
+
+| Flag | Description |
+|------|-------------|
+| `--episodes-file` | Load pre-generated episodes (skips navmesh + sampling) |
+| `--eval-mode train` | Memory read-write (default) |
+| `--eval-mode test` | Memory read-only — query training memories, write nothing |
+| `--memory` | Backend: `none` / `text` / `mem0` / `strategy` / `hierarchical` |
+
+---
+
 ## For Developers
 
 ### Build from Source
