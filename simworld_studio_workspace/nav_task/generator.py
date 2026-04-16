@@ -49,6 +49,7 @@ class NavigationTaskGenerator:
         max_steps: int = 5000,
         max_episode_time_s: float = 300.0,
         min_path_length_cm: float = 1000.0,
+        max_path_length_cm: Optional[float] = None,
         max_retries: int = 50,
         node_type: Optional[str] = None,
         world_x_min: Optional[float] = None,
@@ -65,6 +66,7 @@ class NavigationTaskGenerator:
         self._max_steps = max_steps
         self._max_episode_time_s = max_episode_time_s
         self._min_path_length_cm = min_path_length_cm
+        self._max_path_length_cm = max_path_length_cm
         self._max_retries = max_retries
         self._node_type = node_type
         self._reward_config = RewardConfig(
@@ -87,6 +89,7 @@ class NavigationTaskGenerator:
         self._world_y_max = world_y_max
         self._validator = TaskValidator(
             min_path_length_cm=min_path_length_cm,
+            max_path_length_cm=max_path_length_cm,
             world_x_min=world_x_min,
             world_x_max=world_x_max,
             world_y_min=world_y_min,

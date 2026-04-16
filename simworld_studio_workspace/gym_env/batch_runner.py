@@ -178,6 +178,34 @@ def _finalize_ghost_agents(ucv: UCVClient, names: List[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Episode loading
+# ---------------------------------------------------------------------------
+
+def _load_episodes_file(path: str) -> List[NavigationEpisode]:
+    """Load episodes from a pre-generated JSON file.
+
+    Accepts three shapes produced by ``python -m nav_task``:
+      * split file: ``{"episodes": [...], ...}`` (from ``--split``)
+      * raw list: ``[{...}, {...}]`` (from ``--output`` with n > 1)
+      * single episode: ``{...}`` (from ``--output`` with n == 1)
+    """
+    text = Path(path).read_text()
+    data = json.loads(text)
+    if isinstance(data, dict) and "episodes" in data:
+        raw_list = data["episodes"]
+    elif isinstance(data, list):
+        raw_list = data
+    elif isinstance(data, dict) and "episode_id" in data:
+        raw_list = [data]
+    else:
+        raise ValueError(
+            f"{path}: unrecognised shape (expected split dict, list, or "
+            "single-episode dict)"
+        )
+    return [NavigationEpisode.from_dict(d) for d in raw_list]
+
+
+# ---------------------------------------------------------------------------
 # WandB helpers
 # ---------------------------------------------------------------------------
 
@@ -582,6 +610,18 @@ def _build_parser() -> argparse.ArgumentParser:
                    default=int(_os.environ.get("UNREAL_MCP_PORT", "55557")))
     # Episode generation
     p.add_argument("--scene-graph", default=None)
+    p.add_argument("--episodes-file", default=None,
+                   help=(
+                       "Load pre-generated episodes from a JSON file instead "
+                       "of sampling them at runtime. Accepts either a split "
+                       "file (dict with 'episodes' list, as produced by "
+                       "`python -m nav_task --split ...`) or a raw list / "
+                       "single-episode dict from `--output`. When set, the "
+                       "runner skips navmesh build and episode sampling — "
+                       "all path/geodesic info is read from the file. "
+                       "--n-tasks selects how many episodes from the file "
+                       "to run (must be <= file size)."
+                   ))
     p.add_argument("--nav-min-cm", type=float, default=1000.0)
     p.add_argument("--nav-max-cm", type=float, default=4000.0)
     p.add_argument("--seed", type=int, default=42)
@@ -687,44 +727,59 @@ def main(argv: Optional[List[str]] = None) -> None:
         else:
             log.info("WandB disabled (no API key)")
 
-    # Build navmesh once, then generate all episodes.  The plugin's
-    # game-world binding is racy right after PIE starts — retry on
-    # "No game world available" or any error containing PIE-start hints.
-    nav_interface = None
-    if args.scene_graph:
-        from nav_task.navmesh_interface import NavmeshNavigationInterface
-        nav_interface = NavmeshNavigationInterface(ucv)
-        for attempt in range(6):
-            resp = nav_interface.build_navmesh()
-            log.info("navmesh build attempt %d: %s", attempt + 1, resp)
-            if "error" not in resp.lower():
-                break
-            log.warning("navmesh build returned error; sleeping 3s and retrying")
-            time.sleep(3.0)
-        else:
-            raise RuntimeError(
-                f"navmesh build failed after 6 attempts; last response: {resp}"
-            )
-
-    log.info("Generating %d pointnav episodes (seed=%d)", args.n_tasks, args.seed)
+    # Episode source: either load from a pre-generated file (deterministic,
+    # skips live navmesh build) or sample at runtime via UE navmesh.
     episodes: List[NavigationEpisode] = []
-    for i in range(args.n_tasks):
-        seed = args.seed + i
-        if args.scene_graph:
-            result = sample_pointnav_episode_navmesh(
-                ucv,
-                seed=seed, idx=i,
-                min_geodesic_cm=args.nav_min_cm,
-                max_geodesic_cm=args.nav_max_cm,
-                build_navmesh=False,
-                nav_interface=nav_interface,
+    if args.episodes_file:
+        log.info("Loading episodes from %s (skipping navmesh build + sampling)",
+                 args.episodes_file)
+        episodes = _load_episodes_file(args.episodes_file)
+        if args.n_tasks > len(episodes):
+            raise RuntimeError(
+                f"--n-tasks={args.n_tasks} but {args.episodes_file} only "
+                f"contains {len(episodes)} episode(s)"
             )
-            episodes.append(result["episode"])
-            log.info("  episode %d: %s", i, result["episode"].episode_id)
-        else:
-            ep = sample_pointnav_episode(ucv, seed=seed, idx=i)
-            episodes.append(ep)
+        episodes = episodes[:args.n_tasks]
+        for i, ep in enumerate(episodes):
             log.info("  episode %d: %s", i, ep.episode_id)
+    else:
+        # Build navmesh once, then generate all episodes.  The plugin's
+        # game-world binding is racy right after PIE starts — retry on
+        # "No game world available" or any error containing PIE-start hints.
+        nav_interface = None
+        if args.scene_graph:
+            from nav_task.navmesh_interface import NavmeshNavigationInterface
+            nav_interface = NavmeshNavigationInterface(ucv)
+            for attempt in range(6):
+                resp = nav_interface.build_navmesh()
+                log.info("navmesh build attempt %d: %s", attempt + 1, resp)
+                if "error" not in resp.lower():
+                    break
+                log.warning("navmesh build returned error; sleeping 3s and retrying")
+                time.sleep(3.0)
+            else:
+                raise RuntimeError(
+                    f"navmesh build failed after 6 attempts; last response: {resp}"
+                )
+
+        log.info("Generating %d pointnav episodes (seed=%d)", args.n_tasks, args.seed)
+        for i in range(args.n_tasks):
+            seed = args.seed + i
+            if args.scene_graph:
+                result = sample_pointnav_episode_navmesh(
+                    ucv,
+                    seed=seed, idx=i,
+                    min_geodesic_cm=args.nav_min_cm,
+                    max_geodesic_cm=args.nav_max_cm,
+                    build_navmesh=False,
+                    nav_interface=nav_interface,
+                )
+                episodes.append(result["episode"])
+                log.info("  episode %d: %s", i, result["episode"].episode_id)
+            else:
+                ep = sample_pointnav_episode(ucv, seed=seed, idx=i)
+                episodes.append(ep)
+                log.info("  episode %d: %s", i, ep.episode_id)
 
     # --- Run ---
     if args.mode == "single":
@@ -783,6 +838,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             "nav_min_cm": args.nav_min_cm,
             "nav_max_cm": args.nav_max_cm,
             "scene_graph": args.scene_graph,
+            "episodes_file": args.episodes_file,
             "save_frames": args.save_frames,
             "capture_rgb": not args.no_rgb,
             "run_name": args.run_name,
