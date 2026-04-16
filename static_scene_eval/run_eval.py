@@ -75,7 +75,7 @@ AGENTS = {
     # ── Open-source models via vLLM ──
     "claude-qwen3.5-9b": {
         "env": {
-            "ANTHROPIC_BASE_URL": "http://localhost:30001",
+            "ANTHROPIC_BASE_URL": "http://localhost:30015",  # proxy -> vLLM
             "ANTHROPIC_API_KEY": "dummy",
             "ANTHROPIC_AUTH_TOKEN": "dummy",
             "ANTHROPIC_DEFAULT_SONNET_MODEL": "Qwen3.5-9B",
@@ -172,7 +172,7 @@ PROMPTS = {
 }
 
 
-def build_system_prompt(background_map=None, verify_enabled=False):
+def build_system_prompt(background_map=None, verify_enabled=False, is_vllm=False):
     """Build the system prompt for the coding agent."""
     prompt = (
         "You build 3D city scenes in Unreal Engine 5 using MCP tools.\n"
@@ -183,6 +183,28 @@ def build_system_prompt(background_map=None, verify_enabled=False):
         "Roads: spawn_actor with static_mesh=/Game/CityDatabase/meshes/SM_Road.SM_Road\n"
         "Units: 1m=100. Space buildings 3000-8000 apart.\n"
     )
+    if is_vllm:
+        # Instruct the model to use Hermes JSON format for tool calls.
+        # This is required for vLLM's hermes tool-call parser to detect and
+        # parse tool invocations into structured tool_use blocks.
+        prompt += (
+            "\nTOOL CALL FORMAT — you MUST call tools using ONLY this JSON format:\n"
+            "<tool_call>\n"
+            '{"name": "tool_name", "arguments": {"param1": "value1"}}\n'
+            "</tool_call>\n"
+            "NEVER use <function=> or <parameter=> XML tags. ONLY use the JSON format above.\n"
+            "\nExample — spawning a building:\n"
+            "<tool_call>\n"
+            '{"name": "mcp__simworld__spawn_blueprint_actor", '
+            '"arguments": {"actor_name": "House_1", "blueprint_id": "BP_Building_01", "location": [0, 0, 0]}}\n'
+            "</tool_call>\n"
+            "\nExample — setting up the environment:\n"
+            "<tool_call>\n"
+            '{"name": "mcp__simworld__setup_environment", '
+            '"arguments": {"time_of_day": "afternoon"}}\n'
+            "</tool_call>\n"
+            "\nCall tools one at a time. After each tool call, wait for the result before calling the next tool.\n"
+        )
     if background_map:
         prompt += (
             f"\nIMPORTANT: When calling setup_environment, pass background_map=\"{background_map}\" "
@@ -404,7 +426,11 @@ def run_single(agent_name, setting, difficulty, results_dir,
     run_id = f"{setting}_{difficulty}"
     run_dir = str(results_dir / agent_name / run_id)
 
-    sys_prompt = build_system_prompt(background_map=background_map, verify_enabled=verify_enabled)
+    # Detect if this agent uses vLLM (needs tool-call format instructions)
+    is_vllm = bool(AGENTS[agent_name].get("env", {}).get("ANTHROPIC_BASE_URL"))
+    sys_prompt = build_system_prompt(
+        background_map=background_map, verify_enabled=verify_enabled, is_vllm=is_vllm
+    )
 
     if setting == "s1":
         task_prompt = PROMPTS["s1"][difficulty]
