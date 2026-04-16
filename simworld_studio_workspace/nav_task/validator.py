@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from .episode import NavigationEpisode, Position
 
@@ -49,6 +49,7 @@ class TaskValidator:
         world_y_min: float = -9500.0,
         world_y_max: float = 9500.0,
         min_path_length_cm: float = 1000.0,
+        max_path_length_cm: Optional[float] = None,
         min_start_goal_distance_cm: float = 500.0,
     ) -> None:
         self._x_min = world_x_min
@@ -56,6 +57,7 @@ class TaskValidator:
         self._y_min = world_y_min
         self._y_max = world_y_max
         self._min_path_length = min_path_length_cm
+        self._max_path_length = max_path_length_cm
         self._min_straight_line = min_start_goal_distance_cm
 
     def validate(self, episode: NavigationEpisode) -> ValidationResult:
@@ -129,6 +131,13 @@ class TaskValidator:
             errors.append(
                 f"shortest_path_length_cm ({path_len:.1f}) < min_path_length_cm "
                 f"({self._min_path_length:.1f})"
+            )
+
+        # 5b. maximum path length
+        if self._max_path_length is not None and path_len > self._max_path_length:
+            errors.append(
+                f"shortest_path_length_cm ({path_len:.1f}) > max_path_length_cm "
+                f"({self._max_path_length:.1f})"
             )
 
         # 6. minimum straight-line distance
