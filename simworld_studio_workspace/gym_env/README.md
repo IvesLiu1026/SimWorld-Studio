@@ -171,7 +171,9 @@ python -m gym_env.runner \
 | `--api-key` | _(env var)_ | API key (or `EMPTY` for no-auth endpoints) |
 | `--ucv-port` | `9001` | UnrealCV TCP port |
 | `--n-episodes` | `1` | Episodes to run sequentially |
-| `--memory` | `none` | Memory: none / text / mem0 / strategy |
+| `--memory` | `none` | Memory: none / text / mem0 / strategy / hierarchical |
+| `--eval-mode` | `train` | `train` (read-write memory) or `test` (read-only) |
+| `--episodes-file` | _(none)_ | Load pre-generated episodes from JSON (skips navmesh) |
 | `--task` | `pointnav` | Task: pointnav / objectnav |
 | `--target-distance` | `2000` | PointNav goal distance (cm) |
 | `--max-steps` | `40` | Steps before episode is truncated |
@@ -408,6 +410,102 @@ python -m gym_env.batch_runner --mode batch \
 Each wave spawns N agents, runs them in parallel (sequential LLM calls),
 then destroys them before the next wave. Requires the `collision_channel`,
 `collision_response`, and `hide`/`show` commands in the UnrealCV plugin.
+
+---
+
+## Pre-generated Episode Sets
+
+Generate a fixed, deterministic set of task episodes offline (no UE
+required), then load them at batch-run time to skip runtime navmesh
+building and episode sampling entirely.
+
+### Generate + split
+
+```bash
+# Generate 30 PointNav episodes (seed=42), split into 22 train + 8 test
+cd simworld_studio_workspace
+python -m nav_task \
+    --map ../SimWorld/simworld/data/roads.json \
+    --seed 42 --n-episodes 30 \
+    --min-path-length 1000 --max-path-length 4000 \
+    --split 22,8 \
+    --train-out tasks/pointnav_train.json \
+    --test-out tasks/pointnav_test.json
+```
+
+Output files contain a JSON envelope with metadata (`split`, `seed`,
+`map_file`, `index_range`) and an `episodes` array. Each episode
+includes baked-in `reference_path` and `shortest_path_length_cm`, so
+SPL/SoftSPL metrics do not require live navmesh queries.
+
+### Load at batch-run time
+
+```bash
+# Training: episodes from file, memory accumulates
+python -m gym_env.batch_runner --mode batch \
+    --episodes-file tasks/pointnav_train.json \
+    --n-tasks 22 \
+    --eval-mode train \
+    --memory strategy \
+    --model qwen ...
+
+# Evaluation: frozen memory, no new inserts
+python -m gym_env.batch_runner --mode batch \
+    --episodes-file tasks/pointnav_test.json \
+    --n-tasks 8 \
+    --eval-mode test \
+    --memory strategy \
+    --model qwen ...
+```
+
+When `--episodes-file` is set, the runner skips `vset /nav/build` and
+all `sample_pointnav_episode*` calls — episodes are deserialized
+directly from the file.
+
+### nav_task CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--map` | _(required)_ | Path to `roads.json` |
+| `--seed` | `42` | Master RNG seed |
+| `--n-episodes` | `1` | Total episodes to generate |
+| `--output` | `-` (stdout) | Output path (ignored when `--split` is set) |
+| `--split` | _(none)_ | `N_TRAIN,N_TEST` — deterministic slice split |
+| `--train-out` | _(none)_ | Output path for training split |
+| `--test-out` | _(none)_ | Output path for test split |
+| `--min-path-length` | `1000` | Minimum geodesic path length (cm) |
+| `--max-path-length` | _(none)_ | Maximum geodesic path length (cm) |
+| `--max-retries` | `50` | Resampling attempts per episode |
+| `--task` | `pointnav` | `pointnav` or `objectnav` |
+
+---
+
+## Train / Test Memory Mode
+
+The `--eval-mode` flag controls whether the memory backend is writable:
+
+| Mode | `insert()` | `query()` | Use case |
+|------|-----------|-----------|----------|
+| `train` (default) | yes | yes | Accumulate experience across episodes |
+| `test` | **no-op** | yes | Frozen evaluation — read training memories, write nothing |
+
+In `test` mode the memory is wrapped in `ReadOnlyMemory`, which
+silences `insert()` while forwarding `query()` and `reset()`. This
+ensures evaluation is deterministic and does not contaminate the
+training memory store.
+
+```bash
+# Typical workflow:
+# 1. Train with memory on the training split
+python -m gym_env.batch_runner \
+    --episodes-file tasks/train.json --n-tasks 22 \
+    --eval-mode train --memory strategy ...
+
+# 2. Evaluate with frozen memory on the test split
+python -m gym_env.batch_runner \
+    --episodes-file tasks/test.json --n-tasks 8 \
+    --eval-mode test --memory strategy ...
+```
 
 ---
 

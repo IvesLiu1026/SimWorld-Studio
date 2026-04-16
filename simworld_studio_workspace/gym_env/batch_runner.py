@@ -43,7 +43,7 @@ from tqdm.auto import tqdm
 from .action_space import nav_tool_schemas
 from .llm import LLMClient, LLMMessage, make_llm
 from .logger import EpisodeLogger
-from .memory import AgentMemory, NullMemory, build_memory
+from .memory import AgentMemory, NullMemory, ReadOnlyMemory, build_memory
 from .simworld_nav_env import SimWorldNavEnv
 from .ucv_client import UCVClient
 from .mcp_client import MCPClient
@@ -636,8 +636,17 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Disable RGB capture entirely (faster, smaller logs).")
     # Memory
     p.add_argument("--memory", default="none",
-                   choices=["none", "text", "mem0", "strategy"],
-                   help="Memory backend: none, text, mem0, or strategy")
+                   choices=["none", "text", "mem0", "strategy", "hierarchical"],
+                   help="Memory backend: none, text, mem0, strategy, or hierarchical")
+    p.add_argument("--eval-mode", default="train",
+                   choices=["train", "test"],
+                   dest="eval_mode",
+                   help=(
+                       "train: memory is read-write (insert + query). "
+                       "test: memory is read-only (query only, no insert). "
+                       "Use 'test' for deterministic evaluation with frozen "
+                       "memories from a prior training run."
+                   ))
     # WandB
     p.add_argument("--wandb-project", default="simworld-nav")
     p.add_argument("--wandb-key", default=None,
@@ -710,7 +719,9 @@ def main(argv: Optional[List[str]] = None) -> None:
         llm_base_url=args.base_url,
         llm_api_key=args.api_key,
     )
-    log.info("memory backend: %s", type(memory).__name__)
+    if args.eval_mode == "test":
+        memory = ReadOnlyMemory(memory)
+    log.info("memory backend: %s (eval_mode=%s)", getattr(memory, 'name', type(memory).__name__), args.eval_mode)
 
     # WandB
     import os
@@ -829,6 +840,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             "model": args.model,
             "model_id": args.model_id,
             "memory": args.memory,
+            "eval_mode": args.eval_mode,
             "n_tasks": args.n_tasks,
             "max_steps": args.max_steps,
             "vision_depth": args.vision_depth,

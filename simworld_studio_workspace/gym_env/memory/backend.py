@@ -60,3 +60,27 @@ class NullMemory:
 
     def reset(self) -> None:
         return
+
+
+class ReadOnlyMemory:
+    """Wrapper that silences ``insert()`` while forwarding ``query()`` and ``reset()``.
+
+    Used in test/eval mode: the agent benefits from memories accumulated
+    during training but cannot write new ones, ensuring evaluation is
+    deterministic and does not contaminate the training memory store.
+    """
+
+    name = "read_only"
+
+    def __init__(self, inner: AgentMemory) -> None:
+        self._inner = inner
+        self.name = f"read_only({getattr(inner, 'name', type(inner).__name__)})"
+
+    def insert(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        return
+
+    def query(self, text: str, k: int = 5) -> List[str]:
+        return self._inner.query(text, k)
+
+    def reset(self) -> None:
+        self._inner.reset()

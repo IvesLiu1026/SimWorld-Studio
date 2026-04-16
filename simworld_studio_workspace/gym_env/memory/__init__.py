@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from .backend import AgentMemory, NullMemory
+from .backend import AgentMemory, NullMemory, ReadOnlyMemory
 
-__all__ = ["AgentMemory", "NullMemory", "build_memory"]
+__all__ = ["AgentMemory", "NullMemory", "ReadOnlyMemory", "build_memory"]
 
 
 def build_memory(
