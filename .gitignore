@@ -14,6 +14,10 @@ simworld_studio_workspace/logs/
 simworld_studio_workspace/arena_data/
 simworld_studio_workspace/experiments/*
 !simworld_studio_workspace/experiments/README.md
+!simworld_studio_workspace/experiments/env_diversity_ablation/
+simworld_studio_workspace/experiments/env_diversity_ablation/tasks/
+simworld_studio_workspace/experiments/env_diversity_ablation/conditions/
+simworld_studio_workspace/experiments/env_diversity_ablation/results/
 simworld_studio_workspace/runs/
 simworld_studio_workspace/gym_env/.venv/
 simworld_studio_workspace/probe_frames/

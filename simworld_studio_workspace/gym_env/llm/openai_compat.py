@@ -45,6 +45,7 @@ class OpenAICompatClient(LLMClient):
         model: str,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        text_action_mode: bool = False,
     ) -> None:
         try:
             from openai import OpenAI
@@ -59,7 +60,7 @@ class OpenAICompatClient(LLMClient):
                 if api_key:
                     break
         self._client = OpenAI(api_key=api_key, base_url=base_url)
-        self._text_action_mode = False
+        self._text_action_mode = text_action_mode
 
     # ------------------------------------------------------------------
 
@@ -97,6 +98,7 @@ class OpenAICompatClient(LLMClient):
                     tools=oai_tools,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    timeout=120,
                 )
                 return self._parse_response(resp)
             except Exception as exc:
@@ -199,13 +201,14 @@ class OpenAICompatClient(LLMClient):
         # finds no action name (step becomes "no_tool_call").  Non
         # thinking models need ~3 tokens for the action word and a
         # small cap saves latency.
-        is_thinking = "thinking" in self.model.lower()
+        is_thinking = "thinking" in self.model.lower() or "qwen3" in self.model.lower()
         text_max = max(max_tokens, 4096) if is_thinking else min(max_tokens, 32)
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=patched,
             max_tokens=text_max,
             temperature=temperature,
+            timeout=120,  # prevent hanging on unresponsive vLLM
         )
         return self._parse_text_action(resp, tool_names)
 

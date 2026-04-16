@@ -256,6 +256,8 @@ def run_wave(
     batch_dir: Optional[Path] = None,
     save_frames: bool = False,
     capture_rgb: bool = True,
+    reuse_agents: bool = False,
+    skip_destroy: bool = False,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Run one batch of ghost agents concurrently in one UE instance.
 
@@ -265,25 +267,43 @@ def run_wave(
     summary under ``batch_dir/ep_XXX_<name>/``.  LLM requests are
     issued sequentially (one per active agent per step).
 
+    If *reuse_agents* is True, ghost agents are assumed to already
+    exist in the world — only teleport to new start positions.
+    If *skip_destroy* is True, agents are NOT destroyed at the end
+    (caller plans to reuse them).
+
     Returns (list of metrics dicts, updated global_step).
     """
     n = len(episodes)
-    log.info("wave: %d ghost agents, max_steps=%d", n, max_steps)
+    log.info("wave: %d ghost agents, max_steps=%d, reuse=%s", n, max_steps, reuse_agents)
     mem = memory or NullMemory()
 
-    # --- Phase 1: spawn all ghost agents via UnrealCV ---
+    # --- Phase 1: spawn (or reuse) ghost agents ---
     agent_names = [f"GhostAgent_{i}" for i in range(n)]
-    for i, ep in enumerate(episodes):
-        name = agent_names[i]
-        x, y, z = ep.start_position.x, ep.start_position.y, spawn_z
-        log.info("wave: spawning %s at (%.0f,%.0f,%.0f) for %s",
-                 name, x, y, z, ep.episode_id)
-        ucv.spawn_bp_asset(_HUMANOID_BP, name, location=(x, y, z),
-                           auto_repair_collision=False)
-        _configure_ghost_ucv(ucv, name, x, y, z)
+    if not reuse_agents:
+        for i, ep in enumerate(episodes):
+            name = agent_names[i]
+            x, y, z = ep.start_position.x, ep.start_position.y, spawn_z
+            log.info("wave: spawning %s at (%.0f,%.0f,%.0f) for %s",
+                     name, x, y, z, ep.episode_id)
+            ucv.spawn_bp_asset(_HUMANOID_BP, name, location=(x, y, z),
+                               auto_repair_collision=False)
+            _configure_ghost_ucv(ucv, name, x, y, z)
 
-    # Enable collision on all ghosts in one batch (single navmesh rebuild)
-    _finalize_ghost_agents(ucv, agent_names)
+        # Enable collision on all ghosts in one batch (single navmesh rebuild)
+        _finalize_ghost_agents(ucv, agent_names)
+    else:
+        # Just teleport existing agents to new start positions
+        for i, ep in enumerate(episodes):
+            name = agent_names[i]
+            x, y, z = ep.start_position.x, ep.start_position.y, spawn_z
+            try:
+                ucv.send(f"vset /object/{name}/location {x} {y} {z}")
+                ucv.send(f"vset /object/{name}/rotation 0 0 0")
+                log.info("wave: teleported %s to (%.0f,%.0f,%.0f) for %s",
+                         name, x, y, z, ep.episode_id)
+            except Exception as exc:
+                log.error("wave: teleport %s failed: %s", name, exc)
 
     slots: List[AgentSlot] = []
     for i, ep in enumerate(episodes):
@@ -331,13 +351,23 @@ def run_wave(
         slots.append(slot)
 
     # --- Reset all envs ---
+    failed_slots = []
     for slot in slots:
-        obs, info = slot.env.reset(slot.episode)
-        slot.task_prompt = info.get("task_prompt", "")
-        slot._obs = obs
-        slot._info = info
-        if slot.logger is not None:
-            slot.logger.log_step(0, None, obs, 0.0, False, False, info)
+        try:
+            obs, info = slot.env.reset(slot.episode)
+            slot.task_prompt = info.get("task_prompt", "")
+            slot._obs = obs
+            slot._info = info
+            if slot.logger is not None:
+                slot.logger.log_step(0, None, obs, 0.0, False, False, info)
+        except Exception as exc:
+            log.error("env.reset failed for %s (%s): %s",
+                      slot.agent_name, slot.episode.episode_id, exc)
+            slot.done = True
+            slot.ended_reason = "reset_error"
+            failed_slots.append(slot.idx)
+    if failed_slots:
+        log.warning("wave: %d agents failed to reset: %s", len(failed_slots), failed_slots)
 
     time.sleep(2)  # let cameras initialize
 
@@ -401,7 +431,14 @@ def run_wave(
 
             for tc in resp.tool_calls:
                 prev_d = info.get("distance_to_goal_cm")
-                obs, reward, done, truncated, info = slot.env.step(tc.to_action_dict())
+                try:
+                    obs, reward, done, truncated, info = slot.env.step(tc.to_action_dict())
+                except Exception as exc:
+                    log.error("%s step %d action %s failed: %s",
+                              slot.agent_name, t, tc.name, exc)
+                    slot.done = True
+                    slot.ended_reason = "step_error"
+                    break
                 global_step += 1
                 slot.cumulative_reward += float(reward)
 
@@ -523,11 +560,12 @@ def run_wave(
             }, step=global_step)
 
         results.append(summary)
-        # Destroy ghost agent
-        try:
-            ucv.send(f"vset /object/{slot.agent_name}/destroy")
-        except Exception:
-            pass
+        # Destroy ghost agent (unless caller wants to reuse)
+        if not skip_destroy:
+            try:
+                ucv.send(f"vset /object/{slot.agent_name}/destroy")
+            except Exception:
+                pass
 
     return results, global_step
 
