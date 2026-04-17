@@ -24,25 +24,16 @@ from typing import Any, Callable, Dict, List, Optional
 log = logging.getLogger(__name__)
 
 REFLECTION_PROMPT = """\
-You are analyzing a navigation episode where an agent tried to reach a goal in a 3D city scene.
+Extract 1-2 transferable navigation principles from this episode.
 
-Here is the episode trajectory:
+Trajectory:
 {trajectory}
 
-Episode outcome: {outcome}
+Outcome: {outcome}
 
-Your task: Based on the FULL trajectory above, extract 1-2 **transferable navigation principles** that would help this agent perform better in FUTURE episodes (not just this one).
+Rules: general strategies (no specific coords), actionable, 1-2 sentences each.
 
-Rules:
-- Each principle must be a general strategy, NOT tied to specific coordinates or step numbers.
-- Focus on WHEN to use each action (MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, STOP) based on observable signals (bearing, distance trend, reward trend).
-- If the episode succeeded, explain what strategy worked and why.
-- If the episode failed, identify the root cause (e.g. spinning in place, walking away from goal, not stopping when close) and what should be done differently.
-- Be concise: each principle should be 1-2 sentences max.
-- Write principles as actionable rules the agent can directly follow.
-
-Return ONLY a JSON array of strings:
-["principle 1", "principle 2"]"""
+Return ONLY a JSON array of strings, e.g.: ["principle 1", "principle 2"]"""
 
 
 class StrategyMemory:
@@ -131,24 +122,43 @@ class StrategyMemory:
             return None
 
     def _parse_principles(self, raw: str) -> List[str]:
-        """Parse JSON array from LLM response, tolerant of markdown."""
+        """Parse JSON array from LLM response, tolerant of markdown/thinking."""
+        import re
         text = raw.strip()
+        # Strip <think>...</think> blocks
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
         # Strip markdown code fences
         if "```" in text:
             lines = text.split("\n")
             lines = [l for l in lines if not l.strip().startswith("```")]
             text = "\n".join(lines).strip()
-        # Find JSON array
-        start = text.find("[")
+        # Find ALL JSON arrays and try each (last one is most likely the answer)
+        candidates = list(re.finditer(r'\[(?:[^\[\]]*"[^"]*"[^\[\]]*)\]', text))
+        for match in reversed(candidates):
+            try:
+                arr = json.loads(match.group())
+                result = [str(s).strip() for s in arr if isinstance(s, str) and len(s.strip()) > 10]
+                if result:
+                    return result
+            except json.JSONDecodeError:
+                continue
+        # Fallback: find last [...] bracket pair
         end = text.rfind("]")
-        if start == -1 or end == -1:
-            return []
-        try:
-            arr = json.loads(text[start:end + 1])
-            return [str(s).strip() for s in arr if isinstance(s, str) and s.strip()]
-        except json.JSONDecodeError:
-            log.warning("StrategyMemory: failed to parse: %s", text[:200])
-            return []
+        if end != -1:
+            start = text.rfind("[", 0, end)
+            if start != -1:
+                try:
+                    arr = json.loads(text[start:end + 1])
+                    return [str(s).strip() for s in arr if isinstance(s, str) and len(s.strip()) > 10]
+                except json.JSONDecodeError:
+                    pass
+        # Last resort: extract long quoted strings
+        principles = re.findall(r'"([^"]{20,})"', text[-500:])
+        if principles:
+            log.info("StrategyMemory: fallback parsed %d principles", len(principles))
+            return principles[:2]
+        log.warning("StrategyMemory: no principles found in: %s", text[-200:])
+        return []
 
     def get_system_prompt_section(self) -> str:
         """Format strategies as a system prompt section."""

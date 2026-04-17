@@ -119,13 +119,15 @@ def _run_episodes_on_map(
 ):
     """Run episodes on the currently-loaded map, with resume support.
 
+    Uses ghost agent parallelism within waves. Memory isolation is
+    handled inside run_wave via per-agent trajectory tracking.
+
     Returns list of result dicts (including any reloaded from disk).
     """
     from nav_task.episode import NavigationEpisode
     from gym_env.batch_runner import run_wave
 
     existing = existing_results or {}
-    # Split into: already done vs. need to run
     todo_eps = []
     done_results = []
     for ep in nav_eps:
@@ -143,7 +145,7 @@ def _run_episodes_on_map(
     log.info("  %d/%d episodes to run (%d already done)",
              len(todo_eps), len(nav_eps), len(done_results))
 
-    # Run in waves with agent reuse
+    # Run in waves with agent reuse on same map
     n_waves = (len(todo_eps) + WAVE_SIZE - 1) // WAVE_SIZE
     new_results = []
     for wave_start in range(0, len(todo_eps), WAVE_SIZE):
