@@ -277,6 +277,9 @@ def run_wave(
     n = len(episodes)
     log.info("wave: %d ghost agents, max_steps=%d, reuse=%s", n, max_steps, reuse_agents)
     mem = memory or NullMemory()
+    # Per-agent trajectory buffers (memory.insert goes to shared mem,
+    # but we also track per-agent for correct reflect at end)
+    agent_trajectories: List[List[str]] = [[] for _ in range(n)]
 
     # --- Phase 1: spawn (or reuse) ghost agents ---
     agent_names = [f"GhostAgent_{i}" for i in range(n)]
@@ -293,7 +296,7 @@ def run_wave(
         # Enable collision on all ghosts in one batch (single navmesh rebuild)
         _finalize_ghost_agents(ucv, agent_names)
     else:
-        # Just teleport existing agents to new start positions
+        # Teleport existing agents to new start positions
         for i, ep in enumerate(episodes):
             name = agent_names[i]
             x, y, z = ep.start_position.x, ep.start_position.y, spawn_z
@@ -304,6 +307,12 @@ def run_wave(
                          name, x, y, z, ep.episode_id)
             except Exception as exc:
                 log.error("wave: teleport %s failed: %s", name, exc)
+        # Destroy orphaned agents from a larger previous wave
+        for j in range(n, 30):  # max possible agents from prior waves
+            try:
+                ucv.send(f"vset /object/GhostAgent_{j}/destroy")
+            except Exception:
+                break  # no more agents to clean up
 
     slots: List[AgentSlot] = []
     for i, ep in enumerate(episodes):
@@ -347,7 +356,13 @@ def run_wave(
             env=env,
             logger=ep_logger,
         )
-        slot.history = [LLMMessage.text("system", _NAV_SYSTEM_PROMPT)]
+        # Inject strategy memory lessons into system prompt if available
+        system_text = _NAV_SYSTEM_PROMPT
+        if hasattr(mem, "get_system_prompt_section"):
+            section = mem.get_system_prompt_section()
+            if section:
+                system_text += section
+        slot.history = [LLMMessage.text("system", system_text)]
         slots.append(slot)
 
     # --- Reset all envs ---
@@ -456,14 +471,17 @@ def run_wave(
                     )}],
                 ))
 
-                # Memory: record step
+                # Memory: record step (per-agent trajectory)
                 new_d = info.get("distance_to_goal_cm")
-                delta = (prev_d - new_d) if (prev_d and new_d) else 0.0
-                step_record = (
-                    f"t={t} {tc.name} d_goal:{prev_d:.0f}->{new_d:.0f}cm "
-                    f"(delta={delta:+.0f}) reward={reward:+.3f}"
-                )
-                mem.insert(step_record)
+                if prev_d is not None and new_d is not None:
+                    delta = prev_d - new_d
+                    step_record = (
+                        f"t={t} {tc.name} d_goal:{prev_d:.0f}->{new_d:.0f}cm "
+                        f"(delta={delta:+.0f}) reward={reward:+.3f}"
+                    )
+                else:
+                    step_record = f"t={t} {tc.name} reward={reward:+.3f}"
+                agent_trajectories[slot.idx].append(step_record)
 
                 # WandB per-step logging
                 if wandb_run:
@@ -505,7 +523,7 @@ def run_wave(
         final_metrics.setdefault("cumulative_reward", slot.cumulative_reward)
         slot.metrics = final_metrics
 
-    # --- Reflect on each episode for strategy memory ---
+    # --- Reflect on each episode with its OWN trajectory ---
     for slot in slots:
         sr = float(slot.metrics.get("SR", 0) or 0)
         outcome = (
@@ -514,9 +532,14 @@ def run_wave(
             f"SR={sr:.0f}, SPL={slot.metrics.get('SPL', 0):.3f}"
         )
         try:
-            if hasattr(mem, "reflect"):
+            if hasattr(mem, "reflect") and hasattr(mem, "_trajectory"):
+                # Inject this agent's trajectory (not the shared one)
+                mem._trajectory = agent_trajectories[slot.idx]
                 mem.reflect(outcome)
-            mem.reset()  # clear trajectory buffer for next episode
+                mem._trajectory = []  # clear for next use
+            elif hasattr(mem, "reflect"):
+                mem.reflect(outcome)
+                mem.reset()
         except Exception as exc:
             log.warning("%s: memory reflect/reset failed: %s", slot.agent_name, exc)
 

@@ -84,3 +84,9 @@ class ReadOnlyMemory:
 
     def reset(self) -> None:
         self._inner.reset()
+
+    def get_system_prompt_section(self) -> str:
+        """Forward system prompt section from inner memory (read-only safe)."""
+        if hasattr(self._inner, "get_system_prompt_section"):
+            return self._inner.get_system_prompt_section()
+        return ""
