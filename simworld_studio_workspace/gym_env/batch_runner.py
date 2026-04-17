@@ -505,6 +505,21 @@ def run_wave(
         final_metrics.setdefault("cumulative_reward", slot.cumulative_reward)
         slot.metrics = final_metrics
 
+    # --- Reflect on each episode for strategy memory ---
+    for slot in slots:
+        sr = float(slot.metrics.get("SR", 0) or 0)
+        outcome = (
+            f"{'SUCCESS' if sr > 0 else 'FAILED'}: "
+            f"steps={slot.step}, reason={slot.ended_reason}, "
+            f"SR={sr:.0f}, SPL={slot.metrics.get('SPL', 0):.3f}"
+        )
+        try:
+            if hasattr(mem, "reflect"):
+                mem.reflect(outcome)
+            mem.reset()  # clear trajectory buffer for next episode
+        except Exception as exc:
+            log.warning("%s: memory reflect/reset failed: %s", slot.agent_name, exc)
+
     # --- Collect results, write per-episode summary, cleanup ---
     results = []
     for slot in slots:

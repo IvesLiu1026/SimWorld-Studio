@@ -75,8 +75,25 @@ def build_memory(
         )
     if kind == "strategy":
         from .strategy_backend import StrategyMemory
-        path = (config or {}).get("path", "strategy_memory.json")
-        return StrategyMemory(path=path)
+        default_path = f"strategy_memory_{agent_id}.json" if agent_id != "default" else "strategy_memory.json"
+        path = (config or {}).get("path", default_path)
+        llm_call = None
+        if llm_base_url and llm_model:
+            from openai import OpenAI
+            _client = OpenAI(
+                api_key=llm_api_key or "EMPTY",
+                base_url=llm_base_url,
+            )
+            def llm_call(prompt: str) -> str:
+                resp = _client.chat.completions.create(
+                    model=llm_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=4096,
+                    temperature=0.3,
+                    timeout=120,
+                )
+                return resp.choices[0].message.content or ""
+        return StrategyMemory(path=path, llm_call=llm_call)
     if kind == "hierarchical":
         from .hierarchical import HierarchicalMemory
         cfg = config or {}
