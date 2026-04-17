@@ -42,7 +42,7 @@ from .config import (
 
 log = logging.getLogger(__name__)
 
-WAVE_SIZE = 10
+WAVE_SIZE = 5
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -54,9 +54,9 @@ def load_condition_episodes(n_scenes: int) -> dict:
     return {"train": train, "test": test}
 
 
-def load_map_in_ue(mcp, asset_path: str) -> bool:
+def load_map_in_ue(mcp, asset_path: str, *, skip_load: bool = False) -> bool:
     from .generate_tasks import load_map_in_ue as _load_map
-    return _load_map(mcp, asset_path)
+    return _load_map(mcp, asset_path, skip_load=skip_load)
 
 
 def group_episodes_by_map(episodes: list) -> dict:
@@ -184,6 +184,9 @@ def run_condition(
     *,
     dry_run: bool = False,
     resume: bool = False,
+    only_map_idx: Optional[int] = None,
+    only_split: Optional[str] = None,
+    skip_map_load: bool = False,
 ):
     """Run train + test for one condition, with resume support."""
     from nav_task.episode import NavigationEpisode
@@ -253,6 +256,10 @@ def run_condition(
         # ── Training ─────────────────────────────────────────────────
         train_eps = train_data["episodes"]
         map_groups = group_episodes_by_map(train_eps)
+        if only_split == "test":
+            map_groups = {}  # skip train phase
+        elif only_map_idx is not None:
+            map_groups = {k: v for k, v in map_groups.items() if k == only_map_idx}
 
         epoch_train_results = []
         for map_idx, eps in sorted(map_groups.items()):
@@ -270,7 +277,7 @@ def run_condition(
                 print(f"    Train map {map_idx}: SR={n_succ}/{len(existing)} (resumed)")
                 continue
 
-            if not load_map_in_ue(mcp, asset):
+            if not load_map_in_ue(mcp, asset, skip_load=skip_map_load):
                 log.error("Failed to load map %d, skipping", map_idx)
                 continue
 
@@ -295,6 +302,10 @@ def run_condition(
         # ── Testing (frozen memory) ─────────────────────────────────
         test_eps = test_data["episodes"]
         test_map_groups = group_episodes_by_map(test_eps)
+        if only_split == "train":
+            test_map_groups = {}  # skip test phase
+        elif only_map_idx is not None:
+            test_map_groups = {k: v for k, v in test_map_groups.items() if k == only_map_idx}
         ro_memory = ReadOnlyMemory(memory)
 
         epoch_test_results = []
@@ -312,7 +323,7 @@ def run_condition(
                 print(f"    Test map {map_idx}: SR={n_succ}/{len(existing)} (resumed)")
                 continue
 
-            if not load_map_in_ue(mcp, asset):
+            if not load_map_in_ue(mcp, asset, skip_load=skip_map_load):
                 log.error("Failed to load test map %d, skipping", map_idx)
                 continue
 
@@ -342,9 +353,14 @@ def run_condition(
         }
         all_epoch_results.append(epoch_summary)
 
-        (run_dir / f"epoch{epoch}_summary.json").write_text(
-            json.dumps(epoch_summary, indent=2)
-        )
+        # Skip summary write when only processing a subset — the stats would
+        # only reflect the current map, not the full epoch, and the stale
+        # summary would short-circuit --resume on next iter.
+        is_partial = (only_map_idx is not None) or (only_split is not None)
+        if not is_partial:
+            (run_dir / f"epoch{epoch}_summary.json").write_text(
+                json.dumps(epoch_summary, indent=2)
+            )
 
         print(f"\n  Epoch {epoch} summary:")
         print(f"    Train: SR={epoch_summary['train']['SR']:.3f} SPL={epoch_summary['train']['SPL']:.3f} SoftSPL={epoch_summary['train']['SoftSPL']:.3f}")
@@ -356,7 +372,9 @@ def run_condition(
         "condition": f"{n_scenes}_scenes",
         "epochs": all_epoch_results,
     }
-    (run_dir / "final_results.json").write_text(json.dumps(final, indent=2))
+    is_partial = (only_map_idx is not None) or (only_split is not None)
+    if not is_partial:
+        (run_dir / "final_results.json").write_text(json.dumps(final, indent=2))
     print(f"\nCondition {n_scenes} scenes complete. Results: {run_dir}")
     return final
 
@@ -374,6 +392,16 @@ def main():
     parser.add_argument("--ucv-port", type=int, default=UCV_PORT)
     parser.add_argument("--mcp-host", default=MCP_HOST)
     parser.add_argument("--mcp-port", type=int, default=MCP_PORT)
+    # Per-map UE-restart workflow: UE is launched with target map as startup
+    # level; this flag tells run_ablation to skip load_map (a no-op that
+    # wedges headless UE on first load) and process only the single map
+    # indicated by --only-map-idx in the specified split.
+    parser.add_argument("--only-map-idx", type=int, default=None,
+                        help="Process only episodes from this map index")
+    parser.add_argument("--only-split", choices=["train", "test"], default=None,
+                        help="Process only train or test for --only-map-idx")
+    parser.add_argument("--skip-map-load", action="store_true",
+                        help="UE already has target map loaded; skip load_map call")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -399,7 +427,12 @@ def main():
 
     all_results = {}
     for n in conditions:
-        result = run_condition(n, args.epochs, mcp, ucv, llm, resume=args.resume)
+        result = run_condition(
+            n, args.epochs, mcp, ucv, llm, resume=args.resume,
+            only_map_idx=args.only_map_idx,
+            only_split=args.only_split,
+            skip_map_load=args.skip_map_load,
+        )
         all_results[f"{n}_scenes"] = result
 
     # Comparative summary

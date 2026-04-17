@@ -152,6 +152,8 @@ class MCPClient:
                 return True
             if "PIE_INACTIVE" in line or "PIE_CHECK_OK" in line:
                 return False
+        # Empty logs on a successful probe (MCP log-capture race on secondary
+        # instance) — assume PIE not active so callers proceed with start_pie.
         return False
 
     def _wait_until_ready(self, timeout: float = 60.0) -> bool:
@@ -181,13 +183,20 @@ class MCPClient:
                 if any("EDITOR_READY" in l for l in logs):
                     log.info("[%s] editor ready after %d attempts", self.name, attempt)
                     return True
+                # Secondary UE instance: python_logs can come back empty even on
+                # success (MCP reads wrong rotated log file). Trust success bool.
+                result = resp.get("result") if isinstance(resp, dict) else None
+                if isinstance(result, dict) and result.get("success") and not logs:
+                    log.info("[%s] editor ready (empty logs, success=true) attempt %d",
+                             self.name, attempt)
+                    return True
             except MCPError:
                 pass
             time.sleep(2.0)
         return False
 
     def start_pie(self, *, wait_seconds: float = 5.0,
-                  ready_timeout: float = 60.0) -> None:
+                  ready_timeout: float = 240.0) -> None:
         """Start PIE if it isn't already running.
 
         First waits for the editor to finish loading (PostLoad safe),
@@ -216,7 +225,7 @@ class MCPClient:
             "        print('PIE_START_FAILED:' + repr(e))\n"
         )
         try:
-            self.execute_python(script, timeout=15)
+            self.execute_python(script, timeout=90)
         except MCPError as exc:
             raise MCPError(f"[{self.name}] PIE start failed: {exc}") from exc
         time.sleep(wait_seconds)
@@ -244,7 +253,7 @@ class MCPClient:
             "        print('PIE_END_FAILED:' + repr(e))\n"
         )
         try:
-            self.execute_python(script, timeout=15)
+            self.execute_python(script, timeout=90)
         except MCPError as exc:
             log.warning("[%s] PIE stop failed: %s", self.name, exc)
         time.sleep(wait_seconds)

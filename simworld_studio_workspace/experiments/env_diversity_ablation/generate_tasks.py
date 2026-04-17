@@ -42,11 +42,28 @@ from .config import (
 log = logging.getLogger(__name__)
 
 
-def load_map_in_ue(mcp, asset_path: str, retries: int = 3) -> bool:
+def load_map_in_ue(mcp, asset_path: str, retries: int = 3, skip_load: bool = False) -> bool:
     """Stop PIE, load a new map, start PIE."""
     # Stop PIE first
     log.info("Stopping PIE...")
     mcp.stop_pie(wait_seconds=3.0)
+
+    if skip_load:
+        # Assume UE was launched with the target map already. Verify and skip.
+        verify_script = (
+            "import unreal\n"
+            "w = unreal.EditorLevelLibrary.get_editor_world()\n"
+            "print('CURRENT_MAP:' + (w.get_path_name() if w else 'NONE'))\n"
+        )
+        try:
+            resp = mcp.execute_python(verify_script, timeout=30)
+            logs = _extract_logs(resp)
+            log.info("skip_load active; current map logs: %s", logs)
+        except Exception as exc:
+            log.warning("skip_load verify failed: %s", exc)
+        time.sleep(3.0)
+        _setup_navmesh_and_pie(mcp)
+        return True
 
     # Load map
     script = (
@@ -60,10 +77,21 @@ def load_map_in_ue(mcp, asset_path: str, retries: int = 3) -> bool:
     for attempt in range(retries):
         log.info("Loading map %s (attempt %d)...", asset_path, attempt + 1)
         try:
-            resp = mcp.execute_python(script, timeout=30)
+            resp = mcp.execute_python(script, timeout=180)
             logs = _extract_logs(resp)
             if any("MAP_LOADED_OK" in l for l in logs):
                 log.info("Map loaded: %s", asset_path)
+                break
+            # MCP log capture is unreliable on secondary instances — python_logs
+            # can come back empty even when the script ran successfully (UE's
+            # SimWorld_2.log vs SimWorld.log resolution race). If the script
+            # returned success and the log is empty, give UE time to settle and
+            # trust the load; otherwise retry.
+            result = resp.get("result") if isinstance(resp, dict) else None
+            script_ok = bool(isinstance(result, dict) and result.get("success"))
+            if script_ok and not logs:
+                log.warning("Empty python_logs but success=true; trusting load of %s", asset_path)
+                time.sleep(3.0)
                 break
             log.warning("Map load response: %s", logs)
         except Exception as exc:
@@ -76,6 +104,11 @@ def load_map_in_ue(mcp, asset_path: str, retries: int = 3) -> bool:
     # Wait for editor to settle after map load
     time.sleep(5.0)
 
+    _setup_navmesh_and_pie(mcp)
+    return True
+
+
+def _setup_navmesh_and_pie(mcp):
     # Spawn NavMeshBoundsVolume + build navmesh in editor mode
     log.info("Spawning NavMeshBoundsVolume and building navmesh in editor...")
     nav_setup_script = """
@@ -122,7 +155,6 @@ else:
     # Start PIE
     log.info("Starting PIE...")
     mcp.start_pie(wait_seconds=12.0)
-    return True
 
 
 def generate_for_map(
@@ -216,6 +248,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--map-index", type=int, default=None,
                         help="Generate for a single map index (0-16)")
+    parser.add_argument("--skip-load", action="store_true",
+                        help="Skip load_map (assume UE launched with target map)")
     parser.add_argument("--ucv-host", default=UCV_HOST)
     parser.add_argument("--ucv-port", type=int, default=UCV_PORT)
     parser.add_argument("--mcp-host", default=MCP_HOST)
@@ -248,8 +282,13 @@ def main():
         print(f"[{role}] Map {idx:2d}: {name} ({n_objs} objs) — sampling {n_tasks} tasks")
         print(f"{'='*60}")
 
+        out_path = TASKS_DIR / f"{map_label(idx)}.json"
+        if out_path.exists():
+            print(f"  SKIP: {out_path.name} already exists")
+            continue
+
         asset = ue_asset_path(idx)
-        if not load_map_in_ue(mcp, asset):
+        if not load_map_in_ue(mcp, asset, skip_load=args.skip_load):
             print(f"  FAILED to load map {idx}, skipping")
             continue
 
