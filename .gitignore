@@ -18,6 +18,11 @@ simworld_studio_workspace/experiments/*
 simworld_studio_workspace/experiments/env_diversity_ablation/tasks/
 simworld_studio_workspace/experiments/env_diversity_ablation/conditions/
 simworld_studio_workspace/experiments/env_diversity_ablation/results/
+!simworld_studio_workspace/experiments/observation_modality_ablation/
+simworld_studio_workspace/experiments/observation_modality_ablation/tasks/
+simworld_studio_workspace/experiments/observation_modality_ablation/results/
+simworld_studio_workspace/experiments/observation_modality_ablation/probes_A/
+simworld_studio_workspace/experiments/observation_modality_ablation/probes_B/
 simworld_studio_workspace/runs/
 simworld_studio_workspace/gym_env/.venv/
 simworld_studio_workspace/probe_frames/

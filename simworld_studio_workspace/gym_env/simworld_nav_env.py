@@ -95,6 +95,7 @@ class SimWorldNavEnv:
         camera_id: Optional[int] = None,
         image_size: Tuple[int, int] = (240, 320),
         capture_rgb: bool = True,
+        capture_depth: bool = False,
         require_stop_for_success: bool = False,
         use_collision_penalty: bool = False,
         forward_duration_s: float = DEFAULT_FORWARD_DURATION_S,
@@ -145,6 +146,7 @@ class SimWorldNavEnv:
             camera_id=camera_id if camera_id is not None else 0,
             image_size=image_size,
             capture_rgb=capture_rgb,
+            capture_depth=capture_depth,
         )
 
         # Per-episode runtime state

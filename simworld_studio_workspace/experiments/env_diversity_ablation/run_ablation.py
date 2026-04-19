@@ -226,10 +226,14 @@ def run_condition(
         print(f"  Output: {run_dir}")
         return
 
-    # Build memory (persists across epochs)
+    # Build memory (persists across epochs). Keep the path under run_dir so
+    # different models (via ABLATION_RESULTS_SUBDIR) don't cross-contaminate
+    # strategies — default path is cwd-relative which would share one file
+    # across all models running from the same workspace.
     memory = build_memory(
         MEMORY_BACKEND,
         agent_id=f"ablation_{n_scenes}scenes",
+        config={"path": str(run_dir / "strategy_memory.json")},
         llm_model=LLM_MODEL_ID,
         llm_base_url=LLM_BASE_URL,
         llm_api_key=LLM_API_KEY,
