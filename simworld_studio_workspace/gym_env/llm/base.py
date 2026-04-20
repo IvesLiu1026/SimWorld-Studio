@@ -59,6 +59,24 @@ class LLMMessage:
             ],
         )
 
+    @classmethod
+    def user_with_images(
+        cls, text: str, images: List[np.ndarray],
+        captions: Optional[List[str]] = None,
+    ) -> "LLMMessage":
+        """User turn with multiple images (e.g. rgb + depth side-by-side).
+
+        ``captions`` (optional) is a per-image label rendered as a text
+        block right before the image — useful so the VLM knows which
+        modality each picture represents.
+        """
+        blocks: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+        for i, img in enumerate(images):
+            if captions and i < len(captions) and captions[i]:
+                blocks.append({"type": "text", "text": captions[i]})
+            blocks.append({"type": "image", "image": img})
+        return cls(role="user", content=blocks)
+
 
 @dataclass
 class ToolCall:

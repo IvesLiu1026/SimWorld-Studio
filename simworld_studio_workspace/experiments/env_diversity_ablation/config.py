@@ -12,21 +12,25 @@ Design:
   - Model: Qwen3.5-27B
 """
 
+import os
 from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────
-PROJECT_ROOT = Path("/home/koe/SimWorld-Studio-Internal/simworld_studio_workspace")
+PROJECT_ROOT = Path("/data/koe/SimWorld-Studio-Internal/simworld_studio_workspace")
 EXP_DIR = PROJECT_ROOT / "experiments" / "env_diversity_ablation"
 TASKS_DIR = EXP_DIR / "tasks"           # per-map sampled tasks
 CONDITIONS_DIR = EXP_DIR / "conditions" # composed train/test per condition
-RESULTS_DIR = EXP_DIR / "results"       # run outputs
+# Multi-model runs: set ABLATION_RESULTS_SUBDIR so different LLMs' cond1/5/10/15
+# results don't overwrite each other.
+_RES_SUB = os.environ.get("ABLATION_RESULTS_SUBDIR", "").strip()
+RESULTS_DIR = (EXP_DIR / "results" / _RES_SUB) if _RES_SUB else (EXP_DIR / "results")
 
 UE_ROOT = Path("/data/koe/UE_5.3.2")
-UE_PROJECT_PATH = Path("/data/koe/simworld_studio_projects")
+UE_PROJECT_PATH = Path("/data/koe/SimWorld-Internal")
 UE_PROJECT_CONTENT = UE_PROJECT_PATH / "Content"
 UE_MAP_DIR = UE_PROJECT_CONTENT / "AblationMaps"  # where we copy .umaps
 
-VALID_UMAPS_DIR = Path("/home/koe/valid_umaps")
+VALID_UMAPS_DIR = EXP_DIR / "valid_umaps"
 
 # ── UE / Network ──────────────────────────────────────────────────────
 MCP_HOST = "127.0.0.1"
@@ -36,9 +40,10 @@ UCV_PORT = 9002           # adjust to your assigned port
 
 # ── LLM ───────────────────────────────────────────────────────────────
 LLM_MODEL = "qwen"
-LLM_MODEL_ID = "Qwen3.5-27B"
-LLM_BASE_URL = "http://132.239.95.133:8001/v1"
-LLM_API_KEY = "EMPTY"
+# Env var overrides so per-GPU supervisors can target different models.
+LLM_MODEL_ID = os.environ.get("ABLATION_LLM_MODEL_ID", "Qwen3.5-27B")
+LLM_BASE_URL = os.environ.get("ABLATION_LLM_BASE_URL", "http://132.239.95.133:8001/v1")
+LLM_API_KEY = os.environ.get("ABLATION_LLM_API_KEY", "EMPTY")
 
 # ── Map Inventory ─────────────────────────────────────────────────────
 # Maps sorted by object count (desc) from the dedup analysis.
@@ -86,7 +91,7 @@ TEST_TASKS_PER_MAP = 8    # tasks per test map
 TRAIN_BUDGET = 30                  # total training tasks per condition
 N_SCENES_CONDITIONS = [1, 5, 10, 15]
 N_EPOCHS = 2
-MAX_STEPS = 40
+MAX_STEPS = 20
 MEMORY_BACKEND = "strategy"
 
 CONDITION_SEED = 123  # for sampling which scenes to use

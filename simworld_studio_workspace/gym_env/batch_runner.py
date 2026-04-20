@@ -55,8 +55,9 @@ _DEFAULT_SPAWN_Z = 110.0
 
 _NAV_SYSTEM_PROMPT = """You are an embodied navigation agent in a 3D city scene.
 
-You receive a first-person RGB image and a goal description.  Choose
-ONE navigation action per turn:
+You may receive a first-person RGB image, a depth map (near = bright,
+far = dark), or no image at all depending on the sensor configuration.
+Choose ONE navigation action per turn:
 
   - MOVE_FORWARD : walk forward ~2 seconds (~200-400 cm)
   - TURN_LEFT    : rotate 30 degrees left
@@ -256,6 +257,8 @@ def run_wave(
     batch_dir: Optional[Path] = None,
     save_frames: bool = False,
     capture_rgb: bool = True,
+    capture_depth: bool = False,
+    image_kind: str = "rgb",
     reuse_agents: bool = False,
     skip_destroy: bool = False,
 ) -> Tuple[List[Dict[str, Any]], int]:
@@ -324,6 +327,7 @@ def run_wave(
             agent_name=agent_name,
             camera_id=i,            # spawn-order camera index (fresh UE → starts at 0)
             capture_rgb=capture_rgb,
+            capture_depth=capture_depth,
             spawn_on_reset=False,   # already spawned as ghost
             ensure_pie=False,       # PIE already running
             spawn_z=spawn_z,
@@ -334,7 +338,10 @@ def run_wave(
         ep_logger: Optional[EpisodeLogger] = None
         if batch_dir is not None:
             ep_logger = EpisodeLogger(
-                run_name=f"ep_{i:03d}_{agent_name}",
+                # Per-episode name (not slot index) so resume doesn't clobber
+                # previously-written summaries when a retry wave has fewer
+                # episodes than the original run.
+                run_name=f"ep_{ep.episode_id}_{agent_name}",
                 root=str(batch_dir),
                 save_frames=save_frames,
                 annotate_frames=False,
@@ -412,11 +419,37 @@ def run_wave(
                 recalled_text = "\n".join(f"- {m}" for m in recalled)
                 user_text = f"Relevant past experience:\n{recalled_text}\n\n{user_text}"
 
-            rgb = obs.get("rgb")
-            if rgb is not None and getattr(llm, "name", "") != "claude-sdk":
-                slot.history.append(LLMMessage.user_with_image(user_text, rgb))
-            else:
+            # Pick the image(s) the agent sees based on the modality:
+            #   image_kind == "rgb"       → first-person lit RGB
+            #   image_kind == "depth"     → pre-colorised depth map
+            #   image_kind == "rgb_depth" → BOTH RGB and depth as two
+            #                              image blocks (captioned so the
+            #                              VLM can tell them apart)
+            #   image_kind == "none"      → no image, scalars-only text
+            no_image_client = getattr(llm, "name", "") == "claude-sdk"
+            if no_image_client or image_kind == "none":
                 slot.history.append(LLMMessage.text("user", user_text))
+            elif image_kind == "rgb_depth":
+                rgb = obs.get("rgb")
+                depth_rgb = obs.get("depth_rgb")
+                imgs = [im for im in (rgb, depth_rgb) if im is not None]
+                caps = []
+                if rgb is not None:
+                    caps.append("[First-person RGB view]")
+                if depth_rgb is not None:
+                    caps.append("[Depth map — brighter = closer, darker = farther]")
+                if imgs:
+                    slot.history.append(
+                        LLMMessage.user_with_images(user_text, imgs, caps)
+                    )
+                else:
+                    slot.history.append(LLMMessage.text("user", user_text))
+            else:
+                img = obs.get("rgb") if image_kind == "rgb" else obs.get("depth_rgb")
+                if img is not None:
+                    slot.history.append(LLMMessage.user_with_image(user_text, img))
+                else:
+                    slot.history.append(LLMMessage.text("user", user_text))
             _strip_images(slot.history, vision_depth)
 
             # LLM call (sequential per agent)
