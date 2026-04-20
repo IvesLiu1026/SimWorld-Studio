@@ -278,6 +278,7 @@ class UCVClient:
         location: Optional[tuple] = None,
         rotation: Optional[tuple] = None,
         auto_repair_collision: bool = True,
+        collision_mode: int = None,
     ) -> None:
         """Spawn a blueprint actor, optionally at a specific transform.
 
@@ -288,14 +289,19 @@ class UCVClient:
         into subsequent requests.
 
         Args:
-            auto_repair_collision: If False, skip UE's post-spawn
-                ``AdjustActorLocationForCollision`` which can push the
-                actor thousands of units away from the requested position.
+            auto_repair_collision: Legacy bool flag (0 or 1).
+            collision_mode: If set, overrides auto_repair_collision.
+                0 = no collision repair
+                1 = full repair (XY collision + ground trace)
+                2 = XY-only repair (no ground trace, keeps Z position)
         """
         if location is not None:
             x, y, z = location
             pitch, yaw, roll = rotation if rotation is not None else (0.0, 0.0, 0.0)
-            flag = 1 if auto_repair_collision else 0
+            if collision_mode is not None:
+                flag = collision_mode
+            else:
+                flag = 1 if auto_repair_collision else 0
             cmd = (
                 f"vset /objects/spawn_bp_asset {blueprint_path} {name} "
                 f"{x} {y} {z} {pitch} {yaw} {roll} {flag}"
@@ -308,8 +314,34 @@ class UCVClient:
         except UCVError as exc:
             log.debug("[%s] spawn raised %s — UE often resets socket",
                       self.name, exc)
-        time.sleep(2.0)
-        self.hard_reconnect()
+
+        # UE drops the UnrealCV socket during skinned-mesh compilation
+        # (~60-120s).  UnrealCV is single-client: creating a NEW client
+        # via hard_reconnect() while the old connection is registered
+        # server-side blocks forever.  Instead: disconnect the current
+        # client cleanly, wait, then reconnect the SAME client object.
+        log.info("[%s] spawn sent — waiting for UE recovery (up to 5 min)...",
+                 self.name)
+        try:
+            self._client.disconnect()
+        except Exception:
+            pass
+        time.sleep(5.0)
+        for attempt in range(60):  # 60 * 5s = 300s max
+            try:
+                self._client.connect()
+                if self.is_connected():
+                    log.info("[%s] reconnected after spawn (attempt %d, ~%ds)",
+                             self.name, attempt + 1, (attempt + 1) * 5 + 5)
+                    break
+            except Exception:
+                pass
+            if attempt % 10 == 9:
+                log.info("[%s] still waiting for UE... (%ds)",
+                         self.name, (attempt + 1) * 5 + 5)
+            time.sleep(5.0)
+        else:
+            raise UCVError(f"[{self.name}] spawn reconnect failed after 300s")
         log.info("[%s] spawned BP %s as %s at %s",
                  self.name, blueprint_path, name, location)
 

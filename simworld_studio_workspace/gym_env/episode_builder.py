@@ -156,6 +156,7 @@ def sample_pointnav_episode_navmesh(
     build_navmesh: bool = True,
     nav_interface=None,
     sample_count: int = 500,
+    bounds: Optional[Tuple[float, float, float, float]] = None,
 ) -> dict:
     """Sample a PointNav episode — all sampling from UE navmesh, no scene graph.
 
@@ -185,9 +186,26 @@ def sample_pointnav_episode_navmesh(
             "Is navmesh built? Check vget /nav/status."
         )
 
-    # Filter out positions in the outer 10% of the navmesh bounding box.
-    # Edge positions are often outside the playable area or in degenerate
-    # navmesh polygons that produce unreachable episodes.
+    # If bounds are specified, filter positions to that area first.
+    # bounds = (x_min, y_min, x_max, y_max)
+    pre_filter_count = len(positions)
+    if bounds is not None:
+        bx_min, by_min, bx_max, by_max = bounds
+        positions = [
+            p for p in positions
+            if bx_min <= p.x <= bx_max and by_min <= p.y <= by_max
+        ]
+        log.info(
+            "bounds filter: %d -> %d positions (bounds [%.0f,%.0f]-[%.0f,%.0f])",
+            pre_filter_count, len(positions), bx_min, by_min, bx_max, by_max,
+        )
+        if len(positions) < 2:
+            raise RuntimeError(
+                f"After bounds filtering, only {len(positions)} positions remain. "
+                f"Bounds [{bx_min},{by_min}]-[{bx_max},{by_max}] may be too tight."
+            )
+
+    # Filter out positions in the outer 10% of the (remaining) bounding box.
     xs = [p.x for p in positions]
     ys = [p.y for p in positions]
     x_min, x_max = min(xs), max(xs)
