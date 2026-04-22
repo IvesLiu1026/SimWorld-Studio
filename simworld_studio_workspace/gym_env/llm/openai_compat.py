@@ -59,8 +59,18 @@ class OpenAICompatClient(LLMClient):
                 api_key = os.environ.get(env)
                 if api_key:
                     break
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # Defer client construction to per-call: reusing a single httpx pool
+        # across unrealcv.connect() on Windows reproduces WinError 10061 on
+        # every subsequent outbound request in the same process. See
+        # co_evolve/loop.py::_make_llm_call for the same mitigation.
+        self._api_key = api_key
+        self._base_url = base_url
+        self._openai_cls = OpenAI
         self._text_action_mode = text_action_mode
+
+    @property
+    def _client(self):
+        return self._openai_cls(api_key=self._api_key, base_url=self._base_url)
 
     # ------------------------------------------------------------------
 
@@ -100,7 +110,16 @@ class OpenAICompatClient(LLMClient):
                     temperature=temperature,
                     timeout=120,
                 )
-                return self._parse_response(resp)
+                result = self._parse_response(resp)
+                # vLLM without --enable-auto-tool-choice accepts tools
+                # param but returns empty tool_calls.  The model may have
+                # embedded the action in text (Qwen <tool_call> XML).
+                if not result.tool_calls and result.text:
+                    tool_names = [t["name"] for t in tools]
+                    fallback = self._parse_text_action(resp, tool_names)
+                    if fallback.tool_calls:
+                        return fallback
+                return result
             except Exception as exc:
                 if "tool" in str(exc).lower() and "400" in str(exc):
                     log.warning(

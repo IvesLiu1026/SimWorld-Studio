@@ -39,8 +39,15 @@ class DesignRecord:
 REFLECT_PROMPT = """\
 You are analyzing your history as a curriculum designer for a navigation agent.
 
-Your goal: design tasks that keep the agent in the learning zone (SR 25-75%).
-Your reward = 1 - agent_SR (but 0 if agent_SR < 10%, meaning task was too hard).
+## REWARD SHAPE (updated — ignore any principles that reference reward=1-SR)
+Reward = Gaussian(SR; peak=0.60, sigma=0.20) × (1 + 0.25·progress_bonus)
+  - Peak reward is at SR≈0.60. SR=0.25 gives reward≈0.29 (NOT 0.75).
+  - progress_bonus rewards raising difficulty at/above the running best.
+  - SR<0.10 → reward=0 (catastrophic). SR>0.85 → reward<0.2 (too easy).
+  - Optimal: SR in [0.45, 0.75] AT the highest difficulty the agent can still handle.
+
+Your goal: keep SR in [0.45, 0.75] while difficulty MONOTONICALLY rises.
+Principles that endorse SR<0.3 or advocate cyclic difficulty resets are WRONG under this reward.
 
 ## Your recent design records:
 {history}
@@ -49,11 +56,12 @@ Your reward = 1 - agent_SR (but 0 if agent_SR < 10%, meaning task was too hard).
 {principles}
 
 Based on the outcomes, extract 1-3 NEW curriculum design principles.
+If any existing principle contradicts the new reward shape, write a replacement.
 Focus on:
-- What difficulty scores (0-100) lead to the best coding_reward (0.5-0.75)?
-- When should you add objects vs just increase path length?
-- What heading offsets work at each difficulty level?
-- At what SR should you escalate to a new scene with more objects?
+- Which difficulty increments actually kept SR in [0.45, 0.75]?
+- When does adding an object cause SR to collapse <0.2 vs stay in band?
+- How many epochs should a single scene be held before escalating?
+- What's the best progression: path length vs object count vs blocked ratio?
 
 Return ONLY a JSON array: ["principle 1", "principle 2"]"""
 
@@ -109,8 +117,20 @@ class CodingAgentMemory:
         self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def record(self, epoch: int, spec, nav_sr: float, difficulty_score: float):
-        """Record a design + outcome."""
-        coding_reward = compute_coding_reward(nav_sr)
+        """Record a design + outcome.
+
+        Reward uses the running best difficulty so the progress bonus reflects
+        curriculum ascent, not a single epoch.
+        """
+        best_diff = max(
+            (r.difficulty_score for r in self.history if r.nav_sr >= 0.2),
+            default=0.0,
+        )
+        coding_reward = compute_coding_reward(
+            nav_sr=nav_sr,
+            difficulty=difficulty_score,
+            best_difficulty=best_diff,
+        )
         self.history.append(DesignRecord(
             epoch=epoch,
             scene_id=getattr(spec, 'scene_id', '?'),
@@ -124,8 +144,8 @@ class CodingAgentMemory:
             reasoning=getattr(spec, 'reasoning', '')[:80],
         ))
         self._save()
-        log.info("CodingMemory: epoch=%d difficulty=%.0f nav_sr=%.2f coding_reward=%.2f",
-                 epoch, difficulty_score, nav_sr, coding_reward)
+        log.info("CodingMemory: epoch=%d difficulty=%.2f (best=%.2f) nav_sr=%.2f coding_reward=%.2f",
+                 epoch, difficulty_score, best_diff, nav_sr, coding_reward)
 
     def maybe_reflect(self, epoch: int) -> bool:
         """Reflect every N epochs."""

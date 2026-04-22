@@ -21,7 +21,8 @@ def main(argv=None):
     p.add_argument("--nav-base-url", default=None, help="Nav LLM API URL (default: from env NAV_BASE_URL)")
     p.add_argument("--nav-api-key", default=None)
     p.add_argument("--nav-memory", default="strategy")
-    p.add_argument("--capture-rgb", action="store_true", default=False)
+    p.add_argument("--no-rgb", action="store_true", default=False,
+                   help="Disable RGB capture (default: RGB on)")
 
     p.add_argument("--coding-model-id", default=None, help="Coding LLM model ID (default: from env CODING_MODEL_ID)")
     p.add_argument("--coding-base-url", default=None, help="Coding LLM API URL (default: from env CODING_BASE_URL)")
@@ -53,7 +54,7 @@ def main(argv=None):
         max_steps=args.max_steps,
         nav_model=args.nav_model,
         nav_memory=args.nav_memory,
-        capture_rgb=args.capture_rgb,
+        capture_rgb=not args.no_rgb,
         ucv_port=args.ucv_port,
         mcp_port=args.mcp_port,
         seed=args.seed,

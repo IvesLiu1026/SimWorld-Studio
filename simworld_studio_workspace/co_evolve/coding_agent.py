@@ -22,10 +22,29 @@ log = logging.getLogger(__name__)
 
 CODING_AGENT_PROMPT = """\
 You are a **training environment designer** for a navigation agent.
-Your REWARD = 1 - agent_success_rate (but 0 if agent_SR < 10%).
-Maximize your reward by designing challenging but solvable tasks.
+
+## REWARD (READ CAREFULLY — this is the new shape)
+Reward = Gaussian(agent_SR; peak=0.60, sigma=0.20) × (1 + 0.25·progress_bonus)
+  - Peak reward at SR ≈ 0.60 (NOT at low SR).
+  - SR=0.60 → 1.00;  SR=0.40 or 0.80 → 0.61;  SR=0.20 or 1.00 → 0.14;  SR<0.10 → 0.
+  - progress_bonus > 0 only when current difficulty ≥ running best difficulty.
+  - Therefore: tasks that are TOO HARD (SR<0.2) give nearly zero reward.
+    Tasks that are TOO EASY (SR>0.85) also give near-zero reward.
+    Optimal is SR in [0.45, 0.75] AT THE HIGHEST DIFFICULTY the agent can still handle.
+
+## HARD CONSTRAINTS (violations will be clipped by the framework)
+1. target_difficulty must NOT decrease by more than 0.5 from the previous epoch.
+   (You cannot "reset" to low difficulty to farm easy reward.)
+2. Do not use action="new_scene" unless the current scene has been held for ≥ 3
+   epochs OR rolling_SR < 0.10 (catastrophic) OR rolling_SR > 0.85 (mastered).
+   Use "keep_scene" or "modify_scene" for incremental edits instead.
+3. Base decisions on ROLLING SR (shown below), NOT last-epoch SR.
+   Single-epoch SR is quantized and noisy — do not react to one bad reading.
 
 ## EMBODIED AGENT STATUS
+{rolling_summary}
+
+Per-epoch history (for trend only; act on the rolling stats above):
 {performance_history}
 
 Learned strategies:
@@ -34,7 +53,7 @@ Learned strategies:
 Failure patterns:
 {failure_patterns}
 
-## CURRENT SCENE (difficulty: {current_difficulty}/100)
+## CURRENT SCENE (difficulty: {current_difficulty}/10)
 {current_scene}
 
 ## YOUR DESIGN MEMORY
@@ -54,24 +73,27 @@ To create effective obstacles that FORCE detours:
 - Cluster objects to form walls, corridors, or chokepoints
 - A single isolated object is easy to walk around — use groups of 2-3
   objects placed close together (300-800 units apart) to form barriers
-- Example barrier: 3 buildings in a line at y=0, spaced 800 units apart,
-  forces the agent to go around the entire wall
 
-## DIFFICULTY SCALE (0-10)
-Current: {current_difficulty}/10
+## DIFFICULTY SCALE (0-10, monotone target)
 1 = empty field, 1000cm path → agent ~80% SR
-2 = empty field, 2000cm path → agent ~60% SR
-3 = 1-2 objects, 1500cm path → agent ~50% SR
-4 = 3-4 objects forming a partial wall, 2000cm path → agent ~40% SR
-5 = 5+ objects forming corridors, 2500cm path → agent ~30% SR
-6 = dense layout with walls, 3000cm path, forced detours → agent ~20% SR
-8 = complex town layout with multiple walls → agent ~10% SR
-10 = dense city with objectnav → agent ~5% SR
+2 = empty field, 2000cm path → agent ~65% SR
+3 = 1-2 objects, 1500cm path → agent ~55% SR
+4 = 3-4 objects forming a partial wall, 2000cm path → agent ~45% SR
+5 = 5+ objects forming corridors, 2500cm path → agent ~35% SR
+6 = dense layout with walls, 3000cm path, forced detours → agent ~25% SR
+8 = complex town layout with multiple walls → agent ~15% SR
 
-## YOUR GOAL
-Increase difficulty GRADUALLY. If agent SR > 60%, push harder.
-If SR < 20%, pull back slightly. Add 1-2 objects at a time.
-Place objects to BLOCK direct paths, not just decorate the scene.
+## POLICY
+Target rolling_SR in [0.45, 0.75] (ZPD band).
+- If rolling_SR > 0.75 AND stable (streak ≥ 2): increase difficulty by +0.3 to +0.6
+  (add 1 object OR +300cm path length, not both).
+- If rolling_SR in [0.45, 0.75]: KEEP difficulty roughly flat (±0.2), let the agent
+  master this level. Small scene tweaks are OK.
+- If rolling_SR in [0.20, 0.45]: hold difficulty flat; do NOT add hardness, let
+  the agent catch up (new strategies accumulate every epoch).
+- If rolling_SR < 0.20: decrease difficulty by -0.3 to -0.5 (remove 1 object OR
+  -300cm path), NOT more.
+- Change ONE variable at a time (path OR objects OR heading), never multiple.
 
 Output JSON:
 ```json
@@ -110,6 +132,8 @@ class CodingAgent:
         self._current_scene_id = "scene_000"
         self._scene_counter = 0
         self._current_difficulty = 0.0
+        self._best_difficulty = 0.0
+        self._last_scene_streak = 0
         self._last_successful_spec: Optional[SceneSpec] = None
 
     def design(
@@ -118,6 +142,8 @@ class CodingAgent:
         strategies: str,
         failure_patterns: str,
         current_scene_objects: List[str],
+        rolling_summary: str = "(no data yet)",
+        current_scene_streak: int = 0,
     ) -> SceneSpec:
         """Design next scene+tasks. Retries on parse failure, NEVER falls back."""
 
@@ -134,11 +160,13 @@ class CodingAgent:
             strategies=strategies or "(none yet)",
             failure_patterns=failure_patterns or "(none yet)",
             current_scene=current_scene,
-            current_difficulty=f"{self._current_difficulty:.0f}",
+            current_difficulty=f"{self._current_difficulty:.1f}",
             coding_memory=coding_memory_text or "(no experience yet)",
             asset_catalog=SceneManager.get_asset_catalog_prompt(),
             asset_keys=", ".join(sorted(ASSET_CATALOG.keys())),
+            rolling_summary=rolling_summary,
         )
+        self._last_scene_streak = current_scene_streak
 
         # Try up to 3 times to get valid JSON
         for attempt in range(3):
@@ -148,7 +176,8 @@ class CodingAgent:
                 self._last_successful_spec = spec
                 return spec
             except Exception as exc:
-                log.warning("CodingAgent attempt %d failed: %s", attempt + 1, exc)
+                log.warning("CodingAgent attempt %d failed: %s: %s",
+                            attempt + 1, type(exc).__name__, exc, exc_info=True)
 
         # All retries failed — use last successful design
         if self._last_successful_spec is not None:
@@ -207,6 +236,14 @@ class CodingAgent:
         is_new = action == "new_scene"
         is_modify = action == "modify_scene"
 
+        # Enforce scene persistence: downgrade new_scene -> modify_scene if the
+        # agent tries to churn before the current scene has had 3 epochs of data.
+        if is_new and self._last_scene_streak < 3:
+            log.info("CodingAgent: downgrading new_scene -> modify_scene "
+                     "(scene streak=%d < 3)", self._last_scene_streak)
+            is_new = False
+            is_modify = True
+
         if is_new or is_modify:
             self._scene_counter += 1
             scene_id = f"scene_{self._scene_counter:03d}"
@@ -241,7 +278,17 @@ class CodingAgent:
             remove_names = data.get("remove_objects", [])
 
         target_diff = float(data.get("target_difficulty", self._current_difficulty))
+        # Hard cap on downward difficulty step: no more than -0.5 per epoch.
+        # Prevents the "SR crash -> reset to diff=2" escape hatch that killed
+        # curriculum monotonicity in coevolve_20260420_055752.
+        floor = self._current_difficulty - 0.5
+        if target_diff < floor:
+            log.info("CodingAgent: clamped target_difficulty %.2f -> %.2f "
+                     "(max downshift 0.5)", target_diff, floor)
+            target_diff = floor
         self._current_difficulty = target_diff
+        if target_diff > self._best_difficulty:
+            self._best_difficulty = target_diff
 
         spec = SceneSpec(
             scene_id=scene_id,
@@ -251,7 +298,7 @@ class CodingAgent:
             min_path_cm=max(500.0, float(data.get("min_path_cm", 800))),
             max_path_cm=min(5000.0, float(data.get("max_path_cm", 2000))),
             max_steps=min(40, max(15, int(data.get("max_steps", 25)))),
-            n_episodes=min(6, max(2, int(data.get("n_episodes", 4)))),
+            n_episodes=min(12, max(4, int(data.get("n_episodes", 8)))),
             reasoning=str(data.get("reasoning", "")),
         )
         spec._is_new_scene = is_new

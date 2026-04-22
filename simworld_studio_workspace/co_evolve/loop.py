@@ -23,7 +23,7 @@ from .coding_agent import CodingAgent
 from .coding_memory import CodingAgentMemory
 from .config import CoEvolveConfig
 from .context_manager import CoEvolveContextManager
-from .difficulty import compute_coding_reward, measure_blocked_ratio, score_task_difficulty
+from .difficulty import compute_coding_reward, measure_blocked_ratio, measure_float_penalty, score_task_difficulty
 from .scene_manager import SceneManager, SceneSpec
 
 log = logging.getLogger(__name__)
@@ -227,9 +227,32 @@ else:
                 strategies=nav_ctx["strategies"],
                 failure_patterns=nav_ctx["failure_summary"],
                 current_scene_objects=scene_mgr.get_scene_objects(),
+                rolling_summary=nav_ctx.get("rolling_summary", "(no data yet)"),
+                current_scene_streak=nav_ctx.get("current_scene_streak", 0),
             )
             spec.max_steps = min(spec.max_steps, cfg.max_steps)
             spec.max_path_cm = min(spec.max_path_cm, 5000.0)
+            # cfg.episodes_per_gen is a FLOOR — each epoch runs at least this
+            # many tasks, so the per-epoch SR average has enough samples to be
+            # a stable signal for the coding agent. Fixes the 4-episode
+            # quantization noise from coevolve_20260420_055752.
+            spec.n_episodes = max(spec.n_episodes, cfg.episodes_per_gen)
+
+            # Hard-clip path length step-downs to prevent difficulty regression.
+            if self.gen_results:
+                prev = self.gen_results[-1]
+                floor_min = max(500.0, prev.get("min_path_cm", 500.0) - 500.0)
+                floor_max = max(1000.0, prev.get("max_path_cm", 1000.0) - 500.0)
+                if spec.min_path_cm < floor_min:
+                    log.info("Clamping min_path_cm %.0f -> %.0f (max -500 step)",
+                             spec.min_path_cm, floor_min)
+                    spec.min_path_cm = floor_min
+                if spec.max_path_cm < floor_max:
+                    log.info("Clamping max_path_cm %.0f -> %.0f (max -500 step)",
+                             spec.max_path_cm, floor_max)
+                    spec.max_path_cm = floor_max
+                if spec.min_path_cm >= spec.max_path_cm:
+                    spec.max_path_cm = spec.min_path_cm + 500.0
 
             is_new_scene = getattr(spec, '_is_new_scene', False)
             is_modify = getattr(spec, '_is_modify', False)
@@ -403,13 +426,24 @@ else:
             epoch_dir = self.output_dir / f"epoch_{epoch:03d}"
             epoch_dir.mkdir(parents=True, exist_ok=True)
 
-            # Create env for this PIE session
+            # Create env for this PIE session.
+            # spawn_on_reset=False: agent is spawned ONCE below (ghost mode
+            # allows teleport between episodes, avoiding 10s respawn overhead
+            # per episode).
             env = SimWorldNavEnv(
                 ucv_client=ucv, mcp_client=mcp,
                 agent_name="CoEvolveAgent_0",
                 capture_rgb=cfg.capture_rgb,
-                spawn_on_reset=True, ensure_pie=False,
+                spawn_on_reset=False, ensure_pie=False,
             )
+            # Pre-spawn the agent for this epoch (one-time cost, then
+            # subsequent resets just teleport).
+            try:
+                env._spawn_agent()
+                log.info("Agent pre-spawned for epoch %d", epoch)
+            except Exception as exc:
+                log.warning("Agent pre-spawn failed, falling back to per-episode spawn: %s", exc)
+                env.spawn_on_reset = True
 
             wave_results = []
             all_trajectories = []
@@ -448,7 +482,8 @@ else:
                     log.info("  ep %d: SR=%d steps=%d %s",
                              ep_idx, sr, steps, result["ended_reason"])
                 except Exception as exc:
-                    log.error("  ep %d FAILED: %s", ep_idx, exc)
+                    log.error("  ep %d FAILED: %s: %s", ep_idx,
+                              type(exc).__name__, exc, exc_info=True)
                     wave_results.append({
                         "episode_id": ep.episode_id,
                         "SR": 0, "SPL": 0, "steps": 0,
@@ -462,7 +497,20 @@ else:
             sr = n_success / n if n else 0
             spl = sum(r.get("SPL", 0) for r in wave_results) / n if n else 0
             avg_steps = sum(r.get("steps", 0) for r in wave_results) / n if n else 0
-            coding_reward = compute_coding_reward(sr)
+            # Measure float penalty in PIE — check if objects are grounded.
+            float_penalty = 0.0
+            spawned = scene_mgr.get_scene_objects()
+            if spawned:
+                try:
+                    float_penalty = measure_float_penalty(ucv, spawned)
+                except Exception as fp_exc:
+                    log.warning("Float penalty check failed: %s", fp_exc)
+
+            coding_reward = compute_coding_reward(
+                sr, difficulty=avg_task_diff,
+                best_difficulty=coding_agent._best_difficulty,
+                float_penalty=float_penalty,
+            )
 
             coding_mem.record(epoch, spec, sr, avg_task_diff)
             coding_mem.maybe_reflect(epoch)
@@ -524,13 +572,32 @@ else:
 
     @staticmethod
     def _make_llm_call(model_id, base_url, api_key):
+        """Build a per-call LLM closure with fresh OpenAI client each call.
+
+        Fresh client = fresh httpx pool. Reusing a single long-lived client
+        across ucv.connect() on Windows reproduced WinError 10061 on every
+        subsequent outbound request. Per-call clients work. Connect timeout
+        is short so transient SYN rejections fail fast and retry.
+        """
         from openai import OpenAI
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        import httpx as _httpx
+        _timeout = _httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
+
         def call(prompt: str) -> str:
-            resp = client.chat.completions.create(
-                model=model_id,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=8192, temperature=0.7,
+            client = OpenAI(
+                api_key=api_key, base_url=base_url,
+                timeout=_timeout, max_retries=6,
             )
-            return resp.choices[0].message.content or ""
+            try:
+                resp = client.chat.completions.create(
+                    model=model_id,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=8192, temperature=0.7,
+                )
+                return resp.choices[0].message.content or ""
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
         return call

@@ -49,9 +49,59 @@ class CoEvolveContextManager:
             scene = r.get("scene_id", "?")
             perf_lines.append(
                 f"Epoch {r.get('generation','?')}: SR={sr:.0%} SPL={spl:.3f} "
-                f"diff={diff:.0f} scene={scene} "
+                f"diff={diff:.1f} scene={scene} "
                 f"path=[{r.get('min_path_cm',0):.0f},{r.get('max_path_cm',0):.0f}]"
             )
+
+        # Rolling / EMA SR — coding agent sees smoothed signal, not a single noisy datapoint.
+        # With n=4 eps/gen, a single SR has only 5 possible values; any one reading is
+        # mostly noise. EMA over last 5 epochs gives the coding agent a stable feedback
+        # signal to act on.
+        rolling_sr = 0.0
+        ema_sr = 0.0
+        if self.gen_results:
+            recent = self.gen_results[-5:]
+            rolling_sr = sum(r.get("sr", 0) for r in recent) / len(recent)
+            alpha = 0.4
+            ema_sr = self.gen_results[0].get("sr", 0)
+            for r in self.gen_results[1:]:
+                ema_sr = alpha * r.get("sr", 0) + (1 - alpha) * ema_sr
+
+        # How many consecutive epochs has rolling SR been out of the ZPD band?
+        ZPD_LO, ZPD_HI = 0.5, 0.75
+        out_of_band_streak = 0
+        last_sr_in_band = None
+        for r in reversed(self.gen_results):
+            sr_i = r.get("sr", 0)
+            in_band = ZPD_LO <= sr_i <= ZPD_HI
+            if last_sr_in_band is None:
+                last_sr_in_band = in_band
+            if in_band == last_sr_in_band:
+                if not in_band:
+                    out_of_band_streak += 1
+            else:
+                break
+
+        # Scene stability — how many epochs on current scene
+        current_scene_streak = 0
+        if self.gen_results:
+            last_scene = self.gen_results[-1].get("scene_id", "?")
+            for r in reversed(self.gen_results):
+                if r.get("scene_id", "?") == last_scene:
+                    current_scene_streak += 1
+                else:
+                    break
+
+        if self.gen_results:
+            last_sr = self.gen_results[-1].get("sr", 0)
+            rolling_summary = (
+                f"Rolling-5 SR={rolling_sr:.2f}, EMA SR={ema_sr:.2f}, "
+                f"last-epoch SR={last_sr:.2f}. "
+                f"Out-of-ZPD streak={out_of_band_streak}. "
+                f"Current scene kept for {current_scene_streak} epoch(s)."
+            )
+        else:
+            rolling_summary = "(no data yet)"
 
         # Failure analysis
         recent_eps = self._all_episode_results[-12:]
@@ -66,6 +116,11 @@ class CoEvolveContextManager:
             "strategies": "\n".join(f"  {i+1}. {s}" for i, s in enumerate(strategies)) if strategies else "(none)",
             "l3_skills": l3_section or "(none)",
             "performance_history": "\n".join(perf_lines) if perf_lines else "(no data)",
+            "rolling_summary": rolling_summary,
+            "rolling_sr": rolling_sr,
+            "ema_sr": ema_sr,
+            "out_of_band_streak": out_of_band_streak,
+            "current_scene_streak": current_scene_streak,
             "failure_summary": fail_summary,
         }
 

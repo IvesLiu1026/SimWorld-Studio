@@ -160,6 +160,25 @@ class SceneManager:
                     rotation=(0.0, obj.yaw, 0.0),
                     collision_mode=2,  # XY-only: separate objects, no ground trace
                 )
+                # Snap z to NavMesh-projected ground level so objects don't float.
+                # After spawn, project (x,y) onto the navmesh to get the actual
+                # floor z, then move the object there.
+                try:
+                    nav_resp = self.ucv.send(
+                        f"vget /nav/project {obj.x} {obj.y} 0"
+                    ).strip()
+                    parts = nav_resp.split(",")
+                    if len(parts) >= 3 and not nav_resp.startswith("error"):
+                        floor_z = float(parts[2])
+                        self.ucv.send(
+                            f"vset /object/{obj.actor_name}/location "
+                            f"{obj.x} {obj.y} {floor_z}"
+                        )
+                        log.info("  Snapped %s z to navmesh floor: %.0f",
+                                 obj.actor_name, floor_z)
+                except Exception as snap_exc:
+                    log.warning("  z-snap failed for %s: %s",
+                                obj.actor_name, snap_exc)
                 self._spawned_names.append(obj.actor_name)
                 success_count += 1
                 log.info("  Spawned %s (%s) at (%.0f, %.0f)",
