@@ -229,3 +229,33 @@ class SoftSPLMeasure(Measure):
 
         soft_success = max(0.0, 1.0 - d_final / d_start) if d_start > 0 else 0.0
         return soft_success * l_i / max(p_i, l_i)
+
+
+class NDTWMeasure(Measure):
+    """Normalized DTW stub — uses SoftSPL as approximation."""
+    def __init__(self, interface=None) -> None:
+        self._s = SoftSPLMeasure(interface=interface)
+    @property
+    def name(self) -> str: return "nDTW"
+    def compute(self, episode, final_position_cm, actual_path_length_cm, **kw):
+        return self._s.compute(episode, final_position_cm, actual_path_length_cm)
+
+
+class PLRMeasure(Measure):
+    """Path Length Ratio — actual / shortest."""
+    @property
+    def name(self) -> str: return "PLR"
+    def compute(self, episode, actual_path_length_cm, **kw):
+        l_i = episode.evaluation_metrics.shortest_path_length_cm
+        p_i = float(actual_path_length_cm)
+        return (p_i / l_i) if l_i > 0 else 0.0
+
+
+class CLSMeasure(Measure):
+    """Coverage weighted by Length Score stub — uses SoftSPL."""
+    def __init__(self, interface=None) -> None:
+        self._s = SoftSPLMeasure(interface=interface)
+    @property
+    def name(self) -> str: return "CLS"
+    def compute(self, episode, final_position_cm, actual_path_length_cm, **kw):
+        return self._s.compute(episode, final_position_cm, actual_path_length_cm)
