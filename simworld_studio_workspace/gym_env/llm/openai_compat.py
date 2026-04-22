@@ -220,14 +220,34 @@ class OpenAICompatClient(LLMClient):
         # finds no action name (step becomes "no_tool_call").  Non
         # thinking models need ~3 tokens for the action word and a
         # small cap saves latency.
-        is_thinking = "thinking" in self.model.lower() or "qwen3" in self.model.lower()
-        text_max = max(max_tokens, 4096) if is_thinking else min(max_tokens, 32)
+        # Only bump max_tokens for models that are explicitly marked as
+        # "thinking" variants (chain-of-thought output).  Qwen3.5 is a
+        # hybrid model whose thinking is gated by a chat-template kwarg
+        # (`enable_thinking`), so leave its cap at the small action-name
+        # budget unless the model name spells out "thinking".
+        is_thinking = "thinking" in self.model.lower()
+        # 256 tokens covers a one-sentence "I see X, so Y" preamble + the
+        # action name without the model hitting `finish_reason=length`
+        # mid-sentence.  32 was too tight: Qwen3.5 always emits a brief
+        # analysis even with enable_thinking=False, and the parser then
+        # sees no action token at all (→ no_tool_call).
+        text_max = max(max_tokens, 4096) if is_thinking else min(max_tokens, 256)
+
+        # Disable thinking by default for Qwen3 hybrid models — each
+        # ghost just needs to emit an action name.  vLLM serving Qwen3
+        # accepts this via extra_body -> chat_template_kwargs and falls
+        # back gracefully for models that don't recognise it.
+        extra_body: Dict[str, Any] = {}
+        if "qwen3" in self.model.lower() and not is_thinking:
+            extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=patched,
             max_tokens=text_max,
             temperature=temperature,
-            timeout=120,  # prevent hanging on unresponsive vLLM
+            timeout=60,
+            extra_body=extra_body or None,
         )
         return self._parse_text_action(resp, tool_names)
 

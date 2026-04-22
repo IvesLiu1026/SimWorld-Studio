@@ -50,7 +50,22 @@ class EuclideanNavigationInterface:
     def get_agent_position(self) -> Position:
         resp = self._ucv(f"vget /object/{self._agent_name}/location")
         parts = resp.strip().split()
-        x, y = float(parts[0]), float(parts[1])
+        # UnrealCV returns strings like "error Can not find object ..."
+        # when the actor has been destroyed or the server is in a bad
+        # state (e.g. after a PIE crash or mid-cycle).  Raise a clean
+        # RuntimeError here so the batch runner treats it as step_error
+        # for this ghost instead of crashing with ValueError on float().
+        if len(parts) < 2 or parts[0].lower() == "error":
+            raise RuntimeError(
+                f"UCV position query failed for {self._agent_name!r}: {resp!r}"
+            )
+        try:
+            x, y = float(parts[0]), float(parts[1])
+        except ValueError as exc:
+            raise RuntimeError(
+                f"UCV returned non-numeric position for "
+                f"{self._agent_name!r}: {resp!r}"
+            ) from exc
         return Position(x=x, y=y, node_type="intersection")
 
     # -- distance ----------------------------------------------------------

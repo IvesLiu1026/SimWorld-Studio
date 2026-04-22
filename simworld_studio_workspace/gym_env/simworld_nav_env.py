@@ -204,7 +204,6 @@ class SimWorldNavEnv:
             elif self.spawn_on_reset:
                 self._spawn_agent()
                 self._spawned = True
-            self._resolve_camera_id()
 
         # Place at start.
         #
@@ -235,6 +234,12 @@ class SimWorldNavEnv:
         # Sync interface position cache and reset reward
         self._last_xy = (start.x, start.y)
         self.reward_fn.reset(episode)
+
+        # Resolve camera AFTER teleport: the sensor's world location
+        # only aligns with the agent's once the actor has been placed.
+        # Cheap (~5 ucv calls for a 5-ghost wave) and re-runs per episode
+        # in case the sensor ordering shifted between maps.
+        self._resolve_camera_id()
 
         obs = self.obs_builder.observe(episode, self._start_xy)
         info = self._build_info(initial=True)
@@ -320,26 +325,92 @@ class SimWorldNavEnv:
             log.warning("env: EnableController failed (non-fatal): %s", exc)
 
     def _resolve_camera_id(self) -> None:
-        """Resolve the camera index for our spawned agent's first-person view.
+        """Resolve the camera index for this agent's first-person view.
 
-        On the current build, the first spawned ``Base_User_Agent_C``
-        registers its ``FusionCamSensor`` at **sensor index 0**
-        (verified empirically with ``gym_env.probe_camera``: a 640x480
-        PNG capture from ``vget /camera/0/lit`` returns a valid image
-        with mean ~143 and std ~78 within ~70 ms).  Indices 1-3 return
-        ``error Invalid sensor id``.
+        ``USensorBPLib::GetFusionSensorList`` orders sensors as
+        ``[pawn's sensors] + [other FusionCamSensors in UE hash order]``
+        — the hash order is non-deterministic across ghosts, so the
+        slot index we pass from the runner does NOT correspond to the
+        sensor index.  Instead, we locate our agent's sensor by
+        matching each ``vget /camera/N/location`` against the agent's
+        actor location (FusionCamSensor is attached at eye-level so
+        the world-space distance is on the order of 10-150 cm).
 
-        Subsequent agents (if ever added) would go to index 1, 2, ...
-        in spawn order.  If you ever need the N-th agent's camera,
-        pass ``camera_id=N`` to the env ctor.
+        If ``camera_id`` is explicitly set via the ctor, honour it
+        (useful for legacy / single-agent paths).  Otherwise probe
+        the sensor list and pick the closest match.
         """
         if self._camera_id_override is not None:
             self._camera_id = self._camera_id_override
-        else:
-            self._camera_id = 0   # first humanoid's FusionCamSensor
-        self.obs_builder.camera_id = self._camera_id
-        log.info("env: using camera_id=%d for agent first-person view",
-                 self._camera_id)
+            self.obs_builder.camera_id = self._camera_id
+            log.info("env: using override camera_id=%d for %s",
+                     self._camera_id, self.agent_name)
+            return
+
+        # Location-based resolution
+        try:
+            agent_x, agent_y, agent_z = self.ucv.vget_location(self.agent_name)
+        except Exception as exc:
+            log.warning("env: could not read %s location (%s); fallback camera_id=0",
+                        self.agent_name, exc)
+            self._camera_id = 0
+            self.obs_builder.camera_id = 0
+            return
+
+        try:
+            resp = self.ucv.send("vget /cameras")
+        except Exception as exc:
+            log.warning("env: vget /cameras failed (%s); fallback camera_id=0", exc)
+            self._camera_id = 0
+            self.obs_builder.camera_id = 0
+            return
+
+        n_cams = len(resp.strip().split()) if resp else 0
+        best_id: Optional[int] = None
+        best_dist = float("inf")
+        for cam_id in range(n_cams):
+            try:
+                loc_resp = self.ucv.send(f"vget /camera/{cam_id}/location")
+            except Exception:
+                continue
+            parts = loc_resp.strip().split()
+            # UCV returns "error ..." if the sensor is invalid; skip those.
+            if len(parts) < 3 or parts[0].lower() == "error":
+                continue
+            try:
+                cx, cy, cz = float(parts[0]), float(parts[1]), float(parts[2])
+            except ValueError:
+                continue
+            dist = math.sqrt(
+                (cx - agent_x) ** 2
+                + (cy - agent_y) ** 2
+                + (cz - agent_z) ** 2
+            )
+            if dist < best_dist:
+                best_dist = dist
+                best_id = cam_id
+
+        # Sensors attached to the humanoid BP sit at eye-level relative to
+        # the actor, so the camera-to-actor distance should be well under
+        # a few meters when the match is correct.  Anything farther is
+        # likely a stale / wrong-agent sensor.
+        if best_id is None or best_dist > 500.0:
+            log.warning(
+                "env: could not locate camera for %s (best_id=%s dist=%.0fcm "
+                "n_cams=%d agent_xyz=(%.0f,%.0f,%.0f)); fallback camera_id=0",
+                self.agent_name, best_id, best_dist, n_cams,
+                agent_x, agent_y, agent_z,
+            )
+            self._camera_id = 0
+            self.obs_builder.camera_id = 0
+            return
+
+        self._camera_id = best_id
+        self.obs_builder.camera_id = best_id
+        log.info(
+            "env: resolved camera_id=%d for %s (dist=%.0fcm, n_cams=%d)",
+            best_id, self.agent_name, best_dist, n_cams,
+        )
 
     def close(self) -> None:
         log.info("env.close")

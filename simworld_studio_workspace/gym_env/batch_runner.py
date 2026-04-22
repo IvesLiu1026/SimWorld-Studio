@@ -328,7 +328,13 @@ def run_wave(
             ucv_client=ucv,
             mcp_client=mcp,
             agent_name=agent_name,
-            camera_id=i,            # spawn-order camera index (fresh UE → starts at 0)
+            # camera_id=None → env resolves dynamically at reset via
+            # location match against vget /cameras.  Spawn-order index
+            # is NOT stable: UnrealCV's sensor list starts with the
+            # PlayerController's pawn (whichever ghost called
+            # EnableController True LAST), so slot_idx → camera_id is
+            # wrong in ghost-mode waves.
+            camera_id=None,
             capture_rgb=capture_rgb,
             capture_depth=capture_depth,
             spawn_on_reset=False,   # already spawned as ghost
