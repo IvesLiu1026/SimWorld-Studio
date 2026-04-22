@@ -31,7 +31,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from nav_task.episode import NavigationEpisode
 from nav_task.interface_euclidean import EuclideanNavigationInterface
-from nav_task.measures import SoftSPLMeasure, SPLMeasure, SuccessMeasure
+from nav_task.measures import (
+    CLSMeasure,
+    NDTWMeasure,
+    PLRMeasure,
+    SoftSPLMeasure,
+    SPLMeasure,
+    SuccessMeasure,
+)
 from nav_task.reward import NavigationReward
 from nav_task.task_spec import make_task_prompt
 
@@ -139,6 +146,9 @@ class SimWorldNavEnv:
         self.success_measure = SuccessMeasure(interface=self.nav_iface)
         self.spl_measure = SPLMeasure(interface=self.nav_iface)
         self.softspl_measure = SoftSPLMeasure(interface=self.nav_iface)
+        self.plr_measure = PLRMeasure()
+        self.ndtw_measure = NDTWMeasure()
+        self.cls_measure = CLSMeasure()
 
         self.obs_builder = ObservationBuilder(
             ucv=self.ucv,
@@ -157,6 +167,9 @@ class SimWorldNavEnv:
         self._last_xy: Tuple[float, float] = (0.0, 0.0)
         self._cumulative_reward: float = 0.0
         self.last_step: Optional[StepResult] = None
+        # Full agent (x,y) trajectory in cm, including start and every
+        # post-step position.  Needed by nDTW / CLS.
+        self.trajectory: List[Tuple[float, float]] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -172,6 +185,7 @@ class SimWorldNavEnv:
 
         start = episode.start_position
         self._start_xy = (start.x, start.y)
+        self.trajectory = [self._start_xy]
 
         # Start PIE if requested.  Done in reset() (not __init__) so we
         # can recover from a manual stop/start cycle between episodes.
@@ -337,16 +351,46 @@ class SimWorldNavEnv:
     # Step
     # ------------------------------------------------------------------
 
+    def step_send(self, action: Dict[str, Any]) -> float:
+        """Send action to UE (non-blocking). Returns expected wait_s.
+
+        Use with step_finalize for batched ghost waves — all agents send in
+        phase A, caller sleeps once, then all call finalize in phase C.
+        """
+        if self.episode is None:
+            raise RuntimeError("env.step called before reset")
+        self.step_count += 1
+        action_name = action.get("tool") or action.get("name") or "UNKNOWN"
+        cmd = translate_action(
+            action, self.agent_name,
+            forward_duration_s=self.forward_duration_s,
+            turn_angle_deg=self.turn_angle_deg,
+        )
+        self.ucv.send(cmd)
+        self._pending_action = action
+        self._pending_cmd = cmd
+        self._pending_action_name = action_name
+        if action_name == "MOVE_FORWARD":
+            return self.forward_duration_s + _TICK_BUFFER_S
+        elif action_name in ("TURN_LEFT", "TURN_RIGHT"):
+            return 1.0 + _TICK_BUFFER_S
+        return _TICK_BUFFER_S
+
+    def step_finalize(self) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
+        """Finalize step after action has completed — read position, capture, compute."""
+        action = self._pending_action
+        cmd = self._pending_cmd
+        action_name = self._pending_action_name
+        return self._step_body(action, cmd, action_name)
+
     def step(
         self, action: Dict[str, Any],
     ) -> Tuple[Dict[str, Any], float, bool, bool, Dict[str, Any]]:
+        """Send action + wait + finalize (blocking). For single-agent / sequential use."""
         if self.episode is None:
             raise RuntimeError("env.step called before reset")
-
         self.step_count += 1
         action_name = action.get("tool") or action.get("name") or "UNKNOWN"
-
-        # 1. Translate + send (action_space owns the BP signature details)
         cmd = translate_action(
             action, self.agent_name,
             forward_duration_s=self.forward_duration_s,
@@ -354,9 +398,6 @@ class SimWorldNavEnv:
         )
         log.debug("env.step %d: %s", self.step_count, cmd)
         self.ucv.send(cmd)
-
-        # 2. Wait for the action to play out in UE.  StepForward must
-        # wait at least the requested duration; turns animate in ~1 s.
         if action_name == "MOVE_FORWARD":
             wait_s = self.forward_duration_s + _TICK_BUFFER_S
         elif action_name in ("TURN_LEFT", "TURN_RIGHT"):
@@ -364,6 +405,10 @@ class SimWorldNavEnv:
         else:
             wait_s = _TICK_BUFFER_S
         time.sleep(wait_s)
+        return self._step_body(action, cmd, action_name)
+
+    def _step_body(self, action, cmd, action_name):
+        """Common logic after action has played out (read pos, capture, reward)."""
 
         # 3. Read new position; update path length and reward
         if is_stop_action(action):
@@ -377,6 +422,7 @@ class SimWorldNavEnv:
         )
         self.path_length_cm += delta
         self._last_xy = new_xy
+        self.trajectory.append(new_xy)
 
         reward = float(self.reward_fn.step(new_xy))
         self._cumulative_reward += reward
@@ -463,11 +509,15 @@ class SimWorldNavEnv:
         kwargs = dict(
             final_position_cm=final_xy,
             actual_path_length_cm=self.path_length_cm,
+            trajectory_cm=self.trajectory,
         )
         return {
             "SR": float(self.success_measure.compute(ep, **kwargs)),
             "SPL": float(self.spl_measure.compute(ep, **kwargs)),
             "SoftSPL": float(self.softspl_measure.compute(ep, **kwargs)),
+            "PLR": float(self.plr_measure.compute(ep, **kwargs)),
+            "nDTW": float(self.ndtw_measure.compute(ep, **kwargs)),
+            "CLS": float(self.cls_measure.compute(ep, **kwargs)),
             "path_length_cm": self.path_length_cm,
             "cumulative_reward": self._cumulative_reward,
         }

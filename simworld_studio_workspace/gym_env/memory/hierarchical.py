@@ -82,6 +82,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -221,6 +222,10 @@ class HierarchicalMemory:
         # Track latest bearing/distance for retrieval context
         self._current_bearing: float = 0.0
         self._current_distance: float = 0.0
+
+        # Guards L2 merge, L3 distill, episode counter, and JSON persistence
+        # so concurrent ghost views can batch-update safely.
+        self._write_lock = threading.Lock()
 
         log.info(
             "HierarchicalMemory: L2=%d patterns, L3=%d skills, "
@@ -487,51 +492,49 @@ class HierarchicalMemory:
         total_steps: int = 0,
         final_distance_cm: float = 0.0,
     ) -> None:
-        """Compress L1 step records into L2 SAO patterns."""
-        if not self._l1:
-            return
-
-        self._episode_count += 1
-        log.info(
-            "Compacting episode %d: %d steps → L2",
-            self._episode_count, len(self._l1),
+        """Compress L1 step records into L2 SAO patterns (single-agent path)."""
+        self._merge_l1_into_l2(
+            self._l1,
+            success=success,
+            total_steps=total_steps,
+            final_distance_cm=final_distance_cm,
         )
 
-        # Step 1: compress steps into events
-        events = self._compressor.compress(self._l1)
-        log.info("  Compressed into %d events", len(events))
+    def _merge_l1_into_l2(
+        self,
+        l1_records: List[StepRecord],
+        *,
+        success: bool = False,
+        total_steps: int = 0,
+        final_distance_cm: float = 0.0,
+        distill: bool = True,
+    ) -> None:
+        """Thread-safe L1 → L2 merge used by both the single-agent path and
+        per-ghost forks.  Holds the write lock across L2/L3 mutation + persist.
+        """
+        if not l1_records:
+            return
 
-        # Step 2: extract SAO patterns from individual steps
-        for rec in self._l1:
-            pat = SAOPattern(
-                situation_key=rec.situation_key,
-                action=rec.action,
-                outcome=rec.outcome,
-                count=1,
-                total_delta_cm=rec.delta_cm,
-                lesson=rec.semantic,
+        with self._write_lock:
+            self._episode_count += 1
+            log.info(
+                "Compacting episode %d: %d steps → L2",
+                self._episode_count, len(l1_records),
             )
-            key = pat.pattern_key
-            if key in self._l2:
-                self._l2[key].merge(pat)
-            else:
-                self._l2[key] = pat
 
-        # Step 3: also store event-level lessons
-        for event in events:
-            if event.event_type in ("oscillation", "stuck", "backtrack"):
-                # These are high-value failure patterns
-                bearing_bin = self._l1[0].bearing_bin if self._l1 else "aligned"
-                from .semantic_reward import classify_distance
-                dist_bin = classify_distance(event.start_distance_cm)
-                sit_key = f"{bearing_bin}|{dist_bin}"
+            # Step 1: compress steps into events
+            events = self._compressor.compress(l1_records)
+            log.info("  Compressed into %d events", len(events))
+
+            # Step 2: extract SAO patterns from individual steps
+            for rec in l1_records:
                 pat = SAOPattern(
-                    situation_key=sit_key,
-                    action=event.event_type,
-                    outcome="failure_pattern",
+                    situation_key=rec.situation_key,
+                    action=rec.action,
+                    outcome=rec.outcome,
                     count=1,
-                    total_delta_cm=event.net_progress_cm,
-                    lesson=event.lesson,
+                    total_delta_cm=rec.delta_cm,
+                    lesson=rec.semantic,
                 )
                 key = pat.pattern_key
                 if key in self._l2:
@@ -539,22 +542,79 @@ class HierarchicalMemory:
                 else:
                     self._l2[key] = pat
 
-        # Step 4: prune L2 if too large (keep highest-count patterns)
-        if len(self._l2) > self._l2_max:
-            sorted_pats = sorted(
-                self._l2.items(),
-                key=lambda x: x[1].count,
-                reverse=True,
+            # Step 3: also store event-level lessons
+            for event in events:
+                if event.event_type in ("oscillation", "stuck", "backtrack"):
+                    bearing_bin = (
+                        l1_records[0].bearing_bin if l1_records else "aligned"
+                    )
+                    from .semantic_reward import classify_distance
+                    dist_bin = classify_distance(event.start_distance_cm)
+                    sit_key = f"{bearing_bin}|{dist_bin}"
+                    pat = SAOPattern(
+                        situation_key=sit_key,
+                        action=event.event_type,
+                        outcome="failure_pattern",
+                        count=1,
+                        total_delta_cm=event.net_progress_cm,
+                        lesson=event.lesson,
+                    )
+                    key = pat.pattern_key
+                    if key in self._l2:
+                        self._l2[key].merge(pat)
+                    else:
+                        self._l2[key] = pat
+
+            # Step 4: prune L2 if too large (keep highest-count patterns)
+            if len(self._l2) > self._l2_max:
+                sorted_pats = sorted(
+                    self._l2.items(),
+                    key=lambda x: x[1].count,
+                    reverse=True,
+                )
+                self._l2 = dict(sorted_pats[:self._l2_max])
+                log.info("  L2 pruned to %d patterns", len(self._l2))
+
+            self._save_l2()
+            self._save_episode_count()
+            should_distill = (
+                distill
+                and self._episode_count % self._distill_every == 0
             )
-            self._l2 = dict(sorted_pats[:self._l2_max])
-            log.info("  L2 pruned to %d patterns", len(self._l2))
 
-        self._save_l2()
-        self._save_episode_count()
-
-        # Step 5: trigger L3 distillation if due
-        if self._episode_count % self._distill_every == 0:
+        # Distill outside the lock — LLM call can be slow; L3 has its own
+        # save path.  If two forks race on distill they both produce valid
+        # L3 state, the second wins.
+        if should_distill:
             self._distill_skills()
+
+    def distill_if_due(self) -> None:
+        """Trigger L3 distillation if the shared episode counter is due.
+
+        Useful for batch-mode callers that want to force a distill after
+        all forks have completed their episodes.
+        """
+        with self._write_lock:
+            due = (
+                self._l2
+                and self._episode_count % self._distill_every == 0
+            )
+        if due:
+            self._distill_skills()
+
+    # ══════════════════════════════════════════════════════════════════
+    # Ghost-mode fork: per-agent L1, shared L2/L3
+    # ══════════════════════════════════════════════════════════════════
+
+    def fork(self, agent_id: str) -> "_GhostView":
+        """Return a lightweight per-agent view that shares L2/L3 but has a
+        private L1 working memory.
+
+        All ghosts in a wave should use their own fork; end_episode() on
+        each view folds that ghost's L1 into the shared L2 under a lock,
+        so updates from parallel ghosts are safely batched.
+        """
+        return _GhostView(self, agent_id)
 
     # ══════════════════════════════════════════════════════════════════
     # Internal: L2 → L3 distillation
@@ -766,3 +826,215 @@ class HierarchicalMemory:
         self._save_l3()
         self._save_episode_count()
         log.info("HierarchicalMemory cleared")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Ghost-mode per-agent view: private L1, shared L2/L3
+# ══════════════════════════════════════════════════════════════════════
+
+
+class _GhostView:
+    """Per-agent facade over a shared :class:`HierarchicalMemory`.
+
+    Each ghost in a wave forks its own view so their working memories
+    (L1) stay isolated — one ghost's recent steps do not leak into
+    another's retrieval context.  L2 (episodic patterns) and L3
+    (distilled skills) remain shared and are updated under a lock
+    when each ghost's episode ends, so all ghosts contribute to the
+    same persistent knowledge store.
+
+    Implements the same `AgentMemory` protocol as the parent
+    (insert / query / reset) plus the hierarchical extras used by
+    the runner (get_system_prompt_section / end_episode /
+    check_rethink).
+    """
+
+    name = "hierarchical_ghost"
+
+    def __init__(self, parent: "HierarchicalMemory", agent_id: str) -> None:
+        self._parent = parent
+        self._agent_id = agent_id
+        self._l1: List[StepRecord] = []
+        self._episode_lessons: List[Dict[str, Any]] = []
+        self._current_bearing: float = 0.0
+        self._current_distance: float = 0.0
+
+    # ── AgentMemory protocol ──────────────────────────────────────────
+
+    def insert(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        meta = metadata or {}
+
+        if meta.get("event_type") == "episode_summary":
+            self._episode_lessons.append({
+                "text": text,
+                "success": bool(meta.get("success", False)),
+            })
+            return
+
+        required = {"step", "action", "bearing_deg", "distance_cm",
+                    "prev_distance_cm", "reward"}
+        if required.issubset(meta.keys()):
+            record = self._parent._interpreter.interpret(
+                step=int(meta["step"]),
+                action=str(meta["action"]),
+                bearing_deg=float(meta["bearing_deg"]),
+                distance_cm=float(meta["distance_cm"]),
+                prev_distance_cm=float(meta["prev_distance_cm"]),
+                reward=float(meta["reward"]),
+                yaw_deg=float(meta.get("yaw_deg", 0.0)),
+            )
+            self._l1.append(record)
+            self._current_bearing = record.bearing_deg
+            self._current_distance = record.distance_cm
+        else:
+            record = StepRecord(
+                step=int(meta.get("step", len(self._l1) + 1)),
+                action=str(meta.get("action", "UNKNOWN")),
+                bearing_deg=0.0,
+                bearing_bin="aligned",
+                distance_cm=float(meta.get("d_goal_cm", 0)),
+                distance_bin="medium",
+                prev_distance_cm=float(meta.get("d_goal_cm", 0)),
+                delta_cm=float(meta.get("delta_cm", 0)),
+                outcome="neutral",
+                reward=float(meta.get("reward", 0)),
+                yaw_deg=0.0,
+                semantic=text,
+                situation_key="aligned|medium",
+            )
+            self._l1.append(record)
+
+    def query(self, text: str, k: int = 5) -> List[str]:
+        results: List[str] = []
+
+        # L2 (shared) — snapshot under lock to avoid concurrent mutation
+        with self._parent._write_lock:
+            l2_snapshot = dict(self._parent._l2)
+        if l2_snapshot:
+            matched = self._parent._retriever.query(
+                l2_snapshot,
+                bearing_deg=self._current_bearing,
+                distance_cm=self._current_distance,
+                k=min(k, 3),
+            )
+            for pat in matched:
+                results.append(f"[experience] {pat.to_text()}")
+
+        # L1 (private): own recent steps only
+        recent = self._l1[-self._parent._l1_window:]
+        for rec in recent:
+            results.append(f"[recent] {rec.semantic}")
+
+        return results
+
+    def reset(self) -> None:
+        """Compact own L1 into shared L2, then clear for next episode."""
+        if self._l1:
+            self._parent._merge_l1_into_l2(self._l1)
+        self._l1 = []
+        self._episode_lessons = []
+        self._current_bearing = 0.0
+        self._current_distance = 0.0
+
+    # ── Hierarchical extras ───────────────────────────────────────────
+
+    def get_system_prompt_section(self) -> str:
+        return self._parent.get_system_prompt_section()
+
+    def end_episode(
+        self,
+        success: bool = False,
+        total_steps: int = 0,
+        final_distance_cm: float = 0.0,
+        distill: bool = False,
+    ) -> None:
+        """Fold this ghost's L1 into shared L2.
+
+        ``distill`` is OFF by default for ghost views — with N ghosts
+        running concurrently we want to distill once after the wave
+        rather than N times during it.  The wave runner should call
+        :meth:`HierarchicalMemory.distill_if_due` after all ghosts have
+        ended their episodes.
+        """
+        self._parent._merge_l1_into_l2(
+            self._l1,
+            success=success,
+            total_steps=total_steps,
+            final_distance_cm=final_distance_cm,
+            distill=distill,
+        )
+        self._l1 = []
+        self._episode_lessons = []
+
+    def check_rethink(self) -> Optional[RethinkSignal]:
+        """Online failure-pattern detection on this ghost's own L1."""
+        recent = self._l1[-_RETHINK_WINDOW:]
+        if len(recent) < 3:
+            return None
+
+        # Delegate to parent's rethink logic by temporarily pointing it at
+        # our L1.  Safe because parent's check_rethink is pure wrt _l1 and
+        # this view is the only caller holding a reference to our list.
+        # We keep this inline rather than refactoring to avoid churning
+        # the single-agent code path.
+        turns = [r for r in recent if r.action in ("TURN_LEFT", "TURN_RIGHT")]
+        if len(turns) >= 3:
+            alternations = sum(
+                1 for j in range(len(turns) - 1)
+                if turns[j].action != turns[j + 1].action
+            )
+            net_progress = sum(r.delta_cm for r in recent)
+            if alternations >= 2 and abs(net_progress) < 60:
+                bearing = recent[-1].bearing_deg
+                distance = recent[-1].distance_cm
+                action_seq = " → ".join(r.action for r in recent)
+                return RethinkSignal(
+                    reason="oscillation",
+                    steps_affected=len(recent),
+                    prompt=(
+                        f"OBSERVATION: Your last {len(recent)} actions were: "
+                        f"{action_seq}. Net distance change: {net_progress:+.0f}cm "
+                        f"(no progress). Current bearing to goal: {bearing:+.0f}°, "
+                        f"distance: {distance:.0f}cm. "
+                        f"Your current approach is not working. "
+                        f"Rethink your strategy before choosing the next action."
+                    ),
+                )
+
+        forward_recent = [r for r in recent if r.action == "MOVE_FORWARD"]
+        if len(forward_recent) >= 2:
+            stuck_steps = [r for r in forward_recent if abs(r.delta_cm) < 30]
+            if len(stuck_steps) >= 2:
+                bearing = recent[-1].bearing_deg
+                distance = recent[-1].distance_cm
+                deltas = [f"{r.delta_cm:+.0f}" for r in stuck_steps]
+                return RethinkSignal(
+                    reason="stuck",
+                    steps_affected=len(stuck_steps),
+                    prompt=(
+                        f"OBSERVATION: You moved forward {len(stuck_steps)} times "
+                        f"but distance barely changed (deltas: {', '.join(deltas)}cm). "
+                        f"Something is blocking your path. "
+                        f"Current bearing: {bearing:+.0f}°, distance: {distance:.0f}cm. "
+                        f"Rethink your strategy before choosing the next action."
+                    ),
+                )
+
+            regressing = [r for r in forward_recent if r.delta_cm < -30]
+            if len(regressing) >= 2:
+                bearing = recent[-1].bearing_deg
+                distance = recent[-1].distance_cm
+                total_regress = sum(r.delta_cm for r in regressing)
+                return RethinkSignal(
+                    reason="backtrack",
+                    steps_affected=len(regressing),
+                    prompt=(
+                        f"OBSERVATION: You moved forward {len(regressing)} times "
+                        f"but distance to goal INCREASED by {abs(total_regress):.0f}cm. "
+                        f"You are moving away from the goal. "
+                        f"Current bearing: {bearing:+.0f}°, distance: {distance:.0f}cm. "
+                        f"Rethink your strategy before choosing the next action."
+                    ),
+                )
+
+        return None

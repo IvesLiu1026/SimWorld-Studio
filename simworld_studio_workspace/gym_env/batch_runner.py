@@ -83,6 +83,9 @@ class AgentSlot:
     episode: NavigationEpisode
     env: SimWorldNavEnv
     logger: Optional[EpisodeLogger] = None
+    # Per-agent memory view: private L1, shared L2/L3 (see HierarchicalMemory.fork).
+    # Falls back to the shared memory object if the backend doesn't support fork.
+    mem_view: Any = None
     history: List[LLMMessage] = field(default_factory=list)
     step: int = 0
     done: bool = False
@@ -356,17 +359,22 @@ def run_wave(
                 },
             )
 
+        # Per-ghost memory view: private L1, shared L2/L3.  Falls back to
+        # the shared object for backends that don't implement fork().
+        slot_mem = mem.fork(f"ghost_{i}") if hasattr(mem, "fork") else mem
+
         slot = AgentSlot(
             idx=i,
             agent_name=agent_name,
             episode=ep,
             env=env,
             logger=ep_logger,
+            mem_view=slot_mem,
         )
         # Inject strategy memory lessons into system prompt if available
         system_text = _NAV_SYSTEM_PROMPT
-        if hasattr(mem, "get_system_prompt_section"):
-            section = mem.get_system_prompt_section()
+        if hasattr(slot_mem, "get_system_prompt_section"):
+            section = slot_mem.get_system_prompt_section()
             if section:
                 system_text += section
         slot.history = [LLMMessage.text("system", system_text)]
@@ -400,11 +408,15 @@ def run_wave(
         unit="step",
         leave=True,
     )
+    from concurrent.futures import ThreadPoolExecutor
+    _llm_pool = ThreadPoolExecutor(max_workers=max(1, n))
+
     for t in range(1, max_steps + 1):
         active = [s for s in slots if not s.done]
         if not active:
             break
 
+        # Phase 1: build prompts + memory queries for all active agents (fast, local)
         for slot in active:
             slot.step = t
             obs = slot._obs
@@ -413,19 +425,11 @@ def run_wave(
 
             user_text = _build_user_text(info, obs)
 
-            # Memory: prepend recalled experience
-            recalled = mem.query(user_text, k=5)
+            recalled = slot.mem_view.query(user_text, k=5)
             if recalled:
                 recalled_text = "\n".join(f"- {m}" for m in recalled)
                 user_text = f"Relevant past experience:\n{recalled_text}\n\n{user_text}"
 
-            # Pick the image(s) the agent sees based on the modality:
-            #   image_kind == "rgb"       → first-person lit RGB
-            #   image_kind == "depth"     → pre-colorised depth map
-            #   image_kind == "rgb_depth" → BOTH RGB and depth as two
-            #                              image blocks (captioned so the
-            #                              VLM can tell them apart)
-            #   image_kind == "none"      → no image, scalars-only text
             no_image_client = getattr(llm, "name", "") == "claude-sdk"
             if no_image_client or image_kind == "none":
                 slot.history.append(LLMMessage.text("user", user_text))
@@ -452,10 +456,23 @@ def run_wave(
                     slot.history.append(LLMMessage.text("user", user_text))
             _strip_images(slot.history, vision_depth)
 
-            # LLM call (sequential per agent)
+        # Phase 2: parallel LLM calls for all active agents (vLLM batches)
+        def _call_llm(slot):
             try:
-                resp = llm.chat(slot.history, nav_tool_schemas(), max_tokens=1024)
+                return slot, llm.chat(slot.history, nav_tool_schemas(), max_tokens=1024), None
             except Exception as exc:
+                return slot, None, exc
+
+        llm_results = list(_llm_pool.map(_call_llm, active))
+
+        # Phase 3a: send actions for every active slot (non-blocking).
+        # All agents act concurrently in UE; we do one sleep for the
+        # longest-running action, then finalize each sequentially.
+        pending: List[Tuple[AgentSlot, Any, Any, float]] = []  # (slot, resp, tc, prev_d)
+        max_wait = 0.0
+        for slot, resp, exc in llm_results:
+            info = slot._info
+            if exc is not None:
                 log.error("LLM error for %s: %s", slot.agent_name, exc)
                 slot.ended_reason = "llm_error"
                 slot.done = True
@@ -477,63 +494,103 @@ def run_wave(
                 tool_calls=resp.tool_calls,
             ))
 
-            for tc in resp.tool_calls:
-                prev_d = info.get("distance_to_goal_cm")
-                try:
-                    obs, reward, done, truncated, info = slot.env.step(tc.to_action_dict())
-                except Exception as exc:
-                    log.error("%s step %d action %s failed: %s",
-                              slot.agent_name, t, tc.name, exc)
-                    slot.done = True
-                    slot.ended_reason = "step_error"
-                    break
-                global_step += 1
-                slot.cumulative_reward += float(reward)
+            # Only the first tool call is actioned per turn (matches the
+            # prompt: "call exactly one tool").
+            tc = resp.tool_calls[0]
+            prev_d = info.get("distance_to_goal_cm")
+            try:
+                wait_s = slot.env.step_send(tc.to_action_dict())
+            except Exception as exc:
+                log.error("%s step_send %d action %s failed: %s",
+                          slot.agent_name, t, tc.name, exc)
+                slot.done = True
+                slot.ended_reason = "step_error"
+                continue
+            if wait_s > max_wait:
+                max_wait = wait_s
+            pending.append((slot, resp, tc, prev_d))
 
-                if slot.logger is not None:
-                    slot.logger.log_step(
-                        t, tc.to_action_dict(), obs, reward, done, truncated, info,
-                    )
+        # Phase 3b: single wait — all agents' actions play out in parallel in UE.
+        if pending:
+            time.sleep(max_wait)
 
-                slot.history.append(LLMMessage(
-                    role="tool",
-                    tool_call_id=tc.id,
-                    content=[{"type": "text", "text": (
-                        f"reward={reward:+.3f} "
-                        f"d_goal={info['distance_to_goal_cm']:.0f}cm"
-                    )}],
-                ))
+        # Phase 3c: finalize each slot (read position, compute reward, build obs).
+        for slot, resp, tc, prev_d in pending:
+            try:
+                obs, reward, done, truncated, info = slot.env.step_finalize()
+            except Exception as exc:
+                log.error("%s step_finalize %d action %s failed: %s",
+                          slot.agent_name, t, tc.name, exc)
+                slot.done = True
+                slot.ended_reason = "step_error"
+                continue
+            global_step += 1
+            slot.cumulative_reward += float(reward)
 
-                # Memory: record step (per-agent trajectory)
-                new_d = info.get("distance_to_goal_cm")
-                if prev_d is not None and new_d is not None:
-                    delta = prev_d - new_d
-                    step_record = (
-                        f"t={t} {tc.name} d_goal:{prev_d:.0f}->{new_d:.0f}cm "
-                        f"(delta={delta:+.0f}) reward={reward:+.3f}"
-                    )
-                else:
-                    step_record = f"t={t} {tc.name} reward={reward:+.3f}"
-                agent_trajectories[slot.idx].append(step_record)
+            if slot.logger is not None:
+                slot.logger.log_step(
+                    t, tc.to_action_dict(), obs, reward, done, truncated, info,
+                )
 
-                # WandB per-step logging
-                if wandb_run:
-                    import wandb
-                    wandb.log({
-                        "batch/step_reward": float(reward),
-                        "batch/cumulative_reward": float(slot.cumulative_reward),
-                        "batch/distance_to_goal": float(info["distance_to_goal_cm"]),
-                        "batch/action": tc.name,
-                        "batch/agent": slot.agent_name,
-                        "batch/episode_idx": slot.idx,
-                        "batch/step": t,
-                    }, step=global_step)
+            slot.history.append(LLMMessage(
+                role="tool",
+                tool_call_id=tc.id,
+                content=[{"type": "text", "text": (
+                    f"reward={reward:+.3f} "
+                    f"d_goal={info['distance_to_goal_cm']:.0f}cm"
+                )}],
+            ))
 
-                if done or truncated:
-                    slot.metrics = info.get("metrics", {}) or {}
-                    slot.ended_reason = "success" if done else "truncated"
-                    slot.done = True
-                    break
+            new_d = info.get("distance_to_goal_cm")
+            if prev_d is not None and new_d is not None:
+                delta = prev_d - new_d
+                step_record = (
+                    f"t={t} {tc.name} d_goal:{prev_d:.0f}->{new_d:.0f}cm "
+                    f"(delta={delta:+.0f}) reward={reward:+.3f}"
+                )
+            else:
+                step_record = f"t={t} {tc.name} reward={reward:+.3f}"
+            agent_trajectories[slot.idx].append(step_record)
+
+            # Per-ghost L1 insert: private working memory for this slot.
+            # Hierarchical backend reads these structured fields; simpler
+            # backends (text/null) just append the raw record.
+            try:
+                bearing_rad = 0.0
+                if "pointgoal_with_gps_compass" in obs:
+                    _d, _bearing = obs["pointgoal_with_gps_compass"].tolist()
+                    bearing_rad = _bearing
+                slot.mem_view.insert(
+                    step_record,
+                    metadata={
+                        "step": t,
+                        "action": tc.name,
+                        "bearing_deg": math.degrees(bearing_rad),
+                        "distance_cm": float(new_d or 0.0),
+                        "prev_distance_cm": float(prev_d or new_d or 0.0),
+                        "reward": float(reward),
+                        "yaw_deg": float(obs.get("agent_yaw_deg", 0.0)),
+                    },
+                )
+            except Exception as exc:
+                log.debug("%s: mem_view.insert failed: %s", slot.agent_name, exc)
+
+            if wandb_run:
+                import wandb
+                wandb.log({
+                    "batch/step_reward": float(reward),
+                    "batch/cumulative_reward": float(slot.cumulative_reward),
+                    "batch/distance_to_goal": float(info["distance_to_goal_cm"]),
+                    "batch/action": tc.name,
+                    "batch/agent": slot.agent_name,
+                    "batch/episode_idx": slot.idx,
+                    "batch/step": t,
+                }, step=global_step)
+
+            if done or truncated:
+                slot.metrics = info.get("metrics", {}) or {}
+                slot.ended_reason = "success" if done else "truncated"
+                slot.done = True
 
             slot._obs = obs
             slot._info = info
@@ -556,25 +613,52 @@ def run_wave(
         final_metrics.setdefault("cumulative_reward", slot.cumulative_reward)
         slot.metrics = final_metrics
 
-    # --- Reflect on each episode with its OWN trajectory ---
+    # --- End-of-episode memory update ---
+    # Preferred path (hierarchical/ghost view): call end_episode() on each
+    # slot's own L1 → folds into shared L2 under a lock.  Distill runs
+    # ONCE at the end of the wave rather than per-ghost, amortizing the
+    # LLM-based L3 refresh cost across the whole batch.
+    #
+    # Fallback path: older backends expose reflect()/reset() on the shared
+    # object with no per-agent isolation.
     for slot in slots:
+        view = slot.mem_view
         sr = float(slot.metrics.get("SR", 0) or 0)
-        outcome = (
-            f"{'SUCCESS' if sr > 0 else 'FAILED'}: "
-            f"steps={slot.step}, reason={slot.ended_reason}, "
-            f"SR={sr:.0f}, SPL={slot.metrics.get('SPL', 0):.3f}"
-        )
+        final_d = float(slot.metrics.get("distance_to_goal_cm", 0) or 0)
         try:
-            if hasattr(mem, "reflect") and hasattr(mem, "_trajectory"):
-                # Inject this agent's trajectory (not the shared one)
-                mem._trajectory = agent_trajectories[slot.idx]
-                mem.reflect(outcome)
-                mem._trajectory = []  # clear for next use
-            elif hasattr(mem, "reflect"):
-                mem.reflect(outcome)
-                mem.reset()
+            if hasattr(view, "end_episode"):
+                view.end_episode(
+                    success=sr > 0,
+                    total_steps=slot.step,
+                    final_distance_cm=final_d,
+                )
+            elif hasattr(view, "reflect") and hasattr(view, "_trajectory"):
+                view._trajectory = agent_trajectories[slot.idx]
+                outcome = (
+                    f"{'SUCCESS' if sr > 0 else 'FAILED'}: "
+                    f"steps={slot.step}, reason={slot.ended_reason}, "
+                    f"SR={sr:.0f}, SPL={slot.metrics.get('SPL', 0):.3f}"
+                )
+                view.reflect(outcome)
+                view._trajectory = []
+            elif hasattr(view, "reflect"):
+                outcome = (
+                    f"{'SUCCESS' if sr > 0 else 'FAILED'}: "
+                    f"steps={slot.step}, reason={slot.ended_reason}, "
+                    f"SR={sr:.0f}, SPL={slot.metrics.get('SPL', 0):.3f}"
+                )
+                view.reflect(outcome)
+                if hasattr(view, "reset"):
+                    view.reset()
         except Exception as exc:
-            log.warning("%s: memory reflect/reset failed: %s", slot.agent_name, exc)
+            log.warning("%s: memory end_episode failed: %s", slot.agent_name, exc)
+
+    # Wave-level distill: L2 → L3 once after all ghosts have folded in.
+    if hasattr(mem, "distill_if_due"):
+        try:
+            mem.distill_if_due()
+        except Exception as exc:
+            log.warning("wave: memory distill_if_due failed: %s", exc)
 
     # --- Collect results, write per-episode summary, cleanup ---
     results = []
@@ -582,12 +666,15 @@ def run_wave(
         sr = float(slot.metrics.get("SR", 0) or 0)
         spl = float(slot.metrics.get("SPL", 0) or 0)
         softspl = float(slot.metrics.get("SoftSPL", 0) or 0)
+        plr = float(slot.metrics.get("PLR", 0) or 0)
+        ndtw = float(slot.metrics.get("nDTW", 0) or 0)
+        cls = float(slot.metrics.get("CLS", 0) or 0)
         path_cm = float(slot.metrics.get("path_length_cm", 0) or 0)
         cum_r = float(slot.metrics.get("cumulative_reward", slot.cumulative_reward) or 0)
 
         log.info(
-            "%s episode=%s SR=%.0f SPL=%.3f steps=%d reason=%s",
-            slot.agent_name, slot.episode.episode_id, sr, spl,
+            "%s episode=%s SR=%.0f SPL=%.3f nDTW=%.3f CLS=%.3f steps=%d reason=%s",
+            slot.agent_name, slot.episode.episode_id, sr, spl, ndtw, cls,
             slot.step, slot.ended_reason,
         )
 
@@ -598,6 +685,9 @@ def run_wave(
             "SR": sr,
             "SPL": spl,
             "SoftSPL": softspl,
+            "PLR": plr,
+            "nDTW": ndtw,
+            "CLS": cls,
             "steps": slot.step,
             "path_length_cm": path_cm,
             "cumulative_reward": cum_r,
@@ -620,6 +710,9 @@ def run_wave(
                 "episode/SR": sr,
                 "episode/SPL": spl,
                 "episode/SoftSPL": softspl,
+                "episode/PLR": plr,
+                "episode/nDTW": ndtw,
+                "episode/CLS": cls,
                 "episode/steps": slot.step,
                 "episode/path_length_cm": path_cm,
                 "episode/cumulative_reward": cum_r,

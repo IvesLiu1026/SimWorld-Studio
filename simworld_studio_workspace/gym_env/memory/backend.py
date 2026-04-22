@@ -90,3 +90,58 @@ class ReadOnlyMemory:
         if hasattr(self._inner, "get_system_prompt_section"):
             return self._inner.get_system_prompt_section()
         return ""
+
+    def fork(self, agent_id: str):
+        """Per-ghost read-only view — delegates query to inner.fork but
+        swallows insert/end_episode so test runs never mutate shared L2/L3.
+        """
+        if hasattr(self._inner, "fork"):
+            return _ReadOnlyGhostView(self._inner.fork(agent_id))
+        return self
+
+
+class _ReadOnlyGhostView:
+    """Ghost-mode fork with all write paths silenced. Query + system-prompt
+    injection still go to the shared (trained) L2/L3.
+    """
+
+    name = "read_only_ghost"
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def insert(self, text: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        # Still append to the inner fork's private L1 so local query() and
+        # check_rethink() see this ghost's own recent steps. L1 is private
+        # per fork and discarded at end_episode, so nothing persists.
+        if hasattr(self._inner, "insert"):
+            self._inner.insert(text, metadata)
+
+    def query(self, text: str, k: int = 5) -> List[str]:
+        return self._inner.query(text, k)
+
+    def reset(self) -> None:
+        if hasattr(self._inner, "reset"):
+            # Drop the ghost's private L1 without merging into shared L2.
+            if hasattr(self._inner, "_l1"):
+                self._inner._l1 = []
+            if hasattr(self._inner, "_episode_lessons"):
+                self._inner._episode_lessons = []
+
+    def end_episode(self, success: bool = False, total_steps: int = 0,
+                    final_distance_cm: float = 0.0, **kwargs) -> None:
+        # Silently drop this ghost's L1 — do NOT merge into shared L2/L3.
+        if hasattr(self._inner, "_l1"):
+            self._inner._l1 = []
+        if hasattr(self._inner, "_episode_lessons"):
+            self._inner._episode_lessons = []
+
+    def check_rethink(self):
+        if hasattr(self._inner, "check_rethink"):
+            return self._inner.check_rethink()
+        return None
+
+    def get_system_prompt_section(self) -> str:
+        if hasattr(self._inner, "get_system_prompt_section"):
+            return self._inner.get_system_prompt_section()
+        return ""
