@@ -161,6 +161,64 @@ python -m gym_env.runner \
 
 ---
 
+## Scaling: Ghosts × UE Instances
+
+`batch_runner` runs **N ghost agents in ONE UE instance per process**. Two
+knobs:
+
+**1. Ghosts per UE — keep at 5–10**
+
+```bash
+python -m gym_env.batch_runner --mode batch --n-tasks 5 ...
+```
+
+`--n-tasks` is the wave size. Above ~10 ghosts UE's actor / sensor
+registration becomes unreliable (some `FusionCamSensor` components silently
+fail to register, positions get corrupted under physics, mass `step_error`
+around step 4). **5 is the sweet spot** validated in the `diverse50_eval`
+runs; 10 still works.
+
+**2. Multi-UE = multiple processes**
+
+Each UE instance needs its own MCP/UCV ports **and** its own project copy
+(the unrealcv plugin reads `<uproject_dir>/Saved/unrealcv.ini` — two UEs
+sharing one project will race on `Port=`):
+
+```bash
+# UE 0
+UNREAL_MCP_PORT=55558 UNREALCV_PORT=9010 \
+  python -m gym_env.batch_runner --mode batch --n-tasks 5 ...
+
+# UE 1 (separate project copy, different ports & GPU)
+UNREAL_MCP_PORT=55560 UNREALCV_PORT=9011 \
+  python -m gym_env.batch_runner --mode batch --n-tasks 5 ...
+```
+
+Use symlinks for `Content/`, `Binaries/`, `Plugins/`, `DerivedDataCache/`,
+`Intermediate/`, `Source/` to save disk; only `Saved/` and `Config/` need
+to be unique copies per instance.
+
+**3. Automated multi-slot driver**
+
+For one driver process orchestrating N UEs, see
+[`experiments/diverse50_eval/run_experiment.py`](../experiments/diverse50_eval/run_experiment.py).
+Its `SLOTS` table maps each slot to its own MCP/UCV port + GPU + uproject
+path; one worker thread per slot pulls maps from a shared queue:
+
+```python
+SLOTS = [
+  {"mcp_port": 55558, "ucv_port": 9010, "gpu": 0, "uproject": ".../inst_0/SimWorld.uproject"},
+  {"mcp_port": 55560, "ucv_port": 9011, "gpu": 1, "uproject": ".../inst_1/SimWorld.uproject"},
+  ...
+]
+```
+
+**Recommended baseline**: 4 UEs × 5 ghosts = 20 concurrent. Spreads vLLM
+load across endpoints and keeps each UE's actor count safely below the
+failure threshold.
+
+---
+
 ## Key CLI Flags
 
 | Flag | Default | Description |
