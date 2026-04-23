@@ -9,8 +9,33 @@
       "Grep(*)",
       "Agent(*)",
       "WebFetch(*)",
-      "WebSearch(*)"
+      "WebSearch(*)",
+      "Read(//data/koe/simworld_studio_projects/Plugins/unrealcv/Source/UnrealCV/Private/**)",
+      "Read(//tmp/**)",
+      "Read(//data/koe/simworld_studio_projects/Saved/Logs/**)",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(grep --line-buffered -E \"Traceback|BATCH RESULTS|^={5,}|--- Wave|GhostAgent_[0-9]+ episode=|batch summary written|navmesh build\")",
+      "Bash(python -c ' *)",
+      "Monitor(*)",
+      "TodoWrite(*)",
+      "Skill(*)"
     ],
-    "defaultMode": "auto"
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(rm -rf /*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git clean -fdx:*)",
+      "Bash(mkfs:*)",
+      "Bash(dd if=:*)",
+      "Bash(shutdown:*)",
+      "Bash(reboot:*)"
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }

@@ -1,1 +1,14 @@
-{"mcpServers":{"simworld":{"command":"node","args":["C:\\Users\\28262\\Desktop\\PlayGorund\\SimWorld-Studio-Dev\\simworld_studio_workspace\\web\\server\\mcp-server.js"],"env":{"UNREAL_HOST":"127.0.0.1","UNREAL_PORT":"55557"}}}} 
+{
+  "mcpServers": {
+    "simworld": {
+      "command": "node",
+      "args": [
+        "/home/koe/SimWorld-Studio-Internal/simworld_studio_workspace/web/server/mcp-server.js"
+      ],
+      "env": {
+        "UNREAL_HOST": "127.0.0.1",
+        "UNREAL_PORT": "55560"
+      }
+    }
+  }
+}
