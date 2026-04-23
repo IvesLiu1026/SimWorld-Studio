@@ -44,7 +44,7 @@ from .action_space import nav_tool_schemas
 from .llm import LLMClient, LLMMessage, make_llm
 from .logger import EpisodeLogger
 from .memory import AgentMemory, NullMemory, ReadOnlyMemory, build_memory
-from .simworld_nav_env import SimWorldNavEnv
+from .simworld_nav_env import SimWorldNavEnv, SpawnBlockedError
 from .ucv_client import UCVClient
 from .mcp_client import MCPClient
 
@@ -129,6 +129,30 @@ def _strip_images(messages: List[LLMMessage], keep_last_k: int) -> None:
             b if b["type"] == "text" else {"type": "text", "text": "[image omitted]"}
             for b in messages[i].content
         ]
+
+
+def _truncate_history(messages: List[LLMMessage], keep_last_k_turns: int) -> List[LLMMessage]:
+    """Keep system + the last K conversation turns (user / assistant / tool).
+
+    A "turn" is a user message and any assistant/tool messages that follow it
+    until the next user message.  Returns a NEW list (does not mutate input)
+    so vLLM's prefix-cache key for the unchanged system prefix is preserved.
+
+    Without truncation each step sent ~8K input tokens (full history); 5
+    turns @ ~600 tokens each + system ~500 keeps it around 3-4K.  Helps
+    KV cache pressure and lets the endpoint sustain more concurrent
+    agents at the cost of losing some long-horizon context.
+    """
+    if keep_last_k_turns is None or keep_last_k_turns <= 0:
+        return messages
+    # Find indices where role == "user" — those mark turn starts.
+    user_idx = [i for i, m in enumerate(messages) if m.role == "user"]
+    if len(user_idx) <= keep_last_k_turns:
+        return messages
+    cut_at = user_idx[-keep_last_k_turns]
+    head = [m for m in messages[:cut_at] if m.role == "system"]
+    tail = messages[cut_at:]
+    return head + tail
 
 
 def _configure_ghost_ucv(ucv: UCVClient, name: str, x: float, y: float, z: float) -> None:
@@ -396,6 +420,16 @@ def run_wave(
             slot._info = info
             if slot.logger is not None:
                 slot.logger.log_step(0, None, obs, 0.0, False, False, info)
+        except SpawnBlockedError as exc:
+            # Distinct from reset_error: the env reset itself completed,
+            # but the actor is wedged in collision geometry.  Skip this
+            # episode without burning LLM tokens and tag it so we can
+            # measure the invalid-spawn rate per map.
+            log.warning("env.reset spawn_blocked for %s (%s): %s",
+                        slot.agent_name, slot.episode.episode_id, exc)
+            slot.done = True
+            slot.ended_reason = "spawn_blocked"
+            failed_slots.append(slot.idx)
         except Exception as exc:
             log.error("env.reset failed for %s (%s): %s",
                       slot.agent_name, slot.episode.episode_id, exc)
@@ -465,7 +499,11 @@ def run_wave(
         # Phase 2: parallel LLM calls for all active agents (vLLM batches)
         def _call_llm(slot):
             try:
-                return slot, llm.chat(slot.history, nav_tool_schemas(), max_tokens=1024), None
+                # Truncate to last 5 turns + system to cap per-call input.
+                # slot.history stays intact for memory/logging; only what's
+                # SENT to the LLM is shortened.
+                msgs = _truncate_history(slot.history, keep_last_k_turns=5)
+                return slot, llm.chat(msgs, nav_tool_schemas(), max_tokens=1024), None
             except Exception as exc:
                 return slot, None, exc
 

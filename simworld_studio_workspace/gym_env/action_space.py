@@ -42,7 +42,7 @@ NAV_TOOL_NAMES = tuple(a.name for a in NAVIGATION_ACTIONS)
 _DESCRIPTIONS = {a.name: a.description for a in NAVIGATION_ACTIONS}
 
 # Default per-action parameters (override in env config if you want).
-DEFAULT_FORWARD_DURATION_S = 1.0     # StepForward duration (reduced from 2.0 for faster rollout)
+DEFAULT_FORWARD_DURATION_S = 2.0     # StepForward duration (each step ~4m at 200cm/s)
 DEFAULT_TURN_ANGLE_DEG = 30.0        # TurnAround magnitude
 
 

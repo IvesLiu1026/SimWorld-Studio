@@ -60,6 +60,17 @@ log = logging.getLogger(__name__)
 # duration; turns play out in ~1s.
 _TICK_BUFFER_S = 0.5
 
+
+class SpawnBlockedError(RuntimeError):
+    """Raised when the agent cannot move from its spawn position.
+
+    Some teleport-to-start placements end up inside collision geometry
+    (wall, prop, below ground after Z snap) so ``vbp StepForward`` is
+    a no-op.  We detect this with a short probe move during reset and
+    raise this so the runner can mark the slot as ``spawn_blocked``
+    and skip the episode without burning LLM tokens on it.
+    """
+
 _HUMANOID_BP = "/Game/TrafficSystem/Pedestrian/Base_User_Agent.Base_User_Agent_C"
 
 # Spawn Z for humanoid.  Studio's ``agent-registry.json`` and the
@@ -241,9 +252,61 @@ class SimWorldNavEnv:
         # in case the sensor ordering shifted between maps.
         self._resolve_camera_id()
 
+        # Spawn-validity probe: send a brief StepForward, verify the
+        # actor actually moved.  ~30-40% of PN agents in v7 hit start
+        # positions where the actor is wedged in collision geometry and
+        # `vbp StepForward` is a silent no-op for the entire episode.
+        # Try one Z bump before giving up; on failure raise so the
+        # runner can record `spawn_blocked` and move on without burning
+        # 40 LLM steps.
+        if not self._probe_movable(start):
+            raise SpawnBlockedError(
+                f"agent {self.agent_name} cannot move from spawn "
+                f"({start.x:.0f}, {start.y:.0f}) — likely inside "
+                f"collision geometry"
+            )
+
         obs = self.obs_builder.observe(episode, self._start_xy)
         info = self._build_info(initial=True)
         return obs, info
+
+    def _probe_movable(self, start, *, threshold_cm: float = 30.0) -> bool:
+        """Send a 0.5s StepForward and return True if the actor moved.
+
+        Tries a single Z bump (+50, +150) if the first probe failed —
+        cheaply rescues agents whose Z snapped slightly under the
+        ground mesh.  Restores the actor to ``start`` after a successful
+        probe so the episode begins from the canonical pose.
+        """
+        for z_bump in (0.0, 50.0, 150.0):
+            if z_bump > 0.0:
+                self.ucv.vset_location(self.agent_name, start.x, start.y,
+                                       self.spawn_z + z_bump)
+                time.sleep(0.3)
+            try:
+                self.ucv.send(f"vbp {self.agent_name} StepForward 0.5 0")
+                time.sleep(0.7)
+                x, y, _z = self.ucv.vget_location(self.agent_name)
+            except Exception as exc:
+                log.warning("env: spawn probe send/read failed (%s)", exc)
+                return False
+            moved = math.sqrt((x - start.x) ** 2 + (y - start.y) ** 2)
+            if moved >= threshold_cm:
+                # Reset to canonical start so the trajectory begins clean.
+                try:
+                    self.ucv.vbp(self.agent_name, "StopAgent")
+                except Exception:
+                    pass
+                self.ucv.vset_location(self.agent_name, start.x, start.y,
+                                       self.spawn_z + z_bump)
+                self.ucv.vset_rotation(self.agent_name, 0.0, 0.0, 0.0)
+                time.sleep(0.3)
+                self._last_xy = (start.x, start.y)
+                if z_bump > 0.0:
+                    log.info("env: spawn unblocked for %s after Z bump +%.0f",
+                             self.agent_name, z_bump)
+                return True
+        return False
 
     def _ensure_pie(self) -> None:
         """Start PIE via MCP if it isn't already running.

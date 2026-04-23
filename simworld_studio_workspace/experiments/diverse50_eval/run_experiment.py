@@ -43,24 +43,30 @@ RESULTS   = pathlib.Path(os.environ.get("EVAL_RESULTS",
 
 LLM_MODEL    = "qwen"
 LLM_MODEL_ID = "Qwen3.5-27B"
-# Multiple Qwen endpoints to spread 20 concurrent requests across N vLLM
-# servers. Each UE slot is pinned to exactly one endpoint (by pair) so
-# prefix-cache stays warm per endpoint:
-#   slot 0,1 → urls[0]   slot 2,3 → urls[1]
-#   slot 4,5 → urls[2]   slot 6,7 → urls[3]
+# Multiple Qwen endpoints, round-robin across slots.  Each UE slot is
+# pinned to exactly one endpoint for its whole lifetime (sticky) so
+# vLLM's prefix cache can reuse the system+L3 prefix across all 10
+# ghosts in a wave.  Pure per-request RR would destroy that cache.
+# With 8 slots over 5 endpoints (slot_idx_abs % 5):
+#   PN: slot 0→ep0, 1→ep1, 2→ep2, 3→ep3
+#   ON: slot 4→ep4, 5→ep0, 6→ep1, 7→ep2
+# Resulting load: ep0/1/2 = 2 slots each (20 concurrent), ep3/4 = 1 slot (10).
 # Override via EVAL_LLM_URLS=url1,url2,... env var (comma-separated).
 LLM_URLS_DEFAULT = (
     "http://132.239.95.133:8000/v1,"
+    "http://132.239.95.133:8001/v1,"
     "http://132.239.95.133:8002/v1,"
     "http://132.239.95.133:8003/v1,"
     "http://132.239.95.15:8007/v1"
 )
 LLM_API_KEY  = "EMPTY"
 MEMORY_BACKEND = "hierarchical"
-MAX_STEPS    = 40
+MAX_STEPS    = 40          # 40 × 2s walking ≈ 160m budget; covers 99% of dataset
 VISION_DEPTH = 1           # only current step's image; old frames replaced with "[image omitted]"
-WAVE_SIZE    = 5           # ghost agents per wave — 2 slots per endpoint × 5 = 10 concurrent/endpoint
+WAVE_SIZE    = 10          # ghost agents per wave — 2 slots/endpoint × 10 = 20 concurrent/endpoint
+                           # (paired with 5-turn history truncation to cap KV pressure)
 MAX_WAVE     = 20          # try single wave first, split if agent count > this
+MAX_EUCLIDEAN_M = 120      # filter out tasks where straight-line distance > 120m (4.7% of train)
 
 SLOTS = [
     {"mcp_port": 55558, "ucv_port": 9010, "gpu": 0, "uproject": "/data/koe/simworld_studio_inst_0/SimWorld.uproject", "ue_bin": "/data/koe/ue_launch_inst_0/UnrealEditor"},
@@ -71,6 +77,11 @@ SLOTS = [
     {"mcp_port": 55568, "ucv_port": 9015, "gpu": 6, "uproject": "/data/koe/simworld_studio_inst_5/SimWorld.uproject", "ue_bin": "/data/koe/ue_launch_inst_5/UnrealEditor"},
     {"mcp_port": 55570, "ucv_port": 9016, "gpu": 7, "uproject": "/data/koe/simworld_studio_inst_6/SimWorld.uproject", "ue_bin": "/data/koe/ue_launch_inst_6/UnrealEditor"},
     {"mcp_port": 55572, "ucv_port": 9017, "gpu": 4, "uproject": "/data/koe/simworld_studio_inst_7/SimWorld.uproject", "ue_bin": "/data/koe/ue_launch_inst_7/UnrealEditor"},
+    # Test-only slots (used while train is running on slots 0-7)
+    {"mcp_port": 55600, "ucv_port": 9024, "gpu": 0, "uproject": "/data/koe/simworld_studio_inst_9/SimWorld.uproject",  "ue_bin": "/data/koe/ue_launch_inst_8/UnrealEditor"},
+    {"mcp_port": 55601, "ucv_port": 9025, "gpu": 1, "uproject": "/data/koe/simworld_studio_inst_10/SimWorld.uproject", "ue_bin": "/data/koe/ue_launch_inst_9/UnrealEditor"},
+    {"mcp_port": 55602, "ucv_port": 9026, "gpu": 3, "uproject": "/data/koe/simworld_studio_inst_11/SimWorld.uproject", "ue_bin": "/data/koe/ue_launch_inst_10/UnrealEditor"},
+    {"mcp_port": 55603, "ucv_port": 9027, "gpu": 5, "uproject": "/data/koe/simworld_studio_inst_12/SimWorld.uproject", "ue_bin": "/data/koe/ue_launch_inst_11/UnrealEditor"},
 ]
 
 log = logging.getLogger(__name__)
@@ -373,7 +384,30 @@ def run_setting(setting: str, split: str, parallel: int, resume: bool):
         print(f"ERROR: {jsonl_path} not found"); return
 
     recs = load_jsonl(jsonl_path)
-    print(f"Loaded {len(recs)} {setting} {split} records")
+    n_loaded = len(recs)
+
+    # Filter: drop tasks where straight-line start->goal exceeds the
+    # MAX_EUCLIDEAN_M budget.  At MAX_STEPS × 2s × 200cm/s = 240m
+    # nominal budget per episode, anything over 120m needs ≥50% of the
+    # budget burned just on forward motion — leaves no room for turns
+    # or backtracking, so the success rate is essentially 0 and just
+    # adds noise to SR.  Also catches dataset-generation artifacts
+    # where the stored geodesic_distance_cm is much smaller than the
+    # actual euclidean distance (~10% of records).
+    import math as _math
+    def _within_budget(r):
+        sp = r.get("start_position") or {}
+        gp = r.get("goal_position") or {}
+        if not gp: gp = (r.get("gt_path") or [{}])[-1]
+        dx = float(sp.get("x", 0)) - float(gp.get("x", 0))
+        dy = float(sp.get("y", 0)) - float(gp.get("y", 0))
+        return _math.sqrt(dx*dx + dy*dy) / 100.0 <= MAX_EUCLIDEAN_M
+    recs_kept = [r for r in recs if _within_budget(r)]
+    n_dropped = n_loaded - len(recs_kept)
+    recs = recs_kept
+    print(f"Loaded {n_loaded} {setting} {split} records; "
+          f"filtered {n_dropped} ({100*n_dropped/max(1,n_loaded):.1f}%) "
+          f"with euclidean > {MAX_EUCLIDEAN_M}m → {len(recs)} kept")
 
     # Group by map
     map_groups: dict = {}
@@ -399,7 +433,9 @@ def run_setting(setting: str, split: str, parallel: int, resume: bool):
     llm_urls = [u.strip() for u in urls_raw.split(",") if u.strip()]
     print(f"LLM endpoints ({len(llm_urls)}):")
     for i, u in enumerate(llm_urls):
-        print(f"  urls[{i}] = {u}  (slots {2*i},{2*i+1})")
+        # Show which absolute slots will hit this endpoint via slot % len(urls).
+        owners = [s for s in range(8) if s % len(llm_urls) == i]
+        print(f"  urls[{i}] = {u}  (slots {owners})")
 
     # Save meta
     meta = {
@@ -415,7 +451,10 @@ def run_setting(setting: str, split: str, parallel: int, resume: bool):
     print(f"Maps: {len(map_groups)}, Episodes: {len(recs)}, Parallel: {parallel}")
 
     def make_slot_llm(slot_idx_abs: int):
-        url = llm_urls[(slot_idx_abs // 2) % len(llm_urls)]
+        # Sticky per-slot: same endpoint for the slot's whole lifetime so
+        # vLLM prefix-cache can reuse the system+L3 prefix across the
+        # 10 ghosts in a wave (and across waves on the same map/setting).
+        url = llm_urls[slot_idx_abs % len(llm_urls)]
         c = make_llm(LLM_MODEL, model=LLM_MODEL_ID, base_url=url,
                      api_key=LLM_API_KEY)
         c._text_action_mode = True  # bypass tool-call API, parse action from text
@@ -423,12 +462,19 @@ def run_setting(setting: str, split: str, parallel: int, resume: bool):
 
     # Memory persist dir: shared per setting so train writes and test reads the same store.
     # HierarchicalMemory needs a DIRECTORY (it keeps L2 / L3 / episode_count as separate files).
-    memory_dir = RESULTS / f"memory_{setting}"
+    # Can be overridden via EVAL_MEMORY_DIR (e.g. to point at a snapshot for test).
+    memory_dir = pathlib.Path(os.environ.get(
+        "EVAL_MEMORY_DIR", str(RESULTS / f"memory_{setting}")))
     memory_dir.mkdir(parents=True, exist_ok=True)
+
+    # Memory backend can be overridden via EVAL_MEMORY_BACKEND — useful to run
+    # a no-memory baseline ("none") while the trained run keeps "hierarchical".
+    memory_backend = os.environ.get("EVAL_MEMORY_BACKEND", MEMORY_BACKEND)
+    print(f"Memory backend: {memory_backend}  dir: {memory_dir}")
 
     # Memory's own LLM (for L3 distill) uses the first configured endpoint.
     memory = build_memory(
-        MEMORY_BACKEND,
+        memory_backend,
         agent_id=f"diverse50_{setting}",
         config={"persist_dir": str(memory_dir)},
         llm_model=LLM_MODEL_ID,
