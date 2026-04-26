@@ -93,7 +93,8 @@ import unreal
 world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
 nav_sys = unreal.NavigationSystemV1.get_navigation_system(world)
 if nav_sys:
-    nav_sys.build()
+    # UE5 Python does not expose Build(); use console command instead.
+    unreal.SystemLibrary.execute_console_command(world, 'RebuildNavigation')
     print('NAVMESH_BUILT')
 else:
     print('NO_NAV_SYS')

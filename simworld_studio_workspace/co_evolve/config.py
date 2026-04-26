@@ -22,14 +22,15 @@ class CoEvolveConfig:
                                        # in half vs. the old 4 (which quantized
                                        # to 5 noisy levels).
     max_steps: int = 40                # hard cap
-
-    # ── Nav agent ──
+    wave_size: int = 10                # ghost agents per parallel wave (1 UE,
+                                       # N agents). episodes_per_gen episodes
+                                       # are split into ceil(n/wave_size) waves.
     nav_model: str = "qwen"
     nav_model_id: str = os.environ.get("NAV_MODEL_ID", "Qwen3.5-9B")
     nav_base_url: str = os.environ.get("NAV_BASE_URL", "http://132.239.95.15:8002/v1")
     nav_api_key: str = os.environ.get("NAV_API_KEY", "EMPTY")
     nav_memory: str = "strategy"
-    vision_depth: int = 3
+    vision_depth: int = 1
     capture_rgb: bool = True
 
     # ── Coding agent LLM ──
@@ -46,3 +47,19 @@ class CoEvolveConfig:
     # ── Output ──
     output_dir: str = "runs/co_evolve"
     seed: int = 42
+
+    # ── Curriculum teacher ──
+    # Difficulty controller. One of: "alpgmm", "epsilon_greedy", "fixed".
+    teacher: str = "alpgmm"
+    # Half-width of the acceptable difficulty band around the teacher's
+    # target. The coding agent must produce a scene whose predicted
+    # rubric difficulty falls in [target-tol, target+tol], otherwise it
+    # is asked to redesign.
+    difficulty_tolerance: float = 2.0
+    # Probability of uniform exploration (ALP-GMM / ε-greedy).
+    teacher_p_random: float = 0.2
+    # Max number of LLM regeneration attempts when the spec misses the band.
+    teacher_max_regen: int = 0  # band is advisory; LLM is not asked to regenerate
+    # Lower / upper bounds of the difficulty axis for the teacher.
+    teacher_d_min: float = 1.0
+    teacher_d_max: float = 10.0

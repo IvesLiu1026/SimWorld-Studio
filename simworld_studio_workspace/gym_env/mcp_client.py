@@ -40,6 +40,23 @@ class MCPError(RuntimeError):
     """Raised when an MCP command fails or times out."""
 
 
+def _is_soft_timeout_success(resp: Optional[dict]) -> bool:
+    """Return True for the MCP bridge's false-negative timeout reply.
+
+    On this UE build, ``execute_python_script`` can run the script and then
+    return ``status=error`` because post-exec log capture timed out while
+    reading ``Saved/Logs/CodingAgent.log``.  The caller still got a structured
+    response, which means the editor Python side was reachable and the script
+    was dispatched.
+    """
+    if not isinstance(resp, dict):
+        return False
+    if resp.get("status") != "error":
+        return False
+    error_text = str(resp.get("error", ""))
+    return "Script execution timed out after" in error_text
+
+
 class MCPClient:
     """One-shot JSON-over-TCP client for SimWorld's MCP server.
 
@@ -181,7 +198,8 @@ class MCPClient:
         while time.time() < deadline:
             attempt += 1
             try:
-                resp = self.execute_python(poll_script, timeout=5)
+                remaining = max(1.0, deadline - time.time())
+                resp = self.execute_python(poll_script, timeout=min(35.0, remaining))
                 logs = _extract_python_logs(resp)
                 if any("EDITOR_READY" in l for l in logs):
                     log.info("[%s] editor ready after %d attempts", self.name, attempt)
@@ -191,6 +209,10 @@ class MCPClient:
                 result = resp.get("result") if isinstance(resp, dict) else None
                 if isinstance(result, dict) and result.get("success") and not logs:
                     log.info("[%s] editor ready (empty logs, success=true) attempt %d",
+                             self.name, attempt)
+                    return True
+                if _is_soft_timeout_success(resp):
+                    log.info("[%s] editor ready (soft-timeout MCP reply) attempt %d",
                              self.name, attempt)
                     return True
             except MCPError:
@@ -208,7 +230,12 @@ class MCPClient:
         """
         # Wait until editor is fully loaded — avoids PostLoad assertion crash
         if not self._wait_until_ready(timeout=ready_timeout):
-            raise MCPError(f"[{self.name}] editor not ready after {ready_timeout}s")
+            log.warning(
+                "[%s] editor readiness probe timed out after %.1fs; "
+                "continuing with direct PIE start",
+                self.name,
+                ready_timeout,
+            )
 
         if self.is_pie_active():
             log.info("[%s] PIE already active", self.name)

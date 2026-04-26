@@ -1,6 +1,7 @@
 """Visualize co-evolution experiment results.
 
 Usage:
+    python -m co_evolve.visualize runs/co_evolve/coevolve_XXXXXXXX_XXXXXX
     python -m co_evolve.visualize runs/co_evolve/coevolve_XXXXXXXX_XXXXXX/all_results.json
 """
 from __future__ import annotations
@@ -19,6 +20,20 @@ def load_results(path: str) -> list:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def resolve_results_path(path_arg: str) -> Path:
+    path = Path(path_arg)
+    if path.is_file():
+        return path
+    if not path.is_dir():
+        raise FileNotFoundError(f"No such file or directory: {path}")
+
+    for candidate in ("all_results.json", "all_results_final.json", "all_results_mid.json"):
+        candidate_path = path / candidate
+        if candidate_path.exists():
+            return candidate_path
+    raise FileNotFoundError(f"No all_results*.json found under {path}")
+
+
 def plot_coevolution(results: list, output_dir: Path):
     """Create a multi-panel figure showing co-evolution dynamics."""
     gens = [r["generation"] for r in results]
@@ -26,11 +41,8 @@ def plot_coevolution(results: list, output_dir: Path):
     spls = [r["spl"] for r in results]
     diffs = [r.get("difficulty_score", 0) for r in results]
     avg_steps = [r["avg_steps"] for r in results]
-    min_paths = [r["min_path_cm"] for r in results]
-    max_paths = [r["max_path_cm"] for r in results]
-    n_strategies = [len(r.get("nav_strategies", r.get("strategies", []))) for r in results]
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     fig.suptitle("Co-Evolution: Coding Agent × Embodied Agent", fontsize=16, y=0.98)
 
     # 1. Success Rate over generations
@@ -56,7 +68,7 @@ def plot_coevolution(results: list, output_dir: Path):
     ax.grid(True, alpha=0.3)
 
     # 3. SPL over generations
-    ax = axes[0, 2]
+    ax = axes[1, 0]
     ax.plot(gens, spls, "^-", color="#4CAF50", linewidth=2, markersize=6)
     ax.set_xlabel("Generation")
     ax.set_ylabel("SPL")
@@ -64,31 +76,12 @@ def plot_coevolution(results: list, output_dir: Path):
     ax.set_ylim(-0.05, 1.05)
     ax.grid(True, alpha=0.3)
 
-    # 4. Path length range over generations
-    ax = axes[1, 0]
-    ax.fill_between(gens, min_paths, max_paths, alpha=0.3, color="#9C27B0")
-    ax.plot(gens, min_paths, "-", color="#9C27B0", alpha=0.7, label="min path")
-    ax.plot(gens, max_paths, "-", color="#9C27B0", alpha=0.7, label="max path")
-    ax.set_xlabel("Generation")
-    ax.set_ylabel("Path Length (cm)")
-    ax.set_title("Task Path Length Range (Coding Agent Output)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    # 5. Average steps over generations
+    # 4. Average steps over generations
     ax = axes[1, 1]
     ax.plot(gens, avg_steps, "D-", color="#FF9800", linewidth=2, markersize=6)
     ax.set_xlabel("Generation")
     ax.set_ylabel("Avg Steps")
     ax.set_title("Average Steps per Episode")
-    ax.grid(True, alpha=0.3)
-
-    # 6. Number of learned strategies
-    ax = axes[1, 2]
-    ax.bar(gens, n_strategies, color="#607D8B", alpha=0.7)
-    ax.set_xlabel("Generation")
-    ax.set_ylabel("# Strategies")
-    ax.set_title("Nav Agent Learned Strategies")
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
@@ -143,11 +136,11 @@ def plot_sr_vs_difficulty(results: list, output_dir: Path):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python -m co_evolve.visualize <path/to/all_results.json>")
+        print("Usage: python -m co_evolve.visualize <run_dir_or_results_json>")
         sys.exit(1)
 
-    results_path = Path(sys.argv[1])
-    results = load_results(results_path)
+    results_path = resolve_results_path(sys.argv[1])
+    results = load_results(str(results_path))
     output_dir = results_path.parent
 
     plot_coevolution(results, output_dir)

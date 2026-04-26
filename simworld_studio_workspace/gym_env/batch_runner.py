@@ -44,7 +44,7 @@ from .action_space import nav_tool_schemas
 from .llm import LLMClient, LLMMessage, make_llm
 from .logger import EpisodeLogger
 from .memory import AgentMemory, NullMemory, ReadOnlyMemory, build_memory
-from .simworld_nav_env import SimWorldNavEnv, SpawnBlockedError
+from .simworld_nav_env import SimWorldNavEnv
 from .ucv_client import UCVClient
 from .mcp_client import MCPClient
 
@@ -68,7 +68,10 @@ Each step you receive the bearing to the goal (degrees) and distance.
 Discover the bearing sign convention by observing your TURN effects.
 STOP when distance < 200 cm.
 
-Think briefly, then call exactly one tool."""
+IMPORTANT OUTPUT FORMAT:
+Reply with EXACTLY ONE action name on its own line (e.g. just `MOVE_FORWARD`).
+Do NOT explain, do NOT think out loud, do NOT add any other words.
+The action name MUST be one of: MOVE_FORWARD, TURN_LEFT, TURN_RIGHT, STOP."""
 
 
 # ---------------------------------------------------------------------------
@@ -129,30 +132,6 @@ def _strip_images(messages: List[LLMMessage], keep_last_k: int) -> None:
             b if b["type"] == "text" else {"type": "text", "text": "[image omitted]"}
             for b in messages[i].content
         ]
-
-
-def _truncate_history(messages: List[LLMMessage], keep_last_k_turns: int) -> List[LLMMessage]:
-    """Keep system + the last K conversation turns (user / assistant / tool).
-
-    A "turn" is a user message and any assistant/tool messages that follow it
-    until the next user message.  Returns a NEW list (does not mutate input)
-    so vLLM's prefix-cache key for the unchanged system prefix is preserved.
-
-    Without truncation each step sent ~8K input tokens (full history); 5
-    turns @ ~600 tokens each + system ~500 keeps it around 3-4K.  Helps
-    KV cache pressure and lets the endpoint sustain more concurrent
-    agents at the cost of losing some long-horizon context.
-    """
-    if keep_last_k_turns is None or keep_last_k_turns <= 0:
-        return messages
-    # Find indices where role == "user" — those mark turn starts.
-    user_idx = [i for i, m in enumerate(messages) if m.role == "user"]
-    if len(user_idx) <= keep_last_k_turns:
-        return messages
-    cut_at = user_idx[-keep_last_k_turns]
-    head = [m for m in messages[:cut_at] if m.role == "system"]
-    tail = messages[cut_at:]
-    return head + tail
 
 
 def _configure_ghost_ucv(ucv: UCVClient, name: str, x: float, y: float, z: float) -> None:
@@ -288,6 +267,7 @@ def run_wave(
     image_kind: str = "rgb",
     reuse_agents: bool = False,
     skip_destroy: bool = False,
+    name_prefix: str = "GhostAgent",
 ) -> Tuple[List[Dict[str, Any]], int]:
     """Run one batch of ghost agents concurrently in one UE instance.
 
@@ -312,7 +292,12 @@ def run_wave(
     agent_trajectories: List[List[str]] = [[] for _ in range(n)]
 
     # --- Phase 1: spawn (or reuse) ghost agents ---
-    agent_names = [f"GhostAgent_{i}" for i in range(n)]
+    # NOTE: name_prefix MUST be unique per wave when running multiple waves
+    # in the same PIE, otherwise UE's UObject FName for the previous (just-
+    # destroyed but not-yet-GC'd) ghost still occupies the name and
+    # SetActorName -> Actor->Rename() asserts -> UE crash. Loop.py passes
+    # a wave-scoped prefix like "GhostW{wave_idx}".
+    agent_names = [f"{name_prefix}_{i}" for i in range(n)]
     if not reuse_agents:
         for i, ep in enumerate(episodes):
             name = agent_names[i]
@@ -340,7 +325,7 @@ def run_wave(
         # Destroy orphaned agents from a larger previous wave
         for j in range(n, 30):  # max possible agents from prior waves
             try:
-                ucv.send(f"vset /object/GhostAgent_{j}/destroy")
+                ucv.send(f"vset /object/{name_prefix}_{j}/destroy")
             except Exception:
                 break  # no more agents to clean up
 
@@ -420,16 +405,6 @@ def run_wave(
             slot._info = info
             if slot.logger is not None:
                 slot.logger.log_step(0, None, obs, 0.0, False, False, info)
-        except SpawnBlockedError as exc:
-            # Distinct from reset_error: the env reset itself completed,
-            # but the actor is wedged in collision geometry.  Skip this
-            # episode without burning LLM tokens and tag it so we can
-            # measure the invalid-spawn rate per map.
-            log.warning("env.reset spawn_blocked for %s (%s): %s",
-                        slot.agent_name, slot.episode.episode_id, exc)
-            slot.done = True
-            slot.ended_reason = "spawn_blocked"
-            failed_slots.append(slot.idx)
         except Exception as exc:
             log.error("env.reset failed for %s (%s): %s",
                       slot.agent_name, slot.episode.episode_id, exc)
@@ -495,19 +470,20 @@ def run_wave(
                 else:
                     slot.history.append(LLMMessage.text("user", user_text))
             _strip_images(slot.history, vision_depth)
+            from gym_env.runner import _truncate_history
+            slot.history[:] = _truncate_history(slot.history, l1_keep=5, l2_keep=10)
 
         # Phase 2: parallel LLM calls for all active agents (vLLM batches)
         def _call_llm(slot):
             try:
-                # Truncate to last 5 turns + system to cap per-call input.
-                # slot.history stays intact for memory/logging; only what's
-                # SENT to the LLM is shortened.
-                msgs = _truncate_history(slot.history, keep_last_k_turns=5)
-                return slot, llm.chat(msgs, nav_tool_schemas(), max_tokens=1024), None
+                return slot, llm.chat(slot.history, nav_tool_schemas(), max_tokens=1024), None
             except Exception as exc:
                 return slot, None, exc
 
+        t_llm0 = time.time()
         llm_results = list(_llm_pool.map(_call_llm, active))
+        dt_llm = time.time() - t_llm0
+        log.info("[timing batch t=%d] llm_parallel=%.2fs  n_active=%d", t, dt_llm, len(active))
 
         # Phase 3a: send actions for every active slot (non-blocking).
         # All agents act concurrently in UE; we do one sleep for the
@@ -556,9 +532,12 @@ def run_wave(
 
         # Phase 3b: single wait — all agents' actions play out in parallel in UE.
         if pending:
+            t_ue0 = time.time()
             time.sleep(max_wait)
+            log.info("[timing batch t=%d] ue_wait=%.2fs  n_pending=%d", t, time.time() - t_ue0, len(pending))
 
         # Phase 3c: finalize each slot (read position, compute reward, build obs).
+        t_fin0 = time.time()
         for slot, resp, tc, prev_d in pending:
             try:
                 obs, reward, done, truncated, info = slot.env.step_finalize()
@@ -640,6 +619,8 @@ def run_wave(
             slot._info = info
 
         n_done = sum(1 for s in slots if s.done)
+        dt_fin = time.time() - t_fin0
+        log.info("[timing batch t=%d] finalize=%.2fs  done=%d/%d", t, dt_fin, n_done, n)
         step_bar.set_postfix(done=f"{n_done}/{n}")
         step_bar.update(1)
         log.info("batch t=%d: %d/%d done", t, n_done, n)
@@ -769,11 +750,225 @@ def run_wave(
 
         results.append(summary)
         # Destroy ghost agent (unless caller wants to reuse)
+        # NOTE: Actor->Destroy() only marks pending-kill; the UObject FName
+        # lingers until UE's next GC tick. Reusing the same name in a
+        # subsequent wave within ~1s will crash UE on Rename collision.
+        # name_prefix should be unique per wave to avoid this.
         if not skip_destroy:
             try:
                 ucv.send(f"vset /object/{slot.agent_name}/destroy")
             except Exception:
                 pass
+
+    return results, global_step
+
+
+# ---------------------------------------------------------------------------
+# Sequential runner — drop-in replacement for run_wave that uses ONE
+# normal (non-ghost) agent and runs episodes one after another. Avoids
+# the multi-camera resolution / ghost-collision-channel complexity of
+# run_wave; pays a wall-clock cost (no LLM batching) but uses far less
+# UE/GPU resource per epoch.
+# ---------------------------------------------------------------------------
+
+def run_sequential(
+    ucv: UCVClient,
+    mcp: Optional[MCPClient],
+    llm: LLMClient,
+    episodes: List[NavigationEpisode],
+    *,
+    max_steps: int = 40,
+    vision_depth: int = 3,
+    spawn_z: float = _DEFAULT_SPAWN_Z,
+    memory: Optional[AgentMemory] = None,
+    wandb_run=None,
+    global_step: int = 0,
+    batch_dir: Optional[Path] = None,
+    save_frames: bool = False,
+    capture_rgb: bool = True,
+    capture_depth: bool = False,
+    image_kind: str = "rgb",
+    reuse_agents: bool = False,  # accepted for sig parity, ignored
+    skip_destroy: bool = False,
+    name_prefix: str = "SeqAgent",
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Sequential normal-agent runner. ONE agent, ONE camera, episodes in series.
+
+    Returns (list of summary dicts, updated global_step) — same schema
+    as :func:`run_wave` so loop.py callers don't need changes.
+    """
+    from .runner import run_episode
+
+    n = len(episodes)
+    log.info("sequential: %d episodes, max_steps=%d, agent=%s",
+             n, max_steps, name_prefix)
+    mem = memory or NullMemory()
+
+    # Defensive cleanup: destroy any leftover nav-agent actors from
+    # prior runs. The env's auto-discover logic prefers any actor whose
+    # name starts with "CoEvolveAgent", so a stale leftover from a
+    # previous PIE session will hijack our fresh spawn and yield a
+    # "vget_location -> 'error'" failure on the first reset.
+    try:
+        existing_objs = ucv.vget_objects() or []
+        stale = [
+            nm for nm in existing_objs
+            if nm.startswith("CoEvolveAgent")
+            or nm.startswith("SeqE")
+            or nm.startswith("GhostE")
+            or nm.startswith("GymNavAgent")
+            or nm == name_prefix
+        ]
+        for nm in stale:
+            try:
+                ucv.send(f"vset /object/{nm}/destroy")
+            except Exception:
+                pass
+        if stale:
+            log.info("sequential: cleaned %d stale agent actor(s): %s",
+                     len(stale), stale)
+    except Exception as exc:
+        log.warning("sequential: stale-agent cleanup failed: %s", exc)
+
+    # Single env: spawns the agent on the FIRST reset(), then teleports
+    # for subsequent episodes.
+    env = SimWorldNavEnv(
+        ucv_client=ucv,
+        mcp_client=mcp,
+        agent_name=name_prefix,
+        camera_id=None,        # env resolves dynamically at reset
+        capture_rgb=capture_rgb,
+        capture_depth=capture_depth,
+        spawn_on_reset=True,
+        ensure_pie=False,      # PIE managed by loop.py
+        spawn_z=spawn_z,
+    )
+
+    # Per-agent memory view: hierarchical backends fork private L1 + share L2/L3.
+    seq_mem = mem.fork(name_prefix) if hasattr(mem, "fork") else mem
+
+    results: List[Dict[str, Any]] = []
+    for i, ep in enumerate(episodes):
+        log.info(
+            "sequential: episode %d/%d %s start=(%.0f,%.0f) goal=(%.0f,%.0f)",
+            i + 1, n, ep.episode_id,
+            ep.start_position.x, ep.start_position.y,
+            ep.goal_position.x, ep.goal_position.y,
+        )
+
+        ep_logger = None
+        if batch_dir is not None:
+            ep_logger = EpisodeLogger(
+                run_name=f"ep_{ep.episode_id}_{name_prefix}",
+                root=str(batch_dir),
+                save_frames=save_frames,
+                annotate_frames=False,
+                timestamp_dir=False,
+                install_log_handler=False,
+                meta={
+                    "episode_id": ep.episode_id,
+                    "episode_idx": i,
+                    "agent_name": name_prefix,
+                    "task_type": getattr(ep, "task_type", "pointnav"),
+                },
+            )
+
+        ended_reason = "max_steps"
+        metrics: Dict[str, Any] = {}
+        steps_used = 0
+        try:
+            # NB: run_episode requires a non-None logger. Provide one even
+            # when batch_dir is None to keep the contract simple.
+            if ep_logger is None:
+                ep_logger = EpisodeLogger(
+                    run_name=f"ep_{ep.episode_id}_{name_prefix}",
+                    save_frames=False,
+                    annotate_frames=False,
+                    timestamp_dir=False,
+                    install_log_handler=False,
+                )
+            metrics = run_episode(
+                env, llm, ep, ep_logger,
+                memory=seq_mem,
+                max_steps=max_steps,
+                vision_history_depth=vision_depth,
+            )
+            steps_used = int(env.step_count or 0)
+            sr_val = float(metrics.get("SR", 0) or 0)
+            ended_reason = "success" if sr_val > 0 else "max_steps"
+        except Exception as exc:
+            log.error("sequential: episode %d (%s) failed: %s: %s",
+                      i + 1, ep.episode_id, type(exc).__name__, exc, exc_info=True)
+            ended_reason = "step_error"
+            try:
+                ucv.hard_reconnect()
+            except Exception:
+                pass
+
+        sr = float(metrics.get("SR", 0) or 0)
+        spl = float(metrics.get("SPL", 0) or 0)
+        softspl = float(metrics.get("SoftSPL", 0) or 0)
+        plr = float(metrics.get("PLR", 0) or 0)
+        ndtw = float(metrics.get("nDTW", 0) or 0)
+        cls_ = float(metrics.get("CLS", 0) or 0)
+        path_cm = float(metrics.get("path_length_cm", 0) or 0)
+        cum_r = float(metrics.get("cumulative_reward", 0) or 0)
+
+        log.info(
+            "sequential: %s ep=%s SR=%.0f SPL=%.3f steps=%d reason=%s",
+            name_prefix, ep.episode_id, sr, spl, steps_used, ended_reason,
+        )
+
+        summary = {
+            "episode_id": ep.episode_id,
+            "episode_idx": i,
+            "agent_name": name_prefix,
+            "SR": sr,
+            "SPL": spl,
+            "SoftSPL": softspl,
+            "PLR": plr,
+            "nDTW": ndtw,
+            "CLS": cls_,
+            "steps": steps_used,
+            "path_length_cm": path_cm,
+            "cumulative_reward": cum_r,
+            "ended_reason": ended_reason,
+            "metrics": metrics,
+        }
+        results.append(summary)
+        global_step += steps_used
+
+        if wandb_run:
+            import wandb
+            wandb.log({
+                "episode/SR": sr,
+                "episode/SPL": spl,
+                "episode/SoftSPL": softspl,
+                "episode/PLR": plr,
+                "episode/nDTW": ndtw,
+                "episode/CLS": cls_,
+                "episode/steps": steps_used,
+                "episode/path_length_cm": path_cm,
+                "episode/cumulative_reward": cum_r,
+                "episode/idx": i,
+                "episode/ended_reason_code": {
+                    "success": 0, "truncated": 1, "max_steps": 2,
+                    "llm_error": 3, "no_tool_call": 4, "step_error": 5,
+                }.get(ended_reason, -1),
+            }, step=global_step)
+
+    # Wave-level distill (mirrors run_wave behaviour).
+    if hasattr(mem, "distill_if_due"):
+        try:
+            mem.distill_if_due()
+        except Exception as exc:
+            log.warning("sequential: memory distill_if_due failed: %s", exc)
+
+    if not skip_destroy:
+        try:
+            ucv.send(f"vset /object/{name_prefix}/destroy")
+        except Exception:
+            pass
 
     return results, global_step
 

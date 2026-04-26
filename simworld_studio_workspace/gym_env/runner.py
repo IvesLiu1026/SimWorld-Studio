@@ -20,6 +20,7 @@ import argparse
 import logging
 import math
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
 from nav_task.episode import NavigationEpisode
@@ -94,6 +95,68 @@ def _strip_images(messages: List[LLMMessage], keep_last_k: int) -> None:
         ]
 
 
+def _truncate_history(
+    messages: List[LLMMessage],
+    l1_keep: int = 5,
+    l2_keep: int = 10,
+) -> List[LLMMessage]:
+    """Truncate chat history to keep tokens manageable.
+
+    Three tiers:
+    - L3 (system):    all system messages, always kept.
+    - L1 (recent):    last ``l1_keep`` turns (user+assistant+tool) in full.
+    - L2 (older):     next ``l2_keep`` turns before L1, with user observation
+                      compressed to a single compact line (no image).
+    - Older:          dropped.
+
+    A "turn" is a user message plus the assistant and tool messages that
+    follow it up to the next user message.
+    """
+    system_msgs = [m for m in messages if m.role == "system"]
+    other_msgs  = [m for m in messages if m.role != "system"]
+
+    # Group into turns: each group starts at a user message.
+    turns: List[List[LLMMessage]] = []
+    current: List[LLMMessage] = []
+    for m in other_msgs:
+        if m.role == "user" and current:
+            turns.append(current)
+            current = [m]
+        else:
+            current.append(m)
+    if current:
+        turns.append(current)
+
+    # Keep last (l1_keep + l2_keep) turns.
+    total_keep = l1_keep + l2_keep
+    turns = turns[-total_keep:]
+
+    result = list(system_msgs)
+    for i, turn in enumerate(turns):
+        idx_from_end = len(turns) - i  # 1 = most recent turn
+        if idx_from_end <= l1_keep:
+            # L1: keep turn as-is (images already handled by _strip_images)
+            result.extend(turn)
+        else:
+            # L2: compress user message to one line, drop image blocks.
+            for m in turn:
+                if m.role == "user":
+                    text = ""
+                    for b in m.content:
+                        if isinstance(b, dict) and b.get("type") == "text":
+                            text = b.get("text", "")
+                            break
+                    lines = [
+                        ln for ln in text.splitlines()
+                        if ln.startswith(("Step:", "Goal:", "Position:"))
+                    ]
+                    compact = " | ".join(lines) if lines else "[obs]"
+                    result.append(LLMMessage.text("user", compact))
+                else:
+                    result.append(m)
+    return result
+
+
 def run_episode(
     env: SimWorldNavEnv,
     llm: LLMClient,
@@ -102,9 +165,11 @@ def run_episode(
     *,
     memory: Optional[AgentMemory] = None,
     max_steps: Optional[int] = None,
-    vision_history_depth: Optional[int] = 3,
+    vision_history_depth: Optional[int] = 1,
     max_tokens: int = 1024,
     task_prompt_override: Optional[str] = None,
+    history_l1: int = 5,
+    history_l2: int = 10,
 ) -> Dict[str, Any]:
     """Run one episode end-to-end.  Returns the final metrics dict.
 
@@ -134,6 +199,8 @@ def run_episode(
     history: List[LLMMessage] = [
         LLMMessage.text("system", system_text),
     ]
+    recent_actions: List[str] = []
+    recent_distances: List[float] = []
 
     final_metrics: Dict[str, Any] = {}
     for t in range(1, max_steps + 1):
@@ -166,6 +233,20 @@ def run_episode(
         if rethink_text:
             user_text = rethink_text + user_text
 
+        # Soft warning only: detect turn oscillation and provide context to LLM.
+        # Do NOT override the model action in code.
+        if len(recent_actions) >= 6 and len(recent_distances) >= 4:
+            last6 = recent_actions[-6:]
+            turn_only = all(a in ("TURN_LEFT", "TURN_RIGHT") for a in last6)
+            alternates = all(last6[i] != last6[i + 1] for i in range(len(last6) - 1))
+            dist_span = max(recent_distances[-4:]) - min(recent_distances[-4:])
+            if turn_only and alternates and dist_span < 30.0:
+                user_text = (
+                    "Rethink hint: You appear to be oscillating between left/right turns "
+                    "without reducing distance. Choose an action that makes forward progress.\n\n"
+                    + user_text
+                )
+
         # Attach image only if RGB capture is on AND the LLM actually
         # consumes images.  ClaudeAgentSDKClient is text-only.
         rgb = obs.get("rgb")
@@ -174,9 +255,14 @@ def run_episode(
         else:
             history.append(LLMMessage.text("user", user_text))
         _strip_images(history, vision_history_depth)
+        history[:] = _truncate_history(history, l1_keep=history_l1, l2_keep=history_l2)
 
-        log.info("[runner t=%d] querying %s", t, llm.name)
+        t_step_start = time.time()
+        log.info("[runner t=%d] querying %s  history_msgs=%d", t, llm.name, len(history))
+        t_llm0 = time.time()
         resp = llm.chat(history, nav_tool_schemas(), max_tokens=max_tokens)
+        dt_llm = time.time() - t_llm0
+        log.info("[timing t=%d] llm=%.2fs", t, dt_llm)
         logger.log_llm(t, llm.name, resp)
 
         # Echo to stdout for live debugging
@@ -187,8 +273,11 @@ def run_episode(
             print(f"[t={t}] action -> {tc.name}")
 
         if not resp.tool_calls:
-            log.info("LLM returned no tool calls; ending episode")
-            break
+            preview = (resp.text or "").strip().replace("\n", " ")[:200]
+            raise RuntimeError(
+                f"LLM response did not contain a valid action at step {t}. "
+                f"response_preview={preview!r}"
+            )
 
         history.append(LLMMessage(
             role="assistant",
@@ -199,8 +288,15 @@ def run_episode(
         done_now = False
         for tc in resp.tool_calls:
             prev_d = info.get("distance_to_goal_cm")
-            obs, reward, done, truncated, info = env.step(tc.to_action_dict())
-            logger.log_step(t, tc.to_action_dict(), obs, reward, done, truncated, info)
+            action_dict = tc.to_action_dict()
+            executed_action = action_dict.get("tool") or action_dict.get("name") or tc.name
+
+            t_env0 = time.time()
+            obs, reward, done, truncated, info = env.step(action_dict)
+            dt_env = time.time() - t_env0
+            dt_step = time.time() - t_step_start
+            log.info("[timing t=%d] env_step=%.2fs  total=%.2fs", t, dt_env, dt_step)
+            logger.log_step(t, action_dict, obs, reward, done, truncated, info)
             history.append(LLMMessage(
                 role="tool",
                 tool_call_id=tc.id,
@@ -226,13 +322,13 @@ def run_episode(
 
             memory.insert(
                 (
-                    f"step={t} action={tc.name} reward={reward:+.3f} "
+                    f"step={t} action={executed_action} reward={reward:+.3f} "
                     f"d_goal {prev_d:.0f}->{new_d:.0f}cm (delta={delta:+.0f}) "
                     f"yaw={obs['agent_yaw_deg']:+.0f}"
                 ),
                 metadata={
                     "step": t,
-                    "action": tc.name,
+                    "action": executed_action,
                     "reward": float(reward),
                     "d_goal_cm": float(new_d) if new_d is not None else None,
                     "delta_cm": float(delta),
@@ -243,6 +339,9 @@ def run_episode(
                     "yaw_deg": float(obs.get("agent_yaw_deg", 0)),
                 },
             )
+            recent_actions.append(executed_action)
+            if new_d is not None:
+                recent_distances.append(float(new_d))
 
             if done or truncated:
                 final_metrics = info.get("metrics", {}) or {}

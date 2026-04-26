@@ -60,17 +60,6 @@ log = logging.getLogger(__name__)
 # duration; turns play out in ~1s.
 _TICK_BUFFER_S = 0.5
 
-
-class SpawnBlockedError(RuntimeError):
-    """Raised when the agent cannot move from its spawn position.
-
-    Some teleport-to-start placements end up inside collision geometry
-    (wall, prop, below ground after Z snap) so ``vbp StepForward`` is
-    a no-op.  We detect this with a short probe move during reset and
-    raise this so the runner can mark the slot as ``spawn_blocked``
-    and skip the episode without burning LLM tokens on it.
-    """
-
 _HUMANOID_BP = "/Game/TrafficSystem/Pedestrian/Base_User_Agent.Base_User_Agent_C"
 
 # Spawn Z for humanoid.  Studio's ``agent-registry.json`` and the
@@ -186,6 +175,49 @@ class SimWorldNavEnv:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _bind_agent_name(self, new_name: str) -> None:
+        """Switch all env subsystems to a discovered UE actor name."""
+        if not new_name or new_name == self.agent_name:
+            return
+        log.info("env: binding agent_name %s -> %s", self.agent_name, new_name)
+        self.agent_name = new_name
+        # Euclidean interface keeps the actor id in a private field.
+        if hasattr(self.nav_iface, "_agent_name"):
+            self.nav_iface._agent_name = new_name
+        self.obs_builder.agent_name = new_name
+
+    @staticmethod
+    def _find_existing_agent_name(objects: List[str]) -> Optional[str]:
+        """Pick a likely controllable pedestrian actor from UE objects."""
+        if not objects:
+            return None
+        # Prefer explicit co-evolve naming if present.
+        for name in objects:
+            if name.startswith("CoEvolveAgent"):
+                return name
+        # Fallback to map-existing pedestrian actors.
+        for name in objects:
+            lname = name.lower()
+            if "base_user_agent" in lname or "user_agent" in lname:
+                return name
+        return None
+
+    def _is_actor_alive(self, name: str) -> bool:
+        """An actor name may linger in vget_objects after destroy; the
+        location query is the truth source — it returns 'error' for
+        dead actors. Used to avoid binding to a tombstone."""
+        try:
+            resp = self.ucv.send(f"vget /object/{name}/location")
+            if not resp:
+                return False
+            if "error" in resp.lower():
+                return False
+            parts = resp.strip().split()
+            float(parts[0]); float(parts[1]); float(parts[2])
+            return True
+        except Exception:
+            return False
+
     def reset(self, episode: NavigationEpisode) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Spawn / reposition the agent and return the initial obs."""
         log.info("env.reset: episode=%s task=%s", episode.episode_id, episode.task_type)
@@ -209,10 +241,18 @@ class SimWorldNavEnv:
             # over from a previous run).  If so, skip the 90-second
             # spawn and just reuse it.
             existing = self.ucv.vget_objects()
-            if self.agent_name in existing:
+            if self.agent_name in existing and self._is_actor_alive(self.agent_name):
                 log.info("env: agent %s already in scene, reusing", self.agent_name)
                 self._spawned = True
-            elif self.spawn_on_reset:
+            else:
+                discovered = self._find_existing_agent_name(existing)
+                if discovered and self._is_actor_alive(discovered):
+                    self._bind_agent_name(discovered)
+                    log.info("env: discovered existing agent %s, reusing", discovered)
+                    self._spawned = True
+                elif discovered:
+                    log.info("env: discovered %s but it is a dead tombstone, ignoring", discovered)
+            if (not self._spawned) and self.spawn_on_reset:
                 self._spawn_agent()
                 self._spawned = True
 
@@ -252,61 +292,9 @@ class SimWorldNavEnv:
         # in case the sensor ordering shifted between maps.
         self._resolve_camera_id()
 
-        # Spawn-validity probe: send a brief StepForward, verify the
-        # actor actually moved.  ~30-40% of PN agents in v7 hit start
-        # positions where the actor is wedged in collision geometry and
-        # `vbp StepForward` is a silent no-op for the entire episode.
-        # Try one Z bump before giving up; on failure raise so the
-        # runner can record `spawn_blocked` and move on without burning
-        # 40 LLM steps.
-        if not self._probe_movable(start):
-            raise SpawnBlockedError(
-                f"agent {self.agent_name} cannot move from spawn "
-                f"({start.x:.0f}, {start.y:.0f}) — likely inside "
-                f"collision geometry"
-            )
-
         obs = self.obs_builder.observe(episode, self._start_xy)
         info = self._build_info(initial=True)
         return obs, info
-
-    def _probe_movable(self, start, *, threshold_cm: float = 30.0) -> bool:
-        """Send a 0.5s StepForward and return True if the actor moved.
-
-        Tries a single Z bump (+50, +150) if the first probe failed —
-        cheaply rescues agents whose Z snapped slightly under the
-        ground mesh.  Restores the actor to ``start`` after a successful
-        probe so the episode begins from the canonical pose.
-        """
-        for z_bump in (0.0, 50.0, 150.0):
-            if z_bump > 0.0:
-                self.ucv.vset_location(self.agent_name, start.x, start.y,
-                                       self.spawn_z + z_bump)
-                time.sleep(0.3)
-            try:
-                self.ucv.send(f"vbp {self.agent_name} StepForward 0.5 0")
-                time.sleep(0.7)
-                x, y, _z = self.ucv.vget_location(self.agent_name)
-            except Exception as exc:
-                log.warning("env: spawn probe send/read failed (%s)", exc)
-                return False
-            moved = math.sqrt((x - start.x) ** 2 + (y - start.y) ** 2)
-            if moved >= threshold_cm:
-                # Reset to canonical start so the trajectory begins clean.
-                try:
-                    self.ucv.vbp(self.agent_name, "StopAgent")
-                except Exception:
-                    pass
-                self.ucv.vset_location(self.agent_name, start.x, start.y,
-                                       self.spawn_z + z_bump)
-                self.ucv.vset_rotation(self.agent_name, 0.0, 0.0, 0.0)
-                time.sleep(0.3)
-                self._last_xy = (start.x, start.y)
-                if z_bump > 0.0:
-                    log.info("env: spawn unblocked for %s after Z bump +%.0f",
-                             self.agent_name, z_bump)
-                return True
-        return False
 
     def _ensure_pie(self) -> None:
         """Start PIE via MCP if it isn't already running.
@@ -548,7 +536,18 @@ class SimWorldNavEnv:
         if is_stop_action(action):
             self.reward_fn.on_stop_action()
 
-        new_pos = self.nav_iface.get_agent_position()
+        try:
+            new_pos = self.nav_iface.get_agent_position()
+        except RuntimeError as exc:
+            # UE can occasionally lose the actor handle mid-PIE tick.
+            # Try one best-effort recovery before failing the episode.
+            msg = str(exc).lower()
+            if "can not find object" in msg or "cannot find object" in msg:
+                log.warning("env.step: agent missing in UE, attempting recovery: %s", exc)
+                self._recover_missing_agent()
+                new_pos = self.nav_iface.get_agent_position()
+            else:
+                raise
         new_xy = (new_pos.x, new_pos.y)
         delta = math.sqrt(
             (new_xy[0] - self._last_xy[0]) ** 2
@@ -598,6 +597,27 @@ class SimWorldNavEnv:
             log.info("episode done: %s", metrics)
 
         return obs, reward, terminated, truncated, info
+
+    def _recover_missing_agent(self) -> None:
+        """Best-effort recovery when UE reports agent actor missing."""
+        # Refresh socket state first; UnrealCV may have rolled over between ticks.
+        self.ucv.hard_reconnect()
+
+        existing = set(self.ucv.vget_objects())
+        if self.agent_name not in existing:
+            log.warning("env.recover: actor %s not found, respawning", self.agent_name)
+            self._spawn_agent()
+            self._spawned = True
+
+        # Restore to the last known pose so episode dynamics remain coherent.
+        self.ucv.vset_location(self.agent_name, self._last_xy[0], self._last_xy[1], self.spawn_z)
+        self.ucv.vset_rotation(self.agent_name, 0.0, 0.0, 0.0)
+        try:
+            self.ucv.vbp(self.agent_name, "StopAgent")
+        except Exception:
+            pass
+        time.sleep(0.5)
+        self._resolve_camera_id()
 
     # ------------------------------------------------------------------
     # Info / metrics

@@ -77,6 +77,7 @@ def make_llm(
             model=model or "qwen3-vl-plus",
             api_key=api_key,
             base_url=base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            text_action_mode=True,
             **kwargs,
         )
     raise ValueError(

@@ -46,12 +46,17 @@ class StrategyMemory:
         path: str = "strategy_memory.json",
         max_strategies: int = 5,
         llm_call: Optional[Callable] = None,
+        warmup: Optional[List[str]] = None,
     ) -> None:
         self._path = Path(path)
         self._max = max_strategies
         self._strategies: List[str] = []
         self._trajectory: List[str] = []
         self._llm_call = llm_call
+        # Pinned warmup strategies (e.g. distilled L3 skills from prior
+        # training). They are always returned in addition to learned
+        # ones, never evicted, and never written to the persistence file.
+        self._warmup: List[str] = list(warmup or [])
         self._load()
 
     def _load(self) -> None:
@@ -75,8 +80,9 @@ class StrategyMemory:
         self._trajectory.append(text)
 
     def query(self, text: str, k: int = 5) -> List[str]:
-        """Return all stored strategies (they're few and high-quality)."""
-        return list(self._strategies[-k:])
+        """Return warmup + learned strategies (warmup is always included)."""
+        learned = list(self._strategies[-k:])
+        return list(self._warmup) + learned
 
     def reset(self) -> None:
         """Clear trajectory buffer for new episode (strategies persist)."""
@@ -162,9 +168,10 @@ class StrategyMemory:
 
     def get_system_prompt_section(self) -> str:
         """Format strategies as a system prompt section."""
-        if not self._strategies:
+        all_strategies = list(self._warmup) + list(self._strategies)
+        if not all_strategies:
             return ""
-        lines = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(self._strategies))
+        lines = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(all_strategies))
         return (
             "\n\nNavigation Lessons (from previous episodes):\n"
             f"{lines}\n"

@@ -77,6 +77,7 @@ def build_memory(
         from .strategy_backend import StrategyMemory
         default_path = f"strategy_memory_{agent_id}.json" if agent_id != "default" else "strategy_memory.json"
         path = (config or {}).get("path", default_path)
+        warmup = (config or {}).get("warmup")
         llm_call = None
         if llm_base_url and llm_model:
             from openai import OpenAI
@@ -93,7 +94,7 @@ def build_memory(
                     timeout=120,
                 )
                 return resp.choices[0].message.content or ""
-        return StrategyMemory(path=path, llm_call=llm_call)
+        return StrategyMemory(path=path, llm_call=llm_call, warmup=warmup)
     if kind == "hierarchical":
         from .hierarchical import HierarchicalMemory
         cfg = config or {}

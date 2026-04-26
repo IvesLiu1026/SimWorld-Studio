@@ -15,6 +15,8 @@ def main(argv=None):
     p.add_argument("--generations", type=int, default=30)
     p.add_argument("--episodes-per-gen", type=int, default=4)
     p.add_argument("--max-steps", type=int, default=40)
+    p.add_argument("--wave-size", type=int, default=10,
+                   help="Ghost agents per parallel wave (default 10)")
 
     p.add_argument("--nav-model", default="qwen")
     p.add_argument("--nav-model-id", default=None, help="Nav LLM model ID (default: from env NAV_MODEL_ID or Qwen3.5-9B)")
@@ -37,6 +39,16 @@ def main(argv=None):
                    help="Path to experiment dir to resume from (e.g. runs/co_evolve/coevolve_XXX)")
     p.add_argument("--log-level", default="INFO")
 
+    p.add_argument("--teacher", default=None,
+                   choices=["alpgmm", "epsilon_greedy", "fixed"],
+                   help="Difficulty curriculum teacher (default: alpgmm)")
+    p.add_argument("--difficulty-tolerance", type=float, default=None,
+                   help="Half-width of acceptable difficulty band around teacher target (default: 2.0)")
+    p.add_argument("--teacher-p-random", type=float, default=None,
+                   help="Uniform-explore probability for ALP/EpsGreedy (default: 0.2)")
+    p.add_argument("--teacher-max-regen", type=int, default=None,
+                   help="Max LLM regeneration retries when spec misses band (default: 3)")
+
     args = p.parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper(), logging.INFO),
@@ -52,6 +64,7 @@ def main(argv=None):
         generations=args.generations,
         episodes_per_gen=args.episodes_per_gen,
         max_steps=args.max_steps,
+        wave_size=args.wave_size,
         nav_model=args.nav_model,
         nav_memory=args.nav_memory,
         capture_rgb=not args.no_rgb,
@@ -73,6 +86,15 @@ def main(argv=None):
         config.coding_base_url = args.coding_base_url
     if args.coding_api_key is not None:
         config.coding_api_key = args.coding_api_key
+
+    if args.teacher is not None:
+        config.teacher = args.teacher
+    if args.difficulty_tolerance is not None:
+        config.difficulty_tolerance = args.difficulty_tolerance
+    if args.teacher_p_random is not None:
+        config.teacher_p_random = args.teacher_p_random
+    if args.teacher_max_regen is not None:
+        config.teacher_max_regen = args.teacher_max_regen
 
     runner = CoEvolutionRunner(config, resume_dir=args.resume)
     results = runner.run()

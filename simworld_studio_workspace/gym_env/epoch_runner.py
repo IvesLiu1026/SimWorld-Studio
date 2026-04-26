@@ -138,8 +138,10 @@ def run_episode_with_logging(
     *,
     memory: AgentMemory,
     max_steps: int = 40,
-    vision_history_depth: int = 3,
+    vision_history_depth: int = 1,
     max_tokens: int = 1024,
+    history_l1: int = 5,
+    history_l2: int = 10,
     wandb_run=None,
     global_step_offset: int = 0,
     split: str = "train",
@@ -197,6 +199,8 @@ def run_episode_with_logging(
         else:
             history.append(LLMMessage.text("user", user_text))
         _strip_images(history, vision_history_depth)
+        from .runner import _truncate_history
+        history[:] = _truncate_history(history, l1_keep=history_l1, l2_keep=history_l2)
 
         # LLM call
         resp = llm.chat(history, nav_tool_schemas(), max_tokens=max_tokens)

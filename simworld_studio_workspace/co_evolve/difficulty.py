@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import math
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -81,27 +81,30 @@ def score_task_difficulty(
 
 def measure_blocked_ratio(
     ucv,
-    bounds_half: float = 5000.0,
+    center: Tuple[float, float] = (7661.0, 10970.0),
+    bounds_half: float = 10000.0,
     n_samples: int = 100,
     seed: int = 42,
 ) -> float:
     """Measure fraction of scene area blocked by objects.
 
-    Samples uniform grid points and uses NavMesh projection to check
-    if each point is navigable. Returns blocked_ratio = 1 - navigable_ratio.
+    Samples uniform grid points (center ± bounds_half) and uses NavMesh
+    projection to check if each point is navigable.
+    Returns blocked_ratio = 1 - navigable_ratio.
 
     Raises NavMeshRequired if NavMesh is not functional.
     """
     rng = random.Random(seed)
     n_navigable = 0
     n_total = 0
+    cx, cy = center
 
     for _ in range(n_samples):
-        x = rng.uniform(-bounds_half, bounds_half)
-        y = rng.uniform(-bounds_half, bounds_half)
+        x = rng.uniform(cx - bounds_half, cx + bounds_half)
+        y = rng.uniform(cy - bounds_half, cy + bounds_half)
         n_total += 1
         try:
-            resp = ucv.send(f"vget /nav/project {x} {y} 0")
+            resp = ucv.send(f"vget /nav/project {x} {y} 100")
             resp = resp.strip()
             if resp and not resp.startswith("error") and resp != "-1":
                 parts = resp.split(",")
@@ -110,8 +113,8 @@ def measure_blocked_ratio(
                     # Valid if projected point is not degenerate (all zeros)
                     if abs(px) > 1 or abs(py) > 1:
                         n_navigable += 1
-                    elif abs(x) < 100 and abs(y) < 100:
-                        # Near origin is valid
+                    elif abs(x - cx) < 100 and abs(y - cy) < 100:
+                        # Near center is valid
                         n_navigable += 1
         except Exception:
             pass

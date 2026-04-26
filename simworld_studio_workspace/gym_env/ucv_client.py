@@ -149,7 +149,43 @@ class UCVClient:
     # Commands
     # ------------------------------------------------------------------
 
-    def send(self, cmd: str) -> str:
+    def _request_with_timeout(self, cmd: str, timeout: float = 10.0):
+        """Run self._client.request(cmd) with a real wall-clock timeout.
+
+        The unrealcv library's ``request(timeout=N)`` parameter is silently
+        ignored — the underlying ``recv_data_q.get()`` call has no timeout
+        and blocks forever if UE never replies or drops the connection.
+        We work around this by running the blocking call in a daemon thread
+        and joining with our own deadline.  The abandoned thread dies when
+        its socket is closed (by a subsequent disconnect or process exit).
+        """
+        result: list = [None]
+        exc_holder: list = [None]
+
+        def _run() -> None:
+            try:
+                result[0] = self._client.request(cmd)
+            except Exception as exc:  # noqa: BLE001
+                exc_holder[0] = exc
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            raise UCVError(
+                f"[{self.name}] command timed out after {timeout:.0f}s: {cmd!r}"
+            )
+        if exc_holder[0] is not None:
+            raise UCVError(
+                f"[{self.name}] command failed: {cmd!r} -> {exc_holder[0]}"
+            ) from exc_holder[0]
+        if result[0] is None:
+            raise UCVError(
+                f"[{self.name}] no response (disconnection) for: {cmd!r}"
+            )
+        return result[0]
+
+    def send(self, cmd: str, timeout: float = 10.0) -> str:
         """Send a text command and return its string response.
 
         Auto-recovers once on transient socket failures.  Raises
@@ -164,13 +200,13 @@ class UCVClient:
         self._ensure_connected()
         log.debug("[%s] >> %s", self.name, cmd)
         try:
-            resp = self._client.request(cmd, timeout=10)
+            resp = self._request_with_timeout(cmd, timeout)
         except Exception as exc:
             log.warning("[%s] command failed (%s); hard_reconnect + retry",
                         self.name, exc)
             self.hard_reconnect()
             try:
-                resp = self._client.request(cmd, timeout=10)
+                resp = self._request_with_timeout(cmd, timeout)
             except Exception as exc2:
                 raise UCVError(
                     f"[{self.name}] command failed: {cmd!r} -> {exc2}"
@@ -183,18 +219,18 @@ class UCVClient:
             log.debug("[%s] << %s", self.name, preview)
         return text
 
-    def send_bytes(self, cmd: str, *, timeout: int = 10) -> bytes:
+    def send_bytes(self, cmd: str, *, timeout: float = 10.0) -> bytes:
         """Send a command expected to return a binary payload (PNG, npy)."""
         self._ensure_connected()
-        log.debug("[%s] >> %s (binary, timeout=%ds)", self.name, cmd, timeout)
+        log.debug("[%s] >> %s (binary, timeout=%.0fs)", self.name, cmd, timeout)
         try:
-            resp = self._client.request(cmd, timeout=timeout)
+            resp = self._request_with_timeout(cmd, timeout)
         except Exception as exc:
             log.warning("[%s] binary cmd failed (%s); hard_reconnect + retry",
                         self.name, exc)
             self.hard_reconnect()
             try:
-                resp = self._client.request(cmd, timeout=timeout)
+                resp = self._request_with_timeout(cmd, timeout)
             except Exception as exc2:
                 raise UCVError(
                     f"[{self.name}] binary command failed: {cmd!r} -> {exc2}"
@@ -232,6 +268,34 @@ class UCVClient:
         """Return the list of all visible UE actor names."""
         resp = self.send("vget /objects")
         return [name for name in resp.strip().split() if name]
+
+    def vget_bounds(self, actor: str):
+        """Return world-space AABB ``(xmin, ymin, zmin, xmax, ymax, zmax)``
+        in cm, or ``None`` if the engine did not return 6 parseable floats.
+
+        Calls UnrealCV's ``vget /object/<name>/bounds``. The standard plugin
+        returns 6 space-separated floats; some forks use commas. Both are
+        accepted. ``None`` means "unknown" — callers should treat that as
+        "no information" (do NOT assume zero size or empty box).
+        """
+        try:
+            resp = self.send(f"vget /object/{actor}/bounds").strip()
+        except Exception:
+            return None
+        if not resp or resp.lower().startswith("error"):
+            return None
+        # Accept both " " and "," separators.
+        parts = resp.replace(",", " ").split()
+        if len(parts) < 6:
+            return None
+        try:
+            xmin, ymin, zmin, xmax, ymax, zmax = (float(p) for p in parts[:6])
+        except ValueError:
+            return None
+        # Guard against degenerate boxes from buggy responses.
+        if xmin > xmax or ymin > ymax or zmin > zmax:
+            return None
+        return (xmin, ymin, zmin, xmax, ymax, zmax)
 
     def vget_camera_png(self, camera_id: int = 1, mode: str = "lit") -> bytes:
         """Capture an RGB frame as PNG bytes from a humanoid first-person camera.
@@ -309,39 +373,45 @@ class UCVClient:
         else:
             cmd = f"vset /objects/spawn_bp_asset {blueprint_path} {name}"
 
+        # Synchronous spawn with bounded timeout — we MUST see UE's response
+        # to detect "error" (e.g. duplicate name, BP not found, world rejection).
+        # The fire-and-forget path silently swallowed all errors.
+        log.info("[%s] spawn dispatching (sync, 60s timeout): %s",
+                 self.name, cmd)
+        self._ensure_connected()
+        resp = None
         try:
-            self.send(cmd)
+            resp = self._request_with_timeout(cmd, timeout=60.0)
         except UCVError as exc:
-            log.debug("[%s] spawn raised %s — UE often resets socket",
-                      self.name, exc)
-
-        # UE drops the UnrealCV socket during skinned-mesh compilation
-        # (~60-120s).  UnrealCV is single-client: creating a NEW client
-        # via hard_reconnect() while the old connection is registered
-        # server-side blocks forever.  Instead: disconnect the current
-        # client cleanly, wait, then reconnect the SAME client object.
-        log.info("[%s] spawn sent — waiting for UE recovery (up to 5 min)...",
-                 self.name)
-        try:
-            self._client.disconnect()
-        except Exception:
-            pass
-        time.sleep(5.0)
-        for attempt in range(60):  # 60 * 5s = 300s max
+            # Likely UE dropped socket during skinned-mesh compile.
+            # Reconnect and verify post-hoc by checking object list.
+            log.warning("[%s] spawn request raised %s — reconnecting to verify",
+                        self.name, exc)
             try:
-                self._client.connect()
-                if self.is_connected():
-                    log.info("[%s] reconnected after spawn (attempt %d, ~%ds)",
-                             self.name, attempt + 1, (attempt + 1) * 5 + 5)
-                    break
+                self._client.disconnect()
             except Exception:
                 pass
-            if attempt % 10 == 9:
-                log.info("[%s] still waiting for UE... (%ds)",
-                         self.name, (attempt + 1) * 5 + 5)
             time.sleep(5.0)
+            for attempt in range(60):
+                try:
+                    self._client.connect()
+                    if self.is_connected():
+                        log.info("[%s] reconnected after spawn drop (attempt %d, ~%ds)",
+                                 self.name, attempt + 1, (attempt + 1) * 5 + 5)
+                        break
+                except Exception:
+                    pass
+                time.sleep(5.0)
+            else:
+                raise UCVError(f"[{self.name}] spawn reconnect failed after 300s")
         else:
-            raise UCVError(f"[{self.name}] spawn reconnect failed after 300s")
+            resp_text = "" if resp is None else str(resp).strip()
+            log.info("[%s] spawn UE response: %r", self.name, resp_text[:200])
+            if resp_text.lower().startswith("error"):
+                raise UCVError(
+                    f"[{self.name}] spawn rejected by UE: {resp_text!r} "
+                    f"(cmd={cmd!r})"
+                )
         log.info("[%s] spawned BP %s as %s at %s",
                  self.name, blueprint_path, name, location)
 
@@ -402,11 +472,41 @@ class UCVClient:
         subsequent ``request()`` we make on the new client may get a
         response that's intercepted by the dead old thread, hanging
         the new request indefinitely.
-        Solution: orphan the old client.  Its receive thread will exit
-        cleanly when its socket dies, with no join attempt; Python's
-        GC will clean it up later.  We just drop our reference.
+
+        However, just dropping our reference to the old Client (the
+        previous behaviour) leaks the underlying TCP socket: the old
+        receive thread is still blocked on ``socket.recv`` so the
+        Client object cannot be garbage-collected, and the OS-level
+        socket stays in ESTABLISHED. After a long run this piles up to
+        hundreds of connections on port 9001, observed empirically
+        on the 2026-04-24 prod30 run (~200 ESTABLISHED).
+
+        Solution: explicitly ``shutdown`` + ``close`` the OLD raw
+        socket from the main thread BEFORE we drop the reference.
+        Closing the socket unblocks the receive thread (recv returns
+        b'' and the thread exits naturally), so no join is needed and
+        the OS releases the connection immediately.
         """
-        # Forget the old client — DO NOT call disconnect on it.
+        # Shut down the old socket so its receive thread exits and the
+        # OS releases the TCP connection. ``sock`` is the raw
+        # ``socket.socket`` exposed by ``unrealcv.Client``.
+        old = self._client
+        if old is not None:
+            try:
+                sock = getattr(old, "sock", None)
+                if sock is not None:
+                    import socket as _socket
+                    try:
+                        sock.shutdown(_socket.SHUT_RDWR)
+                    except Exception:
+                        pass
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+            except Exception as exc:
+                log.debug("[%s] hard_reconnect: socket close failed: %s",
+                          self.name, exc)
         self._client = None
         time.sleep(0.5)
         import unrealcv
