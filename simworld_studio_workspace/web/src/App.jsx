@@ -57,45 +57,45 @@ function SvgIcon({ children, size = "1em", style, ...props }) {
 }
 
 const ICONS = {
-  clipboard: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="2" fill="#3fb950" /><rect x="8" y="1" width="8" height="3" rx="1" fill="#2ea043" /><rect x="8" y="8" width="8" height="1.5" rx=".75" fill="#fff" /><rect x="8" y="11.5" width="6" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="8" y="15" width="7" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
-  search: (s) => <SvgIcon size={s}><circle cx="10.5" cy="10.5" r="6" stroke="#58a6ff" strokeWidth="2.2" /><line x1="15" y1="15" x2="20" y2="20" stroke="#58a6ff" strokeWidth="2.5" strokeLinecap="round" /></SvgIcon>,
-  plus: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="9" fill="#3fb950" /><line x1="12" y1="7.5" x2="12" y2="16.5" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /><line x1="7.5" y1="12" x2="16.5" y2="12" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /></SvgIcon>,
-  trash: (s) => <SvgIcon size={s}><path d="M6 7h12l-1 13H7L6 7z" fill="#f85149" /><rect x="4" y="4.5" width="16" height="2.5" rx="1" fill="#da3633" /><rect x="9" y="2" width="6" height="3" rx="1" fill="#f85149" /></SvgIcon>,
-  transform: (s) => <SvgIcon size={s}><line x1="4" y1="12" x2="20" y2="12" stroke="#d29922" strokeWidth="2" strokeLinecap="round" /><polyline points="7,8.5 4,12 7,15.5" fill="none" stroke="#d29922" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><polyline points="17,8.5 20,12 17,15.5" fill="none" stroke="#d29922" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></SvgIcon>,
-  document: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="2" fill="#8b949e" /><path d="M5 2h9l5 5v15a2 2 0 01-2 2H7a2 2 0 01-2-2V2z" fill="#8b949e" /><path d="M14 2v5h5" fill="#656d76" /><rect x="8" y="10" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="8" y="13" width="5" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
-  video: (s) => <SvgIcon size={s}><rect x="2" y="5" width="14" height="14" rx="2" fill="#a371f7" /><polygon points="18,7 22,5 22,19 18,17" fill="#8957e5" /><circle cx="9" cy="12" r="2.5" fill="#fff" opacity=".5" /></SvgIcon>,
-  camera: (s) => <SvgIcon size={s}><rect x="2" y="6" width="20" height="14" rx="3" fill="#58a6ff" /><circle cx="12" cy="13" r="4" fill="#1f6feb" /><circle cx="12" cy="13" r="2" fill="#a5d6ff" /><rect x="8" y="3.5" width="8" height="3" rx="1" fill="#1f6feb" /></SvgIcon>,
-  python: (s) => <SvgIcon size={s}><path d="M12 2c-3 0-5 1.5-5 4v2h5v1H6c-2 0-4 1.5-4 4.5S4 18 6 18h2v-3c0-2 1.5-3.5 3.5-3.5h5c1.5 0 3-1.2 3-3V6c0-2.2-2-4-5-4z" fill="#3fb950" /><path d="M12 22c3 0 5-1.5 5-4v-2h-5v-1h6c2 0 4-1.5 4-4.5S18 6 16 6h-2v3c0 2-1.5 3.5-3.5 3.5h-5c-1.5 0-3 1.2-3 3v3.5c0 2.2 2 4 5 4z" fill="#1f6feb" /><circle cx="8.5" cy="5" r="1" fill="#fff" /><circle cx="15.5" cy="19" r="1" fill="#fff" /></SvgIcon>,
-  wrench: (s) => <SvgIcon size={s}><path d="M14.5 3a6 6 0 00-5.7 7.9L3.3 16.4a2.2 2.2 0 003.1 3.1l5.5-5.5A6 6 0 1014.5 3z" fill="#d29922" /><circle cx="14.5" cy="9" r="2.5" fill="#f0883e" /></SvgIcon>,
-  gear: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="4" fill="#8b949e" /><path d="M12 1l1.5 3.2a7.5 7.5 0 012.3 1.3L19 4.5l1 2.5-2.8 1.5a7.5 7.5 0 01.3 2.5H21v2.5h-3.5a7.5 7.5 0 01-.3 2.5l2.8 1.5-1 2.5-3.2-1a7.5 7.5 0 01-2.3 1.3L12 23l-1.5-3.2a7.5 7.5 0 01-2.3-1.3L5 19.5l-1-2.5 2.8-1.5a7.5 7.5 0 01-.3-2.5H3v-2.5h3.5a7.5 7.5 0 01.3-2.5L4 6.5l1-2.5 3.2 1a7.5 7.5 0 012.3-1.3L12 1z" fill="#656d76" /><circle cx="12" cy="12" r="3" fill="#e6edf3" /></SvgIcon>,
-  palette: (s) => <SvgIcon size={s}><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1 0 1.5-.7 1.5-1.5 0-.4-.1-.7-.3-1-.2-.3-.3-.6-.3-1 0-1 .7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-5-4.5-9-10-9z" fill="#a371f7" /><circle cx="7" cy="12" r="1.8" fill="#f85149" /><circle cx="9" cy="8" r="1.8" fill="#d29922" /><circle cx="14" cy="7" r="1.8" fill="#3fb950" /><circle cx="17.5" cy="10" r="1.8" fill="#58a6ff" /></SvgIcon>,
-  plug: (s) => <SvgIcon size={s}><rect x="7" y="2" width="3" height="8" rx="1" fill="#58a6ff" /><rect x="14" y="2" width="3" height="8" rx="1" fill="#58a6ff" /><path d="M6 10h12v3a6 6 0 01-5 5.9V22h-2v-3.1A6 6 0 016 13V10z" fill="#1f6feb" /></SvgIcon>,
-  eye: (s) => <SvgIcon size={s}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" fill="#a371f7" /><circle cx="12" cy="12" r="4" fill="#fff" /><circle cx="12" cy="12" r="2" fill="#8957e5" /></SvgIcon>,
-  map: (s) => <SvgIcon size={s}><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3V6z" fill="#1f6feb" /><path d="M9 3v15" stroke="#58a6ff" strokeWidth="1.5" /><path d="M15 6v15" stroke="#58a6ff" strokeWidth="1.5" /><circle cx="8" cy="10" r="1.2" fill="#f85149" /><circle cx="16" cy="12" r="1.2" fill="#3fb950" /></SvgIcon>,
-  building: (s) => <SvgIcon size={s}><rect x="4" y="4" width="16" height="18" rx="1" fill="#1f6feb" /><rect x="7" y="7" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="14" y="7" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="7" y="13" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="14" y="13" width="3" height="3" rx=".5" fill="#a5d6ff" /><rect x="10" y="18" width="4" height="4" fill="#58a6ff" /></SvgIcon>,
-  tree: (s) => <SvgIcon size={s}><rect x="10.5" y="15" width="3" height="7" fill="#8b6914" /><polygon points="12,2 4,15 20,15" fill="#3fb950" /><polygon points="12,6 6,15 18,15" fill="#2ea043" /></SvgIcon>,
-  car: (s) => <SvgIcon size={s}><rect x="2" y="10" width="20" height="7" rx="2" fill="#f0883e" /><path d="M5 10l2-5h10l2 5" fill="#d29922" /><circle cx="7" cy="17" r="2.2" fill="#484f58" /><circle cx="7" cy="17" r="1" fill="#8b949e" /><circle cx="17" cy="17" r="2.2" fill="#484f58" /><circle cx="17" cy="17" r="1" fill="#8b949e" /><rect x="7" y="7" width="4" height="3" rx=".5" fill="#a5d6ff" opacity=".7" /><rect x="13" y="7" width="4" height="3" rx=".5" fill="#a5d6ff" opacity=".7" /></SvgIcon>,
-  hydrant: (s) => <SvgIcon size={s}><rect x="4" y="12" width="16" height="10" rx="1" fill="#8b949e" /><rect x="6" y="8" width="12" height="4" rx="1" fill="#656d76" /><rect x="2" y="14" width="4" height="3" rx="1" fill="#656d76" /><rect x="18" y="14" width="4" height="3" rx="1" fill="#656d76" /><rect x="8" y="4" width="8" height="5" rx="2" fill="#8b949e" /><circle cx="12" cy="6" r="1.5" fill="#484f58" /></SvgIcon>,
-  road: (s) => <SvgIcon size={s}><polygon points="1,22 8,2 16,2 23,22" fill="#656d76" /><rect x="11" y="4" width="2" height="3.5" rx=".5" fill="#d29922" /><rect x="11" y="10" width="2" height="3.5" rx=".5" fill="#d29922" /><rect x="11" y="16" width="2" height="3.5" rx=".5" fill="#d29922" /></SvgIcon>,
-  cube: (s) => <SvgIcon size={s}><rect x="4" y="4" width="16" height="16" rx="2" fill="#484f58" /><rect x="6" y="6" width="12" height="12" rx="1" fill="#656d76" /></SvgIcon>,
-  hammer: (s) => <SvgIcon size={s}><rect x="10" y="10" width="3" height="12" rx="1" fill="#8b6914" transform="rotate(-45 12 16)" /><rect x="5" y="2" width="12" height="7" rx="2" fill="#8b949e" transform="rotate(-45 11 5.5)" /></SvgIcon>,
-  box: (s) => <SvgIcon size={s}><rect x="3" y="8" width="18" height="14" rx="1" fill="#d29922" /><path d="M3 8l9-6 9 6" fill="#f0883e" /><line x1="12" y1="2" x2="12" y2="22" stroke="#8b6914" strokeWidth="1" opacity=".3" /><rect x="9" y="8" width="6" height="4" rx="1" fill="#8b6914" opacity=".4" /></SvgIcon>,
-  chat: (s) => <SvgIcon size={s}><rect x="2" y="3" width="20" height="15" rx="3" fill="#58a6ff" /><path d="M6 18l-2 4v-4" fill="#58a6ff" /><rect x="6" y="8" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="6" y="11.5" width="5" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
-  robot: (s) => <SvgIcon size={s}><rect x="4" y="7" width="16" height="13" rx="3" fill="#8b949e" /><rect x="7" y="10" width="4" height="3" rx="1" fill="#58a6ff" /><rect x="13" y="10" width="4" height="3" rx="1" fill="#58a6ff" /><rect x="9" y="16" width="6" height="2" rx="1" fill="#656d76" /><line x1="12" y1="3" x2="12" y2="7" stroke="#8b949e" strokeWidth="2" /><circle cx="12" cy="2.5" r="1.5" fill="#58a6ff" /><rect x="1" y="12" width="3" height="4" rx="1" fill="#656d76" /><rect x="20" y="12" width="3" height="4" rx="1" fill="#656d76" /></SvgIcon>,
-  swords: (s) => <SvgIcon size={s}><line x1="5" y1="19" x2="18" y2="5" stroke="#f0883e" strokeWidth="2.5" strokeLinecap="round" /><polygon points="18,5 21,3 22,6 19,7" fill="#d29922" /><line x1="19" y1="19" x2="6" y2="5" stroke="#58a6ff" strokeWidth="2.5" strokeLinecap="round" /><polygon points="6,5 3,3 2,6 5,7" fill="#1f6feb" /><circle cx="12" cy="12" r="1.5" fill="#e6edf3" /></SvgIcon>,
-  frame: (s) => <SvgIcon size={s}><rect x="3" y="3" width="18" height="18" rx="2" fill="#a371f7" /><rect x="5" y="5" width="14" height="14" rx="1" fill="#0d1117" /><circle cx="9" cy="11" r="3" fill="#3fb950" /><polygon points="6,17 11,11 14,14 17,10 19,17" fill="#1f6feb" opacity=".8" /></SvgIcon>,
-  tools: (s) => <SvgIcon size={s}><path d="M14.5 3a6 6 0 00-5.7 7.9L3.3 16.4a2.2 2.2 0 003.1 3.1l5.5-5.5A6 6 0 1014.5 3z" fill="#d29922" /><path d="M4 4l3 3M2 8l4 1M8 2l1 4" stroke="#8b949e" strokeWidth="1.5" strokeLinecap="round" /><rect x="13" y="13" width="3" height="9" rx="1" fill="#8b949e" transform="rotate(-45 14.5 17.5)" /><rect x="14" y="11" width="8" height="4" rx="1" fill="#656d76" transform="rotate(-45 18 13)" /></SvgIcon>,
-  trophy: (s) => <SvgIcon size={s}><path d="M7 4h10v7a5 5 0 01-10 0V4z" fill="#d29922" /><path d="M7 6H4a2 2 0 00-2 2v1a3 3 0 003 3h2" fill="#f0883e" /><path d="M17 6h3a2 2 0 012 2v1a3 3 0 01-3 3h-2" fill="#f0883e" /><rect x="10" y="15" width="4" height="3" fill="#d29922" /><rect x="7" y="18" width="10" height="2.5" rx="1" fill="#f0883e" /></SvgIcon>,
-  gamepad: (s) => <SvgIcon size={s}><rect x="2" y="7" width="20" height="12" rx="5" fill="#484f58" /><circle cx="8" cy="13" r="3.5" fill="#656d76" /><line x1="8" y1="10.5" x2="8" y2="15.5" stroke="#8b949e" strokeWidth="1.5" strokeLinecap="round" /><line x1="5.5" y1="13" x2="10.5" y2="13" stroke="#8b949e" strokeWidth="1.5" strokeLinecap="round" /><circle cx="15" cy="11" r="1.3" fill="#3fb950" /><circle cx="18" cy="13" r="1.3" fill="#f85149" /><circle cx="15" cy="15" r="1.3" fill="#58a6ff" /><circle cx="18" cy="11" r="1.3" fill="#d29922" /></SvgIcon>,
-  mouse: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="7" fill="#8b949e" /><line x1="12" y1="2" x2="12" y2="10" stroke="#656d76" strokeWidth="1.5" /><rect x="10.5" y="5" width="3" height="4" rx="1.5" fill="#e6edf3" /></SvgIcon>,
-  keyboard: (s) => <SvgIcon size={s}><rect x="1" y="6" width="22" height="13" rx="2" fill="#484f58" /><rect x="3" y="8" width="3" height="2.5" rx=".5" fill="#8b949e" /><rect x="7.5" y="8" width="3" height="2.5" rx=".5" fill="#8b949e" /><rect x="12" y="8" width="3" height="2.5" rx=".5" fill="#8b949e" /><rect x="16.5" y="8" width="4.5" height="2.5" rx=".5" fill="#8b949e" /><rect x="3" y="12" width="4" height="2.5" rx=".5" fill="#8b949e" /><rect x="8.5" y="12" width="7" height="2.5" rx=".5" fill="#8b949e" /><rect x="17" y="12" width="4" height="2.5" rx=".5" fill="#8b949e" /><rect x="6" y="16" width="12" height="2" rx=".5" fill="#656d76" /></SvgIcon>,
-  liveCircle: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="6" fill="#f85149" /><circle cx="12" cy="12" r="3" fill="#ff7b72" /></SvgIcon>,
-  warning: (s) => <SvgIcon size={s}><path d="M12 2L1 21h22L12 2z" fill="#d29922" /><rect x="11" y="9" width="2" height="6" rx="1" fill="#fff" /><circle cx="12" cy="17.5" r="1.2" fill="#fff" /></SvgIcon>,
-  gold: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#d29922" /><circle cx="12" cy="10" r="6" fill="#f0883e" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">1</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#d29922" /></SvgIcon>,
-  silver: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#8b949e" /><circle cx="12" cy="10" r="6" fill="#c0c0c0" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">2</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#8b949e" /></SvgIcon>,
-  bronze: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#8b6914" /><circle cx="12" cy="10" r="6" fill="#cd7f32" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">3</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#8b6914" /></SvgIcon>,
-  book: (s) => <SvgIcon size={s}><rect x="4" y="3" width="16" height="18" rx="2" fill="#1f6feb" /><rect x="4" y="3" width="4" height="18" fill="#163d6f" /><rect x="10" y="7" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="10" y="10.5" width="6" height="1.5" rx=".75" fill="#fff" opacity=".5" /><rect x="10" y="14" width="7" height="1.5" rx=".75" fill="#fff" opacity=".4" /></SvgIcon>,
-  brain: (s) => <SvgIcon size={s}><path d="M12 4c-2 0-3.5.8-4.2 2-.8-.3-1.8-.2-2.5.4-1 .8-1.3 2.2-.8 3.3-.8.8-1.2 2-1 3.2.3 1.5 1.3 2.5 2.5 2.8.2 1.5 1.2 2.8 2.8 3.3.8.2 1.6.3 2.2.1V4z" fill="#a371f7" /><path d="M12 4c2 0 3.5.8 4.2 2 .8-.3 1.8-.2 2.5.4 1 .8 1.3 2.2.8 3.3.8.8 1.2 2 1 3.2-.3 1.5-1.3 2.5-2.5 2.8-.2 1.5-1.2 2.8-2.8 3.3-.8.2-1.6.3-2.2.1V4z" fill="#8957e5" /><line x1="12" y1="4" x2="12" y2="20" stroke="#c9a0ff" strokeWidth="1" /></SvgIcon>,
+  clipboard: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="2" fill="#16a34a" /><rect x="8" y="1" width="8" height="3" rx="1" fill="#15803d" /><rect x="8" y="8" width="8" height="1.5" rx=".75" fill="#fff" /><rect x="8" y="11.5" width="6" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="8" y="15" width="7" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
+  search: (s) => <SvgIcon size={s}><circle cx="10.5" cy="10.5" r="6" stroke="#2563eb" strokeWidth="2.2" /><line x1="15" y1="15" x2="20" y2="20" stroke="#2563eb" strokeWidth="2.5" strokeLinecap="round" /></SvgIcon>,
+  plus: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="9" fill="#16a34a" /><line x1="12" y1="7.5" x2="12" y2="16.5" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /><line x1="7.5" y1="12" x2="16.5" y2="12" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" /></SvgIcon>,
+  trash: (s) => <SvgIcon size={s}><path d="M6 7h12l-1 13H7L6 7z" fill="#dc2626" /><rect x="4" y="4.5" width="16" height="2.5" rx="1" fill="#b91c1c" /><rect x="9" y="2" width="6" height="3" rx="1" fill="#dc2626" /></SvgIcon>,
+  transform: (s) => <SvgIcon size={s}><line x1="4" y1="12" x2="20" y2="12" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" /><polyline points="7,8.5 4,12 7,15.5" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><polyline points="17,8.5 20,12 17,15.5" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></SvgIcon>,
+  document: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="2" fill="#64748b" /><path d="M5 2h9l5 5v15a2 2 0 01-2 2H7a2 2 0 01-2-2V2z" fill="#64748b" /><path d="M14 2v5h5" fill="#64748b" /><rect x="8" y="10" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="8" y="13" width="5" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
+  video: (s) => <SvgIcon size={s}><rect x="2" y="5" width="14" height="14" rx="2" fill="#7c3aed" /><polygon points="18,7 22,5 22,19 18,17" fill="#6d28d9" /><circle cx="9" cy="12" r="2.5" fill="#fff" opacity=".5" /></SvgIcon>,
+  camera: (s) => <SvgIcon size={s}><rect x="2" y="6" width="20" height="14" rx="3" fill="#2563eb" /><circle cx="12" cy="13" r="4" fill="#3b82f6" /><circle cx="12" cy="13" r="2" fill="#93c5fd" /><rect x="8" y="3.5" width="8" height="3" rx="1" fill="#3b82f6" /></SvgIcon>,
+  python: (s) => <SvgIcon size={s}><path d="M12 2c-3 0-5 1.5-5 4v2h5v1H6c-2 0-4 1.5-4 4.5S4 18 6 18h2v-3c0-2 1.5-3.5 3.5-3.5h5c1.5 0 3-1.2 3-3V6c0-2.2-2-4-5-4z" fill="#16a34a" /><path d="M12 22c3 0 5-1.5 5-4v-2h-5v-1h6c2 0 4-1.5 4-4.5S18 6 16 6h-2v3c0 2-1.5 3.5-3.5 3.5h-5c-1.5 0-3 1.2-3 3v3.5c0 2.2 2 4 5 4z" fill="#3b82f6" /><circle cx="8.5" cy="5" r="1" fill="#fff" /><circle cx="15.5" cy="19" r="1" fill="#fff" /></SvgIcon>,
+  wrench: (s) => <SvgIcon size={s}><path d="M14.5 3a6 6 0 00-5.7 7.9L3.3 16.4a2.2 2.2 0 003.1 3.1l5.5-5.5A6 6 0 1014.5 3z" fill="#f59e0b" /><circle cx="14.5" cy="9" r="2.5" fill="#ea580c" /></SvgIcon>,
+  gear: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="4" fill="#64748b" /><path d="M12 1l1.5 3.2a7.5 7.5 0 012.3 1.3L19 4.5l1 2.5-2.8 1.5a7.5 7.5 0 01.3 2.5H21v2.5h-3.5a7.5 7.5 0 01-.3 2.5l2.8 1.5-1 2.5-3.2-1a7.5 7.5 0 01-2.3 1.3L12 23l-1.5-3.2a7.5 7.5 0 01-2.3-1.3L5 19.5l-1-2.5 2.8-1.5a7.5 7.5 0 01-.3-2.5H3v-2.5h3.5a7.5 7.5 0 01.3-2.5L4 6.5l1-2.5 3.2 1a7.5 7.5 0 012.3-1.3L12 1z" fill="#64748b" /><circle cx="12" cy="12" r="3" fill="#0f172a" /></SvgIcon>,
+  palette: (s) => <SvgIcon size={s}><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1 0 1.5-.7 1.5-1.5 0-.4-.1-.7-.3-1-.2-.3-.3-.6-.3-1 0-1 .7-1.5 1.5-1.5H16c3.3 0 6-2.7 6-6 0-5-4.5-9-10-9z" fill="#7c3aed" /><circle cx="7" cy="12" r="1.8" fill="#dc2626" /><circle cx="9" cy="8" r="1.8" fill="#f59e0b" /><circle cx="14" cy="7" r="1.8" fill="#16a34a" /><circle cx="17.5" cy="10" r="1.8" fill="#2563eb" /></SvgIcon>,
+  plug: (s) => <SvgIcon size={s}><rect x="7" y="2" width="3" height="8" rx="1" fill="#2563eb" /><rect x="14" y="2" width="3" height="8" rx="1" fill="#2563eb" /><path d="M6 10h12v3a6 6 0 01-5 5.9V22h-2v-3.1A6 6 0 016 13V10z" fill="#3b82f6" /></SvgIcon>,
+  eye: (s) => <SvgIcon size={s}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" fill="#7c3aed" /><circle cx="12" cy="12" r="4" fill="#fff" /><circle cx="12" cy="12" r="2" fill="#6d28d9" /></SvgIcon>,
+  map: (s) => <SvgIcon size={s}><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3V6z" fill="#3b82f6" /><path d="M9 3v15" stroke="#2563eb" strokeWidth="1.5" /><path d="M15 6v15" stroke="#2563eb" strokeWidth="1.5" /><circle cx="8" cy="10" r="1.2" fill="#dc2626" /><circle cx="16" cy="12" r="1.2" fill="#16a34a" /></SvgIcon>,
+  building: (s) => <SvgIcon size={s}><rect x="4" y="4" width="16" height="18" rx="1" fill="#3b82f6" /><rect x="7" y="7" width="3" height="3" rx=".5" fill="#93c5fd" /><rect x="14" y="7" width="3" height="3" rx=".5" fill="#93c5fd" /><rect x="7" y="13" width="3" height="3" rx=".5" fill="#93c5fd" /><rect x="14" y="13" width="3" height="3" rx=".5" fill="#93c5fd" /><rect x="10" y="18" width="4" height="4" fill="#2563eb" /></SvgIcon>,
+  tree: (s) => <SvgIcon size={s}><rect x="10.5" y="15" width="3" height="7" fill="#92400e" /><polygon points="12,2 4,15 20,15" fill="#16a34a" /><polygon points="12,6 6,15 18,15" fill="#15803d" /></SvgIcon>,
+  car: (s) => <SvgIcon size={s}><rect x="2" y="10" width="20" height="7" rx="2" fill="#ea580c" /><path d="M5 10l2-5h10l2 5" fill="#f59e0b" /><circle cx="7" cy="17" r="2.2" fill="#94a3b8" /><circle cx="7" cy="17" r="1" fill="#64748b" /><circle cx="17" cy="17" r="2.2" fill="#94a3b8" /><circle cx="17" cy="17" r="1" fill="#64748b" /><rect x="7" y="7" width="4" height="3" rx=".5" fill="#93c5fd" opacity=".7" /><rect x="13" y="7" width="4" height="3" rx=".5" fill="#93c5fd" opacity=".7" /></SvgIcon>,
+  hydrant: (s) => <SvgIcon size={s}><rect x="4" y="12" width="16" height="10" rx="1" fill="#64748b" /><rect x="6" y="8" width="12" height="4" rx="1" fill="#64748b" /><rect x="2" y="14" width="4" height="3" rx="1" fill="#64748b" /><rect x="18" y="14" width="4" height="3" rx="1" fill="#64748b" /><rect x="8" y="4" width="8" height="5" rx="2" fill="#64748b" /><circle cx="12" cy="6" r="1.5" fill="#94a3b8" /></SvgIcon>,
+  road: (s) => <SvgIcon size={s}><polygon points="1,22 8,2 16,2 23,22" fill="#64748b" /><rect x="11" y="4" width="2" height="3.5" rx=".5" fill="#f59e0b" /><rect x="11" y="10" width="2" height="3.5" rx=".5" fill="#f59e0b" /><rect x="11" y="16" width="2" height="3.5" rx=".5" fill="#f59e0b" /></SvgIcon>,
+  cube: (s) => <SvgIcon size={s}><rect x="4" y="4" width="16" height="16" rx="2" fill="#94a3b8" /><rect x="6" y="6" width="12" height="12" rx="1" fill="#64748b" /></SvgIcon>,
+  hammer: (s) => <SvgIcon size={s}><rect x="10" y="10" width="3" height="12" rx="1" fill="#92400e" transform="rotate(-45 12 16)" /><rect x="5" y="2" width="12" height="7" rx="2" fill="#64748b" transform="rotate(-45 11 5.5)" /></SvgIcon>,
+  box: (s) => <SvgIcon size={s}><rect x="3" y="8" width="18" height="14" rx="1" fill="#f59e0b" /><path d="M3 8l9-6 9 6" fill="#ea580c" /><line x1="12" y1="2" x2="12" y2="22" stroke="#92400e" strokeWidth="1" opacity=".3" /><rect x="9" y="8" width="6" height="4" rx="1" fill="#92400e" opacity=".4" /></SvgIcon>,
+  chat: (s) => <SvgIcon size={s}><rect x="2" y="3" width="20" height="15" rx="3" fill="#2563eb" /><path d="M6 18l-2 4v-4" fill="#2563eb" /><rect x="6" y="8" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="6" y="11.5" width="5" height="1.5" rx=".75" fill="#fff" opacity=".5" /></SvgIcon>,
+  robot: (s) => <SvgIcon size={s}><rect x="4" y="7" width="16" height="13" rx="3" fill="#64748b" /><rect x="7" y="10" width="4" height="3" rx="1" fill="#2563eb" /><rect x="13" y="10" width="4" height="3" rx="1" fill="#2563eb" /><rect x="9" y="16" width="6" height="2" rx="1" fill="#64748b" /><line x1="12" y1="3" x2="12" y2="7" stroke="#64748b" strokeWidth="2" /><circle cx="12" cy="2.5" r="1.5" fill="#2563eb" /><rect x="1" y="12" width="3" height="4" rx="1" fill="#64748b" /><rect x="20" y="12" width="3" height="4" rx="1" fill="#64748b" /></SvgIcon>,
+  swords: (s) => <SvgIcon size={s}><line x1="5" y1="19" x2="18" y2="5" stroke="#ea580c" strokeWidth="2.5" strokeLinecap="round" /><polygon points="18,5 21,3 22,6 19,7" fill="#f59e0b" /><line x1="19" y1="19" x2="6" y2="5" stroke="#2563eb" strokeWidth="2.5" strokeLinecap="round" /><polygon points="6,5 3,3 2,6 5,7" fill="#3b82f6" /><circle cx="12" cy="12" r="1.5" fill="#0f172a" /></SvgIcon>,
+  frame: (s) => <SvgIcon size={s}><rect x="3" y="3" width="18" height="18" rx="2" fill="#7c3aed" /><rect x="5" y="5" width="14" height="14" rx="1" fill="#f4f6fa" /><circle cx="9" cy="11" r="3" fill="#16a34a" /><polygon points="6,17 11,11 14,14 17,10 19,17" fill="#3b82f6" opacity=".8" /></SvgIcon>,
+  tools: (s) => <SvgIcon size={s}><path d="M14.5 3a6 6 0 00-5.7 7.9L3.3 16.4a2.2 2.2 0 003.1 3.1l5.5-5.5A6 6 0 1014.5 3z" fill="#f59e0b" /><path d="M4 4l3 3M2 8l4 1M8 2l1 4" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" /><rect x="13" y="13" width="3" height="9" rx="1" fill="#64748b" transform="rotate(-45 14.5 17.5)" /><rect x="14" y="11" width="8" height="4" rx="1" fill="#64748b" transform="rotate(-45 18 13)" /></SvgIcon>,
+  trophy: (s) => <SvgIcon size={s}><path d="M7 4h10v7a5 5 0 01-10 0V4z" fill="#f59e0b" /><path d="M7 6H4a2 2 0 00-2 2v1a3 3 0 003 3h2" fill="#ea580c" /><path d="M17 6h3a2 2 0 012 2v1a3 3 0 01-3 3h-2" fill="#ea580c" /><rect x="10" y="15" width="4" height="3" fill="#f59e0b" /><rect x="7" y="18" width="10" height="2.5" rx="1" fill="#ea580c" /></SvgIcon>,
+  gamepad: (s) => <SvgIcon size={s}><rect x="2" y="7" width="20" height="12" rx="5" fill="#94a3b8" /><circle cx="8" cy="13" r="3.5" fill="#64748b" /><line x1="8" y1="10.5" x2="8" y2="15.5" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" /><line x1="5.5" y1="13" x2="10.5" y2="13" stroke="#64748b" strokeWidth="1.5" strokeLinecap="round" /><circle cx="15" cy="11" r="1.3" fill="#16a34a" /><circle cx="18" cy="13" r="1.3" fill="#dc2626" /><circle cx="15" cy="15" r="1.3" fill="#2563eb" /><circle cx="18" cy="11" r="1.3" fill="#f59e0b" /></SvgIcon>,
+  mouse: (s) => <SvgIcon size={s}><rect x="5" y="2" width="14" height="20" rx="7" fill="#64748b" /><line x1="12" y1="2" x2="12" y2="10" stroke="#64748b" strokeWidth="1.5" /><rect x="10.5" y="5" width="3" height="4" rx="1.5" fill="#0f172a" /></SvgIcon>,
+  keyboard: (s) => <SvgIcon size={s}><rect x="1" y="6" width="22" height="13" rx="2" fill="#94a3b8" /><rect x="3" y="8" width="3" height="2.5" rx=".5" fill="#64748b" /><rect x="7.5" y="8" width="3" height="2.5" rx=".5" fill="#64748b" /><rect x="12" y="8" width="3" height="2.5" rx=".5" fill="#64748b" /><rect x="16.5" y="8" width="4.5" height="2.5" rx=".5" fill="#64748b" /><rect x="3" y="12" width="4" height="2.5" rx=".5" fill="#64748b" /><rect x="8.5" y="12" width="7" height="2.5" rx=".5" fill="#64748b" /><rect x="17" y="12" width="4" height="2.5" rx=".5" fill="#64748b" /><rect x="6" y="16" width="12" height="2" rx=".5" fill="#64748b" /></SvgIcon>,
+  liveCircle: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="6" fill="#dc2626" /><circle cx="12" cy="12" r="3" fill="#ff7b72" /></SvgIcon>,
+  warning: (s) => <SvgIcon size={s}><path d="M12 2L1 21h22L12 2z" fill="#f59e0b" /><rect x="11" y="9" width="2" height="6" rx="1" fill="#fff" /><circle cx="12" cy="17.5" r="1.2" fill="#fff" /></SvgIcon>,
+  gold: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#f59e0b" /><circle cx="12" cy="10" r="6" fill="#ea580c" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">1</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#f59e0b" /></SvgIcon>,
+  silver: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#64748b" /><circle cx="12" cy="10" r="6" fill="#c0c0c0" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">2</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#64748b" /></SvgIcon>,
+  bronze: (s) => <SvgIcon size={s}><circle cx="12" cy="10" r="8" fill="#92400e" /><circle cx="12" cy="10" r="6" fill="#cd7f32" /><text x="12" y="14" textAnchor="middle" fontSize="10" fontWeight="700" fill="#fff">3</text><path d="M6 18h12l-1 3H7l-1-3z" fill="#92400e" /></SvgIcon>,
+  book: (s) => <SvgIcon size={s}><rect x="4" y="3" width="16" height="18" rx="2" fill="#3b82f6" /><rect x="4" y="3" width="4" height="18" fill="#dbeafe" /><rect x="10" y="7" width="8" height="1.5" rx=".75" fill="#fff" opacity=".7" /><rect x="10" y="10.5" width="6" height="1.5" rx=".75" fill="#fff" opacity=".5" /><rect x="10" y="14" width="7" height="1.5" rx=".75" fill="#fff" opacity=".4" /></SvgIcon>,
+  brain: (s) => <SvgIcon size={s}><path d="M12 4c-2 0-3.5.8-4.2 2-.8-.3-1.8-.2-2.5.4-1 .8-1.3 2.2-.8 3.3-.8.8-1.2 2-1 3.2.3 1.5 1.3 2.5 2.5 2.8.2 1.5 1.2 2.8 2.8 3.3.8.2 1.6.3 2.2.1V4z" fill="#7c3aed" /><path d="M12 4c2 0 3.5.8 4.2 2 .8-.3 1.8-.2 2.5.4 1 .8 1.3 2.2.8 3.3.8.8 1.2 2 1 3.2-.3 1.5-1.3 2.5-2.5 2.8-.2 1.5-1.2 2.8-2.8 3.3-.8.2-1.6.3-2.2.1V4z" fill="#6d28d9" /><line x1="12" y1="4" x2="12" y2="20" stroke="#c9a0ff" strokeWidth="1" /></SvgIcon>,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -125,27 +125,27 @@ const TOOL_ICONS = {
 };
 
 const TAG_COLORS = {
-  city: "#1f6feb",
-  buildings: "#da3633",
-  props: "#8b949e",
-  weather: "#f0883e",
-  camera: "#a371f7",
-  layout: "#3fb950",
-  planning: "#1f6feb",
-  spacing: "#d29922",
-  trees: "#3fb950",
-  vehicles: "#f0883e",
-  lighting: "#d29922",
-  atmosphere: "#a371f7",
-  screenshot: "#a371f7",
-  decoration: "#8b949e",
-  furniture: "#8b949e",
-  architecture: "#da3633",
-  environment: "#3fb950",
-  viewpoint: "#a371f7",
-  placement: "#d29922",
-  roads: "#656d76",
-  capture: "#a371f7",
+  city: "#3b82f6",
+  buildings: "#b91c1c",
+  props: "#64748b",
+  weather: "#ea580c",
+  camera: "#7c3aed",
+  layout: "#16a34a",
+  planning: "#3b82f6",
+  spacing: "#f59e0b",
+  trees: "#16a34a",
+  vehicles: "#ea580c",
+  lighting: "#f59e0b",
+  atmosphere: "#7c3aed",
+  screenshot: "#7c3aed",
+  decoration: "#64748b",
+  furniture: "#64748b",
+  architecture: "#b91c1c",
+  environment: "#16a34a",
+  viewpoint: "#7c3aed",
+  placement: "#f59e0b",
+  roads: "#64748b",
+  capture: "#7c3aed",
 };
 
 const CATEGORY_ICONS = {
@@ -158,12 +158,12 @@ const CATEGORY_ICONS = {
 };
 
 const CATEGORY_COLORS = {
-  buildings: "#1f6feb",
-  trees: "#3fb950",
-  vehicles: "#f0883e",
-  street_furniture: "#8b949e",
-  roads: "#656d76",
-  static_meshes: "#484f58",
+  buildings: "#3b82f6",
+  trees: "#16a34a",
+  vehicles: "#ea580c",
+  street_furniture: "#64748b",
+  roads: "#64748b",
+  static_meshes: "#94a3b8",
 };
 
 const CAMERA_PRESETS = [
@@ -553,13 +553,16 @@ function isLearnedSkillMeta(skill) {
 
 function headerButtonStyle(color) {
   return {
-    padding: "2px 10px",
+    padding: "3px 11px",
     fontSize: 11,
-    background: "#21262d",
-    border: "1px solid #30363d",
-    borderRadius: 4,
+    background: "#ffffff",
+    border: `1px solid ${color}55`,
+    borderRadius: 8,
     color,
     cursor: "pointer",
+    fontWeight: 600,
+    fontFamily: "inherit",
+    boxShadow: "0 1px 2px rgba(15,23,42,.04)",
   };
 }
 
@@ -570,10 +573,10 @@ function ToolCallBlock({ tool }) {
 
   const iconFn = TOOL_ICONS[tool.displayName] || ICONS.hammer;
   const statusColor = {
-    starting: "#8b949e",
-    running: "#d29922",
-    done: "#3fb950",
-    error: "#f85149",
+    starting: "#64748b",
+    running: "#f59e0b",
+    done: "#16a34a",
+    error: "#dc2626",
   }[tool.status];
   const displayName = tool.displayName || tool.name.replace(/^mcp__\w+__/, "");
 
@@ -596,10 +599,10 @@ function ToolCallBlock({ tool }) {
     <div
       style={{
         margin: "4px 0",
-        border: "1px solid #30363d",
-        borderRadius: 6,
+        border: "1px solid #e6e9ef",
+        borderRadius: 8,
         overflow: "hidden",
-        background: "#0d1117",
+        background: "#f8fafc",
       }}
     >
       <button
@@ -612,7 +615,7 @@ function ToolCallBlock({ tool }) {
           padding: "5px 10px",
           background: "none",
           border: "none",
-          color: "#8b949e",
+          color: "#64748b",
           cursor: "pointer",
           textAlign: "left",
           fontSize: 12,
@@ -632,13 +635,13 @@ function ToolCallBlock({ tool }) {
           }}
         />
         <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center" }}>{iconFn(13)}</span>
-        <span style={{ fontFamily: "monospace", color: "#79c0ff", fontWeight: 500 }}>
+        <span style={{ fontFamily: "monospace", color: "#2563eb", fontWeight: 600 }}>
           {displayName}
         </span>
         {paramSummary && (
           <span
             style={{
-              color: "#656d76",
+              color: "#475569",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -650,7 +653,7 @@ function ToolCallBlock({ tool }) {
           </span>
         )}
         {tool.status === "running" && !tool.input && (
-          <span style={{ color: "#d29922", fontSize: 10, marginLeft: "auto" }}>
+          <span style={{ color: "#f59e0b", fontSize: 10, marginLeft: "auto" }}>
             running…
           </span>
         )}
@@ -660,12 +663,12 @@ function ToolCallBlock({ tool }) {
       </button>
 
       {expanded && (
-        <div style={{ padding: "8px 10px", borderTop: "1px solid #21262d" }}>
+        <div style={{ padding: "8px 10px", borderTop: "1px solid #e6e9ef" }}>
           {(tool.input || tool.inputBuffer) && (
             <div style={{ marginBottom: 6 }}>
               <div
                 style={{
-                  color: "#656d76",
+                  color: "#475569",
                   fontSize: 10,
                   marginBottom: 3,
                   textTransform: "uppercase",
@@ -678,7 +681,7 @@ function ToolCallBlock({ tool }) {
                 style={{
                   margin: 0,
                   fontSize: 11,
-                  color: "#e6edf3",
+                  color: "#334155",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                 }}
@@ -691,7 +694,7 @@ function ToolCallBlock({ tool }) {
             <div>
               <div
                 style={{
-                  color: "#656d76",
+                  color: "#64748b",
                   fontSize: 10,
                   marginBottom: 3,
                   textTransform: "uppercase",
@@ -704,7 +707,7 @@ function ToolCallBlock({ tool }) {
                 style={{
                   margin: 0,
                   fontSize: 11,
-                  color: tool.isError ? "#f85149" : "#3fb950",
+                  color: tool.isError ? "#dc2626" : "#16a34a",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                   maxHeight: 200,
@@ -723,7 +726,7 @@ function ToolCallBlock({ tool }) {
                 style={{
                   maxWidth: "100%",
                   borderRadius: 4,
-                  border: "1px solid #30363d",
+                  border: "1px solid #e2e8f0",
                 }}
               />
             </div>
@@ -749,8 +752,8 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
       style={{
         padding: "8px 10px",
         borderRadius: 6,
-        border: `1px solid ${active ? "#1f6feb" : "#21262d"}`,
-        background: active ? "#1f3a5f22" : "#161b22",
+        border: `1px solid ${active ? "#3b82f6" : "#e6e9ef"}`,
+        background: active ? "#2563eb11" : "#ffffff",
         transition: "all 0.15s",
         opacity: disabled ? 0.75 : 1,
       }}
@@ -762,8 +765,8 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
             width: 14,
             height: 14,
             borderRadius: 3,
-            border: `2px solid ${active ? "#1f6feb" : "#30363d"}`,
-            background: active ? "#1f6feb" : "transparent",
+            border: `2px solid ${active ? "#3b82f6" : "#e2e8f0"}`,
+            background: active ? "#3b82f6" : "transparent",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -780,7 +783,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
           style={{
             fontSize: 12,
             fontWeight: 500,
-            color: "#e6edf3",
+            color: "#0f172a",
             cursor: disabled ? "not-allowed" : "pointer",
             flex: 1,
           }}
@@ -795,10 +798,10 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
           style={{
             padding: "2px 6px",
             fontSize: 10,
-            background: "#21262d",
-            border: "1px solid #30363d",
+            background: "#e6e9ef",
+            border: "1px solid #e2e8f0",
             borderRadius: 4,
-            color: "#8b949e",
+            color: "#64748b",
             cursor: "pointer",
           }}
           title="Preview skill details"
@@ -810,8 +813,8 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
             fontSize: 9,
             padding: "1px 5px",
             borderRadius: 4,
-            background: skill.source === "custom" ? "#1f6feb22" : "#21262d",
-            color: skill.source === "custom" ? "#58a6ff" : "#484f58",
+            background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
+            color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
           }}
         >
           {skill.source}
@@ -821,7 +824,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
       <div
         style={{
           fontSize: 11,
-          color: "#8b949e",
+          color: "#64748b",
           marginTop: 4,
           marginLeft: 20,
           lineHeight: 1.4,
@@ -847,9 +850,9 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
                 fontSize: 9,
                 padding: "1px 5px",
                 borderRadius: 4,
-                background: (TAG_COLORS[tag] || "#30363d") + "33",
-                color: TAG_COLORS[tag] || "#8b949e",
-                border: `1px solid ${TAG_COLORS[tag] || "#30363d"}44`,
+                background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                color: TAG_COLORS[tag] || "#64748b",
+                border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
               }}
             >
               {tag}
@@ -862,7 +865,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
         <div
           style={{
             fontSize: 10,
-            color: "#484f58",
+            color: "#475569",
             marginTop: 4,
             marginLeft: 20,
           }}
@@ -896,8 +899,8 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
           width: "90%",
           maxWidth: 700,
           maxHeight: "80vh",
-          background: "#0d1117",
-          border: "1px solid #30363d",
+          background: "#f4f6fa",
+          border: "1px solid #e2e8f0",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -908,25 +911,25 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
         <div
           style={{
             padding: "14px 18px",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #e6e9ef",
             display: "flex",
             alignItems: "center",
             gap: 10,
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "#e6edf3" }}>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>
               {skill.name}
             </div>
-            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 3 }}>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>
               v{skill.version} by {skill.author}
               <span
                 style={{
                   marginLeft: 8,
                   padding: "1px 5px",
                   borderRadius: 4,
-                  background: skill.source === "custom" ? "#1f6feb22" : "#21262d",
-                  color: skill.source === "custom" ? "#58a6ff" : "#484f58",
+                  background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
+                  color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
                   fontSize: 9,
                 }}
               >
@@ -940,10 +943,10 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
               style={{
                 padding: "4px 10px",
                 fontSize: 11,
-                background: "#da363322",
-                border: "1px solid #da363366",
+                background: "#b91c1c22",
+                border: "1px solid #b91c1c66",
                 borderRadius: 6,
-                color: "#f85149",
+                color: "#dc2626",
                 cursor: "pointer",
               }}
             >
@@ -957,7 +960,7 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
               fontSize: 14,
               background: "transparent",
               border: "none",
-              color: "#8b949e",
+              color: "#64748b",
               cursor: "pointer",
             }}
           >
@@ -966,8 +969,8 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
         </div>
 
         {/* Description + Tags */}
-        <div style={{ padding: "10px 18px", borderBottom: "1px solid #21262d" }}>
-          <div style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.5 }}>
+        <div style={{ padding: "10px 18px", borderBottom: "1px solid #e6e9ef" }}>
+          <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
             {skill.description}
           </div>
           {skill.tags.length > 0 && (
@@ -986,9 +989,9 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
                     fontSize: 10,
                     padding: "2px 7px",
                     borderRadius: 4,
-                    background: (TAG_COLORS[tag] || "#30363d") + "33",
-                    color: TAG_COLORS[tag] || "#8b949e",
-                    border: `1px solid ${TAG_COLORS[tag] || "#30363d"}44`,
+                    background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                    color: TAG_COLORS[tag] || "#64748b",
+                    border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
                   }}
                 >
                   {tag}
@@ -1003,7 +1006,7 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
           <pre
             style={{
               fontSize: 12,
-              color: "#c9d1d9",
+              color: "#1e293b",
               lineHeight: 1.6,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
@@ -1071,10 +1074,10 @@ Provide detailed instructions for the AI agent.
     width: "100%",
     padding: "6px 10px",
     fontSize: 12,
-    background: "#161b22",
-    border: "1px solid #30363d",
+    background: "#ffffff",
+    border: "1px solid #e2e8f0",
     borderRadius: 6,
-    color: "#e6edf3",
+    color: "#0f172a",
     outline: "none",
     boxSizing: "border-box",
   };
@@ -1098,8 +1101,8 @@ Provide detailed instructions for the AI agent.
           width: "90%",
           maxWidth: 650,
           maxHeight: "85vh",
-          background: "#0d1117",
-          border: "1px solid #30363d",
+          background: "#f4f6fa",
+          border: "1px solid #e2e8f0",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -1110,12 +1113,12 @@ Provide detailed instructions for the AI agent.
         <div
           style={{
             padding: "14px 18px",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #e6e9ef",
             display: "flex",
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 16, fontWeight: 600, color: "#e6edf3" }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>
             Create Custom Skill
           </span>
           <button
@@ -1126,7 +1129,7 @@ Provide detailed instructions for the AI agent.
               fontSize: 14,
               background: "transparent",
               border: "none",
-              color: "#8b949e",
+              color: "#64748b",
               cursor: "pointer",
             }}
           >
@@ -1146,7 +1149,7 @@ Provide detailed instructions for the AI agent.
           }}
         >
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>
               Skill ID (lowercase, no spaces)
             </label>
             <input
@@ -1157,7 +1160,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>
               Name
             </label>
             <input
@@ -1168,7 +1171,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>
               Description (short summary)
             </label>
             <input
@@ -1179,7 +1182,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>
               Tags (comma-separated)
             </label>
             <input
@@ -1190,7 +1193,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>
               Content (Markdown — instructions for the AI agent)
             </label>
             <textarea
@@ -1207,7 +1210,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           {error && (
-            <div style={{ fontSize: 11, color: "#f85149", padding: "4px 0" }}>{error}</div>
+            <div style={{ fontSize: 11, color: "#dc2626", padding: "4px 0" }}>{error}</div>
           )}
         </div>
 
@@ -1215,7 +1218,7 @@ Provide detailed instructions for the AI agent.
         <div
           style={{
             padding: "12px 18px",
-            borderTop: "1px solid #21262d",
+            borderTop: "1px solid #e6e9ef",
             display: "flex",
             gap: 8,
             justifyContent: "flex-end",
@@ -1226,10 +1229,10 @@ Provide detailed instructions for the AI agent.
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#21262d",
-              border: "1px solid #30363d",
+              background: "#e6e9ef",
+              border: "1px solid #e2e8f0",
               borderRadius: 6,
-              color: "#c9d1d9",
+              color: "#1e293b",
               cursor: "pointer",
             }}
           >
@@ -1241,8 +1244,8 @@ Provide detailed instructions for the AI agent.
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#238636",
-              border: "1px solid #2ea043",
+              background: "#15803d",
+              border: "1px solid #15803d",
               borderRadius: 6,
               color: "#fff",
               cursor: saving ? "wait" : "pointer",
@@ -1315,8 +1318,8 @@ function SkillsPanel({
     <div
       style={{
         padding: "6px 12px",
-        borderBottom: "1px solid #21262d",
-        background: "#0d1117",
+        borderBottom: "1px solid #e6e9ef",
+        background: "#f4f6fa",
       }}
     >
       {/* Toggle header */}
@@ -1330,15 +1333,15 @@ function SkillsPanel({
         }}
         onClick={() => setExpanded(!expanded)}
       >
-        <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>
+        <span style={{ fontSize: 11, color: "#64748b", fontFamily: "monospace" }}>
           {expanded ? "▼" : "▶"}
         </span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>Skills</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Skills</span>
         {activeSkills.length > 0 && (
           <span
             style={{
               fontSize: 10,
-              background: "#1f6feb",
+              background: "#3b82f6",
               color: "#fff",
               borderRadius: 8,
               padding: "1px 6px",
@@ -1352,15 +1355,15 @@ function SkillsPanel({
           onClick={(e) => e.stopPropagation()}
           style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}
         >
-          <span style={{ fontSize: 10, color: "#8b949e" }}>Auto-select skills</span>
+          <span style={{ fontSize: 10, color: "#64748b" }}>Auto-select skills</span>
           <button
             onClick={() => onAutoEnabledChange(!autoEnabled)}
             style={{
               width: 34,
               height: 18,
               borderRadius: 999,
-              border: "1px solid #30363d",
-              background: autoEnabled ? "#1f6feb" : "#21262d",
+              border: "1px solid #e2e8f0",
+              background: autoEnabled ? "#3b82f6" : "#e6e9ef",
               padding: 1,
               position: "relative",
               cursor: "pointer",
@@ -1382,7 +1385,7 @@ function SkillsPanel({
             />
           </button>
         </div>
-        <span style={{ fontSize: 10, color: "#484f58", marginLeft: 6 }}>
+        <span style={{ fontSize: 10, color: "#475569", marginLeft: 6 }}>
           {skills.length} available
         </span>
       </div>
@@ -1403,9 +1406,9 @@ function SkillsPanel({
           <div
             style={{
               fontSize: 10,
-              color: "#656d76",
-              border: "1px solid #21262d",
-              background: "#0d1117",
+              color: "#64748b",
+              border: "1px solid #e6e9ef",
+              background: "#f4f6fa",
               borderRadius: 6,
               padding: "6px 8px",
               marginBottom: 2,
@@ -1419,7 +1422,7 @@ function SkillsPanel({
             <div
               style={{
                 fontSize: 10,
-                color: "#484f58",
+                color: "#475569",
                 fontWeight: 600,
                 padding: "4px 0 2px",
               }}
@@ -1442,7 +1445,7 @@ function SkillsPanel({
             <div
               style={{
                 fontSize: 10,
-                color: "#484f58",
+                color: "#475569",
                 fontWeight: 600,
                 padding: "6px 0 2px",
               }}
@@ -1470,9 +1473,9 @@ function SkillsPanel({
               padding: "6px 10px",
               marginTop: 4,
               borderRadius: 6,
-              border: "1px dashed #30363d",
+              border: "1px dashed #e2e8f0",
               background: "transparent",
-              color: "#58a6ff",
+              color: "#2563eb",
               fontSize: 11,
               cursor: "pointer",
               display: "flex",
@@ -1554,17 +1557,17 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
       <div
         style={{
           padding: "8px 14px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 8,
-          background: "#161b22",
+          background: "#ffffff",
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: "#f0883e" }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "#ea580c" }}>
           Annotate Screenshot
         </span>
-        <span style={{ fontSize: 11, color: "#8b949e" }}>
+        <span style={{ fontSize: 11, color: "#64748b" }}>
           Click on the image to add feedback points
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -1574,9 +1577,9 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
               padding: "4px 12px",
               fontSize: 11,
               borderRadius: 4,
-              border: "1px solid #30363d",
-              background: "#21262d",
-              color: "#8b949e",
+              border: "1px solid #e2e8f0",
+              background: "#e6e9ef",
+              color: "#64748b",
               cursor: "pointer",
             }}
           >
@@ -1589,8 +1592,8 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
               padding: "4px 12px",
               fontSize: 11,
               borderRadius: 4,
-              border: "1px solid #1f6feb",
-              background: "#1f6feb",
+              border: "1px solid #3b82f6",
+              background: "#3b82f6",
               color: "#fff",
               cursor: "pointer",
               opacity: !feedbackText && points.length === 0 ? 0.5 : 1,
@@ -1639,7 +1642,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                     width: 24,
                     height: 24,
                     borderRadius: "50%",
-                    background: "#f0883e",
+                    background: "#ea580c",
                     border: "2px solid #fff",
                     display: "flex",
                     alignItems: "center",
@@ -1661,12 +1664,12 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                     position: "absolute",
                     left: 16,
                     top: -4,
-                    background: "#21262d",
-                    border: "1px solid #30363d",
+                    background: "#e6e9ef",
+                    border: "1px solid #e2e8f0",
                     borderRadius: 4,
                     padding: "2px 6px",
                     fontSize: 10,
-                    color: "#e6edf3",
+                    color: "#0f172a",
                     whiteSpace: "nowrap",
                     maxWidth: 200,
                     overflow: "hidden",
@@ -1684,15 +1687,15 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
         <div
           style={{
             width: 260,
-            borderLeft: "1px solid #21262d",
-            background: "#0d1117",
+            borderLeft: "1px solid #e6e9ef",
+            background: "#f4f6fa",
             display: "flex",
             flexDirection: "column",
             padding: 12,
             gap: 8,
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>Feedback</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Feedback</span>
           <textarea
             value={feedbackText}
             onChange={(e) => setFeedbackText(e.target.value)}
@@ -1700,17 +1703,17 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
             style={{
               flex: 1,
               resize: "none",
-              background: "#161b22",
-              border: "1px solid #30363d",
+              background: "#ffffff",
+              border: "1px solid #e2e8f0",
               borderRadius: 6,
-              color: "#e6edf3",
+              color: "#0f172a",
               padding: 8,
               fontSize: 12,
               fontFamily: "inherit",
             }}
           />
           {points.length > 0 && (
-            <div style={{ fontSize: 11, color: "#8b949e" }}>
+            <div style={{ fontSize: 11, color: "#64748b" }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Annotations:</div>
               {points.map((pt, i) => (
                 <div
@@ -1727,7 +1730,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                       width: 16,
                       height: 16,
                       borderRadius: "50%",
-                      background: "#f0883e",
+                      background: "#ea580c",
                       fontSize: 9,
                       color: "#fff",
                       display: "flex",
@@ -1738,7 +1741,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                   >
                     {i + 1}
                   </span>
-                  <span style={{ fontSize: 10, color: "#c9d1d9" }}>{pt.text}</span>
+                  <span style={{ fontSize: 10, color: "#1e293b" }}>{pt.text}</span>
                 </div>
               ))}
             </div>
@@ -1767,19 +1770,20 @@ function ChatMessage({ message }) {
           maxWidth: "92%",
           padding: "9px 13px",
           borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
-          background: isUser ? "#1f3a5f" : "#161b22",
-          border: `1px solid ${isUser ? "#1f6feb" : "#21262d"}`,
+          background: isUser ? "#eff4ff" : "#ffffff",
+          border: `1px solid ${isUser ? "#dbe6ff" : "#e6e9ef"}`,
+          boxShadow: "0 1px 2px rgba(15,23,42,.04)",
         }}
       >
         {isUser ? (
-          <div style={{ color: "#e6edf3", fontSize: 14, whiteSpace: "pre-wrap" }}>
+          <div style={{ color: "#0f172a", fontSize: 14, whiteSpace: "pre-wrap" }}>
             {message.content}
           </div>
         ) : (
           <>
             {message.waiting && (
-              <div style={{ color: "#8b949e", fontSize: 13, display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-                <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", border: "2px solid #58a6ff", borderTopColor: "transparent", animation: "spin 1s linear infinite" }} />
+              <div style={{ color: "#64748b", fontSize: 13, display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+                <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", border: "2px solid #2563eb", borderTopColor: "transparent", animation: "spin 1s linear infinite" }} />
                 Waiting for Claude...
               </div>
             )}
@@ -1790,7 +1794,7 @@ function ChatMessage({ message }) {
                       <div
                         className="markdown"
                         key={"t" + idx}
-                        style={{ color: "#e6edf3", fontSize: 14 }}
+                        style={{ color: "#0f172a", fontSize: 14 }}
                       >
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {block.content}
@@ -1809,7 +1813,7 @@ function ChatMessage({ message }) {
                     <div
                       className="markdown"
                       key="content"
-                      style={{ color: "#e6edf3", fontSize: 14 }}
+                      style={{ color: "#0f172a", fontSize: 14 }}
                     >
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {message.content}
@@ -1823,7 +1827,7 @@ function ChatMessage({ message }) {
           </>
         )}
       </div>
-      <div style={{ marginTop: 3, fontSize: 10, color: "#656d76", padding: "0 4px" }}>
+      <div style={{ marginTop: 3, fontSize: 10, color: "#64748b", padding: "0 4px" }}>
         {isUser ? "You" : "Agent"} · {new Date(message.timestamp).toLocaleTimeString()}
       </div>
     </div>
@@ -1842,7 +1846,7 @@ function TypingIndicator() {
             width: 6,
             height: 6,
             borderRadius: "50%",
-            background: "#656d76",
+            background: "#64748b",
             animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
           }}
         />
@@ -1876,96 +1880,16 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
   const textareaRef = useRef(null);
-  const demoReplayQueueRef = useRef(Promise.resolve());
-  const demoAssistantIdsRef = useRef(new Map());
   const selfEvolutionReqSeqRef = useRef(0);
   const activeSkills = autoSkillSelectionEnabled ? autoSelectedSkills : selectedSkills;
   const selfEvolutionReady = typeof selfEvolutionEnabled === "boolean";
   const selfEvolutionOn = selfEvolutionEnabled === true;
-
-  const sleep = useCallback((ms) => new Promise((resolve) => setTimeout(resolve, ms)), []);
-
-  const enqueueDemoReplay = useCallback((task) => {
-    demoReplayQueueRef.current = demoReplayQueueRef.current.then(task).catch(() => {});
-    return demoReplayQueueRef.current;
-  }, []);
-
-  const beginDemoPromptReplay = useCallback(
-    (text, key) =>
-      enqueueDemoReplay(async () => {
-        const src = String(text || "");
-        setInput("");
-        let cur = "";
-        for (const ch of src) {
-          cur += ch;
-          setInput(cur);
-          await sleep(16);
-        }
-        await sleep(120);
-
-        const userMsg = {
-          id: generateMessageId(),
-          role: "user",
-          content: src,
-          timestamp: Date.now(),
-        };
-        const assistantId = generateMessageId();
-        const assistantMsg = {
-          id: assistantId,
-          role: "assistant",
-          content: "",
-          toolCalls: [],
-          timestamp: Date.now(),
-        };
-
-        if (key) demoAssistantIdsRef.current.set(String(key), assistantId);
-        setMessages((prev) => [...prev, userMsg, assistantMsg]);
-        setInput("");
-      }),
-    [enqueueDemoReplay, sleep]
-  );
-
-  const completeDemoAssistantReplay = useCallback(
-    (text, key) =>
-      enqueueDemoReplay(async () => {
-        const content = String(text || "").trim();
-        if (!content) return;
-        const k = String(key || "");
-        const assistantId = k ? demoAssistantIdsRef.current.get(k) : null;
-        if (!assistantId) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: generateMessageId(),
-              role: "assistant",
-              content,
-              toolCalls: [],
-              timestamp: Date.now(),
-            },
-          ]);
-          return;
-        }
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, content, timestamp: Date.now() } : m))
-        );
-      }),
-    [enqueueDemoReplay]
-  );
-
-  const resetDemoReplayState = useCallback(() => {
-    demoAssistantIdsRef.current.clear();
-    demoReplayQueueRef.current = Promise.resolve();
-    setInput("");
-  }, []);
 
   // Expose methods to parent
   useEffect(() => {
     onRef?.({
       insertText: (text) =>
         setInput((prev) => (prev ? prev + "\n" + text : text)),
-      beginDemoPromptReplay: (text, key) => beginDemoPromptReplay(text, key),
-      completeDemoAssistantReplay: (text, key) => completeDemoAssistantReplay(text, key),
-      resetDemoReplayState: () => resetDemoReplayState(),
       loadScene: (scene) => {
         if (scene.sessionId) {
           setSessionId(scene.sessionId);
@@ -1982,32 +1906,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         }
       },
     });
-  }, [onRef, beginDemoPromptReplay, completeDemoAssistantReplay, resetDemoReplayState]);
-
-  useEffect(() => {
-    function onRunStarted() {
-      resetDemoReplayState();
-    }
-
-    function onRoundStarted(e) {
-      const d = (e && e.detail) || {};
-      beginDemoPromptReplay(d.prompt || "", d.key || "");
-    }
-
-    function onRoundCompleted(e) {
-      const d = (e && e.detail) || {};
-      completeDemoAssistantReplay(d.assistantText || "", d.key || "");
-    }
-
-    window.addEventListener("simworld_demo_run_started", onRunStarted);
-    window.addEventListener("simworld_demo_round_started", onRoundStarted);
-    window.addEventListener("simworld_demo_round_completed", onRoundCompleted);
-    return () => {
-      window.removeEventListener("simworld_demo_run_started", onRunStarted);
-      window.removeEventListener("simworld_demo_round_started", onRoundStarted);
-      window.removeEventListener("simworld_demo_round_completed", onRoundCompleted);
-    };
-  }, [beginDemoPromptReplay, completeDemoAssistantReplay, resetDemoReplayState]);
+  }, [onRef]);
 
   useEffect(() => {
     let mounted = true;
@@ -2378,7 +2277,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         display: "flex",
         flexDirection: "column",
         height: "100%",
-        background: "#0d1117",
+        background: "#f4f6fa",
         position: "relative",
       }}
     >
@@ -2395,19 +2294,21 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       <div
         style={{
           padding: "10px 14px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
+          background: "#ffffff",
           display: "flex",
           alignItems: "center",
           gap: 10,
           flexShrink: 0,
+          boxShadow: "0 1px 2px rgba(15,23,42,.04)",
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, color: "#e6edf3" }}>Scene Agent</div>
+          <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>Scene Agent</div>
           <div
             style={{
               fontSize: 10,
-              color: "#8b949e",
+              color: "#64748b",
               display: "flex",
               gap: 8,
               alignItems: "center",
@@ -2415,19 +2316,19 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           >
             <span>Claude Code CLI</span>
             <span>·</span>
-            <span style={{ color: mcpStatus.startsWith("✓") ? "#3fb950" : "#f85149" }}>
+            <span style={{ color: mcpStatus.startsWith("✓") ? "#16a34a" : "#dc2626" }}>
               MCP: {mcpStatus}
             </span>
             <span>·</span>
-            <span style={{ color: selfEvolutionOn ? "#f0883e" : "#8b949e" }}>
+            <span style={{ color: selfEvolutionOn ? "#ea580c" : "#64748b" }}>
               Self-evolution: {selfEvolutionReady ? (selfEvolutionOn ? "on" : "off") : "syncing"}
             </span>
             {sessionId && (
               <>
                 <span>·</span>
-                <span style={{ color: "#8b949e" }}>session: {sessionId.slice(0, 8)}</span>
+                <span style={{ color: "#64748b" }}>session: {sessionId.slice(0, 8)}</span>
                 <span>·</span>
-                <span style={{ color: "#656d76" }}>turn {turnCount}</span>
+                <span style={{ color: "#475569" }}>turn {turnCount}</span>
               </>
             )}
           </div>
@@ -2440,11 +2341,9 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               height: 24,
               padding: "0 10px",
               borderRadius: 7,
-              border: selfEvolutionOn ? "1px solid #f0883e88" : "1px solid #30363d",
-              background: selfEvolutionOn
-                ? "linear-gradient(135deg, #2a1b0f 0%, #3b2414 100%)"
-                : "#161b22",
-              color: selfEvolutionOn ? "#ffd7a1" : "#8b949e",
+              border: selfEvolutionOn ? "1px solid #fed7aa" : "1px solid #e6e9ef",
+              background: selfEvolutionOn ? "#fff7ed" : "#f8fafc",
+              color: selfEvolutionOn ? "#ea580c" : "#64748b",
               cursor: selfEvolutionReady ? "pointer" : "not-allowed",
               display: "flex",
               alignItems: "center",
@@ -2461,8 +2360,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: selfEvolutionOn ? "#f0883e" : "#656d76",
-                boxShadow: selfEvolutionOn ? "0 0 8px #f0883e" : "none",
+                background: selfEvolutionOn ? "#ea580c" : "#cbd5e1",
+                boxShadow: selfEvolutionOn ? "0 0 8px #ea580c66" : "none",
                 animation: selfEvolutionOn ? "selfEvoPulse 1.3s ease-in-out infinite" : "none",
                 flexShrink: 0,
               }}
@@ -2470,7 +2369,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             <span>Self-Evolution</span>
             <span
               style={{
-                color: selfEvolutionOn ? "#f0c674" : "#656d76",
+                color: selfEvolutionOn ? "#ea580c" : "#94a3b8",
                 flexShrink: 0,
                 letterSpacing: 0.2,
               }}
@@ -2484,7 +2383,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           {latestScreenshot && !loading && (
             <button
               onClick={() => setAnnotating(true)}
-              style={headerButtonStyle("#f0883e")}
+              style={headerButtonStyle("#ea580c")}
               title="Annotate screenshot to give feedback"
             >
               Annotate
@@ -2493,7 +2392,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           {!loading && sessionId && (
             <button
               onClick={handleSave}
-              style={headerButtonStyle("#3fb950")}
+              style={headerButtonStyle("#16a34a")}
               title="Save current scene"
             >
               Save
@@ -2502,14 +2401,14 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           {!loading && sessionId && latestScreenshot && (
             <button
               onClick={handleShare}
-              style={headerButtonStyle("#1f6feb")}
+              style={headerButtonStyle("#3b82f6")}
               title="Share to community gallery"
             >
               Share
             </button>
           )}
           {loading && (
-            <button onClick={handleStop} style={headerButtonStyle("#f85149")}>
+            <button onClick={handleStop} style={headerButtonStyle("#dc2626")}>
               Stop
             </button>
           )}
@@ -2517,7 +2416,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             <button
               onClick={handleReset}
               title="Reset conversation"
-              style={headerButtonStyle("#8b949e")}
+              style={headerButtonStyle("#64748b")}
             >
               Reset
             </button>
@@ -2561,8 +2460,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         <div
           style={{
             padding: "6px 14px",
-            borderTop: "1px solid #21262d",
-            background: "#0d1117",
+            borderTop: "1px solid #e6e9ef",
+            background: "#ffffff",
             display: "flex",
             gap: 6,
             flexWrap: "wrap",
@@ -2573,13 +2472,15 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               key={suggestion}
               onClick={() => handleSend(suggestion)}
               style={{
-                padding: "3px 10px",
-                fontSize: 10,
-                borderRadius: 12,
-                border: "1px solid #21262d",
-                background: "#161b22",
-                color: "#8b949e",
+                padding: "4px 11px",
+                fontSize: 11,
+                borderRadius: 999,
+                border: "1px solid #e6e9ef",
+                background: "#f8fafc",
+                color: "#334155",
                 cursor: "pointer",
+                fontWeight: 600,
+                fontFamily: "inherit",
               }}
             >
               {suggestion}
@@ -2592,9 +2493,9 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       <div
         style={{
           padding: "10px 14px",
-          borderTop: "1px solid #21262d",
+          borderTop: "1px solid #e6e9ef",
           flexShrink: 0,
-          background: "#161b22",
+          background: "#ffffff",
         }}
       >
         <div
@@ -2602,9 +2503,9 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             display: "flex",
             gap: 8,
             alignItems: "flex-end",
-            background: "#0d1117",
-            border: "1px solid #30363d",
-            borderRadius: 8,
+            background: "#fafbfd",
+            border: "1px solid #e6e9ef",
+            borderRadius: 10,
             padding: "8px 12px",
           }}
         >
@@ -2625,8 +2526,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               background: "none",
               border: "none",
               outline: "none",
-              color: "#e6edf3",
-              fontSize: 14,
+              color: "#0f172a",
+              fontSize: 13,
               resize: "none",
               lineHeight: 1.5,
               maxHeight: 160,
@@ -2639,34 +2540,35 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             disabled={!loading && !input.trim()}
             style={{
               flexShrink: 0,
-              width: 32,
-              height: 32,
-              borderRadius: 6,
+              width: 34,
+              height: 34,
+              borderRadius: 10,
               border: "none",
-              background: loading ? "#21262d" : input.trim() ? "#1f6feb" : "#21262d",
-              color: loading ? "#f85149" : "#e6edf3",
+              background: loading ? "#fee2e2" : input.trim() ? "#2563eb" : "#e2e8f0",
+              color: loading ? "#dc2626" : input.trim() ? "#ffffff" : "#94a3b8",
               cursor: loading || input.trim() ? "pointer" : "default",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 16,
+              fontSize: 15,
+              boxShadow: input.trim() && !loading ? "0 4px 10px rgba(37,99,235,.25)" : "none",
             }}
           >
             {loading ? "⏹" : "▶"}
           </button>
         </div>
-        <div style={{ marginTop: 5, fontSize: 11, color: "#656d76" }}>
+        <div style={{ marginTop: 5, fontSize: 11, color: "#64748b" }}>
           Enter to send · Shift+Enter for new line
-          <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "#58a6ff" : "#8b949e" }}>
+          <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "#2563eb" : "#94a3b8" }}>
             {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
             {autoSelectingSkills ? " (selecting...)" : ""}
           </span>          {activeSkills.length > 0 && (
-            <span style={{ color: "#58a6ff", marginLeft: 8 }}>
+            <span style={{ color: "#2563eb", marginLeft: 8 }}>
               {activeSkills.length} skill{activeSkills.length > 1 ? "s" : ""} active
             </span>
           )}
           {autoSelectionError && (
-            <span style={{ color: "#f85149", marginLeft: 8 }}>{autoSelectionError}</span>
+            <span style={{ color: "#dc2626", marginLeft: 8 }}>{autoSelectionError}</span>
           )}
         </div>
       </div>
@@ -2688,12 +2590,12 @@ function KeyHint({ icon, label }) {
     >
       <div
         style={{
-          background: "#21262d",
-          border: "1px solid #30363d",
+          background: "rgba(255,255,255,0.15)",
+          border: "1px solid rgba(255,255,255,0.25)",
           borderRadius: 4,
           padding: "2px 8px",
           fontSize: 12,
-          color: "#e6edf3",
+          color: "#ffffff",
           fontFamily: "monospace",
           minWidth: 32,
           textAlign: "center",
@@ -2701,7 +2603,7 @@ function KeyHint({ icon, label }) {
       >
         {icon}
       </div>
-      <div style={{ color: "#656d76", fontSize: 10 }}>{label}</div>
+      <div style={{ color: "#94a3b8", fontSize: 10 }}>{label}</div>
     </div>
   );
 }
@@ -2760,12 +2662,12 @@ function PixelStreamView({ playerUrl }) {
           }}
         >
           <div style={{ fontSize: 48 }}>{ICONS.gamepad(48)}</div>
-          <div style={{ color: "#e6edf3", fontSize: 18, fontWeight: 600 }}>
+          <div style={{ color: "#ffffff", fontSize: 18, fontWeight: 600 }}>
             Click to Activate Stream
           </div>
           <div
             style={{
-              color: "#8b949e",
+              color: "#cbd5e1",
               fontSize: 13,
               textAlign: "center",
               maxWidth: 320,
@@ -2781,7 +2683,7 @@ function PixelStreamView({ playerUrl }) {
               display: "flex",
               gap: 24,
               marginTop: 8,
-              color: "#656d76",
+              color: "#94a3b8",
               fontSize: 12,
             }}
           >
@@ -2806,7 +2708,7 @@ function PixelStreamView({ playerUrl }) {
             display: "flex",
             gap: 20,
             pointerEvents: "none",
-            border: "1px solid #30363d",
+            border: "1px solid #e2e8f0",
           }}
         >
           <KeyHint icon={ICONS.mouse(14)} label="Click & drag to look" />
@@ -2824,7 +2726,7 @@ function PixelStreamView({ playerUrl }) {
             top: 8,
             left: 8,
             background: "rgba(0,0,0,0.6)",
-            color: "#3fb950",
+            color: "#16a34a",
             fontSize: 11,
             padding: "3px 8px",
             borderRadius: 4,
@@ -2840,7 +2742,7 @@ function PixelStreamView({ playerUrl }) {
               width: 6,
               height: 6,
               borderRadius: "50%",
-              background: "#3fb950",
+              background: "#16a34a",
               animation: "livebeat 2s ease-in-out infinite",
             }}
           />
@@ -2865,9 +2767,9 @@ function PixelStreamView({ playerUrl }) {
             padding: "3px 10px",
             fontSize: 11,
             background: "rgba(0,0,0,0.6)",
-            border: "1px solid #30363d",
+            border: "1px solid #e2e8f0",
             borderRadius: 4,
-            color: "#8b949e",
+            color: "#64748b",
             cursor: "pointer",
           }}
         >
@@ -2909,10 +2811,10 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
           onError={() => { setErrored(true); setTimeout(() => onRefresh?.(), 1000); }}
         />
         {!loaded && !errored && (
-          <span style={{ color: "#656d76", fontSize: 13 }}>Loading screenshot...</span>
+          <span style={{ color: "#64748b", fontSize: 13 }}>Loading screenshot...</span>
         )}
         {errored && (
-          <span style={{ color: "#656d76", fontSize: 13 }}>Retrying screenshot...</span>
+          <span style={{ color: "#64748b", fontSize: 13 }}>Retrying screenshot...</span>
         )}
       </div>
     );
@@ -2928,7 +2830,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
         alignItems: "center",
         justifyContent: "center",
         gap: 14,
-        color: "#656d76",
+        color: "#64748b",
       }}
     >
       <div style={{ fontSize: 44 }}>{ICONS.camera(44)}</div>
@@ -2936,7 +2838,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
       <div
         style={{
           fontSize: 11,
-          color: "#30363d",
+          color: "#e2e8f0",
           textAlign: "center",
           maxWidth: 280,
         }}
@@ -2950,10 +2852,10 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
         style={{
           padding: "6px 18px",
           fontSize: 13,
-          background: "#21262d",
-          border: "1px solid #30363d",
+          background: "#e6e9ef",
+          border: "1px solid #e2e8f0",
           borderRadius: 6,
-          color: "#e6edf3",
+          color: "#0f172a",
           cursor: "pointer",
         }}
       >
@@ -2971,18 +2873,18 @@ function EntityRow({ entity }) {
     ? entity.location.map((v) => Math.round(v)).join(", ")
     : null;
   return (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", borderBottom: "1px solid #21262d" }}>
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", borderBottom: "1px solid #e6e9ef" }}>
       <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1, display: "inline-flex", alignItems: "center" }}>{iconFn(14)}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ color: "#e6edf3", fontSize: 12, fontWeight: 500 }}>{entity.name}</span>
+          <span style={{ color: "#0f172a", fontSize: 12, fontWeight: 500 }}>{entity.name}</span>
           {entity.cls && (
-            <span style={{ fontSize: 10, color: "#58a6ff", background: "#1f3a5f", borderRadius: 3, padding: "1px 5px" }}>
+            <span style={{ fontSize: 10, color: "#2563eb", background: "#eff4ff", borderRadius: 3, padding: "1px 5px" }}>
               {entity.cls}
             </span>
           )}
         </div>
-        {loc && <div style={{ fontSize: 10, color: "#656d76", marginTop: 2 }}>@ ({loc})</div>}
+        {loc && <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>@ ({loc})</div>}
       </div>
     </div>
   );
@@ -2999,15 +2901,15 @@ function ContextPanel({ sessionId, refreshKey }) {
 
   const containerStyle = {
     height: "100%", display: "flex", flexDirection: "column",
-    background: "#0d1117", color: "#e6edf3", overflow: "hidden",
+    background: "#f4f6fa", color: "#0f172a", overflow: "hidden",
   };
   const headerStyle = {
-    padding: "10px 14px", borderBottom: "1px solid #21262d",
+    padding: "10px 14px", borderBottom: "1px solid #e6e9ef",
     display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
   };
   const sectionStyle = { padding: "10px 14px 0" };
   const sectionTitleStyle = {
-    fontSize: 11, fontWeight: 600, color: "#8b949e",
+    fontSize: 11, fontWeight: 600, color: "#64748b",
     textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6,
   };
 
@@ -3015,7 +2917,7 @@ function ContextPanel({ sessionId, refreshKey }) {
     return (
       <div style={containerStyle}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "#656d76", fontSize: 13 }}>
+          <span style={{ color: "#64748b", fontSize: 13 }}>
             {sessionId ? "No scene data yet — complete a round to populate." : "Start a chat session to see scene context."}
           </span>
         </div>
@@ -3034,15 +2936,15 @@ function ContextPanel({ sessionId, refreshKey }) {
       <div style={headerStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>Scene Context</span>
-          <span style={{ fontSize: 10, background: state.environment?.ready ? "#1a3a2a" : "#3a2a1a",
-            color: state.environment?.ready ? "#3fb950" : "#d29922",
+          <span style={{ fontSize: 10, background: state.environment?.ready ? "#1a3a2a" : "#fff7ed",
+            color: state.environment?.ready ? "#16a34a" : "#f59e0b",
             borderRadius: 3, padding: "1px 6px" }}>
             {state.environment?.ready ? "env ready" : "env not initialized"}
           </span>
-          <span style={{ fontSize: 10, color: "#8b949e" }}>round {state.round ?? 0}</span>
+          <span style={{ fontSize: 10, color: "#64748b" }}>round {state.round ?? 0}</span>
         </div>
         {lastUpdated && (
-          <span style={{ fontSize: 10, color: "#656d76" }}>
+          <span style={{ fontSize: 10, color: "#64748b" }}>
             updated {lastUpdated.toLocaleTimeString()}
           </span>
         )}
@@ -3052,10 +2954,10 @@ function ContextPanel({ sessionId, refreshKey }) {
         {/* Agents section */}
         <div style={sectionStyle}>
           <div style={sectionTitleStyle}>
-            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "#58a6ff" }}>{(state.agents || []).length}</span>
+            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "#2563eb" }}>{(state.agents || []).length}</span>
           </div>
           {(state.agents || []).length === 0
-            ? <div style={{ fontSize: 12, color: "#656d76", paddingBottom: 8 }}>No agents in scene</div>
+            ? <div style={{ fontSize: 12, color: "#64748b", paddingBottom: 8 }}>No agents in scene</div>
             : (state.agents || []).map((a) => <EntityRow key={a.name} entity={a} />)
           }
         </div>
@@ -3063,13 +2965,13 @@ function ContextPanel({ sessionId, refreshKey }) {
         {/* Objects section, grouped by category */}
         <div style={{ ...sectionStyle, marginTop: 12 }}>
           <div style={sectionTitleStyle}>
-            {ICONS.box(13)} Objects &nbsp;<span style={{ color: "#58a6ff" }}>{(state.objects || []).length}</span>
+            {ICONS.box(13)} Objects &nbsp;<span style={{ color: "#2563eb" }}>{(state.objects || []).length}</span>
           </div>
           {(state.objects || []).length === 0
-            ? <div style={{ fontSize: 12, color: "#656d76" }}>No objects in scene</div>
+            ? <div style={{ fontSize: 12, color: "#64748b" }}>No objects in scene</div>
             : Object.entries(byCategory).map(([cat, items]) => (
                 <div key={cat} style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 4 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>
                     {(CATEGORY_ICONS[cat] || ICONS.box)(11)} {cat}s ({items.length})
                   </div>
                   {items.map((o) => <EntityRow key={o.name} entity={o} />)}
@@ -3084,7 +2986,7 @@ function ContextPanel({ sessionId, refreshKey }) {
 
 // ─── AgentPanel ──────────────────────────────────────────────────────────────
 
-const AGENT_COLORS = ["#58a6ff", "#3fb950", "#d29922", "#f778ba", "#bc8cff", "#f0883e", "#79c0ff", "#56d364"];
+const AGENT_COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#f778ba", "#bc8cff", "#ea580c", "#2563eb", "#56d364"];
 
 async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
   console.log("[sendAgentChat] START", { agentName, message, sessionId });
@@ -3227,7 +3129,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
   useEffect(() => { if (activityRef.current) activityRef.current.scrollTop = activityRef.current.scrollHeight; }, [thought, actions]);
 
   const loc = Array.isArray(agent.location) && agent.location.length >= 3 ? agent.location.map(v => Math.round(v)).join(", ") : null;
-  const statusColors = { idle: "#8b949e", running: "#d29922", done: "#3fb950", error: "#f85149" };
+  const statusColors = { idle: "#64748b", running: "#f59e0b", done: "#16a34a", error: "#dc2626" };
 
   // Render a single activity (ReAct format)
   const renderActivity = (act, isLive) => {
@@ -3237,17 +3139,17 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
       <div style={{ fontSize: 11, lineHeight: "1.5" }}>
         {/* Thought */}
         {t && (
-          <div style={{ color: "#c9d1d9", whiteSpace: "pre-wrap", marginBottom: 4 }}>
-            <span style={{ color: "#8b949e", fontWeight: 600 }}>Thought: </span>{t.slice(0, 500)}
+          <div style={{ color: "#1e293b", whiteSpace: "pre-wrap", marginBottom: 4 }}>
+            <span style={{ color: "#64748b", fontWeight: 600 }}>Thought: </span>{t.slice(0, 500)}
           </div>
         )}
         {/* Actions */}
         {acts.length > 0 && acts.map((a, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 2, paddingLeft: 8 }}>
-            <span style={{ color: a.ok === null ? "#d29922" : a.ok ? "#3fb950" : "#f85149", fontWeight: 600 }}>
+            <span style={{ color: a.ok === null ? "#f59e0b" : a.ok ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
               {a.ok === null ? "..." : a.ok ? "ok" : "err"}
             </span>
-            <span style={{ color: "#79c0ff" }}>{a.tool || a.name}</span>
+            <span style={{ color: "#2563eb" }}>{a.tool || a.name}</span>
           </div>
         ))}
       </div>
@@ -3255,12 +3157,12 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
   };
 
   return (
-    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#161b22", minWidth: 200, flex: "1 1 calc(50% - 5px)", maxWidth: "calc(50% - 5px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#ffffff", minWidth: 200, flex: "1 1 calc(50% - 5px)", maxWidth: "calc(50% - 5px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* Header */}
-      <div style={{ padding: "8px 10px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 6, background: `${color}0a` }}>
+      <div style={{ padding: "8px 10px", borderBottom: "1px solid #e6e9ef", display: "flex", alignItems: "center", gap: 6, background: `${color}0a` }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status], flexShrink: 0 }} />
         <span style={{ fontSize: 13, fontWeight: 700, color }}>{agent.name}</span>
-        <span style={{ fontSize: 9, color: "#8b949e", background: "#0d1117", borderRadius: 3, padding: "1px 5px" }}>{agent.cls}</span>
+        <span style={{ fontSize: 9, color: "#64748b", background: "#f4f6fa", borderRadius: 3, padding: "1px 5px" }}>{agent.cls}</span>
         <div style={{ flex: 1 }} />
         {/* Camera focus button */}
         {loc && <button onClick={() => {
@@ -3275,45 +3177,45 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
             body: JSON.stringify({ cmd: "set_camera", args: [camX, camY, camZ, pitch, yaw, 0] })
           }).catch(() => {});
         }} title={`Focus camera on ${agent.name}`}
-          style={{ background: "none", border: "1px solid #30363d", borderRadius: 3, padding: "2px 5px", color: "#8b949e", fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", lineHeight: 1 }}>
+          style={{ background: "none", border: "1px solid #e2e8f0", borderRadius: 3, padding: "2px 5px", color: "#64748b", fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", lineHeight: 1 }}>
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M15 3.5a1.5 1.5 0 0 0-2.29-1.27L10 3.99V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2v-.99l2.71 1.76A1.5 1.5 0 0 0 15 9.5v-6z"/></svg>
         </button>}
-        {status === "running" && <button onClick={handleStop} style={{ background: "none", border: "1px solid #da3633", borderRadius: 3, padding: "1px 6px", color: "#f85149", fontSize: 10, cursor: "pointer" }}>stop</button>}
+        {status === "running" && <button onClick={handleStop} style={{ background: "none", border: "1px solid #b91c1c", borderRadius: 3, padding: "1px 6px", color: "#dc2626", fontSize: 10, cursor: "pointer" }}>stop</button>}
       </div>
 
       {/* Activity log (ReAct) */}
       <div ref={activityRef} style={{ flex: 1, overflowY: "auto", padding: "6px 10px", minHeight: 80, maxHeight: 200 }}>
         {/* Incoming messages */}
         {agentMessages.map((m, i) => (
-          <div key={`msg-${i}`} style={{ marginBottom: 4, fontSize: 10, color: "#8b949e", borderLeft: "2px solid #30363d", paddingLeft: 6 }}>
-            <span style={{ fontWeight: 600, color: "#58a6ff" }}>@{m.from}</span>: {m.text.slice(0, 120)}
+          <div key={`msg-${i}`} style={{ marginBottom: 4, fontSize: 10, color: "#64748b", borderLeft: "2px solid #e2e8f0", paddingLeft: 6 }}>
+            <span style={{ fontWeight: 600, color: "#2563eb" }}>@{m.from}</span>: {m.text.slice(0, 120)}
           </div>
         ))}
-        {agentMessages.length > 0 && pastActivities.length > 0 && <div style={{ borderBottom: "1px solid #21262d", marginBottom: 6 }} />}
+        {agentMessages.length > 0 && pastActivities.length > 0 && <div style={{ borderBottom: "1px solid #e6e9ef", marginBottom: 6 }} />}
         {/* Past activities */}
         {pastActivities.slice(-3).map((act, i) => (
-          <div key={i} style={{ marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid #21262d" }}>
+          <div key={i} style={{ marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid #e6e9ef" }}>
             {renderActivity(act, false)}
           </div>
         ))}
         {/* Live activity */}
         {(thought || actions.length > 0) ? renderActivity({ thought, response: thought }, true) : (
-          pastActivities.length === 0 && agentMessages.length === 0 && <span style={{ color: "#484f58", fontSize: 11, fontStyle: "italic" }}>No activity yet</span>
+          pastActivities.length === 0 && agentMessages.length === 0 && <span style={{ color: "#475569", fontSize: 11, fontStyle: "italic" }}>No activity yet</span>
         )}
-        {status === "running" && <span style={{ color: "#d29922", fontSize: 10 }}> thinking...</span>}
+        {status === "running" && <span style={{ color: "#f59e0b", fontSize: 10 }}> thinking...</span>}
       </div>
 
       {/* Input */}
-      <div style={{ display: "flex", gap: 4, padding: "6px 8px", borderTop: "1px solid #21262d" }}>
+      <div style={{ display: "flex", gap: 4, padding: "6px 8px", borderTop: "1px solid #e6e9ef" }}>
         <input value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSend(input); } }}
           placeholder={`Command ${agent.name}...`}
           disabled={status === "running"}
-          style={{ flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 4, padding: "5px 8px", color: "#e6edf3", fontSize: 11, outline: "none" }}
+          style={{ flex: 1, background: "#f4f6fa", border: "1px solid #e2e8f0", borderRadius: 4, padding: "5px 8px", color: "#0f172a", fontSize: 11, outline: "none" }}
         />
         <button onClick={() => handleSend(input)}
           disabled={!input.trim() || status === "running"}
-          style={{ background: input.trim() && status !== "running" ? "#238636" : "#21262d", border: "none", borderRadius: 4, padding: "5px 10px", color: "#fff", fontSize: 10, cursor: input.trim() && status !== "running" ? "pointer" : "default", opacity: input.trim() && status !== "running" ? 1 : 0.5 }}
+          style={{ background: input.trim() && status !== "running" ? "#15803d" : "#e6e9ef", border: "none", borderRadius: 4, padding: "5px 10px", color: "#fff", fontSize: 10, cursor: input.trim() && status !== "running" ? "pointer" : "default", opacity: input.trim() && status !== "running" ? 1 : 0.5 }}
         >Go</button>
       </div>
     </div>
@@ -3357,7 +3259,7 @@ function CommHistory({ agents }) {
     setInput("");
   };
 
-  const colors = { user: "#e6edf3" };
+  const colors = { user: "#0f172a" };
   (agents || []).forEach((a, i) => { colors[a.name] = AGENT_COLORS[i % AGENT_COLORS.length]; });
 
   // Render @mentions in text with color
@@ -3366,46 +3268,46 @@ function CommHistory({ agents }) {
     return parts.map((part, i) => {
       if (part.startsWith("@")) {
         const name = part.slice(1);
-        return <span key={i} style={{ color: colors[name] || "#58a6ff", fontWeight: 600 }}>{part}</span>;
+        return <span key={i} style={{ color: colors[name] || "#2563eb", fontWeight: 600 }}>{part}</span>;
       }
       return part;
     });
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#0d1117" }}>
-      <div style={{ padding: "10px 12px", borderBottom: "1px solid #21262d", fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#f4f6fa" }}>
+      <div style={{ padding: "10px 12px", borderBottom: "1px solid #e6e9ef", fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
         Communication
       </div>
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
         {messages.length === 0 ? (
-          <div style={{ color: "#484f58", fontSize: 11, textAlign: "center", marginTop: 40 }}>
+          <div style={{ color: "#475569", fontSize: 11, textAlign: "center", marginTop: 40 }}>
             Messages between you and agents will appear here.
           </div>
         ) : messages.map((m, i) => (
           <div key={i} style={{ marginBottom: 8, fontSize: 12, lineHeight: "1.5" }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ fontWeight: 700, color: colors[m.from] || "#8b949e" }}>{m.from === "user" ? "You" : m.from}</span>
-              {m.to && m.to !== "all" && <span style={{ fontSize: 10, color: "#656d76" }}>to <span style={{ color: colors[m.to] || "#58a6ff" }}>@{m.to}</span></span>}
-              <span style={{ fontSize: 9, color: "#484f58", marginLeft: "auto" }}>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+              <span style={{ fontWeight: 700, color: colors[m.from] || "#64748b" }}>{m.from === "user" ? "You" : m.from}</span>
+              {m.to && m.to !== "all" && <span style={{ fontSize: 10, color: "#64748b" }}>to <span style={{ color: colors[m.to] || "#2563eb" }}>@{m.to}</span></span>}
+              <span style={{ fontSize: 9, color: "#475569", marginLeft: "auto" }}>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
-            <div style={{ color: "#c9d1d9", marginTop: 2 }}>{renderText(m.text)}</div>
+            <div style={{ color: "#1e293b", marginTop: 2 }}>{renderText(m.text)}</div>
           </div>
         ))}
       </div>
-      <div style={{ padding: "8px 12px", borderTop: "1px solid #21262d", display: "flex", gap: 6 }}>
+      <div style={{ padding: "8px 12px", borderTop: "1px solid #e6e9ef", display: "flex", gap: 6 }}>
         <select value={target} onChange={e => setTarget(e.target.value)}
-          style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 4, color: "#8b949e", fontSize: 11, padding: "4px 6px" }}>
+          style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 4, color: "#64748b", fontSize: 11, padding: "4px 6px" }}>
           <option value="all">@all</option>
           {(agents || []).map(a => <option key={a.name} value={a.name}>@{a.name}</option>)}
         </select>
         <input value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSend(); } }}
           placeholder="Message..."
-          style={{ flex: 1, background: "#161b22", border: "1px solid #30363d", borderRadius: 4, padding: "5px 8px", color: "#e6edf3", fontSize: 11, outline: "none" }}
+          style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 4, padding: "5px 8px", color: "#0f172a", fontSize: 11, outline: "none" }}
         />
         <button onClick={handleSend} disabled={!input.trim()} style={{
-          background: input.trim() ? "#238636" : "#21262d", border: "none", borderRadius: 4,
+          background: input.trim() ? "#15803d" : "#e6e9ef", border: "none", borderRadius: 4,
           padding: "5px 10px", color: "#fff", fontSize: 11, cursor: input.trim() ? "pointer" : "default", opacity: input.trim() ? 1 : 0.5,
         }}>Send</button>
       </div>
@@ -3426,15 +3328,15 @@ function AgentPanel({ sessionId }) {
 
   if (contextAgents.length === 0) {
     return (
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#0d1117", color: "#e6edf3" }}>
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid #21262d" }}>
+      <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#f4f6fa", color: "#0f172a" }}>
+        <div style={{ padding: "10px 14px", borderBottom: "1px solid #e6e9ef" }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
         </div>
-        <div style={{ padding: "6px 14px", borderBottom: "1px solid #21262d", fontSize: 11, color: "#656d76" }}>
+        <div style={{ padding: "6px 14px", borderBottom: "1px solid #e6e9ef", fontSize: 11, color: "#64748b" }}>
           {pieActive ? "PIE active. Spawn agents to control them." : "Start PIE in Unreal Engine to enable agent control."}
         </div>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "#484f58", fontSize: 12 }}>No agents in scene</span>
+          <span style={{ color: "#475569", fontSize: 12 }}>No agents in scene</span>
         </div>
       </div>
     );
@@ -3442,20 +3344,20 @@ function AgentPanel({ sessionId }) {
 
   // Split layout: left = comm history, right = agent cards
   return (
-    <div style={{ height: "100%", display: "flex", background: "#0d1117", color: "#e6edf3", overflow: "hidden" }}>
+    <div style={{ height: "100%", display: "flex", background: "#f4f6fa", color: "#0f172a", overflow: "hidden" }}>
       {/* Left: Communication History */}
-      <div style={{ width: 300, minWidth: 240, borderRight: "1px solid #21262d", display: "flex", flexDirection: "column" }}>
+      <div style={{ width: 300, minWidth: 240, borderRight: "1px solid #e6e9ef", display: "flex", flexDirection: "column" }}>
         <CommHistory agents={contextAgents} />
       </div>
 
       {/* Right: Agent Cards */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ padding: "8px 14px", borderBottom: "1px solid #21262d", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        <div style={{ padding: "8px 14px", borderBottom: "1px solid #e6e9ef", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
-          <span style={{ fontSize: 10, color: "#3fb950", background: "#1a3a2a", borderRadius: 3, padding: "1px 6px" }}>{contextAgents.length}</span>
+          <span style={{ fontSize: 10, color: "#16a34a", background: "#1a3a2a", borderRadius: 3, padding: "1px 6px" }}>{contextAgents.length}</span>
           <div style={{ flex: 1 }} />
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: pieActive ? "#3fb950" : "#f85149" }} />
-          <span style={{ fontSize: 10, color: pieActive ? "#3fb950" : "#f85149" }}>PIE</span>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: pieActive ? "#16a34a" : "#dc2626" }} />
+          <span style={{ fontSize: 10, color: pieActive ? "#16a34a" : "#dc2626" }}>PIE</span>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: 10, display: "flex", flexWrap: "wrap", gap: 10, alignContent: "flex-start" }}>
           {contextAgents.map((a, i) => (
@@ -3561,24 +3463,24 @@ function ViewportPanel({ latestScreenshot }) {
         display: "flex",
         flexDirection: "column",
         height: "100%",
-        background: "#0a0d12",
+        background: "#f4f6fa",
       }}
     >
       {/* Toolbar */}
       <div
         style={{
           padding: "8px 14px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 8,
           flexShrink: 0,
-          background: "#161b22",
+          background: "#ffffff",
           userSelect: "none",
         }}
       >
         <span style={{ fontSize: 15, display: "inline-flex", alignItems: "center" }}>{ICONS.gamepad(15)}</span>
-        <span style={{ fontWeight: 600, fontSize: 13, color: "#e6edf3" }}>UE Viewport</span>
+        <span style={{ fontWeight: 600, fontSize: 13, color: "#0f172a" }}>UE Viewport</span>
 
         {/* Mode toggle */}
         <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
@@ -3591,9 +3493,9 @@ function ViewportPanel({ latestScreenshot }) {
                 fontSize: 11,
                 borderRadius: 4,
                 border: "1px solid",
-                borderColor: mode === m ? "#1f6feb" : "#30363d",
-                background: mode === m ? "#1f3a5f" : "transparent",
-                color: mode === m ? "#58a6ff" : "#8b949e",
+                borderColor: mode === m ? "#3b82f6" : "#e2e8f0",
+                background: mode === m ? "#eff4ff" : "transparent",
+                color: mode === m ? "#2563eb" : "#64748b",
                 cursor: "pointer",
               }}
             >
@@ -3612,9 +3514,9 @@ function ViewportPanel({ latestScreenshot }) {
                 padding: "3px 10px",
                 fontSize: 12,
                 borderRadius: 4,
-                border: "1px solid #30363d",
-                background: "#21262d",
-                color: "#e6edf3",
+                border: "1px solid #e2e8f0",
+                background: "#e6e9ef",
+                color: "#0f172a",
                 cursor: "pointer",
               }}
             >
@@ -3626,7 +3528,7 @@ function ViewportPanel({ latestScreenshot }) {
                 alignItems: "center",
                 gap: 4,
                 fontSize: 12,
-                color: "#8b949e",
+                color: "#64748b",
                 cursor: "pointer",
               }}
             >
@@ -3643,10 +3545,10 @@ function ViewportPanel({ latestScreenshot }) {
               style={{
                 padding: "2px 6px",
                 fontSize: 11,
-                background: "#21262d",
-                border: "1px solid #30363d",
+                background: "#e6e9ef",
+                border: "1px solid #e2e8f0",
                 borderRadius: 4,
-                color: "#8b949e",
+                color: "#64748b",
               }}
             >
               {[2, 3, 5, 10].map((s) => (
@@ -3660,7 +3562,7 @@ function ViewportPanel({ latestScreenshot }) {
 
         {/* Camera presets */}
         <div style={{ display: "flex", gap: 3, marginLeft: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 10, color: "#656d76", marginRight: 2 }}>CAM</span>
+          <span style={{ fontSize: 10, color: "#64748b", marginRight: 2 }}>CAM</span>
           {CAMERA_PRESETS.map((preset) => (
             <button
               key={preset.label}
@@ -3671,9 +3573,9 @@ function ViewportPanel({ latestScreenshot }) {
                 padding: "3px 8px",
                 fontSize: 11,
                 borderRadius: 4,
-                border: "1px solid #30363d",
-                background: "#21262d",
-                color: cameraMoving ? "#484f58" : "#8b949e",
+                border: "1px solid #e2e8f0",
+                background: "#e6e9ef",
+                color: cameraMoving ? "#94a3b8" : "#64748b",
                 cursor: cameraMoving ? "wait" : "pointer",
               }}
             >
@@ -3691,9 +3593,9 @@ function ViewportPanel({ latestScreenshot }) {
               padding: "3px 8px",
               fontSize: 11,
               borderRadius: 4,
-              border: "1px solid #30363d",
-              background: "#21262d",
-              color: cameraMoving ? "#484f58" : "#f85149",
+              border: "1px solid #e2e8f0",
+              background: "#e6e9ef",
+              color: cameraMoving ? "#94a3b8" : "#dc2626",
               cursor: cameraMoving ? "wait" : "pointer",
             }}
           >
@@ -3712,9 +3614,9 @@ function ViewportPanel({ latestScreenshot }) {
               padding: "3px 10px",
               fontSize: 11,
               borderRadius: 4,
-              border: "1px solid #30363d",
-              background: "#21262d",
-              color: "#58a6ff",
+              border: "1px solid #e2e8f0",
+              background: "#e6e9ef",
+              color: "#2563eb",
               textDecoration: "none",
               cursor: "pointer",
               display: "inline-block",
@@ -3731,7 +3633,7 @@ function ViewportPanel({ latestScreenshot }) {
         <div style={{ width: "100%", height: "100%", display: mode === "pixelstream" ? "block" : "none" }}>
           {playerUrl
             ? <PixelStreamView playerUrl={playerUrl} />
-            : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#8b949e", fontSize: 14 }}>Connecting to pixel stream...</div>
+            : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#64748b", fontSize: 14 }}>Connecting to pixel stream...</div>
           }
         </div>
         {mode === "screenshot" && (
@@ -3743,20 +3645,20 @@ function ViewportPanel({ latestScreenshot }) {
       <div
         style={{
           padding: "3px 14px",
-          background: "#161b22",
-          borderTop: "1px solid #21262d",
+          background: "#ffffff",
+          borderTop: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 16,
           fontSize: 10,
-          color: "#656d76",
+          color: "#64748b",
           flexShrink: 0,
         }}
       >
         <span>UE 5.3.2 · SimWorld</span>
         <span>PS player: {playerUrl ?? "loading..."}</span>
         {mode === "screenshot" && screenshotUrl && (
-          <span style={{ color: "#3fb950", marginLeft: "auto" }}>● Screenshot ready</span>
+          <span style={{ color: "#16a34a", marginLeft: "auto" }}>● Screenshot ready</span>
         )}
       </div>
     </div>
@@ -3766,7 +3668,7 @@ function ViewportPanel({ latestScreenshot }) {
 // ─── AssetPlaceholder ────────────────────────────────────────────────────────
 
 function AssetPlaceholder({ id, category }) {
-  const color = CATEGORY_COLORS[category] || "#30363d";
+  const color = CATEGORY_COLORS[category] || "#e2e8f0";
   const numMatch = id.match(/(\d+)/);
   if (numMatch) parseInt(numMatch[1]);
 
@@ -3814,18 +3716,18 @@ function AssetCard({ item, category, onInsert }) {
       style={{
         borderRadius: 6,
         overflow: "hidden",
-        border: "1px solid #21262d",
-        background: "#161b22",
+        border: "1px solid #e6e9ef",
+        background: "#ffffff",
         cursor: "pointer",
         transition: "border-color 0.15s",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#58a6ff")}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#21262d")}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#2563eb")}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#e6e9ef")}
     >
       <div
         style={{
           height: 90,
-          background: "#0d1117",
+          background: "#f4f6fa",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -3848,7 +3750,7 @@ function AssetCard({ item, category, onInsert }) {
           style={{
             fontSize: 10,
             fontWeight: 500,
-            color: "#e6edf3",
+            color: "#0f172a",
             wordBreak: "break-all",
             lineHeight: 1.3,
           }}
@@ -3877,7 +3779,7 @@ function AssetListItem({ item, category, onInsert }) {
         borderRadius: 4,
         cursor: "pointer",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "#161b22")}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "#ffffff")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
       <div
@@ -3886,12 +3788,12 @@ function AssetListItem({ item, category, onInsert }) {
           height: 36,
           borderRadius: 4,
           overflow: "hidden",
-          background: "#0d1117",
+          background: "#f4f6fa",
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          border: "1px solid #21262d",
+          border: "1px solid #e6e9ef",
         }}
       >
         {imgError ? (
@@ -3906,12 +3808,12 @@ function AssetListItem({ item, category, onInsert }) {
         )}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11, color: "#e6edf3", fontWeight: 500 }}>{item.id}</div>
+        <div style={{ fontSize: 11, color: "#0f172a", fontWeight: 500 }}>{item.id}</div>
         {item.path && (
           <div
             style={{
               fontSize: 9,
-              color: "#484f58",
+              color: "#475569",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -3941,7 +3843,7 @@ function AssetBrowser({ onInsert }) {
 
   if (!assets) {
     return (
-      <div style={{ padding: 12, color: "#8b949e", fontSize: 12 }}>Loading assets...</div>
+      <div style={{ padding: 12, color: "#64748b", fontSize: 12 }}>Loading assets...</div>
     );
   }
 
@@ -3961,14 +3863,14 @@ function AssetBrowser({ onInsert }) {
         display: "flex",
         flexDirection: "column",
         height: "100%",
-        background: "#0d1117",
+        background: "#f4f6fa",
       }}
     >
       {/* Search bar */}
       <div
         style={{
           padding: "8px 10px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           gap: 6,
           alignItems: "center",
@@ -3983,10 +3885,10 @@ function AssetBrowser({ onInsert }) {
             flex: 1,
             padding: "5px 8px",
             fontSize: 12,
-            background: "#161b22",
-            border: "1px solid #30363d",
+            background: "#ffffff",
+            border: "1px solid #e2e8f0",
             borderRadius: 4,
-            color: "#e6edf3",
+            color: "#0f172a",
             outline: "none",
             boxSizing: "border-box",
           }}
@@ -3996,10 +3898,10 @@ function AssetBrowser({ onInsert }) {
           style={{
             padding: "4px 8px",
             fontSize: 11,
-            background: "#21262d",
-            border: "1px solid #30363d",
+            background: "#e6e9ef",
+            border: "1px solid #e2e8f0",
             borderRadius: 4,
-            color: "#8b949e",
+            color: "#64748b",
             cursor: "pointer",
           }}
           title={viewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
@@ -4015,7 +3917,7 @@ function AssetBrowser({ onInsert }) {
           flexWrap: "wrap",
           gap: 2,
           padding: "6px 10px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
         }}
       >
         {categories.map((cat) => (
@@ -4029,9 +3931,9 @@ function AssetBrowser({ onInsert }) {
               padding: "3px 8px",
               fontSize: 10,
               borderRadius: 4,
-              border: `1px solid ${cat === currentCategory ? "#1f6feb" : "#21262d"}`,
-              background: cat === currentCategory ? "#1f3a5f" : "transparent",
-              color: cat === currentCategory ? "#58a6ff" : "#8b949e",
+              border: `1px solid ${cat === currentCategory ? "#3b82f6" : "#e6e9ef"}`,
+              background: cat === currentCategory ? "#eff4ff" : "transparent",
+              color: cat === currentCategory ? "#2563eb" : "#64748b",
               cursor: "pointer",
             }}
           >
@@ -4046,8 +3948,8 @@ function AssetBrowser({ onInsert }) {
           style={{
             padding: "6px 10px",
             fontSize: 10,
-            color: "#656d76",
-            borderBottom: "1px solid #21262d",
+            color: "#64748b",
+            borderBottom: "1px solid #e6e9ef",
           }}
         >
           {categoryData.description}
@@ -4090,7 +3992,7 @@ function AssetBrowser({ onInsert }) {
             style={{
               textAlign: "center",
               padding: 20,
-              color: "#484f58",
+              color: "#475569",
               fontSize: 12,
             }}
           >
@@ -4103,9 +4005,9 @@ function AssetBrowser({ onInsert }) {
       <div
         style={{
           padding: "4px 10px",
-          borderTop: "1px solid #21262d",
+          borderTop: "1px solid #e6e9ef",
           fontSize: 10,
-          color: "#484f58",
+          color: "#475569",
           display: "flex",
           alignItems: "center",
           gap: 8,
@@ -4114,7 +4016,7 @@ function AssetBrowser({ onInsert }) {
         <span>
           {items.length} assets {search && `matching "${search}"`}
         </span>
-        <span style={{ marginLeft: "auto", color: "#656d76" }}>Click to insert into chat</span>
+        <span style={{ marginLeft: "auto", color: "#64748b" }}>Click to insert into chat</span>
       </div>
     </div>
   );
@@ -4151,29 +4053,29 @@ function SceneManager({ onLoadScene, currentSessionId }) {
         display: "flex",
         flexDirection: "column",
         height: "100%",
-        background: "#0d1117",
+        background: "#f4f6fa",
       }}
     >
       <div
         style={{
           padding: "8px 12px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 8,
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>Saved Scenes</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Saved Scenes</span>
         <button
           onClick={reload}
           style={{
             marginLeft: "auto",
             padding: "3px 8px",
             fontSize: 10,
-            background: "#21262d",
-            border: "1px solid #30363d",
+            background: "#e6e9ef",
+            border: "1px solid #e2e8f0",
             borderRadius: 4,
-            color: "#8b949e",
+            color: "#64748b",
             cursor: "pointer",
           }}
         >
@@ -4183,14 +4085,14 @@ function SceneManager({ onLoadScene, currentSessionId }) {
 
       <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
         {loading && (
-          <div style={{ padding: 12, color: "#8b949e", fontSize: 12 }}>Loading...</div>
+          <div style={{ padding: 12, color: "#64748b", fontSize: 12 }}>Loading...</div>
         )}
         {!loading && scenes.length === 0 && (
           <div
             style={{
               padding: 20,
               textAlign: "center",
-              color: "#484f58",
+              color: "#475569",
               fontSize: 12,
             }}
           >
@@ -4204,8 +4106,8 @@ function SceneManager({ onLoadScene, currentSessionId }) {
               marginBottom: 8,
               borderRadius: 6,
               overflow: "hidden",
-              border: "1px solid #21262d",
-              background: "#161b22",
+              border: "1px solid #e6e9ef",
+              background: "#ffffff",
             }}
           >
             {scene.thumbnail && (
@@ -4213,7 +4115,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                 style={{
                   height: 100,
                   overflow: "hidden",
-                  borderBottom: "1px solid #21262d",
+                  borderBottom: "1px solid #e6e9ef",
                 }}
               >
                 <img
@@ -4224,12 +4126,12 @@ function SceneManager({ onLoadScene, currentSessionId }) {
               </div>
             )}
             <div style={{ padding: "8px 10px" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: "#e6edf3" }}>{scene.name}</div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: "#0f172a" }}>{scene.name}</div>
               {scene.prompt && (
                 <div
                   style={{
                     fontSize: 10,
-                    color: "#8b949e",
+                    color: "#64748b",
                     marginTop: 3,
                     lineHeight: 1.4,
                   }}
@@ -4245,7 +4147,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                   marginTop: 6,
                 }}
               >
-                <span style={{ fontSize: 9, color: "#484f58" }}>
+                <span style={{ fontSize: 9, color: "#475569" }}>
                   {new Date(scene.updatedAt).toLocaleDateString()}
                 </span>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
@@ -4255,9 +4157,9 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                       padding: "2px 8px",
                       fontSize: 10,
                       borderRadius: 3,
-                      border: "1px solid #1f6feb",
+                      border: "1px solid #3b82f6",
                       background: "transparent",
-                      color: "#58a6ff",
+                      color: "#2563eb",
                       cursor: "pointer",
                     }}
                   >
@@ -4269,9 +4171,9 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                       padding: "2px 8px",
                       fontSize: 10,
                       borderRadius: 3,
-                      border: "1px solid #30363d",
+                      border: "1px solid #e2e8f0",
                       background: "transparent",
-                      color: "#f85149",
+                      color: "#dc2626",
                       cursor: "pointer",
                     }}
                   >
@@ -4290,7 +4192,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
 // ─── BattleSide ──────────────────────────────────────────────────────────────
 
 function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
-  const borderColor = isWinner ? "#3fb950" : isLoser ? "#f8514933" : "#30363d";
+  const borderColor = isWinner ? "#16a34a" : isLoser ? "#dc262633" : "#e2e8f0";
 
   return (
     <div
@@ -4298,7 +4200,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
         border: `2px solid ${borderColor}`,
         borderRadius: 12,
         overflow: "hidden",
-        background: "#161b22",
+        background: "#ffffff",
         transition: "border-color 0.2s",
         opacity: isLoser ? 0.6 : 1,
       }}
@@ -4306,13 +4208,13 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
       <div
         style={{
           padding: "10px 16px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
         }}
       >
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#e6edf3" }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
           {label}
           {isWinner && " ✅"}
         </span>
@@ -4320,8 +4222,8 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
           <span
             style={{
               fontSize: 11,
-              color: "#8b949e",
-              background: "#21262d",
+              color: "#64748b",
+              background: "#e6e9ef",
               padding: "2px 8px",
               borderRadius: 4,
             }}
@@ -4330,14 +4232,14 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
           </span>
         )}
         {!revealed && (
-          <span style={{ fontSize: 11, color: "#484f58" }}>Identity hidden</span>
+          <span style={{ fontSize: 11, color: "#475569" }}>Identity hidden</span>
         )}
       </div>
 
       <div
         style={{
           height: 250,
-          background: "#0d1117",
+          background: "#f4f6fa",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -4350,7 +4252,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
           />
         ) : (
-          <div style={{ color: "#484f58", fontSize: 13 }}>
+          <div style={{ color: "#475569", fontSize: 13 }}>
             {side ? "No screenshot available" : "Waiting for generation..."}
           </div>
         )}
@@ -4364,8 +4266,8 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
               padding: "8px 24px",
               fontSize: 13,
               fontWeight: 600,
-              background: "#238636",
-              border: "1px solid #2ea043",
+              background: "#15803d",
+              border: "1px solid #15803d",
               borderRadius: 6,
               color: "#fff",
               cursor: "pointer",
@@ -4385,10 +4287,10 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
 const tieButtonStyle = {
   padding: "8px 20px",
   fontSize: 12,
-  background: "#21262d",
-  border: "1px solid #30363d",
+  background: "#e6e9ef",
+  border: "1px solid #e2e8f0",
   borderRadius: 6,
-  color: "#8b949e",
+  color: "#64748b",
   cursor: "pointer",
 };
 
@@ -4493,14 +4395,14 @@ function ArenaPage() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#0d1117",
+        background: "#f4f6fa",
       }}
     >
       {/* Header */}
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -4508,8 +4410,8 @@ function ArenaPage() {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.swords(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Arena Battle</div>
-          <div style={{ fontSize: 12, color: "#8b949e" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Arena Battle</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
             Two agents generate scenes from the same prompt. You decide which is better.
           </div>
         </div>
@@ -4520,9 +4422,9 @@ function ArenaPage() {
               padding: "4px 12px",
               fontSize: 11,
               borderRadius: 4,
-              border: "1px solid #30363d",
-              background: showAgents ? "#1f3a5f" : "#21262d",
-              color: showAgents ? "#58a6ff" : "#8b949e",
+              border: "1px solid #e2e8f0",
+              background: showAgents ? "#eff4ff" : "#e6e9ef",
+              color: showAgents ? "#2563eb" : "#64748b",
               cursor: "pointer",
             }}
           >
@@ -4536,14 +4438,14 @@ function ArenaPage() {
         <div
           style={{
             padding: "12px 24px",
-            borderBottom: "1px solid #21262d",
-            background: "#161b22",
+            borderBottom: "1px solid #e6e9ef",
+            background: "#ffffff",
           }}
         >
           <div
             style={{
               fontSize: 12,
-              color: "#8b949e",
+              color: "#64748b",
               marginBottom: 8,
               fontWeight: 600,
             }}
@@ -4557,8 +4459,8 @@ function ArenaPage() {
                 style={{
                   padding: "8px 14px",
                   borderRadius: 6,
-                  border: `1px solid ${agent.enabled ? "#238636" : "#30363d"}`,
-                  background: agent.enabled ? "#23863611" : "transparent",
+                  border: `1px solid ${agent.enabled ? "#15803d" : "#e2e8f0"}`,
+                  background: agent.enabled ? "#15803d11" : "transparent",
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
@@ -4569,18 +4471,18 @@ function ArenaPage() {
                   type="checkbox"
                   checked={agent.enabled}
                   onChange={(e) => toggleAgent(agent.id, e.target.checked)}
-                  style={{ accentColor: "#238636" }}
+                  style={{ accentColor: "#15803d" }}
                 />
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "#e6edf3" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
                     {agent.name}
                   </div>
-                  <div style={{ fontSize: 10, color: "#8b949e" }}>
+                  <div style={{ fontSize: 10, color: "#64748b" }}>
                     {agent.type}
                     {agent.model ? ` (${agent.model})` : ""}
                   </div>
                   {agent.description && (
-                    <div style={{ fontSize: 9, color: "#484f58", marginTop: 2 }}>
+                    <div style={{ fontSize: 9, color: "#475569", marginTop: 2 }}>
                       {agent.description}
                     </div>
                   )}
@@ -4600,13 +4502,13 @@ function ArenaPage() {
               style={{
                 fontSize: 28,
                 fontWeight: 700,
-                color: "#e6edf3",
+                color: "#0f172a",
                 marginBottom: 8,
               }}
             >
               Enter a Scene Prompt
             </div>
-            <div style={{ fontSize: 14, color: "#8b949e", marginBottom: 24 }}>
+            <div style={{ fontSize: 14, color: "#64748b", marginBottom: 24 }}>
               Both agents will try to build this scene. Vote for the better result.
             </div>
             <textarea
@@ -4618,10 +4520,10 @@ function ArenaPage() {
                 height: 100,
                 padding: 14,
                 fontSize: 14,
-                background: "#161b22",
-                border: "1px solid #30363d",
+                background: "#ffffff",
+                border: "1px solid #e2e8f0",
                 borderRadius: 8,
-                color: "#e6edf3",
+                color: "#0f172a",
                 resize: "vertical",
                 outline: "none",
                 boxSizing: "border-box",
@@ -4642,10 +4544,10 @@ function ArenaPage() {
                 style={{
                   padding: "10px 28px",
                   fontSize: 14,
-                  background: prompt.trim() ? "#238636" : "#21262d",
-                  border: `1px solid ${prompt.trim() ? "#2ea043" : "#30363d"}`,
+                  background: prompt.trim() ? "#15803d" : "#e6e9ef",
+                  border: `1px solid ${prompt.trim() ? "#15803d" : "#e2e8f0"}`,
                   borderRadius: 8,
-                  color: prompt.trim() ? "#fff" : "#484f58",
+                  color: prompt.trim() ? "#fff" : "#94a3b8",
                   cursor: prompt.trim() ? "pointer" : "default",
                   fontWeight: 600,
                 }}
@@ -4653,7 +4555,7 @@ function ArenaPage() {
                 Start Battle
               </button>
             </div>
-            <div style={{ fontSize: 11, color: "#484f58", marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: "#475569", marginTop: 12 }}>
               {agents.filter((a) => a.enabled).length} agent
               {agents.filter((a) => a.enabled).length !== 1 ? "s" : ""} enabled
             </div>
@@ -4664,26 +4566,26 @@ function ArenaPage() {
         {phase === "generating" && (
           <div style={{ textAlign: "center", padding: 80 }}>
             <div style={{ fontSize: 40, marginBottom: 16 }}>{ICONS.swords(40)}</div>
-            <div style={{ fontSize: 16, color: "#e6edf3", fontWeight: 600 }}>
+            <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 600 }}>
               Generating scenes...
             </div>
-            <div style={{ fontSize: 13, color: "#8b949e", marginTop: 8 }}>
+            <div style={{ fontSize: 13, color: "#64748b", marginTop: 8 }}>
               "{prompt}"
             </div>
             {progress && (
               <div style={{ marginTop: 20 }}>
                 {progress.phase === "starting" && (
-                  <div style={{ fontSize: 12, color: "#58a6ff" }}>
+                  <div style={{ fontSize: 12, color: "#2563eb" }}>
                     Matched: {progress.agentA} vs {progress.agentB}
                   </div>
                 )}
                 {progress.phase === "generating_a" && (
-                  <div style={{ fontSize: 12, color: "#3fb950" }}>
+                  <div style={{ fontSize: 12, color: "#16a34a" }}>
                     Agent A ({progress.agent}) is generating...
                   </div>
                 )}
                 {progress.phase === "generating_b" && (
-                  <div style={{ fontSize: 12, color: "#3fb950" }}>
+                  <div style={{ fontSize: 12, color: "#16a34a" }}>
                     Agent A done. Agent B ({progress.agent}) is generating...
                   </div>
                 )}
@@ -4694,7 +4596,7 @@ function ArenaPage() {
                 marginTop: 24,
                 width: 200,
                 height: 4,
-                background: "#21262d",
+                background: "#e6e9ef",
                 borderRadius: 2,
                 overflow: "hidden",
                 margin: "24px auto 0",
@@ -4704,7 +4606,7 @@ function ArenaPage() {
                 style={{
                   width: progress?.phase === "generating_b" ? "80%" : "40%",
                   height: "100%",
-                  background: "#1f6feb",
+                  background: "#3b82f6",
                   borderRadius: 2,
                   transition: "width 0.5s",
                 }}
@@ -4717,9 +4619,9 @@ function ArenaPage() {
                 padding: "6px 16px",
                 fontSize: 12,
                 background: "transparent",
-                border: "1px solid #30363d",
+                border: "1px solid #e2e8f0",
                 borderRadius: 6,
-                color: "#8b949e",
+                color: "#64748b",
                 cursor: "pointer",
               }}
             >
@@ -4732,8 +4634,8 @@ function ArenaPage() {
         {(phase === "voting" || phase === "result") && battle && (
           <div>
             <div style={{ textAlign: "center", marginBottom: 20 }}>
-              <div style={{ fontSize: 13, color: "#8b949e" }}>Prompt</div>
-              <div style={{ fontSize: 16, color: "#e6edf3", fontWeight: 500 }}>
+              <div style={{ fontSize: 13, color: "#64748b" }}>Prompt</div>
+              <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 500 }}>
                 "{battle.prompt}"
               </div>
             </div>
@@ -4788,7 +4690,7 @@ function ArenaPage() {
                 <div
                   style={{
                     fontSize: 14,
-                    color: "#3fb950",
+                    color: "#16a34a",
                     fontWeight: 600,
                     marginBottom: 12,
                   }}
@@ -4800,7 +4702,7 @@ function ArenaPage() {
                       : `You voted: Agent ${voted?.toUpperCase()} wins!`}
                 </div>
                 {battle.side_a && battle.side_b && (
-                  <div style={{ fontSize: 12, color: "#8b949e" }}>
+                  <div style={{ fontSize: 12, color: "#64748b" }}>
                     Agent A: {battle.side_a.agentName} | Agent B: {battle.side_b.agentName}
                   </div>
                 )}
@@ -4817,7 +4719,7 @@ function ArenaPage() {
                     style={{
                       padding: "8px 20px",
                       fontSize: 13,
-                      background: "#1f6feb",
+                      background: "#3b82f6",
                       border: "1px solid #388bfd",
                       borderRadius: 6,
                       color: "#fff",
@@ -4832,10 +4734,10 @@ function ArenaPage() {
                     style={{
                       padding: "8px 20px",
                       fontSize: 13,
-                      background: shared ? "#21262d" : "#238636",
-                      border: `1px solid ${shared ? "#30363d" : "#2ea043"}`,
+                      background: shared ? "#e6e9ef" : "#15803d",
+                      border: `1px solid ${shared ? "#e2e8f0" : "#15803d"}`,
                       borderRadius: 6,
-                      color: shared ? "#8b949e" : "#fff",
+                      color: shared ? "#64748b" : "#fff",
                       cursor: shared ? "default" : "pointer",
                     }}
                   >
@@ -4870,13 +4772,13 @@ function LeaderboardPage() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#0d1117",
+        background: "#f4f6fa",
       }}
     >
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -4884,13 +4786,13 @@ function LeaderboardPage() {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.trophy(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Leaderboard</div>
-          <div style={{ fontSize: 12, color: "#8b949e" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Leaderboard</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
             Agent rankings based on Elo ratings from arena battles
           </div>
         </div>
         {entries.length > 0 && (
-          <div style={{ marginLeft: "auto", fontSize: 12, color: "#484f58" }}>
+          <div style={{ marginLeft: "auto", fontSize: 12, color: "#475569" }}>
             {entries.reduce((sum, e) => sum + e.numBattles, 0)} total battles
           </div>
         )}
@@ -4898,21 +4800,21 @@ function LeaderboardPage() {
 
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: 60, color: "#8b949e" }}>Loading...</div>
+          <div style={{ textAlign: "center", padding: 60, color: "#64748b" }}>Loading...</div>
         ) : entries.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.trophy(40)}</div>
             <div
               style={{
                 fontSize: 16,
-                color: "#e6edf3",
+                color: "#0f172a",
                 fontWeight: 600,
                 marginBottom: 8,
               }}
             >
               No battles yet
             </div>
-            <div style={{ fontSize: 13, color: "#8b949e" }}>
+            <div style={{ fontSize: 13, color: "#64748b" }}>
               Run arena battles to see agents compete and build the leaderboard.
             </div>
           </div>
@@ -4925,9 +4827,9 @@ function LeaderboardPage() {
                 gridTemplateColumns: "40px 1fr 100px 80px 80px 80px 80px",
                 padding: "8px 16px",
                 fontSize: 11,
-                color: "#484f58",
+                color: "#475569",
                 fontWeight: 600,
-                borderBottom: "1px solid #21262d",
+                borderBottom: "1px solid #e6e9ef",
                 textTransform: "uppercase",
               }}
             >
@@ -4951,8 +4853,8 @@ function LeaderboardPage() {
                     gridTemplateColumns: "40px 1fr 100px 80px 80px 80px 80px",
                     padding: "12px 16px",
                     alignItems: "center",
-                    borderBottom: "1px solid #21262d",
-                    background: i === 0 ? "#1f3a5f11" : "transparent",
+                    borderBottom: "1px solid #e6e9ef",
+                    background: i === 0 ? "#2563eb0a" : "transparent",
                   }}
                 >
                   <span
@@ -4966,13 +4868,13 @@ function LeaderboardPage() {
                             ? "#c0c0c0"
                             : i === 2
                               ? "#cd7f32"
-                              : "#484f58",
+                              : "#94a3b8",
                     }}
                   >
                     {i === 0 ? ICONS.gold(18) : i === 1 ? ICONS.silver(18) : i === 2 ? ICONS.bronze(18) : i + 1}
                   </span>
                   <div>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "#e6edf3" }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
                       {entry.agentName}
                     </span>
                     {i === 0 && (
@@ -4998,10 +4900,10 @@ function LeaderboardPage() {
                         fontWeight: 700,
                         color:
                           entry.rating >= 1200
-                            ? "#3fb950"
+                            ? "#16a34a"
                             : entry.rating >= 1000
-                              ? "#e6edf3"
-                              : "#f85149",
+                              ? "#0f172a"
+                              : "#dc2626",
                       }}
                     >
                       {Math.round(entry.rating)}
@@ -5010,20 +4912,20 @@ function LeaderboardPage() {
                       style={{
                         fontSize: 10,
                         marginLeft: 4,
-                        color: delta >= 0 ? "#3fb950" : "#f85149",
+                        color: delta >= 0 ? "#16a34a" : "#dc2626",
                       }}
                     >
                       {delta >= 0 ? "+" : ""}
                       {delta}
                     </span>
                   </div>
-                  <span style={{ textAlign: "right", fontSize: 13, color: "#8b949e" }}>
+                  <span style={{ textAlign: "right", fontSize: 13, color: "#64748b" }}>
                     {entry.numBattles}
                   </span>
-                  <span style={{ textAlign: "right", fontSize: 13, color: "#3fb950" }}>
+                  <span style={{ textAlign: "right", fontSize: 13, color: "#16a34a" }}>
                     {entry.wins}
                   </span>
-                  <span style={{ textAlign: "right", fontSize: 13, color: "#f85149" }}>
+                  <span style={{ textAlign: "right", fontSize: 13, color: "#dc2626" }}>
                     {entry.losses}
                   </span>
                   <span
@@ -5033,10 +4935,10 @@ function LeaderboardPage() {
                       fontWeight: 600,
                       color:
                         entry.winRate >= 0.6
-                          ? "#3fb950"
+                          ? "#16a34a"
                           : entry.winRate >= 0.4
-                            ? "#e6edf3"
-                            : "#f85149",
+                            ? "#0f172a"
+                            : "#dc2626",
                     }}
                   >
                     {(entry.winRate * 100).toFixed(1)}%
@@ -5051,14 +4953,14 @@ function LeaderboardPage() {
                 marginTop: 24,
                 padding: 16,
                 borderRadius: 8,
-                background: "#161b22",
-                border: "1px solid #21262d",
+                background: "#ffffff",
+                border: "1px solid #e6e9ef",
                 fontSize: 11,
-                color: "#8b949e",
+                color: "#64748b",
                 lineHeight: 1.6,
               }}
             >
-              <div style={{ fontWeight: 600, marginBottom: 4, color: "#e6edf3" }}>
+              <div style={{ fontWeight: 600, marginBottom: 4, color: "#0f172a" }}>
                 How ratings work
               </div>
               Agents start at 1200 Elo. Each battle updates ratings using the Bradley-Terry model
@@ -5081,21 +4983,21 @@ function GalleryCard({ scene, onClick }) {
       style={{
         borderRadius: 10,
         overflow: "hidden",
-        border: "1px solid #21262d",
-        background: "#161b22",
+        border: "1px solid #e6e9ef",
+        background: "#ffffff",
         cursor: "pointer",
         transition: "border-color 0.15s, transform 0.15s",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#58a6ff";
+        e.currentTarget.style.borderColor = "#2563eb";
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#21262d";
+        e.currentTarget.style.borderColor = "#e6e9ef";
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
-      <div style={{ height: 180, background: "#0d1117", overflow: "hidden" }}>
+      <div style={{ height: 180, background: "#f4f6fa", overflow: "hidden" }}>
         {scene.screenshots.length > 0 ? (
           <img
             src={scene.screenshots[0]}
@@ -5109,7 +5011,7 @@ function GalleryCard({ scene, onClick }) {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#484f58",
+              color: "#475569",
               fontSize: 13,
             }}
           >
@@ -5122,7 +5024,7 @@ function GalleryCard({ scene, onClick }) {
           style={{
             fontSize: 13,
             fontWeight: 500,
-            color: "#e6edf3",
+            color: "#0f172a",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -5144,9 +5046,9 @@ function GalleryCard({ scene, onClick }) {
               fontSize: 10,
               padding: "2px 6px",
               borderRadius: 4,
-              background: "#1f6feb22",
-              color: "#58a6ff",
-              border: "1px solid #1f6feb44",
+              background: "#3b82f622",
+              color: "#2563eb",
+              border: "1px solid #3b82f644",
             }}
           >
             {scene.agentName}
@@ -5158,14 +5060,14 @@ function GalleryCard({ scene, onClick }) {
                 fontSize: 9,
                 padding: "1px 5px",
                 borderRadius: 4,
-                background: "#21262d",
-                color: "#8b949e",
+                background: "#e6e9ef",
+                color: "#64748b",
               }}
             >
               {tag}
             </span>
           ))}
-          <span style={{ marginLeft: "auto", fontSize: 10, color: "#484f58" }}>
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "#475569" }}>
             {new Date(scene.created_at).toLocaleDateString()}
           </span>
         </div>
@@ -5198,8 +5100,8 @@ function GalleryDetailModal({ scene, onClose }) {
           width: "90%",
           maxWidth: 900,
           maxHeight: "85vh",
-          background: "#0d1117",
-          border: "1px solid #30363d",
+          background: "#f4f6fa",
+          border: "1px solid #e2e8f0",
           borderRadius: 12,
           overflow: "hidden",
           display: "flex",
@@ -5210,14 +5112,14 @@ function GalleryDetailModal({ scene, onClose }) {
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #e6e9ef",
             display: "flex",
             alignItems: "center",
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "#e6edf3" }}>{scene.prompt}</div>
-            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 4 }}>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>{scene.prompt}</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
               Generated by {scene.agentName} on {new Date(scene.created_at).toLocaleString()}
             </div>
           </div>
@@ -5227,10 +5129,10 @@ function GalleryDetailModal({ scene, onClose }) {
               style={{
                 padding: "4px 10px",
                 fontSize: 12,
-                background: "#21262d",
-                border: "1px solid #30363d",
+                background: "#e6e9ef",
+                border: "1px solid #e2e8f0",
                 borderRadius: 6,
-                color: "#c9d1d9",
+                color: "#1e293b",
                 cursor: "pointer",
               }}
             >
@@ -5244,7 +5146,7 @@ function GalleryDetailModal({ scene, onClose }) {
                 fontSize: 16,
                 background: "transparent",
                 border: "none",
-                color: "#8b949e",
+                color: "#64748b",
                 cursor: "pointer",
               }}
             >
@@ -5268,7 +5170,7 @@ function GalleryDetailModal({ scene, onClose }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "#484f58",
+                color: "#475569",
               }}
             >
               No screenshots
@@ -5294,7 +5196,7 @@ function GalleryDetailModal({ scene, onClose }) {
                     height: 8,
                     borderRadius: "50%",
                     border: "none",
-                    background: i === currentImg ? "#58a6ff" : "#484f58",
+                    background: i === currentImg ? "#2563eb" : "#94a3b8",
                     cursor: "pointer",
                   }}
                 />
@@ -5313,9 +5215,9 @@ function GalleryDetailModal({ scene, onClose }) {
                   fontSize: 10,
                   padding: "2px 7px",
                   borderRadius: 4,
-                  background: "#1f6feb22",
-                  color: "#58a6ff",
-                  border: "1px solid #1f6feb44",
+                  background: "#3b82f622",
+                  color: "#2563eb",
+                  border: "1px solid #3b82f644",
                 }}
               >
                 {s}
@@ -5328,8 +5230,8 @@ function GalleryDetailModal({ scene, onClose }) {
                   fontSize: 10,
                   padding: "2px 7px",
                   borderRadius: 4,
-                  background: "#21262d",
-                  color: "#8b949e",
+                  background: "#e6e9ef",
+                  color: "#64748b",
                 }}
               >
                 {tag}
@@ -5341,7 +5243,7 @@ function GalleryDetailModal({ scene, onClose }) {
               <div
                 style={{
                   fontSize: 12,
-                  color: "#8b949e",
+                  color: "#64748b",
                   fontWeight: 600,
                   marginBottom: 6,
                 }}
@@ -5351,9 +5253,9 @@ function GalleryDetailModal({ scene, onClose }) {
               <pre
                 style={{
                   fontSize: 11,
-                  color: "#c9d1d9",
-                  background: "#161b22",
-                  border: "1px solid #21262d",
+                  color: "#1e293b",
+                  background: "#ffffff",
+                  border: "1px solid #e6e9ef",
                   borderRadius: 6,
                   padding: 12,
                   overflow: "auto",
@@ -5402,14 +5304,14 @@ function GalleryPage() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#0d1117",
+        background: "#f4f6fa",
       }}
     >
       {/* Header */}
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -5417,8 +5319,8 @@ function GalleryPage() {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.frame(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Gallery</div>
-          <div style={{ fontSize: 12, color: "#8b949e" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Gallery</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
             Browse AI-generated scenes shared by the community
           </div>
         </div>
@@ -5437,16 +5339,16 @@ function GalleryPage() {
               padding: "3px 8px",
               fontSize: 11,
               borderRadius: 4,
-              border: "1px solid #30363d",
-              background: "#161b22",
-              color: "#8b949e",
+              border: "1px solid #e2e8f0",
+              background: "#ffffff",
+              color: "#64748b",
               cursor: "pointer",
             }}
           >
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
           </select>
-          <span style={{ fontSize: 12, color: "#484f58" }}>
+          <span style={{ fontSize: 12, color: "#475569" }}>
             {filtered.length} scene{filtered.length !== 1 ? "s" : ""}
           </span>
         </div>
@@ -5457,23 +5359,23 @@ function GalleryPage() {
         <div
           style={{
             padding: "8px 24px",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #e6e9ef",
             display: "flex",
             gap: 6,
             flexWrap: "wrap",
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 10, color: "#484f58", marginRight: 4 }}>Tags:</span>
+          <span style={{ fontSize: 10, color: "#475569", marginRight: 4 }}>Tags:</span>
           <button
             onClick={() => setActiveTag(null)}
             style={{
               fontSize: 10,
               padding: "2px 8px",
               borderRadius: 10,
-              border: `1px solid ${activeTag ? "#30363d" : "#58a6ff"}`,
-              background: activeTag ? "transparent" : "#1f6feb22",
-              color: activeTag ? "#8b949e" : "#58a6ff",
+              border: `1px solid ${activeTag ? "#e2e8f0" : "#2563eb"}`,
+              background: activeTag ? "transparent" : "#3b82f622",
+              color: activeTag ? "#64748b" : "#2563eb",
               cursor: "pointer",
             }}
           >
@@ -5487,9 +5389,9 @@ function GalleryPage() {
                 fontSize: 10,
                 padding: "2px 8px",
                 borderRadius: 10,
-                border: `1px solid ${activeTag === tag ? "#58a6ff" : "#30363d"}`,
-                background: activeTag === tag ? "#1f6feb22" : "transparent",
-                color: activeTag === tag ? "#58a6ff" : "#8b949e",
+                border: `1px solid ${activeTag === tag ? "#2563eb" : "#e2e8f0"}`,
+                background: activeTag === tag ? "#3b82f622" : "transparent",
+                color: activeTag === tag ? "#2563eb" : "#64748b",
                 cursor: "pointer",
               }}
             >
@@ -5502,21 +5404,21 @@ function GalleryPage() {
       {/* Content */}
       <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: 60, color: "#8b949e" }}>Loading...</div>
+          <div style={{ textAlign: "center", padding: 60, color: "#64748b" }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.frame(40)}</div>
             <div
               style={{
                 fontSize: 16,
-                color: "#e6edf3",
+                color: "#0f172a",
                 fontWeight: 600,
                 marginBottom: 8,
               }}
             >
               No scenes yet
             </div>
-            <div style={{ fontSize: 13, color: "#8b949e" }}>
+            <div style={{ fontSize: 13, color: "#64748b" }}>
               Generate scenes in the chat and share them to the gallery, or run arena battles.
             </div>
           </div>
@@ -5554,8 +5456,8 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
       style={{
         padding: "14px 16px",
         borderRadius: 10,
-        border: "1px solid #21262d",
-        background: "#161b22",
+        border: "1px solid #e6e9ef",
+        background: "#ffffff",
         cursor: "pointer",
         transition: "border-color 0.15s, transform 0.15s",
         display: "flex",
@@ -5563,16 +5465,16 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
         gap: 8,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#58a6ff";
+        e.currentTarget.style.borderColor = "#2563eb";
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#21262d";
+        e.currentTarget.style.borderColor = "#e6e9ef";
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "#e6edf3", flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a", flex: 1 }}>
           {skill.name}
         </div>
         {isNew && (
@@ -5584,9 +5486,9 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
               fontSize: 9,
               padding: "2px 7px",
               borderRadius: 10,
-              background: "#f8514922",
-              color: "#f85149",
-              border: "1px solid #f8514944",
+              background: "#dc262622",
+              color: "#dc2626",
+              border: "1px solid #dc262644",
               flexShrink: 0,
               fontWeight: 700,
               letterSpacing: 0.2,
@@ -5597,8 +5499,8 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
                 width: 6,
                 height: 6,
                 borderRadius: "50%",
-                background: "#f85149",
-                boxShadow: "0 0 6px #f85149",
+                background: "#dc2626",
+                boxShadow: "0 0 6px #dc2626",
               }}
             />
             NEW
@@ -5609,16 +5511,16 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
             fontSize: 9,
             padding: "2px 7px",
             borderRadius: 10,
-            background: skill.source === "custom" ? "#1f6feb22" : "#21262d",
-            color: skill.source === "custom" ? "#58a6ff" : "#484f58",
-            border: `1px solid ${skill.source === "custom" ? "#1f6feb44" : "#30363d"}`,
+            background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
+            color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
+            border: `1px solid ${skill.source === "custom" ? "#3b82f644" : "#e2e8f0"}`,
             flexShrink: 0,
           }}
         >
           {skill.source}
         </span>
       </div>
-      <div style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.5 }}>{desc}</div>
+      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>{desc}</div>
       {skill.tags.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
           {skill.tags.map((tag) => (
@@ -5628,9 +5530,9 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
                 fontSize: 9,
                 padding: "2px 6px",
                 borderRadius: 4,
-                background: (TAG_COLORS[tag] || "#30363d") + "33",
-                color: TAG_COLORS[tag] || "#8b949e",
-                border: `1px solid ${TAG_COLORS[tag] || "#30363d"}44`,
+                background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                color: TAG_COLORS[tag] || "#64748b",
+                border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
               }}
             >
               {tag}
@@ -5645,9 +5547,9 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
           gap: 8,
           marginTop: "auto",
           paddingTop: 4,
-          borderTop: "1px solid #21262d",
+          borderTop: "1px solid #e6e9ef",
           fontSize: 10,
-          color: "#484f58",
+          color: "#475569",
         }}
       >
         <span>v{skill.version}</span>
@@ -5677,8 +5579,8 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           width: "90%",
           maxWidth: 750,
           maxHeight: "85vh",
-          background: "#0d1117",
-          border: "1px solid #30363d",
+          background: "#f4f6fa",
+          border: "1px solid #e2e8f0",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -5688,23 +5590,23 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #e6e9ef",
             display: "flex",
             alignItems: "center",
             gap: 10,
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: "#e6edf3" }}>{skill.name}</div>
-            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 4 }}>
+            <div style={{ fontSize: 18, fontWeight: 600, color: "#0f172a" }}>{skill.name}</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
               v{skill.version} by {skill.author}
               <span
                 style={{
                   marginLeft: 8,
                   padding: "2px 7px",
                   borderRadius: 10,
-                  background: skill.source === "custom" ? "#1f6feb22" : "#21262d",
-                  color: skill.source === "custom" ? "#58a6ff" : "#484f58",
+                  background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
+                  color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
                   fontSize: 9,
                 }}
               >
@@ -5718,10 +5620,10 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
               style={{
                 padding: "5px 12px",
                 fontSize: 11,
-                background: "#da363322",
-                border: "1px solid #da363366",
+                background: "#b91c1c22",
+                border: "1px solid #b91c1c66",
                 borderRadius: 6,
-                color: "#f85149",
+                color: "#dc2626",
                 cursor: "pointer",
               }}
             >
@@ -5735,7 +5637,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
               fontSize: 16,
               background: "transparent",
               border: "none",
-              color: "#8b949e",
+              color: "#64748b",
               cursor: "pointer",
             }}
           >
@@ -5743,8 +5645,8 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           </button>
         </div>
 
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid #21262d" }}>
-          <div style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.5 }}>
+        <div style={{ padding: "12px 20px", borderBottom: "1px solid #e6e9ef" }}>
+          <div style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>
             {skill.description}
           </div>
           {skill.tags.length > 0 && (
@@ -5756,9 +5658,9 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
                     fontSize: 10,
                     padding: "2px 7px",
                     borderRadius: 4,
-                    background: (TAG_COLORS[tag] || "#30363d") + "33",
-                    color: TAG_COLORS[tag] || "#8b949e",
-                    border: `1px solid ${TAG_COLORS[tag] || "#30363d"}44`,
+                    background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                    color: TAG_COLORS[tag] || "#64748b",
+                    border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
                   }}
                 >
                   {tag}
@@ -5767,11 +5669,11 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
             </div>
           )}
           {skill.dependencies.length > 0 && (
-            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 10 }}>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 10 }}>
               <span style={{ fontWeight: 600 }}>Dependencies:</span>{" "}
               {skill.dependencies.map((dep, i) => (
                 <span key={dep}>
-                  <span style={{ color: "#58a6ff" }}>{dep}</span>
+                  <span style={{ color: "#2563eb" }}>{dep}</span>
                   {i < skill.dependencies.length - 1 ? ", " : ""}
                 </span>
               ))}
@@ -5783,7 +5685,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           <div
             style={{
               fontSize: 10,
-              color: "#484f58",
+              color: "#475569",
               fontWeight: 600,
               marginBottom: 8,
               textTransform: "uppercase",
@@ -5795,15 +5697,15 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           <pre
             style={{
               fontSize: 12,
-              color: "#c9d1d9",
+              color: "#1e293b",
               lineHeight: 1.6,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
               fontFamily:
                 "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace",
               margin: 0,
-              background: "#161b22",
-              border: "1px solid #21262d",
+              background: "#ffffff",
+              border: "1px solid #e6e9ef",
               borderRadius: 8,
               padding: 16,
             }}
@@ -5865,10 +5767,10 @@ Provide detailed instructions for the AI agent.
     width: "100%",
     padding: "7px 12px",
     fontSize: 13,
-    background: "#161b22",
-    border: "1px solid #30363d",
+    background: "#ffffff",
+    border: "1px solid #e2e8f0",
     borderRadius: 6,
-    color: "#e6edf3",
+    color: "#0f172a",
     outline: "none",
     boxSizing: "border-box",
   };
@@ -5892,8 +5794,8 @@ Provide detailed instructions for the AI agent.
           width: "90%",
           maxWidth: 650,
           maxHeight: "85vh",
-          background: "#0d1117",
-          border: "1px solid #30363d",
+          background: "#f4f6fa",
+          border: "1px solid #e2e8f0",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -5903,12 +5805,12 @@ Provide detailed instructions for the AI agent.
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #e6e9ef",
             display: "flex",
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 16, fontWeight: 600, color: "#e6edf3" }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>
             Create Custom Skill
           </span>
           <button
@@ -5919,7 +5821,7 @@ Provide detailed instructions for the AI agent.
               fontSize: 16,
               background: "transparent",
               border: "none",
-              color: "#8b949e",
+              color: "#64748b",
               cursor: "pointer",
             }}
           >
@@ -5938,25 +5840,25 @@ Provide detailed instructions for the AI agent.
           }}
         >
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>
               Skill ID (lowercase, no spaces)
             </label>
             <input value={id} onChange={(e) => setId(e.target.value)} placeholder="my_custom_skill" style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>Name</label>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>Name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Custom Skill" style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>Description (short summary)</label>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>Description (short summary)</label>
             <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this skill teaches the agent to do" style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>Tags (comma-separated)</label>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>Tags (comma-separated)</label>
             <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="buildings, layout, custom" style={inputStyle} />
           </div>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 11, color: "#8b949e", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 11, color: "#64748b", display: "block", marginBottom: 4 }}>
               Content (Markdown -- instructions for the AI agent)
             </label>
             <textarea
@@ -5971,13 +5873,13 @@ Provide detailed instructions for the AI agent.
               }}
             />
           </div>
-          {error && <div style={{ fontSize: 11, color: "#f85149", padding: "2px 0" }}>{error}</div>}
+          {error && <div style={{ fontSize: 11, color: "#dc2626", padding: "2px 0" }}>{error}</div>}
         </div>
 
         <div
           style={{
             padding: "12px 20px",
-            borderTop: "1px solid #21262d",
+            borderTop: "1px solid #e6e9ef",
             display: "flex",
             gap: 8,
             justifyContent: "flex-end",
@@ -5988,10 +5890,10 @@ Provide detailed instructions for the AI agent.
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#21262d",
-              border: "1px solid #30363d",
+              background: "#e6e9ef",
+              border: "1px solid #e2e8f0",
               borderRadius: 6,
-              color: "#c9d1d9",
+              color: "#1e293b",
               cursor: "pointer",
             }}
           >
@@ -6003,8 +5905,8 @@ Provide detailed instructions for the AI agent.
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#238636",
-              border: "1px solid #2ea043",
+              background: "#15803d",
+              border: "1px solid #15803d",
               borderRadius: 6,
               color: "#fff",
               cursor: saving ? "wait" : "pointer",
@@ -6038,16 +5940,16 @@ function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 400,
-          background: "#0d1117",
-          border: "1px solid #30363d",
+          background: "#f4f6fa",
+          border: "1px solid #e2e8f0",
           borderRadius: 12,
           padding: 24,
         }}
       >
-        <div style={{ fontSize: 14, color: "#e6edf3", fontWeight: 600, marginBottom: 8 }}>
+        <div style={{ fontSize: 14, color: "#0f172a", fontWeight: 600, marginBottom: 8 }}>
           Confirm Delete
         </div>
-        <div style={{ fontSize: 13, color: "#8b949e", lineHeight: 1.5, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5, marginBottom: 20 }}>
           {message}
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -6056,10 +5958,10 @@ function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#21262d",
-              border: "1px solid #30363d",
+              background: "#e6e9ef",
+              border: "1px solid #e2e8f0",
               borderRadius: 6,
-              color: "#c9d1d9",
+              color: "#1e293b",
               cursor: "pointer",
             }}
           >
@@ -6070,8 +5972,8 @@ function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#da3633",
-              border: "1px solid #da363366",
+              background: "#b91c1c",
+              border: "1px solid #b91c1c66",
               borderRadius: 6,
               color: "#fff",
               cursor: "pointer",
@@ -6150,13 +6052,13 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#0d1117",
+        background: "#f4f6fa",
       }}
     >
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -6164,8 +6066,8 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.tools(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Skills</div>
-          <div style={{ fontSize: 12, color: "#8b949e" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Skills</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
             Browse, create, and manage skills that teach the AI agent new capabilities
           </div>
         </div>
@@ -6175,8 +6077,8 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
             marginLeft: "auto",
             padding: "6px 14px",
             fontSize: 12,
-            background: "#238636",
-            border: "1px solid #2ea043",
+            background: "#15803d",
+            border: "1px solid #15803d",
             borderRadius: 6,
             color: "#fff",
             cursor: "pointer",
@@ -6193,7 +6095,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
       <div
         style={{
           padding: "10px 24px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           gap: 10,
           alignItems: "center",
@@ -6208,10 +6110,10 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
             flex: 1,
             padding: "7px 12px",
             fontSize: 13,
-            background: "#161b22",
-            border: "1px solid #30363d",
+            background: "#ffffff",
+            border: "1px solid #e2e8f0",
             borderRadius: 6,
-            color: "#e6edf3",
+            color: "#0f172a",
             outline: "none",
           }}
         />
@@ -6224,9 +6126,9 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
                 padding: "5px 12px",
                 fontSize: 11,
                 borderRadius: 6,
-                border: `1px solid ${filter === f ? "#58a6ff" : "#30363d"}`,
-                background: filter === f ? "#1f6feb22" : "transparent",
-                color: filter === f ? "#58a6ff" : "#8b949e",
+                border: `1px solid ${filter === f ? "#2563eb" : "#e2e8f0"}`,
+                background: filter === f ? "#3b82f622" : "transparent",
+                color: filter === f ? "#2563eb" : "#64748b",
                 cursor: "pointer",
                 textTransform: "capitalize",
               }}
@@ -6235,21 +6137,21 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 12, color: "#484f58", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 12, color: "#475569", whiteSpace: "nowrap" }}>
           {filtered.length} skill{filtered.length !== 1 ? "s" : ""}
         </span>
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: 60, color: "#8b949e" }}>Loading...</div>
+          <div style={{ textAlign: "center", padding: 60, color: "#64748b" }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.tools(40)}</div>
-            <div style={{ fontSize: 16, color: "#e6edf3", fontWeight: 600, marginBottom: 8 }}>
+            <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 600, marginBottom: 8 }}>
               No skills found
             </div>
-            <div style={{ fontSize: 13, color: "#8b949e" }}>
+            <div style={{ fontSize: 13, color: "#64748b" }}>
               {search ? "Try a different search term." : "Create a custom skill to get started."}
             </div>
           </div>
@@ -6313,8 +6215,8 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
       style={{
         padding: "14px 16px",
         borderRadius: 10,
-        border: "1px solid #21262d",
-        background: "#161b22",
+        border: "1px solid #e6e9ef",
+        background: "#ffffff",
         cursor: "pointer",
         transition: "border-color 0.15s, transform 0.15s",
         display: "flex",
@@ -6322,16 +6224,16 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
         gap: 8,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#58a6ff";
+        e.currentTarget.style.borderColor = "#2563eb";
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#21262d";
+        e.currentTarget.style.borderColor = "#e6e9ef";
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "#e6edf3", flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a", flex: 1 }}>
           {tool.name || tool.id}
         </div>
         {isNew && (
@@ -6343,9 +6245,9 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
               fontSize: 9,
               padding: "2px 7px",
               borderRadius: 10,
-              background: "#f8514922",
-              color: "#f85149",
-              border: "1px solid #f8514944",
+              background: "#dc262622",
+              color: "#dc2626",
+              border: "1px solid #dc262644",
               flexShrink: 0,
               fontWeight: 700,
               letterSpacing: 0.2,
@@ -6356,8 +6258,8 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
                 width: 6,
                 height: 6,
                 borderRadius: "50%",
-                background: "#f85149",
-                boxShadow: "0 0 6px #f85149",
+                background: "#dc2626",
+                boxShadow: "0 0 6px #dc2626",
               }}
             />
             NEW
@@ -6368,9 +6270,9 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             fontSize: 9,
             padding: "2px 7px",
             borderRadius: 10,
-            background: tool.enabled ? "#23863622" : "transparent",
-            color: tool.enabled ? "#3fb950" : "#8b949e",
-            border: "1px solid #30363d",
+            background: tool.enabled ? "#15803d22" : "transparent",
+            color: tool.enabled ? "#16a34a" : "#64748b",
+            border: "1px solid #e2e8f0",
             flexShrink: 0,
           }}
         >
@@ -6384,22 +6286,22 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
           gap: 4,
           marginTop: 4,
           paddingTop: 4,
-          borderTop: "1px solid #21262d",
+          borderTop: "1px solid #e6e9ef",
           fontSize: 10,
-          color: "#8b949e",
+          color: "#64748b",
         }}
       >
         <div>
-          Template: <span style={{ color: "#c9d1d9" }}>{tool.template || "–"}</span>
+          Template: <span style={{ color: "#1e293b" }}>{tool.template || "–"}</span>
         </div>
         <div>
-          Primitive: <span style={{ color: "#c9d1d9" }}>{tool.primitive || "–"}</span>
+          Primitive: <span style={{ color: "#1e293b" }}>{tool.primitive || "–"}</span>
         </div>
         <div>
-          Usage: <span style={{ color: "#c9d1d9" }}>{tool.metrics?.usageCount || 0}</span>
+          Usage: <span style={{ color: "#1e293b" }}>{tool.metrics?.usageCount || 0}</span>
         </div>
         <div>
-          Success: <span style={{ color: "#c9d1d9" }}>{successRate == null ? "–" : `${successRate}%`}</span>
+          Success: <span style={{ color: "#1e293b" }}>{successRate == null ? "–" : `${successRate}%`}</span>
         </div>
       </div>
 
@@ -6414,9 +6316,9 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             padding: "5px 10px",
             fontSize: 11,
             borderRadius: 6,
-            border: "1px solid #30363d",
-            background: tool.enabled ? "#21262d" : "#1f6feb22",
-            color: tool.enabled ? "#c9d1d9" : "#58a6ff",
+            border: "1px solid #e2e8f0",
+            background: tool.enabled ? "#e6e9ef" : "#3b82f622",
+            color: tool.enabled ? "#1e293b" : "#2563eb",
             cursor: busy ? "wait" : "pointer",
           }}
         >
@@ -6432,9 +6334,9 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             padding: "5px 10px",
             fontSize: 11,
             borderRadius: 6,
-            border: "1px solid #da363366",
-            background: "#da363322",
-            color: "#f85149",
+            border: "1px solid #b91c1c66",
+            background: "#b91c1c22",
+            color: "#dc2626",
             cursor: busy ? "wait" : "pointer",
           }}
         >
@@ -6451,21 +6353,21 @@ function StaticToolRefCard({ tool }) {
       style={{
         padding: "10px 12px",
         borderRadius: 8,
-        border: "1px solid #21262d",
-        background: "#161b22",
+        border: "1px solid #e6e9ef",
+        background: "#ffffff",
         display: "flex",
         alignItems: "center",
         gap: 8,
         cursor: "pointer",
       }}
     >
-      <span style={{ color: "#e6edf3", fontSize: 12, fontWeight: 600 }}>{tool.name}</span>
+      <span style={{ color: "#0f172a", fontSize: 12, fontWeight: 600 }}>{tool.name}</span>
       <span
         style={{
           marginLeft: "auto",
           fontSize: 10,
-          color: "#8b949e",
-          border: "1px solid #30363d",
+          color: "#64748b",
+          border: "1px solid #e2e8f0",
           borderRadius: 10,
           padding: "2px 7px",
         }}
@@ -6504,8 +6406,8 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           width: "90%",
           maxWidth: 750,
           maxHeight: "85vh",
-          background: "#0d1117",
-          border: "1px solid #30363d",
+          background: "#f4f6fa",
+          border: "1px solid #e2e8f0",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -6515,24 +6417,24 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #21262d",
+            borderBottom: "1px solid #e6e9ef",
             display: "flex",
             alignItems: "center",
             gap: 10,
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: "#e6edf3" }}>{tool.name || tool.id}</div>
-            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 4 }}>
-              <span style={{ color: "#79c0ff", fontFamily: "monospace" }}>{tool.mcpName}</span>
+            <div style={{ fontSize: 18, fontWeight: 600, color: "#0f172a" }}>{tool.name || tool.id}</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+              <span style={{ color: "#2563eb", fontFamily: "monospace" }}>{tool.mcpName}</span>
               <span
                 style={{
                   marginLeft: 8,
                   padding: "2px 7px",
                   borderRadius: 10,
-                  border: "1px solid #30363d",
-                  background: readOnly ? "#1f6feb22" : tool.enabled ? "#23863622" : "transparent",
-                  color: readOnly ? "#58a6ff" : tool.enabled ? "#3fb950" : "#8b949e",
+                  border: "1px solid #e2e8f0",
+                  background: readOnly ? "#3b82f622" : tool.enabled ? "#15803d22" : "transparent",
+                  color: readOnly ? "#2563eb" : tool.enabled ? "#16a34a" : "#64748b",
                   fontSize: 9,
                 }}
               >
@@ -6547,10 +6449,10 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               style={{
                 padding: "5px 12px",
                 fontSize: 11,
-                background: "#da363322",
-                border: "1px solid #da363366",
+                background: "#b91c1c22",
+                border: "1px solid #b91c1c66",
                 borderRadius: 6,
-                color: "#f85149",
+                color: "#dc2626",
                 cursor: busy ? "wait" : "pointer",
               }}
             >
@@ -6564,7 +6466,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               fontSize: 16,
               background: "transparent",
               border: "none",
-              color: "#8b949e",
+              color: "#64748b",
               cursor: "pointer",
             }}
           >
@@ -6572,14 +6474,14 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           </button>
         </div>
 
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid #21262d" }}>
-          <div style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.5 }}>
+        <div style={{ padding: "12px 20px", borderBottom: "1px solid #e6e9ef" }}>
+          <div style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>
             {tool.description || "No description"}
           </div>
           {!readOnly && (
-            <div style={{ marginTop: 10, fontSize: 12, color: "#8b949e" }}>
+            <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
               Related skills:{" "}
-              <span style={{ color: "#c9d1d9" }}>{relatedSkills && relatedSkills.length > 0 ? relatedSkills.length : 0}</span>
+              <span style={{ color: "#1e293b" }}>{relatedSkills && relatedSkills.length > 0 ? relatedSkills.length : 0}</span>
             </div>
           )}
           {!readOnly && relatedSkills && relatedSkills.length > 0 && (
@@ -6592,9 +6494,9 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                     fontSize: 10,
                     padding: "2px 7px",
                     borderRadius: 10,
-                    background: "#1f6feb22",
-                    color: "#58a6ff",
-                    border: "1px solid #1f6feb44",
+                    background: "#3b82f622",
+                    color: "#2563eb",
+                    border: "1px solid #3b82f644",
                     cursor: "pointer",
                   }}
                 >
@@ -6614,13 +6516,13 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 gridTemplateColumns: "repeat(2, minmax(140px, 1fr))",
                 gap: 8,
                 fontSize: 12,
-                color: "#8b949e",
+                color: "#64748b",
               }}
             >
-              <div>Template: <span style={{ color: "#c9d1d9" }}>{tool.template || "–"}</span></div>
-              <div>Primitive: <span style={{ color: "#c9d1d9" }}>{tool.primitive || "–"}</span></div>
-              <div>Usage: <span style={{ color: "#c9d1d9" }}>{tool.metrics?.usageCount || 0}</span></div>
-              <div>Success: <span style={{ color: "#c9d1d9" }}>{successRate == null ? "–" : `${successRate}%`}</span></div>
+              <div>Template: <span style={{ color: "#1e293b" }}>{tool.template || "–"}</span></div>
+              <div>Primitive: <span style={{ color: "#1e293b" }}>{tool.primitive || "–"}</span></div>
+              <div>Usage: <span style={{ color: "#1e293b" }}>{tool.metrics?.usageCount || 0}</span></div>
+              <div>Success: <span style={{ color: "#1e293b" }}>{successRate == null ? "–" : `${successRate}%`}</span></div>
             </div>
           )}
 
@@ -6628,7 +6530,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
             style={{
               marginTop: 16,
               fontSize: 10,
-              color: "#484f58",
+              color: "#475569",
               fontWeight: 600,
               textTransform: "uppercase",
               letterSpacing: 0.5,
@@ -6636,25 +6538,25 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           >
             How Claude Calls This Tool
           </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: "#8b949e", lineHeight: 1.5 }}>
-            Use <span style={{ color: "#79c0ff", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
+          <div style={{ marginTop: 8, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+            Use <span style={{ color: "#2563eb", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
           </div>
-          <div style={{ marginTop: 10, fontSize: 12, color: "#8b949e" }}>
+          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
             Required arguments:{" "}
-            <span style={{ color: "#c9d1d9" }}>
+            <span style={{ color: "#1e293b" }}>
               {requiredKeys.length > 0 ? requiredKeys.join(", ") : "none"}
             </span>
           </div>
-          <div style={{ marginTop: 10, fontSize: 11, color: "#8b949e" }}>Input schema</div>
+          <div style={{ marginTop: 10, fontSize: 11, color: "#64748b" }}>Input schema</div>
           <pre
             style={{
               margin: "6px 0 0",
-              background: "#161b22",
-              border: "1px solid #21262d",
+              background: "#ffffff",
+              border: "1px solid #e6e9ef",
               borderRadius: 8,
               padding: 12,
               fontSize: 11,
-              color: "#c9d1d9",
+              color: "#1e293b",
               lineHeight: 1.45,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
@@ -6669,7 +6571,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           <div
             style={{
               padding: "12px 20px",
-              borderTop: "1px solid #21262d",
+              borderTop: "1px solid #e6e9ef",
               display: "flex",
               gap: 8,
               justifyContent: "flex-end",
@@ -6682,9 +6584,9 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 padding: "6px 14px",
                 fontSize: 12,
                 borderRadius: 6,
-                border: "1px solid #30363d",
-                background: tool.enabled ? "#21262d" : "#1f6feb22",
-                color: tool.enabled ? "#c9d1d9" : "#58a6ff",
+                border: "1px solid #e2e8f0",
+                background: tool.enabled ? "#e6e9ef" : "#3b82f622",
+                color: tool.enabled ? "#1e293b" : "#2563eb",
                 cursor: busy ? "wait" : "pointer",
               }}
             >
@@ -6862,13 +6764,13 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#0d1117",
+        background: "#f4f6fa",
       }}
     >
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #21262d",
+          borderBottom: "1px solid #e6e9ef",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -6876,8 +6778,8 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.wrench(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#e6edf3" }}>Tools</div>
-          <div style={{ fontSize: 12, color: "#8b949e" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Tools</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
             Static MCP tools for reference + learned tools you can manage
           </div>
         </div>
@@ -6887,8 +6789,8 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
         <div
           style={{
             padding: "8px 24px",
-            borderBottom: "1px solid #21262d",
-            color: "#f85149",
+            borderBottom: "1px solid #e6e9ef",
+            color: "#dc2626",
             fontSize: 12,
           }}
         >
@@ -6899,28 +6801,28 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
       <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
         <div
           style={{
-            border: "1px solid #21262d",
+            border: "1px solid #e6e9ef",
             borderRadius: 10,
             marginBottom: 16,
             overflow: "hidden",
-            background: "#0d1117",
+            background: "#f4f6fa",
           }}
         >
           <div
             style={{
               padding: "10px 12px",
-              borderBottom: "1px solid #21262d",
+              borderBottom: "1px solid #e6e9ef",
               display: "flex",
               alignItems: "center",
               gap: 8,
-              background: "#161b22",
+              background: "#ffffff",
             }}
           >
             <span style={{ fontSize: 14, display: "inline-flex", alignItems: "center" }}>{ICONS.book(14)}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
               Static MCP Tools (Reference)
             </span>
-            <span style={{ marginLeft: "auto", fontSize: 11, color: "#8b949e" }}>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#64748b" }}>
               {STATIC_MCP_TOOL_DEFS.length} tools
             </span>
           </div>
@@ -6942,34 +6844,34 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
 
         <div
           style={{
-            border: "1px solid #21262d",
+            border: "1px solid #e6e9ef",
             borderRadius: 10,
             overflow: "hidden",
-            background: "#0d1117",
+            background: "#f4f6fa",
           }}
         >
           <div
             style={{
               padding: "10px 12px",
-              borderBottom: "1px solid #21262d",
+              borderBottom: "1px solid #e6e9ef",
               display: "flex",
               alignItems: "center",
               gap: 8,
-              background: "#161b22",
+              background: "#ffffff",
             }}
           >
             <span style={{ fontSize: 14, display: "inline-flex", alignItems: "center" }}>{ICONS.brain(14)}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#e6edf3" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
               Dynamic Learned Tools
             </span>
-            <span style={{ marginLeft: "auto", fontSize: 11, color: "#8b949e" }}>
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#64748b" }}>
               {filteredTools.length} tool{filteredTools.length !== 1 ? "s" : ""}
             </span>
           </div>
           <div
             style={{
               padding: 12,
-              borderBottom: "1px solid #21262d",
+              borderBottom: "1px solid #e6e9ef",
               display: "flex",
               gap: 10,
               alignItems: "center",
@@ -6984,24 +6886,24 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
                 flex: 1,
                 padding: "7px 12px",
                 fontSize: 13,
-                background: "#161b22",
-                border: "1px solid #30363d",
+                background: "#ffffff",
+                border: "1px solid #e2e8f0",
                 borderRadius: 6,
-                color: "#e6edf3",
+                color: "#0f172a",
                 outline: "none",
               }}
             />
           </div>
           <div style={{ padding: 12 }}>
             {loading ? (
-              <div style={{ color: "#8b949e", padding: 20 }}>Loading…</div>
+              <div style={{ color: "#64748b", padding: 20 }}>Loading…</div>
             ) : filteredTools.length === 0 ? (
               <div style={{ textAlign: "center", padding: 40 }}>
                 <div style={{ fontSize: 32, marginBottom: 10 }}>{ICONS.wrench(32)}</div>
-                <div style={{ fontSize: 15, color: "#e6edf3", fontWeight: 600, marginBottom: 6 }}>
+                <div style={{ fontSize: 15, color: "#0f172a", fontWeight: 600, marginBottom: 6 }}>
                   No learned tools found
                 </div>
-                <div style={{ fontSize: 12, color: "#8b949e" }}>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
                   {search.trim()
                     ? "Try a different search term."
                     : "No learned tools have been promoted yet."}
@@ -7080,7 +6982,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
 
 function StatusDot({ label, active, activeColor, inactiveColor }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#8b949e" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748b" }}>
       <div
         style={{
           width: 6,
@@ -7114,7 +7016,7 @@ function ArtifactToastStack({ items }) {
     >
       {items.map((item) => {
         const isTool = item.kind === "tool";
-        const accent = isTool ? "#f85149" : "#3fb950";
+        const accent = isTool ? "#dc2626" : "#16a34a";
         const title = isTool ? "New Tool Learned" : "New Skill Learned";
         return (
           <div
@@ -7124,7 +7026,7 @@ function ArtifactToastStack({ items }) {
               borderRadius: 6,
               border: `1px solid ${accent}44`,
               borderLeft: `4px solid ${accent}`,
-              background: "linear-gradient(90deg, #161b22 0%, #11161d 100%)",
+              background: "linear-gradient(90deg, #ffffff 0%, #f1f5f9 100%)",
               padding: "6px 10px",
               display: "flex",
               alignItems: "center",
@@ -7149,7 +7051,7 @@ function ArtifactToastStack({ items }) {
                 style={{
                   marginTop: 2,
                   fontSize: 12,
-                  color: "#e6edf3",
+                  color: "#0f172a",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -7165,9 +7067,9 @@ function ArtifactToastStack({ items }) {
                 style={{
                   flexShrink: 0,
                   fontSize: 11,
-                  color: "#8b949e",
-                  background: "#21262d",
-                  border: "1px solid #30363d",
+                  color: "#64748b",
+                  background: "#e6e9ef",
+                  border: "1px solid #e2e8f0",
                   borderRadius: 999,
                   padding: "2px 8px",
                 }}
@@ -7442,59 +7344,57 @@ function App() {
         display: "flex",
         flexDirection: "column",
         height: "100vh",
-        background: "#0d1117",
+        background: "#f4f6fa",
         overflow: "hidden",
         position: "relative",
       }}
     >
-      {/* Top nav bar */}
+      {/* Top nav bar — light theme */}
       <div
         style={{
-          height: 46,
-          background: "linear-gradient(135deg, #161b22 0%, #1c2333 100%)",
-          borderBottom: "1px solid #21262d",
+          height: 52,
+          background: "#ffffff",
+          borderBottom: "1px solid #e6e9ef",
+          boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 4px 12px rgba(15,23,42,.04)",
           display: "flex",
           alignItems: "center",
-          padding: "0 20px",
+          padding: "0 18px",
           gap: 14,
           flexShrink: 0,
           userSelect: "none",
         }}
       >
-        {/* Logo */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <img src="/logo.png" style={{ width: 24, height: 24 }} />
-          <span
-            style={{
-              fontWeight: 700,
-              fontSize: 16,
-              color: "#e6edf3",
-              letterSpacing: -0.3,
-            }}
-          >
+        {/* Brand / Logo */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 18, borderRight: "1px solid #eef0f4" }}>
+          <img src="/simworld-studio-logo.png" style={{ width: 32, height: 32, objectFit: "contain" }} />
+          <span style={{ fontWeight: 800, fontSize: 17, color: "#0f172a", letterSpacing: -0.2 }}>
             SimWorld Studio
           </span>
         </div>
 
         {/* Main nav */}
-        <div style={{ display: "flex", gap: 2, marginLeft: 16 }}>
+        <div style={{ display: "flex", gap: 3, marginLeft: 8 }}>
           {NAV_ITEMS.map(({ id, label, icon }) => (
             <button
               key={id}
               onClick={() => handleNavClick(id)}
               style={{
-                padding: "4px 12px",
-                fontSize: 12,
-                borderRadius: 4,
-                border: `1px solid ${activePage === id ? "#1f6feb" : "transparent"}`,
-                background: activePage === id ? "#1f3a5f" : "transparent",
-                color: activePage === id ? "#58a6ff" : "#8b949e",
+                padding: "6px 13px",
+                fontSize: 13,
+                borderRadius: 10,
+                border: `1px solid ${activePage === id ? "#dbe6ff" : "transparent"}`,
+                background: activePage === id ? "#eef4ff" : "transparent",
+                color: activePage === id ? "#2563eb" : "#334155",
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                gap: 5,
-                fontWeight: activePage === id ? 600 : 400,
+                gap: 6,
+                fontWeight: activePage === id ? 700 : 600,
+                fontFamily: "inherit",
+                transition: "all 0.12s",
               }}
+              onMouseEnter={e => { if (activePage !== id) e.currentTarget.style.background = "#f8fafc"; }}
+              onMouseLeave={e => { if (activePage !== id) e.currentTarget.style.background = "transparent"; }}
             >
               <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center" }}>{icon(13)}</span>
               <span>{label}</span>
@@ -7504,9 +7404,8 @@ function App() {
                     width: 7,
                     height: 7,
                     borderRadius: "50%",
-                    background: "#f85149",
-                    boxShadow: "0 0 6px #f85149",
-                    marginLeft: 3,
+                    background: "#dc2626",
+                    marginLeft: 2,
                     flexShrink: 0,
                   }}
                 />
@@ -7520,10 +7419,10 @@ function App() {
           <div
             style={{
               display: "flex",
-              gap: 2,
-              marginLeft: 16,
+              gap: 3,
+              marginLeft: 10,
               paddingLeft: 16,
-              borderLeft: "1px solid #21262d",
+              borderLeft: "1px solid #eef0f4",
             }}
           >
             {[
@@ -7535,13 +7434,15 @@ function App() {
                 key={id}
                 onClick={() => setRightPanel(id)}
                 style={{
-                  padding: "3px 10px",
-                  fontSize: 11,
-                  borderRadius: 4,
-                  border: `1px solid ${rightPanel === id ? "#1f6feb" : "#30363d"}`,
-                  background: rightPanel === id ? "#1f3a5f" : "transparent",
-                  color: rightPanel === id ? "#58a6ff" : "#8b949e",
+                  padding: "4px 11px",
+                  fontSize: 12,
+                  borderRadius: 8,
+                  border: `1px solid ${rightPanel === id ? "#dbe6ff" : "#e6e9ef"}`,
+                  background: rightPanel === id ? "#eef4ff" : "#ffffff",
+                  color: rightPanel === id ? "#2563eb" : "#64748b",
                   cursor: "pointer",
+                  fontWeight: rightPanel === id ? 700 : 600,
+                  fontFamily: "inherit",
                 }}
               >
                 {label}
@@ -7550,42 +7451,33 @@ function App() {
           </div>
         )}
 
-        {/* Status indicators */}
-        <div
-          style={{
-            marginLeft: "auto",
-            display: "flex",
-            alignItems: "center",
-            gap: 14,
-          }}
-        >
+        {/* SimCoder badge + Status indicators */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
+          {/* SimCoder logo pill */}
+          <div style={{
+            display: "inline-flex", alignItems: "center", gap: 8,
+            padding: "5px 12px 5px 8px",
+            border: "1px solid #fed7aa",
+            borderRadius: 999,
+            background: "#fff7ed",
+          }}>
+            <img src="/SimCoder.png" style={{ width: 22, height: 22, objectFit: "contain", borderRadius: 6 }} />
+            <span style={{ fontWeight: 700, fontSize: 13, color: "#ea580c" }}>SimCoder</span>
+          </div>
+
+          {/* Status dots */}
           {health && (
             <>
-              <StatusDot
-                label="UE Engine"
-                active={health.ueConnected}
-                activeColor="#3fb950"
-                inactiveColor="#f85149"
-              />
-              <StatusDot
-                label="MCP Server"
-                active={health.mcpConnected}
-                activeColor="#3fb950"
-                inactiveColor="#f85149"
-              />
-              <StatusDot
-                label="Claude Code"
-                active={true}
-                activeColor="#3fb950"
-                inactiveColor="#8b949e"
-              />
+              <StatusDot label="UE Engine" active={health.ueConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
+              <StatusDot label="MCP Server" active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
+              <StatusDot label="Claude Code" active={true} activeColor="#16a34a" inactiveColor="#64748b" />
             </>
           )}
           {healthError && (
-            <span style={{ fontSize: 11, color: "#f85149" }}>Backend unreachable</span>
+            <span style={{ fontSize: 11, color: "#dc2626", fontWeight: 600 }}>Backend unreachable</span>
           )}
           {!health && !healthError && (
-            <span style={{ fontSize: 11, color: "#656d76" }}>Connecting...</span>
+            <span style={{ fontSize: 11, color: "#64748b" }}>Connecting…</span>
           )}
         </div>
       </div>
@@ -7633,7 +7525,7 @@ function App() {
           onMouseDown={handleMouseDown}
           style={{
             width: 4,
-            background: dragging ? "#1f6feb" : "#21262d",
+            background: dragging ? "#2563eb" : "#e6e9ef",
             cursor: "col-resize",
             flexShrink: 0,
             transition: "background 0.15s",
@@ -7660,7 +7552,7 @@ function App() {
                   width: 3,
                   height: 3,
                   borderRadius: "50%",
-                  background: dragging ? "#58a6ff" : "#30363d",
+                  background: dragging ? "#2563eb" : "#cbd5e1",
                 }}
               />
             ))}

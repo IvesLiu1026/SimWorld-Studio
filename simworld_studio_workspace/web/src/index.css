@@ -1,114 +1,110 @@
+/* ===== Light theme variables (reference: simworld_studio (2).html) ===== */
 :root {
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #21262d;
-  --bg-hover: #30363d;
-  --border: #30363d;
-  --border-light: #21262d;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #656d76;
-  --accent: #58a6ff;
-  --accent-dim: #1f6feb;
-  --success: #3fb950;
-  --warning: #d29922;
-  --error: #f85149;
-  --tool-bg: #0d1117;
-  --user-bubble: #1f3a5f;
-  --assistant-bubble: #161b22;
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --ink: #0f172a;
+  --ink-2: #334155;
+  --ink-3: #64748b;
+  --line: #e6e9ef;
+  --line-2: #eef0f4;
+  --blue: #2563eb;
+  --blue-soft: #eff4ff;
+  --green: #16a34a;
+  --green-soft: #ecfdf5;
+  --violet: #7c3aed;
+  --violet-soft: #f3efff;
+  --orange: #ea580c;
+  --orange-soft: #fff1e6;
+  --red: #dc2626;
+  --amber: #f59e0b;
+  --shadow-card: 0 1px 2px rgba(15,23,42,.04), 0 4px 12px rgba(15,23,42,.04);
+  --shadow-pop:  0 6px 18px rgba(15,23,42,.10);
+
+  /* legacy var aliases (keep for compat) */
+  --bg-primary: #f4f6fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f1f5f9;
+  --bg-hover: #e2e8f0;
+  --border: #e6e9ef;
+  --border-light: #eef0f4;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --accent: #2563eb;
+  --accent-dim: #3b82f6;
+  --success: #16a34a;
+  --warning: #f59e0b;
+  --error: #dc2626;
+  --tool-bg: #f8fafc;
+  --user-bubble: #eff4ff;
+  --assistant-bubble: #ffffff;
 }
 
-* {
-  box-sizing: border-box;
-}
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; background: var(--bg); }
 
 body {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.6;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   overflow: hidden;
 }
 
 /* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
+
+/* ===== Global button reset for light theme ===== */
+button {
+  font-family: inherit;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--bg-hover);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
-}
-
-/* Markdown content */
-.markdown h1,
-.markdown h2,
-.markdown h3 {
-  color: var(--text-primary);
+/* ===== Markdown content ===== */
+.markdown h1, .markdown h2, .markdown h3 {
+  color: var(--ink);
   margin: 0.5em 0 0.25em;
 }
-
-.markdown p {
-  margin: 0.25em 0;
-}
-
+.markdown p { margin: 0.25em 0; }
 .markdown code {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.1em 0.4em;
-  font-family: SF Mono, Fira Code, monospace;
+  font-family: 'JetBrains Mono', 'SF Mono', Fira Code, monospace;
   font-size: 0.88em;
-  color: #79c0ff;
+  color: var(--blue);
 }
-
 .markdown pre {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 12px;
   overflow-x: auto;
   margin: 0.5em 0;
 }
-
 .markdown pre code {
   background: none;
   border: none;
   padding: 0;
-  color: #e6edf3;
+  color: var(--ink-2);
 }
-
-.markdown ul,
-.markdown ol {
-  padding-left: 1.5em;
-  margin: 0.25em 0;
-}
-
-.markdown li {
-  margin: 0.1em 0;
-}
-
-.markdown strong {
-  color: var(--text-primary);
-}
-
-.markdown a {
-  color: var(--accent);
-}
-
+.markdown ul, .markdown ol { padding-left: 1.5em; margin: 0.25em 0; }
+.markdown li { margin: 0.1em 0; }
+.markdown strong { color: var(--ink); }
+.markdown a { color: var(--blue); }
 .markdown blockquote {
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--line);
   padding-left: 1em;
-  color: var(--text-secondary);
+  color: var(--ink-3);
   margin: 0.5em 0;
 }
+
+/* ===== Font import ===== */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');

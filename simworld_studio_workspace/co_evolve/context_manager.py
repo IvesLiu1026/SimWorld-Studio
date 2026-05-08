@@ -40,9 +40,12 @@ class CoEvolveContextManager:
         if hasattr(nav_memory, 'get_system_prompt_section'):
             l3_section = nav_memory.get_system_prompt_section()
 
-        # Build performance summary
+        # Build performance summary — LAST EPOCH ONLY (no historical context).
+        # The coding agent should react to fresh evidence; cumulative history
+        # was causing it to anchor on stale failure narratives.
         perf_lines = []
-        for r in self.gen_results[-8:]:
+        if self.gen_results:
+            r = self.gen_results[-1]
             sr = r.get("sr", 0)
             spl = r.get("spl", 0)
             diff = r.get("difficulty_score", 0)
@@ -50,7 +53,7 @@ class CoEvolveContextManager:
             perf_lines.append(
                 f"Epoch {r.get('generation','?')}: SR={sr:.0%} SPL={spl:.3f} "
                 f"diff={diff:.1f} scene={scene} "
-                f"path=[{r.get('min_path_cm',0):.0f},{r.get('max_path_cm',0):.0f}]"
+                f"path={r.get('min_path_cm',0):.0f}cm"
             )
 
         # Rolling / EMA SR — coding agent sees smoothed signal, not a single noisy datapoint.

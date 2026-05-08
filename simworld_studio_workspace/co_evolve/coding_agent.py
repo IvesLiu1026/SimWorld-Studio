@@ -47,16 +47,16 @@ better idea.
 ## SCENE EDITING PHASE
 {edit_phase_directive}
 
-## ENVIRONMENT FEEDBACK (last build)
+## ENVIRONMENT FEEDBACK (last build only — no historical residue)
 {build_feedback}
 
-Per-epoch history (for trend only; act on the rolling stats above):
+Last epoch only (do NOT consult older history; rely on rolling stats):
 {performance_history}
 
 Learned strategies:
 {strategies}
 
-Failure patterns:
+Failure patterns (last 12 episodes only):
 {failure_patterns}
 
 ## CURRENT SCENE (difficulty: {current_difficulty}/10)
@@ -105,6 +105,14 @@ Target rolling_SR in [0.45, 0.75] (ZPD band).
   -300cm path), NOT more.
 - Change ONE variable at a time (path OR objects OR heading), never multiple.
 
+## DIFFICULTY CONTROL (deterministic — no random sampling noise)
+You choose a SINGLE `path_cm` (the exact geodesic path length every episode
+will target). Difficulty is then deterministic from your spec:
+  difficulty ≈ min(2.5, path_cm/1000) + 2.5·blocked_ratio + 0.5 + (1.5 if objectnav else 0)
+If you want SR to change, change `path_cm` and/or n_objects. The runner will
+clamp `path_cm` to a per-epoch floor/ceiling around the previous epoch's
+value (max ±800cm step) so you cannot regress more than one notch at a time.
+
 Output JSON:
 ```json
 {{
@@ -112,10 +120,9 @@ Output JSON:
   "add_objects": [{{"name": "Building_1", "asset": "hwaseong_bijangcheong", "x": 8500, "y": 11500, "z": 100}}],
   "remove_objects": ["Building_old_1", "Building_old_2"],
   "task_type": "pointnav",
-  "min_path_cm": 500,
-  "max_path_cm": 1500,
-  "max_steps": 25,
-  "n_episodes": 4,
+  "path_cm": 1500,
+  "max_steps": 40,
+  "n_episodes": 10,
   "target_difficulty": 2,
   "reasoning": "why this design"
 }}
@@ -384,13 +391,28 @@ class CodingAgent:
         if target_diff > self._best_difficulty:
             self._best_difficulty = target_diff
 
+        # Single path length (deterministic difficulty). Accept `path_cm`
+        # (preferred) or fall back to legacy min/max midpoint.
+        if "path_cm" in data:
+            path_cm = max(500.0, min(5000.0, float(data["path_cm"])))
+        else:
+            lo = float(data.get("min_path_cm", 800))
+            hi = float(data.get("max_path_cm", lo + 400))
+            path_cm = max(500.0, min(5000.0, (lo + hi) / 2.0))
+        # Sampling tolerance: ±15% around the target path_cm. Difficulty is
+        # still computed deterministically from the center `path_cm` (see
+        # loop.py predict_spec_difficulty), so this only relaxes geometry
+        # constraints for the navmesh sampler — the coding agent still owns
+        # the difficulty knob.
+        path_lo = max(500.0, path_cm * 0.85)
+        path_hi = min(5000.0, path_cm * 1.15)
         spec = SceneSpec(
             scene_id=scene_id,
             description=self._current_scene_desc,
             objects=objects,
             task_type=str(data.get("task_type", "pointnav")),
-            min_path_cm=max(500.0, float(data.get("min_path_cm", 800))),
-            max_path_cm=min(5000.0, float(data.get("max_path_cm", 2000))),
+            min_path_cm=path_lo,
+            max_path_cm=path_hi,
             max_steps=min(40, max(15, int(data.get("max_steps", 25)))),
             n_episodes=min(12, max(4, int(data.get("n_episodes", 8)))),
             reasoning=str(data.get("reasoning", "")),

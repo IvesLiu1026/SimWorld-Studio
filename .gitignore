@@ -36,3 +36,16 @@ simworld_studio_workspace/tasks/
 claw-code/
 wandb/
 logs/
+
+# demo & eval outputs
+demo/
+demo_output/
+simworld_studio_workspace/demo/
+static_scene_eval_code/
+static_scene_eval_code.zip
+*.png
+*.zip
+
+# local tool configs
+.codex/
+simworld_studio_workspace/.mcp.json

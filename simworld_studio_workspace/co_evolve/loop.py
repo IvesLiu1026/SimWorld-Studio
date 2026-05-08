@@ -178,14 +178,28 @@ class CoEvolutionRunner:
             try:
                 probe_mcp = MCPClient(port=mcp_port, timeout=15, name="loop-pie-probe")
                 resp = probe_mcp.execute_python(probe_script, timeout=15)
-                logs = "\n".join(_extract_python_logs(resp))
+                logs_list = _extract_python_logs(resp)
+                logs = "\n".join(logs_list)
                 if "PIE_READY:1" in logs:
                     log.info("start_pie: PIE world ready after %.1fs (attempt %d)",
                              5.0 * attempt, attempt)
                     ready = True
                     break
+                # MCP log-capture race: success=true with empty python_logs
+                # means the script ran but stdout was lost. After grace period
+                # this is overwhelmingly the "PIE actually started" case.
+                # Trust UCV liveness as the secondary signal before giving up.
+                result = resp.get("result") if isinstance(resp, dict) else None
+                if (isinstance(result, dict) and result.get("success")
+                        and not logs_list and attempt >= 2):
+                    log.info("start_pie: empty logs but execute_python succeeded "
+                             "(attempt %d) — assuming PIE ready (MCP log-capture race)",
+                             attempt)
+                    ready = True
+                    break
                 else:
-                    log.info("start_pie: PIE not ready yet (attempt %d)", attempt)
+                    log.info("start_pie: PIE not ready yet (attempt %d, logs=%d)",
+                             attempt, len(logs_list))
             except Exception as exc:
                 log.info("start_pie: probe %d failed (%s); will retry", attempt, exc)
             # Every 6 attempts (~30s) re-dispatch in case earlier dispatch was lost.
@@ -564,9 +578,13 @@ else:
 
             # Create env and pre-spawn humanoid immediately after PIE start,
             # before spawning scene clutter. This is more stable on heavy maps.
+            # Use a unique agent name per epoch so a leftover actor from a
+            # previous (failed) PIE session can never collide with the new
+            # spawn (UE rejects duplicate names with 'object exsit').
+            warmup_agent_name = f"CoEvolveAgent_E{epoch:03d}_{int(time.time())}"
             env = SimWorldNavEnv(
                 ucv_client=ucv, mcp_client=mcp,
-                agent_name="CoEvolveAgent_0",
+                agent_name=warmup_agent_name,
                 capture_rgb=cfg.capture_rgb,
                 spawn_on_reset=False, ensure_pie=False,
             )
@@ -577,11 +595,25 @@ else:
                 except Exception as exc:
                     log.warning("Agent _spawn_agent attempt %d/10 raised: %s",
                                 attempt, exc)
-                    time.sleep(5)
+                    # If UE rejected because actor with same name already
+                    # exists in the world (extremely unlikely now that the
+                    # name is unique per-epoch, but keep as defensive net),
+                    # destroy it and retry immediately on the next attempt.
+                    msg = str(exc).lower()
+                    if "object exsit" in msg or "object exist" in msg or "already exist" in msg:
+                        try:
+                            log.info("Spawn rejected (object exists); "
+                                     "destroying stale %s and retrying", warmup_agent_name)
+                            ucv.destroy_actor(warmup_agent_name)
+                            time.sleep(2)
+                        except Exception as de:
+                            log.warning("destroy_actor cleanup failed: %s", de)
+                    else:
+                        time.sleep(5)
                     continue
                 # Verify the actor actually exists in the PIE world.
                 try:
-                    loc = ucv.vget_location("CoEvolveAgent_0")
+                    loc = ucv.vget_location(warmup_agent_name)
                     if loc and len(loc) == 3 and all(isinstance(c, float) for c in loc):
                         log.info("Agent pre-spawned at %s for epoch %d (attempt %d)",
                                  loc, epoch, attempt)
@@ -641,16 +673,29 @@ else:
                 round_spec.max_steps = cfg.max_steps
                 round_spec.max_path_cm = min(round_spec.max_path_cm, 5000.0)
                 round_spec.n_episodes = max(round_spec.n_episodes, cfg.episodes_per_gen)
+                # Per-epoch difficulty floor/ceiling (path-based, deterministic).
+                # Coding agent may step path_cm by at most -300 / +800 from the
+                # previous epoch. With min==max==path_cm this directly bounds
+                # the difficulty contribution from path length.
                 if self.gen_results:
-                    prev = self.gen_results[-1]
-                    floor_min = max(500.0, prev.get("min_path_cm", 500.0) - 500.0)
-                    floor_max = max(1000.0, prev.get("max_path_cm", 1000.0) - 500.0)
-                    if round_spec.min_path_cm < floor_min:
-                        round_spec.min_path_cm = floor_min
-                    if round_spec.max_path_cm < floor_max:
-                        round_spec.max_path_cm = floor_max
-                    if round_spec.min_path_cm >= round_spec.max_path_cm:
-                        round_spec.max_path_cm = round_spec.min_path_cm + 500.0
+                    # Use prev epoch midpoint as anchor; clamp the spec's
+                    # CENTER (midpoint) to floor/ceiling, then preserve the
+                    # ±15% sampling tolerance around that center so the
+                    # navmesh sampler still has geometric slack.
+                    prev_lo = float(self.gen_results[-1].get("min_path_cm", 1000.0))
+                    prev_hi = float(self.gen_results[-1].get("max_path_cm", prev_lo))
+                    prev_center = (prev_lo + prev_hi) / 2.0
+                    floor = max(500.0, prev_center - 300.0)
+                    ceiling = min(5000.0, prev_center + 800.0)
+                    chosen_center = (round_spec.min_path_cm + round_spec.max_path_cm) / 2.0
+                    clamped = max(floor, min(ceiling, chosen_center))
+                    if abs(clamped - chosen_center) > 1.0:
+                        log.info(
+                            "Clamped path_cm %.0f -> %.0f (floor=%.0f ceiling=%.0f, prev=%.0f)",
+                            chosen_center, clamped, floor, ceiling, prev_center,
+                        )
+                    round_spec.min_path_cm = max(500.0, clamped * 0.85)
+                    round_spec.max_path_cm = min(5000.0, clamped * 1.15)
 
                 is_new_scene_r = getattr(round_spec, '_is_new_scene', False)
                 is_modify_r = getattr(round_spec, '_is_modify', False)
@@ -876,6 +921,18 @@ else:
 
             avg_task_diff = (sum(d["total"] for d in task_difficulties) / len(task_difficulties)
                             if task_difficulties else 0.0)
+            # Use the SPEC-based predicted difficulty (deterministic from
+            # coding agent's path_cm + n_objects) as the official score, so
+            # the curriculum reflects the agent's deliberate choice rather
+            # than per-episode geodesic sampling noise. The per-task
+            # rubric scores are kept for logging only.
+            from .teacher import predict_spec_difficulty as _predict_diff
+            spec_difficulty = _predict_diff(spec, blocked_ratio)
+            log.info(
+                "Difficulty: spec_based=%.2f (deterministic) vs sampled_avg=%.2f",
+                spec_difficulty, avg_task_diff,
+            )
+            avg_task_diff = spec_difficulty
             coding_agent._current_difficulty = avg_task_diff
             # Cache for next epoch's predicted-difficulty pre-validation.
             prev_blocked_ratio = blocked_ratio
@@ -892,11 +949,31 @@ else:
             # Destroy the warmup agent before spawning ghost agents — it has
             # default collision config and would block the navmesh / ghosts.
             try:
-                ucv.send("vset /object/CoEvolveAgent_0/destroy")
-                log.info("Phase 6: destroyed warmup CoEvolveAgent_0 prior to ghost wave")
+                ucv.send(f"vset /object/{warmup_agent_name}/destroy")
+                log.info("Phase 6: destroyed warmup %s prior to ghost wave", warmup_agent_name)
             except Exception as exc:
                 log.warning("Phase 6: warmup agent destroy failed (%s); continuing", exc)
             time.sleep(1)
+            # Force UE GC so the destroyed warmup actor releases its FName
+            # ("CoEvolveAgent_0") before UnrealCV spawns a new BP. Without
+            # this, UnrealCV's spawn-then-rename flow can hit a fatal
+            # UObject::Rename assert ("Renaming ... on top of an existing
+            # object ... is not allowed") and crash the editor. Observed
+            # in production at E5/Phase 6 on 2026-04-25.
+            try:
+                gc_script = (
+                    "import unreal\n"
+                    "try:\n"
+                    "    unreal.SystemLibrary.collect_garbage()\n"
+                    "    unreal.log('coevolve: forced GC after warmup destroy')\n"
+                    "except Exception as _e:\n"
+                    "    unreal.log_warning('coevolve: collect_garbage failed: ' + repr(_e))\n"
+                )
+                mcp.execute_python(gc_script, timeout=30)
+                log.info("Phase 6: forced UE GC after warmup destroy")
+            except Exception as exc:
+                log.warning("Phase 6: forced GC failed (%s); continuing", exc)
+            time.sleep(2)
 
             epoch_dir = self.output_dir / f"epoch_{epoch:03d}"
             epoch_dir.mkdir(parents=True, exist_ok=True)
