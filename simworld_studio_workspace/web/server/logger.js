@@ -1,77 +1,99 @@
 'use strict';
+/**
+ * logger.js — Structured JSON logger (P3-1 fix)
+ *
+ * Writes newline-delimited JSON (NDJSON) to a rotating daily file.
+ * Each record: { time, level, category, msg, requestId?, sessionToken?, ...data }
+ *
+ * - Async stream writes: no interleaving between concurrent requests
+ * - Log level filter via LOG_LEVEL env var
+ * - Backwards-compatible API: same method signatures as the old logger
+ */
 
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
 
-const LOG_DIR = path.resolve(__dirname, '../../logs');
+const LOG_DIR  = process.env.LOG_DIR || path.resolve(__dirname, '../../logs');
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
-// Log level: 'debug' | 'info' | 'warn' | 'error'
-const LOG_LEVEL = process.env.LOG_LEVEL || 'debug'; // dev default
-const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
+const LOG_LEVEL  = process.env.LOG_LEVEL || 'info';
+const LEVELS     = { debug: 0, info: 1, warn: 2, error: 3 };
+const IS_DEV     = process.env.NODE_ENV !== 'production';
 
-function shouldLog(level) {
-  return (LEVELS[level] || 0) >= (LEVELS[LOG_LEVEL] || 0);
+// ── Stream cache (one stream per file per day) ────────────────────────────────
+const _streams   = new Map();
+function _getStream(filename) {
+  if (_streams.has(filename)) return _streams.get(filename);
+  const ws = fs.createWriteStream(path.join(LOG_DIR, filename), { flags: 'a' });
+  ws.on('error', err => process.stderr.write(`[logger] stream error ${filename}: ${err.message}\n`));
+  _streams.set(filename, ws);
+  return ws;
 }
 
-function timestamp() {
-  return new Date().toISOString();
-}
-
-// Separate log files per category
-const streams = {};
-
-function getStream(category) {
-  const date = new Date().toISOString().slice(0, 10);
-  const key = `${category}_${date}`;
-  if (!streams[key]) {
-    const filePath = path.join(LOG_DIR, `${category}_${date}.log`);
-    streams[key] = fs.createWriteStream(filePath, { flags: 'a' });
+// Rotate daily — close stale streams at midnight
+let _currentDate = new Date().toISOString().slice(0, 10);
+setInterval(() => {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== _currentDate) {
+    for (const [name, ws] of _streams) {
+      if (!name.includes(today)) { try { ws.end(); } catch {} _streams.delete(name); }
+    }
+    _currentDate = today;
   }
-  return streams[key];
+}, 60_000).unref?.();
+
+// ── Core log function ─────────────────────────────────────────────────────────
+function _log(category, level, message, data) {
+  if ((LEVELS[level] || 0) < (LEVELS[LOG_LEVEL] || 0)) return;
+
+  const record = {
+    time:     new Date().toISOString(),
+    level,
+    category,
+    msg:      message,
+    ...(data && typeof data === 'object' ? data : data != null ? { data } : {}),
+  };
+
+  const line = JSON.stringify(record) + '\n';
+  const date = record.time.slice(0, 10);
+
+  // Write to category file + combined file (async, non-blocking)
+  try { _getStream(`${category}_${date}.ndjson`).write(line); } catch {}
+  try { _getStream(`combined_${date}.ndjson`).write(line); } catch {}
+
+  // Dev console — colorized human-readable
+  if (IS_DEV) {
+    const COLORS = { debug: '\x1b[90m', info: '\x1b[36m', warn: '\x1b[33m', error: '\x1b[31m' };
+    const RST = '\x1b[0m';
+    const extra = data ? ' ' + JSON.stringify(data) : '';
+    process.stderr.write(`${COLORS[level] || ''}[${category}] ${message}${extra}${RST}\n`);
+  }
 }
 
-/**
- * Log a message.
- * @param {string} category - Log category: 'chat', 'agent', 'ucv', 'mcp', 'system'
- * @param {string} level - 'debug' | 'info' | 'warn' | 'error'
- * @param {string} message - Log message
- * @param {object} [data] - Optional structured data
- */
-function log(category, level, message, data) {
-  if (!shouldLog(level)) return;
-
-  const ts = timestamp();
-  const dataStr = data ? ' ' + JSON.stringify(data) : '';
-  const line = `[${ts}] [${level.toUpperCase()}] [${category}] ${message}${dataStr}\n`;
-
-  // Write to category-specific file
-  try { getStream(category).write(line); } catch {}
-
-  // Also write to combined log
-  try { getStream('combined').write(line); } catch {}
-
-  // Console output (colored for dev)
-  const colors = { debug: '\x1b[90m', info: '\x1b[36m', warn: '\x1b[33m', error: '\x1b[31m' };
-  const reset = '\x1b[0m';
-  const color = colors[level] || '';
-  process.stderr.write(`${color}[${category}] ${message}${dataStr}${reset}\n`);
-}
-
-// Convenience methods
+// ── Public API (backwards-compatible with old logger.js) ─────────────────────
 const logger = {
-  debug: (cat, msg, data) => log(cat, 'debug', msg, data),
-  info:  (cat, msg, data) => log(cat, 'info', msg, data),
-  warn:  (cat, msg, data) => log(cat, 'warn', msg, data),
-  error: (cat, msg, data) => log(cat, 'error', msg, data),
+  debug:  (cat, msg, data) => _log(cat, 'debug', msg, data),
+  info:   (cat, msg, data) => _log(cat, 'info',  msg, data),
+  warn:   (cat, msg, data) => _log(cat, 'warn',  msg, data),
+  error:  (cat, msg, data) => _log(cat, 'error', msg, data),
 
-  // Category-specific loggers
-  chat:   (level, msg, data) => log('chat', level, msg, data),
-  agent:  (level, msg, data) => log('agent', level, msg, data),
-  ucv:    (level, msg, data) => log('ucv', level, msg, data),
-  mcp:    (level, msg, data) => log('mcp', level, msg, data),
-  system: (level, msg, data) => log('system', level, msg, data),
-  ctx:    (level, msg, data) => log('ctx', level, msg, data),
+  // Category shortcuts used throughout the codebase
+  chat:   (level, msg, data) => _log('chat',   level, msg, data),
+  agent:  (level, msg, data) => _log('agent',  level, msg, data),
+  ucv:    (level, msg, data) => _log('ucv',    level, msg, data),
+  mcp:    (level, msg, data) => _log('mcp',    level, msg, data),
+  system: (level, msg, data) => _log('system', level, msg, data),
+  ctx:    (level, msg, data) => _log('ctx',    level, msg, data),
+
+  // Request-scoped child logger: logger.child({ requestId, sessionToken })
+  child(ctx) {
+    return {
+      debug:  (cat, msg, data) => _log(cat, 'debug', msg, { ...ctx, ...data }),
+      info:   (cat, msg, data) => _log(cat, 'info',  msg, { ...ctx, ...data }),
+      warn:   (cat, msg, data) => _log(cat, 'warn',  msg, { ...ctx, ...data }),
+      error:  (cat, msg, data) => _log(cat, 'error', msg, { ...ctx, ...data }),
+    };
+  },
 };
 
 module.exports = logger;

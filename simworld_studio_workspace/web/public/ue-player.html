@@ -5,34 +5,42 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SimWorld Viewport</title>
 <style>
-/* ── Base ── */
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;
-  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff}
 
-/* ── Video: UE renders at container size via MatchViewportResolution, so contain is perfect ── */
+/* Video fills container */
 #playerUI{width:100%!important;height:100%!important}
-#videoElementParent{width:100%!important;height:100%!important;background:#000!important}
+#videoElementParent{width:100%!important;height:100%!important;background:#0b1220!important}
 #streamingVideo{object-fit:contain!important;width:100%!important;height:100%!important}
 
-/* ── Controls: compact horizontal row, top-right corner ── */
-#controls{
-  position:absolute!important;top:6px!important;right:6px!important;left:auto!important;
-  display:flex!important;flex-direction:row!important;gap:3px!important;
-  background:rgba(0,0,0,0.5)!important;border-radius:6px!important;padding:3px!important;
-  backdrop-filter:blur(8px)!important;-webkit-backdrop-filter:blur(8px)!important;
-  pointer-events:all!important;
+/* Status overlay — shown when disconnected / connecting */
+#sw-status-overlay{
+  position:fixed;inset:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:rgba(11,18,32,0.92);
+  z-index:999;gap:16px;
+  transition:opacity 0.3s;
 }
-#controls>*{
-  margin:0!important;width:1.4rem!important;height:1.4rem!important;
-  padding:0.2rem!important;border-radius:4px!important;
-  display:flex!important;align-items:center!important;justify-content:center!important;
-  line-height:1!important;
+#sw-status-overlay.hidden{opacity:0;pointer-events:none;}
+#sw-spinner{
+  width:44px;height:44px;border-radius:50%;
+  border:3px solid rgba(37,99,235,0.25);
+  border-top-color:#2563eb;
+  animation:sw-spin 0.9s linear infinite;
 }
-#controls #additionalinfo{display:none!important}
-#controls .tooltiptext{display:none!important}
+@keyframes sw-spin{to{transform:rotate(360deg)}}
+#sw-status-text{font-size:15px;font-weight:600;color:#e2e8f0;}
+#sw-status-sub{font-size:12px;color:#64748b;text-align:center;max-width:260px;line-height:1.5;}
+#sw-retry-btn{
+  margin-top:4px;padding:7px 20px;border-radius:8px;
+  background:#2563eb;color:#fff;border:none;
+  font-size:13px;font-weight:600;cursor:pointer;
+  display:none;
+}
+#sw-retry-btn:hover{background:#1d4ed8;}
 
-/* ── Connection quality indicator: bottom-right, tiny ── */
+/* Connection quality indicator */
 #connection{
   position:absolute!important;bottom:6px!important;right:6px!important;left:auto!important;
   width:1.2rem!important;height:1.2rem!important;pointer-events:all!important;
@@ -40,48 +48,167 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hid
 #connection .tooltiptext{font-size:10px!important}
 #qualityStatus{font-size:20px!important;padding:0!important}
 
-/* ── Settings/Stats panels: compact ── */
+/* Controls: compact row, top-right */
+#controls{
+  position:absolute!important;top:6px!important;right:6px!important;left:auto!important;
+  display:flex!important;flex-direction:row!important;gap:3px!important;
+  background:rgba(0,0,0,0.5)!important;border-radius:6px!important;padding:3px!important;
+  backdrop-filter:blur(8px)!important;-webkit-backdrop-filter:blur(8px)!important;
+}
+#controls>*{
+  margin:0!important;width:1.4rem!important;height:1.4rem!important;
+  padding:0.2rem!important;border-radius:4px!important;
+  display:flex!important;align-items:center!important;justify-content:center!important;
+}
+#controls #additionalinfo,#controls .tooltiptext{display:none!important}
+#fullscreen-btn{display:none!important}
 .panel-wrap{min-width:240px!important;max-width:300px!important;font-size:12px!important}
 .panel{padding:0.6em!important}
-#settingsHeading,#statsHeading{font-size:1.3em!important;padding:0 0 0 1rem!important}
-.setting{padding:0.1rem 6px!important}
-.form-group{padding:2px 6px!important}
+</style>
+</head>
+<body style="width:100%;height:100%">
 
-/* ── Overlays: smaller text ── */
-#connectOverlay,#playOverlay,#infoOverlay,#errorOverlay,#disconnectOverlay{
-  font-size:1.1em!important;
+<!-- Connection status overlay -->
+<div id="sw-status-overlay">
+  <div id="sw-spinner"></div>
+  <div id="sw-status-text">Connecting to UE Stream…</div>
+  <div id="sw-status-sub">Establishing WebRTC connection to Unreal Engine pixel streaming server.</div>
+  <button id="sw-retry-btn" onclick="swRetry()">Retry Connection</button>
+</div>
+
+<script>
+// ── Parse params ──────────────────────────────────────────────────────────────
+var _params = new URLSearchParams(location.search);
+var _cirrusPort = _params.get('cirrus') || location.port || '8585';
+var _ssUrl     = 'ws://' + location.hostname + ':' + _cirrusPort;
+
+// Ensure required params are set
+var _changed = false;
+if (_params.get('ss') !== _ssUrl)             { _params.set('ss', _ssUrl); _changed = true; }
+if (!_params.has('MatchViewportRes'))          { _params.set('MatchViewportRes', 'true'); _changed = true; }
+if (!_params.has('HoveringMouse'))             { _params.set('HoveringMouse', 'true'); _changed = true; }
+if (_changed) { location.replace(location.pathname + '?' + _params.toString()); }
+
+// ── Status overlay helpers ────────────────────────────────────────────────────
+var _overlay   = null; // set after DOM ready
+var _retryBtn  = null;
+var _statusTxt = null;
+var _statusSub = null;
+
+function swSetStatus(text, sub, showRetry) {
+  if (!_overlay) return;
+  _statusTxt.textContent = text;
+  _statusSub.textContent = sub || '';
+  _retryBtn.style.display = showRetry ? 'block' : 'none';
+  _overlay.classList.remove('hidden');
+}
+function swHideOverlay() {
+  if (_overlay) _overlay.classList.add('hidden');
+  // Notify parent frame that stream is live
+  try { window.parent.postMessage({ type: 'sw-stream-connected' }, '*'); } catch {}
+}
+function swRetry() {
+  swSetStatus('Reconnecting…', 'Please wait.', false);
+  // Reload the player.js without full page reload
+  var old = document.getElementById('sw-player-script');
+  if (old) old.remove();
+  setTimeout(swLoadPlayerJs, 500);
 }
 
-/* ── Hide fullscreen btn (we're embedded in an iframe) ── */
-#fullscreen-btn{display:none!important}
-</style>
+// ── Reconnection logic ────────────────────────────────────────────────────────
+var _reconnectTimer = null;
+var _reconnectCount = 0;
+var _wsCheckInterval = null;
+var _connected = false;
 
-<script>
-// Auto-set signalling server URL parameter based on host
-(function(){
-  var p = new URLSearchParams(location.search);
-  var cirrusPort = p.get('cirrus') || location.port;
-  var target = 'ws://' + location.hostname + ':' + cirrusPort;
-  var changed = false;
-  if (p.get('ss') !== target) { p.set('ss', target); changed = true; }
-  // Tell UE to render at the browser viewport size (no black bars)
-  if (!p.has('MatchViewportRes')) { p.set('MatchViewportRes', 'true'); changed = true; }
-  if (!p.has('HoveringMouse')) { p.set('HoveringMouse', 'true'); changed = true; }
-  if (changed) { location.replace(location.pathname + '?' + p.toString()); }
-})();
-</script>
+function swScheduleReconnect() {
+  if (_reconnectTimer) return;
+  var delay = Math.min(1000 * Math.pow(1.6, _reconnectCount), 15000);
+  _reconnectCount++;
+  var secs = Math.round(delay / 1000);
+  swSetStatus(
+    'Stream Disconnected',
+    'Reconnecting in ' + secs + 's… (attempt ' + _reconnectCount + ')',
+    true
+  );
+  _reconnectTimer = setTimeout(function() {
+    _reconnectTimer = null;
+    swRetry();
+  }, delay);
+}
 
-<!-- Load the stock UE player.js from the Cirrus server -->
-<script>
-(function(){
-  var p = new URLSearchParams(location.search);
-  var cirrusPort = p.get('cirrus') || location.port;
+// Poll WebSocket state on the video element
+function swStartConnectionWatch() {
+  if (_wsCheckInterval) clearInterval(_wsCheckInterval);
+  _wsCheckInterval = setInterval(function() {
+    var video = document.getElementById('streamingVideo');
+    if (!video) return;
+    var ready = video.readyState >= 2; // HAVE_CURRENT_DATA or better
+    var paused = video.paused;
+    var hasSource = !!video.src || video.srcObject !== null;
+    if (hasSource && ready && !paused) {
+      if (!_connected) {
+        _connected = true;
+        _reconnectCount = 0;
+        swHideOverlay();
+        try { window.parent.postMessage({ type: 'sw-stream-connected', cirrusPort: _cirrusPort }, '*'); } catch {}
+      }
+    } else if (_connected && (!hasSource || (video.readyState === 0 && !paused))) {
+      // Was connected, now lost
+      _connected = false;
+      swScheduleReconnect();
+    }
+  }, 2000);
+}
+
+// ── Load player.js from Cirrus ────────────────────────────────────────────────
+function swLoadPlayerJs() {
   var s = document.createElement('script');
+  s.id  = 'sw-player-script';
   s.defer = true;
-  s.src = location.protocol + '//' + location.hostname + ':' + cirrusPort + '/player.js';
+  s.src = location.protocol + '//' + location.hostname + ':' + _cirrusPort + '/player.js';
+  s.onerror = function() {
+    swSetStatus(
+      'Cannot load stream player',
+      'Cirrus server not reachable at port ' + _cirrusPort + '. Make sure UE is running with pixel streaming enabled.',
+      true
+    );
+  };
+  s.onload = function() {
+    // Give the player 3s to initialise WebRTC before starting the watch
+    setTimeout(swStartConnectionWatch, 3000);
+  };
   document.head.appendChild(s);
-})();
+}
+
+// ── Listen to parent frame messages ──────────────────────────────────────────
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'sw-focus-stream') {
+    var video = document.getElementById('streamingVideo');
+    if (video) video.focus();
+    document.body.focus();
+  }
+  if (e.data && e.data.type === 'sw-reconnect') {
+    _connected = false;
+    _reconnectCount = 0;
+    swRetry();
+  }
+});
+
+// ── Mouse/keyboard: ensure input reaches UE even when iframe is in background ─
+document.addEventListener('mouseenter', function() {
+  document.body.focus();
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function() {
+  _overlay   = document.getElementById('sw-status-overlay');
+  _retryBtn  = document.getElementById('sw-retry-btn');
+  _statusTxt = document.getElementById('sw-status-text');
+  _statusSub = document.getElementById('sw-status-sub');
+  swSetStatus('Connecting to UE Stream…', 'Establishing WebRTC connection.', false);
+  swLoadPlayerJs();
+});
 </script>
-</head>
-<body style="width:100%;height:100%"></body>
+</body>
 </html>

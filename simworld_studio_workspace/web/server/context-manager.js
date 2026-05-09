@@ -308,14 +308,15 @@ class ContextManager {
 
     lines.push('');
 
-    // --- Objects, grouped by category ---
-    lines.push(`### Objects  (${state.objects.length} total)`);
+    // --- Objects, grouped by category (cap at 200 to avoid ENAMETOOLONG) ---
+    const MAX_OBJ_DISPLAY = 200;
+    lines.push(`### Objects  (${state.objects.length} total${state.objects.length > MAX_OBJ_DISPLAY ? `, showing first ${MAX_OBJ_DISPLAY}` : ''})`);
     if (state.objects.length === 0) {
       lines.push('(none)');
     } else {
-      // Group by category for readability
+      const displayObjs = state.objects.slice(0, MAX_OBJ_DISPLAY);
       const byCategory = new Map();
-      for (const o of state.objects) {
+      for (const o of displayObjs) {
         if (!byCategory.has(o.category)) byCategory.set(o.category, []);
         byCategory.get(o.category).push(o);
       }
@@ -328,7 +329,9 @@ class ContextManager {
       }
     }
 
-    return lines.join('\n');
+    // Hard cap on total rendered context size to prevent ENAMETOOLONG
+    const result = lines.join('\n');
+    return result.length > 8000 ? result.slice(0, 8000) + '\n...(truncated)' : result;
   }
 }
 

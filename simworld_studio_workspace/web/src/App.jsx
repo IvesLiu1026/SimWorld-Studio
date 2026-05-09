@@ -1,49 +1,175 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import PixelStreamPlayer from "./PixelStreamPlayer.jsx";
 
-// ─── SSE Status Stream ─────────────────────────────────────────────────────
-// ONE persistent EventSource connection replaces all HTTP polling.
-// Server pushes status every 3s over a single SSE stream.
-// This leaves all HTTP connections free for agent-chat and other API calls —
-// no more connection-pool saturation under HTTP/1.1's 6-connection limit.
+// ─── SSE Status Stream — Split Contexts (P2-1 fix) ─────────────────────────
+// Four fine-grained contexts so consumers only re-render when their slice changes.
+// Old single PollContext caused ALL consumers to re-render on every 3s SSE push.
 
+const AgentsContext  = React.createContext({ agents: [], sessions: [], activities: {} });
+const SceneContext   = React.createContext({ objects: [], environment: { ready: false }, round: 0 });
+const ChatLogContext = React.createContext([]);
+const StatusContext  = React.createContext({ pieActive: false, health: null });
+
+// Stale agent context — agents last seen + any sync errors
+const SyncContext = React.createContext({ staleAgents: new Set(), syncError: null, sseOk: true });
+
+// Legacy combined context kept for usePoll() callers that haven't migrated yet
 const PollContext = React.createContext({
-  context: { agents: [], objects: [], environment: { ready: false }, round: 0, updatedAt: null },
-  sessions: [],
-  activities: {},
-  chatLog: [],
-  pieActive: false,
-  health: null,
+  context: { agents: [], objects: [], environment: { ready: false }, round: 0 },
+  sessions: [], activities: {}, chatLog: [], pieActive: false, health: null,
 });
 
+// Threshold: agent not seen in UE for > 20s is "stale"
+const STALE_AGENT_MS = 20_000;
+
 function PollProvider({ children }) {
-  const [data, setData] = useState({
-    context: { agents: [], objects: [], environment: { ready: false }, round: 0, updatedAt: null },
-    sessions: [],
-    activities: {},
-    chatLog: [],
-    pieActive: false,
-    health: null,
-  });
+  const [agents,   setAgents]   = useState({ agents: [], sessions: [], activities: {} });
+  const [scene,    setScene]    = useState({ objects: [], environment: { ready: false }, round: 0 });
+  const [chatLog,  setChatLog]  = useState([]);
+  const [status,   setStatus]   = useState({ pieActive: false, health: null });
+  const [sync,     setSync]     = useState({ staleAgents: new Set(), syncError: null, sseOk: true });
+
+  const agentLastSeen = useRef(new Map()); // agentName → timestamp
+  const legacyRef = useRef({ context: { agents:[], objects:[], environment:{ready:false}, round:0 }, sessions:[], activities:{}, chatLog:[], pieActive:false, health:null });
 
   useEffect(() => {
-    let es = new EventSource(`${API_BASE}/events`);
-    es.onmessage = (evt) => {
+    const token = sessionStorage.getItem("sw_session_token") || "";
+    const url   = token ? `${API_BASE}/events?token=${token}` : `${API_BASE}/events`;
+    let es = new EventSource(url);
+    let reconnectTimer = null;
+
+    const reconnect = () => {
+      es.close();
+      reconnectTimer = setTimeout(() => {
+        es = new EventSource(url);
+        es.onmessage = onMessage;
+        es.onerror   = onError;
+      }, 3000);
+    };
+
+    function onMessage(evt) {
       try {
         const d = JSON.parse(evt.data);
-        setData(d);
-      } catch {}
-    };
-    es.onerror = () => {
-      // EventSource auto-reconnects; nothing extra needed
-    };
-    return () => { es.close(); };
+        setSync(prev => prev.sseOk ? prev : { ...prev, sseOk: true, syncError: null });
+
+        // Track agent last-seen timestamps
+        const now = Date.now();
+        const liveNames = new Set();
+        (d.sessions || d.context?.agents || []).forEach(a => {
+          const name = a.agentName || a.name;
+          if (name) { agentLastSeen.current.set(name, now); liveNames.add(name); }
+        });
+
+        // Detect stale agents (were seen before but not in current push)
+        const stale = new Set();
+        for (const [name, ts] of agentLastSeen.current) {
+          if (!liveNames.has(name) && now - ts > STALE_AGENT_MS) stale.add(name);
+          if (liveNames.has(name)) agentLastSeen.current.set(name, now); // refresh
+        }
+        setSync(prev => {
+          const same = prev.staleAgents.size === stale.size && [...stale].every(n => prev.staleAgents.has(n));
+          return same ? prev : { ...prev, staleAgents: stale };
+        });
+
+        // Agents slice — lightweight comparison (names + count, avoid full stringify)
+        const nextSessions = d.sessions || [];
+        const nextAgentList = d.context?.agents || [];
+        const nextActivities = d.activities || {};
+        setAgents(prev => {
+          const prevSess = prev.sessions || [];
+          // Fast check: count + first/last name
+          const sameCount = prevSess.length === nextSessions.length && (prev.agents||[]).length === nextAgentList.length;
+          const sameName  = sameCount && (nextSessions[0]?.agentName === prevSess[0]?.agentName);
+          const sameActs  = Object.keys(nextActivities).join(',') === Object.keys(prev.activities || {}).join(',');
+          if (sameCount && sameName && sameActs) return prev;
+          return { agents: nextAgentList, sessions: nextSessions, activities: nextActivities };
+        });
+
+        // Scene slice — only track count + env.ready (objects list can be 30k items)
+        const nextEnv   = d.context?.environment || { ready: false };
+        const nextObjs  = d.context?.objects     || [];
+        const nextRound = d.context?.round       || 0;
+        setScene(prev => {
+          if (prev.objects.length === nextObjs.length &&
+              prev.environment?.ready === nextEnv.ready &&
+              prev.round === nextRound) return prev;
+          return { objects: nextObjs, environment: nextEnv, round: nextRound };
+        });
+
+        // ChatLog — append new only
+        if (Array.isArray(d.chatLog) && d.chatLog.length > 0) {
+          setChatLog(prev => {
+            const existing = new Set(prev.map(m => `${m.from}-${m.timestamp}`));
+            const news = d.chatLog.filter(m => !existing.has(`${m.from}-${m.timestamp}`));
+            return news.length > 0 ? [...prev, ...news].slice(-200) : prev;
+          });
+        }
+
+        // Status — only compare the fields we care about
+        const nextHealth = d.health || null;
+        const nextPie    = !!d.pieActive;
+        setStatus(prev => {
+          if (prev.pieActive === nextPie &&
+              prev.health?.ueConnected  === nextHealth?.ueConnected &&
+              prev.health?.mcpConnected === nextHealth?.mcpConnected) return prev;
+          return { pieActive: nextPie, health: nextHealth };
+        });
+
+        legacyRef.current = d;
+      } catch (e) {
+        setSync(prev => ({ ...prev, syncError: "SSE parse error: " + e.message }));
+      }
+    }
+
+    function onError() {
+      setSync(prev => ({ ...prev, sseOk: false, syncError: "SSE connection lost — reconnecting…" }));
+      reconnect();
+    }
+
+    es.onmessage = onMessage;
+    es.onerror   = onError;
+    return () => { es.close(); if (reconnectTimer) clearTimeout(reconnectTimer); };
   }, []);
 
-  return React.createElement(PollContext.Provider, { value: data }, children);
+  // Legacy combined context value — stable object so usePoll() consumers
+  // still work but don't get extra re-renders from the ref itself
+  const legacyValue = useMemo(() => ({
+    get context()    { return legacyRef.current.context    || {}; },
+    get sessions()   { return legacyRef.current.sessions   || []; },
+    get activities() { return legacyRef.current.activities || {}; },
+    get chatLog()    { return legacyRef.current.chatLog    || []; },
+    get pieActive()  { return legacyRef.current.pieActive  || false; },
+    get health()     { return legacyRef.current.health     || null; },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []); // intentionally stable — consumers that need reactivity should use fine-grained contexts
+
+  return (
+    <AgentsContext.Provider  value={agents}>
+    <SceneContext.Provider   value={scene}>
+    <ChatLogContext.Provider value={chatLog}>
+    <StatusContext.Provider  value={status}>
+    <SyncContext.Provider    value={sync}>
+    <PollContext.Provider    value={legacyValue}>
+      {children}
+    </PollContext.Provider>
+    </SyncContext.Provider>
+    </StatusContext.Provider>
+    </ChatLogContext.Provider>
+    </SceneContext.Provider>
+    </AgentsContext.Provider>
+  );
 }
 
+// Fine-grained hooks — prefer these over usePoll() for new code
+function useAgents()  { return React.useContext(AgentsContext); }
+function useScene()   { return React.useContext(SceneContext); }
+function useChatLog() { return React.useContext(ChatLogContext); }
+function useStatus()  { return React.useContext(StatusContext); }
+function useSync()    { return React.useContext(SyncContext); }
+
+// Legacy hook — works but causes full re-render on every SSE push
 function usePoll() { return React.useContext(PollContext); }
 
 // ─── Inline SVG Icons (flat colorful cartoon style) ─────────────────────────
@@ -568,7 +694,7 @@ function headerButtonStyle(color) {
 
 // ─── ToolCallBlock ───────────────────────────────────────────────────────────
 
-function ToolCallBlock({ tool }) {
+const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
   const [expanded, setExpanded] = useState(false);
 
   const iconFn = TOOL_ICONS[tool.displayName] || ICONS.hammer;
@@ -737,7 +863,7 @@ function ToolCallBlock({ tool }) {
       <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} } @keyframes spin { to{transform:rotate(360deg)} }`}</style>
     </div>
   );
-}
+}); // end React.memo(ToolCallBlock)
 
 // ─── SkillItem ───────────────────────────────────────────────────────────────
 
@@ -1754,85 +1880,96 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
 
 // ─── ChatMessage ─────────────────────────────────────────────────────────────
 
-function ChatMessage({ message }) {
+const ChatMessage = React.memo(function ChatMessage({ message }) {
   const isUser = message.role === "user";
 
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: isUser ? "flex-end" : "flex-start",
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "92%",
-          padding: "9px 13px",
-          borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
-          background: isUser ? "#eff4ff" : "#ffffff",
-          border: `1px solid ${isUser ? "#dbe6ff" : "#e6e9ef"}`,
-          boxShadow: "0 1px 2px rgba(15,23,42,.04)",
-        }}
-      >
-        {isUser ? (
-          <div style={{ color: "#0f172a", fontSize: 14, whiteSpace: "pre-wrap" }}>
-            {message.content}
-          </div>
-        ) : (
-          <>
-            {message.waiting && (
-              <div style={{ color: "#64748b", fontSize: 13, display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-                <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", border: "2px solid #2563eb", borderTopColor: "transparent", animation: "spin 1s linear infinite" }} />
-                Waiting for Claude...
+  const bubbleContent = isUser ? (
+    <div style={{ color:"#0f172a", fontSize:13, whiteSpace:"pre-wrap" }}>{message.content}</div>
+  ) : (
+    <>
+      {message.waiting && (
+        <div style={{ color:"#64748b", fontSize:12, display:"flex", alignItems:"center", gap:8, padding:"2px 0" }}>
+          <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", border:"2px solid #2563eb", borderTopColor:"transparent", animation:"spin 1s linear infinite" }} />
+          Waiting for Claude...
+        </div>
+      )}
+      {message.blocks
+        ? message.blocks.map((block, idx) =>
+            block.type === "text" ? (
+              block.content ? (
+                <div className="markdown" key={"t"+idx} style={{ color:"#0f172a", fontSize:13 }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.content}</ReactMarkdown>
+                </div>
+              ) : null
+            ) : (
+              <ToolCallBlock key={block.toolId} tool={(message.toolCalls||[]).find(tc=>tc.id===block.toolId)} />
+            )
+          )
+        : [
+            message.content && (
+              <div className="markdown" key="content" style={{ color:"#0f172a", fontSize:13 }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
               </div>
-            )}
-            {message.blocks
-              ? message.blocks.map((block, idx) =>
-                  block.type === "text" ? (
-                    block.content ? (
-                      <div
-                        className="markdown"
-                        key={"t" + idx}
-                        style={{ color: "#0f172a", fontSize: 14 }}
-                      >
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {block.content}
-                        </ReactMarkdown>
-                      </div>
-                    ) : null
-                  ) : (
-                    <ToolCallBlock
-                      key={block.toolId}
-                      tool={(message.toolCalls || []).find((tc) => tc.id === block.toolId)}
-                    />
-                  )
-                )
-              : [
-                  message.content && (
-                    <div
-                      className="markdown"
-                      key="content"
-                      style={{ color: "#0f172a", fontSize: 14 }}
-                    >
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {message.content}
-                      </ReactMarkdown>
-                    </div>
-                  ),
-                  (message.toolCalls || []).map((tc) => (
-                    <ToolCallBlock key={tc.id} tool={tc} />
-                  )),
-                ]}
-          </>
-        )}
+            ),
+            (message.toolCalls||[]).map(tc=><ToolCallBlock key={tc.id} tool={tc}/>),
+          ]}
+    </>
+  );
+
+  const bubble = (
+    <div style={{
+      padding:"9px 12px",
+      borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
+      background: isUser ? "#eff4ff" : "#ffffff",
+      border:`1px solid ${isUser?"#dbe6ff":"#e6e9ef"}`,
+      boxShadow:"0 1px 2px rgba(15,23,42,.04)",
+    }}>
+      {bubbleContent}
+    </div>
+  );
+
+  if (isUser) {
+    return (
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:3, marginBottom:2 }}>
+        <div style={{ display:"flex", alignItems:"flex-end", gap:7, maxWidth:"86%" }}>
+          <div style={{ flex:1, minWidth:0 }}>{bubble}</div>
+          <div style={{
+            width:26, height:26, borderRadius:"50%", flexShrink:0,
+            background:"linear-gradient(135deg,#e0e7ff,#c7d2fe)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+          }}>
+            <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
+              <circle cx="12" cy="8" r="4" fill="#6366f1"/>
+              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" fill="#6366f1"/>
+            </svg>
+          </div>
+        </div>
+        <div style={{ fontSize:10, color:"#64748b", paddingRight:33 }}>
+          You · {new Date(message.timestamp).toLocaleTimeString()}
+        </div>
       </div>
-      <div style={{ marginTop: 3, fontSize: 10, color: "#64748b", padding: "0 4px" }}>
-        {isUser ? "You" : "Agent"} · {new Date(message.timestamp).toLocaleTimeString()}
+    );
+  }
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", gap:3, marginBottom:2 }}>
+      <div style={{ display:"flex", alignItems:"flex-end", gap:7, maxWidth:"86%" }}>
+        <div style={{
+          width:26, height:26, borderRadius:"50%", flexShrink:0, overflow:"hidden",
+          background:"linear-gradient(140deg,#fef3e7,#f5e3cf)",
+          border:"1px solid #f3dfc4",
+          boxShadow:"0 1px 4px rgba(234,88,12,.15)",
+        }}>
+          <img src="/SimCoder.png" alt="SimCoder" style={{ width:"100%", height:"100%", objectFit:"contain", padding:2, display:"block" }}/>
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>{bubble}</div>
+      </div>
+      <div style={{ fontSize:10, color:"#64748b", paddingLeft:33 }}>
+        SimCoder · {new Date(message.timestamp).toLocaleTimeString()}
       </div>
     </div>
   );
-}
+}); // end React.memo(ChatMessage)
 
 // ─── TypingIndicator ─────────────────────────────────────────────────────────
 
@@ -1975,6 +2112,33 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       abortRef.current = controller;
       const inputBuffers = new Map();
 
+      // P2-2 SSE text batching: buffer rapid text deltas, flush via rAF to avoid
+      // a React setState per character during fast streaming.
+      let _textBuf = "";
+      let _rafPending = false;
+      const _flushTextBuf = (msgId) => {
+        if (!_textBuf) return;
+        const delta = _textBuf;
+        _textBuf = "";
+        _rafPending = false;
+        setMessages((prev) => {
+          const updated = [...prev];
+          const idx = updated.findIndex((m) => m.id === msgId);
+          if (idx === -1) return prev;
+          const msg = { ...updated[idx] };
+          const blocks = msg.blocks || [];
+          const last = blocks[blocks.length - 1];
+          if (last?.type === "text") {
+            msg.blocks = [...blocks.slice(0, -1), { ...last, content: last.content + delta }];
+          } else {
+            msg.blocks = [...blocks, { type: "text", content: delta }];
+          }
+          msg.content = (msg.content || "") + delta;
+          updated[idx] = msg;
+          return updated;
+        });
+      };
+
       // NOTE: no absolute time limit on agent runs. Long scenes can legitimately
       // take 10+ minutes. Dead-connection detection lives inside sendChat's
       // reader-level idle timer (refreshed by server `: ping` heartbeats).
@@ -2034,21 +2198,14 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                   break;
                 }
                 case "text": {
-                  const blocks = msg.blocks || [];
-                  const lastBlock = blocks[blocks.length - 1];
-                  if (lastBlock && lastBlock.type === "text") {
-                    msg.blocks = [
-                      ...blocks.slice(0, -1),
-                      { ...lastBlock, content: lastBlock.content + event.data.delta },
-                    ];
-                  } else {
-                    msg.blocks = [
-                      ...blocks,
-                      { type: "text", content: event.data.delta },
-                    ];
+                  // P2-2: buffer into _textBuf, flush via rAF — avoids setState per character
+                  _textBuf += event.data.delta || "";
+                  if (!_rafPending) {
+                    _rafPending = true;
+                    requestAnimationFrame(() => _flushTextBuf(assistantId));
                   }
-                  msg.content = (msg.content || "") + event.data.delta;
-                  break;
+                  // Don't update msg here — the rAF flush handles it separately
+                  return prev; // bail out of setMessages for text events
                 }
                 case "tool_start": {
                   const toolCall = {
@@ -2867,7 +3024,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
 
 // ─── ContextPanel ────────────────────────────────────────────────────────────
 
-function EntityRow({ entity }) {
+const EntityRow = React.memo(function EntityRow({ entity }) {
   const iconFn = CATEGORY_ICONS[entity.category] || ICONS.box;
   const loc = Array.isArray(entity.location) && entity.location.length >= 3
     ? entity.location.map((v) => Math.round(v)).join(", ")
@@ -2888,16 +3045,16 @@ function EntityRow({ entity }) {
       </div>
     </div>
   );
-}
+}); // React.memo(EntityRow)
 
 function ContextPanel({ sessionId, refreshKey }) {
-  const poll = usePoll();
-  const state = poll.context?.updatedAt ? poll.context : null;
+  // Use fine-grained scene context to avoid re-render on every SSE agent/chatlog push
+  const scene = useScene();
+  const state  = scene.objects?.length > 0 || scene.environment?.ready ? scene : null;
   const [lastUpdated, setLastUpdated] = useState(null);
+  const MAX_DISPLAY = 150; // cap to avoid long lists causing layout thrash
 
-  useEffect(() => {
-    if (state?.updatedAt) setLastUpdated(new Date());
-  }, [state?.updatedAt]);
+  useEffect(() => { setLastUpdated(new Date()); }, [scene.round]);
 
   const containerStyle = {
     height: "100%", display: "flex", flexDirection: "column",
@@ -2913,7 +3070,7 @@ function ContextPanel({ sessionId, refreshKey }) {
     textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6,
   };
 
-  if (!state || !state.updatedAt) {
+  if (!state) {
     return (
       <div style={containerStyle}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -2925,10 +3082,16 @@ function ContextPanel({ sessionId, refreshKey }) {
     );
   }
 
+  // Group objects by category, but cap per-category to avoid rendering 30k items
   const byCategory = {};
-  for (const o of state.objects || []) {
+  let shown = 0;
+  for (const o of scene.objects || []) {
+    if (shown >= MAX_DISPLAY) break;
     (byCategory[o.category] = byCategory[o.category] || []).push(o);
+    shown++;
   }
+  const totalObjects = (scene.objects || []).length;
+  const truncated = totalObjects > MAX_DISPLAY;
 
   return (
     <div style={containerStyle}>
@@ -2954,20 +3117,22 @@ function ContextPanel({ sessionId, refreshKey }) {
         {/* Agents section */}
         <div style={sectionStyle}>
           <div style={sectionTitleStyle}>
-            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "#2563eb" }}>{(state.agents || []).length}</span>
+            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "#2563eb" }}>{(scene.agents || []).length}</span>
           </div>
-          {(state.agents || []).length === 0
+          {(scene.agents || []).length === 0
             ? <div style={{ fontSize: 12, color: "#64748b", paddingBottom: 8 }}>No agents in scene</div>
-            : (state.agents || []).map((a) => <EntityRow key={a.name} entity={a} />)
+            : (scene.agents || []).map((a) => <EntityRow key={a.name} entity={a} />)
           }
         </div>
 
-        {/* Objects section, grouped by category */}
+        {/* Objects section, grouped by category (capped at MAX_DISPLAY for performance) */}
         <div style={{ ...sectionStyle, marginTop: 12 }}>
           <div style={sectionTitleStyle}>
-            {ICONS.box(13)} Objects &nbsp;<span style={{ color: "#2563eb" }}>{(state.objects || []).length}</span>
+            {ICONS.box(13)} Objects &nbsp;
+            <span style={{ color: "#2563eb" }}>{totalObjects}</span>
+            {truncated && <span style={{ color: "#f59e0b", fontSize: 9, marginLeft: 4 }}>(showing {MAX_DISPLAY})</span>}
           </div>
-          {(state.objects || []).length === 0
+          {totalObjects === 0
             ? <div style={{ fontSize: 12, color: "#64748b" }}>No objects in scene</div>
             : Object.entries(byCategory).map(([cat, items]) => (
                 <div key={cat} style={{ marginBottom: 10 }}>
@@ -2978,6 +3143,11 @@ function ContextPanel({ sessionId, refreshKey }) {
                 </div>
               ))
           }
+          {truncated && (
+            <div style={{ fontSize: 10, color: "#f59e0b", padding: "6px 0", borderTop: "1px solid var(--line)", marginTop: 4 }}>
+              ⚠ {totalObjects - MAX_DISPLAY} more objects not shown — use the coding agent to query specific actors.
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -3051,7 +3221,7 @@ async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
   }
 }
 
-function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
+function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
   const [status, setStatus] = useState("idle");
   const [thought, setThought] = useState(""); // Current reasoning text
   const [actions, setActions] = useState([]); // [{tool, ok}]
@@ -3156,68 +3326,322 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx }) {
     );
   };
 
+  // ── Collapsed card ──────────────────────────────────────────────────────────
   return (
-    <div style={{ border: `1px solid ${color}33`, borderRadius: 8, background: "#ffffff", minWidth: 200, flex: "1 1 calc(50% - 5px)", maxWidth: "calc(50% - 5px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {/* Header */}
-      <div style={{ padding: "8px 10px", borderBottom: "1px solid #e6e9ef", display: "flex", alignItems: "center", gap: 6, background: `${color}0a` }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status], flexShrink: 0 }} />
-        <span style={{ fontSize: 13, fontWeight: 700, color }}>{agent.name}</span>
-        <span style={{ fontSize: 9, color: "#64748b", background: "#f4f6fa", borderRadius: 3, padding: "1px 5px" }}>{agent.cls}</span>
-        <div style={{ flex: 1 }} />
-        {/* Camera focus button */}
-        {loc && <button onClick={() => {
-          const [x, y, z] = agent.location;
-          // Position camera offset behind-left and above, compute yaw/pitch to look at agent
-          const camX = x - 400, camY = y - 400, camZ = z + 350;
-          const dx = x - camX, dy = y - camY, dz = z - camZ;
-          const horiz = Math.sqrt(dx * dx + dy * dy);
-          const pitch = horiz > 1 ? Math.atan2(dz, horiz) * (180 / Math.PI) : -45;
-          const yaw = Math.atan2(dy, dx) * (180 / Math.PI);
-          fetch(`${API_BASE}/camera`, { method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cmd: "set_camera", args: [camX, camY, camZ, pitch, yaw, 0] })
-          }).catch(() => {});
-        }} title={`Focus camera on ${agent.name}`}
-          style={{ background: "none", border: "1px solid #e2e8f0", borderRadius: 3, padding: "2px 5px", color: "#64748b", fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", lineHeight: 1 }}>
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M15 3.5a1.5 1.5 0 0 0-2.29-1.27L10 3.99V3a2 2 0 0 0-2-2H3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2v-.99l2.71 1.76A1.5 1.5 0 0 0 15 9.5v-6z"/></svg>
-        </button>}
-        {status === "running" && <button onClick={handleStop} style={{ background: "none", border: "1px solid #b91c1c", borderRadius: 3, padding: "1px 6px", color: "#dc2626", fontSize: 10, cursor: "pointer" }}>stop</button>}
+    <div
+      onClick={() => onExpand?.(agent)}
+      style={{
+        border: `1px solid ${color}33`, borderRadius: 8, background: "#ffffff",
+        display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0,
+        cursor: "pointer", transition: "box-shadow 0.15s, border-color 0.15s",
+      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = color + "88"; e.currentTarget.style.boxShadow = `0 2px 10px ${color}18`; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = color + "33"; e.currentTarget.style.boxShadow = "none"; }}
+    >
+      {/* Header row */}
+      <div style={{ padding: "8px 10px", display: "flex", alignItems: "center", gap: 6, background: `${color}0a` }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status], flexShrink: 0,
+          boxShadow: status === "running" ? `0 0 0 2px ${statusColors[status]}44` : "none" }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.name}</span>
+        <span style={{ fontSize: 9, color: "#94a3b8", background: "#f1f5f9", borderRadius: 3, padding: "1px 5px", flexShrink: 0 }}>{agent.cls || "?"}</span>
+        <span style={{ fontSize: 10, color: "#94a3b8" }}>›</span>
       </div>
 
-      {/* Activity log (ReAct) */}
-      <div ref={activityRef} style={{ flex: 1, overflowY: "auto", padding: "6px 10px", minHeight: 80, maxHeight: 200 }}>
-        {/* Incoming messages */}
-        {agentMessages.map((m, i) => (
-          <div key={`msg-${i}`} style={{ marginBottom: 4, fontSize: 10, color: "#64748b", borderLeft: "2px solid #e2e8f0", paddingLeft: 6 }}>
-            <span style={{ fontWeight: 600, color: "#2563eb" }}>@{m.from}</span>: {m.text.slice(0, 120)}
-          </div>
-        ))}
-        {agentMessages.length > 0 && pastActivities.length > 0 && <div style={{ borderBottom: "1px solid #e6e9ef", marginBottom: 6 }} />}
-        {/* Past activities */}
-        {pastActivities.slice(-3).map((act, i) => (
-          <div key={i} style={{ marginBottom: 8, paddingBottom: 6, borderBottom: "1px solid #e6e9ef" }}>
-            {renderActivity(act, false)}
-          </div>
-        ))}
-        {/* Live activity */}
-        {(thought || actions.length > 0) ? renderActivity({ thought, response: thought }, true) : (
-          pastActivities.length === 0 && agentMessages.length === 0 && <span style={{ color: "#475569", fontSize: 11, fontStyle: "italic" }}>No activity yet</span>
+      {/* Quick info */}
+      <div style={{ padding: "5px 10px 7px", fontSize: 10 }}>
+        {loc ? (
+          <div style={{ color: "#64748b", fontFamily: "monospace" }}>{loc}</div>
+        ) : (
+          <div style={{ color: "#94a3b8", fontStyle: "italic" }}>location unknown</div>
         )}
-        {status === "running" && <span style={{ color: "#f59e0b", fontSize: 10 }}> thinking...</span>}
+        {(thought || actions.length > 0) && (
+          <div style={{ color: "#64748b", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+            {status === "running" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f59e0b", animation: "pulse 1s ease-in-out infinite" }}/>}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {thought ? thought.slice(0, 50) + (thought.length > 50 ? "…" : "") : actions[actions.length-1]?.tool}
+            </span>
+          </div>
+        )}
+        {pastActivities.length > 0 && !thought && (
+          <div style={{ color: "#94a3b8", marginTop: 2, fontSize: 9 }}>
+            {pastActivities.length} past action{pastActivities.length > 1 ? "s" : ""}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── AgentDetailPanel — expanded view with camera ────────────────────────────
+
+function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
+  const color = AGENT_COLORS[colorIdx % AGENT_COLORS.length];
+  const [activeTab, setActiveTab]   = useState("camera"); // camera | activity | chat
+  const [camImg, setCamImg]         = useState(null);
+  const [camLoading, setCamLoading] = useState(false);
+  const [camError, setCamError]     = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [input, setInput]           = useState("");
+  const [sending, setSending]       = useState(false);
+  const camIntervalRef = useRef(null);
+  const activityRef    = useRef(null);
+
+  const pollData = usePoll();
+  const pastActivities = pollData.activities?.[agent.name] || [];
+  const agentMessages  = useMemo(() =>
+    (pollData.chatLog || []).filter(m =>
+      m.from !== agent.name && (m.to === agent.name || m.to === "all" || !m.to)
+    ).slice(-20),
+  [pollData.chatLog, agent.name]);
+
+  const loc = Array.isArray(agent.location) && agent.location.length >= 3
+    ? agent.location : null;
+
+  // Focus UE viewport camera on this agent and take screenshot
+  const focusAndShoot = useCallback(async () => {
+    if (!loc) { setCamError("No location data"); return; }
+    setCamLoading(true);
+    setCamError(null);
+    try {
+      const [x, y, z] = loc;
+      // Position camera 400 units behind-left and 350 above agent
+      const camX = x - 400, camY = y - 400, camZ = z + 350;
+      const dx = x - camX, dy = y - camY, dz = z - camZ;
+      const horiz = Math.sqrt(dx*dx + dy*dy);
+      const pitch = horiz > 1 ? Math.atan2(dz, horiz) * (180 / Math.PI) : -45;
+      const yaw   = Math.atan2(dy, dx) * (180 / Math.PI);
+
+      // 1) Move viewport camera
+      await fetch(`${API_BASE}/camera`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cmd: "set_camera", args: [camX, camY, camZ, pitch, yaw, 0] }),
+      });
+
+      // 2) Wait a tick for UE to update, then grab screenshot
+      await new Promise(r => setTimeout(r, 600));
+      const resp = await fetch(`${API_BASE}/screenshot/latest?t=${Date.now()}`);
+      if (!resp.ok) throw new Error("No screenshot available");
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      setCamImg(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
+    } catch (e) {
+      setCamError(e.message);
+    } finally {
+      setCamLoading(false);
+    }
+  }, [loc]);
+
+  // Auto-refresh camera when tab is active
+  useEffect(() => {
+    if (activeTab !== "camera" || !autoRefresh) {
+      if (camIntervalRef.current) clearInterval(camIntervalRef.current);
+      return;
+    }
+    focusAndShoot();
+    camIntervalRef.current = setInterval(focusAndShoot, 4000);
+    return () => clearInterval(camIntervalRef.current);
+  }, [activeTab, autoRefresh, focusAndShoot]);
+
+  // Scroll activity log
+  useEffect(() => {
+    if (activityRef.current) activityRef.current.scrollTop = activityRef.current.scrollHeight;
+  }, [pastActivities, agentMessages]);
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    setSending(true);
+    try {
+      await fetch(`${API_BASE}/agent-broadcast`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, target: agent.name }),
+      });
+    } catch {}
+    setSending(false);
+  };
+
+  const statusColors = { idle:"#64748b", running:"#f59e0b", done:"#16a34a", error:"#dc2626" };
+  const status = agent.status || "idle";
+
+  return (
+    <div style={{
+      position: "absolute", inset: 0, zIndex: 50,
+      background: "var(--panel)",
+      display: "flex", flexDirection: "column",
+      borderRadius: 0,  // inside a panel — no extra radius
+    }}>
+      {/* ── Panel header ── */}
+      <div style={{
+        padding: "10px 12px", borderBottom: "1px solid var(--line)",
+        display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
+        background: `${color}0a`,
+      }}>
+        <button onClick={onClose} style={{
+          background: "none", border: "1px solid var(--line)", borderRadius: 6,
+          padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "var(--ink-3)",
+          display: "flex", alignItems: "center", gap: 3,
+        }}>← Back</button>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status],
+          boxShadow: status === "running" ? `0 0 0 2px ${statusColors[status]}44` : "none" }}/>
+        <span style={{ fontSize: 14, fontWeight: 700, color }}>{agent.name}</span>
+        <span style={{ fontSize: 10, color: "var(--ink-3)", background: "var(--bg)", borderRadius: 4, padding: "1px 6px" }}>{agent.cls}</span>
+        <div style={{ flex: 1 }} />
+        {loc && (
+          <span style={{ fontSize: 9, color: "var(--ink-3)", fontFamily: "monospace" }}>
+            {loc.map(v => Math.round(v)).join(", ")}
+          </span>
+        )}
       </div>
 
-      {/* Input */}
-      <div style={{ display: "flex", gap: 4, padding: "6px 8px", borderTop: "1px solid #e6e9ef" }}>
-        <input value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSend(input); } }}
-          placeholder={`Command ${agent.name}...`}
-          disabled={status === "running"}
-          style={{ flex: 1, background: "#f4f6fa", border: "1px solid #e2e8f0", borderRadius: 4, padding: "5px 8px", color: "#0f172a", fontSize: 11, outline: "none" }}
-        />
-        <button onClick={() => handleSend(input)}
-          disabled={!input.trim() || status === "running"}
-          style={{ background: input.trim() && status !== "running" ? "#15803d" : "#e6e9ef", border: "none", borderRadius: 4, padding: "5px 10px", color: "#fff", fontSize: 10, cursor: input.trim() && status !== "running" ? "pointer" : "default", opacity: input.trim() && status !== "running" ? 1 : 0.5 }}
-        >Go</button>
+      {/* ── Tab bar ── */}
+      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--line)", flexShrink: 0, background: "var(--panel)" }}>
+        {[
+          { id: "camera",   label: "📷 Camera"   },
+          { id: "activity", label: "📋 Activity" },
+          { id: "chat",     label: "💬 Chat"     },
+        ].map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+            flex: 1, padding: "8px 4px", border: "none",
+            borderBottom: `2px solid ${activeTab === t.id ? color : "transparent"}`,
+            background: "none", cursor: "pointer",
+            fontSize: 11, fontWeight: activeTab === t.id ? 700 : 400,
+            color: activeTab === t.id ? color : "var(--ink-3)",
+            transition: "all 0.12s",
+          }}>{t.label}</button>
+        ))}
       </div>
+
+      {/* ── Camera tab ── */}
+      {activeTab === "camera" && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* Camera controls */}
+          <div style={{ padding: "6px 10px", display: "flex", alignItems: "center", gap: 6, borderBottom: "1px solid var(--line)", flexShrink: 0 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", color: "var(--ink-3)" }}>
+              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} style={{ accentColor: color }}/>
+              Auto (4s)
+            </label>
+            <button onClick={focusAndShoot} disabled={camLoading} style={{
+              padding: "3px 10px", borderRadius: 6, border: `1px solid ${color}44`,
+              background: `${color}11`, color, cursor: camLoading ? "wait" : "pointer",
+              fontSize: 11, fontWeight: 600, opacity: camLoading ? 0.6 : 1,
+            }}>
+              {camLoading ? "Capturing…" : "↻ Capture"}
+            </button>
+            {!loc && <span style={{ fontSize: 10, color: "var(--red)" }}>No location — no camera</span>}
+          </div>
+
+          {/* Camera image */}
+          <div style={{ flex: 1, background: "#0b1220", position: "relative", overflow: "hidden" }}>
+            {camImg ? (
+              <img src={camImg} alt={`${agent.name} view`} style={{
+                width: "100%", height: "100%", objectFit: "contain", display: "block",
+              }}/>
+            ) : camError ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8 }}>
+                <div style={{ fontSize: 28, opacity: 0.4 }}>📷</div>
+                <div style={{ color: "#dc2626", fontSize: 12 }}>{camError}</div>
+                <button onClick={focusAndShoot} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #2563eb", background: "rgba(37,99,235,.15)", color: "#93c5fd", cursor: "pointer", fontSize: 11 }}>Retry</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 10 }}>
+                {camLoading ? (
+                  <>
+                    <div style={{ width: 32, height: 32, borderRadius: "50%", border: "3px solid rgba(37,99,235,.2)", borderTopColor: "#2563eb", animation: "ps-spin 0.9s linear infinite" }}/>
+                    <div style={{ color: "#64748b", fontSize: 12 }}>Focusing camera…</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 28, opacity: 0.3 }}>📷</div>
+                    <div style={{ color: "#475569", fontSize: 12 }}>Click "Capture" to take a screenshot</div>
+                  </>
+                )}
+              </div>
+            )}
+            {/* Loading overlay */}
+            {camLoading && camImg && (
+              <div style={{ position: "absolute", inset: 0, background: "rgba(11,18,32,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ width: 24, height: 24, borderRadius: "50%", border: "2px solid rgba(255,255,255,.2)", borderTopColor: "#fff", animation: "ps-spin 0.9s linear infinite" }}/>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Activity tab ── */}
+      {activeTab === "activity" && (
+        <div ref={activityRef} style={{ flex: 1, overflowY: "auto", padding: 10 }}>
+          {agentMessages.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: "var(--ink-3)", letterSpacing: ".08em", marginBottom: 4 }}>INCOMING MESSAGES</div>
+              {agentMessages.map((m, i) => (
+                <div key={i} style={{ marginBottom: 5, fontSize: 11, borderLeft: `2px solid ${color}`, paddingLeft: 7, color: "var(--ink-2)" }}>
+                  <span style={{ fontWeight: 600, color }}>{m.from}</span>: {m.text}
+                </div>
+              ))}
+            </div>
+          )}
+          {pastActivities.length === 0 && agentMessages.length === 0 ? (
+            <div style={{ color: "var(--ink-3)", fontSize: 12, fontStyle: "italic", textAlign: "center", paddingTop: 20 }}>No activity yet</div>
+          ) : (
+            pastActivities.map((act, i) => {
+              const t = act.thought || act.response || "";
+              const acts = act.actions || [];
+              return (
+                <div key={i} style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 7, background: "var(--bg)", border: "1px solid var(--line)" }}>
+                  <div style={{ fontSize: 9, color: "var(--ink-3)", marginBottom: 4 }}>Turn {i + 1}</div>
+                  {t && <div style={{ fontSize: 11, color: "var(--ink-2)", marginBottom: 4, lineHeight: 1.5 }}>{t.slice(0, 200)}{t.length > 200 ? "…" : ""}</div>}
+                  {acts.map((a, j) => (
+                    <div key={j} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10 }}>
+                      <span style={{ color: a.ok ? "#16a34a" : "#dc2626" }}>{a.ok ? "✓" : "✗"}</span>
+                      <span style={{ color: "var(--blue)", fontFamily: "monospace" }}>{a.tool || a.name}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* ── Chat tab ── */}
+      {activeTab === "chat" && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--ink-3)", borderBottom: "1px solid var(--line)", flexShrink: 0 }}>
+            Send a direct command to <strong style={{ color }}>{agent.name}</strong>
+          </div>
+          <div ref={activityRef} style={{ flex: 1, overflowY: "auto", padding: 10 }}>
+            {agentMessages.map((m, i) => (
+              <div key={i} style={{ marginBottom: 8, fontSize: 11, lineHeight: 1.5 }}>
+                <div style={{ fontWeight: 600, color: "var(--ink-3)", marginBottom: 2 }}>{m.from}</div>
+                <div style={{ color: "var(--ink-2)", background: "var(--bg)", borderRadius: 6, padding: "5px 8px" }}>{m.text}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding: "8px 10px", borderTop: "1px solid var(--line)", display: "flex", gap: 6, flexShrink: 0 }}>
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+              placeholder={`Command ${agent.name}… (Enter to send)`}
+              rows={2}
+              style={{
+                flex: 1, resize: "none", borderRadius: 8, border: "1px solid var(--line)",
+                background: "var(--bg)", padding: "6px 10px", fontSize: 12, color: "var(--ink-2)",
+                outline: "none", fontFamily: "inherit",
+              }}
+            />
+            <button onClick={handleSend} disabled={!input.trim() || sending} style={{
+              padding: "6px 14px", borderRadius: 8, border: "none",
+              background: input.trim() && !sending ? color : "var(--line)",
+              color: "#fff", cursor: input.trim() && !sending ? "pointer" : "default",
+              fontSize: 12, fontWeight: 600, alignSelf: "flex-end",
+            }}>Send</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3315,55 +3739,125 @@ function CommHistory({ agents }) {
   );
 }
 
-function AgentPanel({ sessionId }) {
-  const poll = usePoll();
-  const pieActive = poll.pieActive;
+// ─── AgentPanel — vertical split: agent cards top, comm bottom ───────────────
+function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange }) {
+  const agentsCtx = useAgents();
+  const statusCtx = useStatus();
+  const pieActive = statusCtx.pieActive;
+
+  // Use fine-grained contexts for agents
   const contextAgents = useMemo(() => {
-    const sessions = poll.sessions || [];
+    const sessions = agentsCtx.sessions || [];
     if (sessions.length > 0) {
       return sessions.map(s => ({ name: s.agentName, cls: s.agentClass, location: s.location, status: s.status }));
     }
-    return (poll.context?.agents || []);
-  }, [poll.sessions, poll.context?.agents]);
+    return (agentsCtx.agents || []);
+  }, [agentsCtx.sessions, agentsCtx.agents]);
 
-  if (contextAgents.length === 0) {
-    return (
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#f4f6fa", color: "#0f172a" }}>
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid #e6e9ef" }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
-        </div>
-        <div style={{ padding: "6px 14px", borderBottom: "1px solid #e6e9ef", fontSize: 11, color: "#64748b" }}>
-          {pieActive ? "PIE active. Spawn agents to control them." : "Start PIE in Unreal Engine to enable agent control."}
-        </div>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "#475569", fontSize: 12 }}>No agents in scene</span>
-        </div>
-      </div>
-    );
-  }
+  // Which agent is expanded to detail view
+  const [expandedAgent, setExpandedAgent] = useState(null);
 
-  // Split layout: left = comm history, right = agent cards
+  // Close detail panel if the agent disappears from UE
+  useEffect(() => {
+    if (expandedAgent && !contextAgents.find(a => a.name === expandedAgent.name)) {
+      setExpandedAgent(null);
+    }
+    // Also update expanded agent data if it changes (location, status)
+    if (expandedAgent) {
+      const updated = contextAgents.find(a => a.name === expandedAgent.name);
+      if (updated && (updated.location !== expandedAgent.location || updated.status !== expandedAgent.status)) {
+        setExpandedAgent(updated);
+      }
+    }
+  }, [contextAgents, expandedAgent]);
+
+  // Vertical resize handle for comm panel
+  const resizeRef = useRef(null);
+  const dragging   = useRef(false);
+  const startY     = useRef(0);
+  const startH     = useRef(commHeight);
+
+  const onMouseDown = useCallback((e) => {
+    e.preventDefault();
+    dragging.current = true;
+    startY.current   = e.clientY;
+    startH.current   = commHeight;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    if (resizeRef.current) resizeRef.current.classList.add("dragging");
+    const onMove = (ev) => {
+      if (!dragging.current) return;
+      const delta = startY.current - ev.clientY; // drag up = taller comm
+      const next  = Math.max(60, Math.min(400, startH.current + delta));
+      onCommHeightChange?.(next);
+    };
+    const onUp = () => {
+      dragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      if (resizeRef.current) resizeRef.current.classList.remove("dragging");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [commHeight, onCommHeightChange]);
+
+  const empty = contextAgents.length === 0;
+
   return (
-    <div style={{ height: "100%", display: "flex", background: "#f4f6fa", color: "#0f172a", overflow: "hidden" }}>
-      {/* Left: Communication History */}
-      <div style={{ width: 300, minWidth: 240, borderRight: "1px solid #e6e9ef", display: "flex", flexDirection: "column" }}>
-        <CommHistory agents={contextAgents} />
+    <div className="sw-right-inner">
+      {/* ── Agents pane (fills remaining height) ── */}
+      <div className="sw-agents-pane" style={{ flex: 1 }}>
+        {/* Sub-header */}
+        <div style={{ padding:"8px 12px", borderBottom:"1px solid var(--line)", display:"flex", alignItems:"center", gap:8, flexShrink:0, background:"var(--panel)" }}>
+          <span style={{ fontSize:12, fontWeight:700, color:"var(--ink)" }}>
+            Agents {contextAgents.length > 0 && <span style={{ color:"var(--ink-3)", fontWeight:400 }}>({contextAgents.length})</span>}
+          </span>
+          <div style={{ flex:1 }} />
+          <span style={{ width:6, height:6, borderRadius:"50%", background:pieActive?"#22c55e":"#94a3b8", boxShadow: pieActive?"0 0 0 2px rgba(34,197,94,.2)":"none" }}/>
+          <span style={{ fontSize:10, color:pieActive?"#16a34a":"var(--ink-3)" }}>
+            {pieActive ? "PIE Active" : "No PIE"}
+          </span>
+        </div>
+
+        {/* Detail panel overlay — covers agents pane when expanded */}
+        {expandedAgent && (
+          <div style={{ position:"absolute", inset:0, zIndex:40 }}>
+            <AgentDetailPanel
+              agent={expandedAgent}
+              sessionId={sessionId}
+              pieActive={pieActive}
+              colorIdx={contextAgents.findIndex(a => a.name === expandedAgent.name)}
+              onClose={() => setExpandedAgent(null)}
+            />
+          </div>
+        )}
+
+        {empty ? (
+          <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, padding:20 }}>
+            <div style={{ fontSize:28, opacity:0.3 }}>🤖</div>
+            <div style={{ fontSize:12, color:"var(--ink-3)", textAlign:"center", lineHeight:1.5 }}>
+              {pieActive ? "Spawn agents to see them here." : "Start PIE in Unreal Engine\nto enable agent control."}
+            </div>
+          </div>
+        ) : (
+          <div style={{ flex:1, overflowY:"auto", padding:8, display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))", gap:8, alignContent:"flex-start" }}>
+            {contextAgents.map((a, i) => (
+              <AgentCard key={a.name} agent={a} sessionId={sessionId} pieActive={pieActive} colorIdx={i}
+                onExpand={setExpandedAgent}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Right: Agent Cards */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ padding: "8px 14px", borderBottom: "1px solid #e6e9ef", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Agents</span>
-          <span style={{ fontSize: 10, color: "#16a34a", background: "#1a3a2a", borderRadius: 3, padding: "1px 6px" }}>{contextAgents.length}</span>
-          <div style={{ flex: 1 }} />
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: pieActive ? "#16a34a" : "#dc2626" }} />
-          <span style={{ fontSize: 10, color: pieActive ? "#16a34a" : "#dc2626" }}>PIE</span>
-        </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: 10, display: "flex", flexWrap: "wrap", gap: 10, alignContent: "flex-start" }}>
-          {contextAgents.map((a, i) => (
-            <AgentCard key={a.name} agent={a} sessionId={sessionId} pieActive={pieActive} colorIdx={i} />
-          ))}
-        </div>
+      {/* ── Vertical resize handle ── */}
+      <div className="sw-resize-row" ref={resizeRef} onMouseDown={onMouseDown} title="Drag to resize" />
+
+      {/* ── Communication pane (fixed height, resizable) ── */}
+      <div className="sw-comm-pane" style={{ height: commHeight }}>
+        <CommHistory agents={contextAgents} />
       </div>
     </div>
   );
@@ -3372,30 +3866,26 @@ function AgentPanel({ sessionId }) {
 // ─── ViewportPanel ───────────────────────────────────────────────────────────
 
 function ViewportPanel({ latestScreenshot }) {
-  const [mode, setMode] = useState("screenshot");
-  const [imgKey, setImgKey] = useState(0);
+  const [mode, setMode]           = useState("pixelstream"); // default to live stream
+  const [imgKey, setImgKey]       = useState(0);
   const [screenshotUrl, setScreenshotUrl] = useState(null);
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState(3);
-  const [cameraMoving, setCameraMoving] = useState(false);
+  const [autoRefresh, setAutoRefresh]     = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(5);
+  const [cameraMoving, setCameraMoving]   = useState(false);
   const intervalRef = useRef(null);
 
   const handleCameraPreset = useCallback(async (args) => {
     setCameraMoving(true);
-    try {
-      await sendCameraCommand("set_camera", args);
-    } finally {
-      setCameraMoving(false);
-    }
+    try { await sendCameraCommand("set_camera", args); }
+    finally { setCameraMoving(false); }
   }, []);
 
   const [playerUrl, setPlayerUrl] = useState(null);
   useEffect(() => {
     fetch("/api/pixel-streaming-url")
-      .then((r) => r.json())
-      .then((d) => {
+      .then(r => r.json())
+      .then(d => {
         if (d.url) {
-          // Use our custom player page, passing cirrus port as param
           try {
             const cirrusPort = new URL(d.url).port;
             setPlayerUrl(`/ue-player.html?cirrus=${cirrusPort}`);
@@ -3458,208 +3948,105 @@ function ViewportPanel({ latestScreenshot }) {
   };
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "#f4f6fa",
-      }}
-    >
-      {/* Toolbar */}
-      <div
-        style={{
-          padding: "8px 14px",
-          borderBottom: "1px solid #e6e9ef",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          flexShrink: 0,
-          background: "#ffffff",
-          userSelect: "none",
-        }}
-      >
-        <span style={{ fontSize: 15, display: "inline-flex", alignItems: "center" }}>{ICONS.gamepad(15)}</span>
-        <span style={{ fontWeight: 600, fontSize: 13, color: "#0f172a" }}>UE Viewport</span>
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"#0b1220" }}>
 
+      {/* Dark toolbar */}
+      <div style={{
+        padding:"7px 12px",
+        borderBottom:"1px solid rgba(255,255,255,.07)",
+        display:"flex", alignItems:"center", gap:6,
+        flexShrink:0, background:"#0d1526", userSelect:"none",
+      }}>
         {/* Mode toggle */}
-        <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
-          {["screenshot", "pixelstream"].map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              style={{
-                padding: "3px 10px",
-                fontSize: 11,
-                borderRadius: 4,
-                border: "1px solid",
-                borderColor: mode === m ? "#3b82f6" : "#e2e8f0",
-                background: mode === m ? "#eff4ff" : "transparent",
-                color: mode === m ? "#2563eb" : "#64748b",
-                cursor: "pointer",
-              }}
-            >
-              {m === "pixelstream" ? <>{ICONS.liveCircle(11)} Live Stream</> : <>{ICONS.camera(11)} Screenshot</>}
-            </button>
+        <div style={{ display:"flex", gap:3 }}>
+          {[
+            { id:"pixelstream", label:"🔴 Live" },
+            { id:"screenshot",  label:"📷 Shot" },
+          ].map(m => (
+            <button key={m.id} onClick={() => setMode(m.id)} style={{
+              padding:"3px 10px", fontSize:11, borderRadius:6, cursor:"pointer",
+              border: `1px solid ${mode===m.id?"#2563eb":"rgba(255,255,255,.1)"}`,
+              background: mode===m.id?"rgba(37,99,235,.25)":"transparent",
+              color: mode===m.id?"#93c5fd":"#94a3b8",
+              fontWeight: mode===m.id?700:400,
+            }}>{m.label}</button>
           ))}
         </div>
 
         {/* Screenshot controls */}
         {mode === "screenshot" && (
           <>
-            <button
-              onClick={fetchLatestScreenshot}
-              style={{
-                marginLeft: "auto",
-                padding: "3px 10px",
-                fontSize: 12,
-                borderRadius: 4,
-                border: "1px solid #e2e8f0",
-                background: "#e6e9ef",
-                color: "#0f172a",
-                cursor: "pointer",
-              }}
-            >
-              ↻ Refresh
-            </button>
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: 12,
-                color: "#64748b",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-              />
+            <button onClick={fetchLatestScreenshot} style={{
+              padding:"3px 8px", fontSize:11, borderRadius:5, cursor:"pointer",
+              border:"1px solid rgba(255,255,255,.15)", background:"rgba(255,255,255,.08)",
+              color:"#e2e8f0",
+            }}>↻ Refresh</button>
+            <label style={{ display:"flex", alignItems:"center", gap:3, fontSize:11, color:"#64748b", cursor:"pointer" }}>
+              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} style={{ accentColor:"#2563eb" }}/>
               Auto
             </label>
-            <select
-              value={refreshInterval}
-              onChange={(e) => setRefreshInterval(Number(e.target.value))}
-              style={{
-                padding: "2px 6px",
-                fontSize: 11,
-                background: "#e6e9ef",
-                border: "1px solid #e2e8f0",
-                borderRadius: 4,
-                color: "#64748b",
-              }}
-            >
-              {[2, 3, 5, 10].map((s) => (
-                <option key={s} value={s}>
-                  {s}s
-                </option>
-              ))}
+            <select value={refreshInterval} onChange={e => setRefreshInterval(Number(e.target.value))} style={{
+              padding:"2px 5px", fontSize:10, background:"rgba(255,255,255,.08)",
+              border:"1px solid rgba(255,255,255,.1)", borderRadius:4, color:"#94a3b8",
+            }}>
+              {[2,3,5,10].map(s => <option key={s} value={s}>{s}s</option>)}
             </select>
           </>
         )}
 
         {/* Camera presets */}
-        <div style={{ display: "flex", gap: 3, marginLeft: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 10, color: "#64748b", marginRight: 2 }}>CAM</span>
-          {CAMERA_PRESETS.map((preset) => (
-            <button
-              key={preset.label}
-              title={preset.title}
-              disabled={cameraMoving}
-              onClick={() => handleCameraPreset(preset.args)}
-              style={{
-                padding: "3px 8px",
-                fontSize: 11,
-                borderRadius: 4,
-                border: "1px solid #e2e8f0",
-                background: "#e6e9ef",
-                color: cameraMoving ? "#94a3b8" : "#64748b",
-                cursor: cameraMoving ? "wait" : "pointer",
-              }}
-            >
-              {preset.label}
-            </button>
+        <div style={{ display:"flex", gap:2, alignItems:"center", marginLeft:4 }}>
+          <span style={{ fontSize:9, color:"#475569", letterSpacing:".06em" }}>CAM</span>
+          {CAMERA_PRESETS.map(p => (
+            <button key={p.label} title={p.title} disabled={cameraMoving}
+              onClick={() => handleCameraPreset(p.args)} style={{
+                padding:"2px 7px", fontSize:10, borderRadius:4, cursor:cameraMoving?"wait":"pointer",
+                border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.06)",
+                color: cameraMoving?"#334155":"#94a3b8",
+              }}>{p.label}</button>
           ))}
-          <button
-            title="Eject agent pilot lock — restores your mouse control"
-            disabled={cameraMoving}
-            onClick={() => {
-              setCameraMoving(true);
-              sendCameraCommand("unpilot_camera").finally(() => setCameraMoving(false));
-            }}
+          <button title="Unlock camera from agent" disabled={cameraMoving}
+            onClick={() => { setCameraMoving(true); sendCameraCommand("unpilot_camera").finally(()=>setCameraMoving(false)); }}
             style={{
-              padding: "3px 8px",
-              fontSize: 11,
-              borderRadius: 4,
-              border: "1px solid #e2e8f0",
-              background: "#e6e9ef",
-              color: cameraMoving ? "#94a3b8" : "#dc2626",
-              cursor: cameraMoving ? "wait" : "pointer",
-            }}
-          >
-            ✕ Unlock
-          </button>
+              padding:"2px 7px", fontSize:10, borderRadius:4, cursor:cameraMoving?"wait":"pointer",
+              border:"1px solid rgba(220,38,38,.3)", background:"rgba(220,38,38,.1)",
+              color: cameraMoving?"#334155":"#fca5a5",
+            }}>✕ Unlock</button>
         </div>
 
-        {/* Open UE tab */}
-        <div style={{ marginLeft: "auto" }}>
-          <a
-            href={playerUrl}
-            target="_blank"
-            rel="noreferrer"
-            title="Open UE pixel stream in a separate tab"
-            style={{
-              padding: "3px 10px",
-              fontSize: 11,
-              borderRadius: 4,
-              border: "1px solid #e2e8f0",
-              background: "#e6e9ef",
-              color: "#2563eb",
-              textDecoration: "none",
-              cursor: "pointer",
-              display: "inline-block",
-            }}
-          >
-            ⧉ Open UE Tab
-          </a>
-        </div>
+        <div style={{ flex:1 }}/>
+
+        {/* Open in tab */}
+        {playerUrl && (
+          <a href={playerUrl} target="_blank" rel="noreferrer" style={{
+            padding:"3px 8px", fontSize:10, borderRadius:5,
+            border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.06)",
+            color:"#64748b", textDecoration:"none", display:"inline-block",
+          }}>⧉ Pop out</a>
+        )}
       </div>
 
-      {/* Viewport content */}
-      <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-        {/* Keep PixelStreamView always mounted to preserve WebRTC connection */}
-        <div style={{ width: "100%", height: "100%", display: mode === "pixelstream" ? "block" : "none" }}>
-          {playerUrl
-            ? <PixelStreamView playerUrl={playerUrl} />
-            : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#64748b", fontSize: 14 }}>Connecting to pixel stream...</div>
-          }
+      {/* Viewport — live stream always mounted, screenshot overlays */}
+      <div style={{ flex:1, position:"relative", overflow:"hidden" }}>
+        {/* PixelStreamPlayer — always mounted (preserves WebRTC) */}
+        <div style={{ width:"100%", height:"100%", display: mode==="pixelstream"?"block":"none" }}>
+          <PixelStreamPlayer playerUrl={playerUrl} />
         </div>
         {mode === "screenshot" && (
           <ScreenshotView src={screenshotUrl} imgKey={imgKey} onRefresh={fetchLatestScreenshot} />
         )}
       </div>
 
-      {/* Status bar */}
-      <div
-        style={{
-          padding: "3px 14px",
-          background: "#ffffff",
-          borderTop: "1px solid #e6e9ef",
-          display: "flex",
-          alignItems: "center",
-          gap: 16,
-          fontSize: 10,
-          color: "#64748b",
-          flexShrink: 0,
-        }}
-      >
-        <span>UE 5.3.2 · SimWorld</span>
-        <span>PS player: {playerUrl ?? "loading..."}</span>
-        {mode === "screenshot" && screenshotUrl && (
-          <span style={{ color: "#16a34a", marginLeft: "auto" }}>● Screenshot ready</span>
-        )}
+      {/* Micro status bar */}
+      <div style={{
+        padding:"2px 12px", background:"#0d1526",
+        borderTop:"1px solid rgba(255,255,255,.05)",
+        display:"flex", alignItems:"center", gap:14,
+        fontSize:9, color:"#334155", flexShrink:0,
+      }}>
+        <span>UE 5.3.2 · SimWorld Studio</span>
+        {playerUrl && <span>{playerUrl.match(/cirrus=(\d+)/)?.[1] ? `Cirrus :${playerUrl.match(/cirrus=(\d+)/)[1]}` : playerUrl}</span>}
+        {mode==="screenshot" && screenshotUrl && <span style={{ color:"#16a34a", marginLeft:"auto" }}>● Screenshot ready</span>}
       </div>
     </div>
   );
@@ -7084,6 +7471,131 @@ function ArtifactToastStack({ items }) {
   );
 }
 
+// ─── useSession — slot acquire, 60s heartbeat, 30-min countdown ──────────────
+// Design rules:
+//  - "dev" mode: server returns {dev:true} → no countdown, no modals, full access
+//  - "managed" mode: server returns real token+TTL → countdown + expiry modal
+//  - Pool full: server returns {error,code:"POOL_FULL"} → waiting room modal
+//  - Never store _dev tokens in sessionStorage (they don't survive server restart)
+
+const STORAGE_KEY   = "sw_session_token";
+const HEARTBEAT_MS  = 60_000;
+const WARN_SECS     = 5 * 60;   // warn when < 5 min left
+
+function useSession() {
+  const [session,  setSession]  = useState(null);   // null=loading, {dev,token,...}=ready
+  const [poolFull, setPoolFull] = useState(null);   // {message, queueLength} | null
+  const [secsLeft, setSecsLeft] = useState(null);
+  const [expired,  setExpired]  = useState(false);
+  const acquiredAt = useRef(null);
+  const ttlMsRef   = useRef(0);
+
+  // ── Acquire on mount ───────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function init() {
+      // Try to reuse a real saved token (never reuse "_dev")
+      const saved = sessionStorage.getItem(STORAGE_KEY);
+      if (saved && saved !== "_dev") {
+        try {
+          const r = await fetch(`${API_BASE}/session/heartbeat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-session-token": saved },
+            body: "{}",
+          });
+          const d = await r.json();
+          if (d.ok && !cancelled) {
+            acquiredAt.current = Date.now() - (d.idleMs || 0);
+            setSession({ token: saved, dev: false });
+            return; // reuse succeeded
+          }
+        } catch {}
+        // Saved token invalid — clear and acquire fresh
+        sessionStorage.removeItem(STORAGE_KEY);
+      }
+
+      // Acquire a new slot
+      try {
+        const r = await fetch(`${API_BASE}/session/acquire`, { method: "POST" });
+        const d = await r.json();
+        if (cancelled) return;
+
+        if (d.code === "POOL_FULL" || (d.error && !d.token)) {
+          setPoolFull({ message: d.error || "Server at capacity", queueLength: d.queueLength });
+          return;
+        }
+
+        if (d.dev) {
+          // Server is in single-user dev mode — no session management
+          setSession({ token: "_dev", dev: true });
+          return;
+        }
+
+        // Real managed session
+        sessionStorage.setItem(STORAGE_KEY, d.token);
+        acquiredAt.current = Date.now();
+        ttlMsRef.current   = d.sessionTtlMs || 30 * 60 * 1000;
+        setSession(d);
+      } catch {
+        // Server not reachable — run in offline/dev mode, no modals
+        if (!cancelled) setSession({ token: "_dev", dev: true });
+      }
+    }
+
+    init();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── Heartbeat (managed sessions only) ─────────────────────────────────────
+  useEffect(() => {
+    if (!session || session.dev) return;
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/session/heartbeat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-session-token": session.token },
+          body: "{}",
+        });
+        const d = await r.json();
+        if (!d.ok) setExpired(true);
+      } catch {}
+    }, HEARTBEAT_MS);
+    return () => clearInterval(iv);
+  }, [session]);
+
+  // ── Countdown (managed sessions only) ─────────────────────────────────────
+  useEffect(() => {
+    if (!session || session.dev || !acquiredAt.current || !ttlMsRef.current) return;
+    const iv = setInterval(() => {
+      const left = Math.max(0, ttlMsRef.current - (Date.now() - acquiredAt.current));
+      setSecsLeft(Math.floor(left / 1000));
+      if (left === 0) { setExpired(true); clearInterval(iv); }
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [session]);
+
+  // ── Release on unload (managed sessions only) ──────────────────────────────
+  useEffect(() => {
+    if (!session || session.dev) return;
+    const handler = () => {
+      navigator.sendBeacon?.(`${API_BASE}/session/release`, JSON.stringify({ token: session.token }));
+      sessionStorage.removeItem(STORAGE_KEY);
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [session]);
+
+  return {
+    session,
+    poolFull,
+    secsLeft,
+    expired,
+    isLoading:   session === null && !poolFull,
+    warningSoon: secsLeft !== null && secsLeft < WARN_SECS,
+  };
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -7097,6 +7609,22 @@ function App() {
   const [rightPanel, setRightPanel] = useState("viewport");
   const [activePage, setActivePage] = useState("generate");
   const [chatRef, setChatRef] = useState(null);
+  const [leftTab,    setLeftTab]    = useState("chat");
+  const [rightTab,   setRightTab]   = useState("agent");
+  const [colLeft,    setColLeft]    = useState(390);   // px
+  const [colRight,   setColRight]   = useState(360);   // px
+  const [commHeight, setCommHeight] = useState(200);   // px for comm panel
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab,  setDrawerTab]  = useState("assets");
+  const [drawerH,    setDrawerH]    = useState(200);   // px when open
+  const colResizingLeft  = useRef(false);
+  const colResizingRight = useRef(false);
+  const colResizeStart   = useRef({ x:0, colLeft:390, colRight:360 });
+  const drawerResizing   = useRef(false);
+  const drawerResizeStart = useRef({ y:0, h:200 });
+  const layoutRef        = useRef(null);
+  const { session, poolFull, secsLeft, expired, isLoading, warningSoon } = useSession();
+  const syncStatus = useSync();
   const [artifactUnread, setArtifactUnread] = useState({ skills: false, tools: false });
   const [artifactNewIds, setArtifactNewIds] = useState({ skills: [], tools: [] });
   const [artifactToasts, setArtifactToasts] = useState([]);
@@ -7298,6 +7826,63 @@ function App() {
     };
   }, [dragging]);
 
+  // ── Column resize drag handlers ────────────────────────────────────────────
+  const startColResize = useCallback((side) => (e) => {
+    e.preventDefault();
+    if (side === "left") {
+      colResizingLeft.current = true;
+      colResizeStart.current = { x: e.clientX, colLeft, colRight };
+    } else {
+      colResizingRight.current = true;
+      colResizeStart.current = { x: e.clientX, colLeft, colRight };
+    }
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev) => {
+      const dx = ev.clientX - colResizeStart.current.x;
+      if (colResizingLeft.current) {
+        setColLeft(Math.max(280, Math.min(600, colResizeStart.current.colLeft + dx)));
+      } else if (colResizingRight.current) {
+        setColRight(Math.max(260, Math.min(560, colResizeStart.current.colRight - dx)));
+      }
+    };
+    const onUp = () => {
+      colResizingLeft.current  = false;
+      colResizingRight.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onUp);
+  }, [colLeft, colRight]);
+
+  // ── Drawer resize (drag top edge up/down) ──────────────────────────────────
+  const startDrawerResize = useCallback((e) => {
+    e.preventDefault();
+    drawerResizing.current = true;
+    drawerResizeStart.current = { y: e.clientY, h: drawerH };
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (ev) => {
+      if (!drawerResizing.current) return;
+      const delta = drawerResizeStart.current.y - ev.clientY; // drag up = taller
+      setDrawerH(Math.max(80, Math.min(600, drawerResizeStart.current.h + delta)));
+      if (!drawerOpen) setDrawerOpen(true);
+    };
+    const onUp = () => {
+      drawerResizing.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [drawerH, drawerOpen]);
+
   const handleNavClick = useCallback((id) => {
     setActivePage(id);
     if (id === "skills") {
@@ -7326,265 +7911,369 @@ function App() {
   }, []);
 
   const NAV_ITEMS = [
-    { id: "generate", label: "Generate", icon: ICONS.chat },
-    { id: "context", label: "Context", icon: ICONS.map },
-    { id: "agent", label: "Agent", icon: ICONS.robot },
+    { id: "generate", label: "Studio", icon: ICONS.chat },
     { id: "arena", label: "Arena", icon: ICONS.swords },
     { id: "gallery", label: "Gallery", icon: ICONS.frame },
     { id: "skills", label: "Skills", icon: ICONS.tools },
     { id: "tools", label: "Tools", icon: ICONS.wrench },
     { id: "leaderboard", label: "Leaderboard", icon: ICONS.trophy },
   ];
-  const SPLIT_PAGES = ["generate", "context", "agent"];
+  const SPLIT_PAGES = ["generate"];
 
   return (
     <PollProvider>
-    <div
-      style={{
+    <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:"var(--bg)", overflow:"hidden", padding:"10px", gap:0, position:"relative" }}>
+
+      {/* ══ POOL FULL — waiting room (only shows when all UE slots are occupied) ══ */}
+      {poolFull && (
+        <div style={{ position:"fixed", inset:0, background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
+          <div style={{ background:"#fff", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:420, boxShadow:"var(--shadow-pop)" }}>
+            <div style={{ fontSize:40, marginBottom:16 }}>⏳</div>
+            <div style={{ fontSize:20, fontWeight:800, color:"var(--ink)", marginBottom:8 }}>Server at capacity</div>
+            <div style={{ fontSize:13, color:"var(--ink-3)", lineHeight:1.6, marginBottom:24 }}>
+              All simulation slots are currently in use.<br/>
+              {poolFull.queueLength > 0 && <>Queue length: <strong style={{color:"var(--blue)"}}>{poolFull.queueLength}</strong><br/></>}
+              {poolFull.message}
+            </div>
+            <button onClick={() => window.location.reload()} className="sw-btn-blue" style={{ width:"100%" }}>
+              Try again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ══ SESSION EXPIRED modal ══ */}
+      {expired && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, backdropFilter:"blur(4px)" }}>
+          <div style={{ background:"#fff", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:380, boxShadow:"var(--shadow-pop)" }}>
+            <div style={{ fontSize:40, marginBottom:16 }}>🔒</div>
+            <div style={{ fontSize:20, fontWeight:800, color:"var(--ink)", marginBottom:8 }}>Session ended</div>
+            <div style={{ fontSize:13, color:"var(--ink-3)", lineHeight:1.6, marginBottom:24 }}>
+              Your 30-minute session has expired.<br/>Refresh to start a new session.
+            </div>
+            <button onClick={() => { sessionStorage.removeItem("sw_session_token"); window.location.reload(); }} className="sw-btn-blue" style={{ width:"100%" }}>
+              Start new session
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ══ TOP NAV BAR — floating card ══ */}
+      <header style={{
+        height: 50,
+        background: "#fff",
+        borderRadius: 12,
+        border: "1px solid var(--line)",
+        boxShadow: "var(--shadow-card)",
         display: "flex",
-        flexDirection: "column",
-        height: "100vh",
-        background: "#f4f6fa",
-        overflow: "hidden",
-        position: "relative",
-      }}
-    >
-      {/* Top nav bar — light theme */}
-      <div
-        style={{
-          height: 52,
-          background: "#ffffff",
-          borderBottom: "1px solid #e6e9ef",
-          boxShadow: "0 1px 2px rgba(15,23,42,.04), 0 4px 12px rgba(15,23,42,.04)",
-          display: "flex",
-          alignItems: "center",
-          padding: "0 18px",
-          gap: 14,
-          flexShrink: 0,
-          userSelect: "none",
-        }}
-      >
-        {/* Brand / Logo */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 18, borderRight: "1px solid #eef0f4" }}>
-          <img src="/simworld-studio-logo.png" style={{ width: 32, height: 32, objectFit: "contain" }} />
-          <span style={{ fontWeight: 800, fontSize: 17, color: "#0f172a", letterSpacing: -0.2 }}>
-            SimWorld Studio
-          </span>
+        alignItems: "center",
+        padding: "0 16px",
+        gap: 12,
+        flexShrink: 0,
+        userSelect: "none",
+        zIndex: 20,
+        marginBottom: 10,
+      }}>
+        {/* Brand */}
+        <div className="sw-brand">
+          <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, boxShadow:"0 2px 8px rgba(2,6,23,.2)" }}>
+            <img src="/simworld-studio-logo.png" style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} alt="SimWorld" />
+          </div>
+          <span className="sw-brand-name">SimWorld Studio</span>
         </div>
 
         {/* Main nav */}
-        <div style={{ display: "flex", gap: 3, marginLeft: 8 }}>
+        <nav className="sw-nav">
           {NAV_ITEMS.map(({ id, label, icon }) => (
             <button
               key={id}
               onClick={() => handleNavClick(id)}
-              style={{
-                padding: "6px 13px",
-                fontSize: 13,
-                borderRadius: 10,
-                border: `1px solid ${activePage === id ? "#dbe6ff" : "transparent"}`,
-                background: activePage === id ? "#eef4ff" : "transparent",
-                color: activePage === id ? "#2563eb" : "#334155",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                fontWeight: activePage === id ? 700 : 600,
-                fontFamily: "inherit",
-                transition: "all 0.12s",
-              }}
-              onMouseEnter={e => { if (activePage !== id) e.currentTarget.style.background = "#f8fafc"; }}
-              onMouseLeave={e => { if (activePage !== id) e.currentTarget.style.background = "transparent"; }}
+              className={`sw-nav-item${activePage === id ? " active" : ""}`}
             >
-              <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center" }}>{icon(13)}</span>
+              <span style={{ display:"inline-flex", alignItems:"center" }}>{icon(13)}</span>
               <span>{label}</span>
               {((id === "skills" && artifactUnread.skills) || (id === "tools" && artifactUnread.tools)) && (
-                <span
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: "50%",
-                    background: "#dc2626",
-                    marginLeft: 2,
-                    flexShrink: 0,
-                  }}
-                />
+                <span className="sw-nav-dot" />
               )}
             </button>
           ))}
-        </div>
+        </nav>
 
-        {/* Right panel tabs (generate mode only) */}
-        {SPLIT_PAGES.includes(activePage) && activePage === "generate" && (
-          <div
-            style={{
-              display: "flex",
-              gap: 3,
-              marginLeft: 10,
-              paddingLeft: 16,
-              borderLeft: "1px solid #eef0f4",
-            }}
-          >
-            {[
-              { id: "viewport", label: "Viewport" },
-              { id: "assets", label: "Assets" },
-              { id: "scenes", label: "Scenes" },
-            ].map(({ id, label }) => (
-              <button
-                key={id}
-                onClick={() => setRightPanel(id)}
-                style={{
-                  padding: "4px 11px",
-                  fontSize: 12,
-                  borderRadius: 8,
-                  border: `1px solid ${rightPanel === id ? "#dbe6ff" : "#e6e9ef"}`,
-                  background: rightPanel === id ? "#eef4ff" : "#ffffff",
-                  color: rightPanel === id ? "#2563eb" : "#64748b",
-                  cursor: "pointer",
-                  fontWeight: rightPanel === id ? 700 : 600,
-                  fontFamily: "inherit",
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* SimCoder badge + Status indicators */}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
-          {/* SimCoder logo pill */}
-          <div style={{
-            display: "inline-flex", alignItems: "center", gap: 8,
-            padding: "5px 12px 5px 8px",
-            border: "1px solid #fed7aa",
-            borderRadius: 999,
-            background: "#fff7ed",
-          }}>
-            <img src="/SimCoder.png" style={{ width: 22, height: 22, objectFit: "contain", borderRadius: 6 }} />
-            <span style={{ fontWeight: 700, fontSize: 13, color: "#ea580c" }}>SimCoder</span>
-          </div>
+        {/* Right side */}
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:10 }}>
 
           {/* Status dots */}
           {health && (
-            <>
-              <StatusDot label="UE Engine" active={health.ueConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label="MCP Server" active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label="Claude Code" active={true} activeColor="#16a34a" inactiveColor="#64748b" />
-            </>
+            <div style={{ display:"flex", alignItems:"center", gap:12, paddingRight:10, borderRight:"1px solid var(--line-2)" }}>
+              <StatusDot label="UE Engine"   active={health.ueConnected}  activeColor="#16a34a" inactiveColor="#dc2626" />
+              <StatusDot label="MCP Server"  active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
+              <StatusDot label="Claude Code" active={true}                activeColor="#16a34a" inactiveColor="#64748b" />
+            </div>
           )}
-          {healthError && (
-            <span style={{ fontSize: 11, color: "#dc2626", fontWeight: 600 }}>Backend unreachable</span>
+          {healthError && <span style={{ fontSize:11, color:"#dc2626", fontWeight:600 }}>Backend unreachable</span>}
+          {!health && !healthError && <span style={{ fontSize:11, color:"#64748b" }}>Connecting…</span>}
+
+          {/* Sync error / stale agent warnings */}
+          {!syncStatus.sseOk && (
+            <div style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 8px", borderRadius:7, background:"#fef2f2", border:"1px solid #fecaca", fontSize:10, fontWeight:600, color:"#dc2626" }}>
+              ⚠ {syncStatus.syncError || "SSE disconnected"}
+            </div>
           )}
-          {!health && !healthError && (
-            <span style={{ fontSize: 11, color: "#64748b" }}>Connecting…</span>
+          {syncStatus.staleAgents?.size > 0 && (
+            <div title={`Stale: ${[...syncStatus.staleAgents].join(", ")}`}
+              style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 8px", borderRadius:7, background:"#fff7ed", border:"1px solid #fed7aa", fontSize:10, fontWeight:600, color:"#ea580c" }}>
+              👻 {syncStatus.staleAgents.size} stale agent{syncStatus.staleAgents.size > 1 ? "s" : ""}
+            </div>
           )}
+
+          {/* Session countdown — shown when < 5 min remaining */}
+          {secsLeft !== null && !session?.dev && (
+            <div style={{
+              display:"inline-flex", alignItems:"center", gap:5,
+              padding:"4px 10px", borderRadius:8,
+              background: warningSoon ? "#fef2f2" : "#f0fdf4",
+              border: `1px solid ${warningSoon ? "#fecaca" : "#bbf7d0"}`,
+              fontSize:11, fontWeight:700,
+              color: warningSoon ? "#dc2626" : "#16a34a",
+            }}>
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+              {Math.floor(secsLeft/60)}:{String(secsLeft%60).padStart(2,"0")}
+            </div>
+          )}
+
+          {/* Running pill */}
+          <div style={{
+            display:"inline-flex", alignItems:"center", gap:7,
+            padding:"5px 8px 5px 11px",
+            border:"1px solid var(--line)", borderRadius:999,
+            background:"#fff", fontSize:12, fontWeight:600,
+          }}>
+            <span style={{
+              width:8, height:8, borderRadius:"50%", background:"#22c55e",
+              boxShadow:"0 0 0 3px rgba(34,197,94,.18)",
+              animation: health?.ueConnected ? "sw-glow-pulse 2s ease-in-out infinite" : "none",
+            }}/>
+            <span style={{ color:"var(--ink-2)" }}>
+              {health?.ueConnected ? "Running" : "Standby"}
+            </span>
+            {/* play/pause controls */}
+            {[
+              <svg key="play" viewBox="0 0 24 24" width="11" height="11" fill="var(--ink-2)"><polygon points="5,3 19,12 5,21"/></svg>,
+              <svg key="pause" viewBox="0 0 24 24" width="11" height="11" fill="var(--ink-2)"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
+            ].map((icon,i) => (
+              <span key={i} style={{
+                width:24, height:24, borderRadius:"50%", background:"#f1f5f9",
+                display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
+              }}>{icon}</span>
+            ))}
+          </div>
+
+          {/* SimCoder pill */}
+          <div className="sw-simcoder-pill">
+            <img src="/SimCoder.png" style={{ width:20, height:20, objectFit:"contain", borderRadius:5 }} alt="SimCoder" />
+            <span>SimCoder</span>
+          </div>
+
+          {/* Avatar */}
+          <div style={{
+            width:32, height:32, borderRadius:"50%",
+            background:"linear-gradient(135deg,#e0e7ff,#c7d2fe)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            boxShadow:"0 0 0 2px #fff, 0 0 0 3px var(--line)",
+            cursor:"pointer",
+          }}>
+            <svg viewBox="0 0 24 24" fill="none" width="17" height="17">
+              <circle cx="12" cy="8" r="4" fill="#6366f1"/>
+              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" fill="#6366f1"/>
+            </svg>
+          </div>
+
+          {/* Settings icon */}
+          <button style={{
+            width:32, height:32, borderRadius:8, border:"none", background:"transparent",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            color:"var(--ink-2)", cursor:"pointer",
+          }}
+            onMouseEnter={e=>e.currentTarget.style.background="#f1f5f9"}
+            onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+          >
+            <svg viewBox="0 0 24 24" fill="none" width="17" height="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h0a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v0a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+          </button>
+
         </div>
-      </div>
+      </header>
 
       <ArtifactToastStack items={artifactToasts} />
 
-      {/* Content */}
-      <div
-        ref={containerRef}
-        style={{
-          flex: 1,
-          display: SPLIT_PAGES.includes(activePage) ? "flex" : "none",
-          overflow: "hidden",
-          cursor: dragging ? "col-resize" : "default",
-        }}
-      >
-        {/* Left panel — content depends on active page */}
-        <div
-          style={{
-            width: `${splitPct}%`,
-            minWidth: 0,
-            overflow: "hidden",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <div style={{ display: activePage === "generate" ? "flex" : "none", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+      {/* ══ 3-COLUMN RESIZABLE STUDIO LAYOUT ══ */}
+      {activePage === "generate" && (
+      <div ref={layoutRef} style={{
+        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:0,
+      }}>
+        {/* ── LEFT: Coding Agent ── */}
+        <div style={{
+          width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
+          borderRadius:12, border:"1px solid var(--line)",
+          boxShadow:"var(--shadow-card)", display:"flex",
+          flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+        }}>
+          <div className="sw-panel-header">
+            <span className="sw-section-title" style={{ color:"var(--orange)" }}>
+              <span className="sw-num-chip" style={{ background:"var(--orange)" }}>1</span>
+              Coding Agent
+            </span>
+            <div style={{ flex:1 }} />
+          </div>
+          {/* Chat only — assets/scenes moved to drawer */}
+          <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
             <ChatPanel
-              onScreenshotUpdate={(url) => setLatestScreenshot(url)}
+              onScreenshotUpdate={url => setLatestScreenshot(url)}
               onRef={setChatRef}
               onSessionChange={setCurrentSessionId}
-              onChatDone={() => setContextRefreshKey((k) => k + 1)}
+              onChatDone={() => setContextRefreshKey(k => k + 1)}
             />
           </div>
-          <div style={{ display: activePage === "context" ? "flex" : "none", flexDirection: "column", flex: 1, overflow: "hidden" }}>
-            <ContextPanel sessionId={currentSessionId} refreshKey={contextRefreshKey} />
-          </div>
-          <div style={{ display: activePage === "agent" ? "flex" : "none", flexDirection: "column", flex: 1, overflow: "hidden" }}>
-            <AgentPanel sessionId={currentSessionId} />
-          </div>
         </div>
 
-        {/* Divider */}
-        <div
-          onMouseDown={handleMouseDown}
-          style={{
-            width: 4,
-            background: dragging ? "#2563eb" : "#e6e9ef",
-            cursor: "col-resize",
-            flexShrink: 0,
-            transition: "background 0.15s",
-            position: "relative",
-            zIndex: 10,
-          }}
-          title="Drag to resize"
-        >
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 3,
-            }}
-          >
-            {[0, 1, 2].map((i) => (
-              <div
-                key={i}
-                style={{
-                  width: 3,
-                  height: 3,
-                  borderRadius: "50%",
-                  background: dragging ? "#2563eb" : "#cbd5e1",
-                }}
-              />
-            ))}
-          </div>
-        </div>
+        {/* ── Resize handle left ── */}
+        <div className="sw-resize-col" onMouseDown={startColResize("left")} />
 
-        {/* Right panel */}
-        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-          {rightPanel === "viewport" && (
+        {/* ── CENTER: Viewport + drawer ── */}
+        <div style={{ flex:1, minWidth:320, display:"flex", flexDirection:"column", gap:8, overflow:"hidden" }}>
+
+          {/* UE Viewport card */}
+          <div style={{
+            flex:1, minHeight:120,
+            borderRadius:12, border:"1px solid #0b1220",
+            boxShadow:"var(--shadow-pop)", overflow:"hidden", background:"#0b1220",
+          }}>
             <ViewportPanel latestScreenshot={latestScreenshot} />
-          )}
-          {rightPanel === "assets" && (
-            <AssetBrowser
-              onInsert={(id) => chatRef?.insertText(`Use asset: ${id}`)}
-            />
-          )}
-          {rightPanel === "scenes" && (
-            <SceneManager
-              onLoadScene={(scene) => chatRef?.loadScene(scene)}
-              currentSessionId={currentSessionId}
-            />
-          )}
-        </div>
-      </div>
+          </div>
 
-      <div
-        style={{
-          flex: SPLIT_PAGES.includes(activePage) ? 0 : 1,
-          overflow: "hidden",
-          display: SPLIT_PAGES.includes(activePage) ? "none" : "block",
-        }}
-      >
+          {/* Drawer: Assets / Scenes / Context / Tools */}
+          <div className={`sw-drawer${drawerOpen ? "" : " collapsed"}`}
+            style={{ height: drawerOpen ? drawerH : 36 }}>
+            {/* Drawer drag handle — drag up/down to resize */}
+            <div
+              onMouseDown={startDrawerResize}
+              style={{
+                height:6, background:"transparent", cursor:"row-resize", flexShrink:0,
+                display:"flex", alignItems:"center", justifyContent:"center",
+              }}
+              title="Drag to resize drawer"
+            >
+              <div style={{ width:32, height:2, borderRadius:2, background:"var(--line)", transition:"background .15s" }}
+                onMouseEnter={e => e.currentTarget.style.background = "var(--blue)"}
+                onMouseLeave={e => e.currentTarget.style.background = "var(--line)"}
+              />
+            </div>
+            {/* Drawer header — always visible */}
+            <div className="sw-drawer-header" onClick={() => setDrawerOpen(o => !o)}>
+              <span style={{ fontSize:11, color:"#94a3b8", marginRight:4 }}>
+                {drawerOpen ? "▾" : "▸"}
+              </span>
+              <span style={{ fontSize:12, fontWeight:700, color:"var(--ink-2)" }}>
+                {drawerOpen ? drawerTab.charAt(0).toUpperCase()+drawerTab.slice(1) : "Drawer — Assets / Scenes / Context"}
+              </span>
+              <div style={{ flex:1 }} />
+              {drawerOpen && (
+                <div style={{ display:"flex", gap:2 }}>
+                  {[
+                    { id:"assets",  label:"Assets"  },
+                    { id:"scenes",  label:"Scenes"  },
+                    { id:"context", label:"Context" },
+                    { id:"tools",   label:"Tools"   },
+                  ].map(t => (
+                    <button key={t.id}
+                      className={`sw-tab-btn${drawerTab===t.id?" active":""}`}
+                      onClick={e => { e.stopPropagation(); setDrawerTab(t.id); }}
+                      style={{ fontSize:10, padding:"2px 8px" }}
+                    >{t.label}</button>
+                  ))}
+                  {/* Height adjusters */}
+                  {[150,220,320].map(h => (
+                    <button key={h} onClick={e=>{ e.stopPropagation(); setDrawerH(h); }}
+                      style={{ fontSize:10, padding:"2px 6px", borderRadius:5, border:"1px solid var(--line)",
+                        background: drawerH===h?"var(--blue-soft)":"transparent",
+                        color: drawerH===h?"var(--blue)":"var(--ink-3)", cursor:"pointer" }}>
+                      {h === 150 ? "S" : h === 220 ? "M" : "L"}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Drawer body */}
+            {drawerOpen && (
+              <div className="sw-drawer-body">
+                {drawerTab === "assets" && (
+                  <AssetBrowser onInsert={id => chatRef?.insertText(`Use asset: ${id}`)} />
+                )}
+                {drawerTab === "scenes" && (
+                  <SceneManager onLoadScene={scene => chatRef?.loadScene(scene)} currentSessionId={currentSessionId} />
+                )}
+                {drawerTab === "context" && (
+                  <ContextPanel sessionId={currentSessionId} refreshKey={contextRefreshKey} />
+                )}
+                {drawerTab === "tools" && (
+                  <ToolsPage newlyAddedToolIds={artifactNewIds.tools} onMarkToolSeen={markToolArtifactSeen} />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Resize handle right ── */}
+        <div className="sw-resize-col" onMouseDown={startColResize("right")} />
+
+        {/* ── RIGHT: Embodied Agent (vertical split) ── */}
+        <div style={{
+          width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
+          borderRadius:12, border:"1px solid var(--line)",
+          boxShadow:"var(--shadow-card)", display:"flex",
+          flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+        }}>
+          {/* Panel header */}
+          <div className="sw-panel-header" style={{ borderRadius:"12px 12px 0 0" }}>
+            <span className="sw-section-title" style={{ color:"var(--blue)" }}>
+              <span className="sw-num-chip" style={{ background:"var(--blue)" }}>2</span>
+              Embodied Agent
+            </span>
+            <div style={{ flex:1 }} />
+            <button
+              className={`sw-tab-btn${rightTab==="agent"?" active":""}`}
+              onClick={() => setRightTab("agent")} style={{ fontSize:10, padding:"3px 8px" }}
+            >Agents</button>
+          </div>
+
+          {/* Full vertical split — agents + resize + comm */}
+          <div style={{ flex:1, overflow:"hidden" }}>
+            <AgentPanel
+              sessionId={currentSessionId}
+              commHeight={commHeight}
+              onCommHeightChange={setCommHeight}
+            />
+          </div>
+        </div>
+
+      </div>
+      )}
+
+      {/* ══ FULL-PAGE CONTENT (non-generate pages) — floating card ══ */}
+      <div style={{
+        flex: activePage !== "generate" ? 1 : 0,
+        overflow: "hidden",
+        display: activePage !== "generate" ? "block" : "none",
+        borderRadius: 12,
+        border: "1px solid var(--line)",
+        boxShadow: "var(--shadow-card)",
+        background: "var(--panel)",
+        minHeight: 0,
+      }}>
         {activePage === "arena" && <ArenaPage />}
         {activePage === "skills" && (
           <SkillsPage
@@ -7599,8 +8288,9 @@ function App() {
           />
         )}
         {activePage === "leaderboard" && <LeaderboardPage />}
-        {activePage === "gallery" && <GalleryPage />}
+        {activePage === "gallery"     && <GalleryPage />}
       </div>
+
     </div>
     </PollProvider>
   );
