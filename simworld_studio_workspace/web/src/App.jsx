@@ -3925,14 +3925,20 @@ function ViewportPanel({ latestScreenshot }) {
     fetchLatestScreenshot();
   }, []);
 
-  // Auto-refresh interval
+  // Auto-refresh — only run when tab is visible AND mode=screenshot
+  // Uses visibilitychange to pause when user switches away (reduces background load)
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    if (autoRefresh && mode === "screenshot") {
-      intervalRef.current = setInterval(fetchLatestScreenshot, refreshInterval * 1000);
-    }
+    if (!autoRefresh || mode !== "screenshot") return;
+
+    const tick = () => {
+      if (document.visibilityState === "visible") fetchLatestScreenshot();
+    };
+    intervalRef.current = setInterval(tick, refreshInterval * 1000);
+    document.addEventListener("visibilitychange", tick);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      document.removeEventListener("visibilitychange", tick);
     };
   }, [autoRefresh, mode, refreshInterval]);
 
@@ -4221,16 +4227,31 @@ function AssetBrowser({ onInsert }) {
   const [activeCategory, setActiveCategory] = useState(null);
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("grid");
+  const containerRef = useRef(null);
+  const loadedRef = useRef(false);
 
+  // Lazy load: fetch assets only when this component becomes visible
+  // Uses IntersectionObserver so assets are not fetched until drawer is opened
   useEffect(() => {
-    fetchAssets()
-      .then(setAssets)
-      .catch(() => {});
+    if (loadedRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadedRef.current) {
+        loadedRef.current = true;
+        fetchAssets().then(setAssets).catch(() => {});
+        observer.disconnect();
+      }
+    }, { threshold: 0.1 });
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   if (!assets) {
     return (
-      <div style={{ padding: 12, color: "#64748b", fontSize: 12 }}>Loading assets...</div>
+      <div ref={containerRef} style={{ padding: 12, color: "#64748b", fontSize: 12, height:"100%" }}>
+        Loading assets…
+      </div>
     );
   }
 
@@ -4413,19 +4434,33 @@ function AssetBrowser({ onInsert }) {
 
 function SceneManager({ onLoadScene, currentSessionId }) {
   const [scenes, setScenes] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false); // start false — lazy load
+  const containerRef = useRef(null);
+  const loadedRef    = useRef(false);
 
-  const reload = () => {
+  const reload = useCallback(() => {
     setLoading(true);
     fetchScenes()
       .then(setScenes)
       .catch(() => {})
       .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    reload();
   }, []);
+
+  // Lazy: only fetch when component scrolls into view (drawer opened)
+  useEffect(() => {
+    if (loadedRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !loadedRef.current) {
+        loadedRef.current = true;
+        reload();
+        observer.disconnect();
+      }
+    }, { threshold: 0.1 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [reload]);
 
   const handleDelete = async (id) => {
     if (confirm("Delete this scene?")) {
@@ -4436,6 +4471,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
 
   return (
     <div
+      ref={containerRef}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -7866,16 +7902,24 @@ function App() {
     drawerResizeStart.current = { y: e.clientY, h: drawerH };
     document.body.style.cursor = "row-resize";
     document.body.style.userSelect = "none";
+    // Track pending height in a ref — only commit to state on mouseup
+    // This prevents iframe resize (and UE data-channel "cannot send yet" logs) on every mousemove
+    const pendingH = { value: drawerH };
     const onMove = (ev) => {
       if (!drawerResizing.current) return;
-      const delta = drawerResizeStart.current.y - ev.clientY; // drag up = taller
-      setDrawerH(Math.max(80, Math.min(600, drawerResizeStart.current.h + delta)));
-      if (!drawerOpen) setDrawerOpen(true);
+      const delta = drawerResizeStart.current.y - ev.clientY;
+      pendingH.value = Math.max(80, Math.min(600, drawerResizeStart.current.h + delta));
+      // Update only the drag-handle visual, not the full React state
+      const handle = document.querySelector('.sw-drawer .sw-drawer-handle-preview');
+      if (handle) handle.style.transform = `translateY(${-delta}px)`;
     };
     const onUp = () => {
       drawerResizing.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      // Commit size only on mouseup — avoids continuous React re-renders + iframe resize
+      setDrawerH(pendingH.value);
+      if (pendingH.value > 50) setDrawerOpen(true);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
