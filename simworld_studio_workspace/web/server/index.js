@@ -56,7 +56,7 @@ Example — spawn 2 pedestrians:
 ## IMPORTANT RULES
 - ALWAYS use spawn_blueprint_actor for buildings/trees/props, NOT spawn_actor
 - Use spawn_agent for controllable humanoid/pedestrian agents
-- Each actor_name must be unique
+- actor_names get a session suffix automatically (prevents cross-map crashes) — use returned name for subsequent ops
 - Use varied blueprint_ids (don't use the same building for everything)
 - After placing objects, ALWAYS take_screenshot so the user sees results
 - DO NOT set or move the camera. DO NOT use execute_python_script to change camera position/rotation. The camera is controlled by the user via the viewport. Just call take_screenshot directly.

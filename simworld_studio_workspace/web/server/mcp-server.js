@@ -71,11 +71,17 @@ async function _execWithRetry(type,params,timeoutMs,retries){
 
 // Ensure actor names are unique by appending a short suffix if already used
 const _usedNames=new Set();
+// 4-char hex session tag, changes every restart — prevents cross-session name collisions
+// even when delete_all_spawned fails to clean up (e.g. after map load crash)
+const _SID=Date.now().toString(16).slice(-4);
 function _uniqueName(name){
-  if(!_usedNames.has(name)){_usedNames.add(name);return name}
-  // Append short numeric suffix: House_1 → House_1_a3
-  const suffix=Date.now().toString(36).slice(-3);
-  const unique=`${name}_${suffix}`;
+  // Always append session tag so the name is unique across restarts and map loads
+  const base=`${name}_${_SID}`;
+  if(!_usedNames.has(base)){_usedNames.add(base);return base}
+  // Within-session collision (extremely rare): add counter
+  let i=2;
+  while(_usedNames.has(`${base}_${i}`))i++;
+  const unique=`${base}_${i}`;
   _usedNames.add(unique);
   return unique;
 }
