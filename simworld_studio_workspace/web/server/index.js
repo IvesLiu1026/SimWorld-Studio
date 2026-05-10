@@ -877,22 +877,27 @@ app.get('/api/agent-camera/:name', async(req,res) => {
   const loc = session?.location;
   const rot = session?.rotation; // [pitch, yaw, roll]
 
+  const _snapToDataUrl = (imgPath) => {
+    const p = imgPath.trim();
+    const buf = fs.existsSync(p) ? fs.readFileSync(p) : Buffer.from(p, 'binary');
+    return `data:image/png;base64,${buf.toString('base64')}`;
+  };
+
   try {
-    // Each agent has its own camera component registered in UCV.
-    // vget /object/{name}/camera/lit returns the path to a captured PNG from that camera.
-    // Returns file path (no "png" suffix = save-to-file mode, more reliable than binary stream).
+    // Primary: vget /camera/actor/{name}/lit
+    // Plugin finds the actor's FusionCamSensor or UCameraComponent and renders from it.
+    // This is the 1-1 correct camera per agent — no index guessing needed.
     const imgPath = await ucvBroker.send(
-      `vget /object/${name}/camera/lit`,
-      { timeoutMs: 5000, retries: 1 }
+      `vget /camera/actor/${name}/lit`,
+      { timeoutMs: 6000, retries: 1 }
     );
-    if (imgPath && imgPath.trim()) {
-      const p = imgPath.trim();
-      const imgBuf = fs.existsSync(p) ? fs.readFileSync(p) : Buffer.from(p, 'binary');
-      const dataUrl = `data:image/png;base64,${imgBuf.toString('base64')}`;
+
+    if (imgPath?.trim()) {
+      const dataUrl = _snapToDataUrl(imgPath);
       _agentSnapCache.set(name, { dataUrl, ts: Date.now() });
       return res.json({ dataUrl, ts: Date.now() });
     }
-    throw new Error('No image from agent camera');
+    throw new Error('No image from actor camera');
   } catch {
     // Final fallback: latest saved screenshot file
     const latest = (() => {
@@ -980,30 +985,74 @@ app.post('/api/vlm-score', async(req,res) => {
       const proc = spawn(CLAUDE_BIN, args, { env: process.env });
       proc.stdin.write(userMsg + '\n');
       proc.stdin.end();
-      let out = '';
-      proc.stdout.on('data', d => out += d.toString());
-      proc.on('close', code => {
-        if (code !== 0 && !out) { reject(new Error(`claude exit ${code}`)); return; }
-        // Extract JSON result from stream-json output
-        const lines = out.split('\n').filter(Boolean);
-        for (const l of lines) {
+
+      let out = '', errOut = '', allText = '';
+      proc.stdout.on('data', d => {
+        out += d.toString();
+        // Collect assistant text incrementally for early extraction
+        const chunk = d.toString();
+        for (const line of chunk.split('\n')) {
+          if (!line.trim()) continue;
           try {
-            const ev = JSON.parse(l);
-            const text = ev.result || (ev.message?.content?.[0]?.text) || '';
-            const m = text.match(/\{"score"[^}]+\}/);
-            if (m) { resolve(JSON.parse(m[0])); return; }
-            // Also check text_delta events
+            const ev = JSON.parse(line);
+            // Accumulate text from all sources
             if (ev.type === 'stream_event') {
-              const delta = ev.event?.delta?.text || '';
-              const md = delta.match(/\{"score"[^}]+\}/);
-              if (md) { resolve(JSON.parse(md[0])); return; }
+              allText += ev.event?.delta?.text || ev.event?.content_block?.text || '';
+            } else if (ev.type === 'assistant') {
+              for (const b of (ev.message?.content || [])) {
+                if (b.type === 'text') allText += b.text || '';
+              }
+            } else if (ev.type === 'result') {
+              allText += (typeof ev.result === 'string' ? ev.result : '') || '';
             }
           } catch {}
         }
-        // Final fallback: search raw output for the JSON pattern
-        const raw = out.match(/\{"score"\s*:\s*\d+[^}]*\}/);
-        if (raw) { try { resolve(JSON.parse(raw[0])); return; } catch {} }
-        reject(new Error('No score JSON in output: ' + out.slice(0,300)));
+      });
+      proc.stderr.on('data', d => { errOut += d.toString(); });
+
+      // Kill if taking too long (images can be slow)
+      const killTimer = setTimeout(() => { proc.kill('SIGTERM'); }, 45000);
+
+      proc.on('close', code => {
+        clearTimeout(killTimer);
+
+        // Extract JSON from accumulated text using multiple strategies
+        const extractScore = (text) => {
+          if (!text) return null;
+          // Strategy 1: exact JSON object with score key
+          const m1 = text.match(/\{[^{}]*"score"\s*:\s*\d+[^{}]*\}/);
+          if (m1) { try { return JSON.parse(m1[0]); } catch {} }
+          // Strategy 2: JSON inside code block
+          const m2 = text.match(/```(?:json)?\s*(\{[^```]+\})\s*```/s);
+          if (m2) { try { const j = JSON.parse(m2[1]); if (j.score) return j; } catch {} }
+          // Strategy 3: lenient — find score number, label word, feedback sentence
+          const ms = text.match(/"score"\s*:\s*(\d+)/);
+          const ml = text.match(/"label"\s*:\s*"([^"]+)"/);
+          const mf = text.match(/"feedback"\s*:\s*"([^"]+)"/);
+          if (ms) return { score: parseInt(ms[1]), label: ml?.[1]||'ok', feedback: mf?.[1]||'' };
+          return null;
+        };
+
+        const scored = extractScore(allText);
+        if (scored) { resolve(scored); return; }
+
+        // Last resort: scan all raw output lines
+        for (const l of out.split('\n')) {
+          try {
+            const ev = JSON.parse(l);
+            const texts = [
+              ev.result,
+              ev.message?.content?.map?.(b=>b.text).join(''),
+            ].filter(Boolean);
+            for (const t of texts) {
+              const s = extractScore(t);
+              if (s) { resolve(s); return; }
+            }
+          } catch {}
+        }
+
+        const debugInfo = `code=${code} textLen=${allText.length} err=${errOut.slice(0,100)} out=${out.slice(0,200)}`;
+        reject(new Error(`No score found. ${debugInfo}`));
       });
       proc.on('error', reject);
     });
