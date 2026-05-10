@@ -4443,105 +4443,112 @@ function CodingVerifierPanel({ sessionId }) {
   const collCount = collData?.collision_count ?? "—";
   const collColor = typeof collCount === "number" ? (collCount === 0 ? "#16a34a" : "#dc2626") : "var(--ink-3)";
 
+  const FS = "var(--fs-body)"; // 13px minimum throughout
+
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"var(--bg)" }}>
-      {/* Header */}
-      <div style={{ display:"flex", alignItems:"center", padding:"4px 8px",
+      {/* Tab bar + action button */}
+      <div style={{ display:"flex", alignItems:"center", padding:"6px 10px",
         borderBottom:"1px solid var(--line)", flexShrink:0, gap:6 }}>
-        <span style={{ fontSize:10, fontWeight:700, color:"var(--orange)" }}>📐 Verifier</span>
-        <div style={{ display:"flex", gap:1, flex:1 }}>
+        <div style={{ display:"flex", gap:4, flex:1 }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
-              padding:"2px 8px", fontSize:9, borderRadius:4, border:"none", cursor:"pointer",
-              background: tab===t.id?"var(--orange)":"transparent",
-              color: tab===t.id?"#fff":"var(--ink-3)", fontWeight: tab===t.id?700:400,
+              padding:"5px 12px", fontSize:FS, borderRadius:6, border:"none", cursor:"pointer",
+              background: tab===t.id?"var(--orange)":"var(--bg)",
+              color: tab===t.id?"#fff":"var(--ink-2)",
+              fontWeight: tab===t.id?700:500, fontFamily:"inherit",
             }}>{t.label}</button>
           ))}
         </div>
         {tab === "collisions" && (
           <button onClick={runCollisionCheck} disabled={checking}
-            style={{ fontSize:9, padding:"2px 8px", borderRadius:4, border:"1px solid var(--line)",
-              background:"none", cursor:"pointer", color:"var(--ink-2)" }}>
-            {checking ? "…" : "↻ Check"}
+            style={{ fontSize:FS, padding:"5px 12px", borderRadius:6,
+              border:"1px solid var(--line)", background:"var(--panel)",
+              cursor:"pointer", color:"var(--ink-2)", fontFamily:"inherit" }}>
+            {checking ? "Checking…" : "↻ Check"}
           </button>
         )}
         {tab === "vlm" && (
           <button onClick={runVlmScore} disabled={vlmRunning}
-            style={{ fontSize:9, padding:"2px 8px", borderRadius:4, border:"1px solid var(--line)",
-              background:"none", cursor:"pointer", color:"var(--ink-2)" }}>
+            style={{ fontSize:FS, padding:"5px 12px", borderRadius:6,
+              border:"1px solid var(--line)", background:"var(--panel)",
+              cursor:"pointer", color:"var(--ink-2)", fontFamily:"inherit" }}>
             {vlmRunning ? "Scoring…" : "↻ Score"}
           </button>
         )}
       </div>
 
       {/* Body */}
-      <div style={{ flex:1, overflow:"auto", padding:6 }}>
+      <div style={{ flex:1, overflow:"auto", padding:8 }}>
         {tab === "collisions" && (
           collData ? (
             <div>
-              {/* Big stat chips */}
-              <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+              {/* Stat chips */}
+              <div style={{ display:"flex", gap:6, marginBottom:10 }}>
                 {[
-                  { val:collData.collision_count,     label:"Collisions",     color:collColor },
-                  { val:collData.checked_actors_count||0, label:"Actors",      color:"var(--ink-2)" },
-                  { val:collData.total_overlaps||0,   label:"Overlaps",      color:"var(--ink-3)" },
+                  { val:collData.collision_count,          label:"Collisions", color:collColor },
+                  { val:collData.checked_actors_count||0,  label:"Actors",     color:"var(--ink-2)" },
+                  { val:collData.total_overlaps||0,        label:"Overlaps",   color:"var(--ink-3)" },
                 ].map(({val,label,color}) => (
-                  <div key={label} style={{ flex:1, textAlign:"center", padding:"6px 4px",
-                    background:"var(--panel)", borderRadius:7, border:"1px solid var(--line)" }}>
-                    <div style={{ fontSize:22, fontWeight:800, color }}>{val}</div>
-                    <div style={{ fontSize:11, color:"var(--ink-3)" }}>{label}</div>
+                  <div key={label} style={{ flex:1, textAlign:"center", padding:"8px 4px",
+                    background:"var(--panel)", borderRadius:8, border:"1px solid var(--line)" }}>
+                    <div style={{ fontSize:26, fontWeight:900, color, lineHeight:1 }}>{val}</div>
+                    <div style={{ fontSize:FS, color:"var(--ink-3)", marginTop:3 }}>{label}</div>
                   </div>
                 ))}
               </div>
               {/* Collision history chart */}
               {sceneCollHistory.length > 1 && (
-                <div style={{ marginBottom:8 }}>
-                  <LineChart series={sceneCollHistory} label="Scene collisions over checks" color="#dc2626" W={380} H={70} />
+                <div style={{ marginBottom:10 }}>
+                  <LineChart series={sceneCollHistory} label="Collision history" color="#dc2626" W={380} H={72} />
                 </div>
               )}
-              {/* Collision pair list */}
+              {/* Collision pairs */}
               {(collData.collision_pairs||[]).slice(0,5).map((p,i) => (
-                <div key={i} style={{ fontSize:11, padding:"4px 7px", background:"rgba(220,38,38,.06)",
-                  borderRadius:5, marginBottom:3, borderLeft:"2px solid #dc2626", color:"var(--ink-2)" }}>
+                <div key={i} style={{ fontSize:FS, padding:"6px 8px",
+                  background:"rgba(220,38,38,.06)", borderRadius:6, marginBottom:4,
+                  borderLeft:"3px solid #dc2626", color:"var(--ink-2)", lineHeight:1.4 }}>
                   <strong>{p.actor1}</strong> ↔ <strong>{p.actor2}</strong>
-                  <span style={{ color:"var(--ink-3)", marginLeft:4 }}>
-                    [{p.collision_type}] {Math.round(p.penetration_depth)}cm
+                  <span style={{ color:"var(--ink-3)", marginLeft:6, fontSize:12 }}>
+                    {p.collision_type} · {Math.round(p.penetration_depth)}cm
                   </span>
                 </div>
               ))}
               {collData.collision_count === 0 && (
-                <div style={{ fontSize:10, color:"#16a34a", textAlign:"center", padding:8 }}>✓ No collisions detected</div>
+                <div style={{ fontSize:FS, color:"#16a34a", textAlign:"center", padding:12, fontWeight:600 }}>
+                  ✓ No collisions detected
+                </div>
               )}
             </div>
           ) : (
-            <div style={{ fontSize:10, color:"var(--ink-3)", textAlign:"center", padding:12 }}>
+            <div style={{ fontSize:FS, color:"var(--ink-3)", textAlign:"center", padding:16 }}>
               {checking ? "Checking…" : "Click ↻ Check to run collision detection"}
             </div>
           )
         )}
         {tab === "vlm" && (
           <div>
-            {vlmError && <div style={{ fontSize:9, color:"#dc2626", marginBottom:4 }}>{vlmError}</div>}
+            {vlmError && <div style={{ fontSize:FS, color:"#dc2626", marginBottom:6 }}>{vlmError}</div>}
             {scores.length === 0 && !vlmRunning && (
-              <div style={{ fontSize:10, color:"var(--ink-3)", textAlign:"center", padding:12 }}>
+              <div style={{ fontSize:FS, color:"var(--ink-3)", textAlign:"center", padding:16 }}>
                 Click ↻ Score to evaluate the current scene with VLM
               </div>
             )}
             {scores.slice().reverse().map((s,i) => (
-              <div key={i} style={{ marginBottom:6, padding:6, background:"var(--panel)",
-                borderRadius:6, border:"1px solid var(--line)" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
-                  <span style={{ fontSize:14, fontWeight:700,
+              <div key={i} style={{ marginBottom:8, padding:8, background:"var(--panel)",
+                borderRadius:8, border:"1px solid var(--line)" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                  <span style={{ fontSize:20, fontWeight:800,
                     color: s.score >= 7?"#16a34a":s.score >= 4?"#f59e0b":"#dc2626" }}>
-                    {s.score}/10
+                    {s.score}<span style={{ fontSize:13, fontWeight:500, color:"var(--ink-3)" }}>/10</span>
                   </span>
-                  <span style={{ fontSize:9, color:"var(--ink-3)" }}>
+                  {s.label && <span style={{ fontSize:12, background:"var(--bg)", borderRadius:4,
+                    padding:"2px 7px", color:"var(--ink-2)", fontWeight:600 }}>{s.label}</span>}
+                  <span style={{ fontSize:12, color:"var(--ink-3)", marginLeft:"auto" }}>
                     {new Date(s.ts).toLocaleTimeString()}
                   </span>
-                  {s.label && <span style={{ fontSize:8, background:"var(--bg)", borderRadius:3, padding:"1px 4px",
-                    color:"var(--ink-3)" }}>{s.label}</span>}
                 </div>
-                {s.feedback && <div style={{ fontSize:9, color:"var(--ink-2)", lineHeight:1.4 }}>{s.feedback}</div>}
+                {s.feedback && <div style={{ fontSize:FS, color:"var(--ink-2)", lineHeight:1.5 }}>{s.feedback}</div>}
               </div>
             ))}
           </div>
@@ -4922,24 +4929,35 @@ const SPAWN_SNIPPETS = {
   maps:(a)=>`load_map(path="${a.fullPath}")`,
 };
 
+// Find a node in the tree by path
+function findNode(root, targetPath) {
+  if (!root) return null;
+  if (root.path === targetPath) return root;
+  for (const child of root.children || []) {
+    const found = findNode(child, targetPath);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Flatten all assets in subtree for search
+function flattenTree(node) {
+  const out = [...(node.assets || [])];
+  for (const c of (node.children || [])) out.push(...flattenTree(c));
+  return out;
+}
+
 function AssetBrowser({ onInsert }) {
-  const [browsePath, setBrowsePath] = useState("/Game/"); // start at Game level
-  const [search, setSearch]         = useState("");
-  const [category, setCategory]     = useState("");
-  const [page, setPage]             = useState(0);
-  const [data, setData]             = useState(null);   // api response
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [allAssets, setAllAssets]   = useState([]);     // accumulated for load-more
+  const [treeData, setTreeData]   = useState(null);   // full tree from /api/asset-tree (loaded once)
+  const [browsePath, setBrowsePath] = useState("/Game/");
+  const [search, setSearch]       = useState("");
+  const [category, setCategory]   = useState("");
+  const [page, setPage]           = useState(0);
   const containerRef = useRef(null);
   const loadedRef    = useRef(false);
-  const PAGE_SIZE    = 30;
+  const PAGE_SIZE    = 40;
 
-  const fetchPage = useCallback(async (path, q, cat, pg) => {
-    const params = new URLSearchParams({ path, q, category: cat, page: pg, limit: PAGE_SIZE });
-    return fetch(`${API_BASE}/assets?${params}`).then(r => r.json());
-  }, []);
-
-  // Lazy-load on first visibility
+  // Load full tree ONCE on first visibility — no subsequent API calls for navigation
   useEffect(() => {
     if (loadedRef.current) return;
     const el = containerRef.current;
@@ -4947,62 +4965,54 @@ function AssetBrowser({ onInsert }) {
     const obs = new IntersectionObserver(([e]) => {
       if (e.isIntersecting && !loadedRef.current) {
         loadedRef.current = true;
-        fetchPage("/", "", "", 0).then(d => { setData(d); setAllAssets(d.assets || []); }).catch(()=>{});
+        fetch(`${API_BASE}/asset-tree`).then(r => r.json()).then(setTreeData).catch(()=>{});
         obs.disconnect();
       }
     }, { threshold: 0.1 });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [fetchPage]);
+  }, []);
 
-  // Re-fetch when path / search / category changes
-  useEffect(() => {
-    if (!loadedRef.current) return;
-    setPage(0); setAllAssets([]);
-    fetchPage(browsePath, search, category, 0)
-      .then(d => { setData(d); setAllAssets(d.assets || []); })
-      .catch(()=>{});
-  }, [browsePath, search, category, fetchPage]);
-
-  const loadMore = async () => {
-    const next = page + 1;
-    setLoadingMore(true);
-    try {
-      const d = await fetchPage(browsePath, search, category, next);
-      setAllAssets(prev => [...prev, ...(d.assets || [])]);
-      setPage(next);
-      setData(d);
-    } finally { setLoadingMore(false); }
-  };
-
-  const navigate = (dir) => {
-    const newPath = browsePath === "/" ? `/${dir}/` : `${browsePath}${dir}/`;
-    setBrowsePath(newPath); setCategory(""); setSearch("");
-  };
+  // All navigation is now local — no API calls
+  const navigate = (childPath) => { setBrowsePath(childPath); setCategory(""); setSearch(""); setPage(0); };
   const navigateUp = () => {
     const parts = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
-    if (parts.length <= 1) { setBrowsePath("/Game/"); setCategory(""); setSearch(""); return; }
+    if (parts.length <= 1) { setBrowsePath("/Game/"); setCategory(""); setSearch(""); setPage(0); return; }
     parts.pop();
     setBrowsePath("/" + parts.join("/") + "/");
-    setCategory(""); setSearch("");
+    setCategory(""); setSearch(""); setPage(0);
   };
-
-  // Breadcrumbs starting from Game level
-  const breadcrumbs = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
 
   const insertAsset = (a) => {
     const snippet = (SPAWN_SNIPPETS[a.category] || ((x) => x.fullPath))(a);
     onInsert?.(snippet);
   };
 
-  if (!data && !loadedRef.current) {
-    return <div ref={containerRef} style={{ padding:12, color:"#64748b", fontSize:12, height:"100%" }}>Loading…</div>;
-  }
-  if (!data) {
-    return <div ref={containerRef} style={{ padding:12, color:"#64748b", fontSize:12, height:"100%" }}>Loading assets…</div>;
+  if (!treeData) {
+    return <div ref={containerRef} style={{ padding:16, color:"var(--ink-3)", fontSize:"var(--fs-body)", height:"100%",
+      display:"flex", alignItems:"center", justifyContent:"center" }}>Loading asset catalog…</div>;
   }
 
-  const counts = data.counts || {};
+  // Find current node in tree
+  const curNode = findNode(treeData.tree, browsePath) || treeData.tree;
+  const counts  = treeData.counts || {};
+
+  // Assets to display: current node + optional filters
+  let displayAssets = category
+    ? flattenTree(treeData.tree).filter(a => a.category === category)
+    : (curNode.assets || []);
+
+  if (search) {
+    const q = search.toLowerCase();
+    displayAssets = (category ? displayAssets : flattenTree(curNode))
+      .filter(a => a.name.toLowerCase().includes(q));
+  }
+
+  const totalShown = displayAssets.length;
+  const pageAssets = displayAssets.slice(0, (page + 1) * PAGE_SIZE);
+  const hasMore    = pageAssets.length < totalShown;
+
+  const breadcrumbs = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
 
   return (
     <div ref={containerRef} style={{ display:"flex", height:"100%", background:"var(--bg)", overflow:"hidden" }}>
@@ -5058,71 +5068,76 @@ function AssetBrowser({ onInsert }) {
               </span>
             ))}
           </div>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
-            style={{ width:100, padding:"3px 6px", fontSize:11, border:"1px solid var(--line)",
-              borderRadius:4, background:"var(--panel)", color:"var(--ink-1)", outline:"none" }} />
+          <input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
+            placeholder="Search…"
+            style={{ width:110, padding:"4px 8px", fontSize:"var(--fs-body)",
+              border:"1px solid var(--line)", borderRadius:5,
+              background:"var(--panel)", color:"var(--ink-1)", outline:"none" }} />
         </div>
 
         {/* Asset grid */}
         <div style={{ flex:1, overflow:"auto", padding:6 }}>
-          {/* Sub-directories */}
-          {data.dirs?.length > 0 && (
-            <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:6 }}>
-              {data.dirs.map(dir => (
-                <button key={dir} onClick={() => navigate(dir)}
-                  style={{ display:"flex", alignItems:"center", gap:4, padding:"4px 8px",
-                    border:"1px solid var(--line)", borderRadius:6, background:"var(--panel)",
-                    cursor:"pointer", fontSize:10, color:"var(--ink-2)" }}>
-                  📁 {dir}
+          {/* Sub-directories — local navigation, no API call */}
+          {!search && !category && curNode.children?.length > 0 && (
+            <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
+              {curNode.children.map(child => (
+                <button key={child.path} onClick={() => navigate(child.path)}
+                  style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 10px",
+                    border:"1px solid var(--line)", borderRadius:7, background:"var(--panel)",
+                    cursor:"pointer", fontSize:"var(--fs-body)", color:"var(--ink-2)",
+                    fontFamily:"inherit", fontWeight:500 }}>
+                  📁 {child.name}
+                  <span style={{ fontSize:11, color:"var(--ink-3)" }}>
+                    ({(child.assets?.length||0) + (child.children?.length>0 ? '+' : '')})
+                  </span>
                 </button>
               ))}
             </div>
           )}
 
           {/* Asset tiles */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(100px,1fr))", gap:5 }}>
-            {allAssets.map((a, i) => (
-              <div key={`${a.fullPath}-${i}`}
-                title={a.fullPath}
-                onClick={() => insertAsset(a)}
-                style={{ padding:"7px 6px", borderRadius:7, border:"1px solid var(--line)",
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))", gap:5 }}>
+            {pageAssets.map((a, i) => (
+              <div key={`${a.fullPath}-${i}`} title={a.fullPath} onClick={() => insertAsset(a)}
+                style={{ padding:"8px 6px", borderRadius:8, border:"1px solid var(--line)",
                   background:"var(--panel)", cursor:"pointer", textAlign:"center",
-                  fontSize:9, color:"var(--ink-2)", transition:"border-color .12s, box-shadow .12s",
-                  userSelect:"none" }}
+                  fontSize:"var(--fs-body)", color:"var(--ink-2)",
+                  transition:"border-color .12s, box-shadow .12s", userSelect:"none" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor="var(--blue)"; e.currentTarget.style.boxShadow="0 0 0 2px var(--blue-soft)"; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor="var(--line)"; e.currentTarget.style.boxShadow="none"; }}>
-                <div style={{ fontSize:18, marginBottom:3 }}>{CAT_ICONS[a.category] || "📦"}</div>
-                <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontWeight:600 }}>
+                <div style={{ fontSize:20, marginBottom:4 }}>{CAT_ICONS[a.category] || a.icon || "📦"}</div>
+                <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontWeight:600, fontSize:12 }}>
                   {a.name.replace(/^BP_/,"").replace(/_/g," ")}
                 </div>
-                {a.agentType && <div style={{ color:"var(--ink-3)", fontSize:8, marginTop:1 }}>{a.agentType}</div>}
-                {a.biome && <div style={{ color:"var(--ink-3)", fontSize:8, marginTop:1 }}>{a.biome?.split(",")[0]}</div>}
+                {a.agentType && <div style={{ color:"var(--ink-3)", fontSize:11, marginTop:1 }}>{a.agentType}</div>}
+                {a.biome && <div style={{ color:"var(--ink-3)", fontSize:11, marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{a.biome.split(",")[0]}</div>}
               </div>
             ))}
           </div>
 
-          {allAssets.length === 0 && (
-            <div style={{ textAlign:"center", padding:20, color:"var(--ink-3)", fontSize:11 }}>
-              {search ? `No assets matching "${search}"` : "No assets in this location"}
+          {pageAssets.length === 0 && (
+            <div style={{ textAlign:"center", padding:24, color:"var(--ink-3)", fontSize:"var(--fs-body)" }}>
+              {search ? `No assets matching "${search}"` : "No assets here — browse a subfolder"}
             </div>
           )}
 
-          {/* Load more */}
-          {data.hasMore && (
+          {/* Load more (local pagination — no API) */}
+          {hasMore && (
             <div style={{ textAlign:"center", marginTop:8 }}>
-              <button onClick={loadMore} disabled={loadingMore}
-                style={{ padding:"5px 16px", borderRadius:6, border:"1px solid var(--line)",
-                  background:"var(--panel)", cursor:"pointer", fontSize:11, color:"var(--blue)" }}>
-                {loadingMore ? "Loading…" : `Load more (${data.total - allAssets.length} remaining)`}
+              <button onClick={() => setPage(p => p + 1)}
+                style={{ padding:"6px 18px", borderRadius:7, border:"1px solid var(--line)",
+                  background:"var(--panel)", cursor:"pointer",
+                  fontSize:"var(--fs-body)", color:"var(--blue)", fontFamily:"inherit" }}>
+                Load more ({totalShown - pageAssets.length} remaining)
               </button>
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div style={{ flexShrink:0, padding:"3px 8px", borderTop:"1px solid var(--line)",
-          fontSize:9, color:"var(--ink-3)", display:"flex", justifyContent:"space-between" }}>
-          <span>{allAssets.length} / {data.total} assets shown</span>
+        <div style={{ flexShrink:0, padding:"4px 10px", borderTop:"1px solid var(--line)",
+          fontSize:12, color:"var(--ink-3)", display:"flex", justifyContent:"space-between" }}>
+          <span>{pageAssets.length} / {totalShown} assets</span>
           <span>Click to insert spawn command</span>
         </div>
       </div>

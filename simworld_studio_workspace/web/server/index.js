@@ -560,6 +560,56 @@ function _flattenAssets(catalog) {
 
 const _allAssets = _flattenAssets(ASSETS_FULL);
 
+// Build complete nested tree once at startup — clients load once and navigate locally
+const _assetTree = (() => {
+  // Build nested dir structure: { name, path, children: [], assets: [] }
+  const root = { name:'', path:'/', children:[], assets:[] };
+  const dirs = new Map(); dirs.set('/', root);
+
+  const getOrCreateDir = (dirPath) => {
+    if (dirs.has(dirPath)) return dirs.get(dirPath);
+    const parts = dirPath.replace(/\/$/, '').split('/').filter(Boolean);
+    let node = root;
+    let built = '/';
+    for (const seg of parts) {
+      built += seg + '/';
+      if (!dirs.has(built)) {
+        const child = { name: seg, path: built, children: [], assets: [] };
+        node.children.push(child);
+        dirs.set(built, child);
+      }
+      node = dirs.get(built);
+    }
+    return node;
+  };
+
+  for (const asset of _allAssets) {
+    const dir = getOrCreateDir(asset.dir);
+    dir.assets.push({
+      name: asset.name, fullPath: asset.fullPath, type: asset.type,
+      category: asset.category, spawnTool: asset.spawnTool, icon: asset.icon || '📦',
+      agentType: asset.agentType, description: asset.description, biome: asset.biome,
+    });
+  }
+
+  // Sort children alphabetically
+  const sortNode = (node) => {
+    node.children.sort((a,b) => a.name.localeCompare(b.name));
+    node.children.forEach(sortNode);
+    node.assets.sort((a,b) => a.name.localeCompare(b.name));
+  };
+  sortNode(root);
+
+  // Category counts for sidebar
+  const counts = {};
+  for (const a of _allAssets) counts[a.category] = (counts[a.category]||0)+1;
+
+  return { tree: root, counts, totalAssets: _allAssets.length, builtAt: Date.now() };
+})();
+
+// Return full tree (built once at startup, ~50KB JSON)
+app.get('/api/asset-tree',(req,res) => res.json(_assetTree));
+
 app.get('/api/assets',(req,res)=>{
   let { path:browsePath='/', q='', page=0, limit=30, category='' } = req.query;
   page = Number(page); limit = Number(limit);
