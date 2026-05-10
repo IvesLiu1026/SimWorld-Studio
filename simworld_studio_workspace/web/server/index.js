@@ -349,20 +349,23 @@ const _assetScanInterval = setInterval(() => {
 }, 5000);
 
 // Auto-discover player-controlled agents every 10s via vget /objects
-// Registers any pawn-like actors so the background poller can track them
-const AGENT_PATTERNS = /agent|pedestrian|pawn|player|user|walker|npc|base_user|base_ped/i;
+// Registers actual agent pawns — excludes camera managers, controllers, HUDs, spectators
+const AGENT_PATTERNS  = /agent|pedestrian|pawn|base_user|base_ped|walker|npc/i;
+const AGENT_EXCLUDE   = /camera|controller|manager|hud|spectator|default__/i;
 setInterval(async () => {
-  if (!_cachedPie) return; // only in PIE mode
+  if (!_cachedPie) return;
   try {
     const raw = await ucvBroker.send('vget /objects', { timeoutMs: 3000, retries: 1 });
-    const names = (raw || '').trim().split(/\s+/).filter(n => n && AGENT_PATTERNS.test(n));
+    const names = (raw || '').trim().split(/\s+/).filter(n =>
+      n && AGENT_PATTERNS.test(n) && !AGENT_EXCLUDE.test(n)
+    );
     for (const name of names) {
       if (!agentCtrl.get(name)) {
         agentCtrl.getOrCreate(name, 'pedestrian', null);
-        log.system('info', `[agent-discover] Auto-registered agent: ${name}`);
+        log.system('info', `[agent-discover] Auto-registered: ${name}`);
       }
     }
-  } catch { /* silent — UCV might not be connected */ }
+  } catch { /* silent */ }
 }, 10000);
 
 // Gather current status snapshot (shared by SSE push and legacy poll)
@@ -1030,9 +1033,7 @@ app.post('/api/agent-discover', async(req,res) => {
     const br = getBroker();
     const raw = await br.send('vget /objects', { timeoutMs:5000 });
     const names = (raw||'').trim().split(/\s+/).filter(Boolean);
-    // Heuristic: names containing 'agent', 'pedestrian', 'pawn', 'player', 'user', 'walker'
-    const AGENT_PATTERNS = /agent|pedestrian|pawn|player|user|walker|npc|base_user|base_ped/i;
-    const discovered = names.filter(n => AGENT_PATTERNS.test(n));
+    const discovered = names.filter(n => AGENT_PATTERNS.test(n) && !AGENT_EXCLUDE.test(n));
     for (const n of discovered) {
       agentCtrl.getOrCreate(n, 'pedestrian', null);
     }

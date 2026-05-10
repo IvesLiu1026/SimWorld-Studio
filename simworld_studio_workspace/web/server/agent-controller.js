@@ -85,6 +85,7 @@ class AgentSession {
     this.rotation     = null;   // [pitch, yaw, roll] from UE
     this.velocity     = null;   // [vx, vy, vz] cm/s
     this.speed        = 0;      // scalar speed cm/s
+    this._prevOverlaps = new Set(); // tracks previous overlap set to detect NEW contacts
 
     this.status        = 'idle'; // idle | running
     this.currentAction = null;   // tool name currently executing
@@ -223,14 +224,17 @@ class AgentSession {
     if (obs.velocity)  this.velocity  = obs.velocity;
     if (obs.speed !== undefined) this.speed = obs.speed;
 
-    // Check for overlapping actors (collision / proximity feedback)
+    // Check for overlapping actors — delta-only (new contacts since last check)
     const overlaps = await getOverlaps(this.agentName);
-    if (overlaps.length > 0) {
-      this.collisionCount += overlaps.length;
-      const ev = { ts: Date.now(), overlapping: overlaps.map(o=>o.name), loc: obs.location };
+    const currentSet = new Set(overlaps.map(o => o.name));
+    const newContacts = [...currentSet].filter(n => !this._prevOverlaps.has(n));
+    if (newContacts.length > 0) {
+      this.collisionCount += newContacts.length;
+      const ev = { ts: Date.now(), overlapping: newContacts, loc: obs.location };
       this.recentCollisions.push(ev);
       if (this.recentCollisions.length > 20) this.recentCollisions.shift();
     }
+    this._prevOverlaps = currentSet;
 
     // Nearby environment feedback (300 cm radius)
     const nearby = await getEnvironmentFeedback(this.agentName, 300);
@@ -527,14 +531,18 @@ class AgentController {
           if (obs.velocity)  session.velocity  = obs.velocity;
           if (obs.speed !== undefined) session.speed = obs.speed;
 
-          // Check overlaps (collision detection)
+          // Collision detection: only record NEW contacts (delta from previous poll)
+          // Prevents counting the same wall-touch repeatedly every 3s
           const overlaps = await getOverlaps(session.agentName);
-          if (overlaps.length > 0) {
-            session.collisionCount += overlaps.length;
-            const ev = { ts: Date.now(), overlapping: overlaps.map(o=>o.name), loc: obs.location };
+          const currentSet = new Set(overlaps.map(o => o.name));
+          const newContacts = [...currentSet].filter(n => !session._prevOverlaps.has(n));
+          if (newContacts.length > 0) {
+            session.collisionCount += newContacts.length;
+            const ev = { ts: Date.now(), overlapping: newContacts, loc: obs.location };
             session.recentCollisions.push(ev);
             if (session.recentCollisions.length > 20) session.recentCollisions.shift();
           }
+          session._prevOverlaps = currentSet;
         } catch { /* broker handles retries */ }
       }
     }, 3000);

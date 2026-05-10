@@ -3866,8 +3866,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
 function AgentAggregatePanelTabs({ agents, sessionId }) {
   const [tab, setTab] = useState("overview");
   const [trackName, setTrackName] = useState("");
-  const [discovering, setDiscovering] = useState(false);
-  const [discoverMsg, setDiscoverMsg] = useState("");
+  const [trackMsg, setTrackMsg] = useState("");
 
   const handleTrack = async () => {
     const name = trackName.trim();
@@ -3877,16 +3876,8 @@ function AgentAggregatePanelTabs({ agents, sessionId }) {
       body: JSON.stringify({ name }),
     });
     setTrackName("");
-    setDiscoverMsg(`Tracking: ${name}`);
-    setTimeout(() => setDiscoverMsg(""), 3000);
-  };
-
-  const handleDiscover = async () => {
-    setDiscovering(true);
-    const d = await fetch(`${API_BASE}/agent-discover`, { method:"POST" }).then(r=>r.json()).catch(()=>null);
-    setDiscovering(false);
-    setDiscoverMsg(d ? `Found: ${d.discovered.join(", ")||"none"}` : "Discovery failed");
-    setTimeout(() => setDiscoverMsg(""), 5000);
+    setTrackMsg(`Tracking: ${name}`);
+    setTimeout(() => setTrackMsg(""), 3000);
   };
 
   const tabs = [
@@ -3896,25 +3887,19 @@ function AgentAggregatePanelTabs({ agents, sessionId }) {
   ];
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"var(--bg)" }}>
-      {/* Track agent + discover controls */}
+      {/* Track agent by name (auto-discovery runs server-side every 10s) */}
       <div style={{ display:"flex", alignItems:"center", gap:4, padding:"4px 8px",
         borderBottom:"1px solid var(--line)", flexShrink:0, background:"var(--panel)" }}>
         <input value={trackName} onChange={e=>setTrackName(e.target.value)}
           onKeyDown={e=>e.key==="Enter"&&handleTrack()}
-          placeholder="Agent name to track…"
+          placeholder="Track agent by name…"
           style={{ flex:1, padding:"4px 8px", fontSize:"var(--fs-body)", border:"1px solid var(--line)",
             borderRadius:5, background:"var(--bg)", color:"var(--ink-1)", outline:"none",
             fontFamily:"inherit" }} />
         <button onClick={handleTrack} style={{ padding:"4px 10px", borderRadius:5, border:"none",
           background:"var(--blue)", color:"#fff", cursor:"pointer",
           fontSize:"var(--fs-body)", fontFamily:"inherit" }}>Track</button>
-        <button onClick={handleDiscover} disabled={discovering}
-          style={{ padding:"4px 10px", borderRadius:5, border:"1px solid var(--line)",
-            background:"none", cursor:"pointer", fontSize:"var(--fs-body)", fontFamily:"inherit",
-            color:"var(--ink-2)" }}>
-          {discovering ? "…" : "🔍 Discover"}
-        </button>
-        {discoverMsg && <span style={{ fontSize:12, color:"var(--blue)", whiteSpace:"nowrap" }}>{discoverMsg}</span>}
+        {trackMsg && <span style={{ fontSize:12, color:"var(--blue)", whiteSpace:"nowrap" }}>{trackMsg}</span>}
       </div>
 
       <div style={{ display:"flex", borderBottom:"1px solid var(--line)", flexShrink:0 }}>
