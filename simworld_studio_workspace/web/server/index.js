@@ -884,20 +884,24 @@ app.get('/api/agent-camera/:name', async(req,res) => {
   };
 
   try {
-    // Primary: vget /camera/actor/{name}/lit
-    // Plugin finds the actor's FusionCamSensor or UCameraComponent and renders from it.
-    // This is the 1-1 correct camera per agent — no index guessing needed.
-    const imgPath = await ucvBroker.send(
-      `vget /camera/actor/${name}/lit`,
-      { timeoutMs: 6000, retries: 1 }
-    );
+    // Primary: vget /camera/actor/{name}/lit (requires recompiled plugin)
+    // Falls back gracefully if command not yet available.
+    let imgPath = null;
+    try {
+      const raw = await ucvBroker.send(`vget /camera/actor/${name}/lit`, { timeoutMs: 6000, retries: 1 });
+      // Only treat as a valid file path — reject error strings and empty results
+      if (raw && raw.trim() && fs.existsSync(raw.trim())) {
+        imgPath = raw.trim();
+      }
+    } catch { /* plugin not yet compiled with this command */ }
 
-    if (imgPath?.trim()) {
-      const dataUrl = _snapToDataUrl(imgPath);
+    if (imgPath) {
+      const buf = fs.readFileSync(imgPath);
+      const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
       _agentSnapCache.set(name, { dataUrl, ts: Date.now() });
       return res.json({ dataUrl, ts: Date.now() });
     }
-    throw new Error('No image from actor camera');
+    throw new Error('Actor camera not available (recompile plugin)');
   } catch {
     // Final fallback: latest saved screenshot file
     const latest = (() => {
@@ -957,106 +961,40 @@ app.post('/api/ue-command', async(req,res) => {
 app.post('/api/vlm-score', async(req,res) => {
   const { imageDataUrl } = req.body;
   if (!imageDataUrl) return res.status(400).json({ error:'imageDataUrl required' });
-  // Pass image via stream-json stdin — Claude Code CLI supports image content blocks
-  // No --image flag needed; encode as base64 content block in the user message.
+  // Use @anthropic-ai/sdk directly — more reliable than CLI for vision tasks
   try {
-    const base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
-    const mediaType = imageDataUrl.match(/^data:(image\/\w+)/)?.[1] || 'image/png';
+    const base64    = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const mediaType = (imageDataUrl.match(/^data:(image\/\w+)/)?.[1] || 'image/png');
 
-    // Build stream-json user message with image + text
-    const userMsg = JSON.stringify({
-      type: 'user',
-      message: {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const msg = await client.messages.create({
+      model:      'claude-opus-4-5',
+      max_tokens: 256,
+      messages: [{
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-          { type: 'text', text: 'Rate this 3D scene 1-10 for: visual coherence, spatial layout, asset diversity, realism. Reply ONLY with JSON on one line: {"score":N,"label":"one-word","feedback":"one sentence"}' }
-        ]
-      }
+          { type: 'text',  text: 'Rate this 3D scene 1-10. Reply ONLY with JSON on one line: {"score":N,"label":"one-word","feedback":"one sentence"}' },
+        ],
+      }],
     });
 
-    const result = await new Promise((resolve, reject) => {
-      const args = [
-        '--input-format', 'stream-json',
-        '--output-format', 'stream-json',
-        '--dangerously-skip-permissions',
-        '--verbose',
-      ];
-      const proc = spawn(CLAUDE_BIN, args, { env: process.env });
-      proc.stdin.write(userMsg + '\n');
-      proc.stdin.end();
+    const text = msg.content?.[0]?.text || '';
+    // Extract JSON — handle markdown fences and plain inline JSON
+    const m = text.match(/\{[^{}]*"score"\s*:\s*\d+[^{}]*\}/);
+    if (m) {
+      const result = JSON.parse(m[0]);
+      return res.json({ score: result.score||5, label: result.label||'ok', feedback: result.feedback||'' });
+    }
+    // Lenient fallback
+    const ms = text.match(/"score"\s*:\s*(\d+)/);
+    const ml = text.match(/"label"\s*:\s*"([^"]+)"/);
+    const mf = text.match(/"feedback"\s*:\s*"([^"]+)"/);
+    if (ms) return res.json({ score:parseInt(ms[1]), label:ml?.[1]||'ok', feedback:mf?.[1]||'' });
 
-      let out = '', errOut = '', allText = '';
-      proc.stdout.on('data', d => {
-        out += d.toString();
-        // Collect assistant text incrementally for early extraction
-        const chunk = d.toString();
-        for (const line of chunk.split('\n')) {
-          if (!line.trim()) continue;
-          try {
-            const ev = JSON.parse(line);
-            // Accumulate text from all sources
-            if (ev.type === 'stream_event') {
-              allText += ev.event?.delta?.text || ev.event?.content_block?.text || '';
-            } else if (ev.type === 'assistant') {
-              for (const b of (ev.message?.content || [])) {
-                if (b.type === 'text') allText += b.text || '';
-              }
-            } else if (ev.type === 'result') {
-              allText += (typeof ev.result === 'string' ? ev.result : '') || '';
-            }
-          } catch {}
-        }
-      });
-      proc.stderr.on('data', d => { errOut += d.toString(); });
-
-      // Kill if taking too long (images can be slow)
-      const killTimer = setTimeout(() => { proc.kill('SIGTERM'); }, 45000);
-
-      proc.on('close', code => {
-        clearTimeout(killTimer);
-
-        // Extract JSON from accumulated text using multiple strategies
-        const extractScore = (text) => {
-          if (!text) return null;
-          // Strategy 1: exact JSON object with score key
-          const m1 = text.match(/\{[^{}]*"score"\s*:\s*\d+[^{}]*\}/);
-          if (m1) { try { return JSON.parse(m1[0]); } catch {} }
-          // Strategy 2: JSON inside code block
-          const m2 = text.match(/```(?:json)?\s*(\{[^```]+\})\s*```/s);
-          if (m2) { try { const j = JSON.parse(m2[1]); if (j.score) return j; } catch {} }
-          // Strategy 3: lenient — find score number, label word, feedback sentence
-          const ms = text.match(/"score"\s*:\s*(\d+)/);
-          const ml = text.match(/"label"\s*:\s*"([^"]+)"/);
-          const mf = text.match(/"feedback"\s*:\s*"([^"]+)"/);
-          if (ms) return { score: parseInt(ms[1]), label: ml?.[1]||'ok', feedback: mf?.[1]||'' };
-          return null;
-        };
-
-        const scored = extractScore(allText);
-        if (scored) { resolve(scored); return; }
-
-        // Last resort: scan all raw output lines
-        for (const l of out.split('\n')) {
-          try {
-            const ev = JSON.parse(l);
-            const texts = [
-              ev.result,
-              ev.message?.content?.map?.(b=>b.text).join(''),
-            ].filter(Boolean);
-            for (const t of texts) {
-              const s = extractScore(t);
-              if (s) { resolve(s); return; }
-            }
-          } catch {}
-        }
-
-        const debugInfo = `code=${code} textLen=${allText.length} err=${errOut.slice(0,100)} out=${out.slice(0,200)}`;
-        reject(new Error(`No score found. ${debugInfo}`));
-      });
-      proc.on('error', reject);
-    });
-    res.json({ score: result.score||5, label: result.label||'ok', feedback: result.feedback||'' });
+    res.json({ score:5, label:'ok', feedback: text.slice(0,120) });
   } catch(e) {
     res.json({ score:5, label:'error', feedback:`Scoring failed: ${e.message}` });
   }
