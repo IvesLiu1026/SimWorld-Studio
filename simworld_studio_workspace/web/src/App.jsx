@@ -3443,8 +3443,11 @@ function AgentTrajectoryView({ agentName, color, liveState }) {
     return `${i===0?'M':'L'} ${sx.toFixed(1)} ${sy.toFixed(1)}`;
   }).join(' ');
 
-  // Collision positions on trajectory
-  const collisionPts = collisions.map(c => c.loc ? toSvg(c.loc[0],c.loc[1]) : null).filter(Boolean);
+  // Collision positions: from recentCollisions AND from trajectory points flagged hit:true
+  const collisionPts = [
+    ...collisions.map(c => c.loc ? toSvg(c.loc[0],c.loc[1]) : null),
+    ...traj.filter(p => p.hit && p.loc).map(p => toSvg(p.loc[0],p.loc[1])),
+  ].filter(Boolean);
 
   const last = traj[traj.length-1];
   const [lastX, lastY] = toSvg(last.loc[0], last.loc[1]);
@@ -3525,7 +3528,8 @@ function AgentTrajectoryView({ agentName, color, liveState }) {
           <div style={{ fontSize:12, fontWeight:700, color:"#dc2626", marginBottom:4, textTransform:"uppercase" }}>Recent Collisions</div>
           {collisions.slice(-5).map((c,i) => (
             <div key={i} style={{ fontSize:12, color:"var(--ink-2)", padding:"3px 6px", background:"rgba(220,38,38,.06)", borderRadius:4, marginBottom:2, borderLeft:"2px solid #dc2626" }}>
-              {new Date(c.ts).toLocaleTimeString()} — overlapping: {c.overlapping?.join(", ")||"unknown"}
+              {new Date(c.ts).toLocaleTimeString()} — hit: {c.overlapping?.join(", ")||"unknown"}
+              {c.impulse > 0 && <span style={{ color:"#f59e0b", marginLeft:6 }}>impulse {Math.round(c.impulse)} N</span>}
             </div>
           ))}
         </div>

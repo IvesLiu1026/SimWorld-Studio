@@ -58,6 +58,23 @@ class MetricsHub {
     }
   }
 
+  /** Record a physics hit event from OnActorHit — call immediately when hit detected */
+  recordAgentHit(agentName, hitEvent) {
+    if (!this._series[agentName]) return;
+    const series = this._series[agentName];
+    // Stamp the latest collision count so chart updates promptly
+    const last = series.collision.length > 0 ? series.collision[series.collision.length - 1] : 0;
+    series.ts.push(Date.now());
+    series.collision.push(last + 1);
+    series.speed.push(series.speed[series.speed.length - 1] || 0);
+    series.turns.push(series.turns[series.turns.length - 1] || 0);
+    series.status.push('hit');
+    if (series.ts.length > MAX_POINTS) {
+      series.ts.shift(); series.collision.shift();
+      series.speed.shift(); series.turns.shift(); series.status.shift();
+    }
+  }
+
   /** Record a scene-level collision count snapshot (called from verifier or on demand) */
   recordSceneCollisions(count) {
     this._sceneCollisions.push({ ts: Date.now(), count });

@@ -56,6 +56,21 @@ async function getEnvironmentFeedback(agentName, radiusCm = 300) {
   } catch { return []; }
 }
 
+async function enableHitTracking(agentName) {
+  try {
+    await broker.send(`vset /object/${agentName}/track_hits`,
+      { timeoutMs: 3000, retries: 1, queueDeadlineMs: 5000 });
+  } catch { /* ignore — actor might not exist yet */ }
+}
+
+async function getHitEvents(agentName) {
+  try {
+    const raw = await broker.send(`vget /object/${agentName}/hit_events`,
+      { timeoutMs: 3000, retries: 1, queueDeadlineMs: 5000 });
+    return JSON.parse(raw || '[]');
+  } catch { return []; }
+}
+
 async function getOverlaps(agentName) {
   try {
     const raw = await broker.send(`vget /object/${agentName}/overlaps`,
@@ -224,17 +239,23 @@ class AgentSession {
     if (obs.velocity)  this.velocity  = obs.velocity;
     if (obs.speed !== undefined) this.speed = obs.speed;
 
-    // Check for overlapping actors — delta-only (new contacts since last check)
-    const overlaps = await getOverlaps(this.agentName);
-    const currentSet = new Set(overlaps.map(o => o.name));
-    const newContacts = [...currentSet].filter(n => !this._prevOverlaps.has(n));
-    if (newContacts.length > 0) {
-      this.collisionCount += newContacts.length;
-      const ev = { ts: Date.now(), overlapping: newContacts, loc: obs.location };
-      this.recentCollisions.push(ev);
-      if (this.recentCollisions.length > 20) this.recentCollisions.shift();
+    // Consume any queued physics hit events at turn-start
+    const hits = await getHitEvents(this.agentName);
+    if (hits.length > 0) {
+      this.collisionCount += hits.length;
+      for (const h of hits) {
+        this.recentCollisions.push({
+          ts: h.ts || Date.now(),
+          overlapping: [h.other],
+          impulse: h.impulse,
+          point: h.point,
+          loc: obs.location,
+        });
+      }
+      if (this.recentCollisions.length > 50) {
+        this.recentCollisions.splice(0, this.recentCollisions.length - 50);
+      }
     }
-    this._prevOverlaps = currentSet;
 
     // Nearby environment feedback (300 cm radius)
     const nearby = await getEnvironmentFeedback(this.agentName, 300);
@@ -508,8 +529,12 @@ class AgentController {
   constructor() {
     this._sessions = new Map();
     this._publicChat = [];
+    this._metricsHub = null;
     this._startPositionPoller();
   }
+
+  /** Wire in MetricsHub so hit events are recorded in real-time */
+  setMetricsHub(hub) { this._metricsHub = hub; }
 
   // Background poll: refresh position+rotation for all known agents every 3s.
   // Running agents get fresh obs at turn-start already; idle agents would otherwise
@@ -520,37 +545,53 @@ class AgentController {
       for (const session of idle) {
         try {
           const obs = await getObservation(session.agentName);
+          // Fetch hit events (physics OnActorHit) — these are the real collisions
+          // Returns events accumulated since last poll, then clears the queue
+          const hits = await getHitEvents(session.agentName);
+          const hasHit = hits.length > 0;
+
           if (obs.location) {
             session.location = obs.location;
             session.positionUpdatedAt = Date.now();
-            // Track trajectory for idle agents too
-            session.trajectory.push({ loc: obs.location, rot: obs.rotation, ts: Date.now(), action: null });
+            // Trajectory point: include hit flag if any collisions this interval
+            const tPoint = { loc: obs.location, rot: obs.rotation, ts: Date.now(), action: null };
+            if (hasHit) tPoint.hit = true;
+            session.trajectory.push(tPoint);
             if (session.trajectory.length > 200) session.trajectory.shift();
           }
           if (obs.rotation)  session.rotation  = obs.rotation;
           if (obs.velocity)  session.velocity  = obs.velocity;
           if (obs.speed !== undefined) session.speed = obs.speed;
 
-          // Collision detection: only record NEW contacts (delta from previous poll)
-          // Prevents counting the same wall-touch repeatedly every 3s
-          const overlaps = await getOverlaps(session.agentName);
-          const currentSet = new Set(overlaps.map(o => o.name));
-          const newContacts = [...currentSet].filter(n => !session._prevOverlaps.has(n));
-          if (newContacts.length > 0) {
-            session.collisionCount += newContacts.length;
-            const ev = { ts: Date.now(), overlapping: newContacts, loc: obs.location };
-            session.recentCollisions.push(ev);
-            if (session.recentCollisions.length > 20) session.recentCollisions.shift();
+          // Record collision events from physics hits
+          if (hasHit) {
+            session.collisionCount += hits.length;
+            for (const h of hits) {
+              session.recentCollisions.push({
+                ts: h.ts || Date.now(),
+                overlapping: [h.other],
+                impulse: h.impulse,
+                point: h.point,
+                loc: obs.location,
+              });
+              // Notify MetricsHub immediately so chart updates in real-time
+              if (this._metricsHub) this._metricsHub.recordAgentHit(session.agentName, h);
+            }
+            if (session.recentCollisions.length > 50) {
+              session.recentCollisions.splice(0, session.recentCollisions.length - 50);
+            }
           }
-          session._prevOverlaps = currentSet;
         } catch { /* broker handles retries */ }
       }
     }, 3000);
   }
 
   getOrCreate(name, cls, location) {
-    if (!this._sessions.has(name)) {
+    const isNew = !this._sessions.has(name);
+    if (isNew) {
       this._sessions.set(name, new AgentSession({ agentName: name, agentClass: cls, location }));
+      // Enable physics hit tracking as soon as the agent is registered
+      enableHitTracking(name).catch(() => {});
     }
     const s = this._sessions.get(name);
     if (location) s.location = location;
