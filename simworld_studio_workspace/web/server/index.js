@@ -60,7 +60,10 @@ Example — spawn 2 pedestrians:
 - Use varied blueprint_ids (don't use the same building for everything)
 - After placing objects, ALWAYS take_screenshot so the user sees results
 - DO NOT set or move the camera. DO NOT use execute_python_script to change camera position/rotation. The camera is controlled by the user via the viewport. Just call take_screenshot directly.
-- Keep it simple: spawn objects, screenshot. Don't overthink it.`,app=express();app.use(cors()),app.use(express.json({limit:"10mb"})),app.use((req,res,next)=>{if(req.method==="POST")logToFile("http",`${req.method} ${req.path} body=${JSON.stringify(req.body||{}).slice(0,200)}`);res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
+- Keep it simple: spawn objects, screenshot. Don't overthink it.
+- To load a map use LevelEditorSubsystem (NOT deprecated EditorLevelLibrary):
+  subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+  subsystem.load_level("/Game/PackName/Maps/MapName")`,app=express();app.use(cors()),app.use(express.json({limit:"10mb"})),app.use((req,res,next)=>{if(req.method==="POST")logToFile("http",`${req.method} ${req.path} body=${JSON.stringify(req.body||{}).slice(0,200)}`);res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
 <html style="width:100%;height:100%;margin:0;background:#000">
 <head><meta charset="utf-8"><title>UE Pixel Stream</title>
 <style>
@@ -242,33 +245,35 @@ for root in roots:
         result.extend(paths)
     except Exception as e:
         pass
-print(json.dumps(result))
+# Use clear delimiters so we can extract JSON even if other output is present
+print('SWASSET_BEGIN' + __import__('json').dumps(result) + 'SWASSET_END')
 `.trim();
 
   try {
     const raw = await new Promise((resolve, reject) => {
       const sock = new (require('net').Socket)();
-      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 30000);
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 45000);
       sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
         sock.write(JSON.stringify({ type:'execute_python_script', params:{ script:py } }) + '\n');
       });
       let buf = '';
       sock.on('data', d => {
         buf += d.toString();
-        try {
-          const r = JSON.parse(buf);
-          clearTimeout(timer); sock.destroy();
-          resolve(r);
-        } catch {}
+        // Try parse only when delimiter is present (avoids partial JSON parse errors)
+        if (buf.includes('SWASSET_END')) {
+          try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch {}
+        }
       });
       sock.on('error', e => { clearTimeout(timer); reject(e); });
+      sock.on('close', () => { clearTimeout(timer); try { resolve(JSON.parse(buf)); } catch {} });
     });
 
-    // Python prints JSON list of paths; extract from result.output or result directly
-    const output = raw?.result?.output || raw?.output || '';
-    const jsonMatch = output.match(/(\[[\s\S]*\])/);
-    if (!jsonMatch) throw new Error('No JSON array in output: ' + output.slice(0,200));
-    const paths = JSON.parse(jsonMatch[1]);
+    // Extract JSON using delimiters — robust against Python warnings/logs in output
+    const fullText = JSON.stringify(raw);
+    const start = fullText.indexOf('SWASSET_BEGIN');
+    const end   = fullText.indexOf('SWASSET_END');
+    if (start === -1 || end === -1) throw new Error('Missing SWASSET delimiters. Raw: ' + fullText.slice(0,300));
+    const paths = JSON.parse(fullText.slice(start + 'SWASSET_BEGIN'.length, end));
     log.system('info', `Received ${paths.length} paths from UE`);
 
     // Build nested tree from paths
@@ -292,38 +297,41 @@ print(json.dumps(result))
       return node;
     };
 
-    const isFolder = (p) => p.endsWith('/') || !p.includes('.');
+    const isFolder = (p) => p.endsWith('/') || !p.split('/').pop().includes('.');
+    // Map/Level paths go to Scenes panel, not Assets drawer
+    const isMap = (p) => /\/(Maps|Levels|Map)\//i.test(p);
 
+    let totalAssets = 0;
     for (const p of paths) {
       if (!p.startsWith('/Game/')) continue;
       if (isFolder(p)) {
+        // Always register the folder node so the tree has full depth
         const fp = p.endsWith('/') ? p : p + '/';
         getOrCreateDir(fp);
       } else {
+        // Skip map/level assets — they belong in Scenes
+        if (isMap(p)) continue;
+        totalAssets++;
         const parts = p.split('/');
         const filename = parts.pop();
         const dir = parts.join('/') + '/';
         const name = filename.split('.')[0];
         const dirNode = getOrCreateDir(dir);
-        // Classify asset type from path/name
-        const isBlueprint = filename.includes('_C') || p.includes('/blueprints/');
+        const isBP   = filename.includes('_C') || p.includes('/blueprints/') || p.includes('/Blueprints/');
         const isMesh = p.includes('/meshes/') || p.includes('/Meshes/') || name.startsWith('SM_');
-        const isMap = p.includes('/Maps/') || p.includes('/Levels/') || p.includes('/Map/');
-        const type = isMap ? 'map' : isBlueprint ? 'blueprint' : isMesh ? 'static_mesh' : 'asset';
-        const spawnTool = type === 'blueprint' ? 'spawn_blueprint_actor' : type === 'static_mesh' ? 'spawn_actor' : null;
-        dirNode.assets.push({ name, fullPath:p, type, spawnTool, icon: type==='map'?'🗺️': type==='blueprint'?'🏗️':'📦' });
+        const type = isBP ? 'blueprint' : isMesh ? 'static_mesh' : 'asset';
+        const spawnTool = isBP ? 'spawn_blueprint_actor' : isMesh ? 'spawn_actor' : null;
+        dirNode.assets.push({ name, fullPath:p, type, spawnTool,
+          icon: isBP ? '🏗️' : isMesh ? '📦' : '🔷' });
       }
     }
 
-    // Sort
     const sortNode = (node) => {
       node.children.sort((a,b) => a.name.localeCompare(b.name));
       node.children.forEach(sortNode);
       node.assets.sort((a,b) => a.name.localeCompare(b.name));
     };
     sortNode(root);
-
-    const totalAssets = paths.filter(p => !isFolder(p)).length;
     _liveAssetTree = { tree: root, totalAssets, scannedAt: Date.now(), source:'ue-python' };
     log.system('info', `Asset tree built: ${totalAssets} assets, ${dirs.size} dirs`);
   } catch(e) {
