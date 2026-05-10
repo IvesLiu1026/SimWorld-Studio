@@ -339,8 +339,29 @@ app.get("/api/agent-activity/:name",(s,e)=>{
 
 // ── PIE status ────────────────────────────────────────────────────────────
 app.get("/api/pie-status",(_,e)=>{
-  // Use cached value from background health check — no raw TCP probes
   e.json({active:_cachedPie});
+});
+
+// Start PIE via UE Python API
+app.post("/api/pie-start",async(req,res)=>{
+  const script=`
+import unreal
+subsystem = unreal.get_editor_subsystem(unreal.PlayWorldEditorSubsystem)
+params = unreal.RequestPlaySessionParams()
+params.world_type = unreal.PlaySessionWorldType.PLAY_IN_EDITOR
+subsystem.request_play_session(params)
+print("PIE started")
+`.trim();
+  try{
+    const sock=new(require('net').Socket)();
+    const timer=setTimeout(()=>{sock.destroy();res.status(503).json({error:'timeout'})},8000);
+    sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{
+      sock.write(JSON.stringify({type:'execute_python_script',params:{script}})+'\n');
+    });
+    let buf='';
+    sock.on('data',d=>{buf+=d.toString();try{const r=JSON.parse(buf);clearTimeout(timer);sock.destroy();res.json({ok:true,result:r})}catch{}});
+    sock.on('error',e=>{clearTimeout(timer);res.status(503).json({error:e.message})});
+  }catch(e){res.status(503).json({error:e.message})}
 });
 
 // ── Inter-agent communication ────────────────────────────────────────────
@@ -349,6 +370,19 @@ app.post("/api/agent-message",(s,e)=>{
   if(!from||!text)return e.status(400).json({error:"from and text required"});
   const msg=agentCtrl.sendMessage(from,to||null,text);
   e.json(msg);
+});
+
+// Force re-sync context from UE (re-snapshot scene and sync agents)
+app.post('/api/context-snapshot', async(req,res) => {
+  try {
+    const snap = await snapshotScene(STUDIO_SESSION);
+    if (snap) {
+      ctxManager.updateFromSnapshot(STUDIO_SESSION, snap);
+      const ctx = ctxManager.getState(STUDIO_SESSION);
+      if (ctx) agentCtrl.syncWithContext(ctx);
+    }
+    res.json({ ok: true, agents: agentCtrl.list().length });
+  } catch(e) { res.status(503).json({ error: e.message }); }
 });
 
 // Broadcast + auto-trigger: send message to agents and run their turns

@@ -3889,74 +3889,94 @@ function AgentOverviewPanel({ agents }) {
 
   if (sessions.length === 0) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-      height:"100%", gap:8, color:"var(--ink-3)", fontSize:11 }}>
-      <div style={{ fontSize:24, opacity:.3 }}>🤖</div>No agents in scene
+      height:"100%", gap:8, color:"var(--ink-3)", fontSize:13 }}>
+      <div style={{ fontSize:32, opacity:.3 }}>🤖</div>No agents in scene
     </div>
   );
 
-  // Compute 2D bounding box from all agent positions
   const pts = sessions.filter(s => s.location).map(s => s.location);
-  const W=440, H=110, pad=16;
-  if (pts.length === 0) return <div style={{ padding:12, color:"var(--ink-3)", fontSize:11 }}>No position data yet</div>;
+  const W = 480, H = 130, pad = 20;
+
+  // Aggregate stats
+  const totalCollisions = sessions.reduce((s,a)=>s+(a.collisionCount||0), 0);
+  const totalTurns      = sessions.reduce((s,a)=>s+(a.totalTurns||0), 0);
+  const running         = sessions.filter(s=>s.status==="running").length;
+
+  if (pts.length === 0) return (
+    <div style={{ padding:12 }}>
+      <div style={{ display:"flex", gap:8 }}>
+        {[
+          { label:"Agents", val:sessions.length, color:"var(--blue)" },
+          { label:"Running", val:running, color:"#f59e0b" },
+          { label:"Collisions", val:totalCollisions, color:"#dc2626" },
+          { label:"Total Turns", val:totalTurns, color:"var(--ink-2)" },
+        ].map(({label,val,color}) => (
+          <div key={label} style={{ flex:1, textAlign:"center", padding:8, background:"var(--panel)",
+            borderRadius:7, border:"1px solid var(--line)" }}>
+            <div style={{ fontSize:22, fontWeight:800, color }}>{val}</div>
+            <div style={{ fontSize:11, color:"var(--ink-3)" }}>{label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop:8, fontSize:12, color:"var(--ink-3)", textAlign:"center" }}>No position data yet</div>
+    </div>
+  );
 
   const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
-  const minX=Math.min(...xs)-500, maxX=Math.max(...xs)+500;
-  const minY=Math.min(...ys)-500, maxY=Math.max(...ys)+500;
+  const minX=Math.min(...xs)-600, maxX=Math.max(...xs)+600;
+  const minY=Math.min(...ys)-600, maxY=Math.max(...ys)+600;
   const rangeX=maxX-minX||1, rangeY=maxY-minY||1;
   const sc = Math.min((W-2*pad)/rangeX, (H-2*pad)/rangeY);
   const toSvg=(x,y)=>[pad+(x-minX)*sc, H-pad-(y-minY)*sc];
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto", padding:"6px 8px" }}>
-      {/* 2D top-down agent map */}
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto", padding:"6px 8px", gap:6 }}>
+      {/* Aggregate stat chips — big and legible */}
+      <div style={{ display:"flex", gap:6 }}>
+        {[
+          { label:"Agents", val:sessions.length, color:"var(--blue)" },
+          { label:"Running", val:running, color:"#f59e0b" },
+          { label:"Collisions", val:totalCollisions, color: totalCollisions>0?"#dc2626":"#16a34a" },
+          { label:"Total Turns", val:totalTurns, color:"var(--ink-2)" },
+        ].map(({label,val,color}) => (
+          <div key={label} style={{ flex:1, textAlign:"center", padding:"6px 4px", background:"var(--panel)",
+            borderRadius:7, border:"1px solid var(--line)" }}>
+            <div style={{ fontSize:20, fontWeight:800, color, lineHeight:1 }}>{val}</div>
+            <div style={{ fontSize:11, color:"var(--ink-3)", marginTop:2 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 2D top-down multi-agent map */}
       <svg width="100%" viewBox={`0 0 ${W} ${H}`}
-        style={{ background:"var(--panel)", borderRadius:7, border:"1px solid var(--line)", marginBottom:6 }}>
+        style={{ background:"var(--panel)", borderRadius:8, border:"1px solid var(--line)" }}>
+        {/* Grid */}
+        {[0.33,0.67].map(f=>(
+          <line key={f} x1={pad} y1={H-pad-f*(H-2*pad)} x2={W-pad} y2={H-pad-f*(H-2*pad)}
+            stroke="var(--line)" strokeWidth={0.5} strokeDasharray="3,3" />
+        ))}
         {sessions.filter(s=>s.location).map((s,i) => {
           const col = AGENT_COLORS[i % AGENT_COLORS.length];
           const [sx,sy] = toSvg(s.location[0], s.location[1]);
           const yaw = s.rotation ? ((s.rotation[1]%360)+360)%360 : 0;
           const rad = yaw * Math.PI/180;
-          // Draw trajectory preview
-          if (s.trajectoryPreview?.length > 1) {
-            const pts = s.trajectoryPreview.map(p => toSvg(p.loc[0],p.loc[1]));
-            const d = pts.map((p,i) => `${i===0?'M':'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-            return (<g key={s.agentName}>
-              <path d={d} fill="none" stroke={col} strokeWidth={1.5} opacity={0.4} />
-              <circle cx={sx} cy={sy} r={6} fill={col} stroke="#fff" strokeWidth={1.5} />
-              <line x1={sx} y1={sy} x2={sx+Math.cos(rad-Math.PI/2)*11} y2={sy+Math.sin(rad-Math.PI/2)*11}
-                stroke="#fff" strokeWidth={1.5} strokeLinecap="round" />
-              <text x={sx} y={sy-9} textAnchor="middle" fontSize={7} fill={col} fontWeight="bold">{s.agentName}</text>
-            </g>);
-          }
+          const traj = s.trajectoryPreview;
           return (<g key={s.agentName}>
-            <circle cx={sx} cy={sy} r={6} fill={col} stroke="#fff" strokeWidth={1.5} />
-            <text x={sx} y={sy-9} textAnchor="middle" fontSize={7} fill={col} fontWeight="bold">{s.agentName}</text>
+            {traj?.length > 1 && (() => {
+              const d = traj.map((p,i) => {
+                const [px,py] = toSvg(p.loc[0],p.loc[1]);
+                return `${i===0?'M':'L'}${px.toFixed(1)},${py.toFixed(1)}`;
+              }).join(' ');
+              return <path d={d} fill="none" stroke={col} strokeWidth={2} opacity={0.35} />;
+            })()}
+            <circle cx={sx} cy={sy} r={7} fill={col} stroke="#fff" strokeWidth={2} />
+            <line x1={sx} y1={sy} x2={sx+Math.cos(rad-Math.PI/2)*13} y2={sy+Math.sin(rad-Math.PI/2)*13}
+              stroke="#fff" strokeWidth={2} strokeLinecap="round" />
+            <text x={sx} y={sy-10} textAnchor="middle" fontSize={9} fill={col} fontWeight="bold"
+              style={{ filter:"drop-shadow(0 0 2px var(--panel))" }}>{s.agentName}</text>
           </g>);
         })}
       </svg>
-
-      {/* Agent status rows */}
-      <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-        {sessions.map((s,i) => {
-          const col = AGENT_COLORS[i % AGENT_COLORS.length];
-          return (
-            <div key={s.agentName} style={{ display:"flex", alignItems:"center", gap:6, padding:"3px 6px",
-              background:"var(--panel)", borderRadius:5, border:"1px solid var(--line)", fontSize:10 }}>
-              <span style={{ width:6, height:6, borderRadius:"50%", flexShrink:0,
-                background: s.status==="running"?"#f59e0b":"#64748b" }} />
-              <span style={{ fontWeight:700, color:col, minWidth:80 }}>{s.agentName}</span>
-              <span style={{ color:"var(--ink-3)", minWidth:50 }}>
-                {s.speed > 0 ? `${Math.round(s.speed/100)}m/s` : "idle"}
-              </span>
-              <span style={{ color: s.collisionCount>0?"#dc2626":"var(--ink-3)" }}>
-                💥{s.collisionCount||0}
-              </span>
-              <span style={{ color:"var(--ink-3)" }}>🔄{s.totalTurns||0}</span>
-              {s.currentAction && <span style={{ color:"#f59e0b", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:80 }}>⚡{s.currentAction}</span>}
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -3973,9 +3993,20 @@ function MultiAgentTestbed({ sessionId }) {
   const spawnAndRun = async () => {
     setRunning(true);
     setLog([]);
-    addLog(`Spawning ${count} agents…`);
     try {
-      // Spawn agents via chat endpoint
+      // Step 1: ensure PIE is active
+      addLog("Starting PIE mode…");
+      const pieStatus = await fetch(`${API_BASE}/pie-status`).then(r=>r.json());
+      if (!pieStatus.active) {
+        await fetch(`${API_BASE}/pie-start`, { method:"POST" });
+        addLog("PIE start requested — waiting 5s…");
+        await new Promise(r => setTimeout(r, 5000));
+      } else {
+        addLog("PIE already active");
+      }
+
+      // Step 2: spawn agents
+      addLog(`Spawning ${count} agents…`);
       const positions = Array.from({length: count}, (_,i) => {
         const angle = (2*Math.PI*i)/count;
         const r = 1500;
@@ -3984,23 +4015,22 @@ function MultiAgentTestbed({ sessionId }) {
       const spawnMsg = positions.map((p,i) =>
         `spawn_agent(agent_name="TestAgent_${i+1}", agent_type="pedestrian", location=[${p.join(",")}])`
       ).join("\n");
-
       await fetch(`${API_BASE}/chat`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ message: spawnMsg, sessionId }),
       });
       addLog(`Spawned ${count} agents`);
 
-      // Send goal to each agent
+      // Step 3: send goal to each agent
       for (let i = 1; i <= count; i++) {
         addLog(`Sending goal to TestAgent_${i}…`);
         await fetch(`${API_BASE}/agent-broadcast`, {
           method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({ text: goal, target: `TestAgent_${i}` }),
         });
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
       }
-      addLog("All agents received goals. Testbed running.");
+      addLog("✓ All agents received goals. Testbed running.");
     } catch(e) {
       addLog(`Error: ${e.message}`);
     } finally {
@@ -4214,13 +4244,20 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange }) {
     <div className="sw-right-inner">
       {/* ── Agents pane (fills remaining height) ── */}
       <div className="sw-agents-pane" style={{ flex: 1 }}>
-        {/* Sub-header */}
-        <div style={{ padding:"8px 12px", borderBottom:"1px solid var(--line)", display:"flex", alignItems:"center", gap:8, flexShrink:0, background:"var(--panel)" }}>
+        {/* Sub-header with refresh button */}
+        <div style={{ padding:"6px 10px", borderBottom:"1px solid var(--line)", display:"flex", alignItems:"center", gap:6, flexShrink:0, background:"var(--panel)" }}>
           <span style={{ fontSize:12, fontWeight:700, color:"var(--ink)" }}>
             Agents {contextAgents.length > 0 && <span style={{ color:"var(--ink-3)", fontWeight:400 }}>({contextAgents.length})</span>}
           </span>
           <div style={{ flex:1 }} />
-          <span style={{ width:6, height:6, borderRadius:"50%", background:pieActive?"#22c55e":"#94a3b8", boxShadow: pieActive?"0 0 0 2px rgba(34,197,94,.2)":"none" }}/>
+          <button
+            onClick={() => fetch(`${API_BASE}/context-snapshot`, { method:"POST" }).catch(()=>{})}
+            title="Refresh agent list from UE"
+            style={{ fontSize:10, padding:"2px 7px", borderRadius:5, border:"1px solid var(--line)",
+              background:"none", cursor:"pointer", color:"var(--ink-3)" }}>
+            ↻ Sync
+          </button>
+          <span style={{ width:6, height:6, borderRadius:"50%", background:pieActive?"#22c55e":"#94a3b8", boxShadow: pieActive?"0 0 0 2px rgba(34,197,94,.2)":"none", flexShrink:0 }}/>
           <span style={{ fontSize:10, color:pieActive?"#16a34a":"var(--ink-3)" }}>
             {pieActive ? "PIE Active" : "No PIE"}
           </span>
@@ -4801,7 +4838,7 @@ const SPAWN_SNIPPETS = {
 };
 
 function AssetBrowser({ onInsert }) {
-  const [browsePath, setBrowsePath] = useState("/");
+  const [browsePath, setBrowsePath] = useState("/Game/"); // start at Game level
   const [search, setSearch]         = useState("");
   const [category, setCategory]     = useState("");
   const [page, setPage]             = useState(0);
@@ -4858,14 +4895,15 @@ function AssetBrowser({ onInsert }) {
     setBrowsePath(newPath); setCategory(""); setSearch("");
   };
   const navigateUp = () => {
-    if (browsePath === "/") return;
-    const parts = browsePath.replace(/\/$/, "").split("/");
+    const parts = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
+    if (parts.length <= 1) { setBrowsePath("/Game/"); setCategory(""); setSearch(""); return; }
     parts.pop();
-    setBrowsePath(parts.length <= 1 ? "/" : parts.join("/") + "/");
+    setBrowsePath("/" + parts.join("/") + "/");
     setCategory(""); setSearch("");
   };
 
-  const breadcrumbs = browsePath === "/" ? [] : browsePath.replace(/\/$/, "").split("/").filter(Boolean);
+  // Breadcrumbs starting from Game level
+  const breadcrumbs = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
 
   const insertAsset = (a) => {
     const snippet = (SPAWN_SNIPPETS[a.category] || ((x) => x.fullPath))(a);
@@ -4916,19 +4954,20 @@ function AssetBrowser({ onInsert }) {
         {/* Toolbar: breadcrumb + search */}
         <div style={{ flexShrink:0, padding:"5px 8px", borderBottom:"1px solid var(--line)",
           display:"flex", alignItems:"center", gap:4 }}>
-          {browsePath !== "/" && (
+          {browsePath !== "/Game/" && (
             <button onClick={navigateUp} style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
               border:"1px solid var(--line)", background:"none", cursor:"pointer", color:"var(--ink-2)" }}>↑</button>
           )}
           {/* Breadcrumb */}
           <div style={{ display:"flex", alignItems:"center", gap:2, fontSize:10, color:"var(--ink-3)", flex:1, overflow:"hidden" }}>
-            <span style={{ cursor:"pointer", color:"var(--blue)" }} onClick={() => { setBrowsePath("/"); setCategory(""); }}>Game</span>
-            {breadcrumbs.map((seg, i) => (
+            <span style={{ cursor:"pointer", color:"var(--blue)" }} onClick={() => { setBrowsePath("/Game/"); setCategory(""); }}>Game</span>
+            {breadcrumbs.filter(s=>s!=="Game").map((seg, i, arr) => (
               <span key={i} style={{ display:"flex", alignItems:"center", gap:2 }}>
                 <span>/</span>
-                <span style={{ cursor:"pointer", color: i===breadcrumbs.length-1?"var(--ink-1)":"var(--blue)" }}
+                <span style={{ cursor:"pointer", color: i===arr.length-1?"var(--ink-1)":"var(--blue)" }}
                   onClick={() => {
-                    const p = "/" + breadcrumbs.slice(0,i+1).join("/") + "/";
+                    const fullSegs = ["Game", ...arr.slice(0,i+1)];
+                    const p = "/" + fullSegs.join("/") + "/";
                     setBrowsePath(p); setCategory("");
                   }}>{seg}</span>
               </span>
@@ -8223,8 +8262,8 @@ function App() {
   const [chatRef, setChatRef] = useState(null);
   const [leftTab,    setLeftTab]    = useState("chat");
   const [rightTab,   setRightTab]   = useState("agent");
-  const [colLeft,    setColLeft]    = useState(390);   // px
-  const [colRight,   setColRight]   = useState(360);   // px
+  const [colLeft,    setColLeft]    = useState(Math.round(window.innerWidth * 0.28));  // ~3/10
+  const [colRight,   setColRight]   = useState(Math.round(window.innerWidth * 0.28)); // ~3/10
   const [commHeight, setCommHeight] = useState(200);   // px for comm panel
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab,  setDrawerTab]  = useState("assets");
@@ -8811,7 +8850,6 @@ function App() {
                     { id:"assets",  label:"Assets"  },
                     { id:"scenes",  label:"Scenes"  },
                     { id:"context", label:"Context" },
-                    { id:"tools",   label:"Tools"   },
                   ].map(t => (
                     <button key={t.id}
                       className={`sw-tab-btn${drawerTab===t.id?" active":""}`}
@@ -8842,9 +8880,6 @@ function App() {
                 )}
                 {drawerTab === "context" && (
                   <ContextPanel sessionId={currentSessionId} refreshKey={contextRefreshKey} />
-                )}
-                {drawerTab === "tools" && (
-                  <ToolsPage newlyAddedToolIds={artifactNewIds.tools} onMarkToolSeen={markToolArtifactSeen} />
                 )}
               </div>
             )}
