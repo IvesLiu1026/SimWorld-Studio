@@ -4246,7 +4246,7 @@ function CommHistory({ agents }) {
 }
 
 // ─── AgentPanel — vertical split: agent cards top, comm bottom ───────────────
-function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange }) {
+function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange, hideComm = false }) {
   const agentsCtx = useAgents();
   const statusCtx = useStatus();
   const pieActive = statusCtx.pieActive;
@@ -4364,13 +4364,13 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange }) {
         )}
       </div>
 
-      {/* ── Vertical resize handle ── */}
-      <div className="sw-resize-row" ref={resizeRef} onMouseDown={onMouseDown} title="Drag to resize" />
-
-      {/* ── Aggregate / Testbed / Comm pane ── */}
-      <div className="sw-comm-pane" style={{ height: commHeight }}>
-        <AgentAggregatePanelTabs agents={contextAgents} sessionId={sessionId} />
-      </div>
+      {/* ── Resize handle + comm pane — hidden when hideComm=true ── */}
+      {!hideComm && (<>
+        <div className="sw-resize-row" ref={resizeRef} onMouseDown={onMouseDown} title="Drag to resize" />
+        <div className="sw-comm-pane" style={{ height: commHeight }}>
+          <AgentAggregatePanelTabs agents={contextAgents} sessionId={sessionId} />
+        </div>
+      </>)}
     </div>
   );
 }
@@ -8858,32 +8858,51 @@ function App() {
       <div ref={layoutRef} style={{
         flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:0,
       }}>
-        {/* ── LEFT: Coding Agent ── */}
+        {/* ── LEFT: Coding Agent + Verifier (two independent panels) ── */}
         <div style={{
           width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
-          borderRadius:12, border:"1px solid var(--line)",
-          boxShadow:"var(--shadow-card)", display:"flex",
-          flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          display:"flex", flexDirection:"column", gap:8, overflow:"hidden",
         }}>
-          <div className="sw-panel-header">
-            <span className="sw-section-title" style={{ color:"var(--orange)" }}>
-              <span className="sw-num-chip" style={{ background:"var(--orange)" }}>1</span>
-              Coding Agent
-            </span>
-            <div style={{ flex:1 }} />
+          {/* Panel 1: Coding Agent */}
+          <div style={{
+            flex:1, minHeight:0,
+            borderRadius:12, border:"1px solid var(--line)",
+            boxShadow:"var(--shadow-card)", display:"flex",
+            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          }}>
+            <div className="sw-panel-header">
+              <span className="sw-section-title" style={{ color:"var(--orange)" }}>
+                <span className="sw-num-chip" style={{ background:"var(--orange)" }}>1</span>
+                Coding Agent
+              </span>
+              <div style={{ flex:1 }} />
+            </div>
+            <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
+              <ChatPanel
+                onScreenshotUpdate={url => setLatestScreenshot(url)}
+                onRef={setChatRef}
+                onSessionChange={setCurrentSessionId}
+                onChatDone={() => setContextRefreshKey(k => k + 1)}
+              />
+            </div>
           </div>
-          {/* Chat — takes most vertical space */}
-          <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
-            <ChatPanel
-              onScreenshotUpdate={url => setLatestScreenshot(url)}
-              onRef={setChatRef}
-              onSessionChange={setCurrentSessionId}
-              onChatDone={() => setContextRefreshKey(k => k + 1)}
-            />
-          </div>
-          {/* Coding Agent Verifier — bottom, symmetric with aggregate panel */}
-          <div style={{ height: commHeight, flexShrink:0, borderTop:"1px solid var(--line)" }}>
-            <CodingVerifierPanel sessionId={currentSessionId} />
+
+          {/* Panel 2: Coding Agent Verifier (standalone) */}
+          <div style={{
+            height: commHeight, flexShrink:0,
+            borderRadius:12, border:"1px solid var(--line)",
+            boxShadow:"var(--shadow-card)", display:"flex",
+            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          }}>
+            <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
+              <span className="sw-section-title" style={{ color:"var(--orange)", fontSize:"var(--fs-panel)" }}>
+                <span className="sw-num-chip" style={{ background:"var(--orange)", fontSize:11 }}>✓</span>
+                Verifier
+              </span>
+            </div>
+            <div style={{ flex:1, overflow:"hidden" }}>
+              <CodingVerifierPanel sessionId={currentSessionId} />
+            </div>
           </div>
         </div>
 
@@ -8973,33 +8992,51 @@ function App() {
         {/* ── Resize handle right ── */}
         <div className="sw-resize-col" onMouseDown={startColResize("right")} />
 
-        {/* ── RIGHT: Embodied Agent (vertical split) ── */}
+        {/* ── RIGHT: Embodied Agent + Statistics (two independent panels) ── */}
         <div style={{
           width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
-          borderRadius:12, border:"1px solid var(--line)",
-          boxShadow:"var(--shadow-card)", display:"flex",
-          flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          display:"flex", flexDirection:"column", gap:8, overflow:"hidden",
         }}>
-          {/* Panel header */}
-          <div className="sw-panel-header" style={{ borderRadius:"12px 12px 0 0" }}>
-            <span className="sw-section-title" style={{ color:"var(--blue)" }}>
-              <span className="sw-num-chip" style={{ background:"var(--blue)" }}>2</span>
-              Embodied Agent
-            </span>
-            <div style={{ flex:1 }} />
-            <button
-              className={`sw-tab-btn${rightTab==="agent"?" active":""}`}
-              onClick={() => setRightTab("agent")} style={{ fontSize:10, padding:"3px 8px" }}
-            >Agents</button>
+          {/* Panel 1: Embodied Agent */}
+          <div style={{
+            flex:1, minHeight:0,
+            borderRadius:12, border:"1px solid var(--line)",
+            boxShadow:"var(--shadow-card)", display:"flex",
+            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          }}>
+            <div className="sw-panel-header" style={{ borderRadius:"12px 12px 0 0" }}>
+              <span className="sw-section-title" style={{ color:"var(--blue)" }}>
+                <span className="sw-num-chip" style={{ background:"var(--blue)" }}>2</span>
+                Embodied Agent
+              </span>
+              <div style={{ flex:1 }} />
+            </div>
+            <div style={{ flex:1, overflow:"hidden" }}>
+              <AgentPanel
+                sessionId={currentSessionId}
+                commHeight={0}
+                onCommHeightChange={() => {}}
+                hideComm
+              />
+            </div>
           </div>
 
-          {/* Full vertical split — agents + resize + comm */}
-          <div style={{ flex:1, overflow:"hidden" }}>
-            <AgentPanel
-              sessionId={currentSessionId}
-              commHeight={commHeight}
-              onCommHeightChange={setCommHeight}
-            />
+          {/* Panel 2: Agent Statistics (standalone) */}
+          <div style={{
+            height: commHeight, flexShrink:0,
+            borderRadius:12, border:"1px solid var(--line)",
+            boxShadow:"var(--shadow-card)", display:"flex",
+            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          }}>
+            <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
+              <span className="sw-section-title" style={{ color:"var(--blue)", fontSize:"var(--fs-panel)" }}>
+                <span className="sw-num-chip" style={{ background:"var(--blue)", fontSize:11 }}>📊</span>
+                Agent Statistics
+              </span>
+            </div>
+            <div style={{ flex:1, overflow:"hidden" }}>
+              <AgentAggregatePanelTabs agents={[]} sessionId={currentSessionId} />
+            </div>
           </div>
         </div>
 
