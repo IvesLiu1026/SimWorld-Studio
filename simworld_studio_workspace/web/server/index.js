@@ -543,20 +543,35 @@ app.get('/api/agent-state/:name', async(req,res) => {
   const name = req.params.name;
   const session = agentCtrl.get(name);
   if (!session) return res.status(404).json({ error:'Agent not found' });
-  // Return current in-memory state (background poller keeps it fresh)
   const lastAct = session.activity.length > 0 ? session.activity[session.activity.length-1] : null;
   res.json({
-    agentName: session.agentName,
-    agentClass: session.agentClass,
-    status: session.status,
-    currentAction: session.currentAction,
-    lastAction: lastAct?.actions?.length > 0 ? lastAct.actions[lastAct.actions.length-1].tool : null,
-    location: session.location,
-    rotation: session.rotation,
+    agentName:         session.agentName,
+    agentClass:        session.agentClass,
+    status:            session.status,
+    currentAction:     session.currentAction,
+    lastAction:        lastAct?.actions?.length > 0 ? lastAct.actions[lastAct.actions.length-1].tool : null,
+    location:          session.location,
+    rotation:          session.rotation,
+    velocity:          session.velocity,
+    speed:             session.speed,
     positionUpdatedAt: session.positionUpdatedAt,
-    activity: session.activity.slice(-5),
-    historyLength: session.history.length,
+    activity:          session.activity.slice(-5),
+    historyLength:     session.history.length,
+    collisionCount:    session.collisionCount,
+    recentCollisions:  (session.recentCollisions||[]).slice(-10),
+    envFeedback:       (session.envFeedback||[]).slice(-5),
+    memory:            (session.memory||[]).slice(-10),
+    totalTurns:        session.totalTurns||0,
+    totalCostUsd:      session.totalCostUsd||0,
+    trajectoryLength:  (session.trajectory||[]).length,
+    trajectoryPreview: (session.trajectory||[]).slice(-20),
   });
+});
+
+app.get('/api/agent-trajectory/:name', (req,res) => {
+  const session = agentCtrl.get(req.params.name);
+  if (!session) return res.status(404).json({ error:'Agent not found' });
+  res.json({ trajectory: session.trajectory||[], agentName: session.agentName });
 });
 
 // ── Agent camera snapshot ──────────────────────────────────────────────────────
@@ -591,6 +606,81 @@ app.get('/api/agent-camera/:name', async(req,res) => {
       res.status(503).json({ error:'No camera available' });
     }
   }
+});
+
+
+// ── UE command passthrough (for verifier collision check) ─────────────────────
+app.post('/api/ue-command', async(req,res) => {
+  const { command } = req.body;
+  if (!command) return res.status(400).json({ error:'command required' });
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const sock = new (require('net').Socket)();
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 8000);
+      sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+        sock.write(JSON.stringify({ type:'execute_console_command', params:{ command } }) + '\n');
+      });
+      let buf = '';
+      sock.on('data', d => {
+        buf += d.toString();
+        try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch {}
+      });
+      sock.on('error', e => { clearTimeout(timer); reject(e); });
+    });
+    // Also try direct UCV for vget commands
+    if (command.startsWith('vget ') || command.startsWith('vset ')) {
+      const ucvResult = await ucvBroker.send(command, { timeoutMs: 6000 }).catch(()=>null);
+      if (ucvResult !== null) return res.json({ result: ucvResult, source:'ucv' });
+    }
+    res.json({ result: JSON.stringify(result), source:'mcp' });
+  } catch(e) {
+    // Fallback to direct UCV
+    try {
+      const ucvResult = await ucvBroker.send(command, { timeoutMs: 6000 });
+      res.json({ result: ucvResult, source:'ucv' });
+    } catch(e2) {
+      res.status(503).json({ error: e2.message });
+    }
+  }
+});
+
+// ── VLM scene scoring ─────────────────────────────────────────────────────────
+app.post('/api/vlm-score', async(req,res) => {
+  const { imageDataUrl, sessionId:sid } = req.body;
+  if (!imageDataUrl) return res.status(400).json({ error:'imageDataUrl required' });
+  const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!CLAUDE_API_KEY) return res.status(503).json({ error:'ANTHROPIC_API_KEY not set', score:5, feedback:'VLM scoring unavailable — set ANTHROPIC_API_KEY', label:'N/A' });
+  try {
+    const base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const mediaType = imageDataUrl.match(/^data:(image\/\w+)/)?.[1] || 'image/png';
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'x-api-key': CLAUDE_API_KEY, 'anthropic-version':'2023-06-01' },
+      body: JSON.stringify({
+        model:'claude-haiku-4-5-20251001',
+        max_tokens:200,
+        messages:[{
+          role:'user',
+          content:[
+            { type:'image', source:{ type:'base64', media_type:mediaType, data:base64 } },
+            { type:'text', text:'Rate this 3D scene from 1-10 for: visual coherence, spatial layout, asset diversity, and realism. Reply ONLY with JSON: {"score":N,"label":"one-word","feedback":"one sentence"}' }
+          ]
+        }]
+      })
+    });
+    const data = await resp.json();
+    const text = data.content?.[0]?.text || '{}';
+    const parsed = JSON.parse(text.match(/\{[^}]+\}/)?.[0] || '{}');
+    res.json({ score: parsed.score||5, label: parsed.label||'ok', feedback: parsed.feedback||text.slice(0,100) });
+  } catch(e) {
+    res.json({ score:5, label:'error', feedback:`Scoring failed: ${e.message}` });
+  }
+});
+
+// ── Agent stop-all ─────────────────────────────────────────────────────────────
+app.post('/api/agent-stop-all', (req,res) => {
+  agentCtrl.stopAll();
+  res.json({ ok:true });
 });
 
 app.all("/api/*",(s,e)=>{e.status(404).json({error:`Unknown API endpoint: ${s.method} ${s.path}`})});

@@ -3387,6 +3387,140 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
   );
 }
 
+// ─── AgentTrajectoryView ─────────────────────────────────────────────────────
+
+function AgentTrajectoryView({ agentName, color, liveState }) {
+  const [traj, setTraj] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/agent-trajectory/${encodeURIComponent(agentName)}`)
+      .then(r => r.json())
+      .then(d => { setTraj(d.trajectory || []); setLoading(false); })
+      .catch(() => setLoading(false));
+    const t = setInterval(() => {
+      fetch(`${API_BASE}/agent-trajectory/${encodeURIComponent(agentName)}`)
+        .then(r => r.json())
+        .then(d => setTraj(d.trajectory || []))
+        .catch(()=>{});
+    }, 2000);
+    return () => clearInterval(t);
+  }, [agentName]);
+
+  const collisions = liveState?.recentCollisions || [];
+  const envEvents  = liveState?.envFeedback || [];
+
+  if (loading) return <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", color:"var(--ink-3)", fontSize:12 }}>Loading trajectory…</div>;
+  if (traj.length < 2) return (
+    <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, color:"var(--ink-3)", fontSize:12 }}>
+      <div style={{ fontSize:28, opacity:0.3 }}>🗺️</div>
+      <div>No trajectory data yet — agent needs to move</div>
+    </div>
+  );
+
+  // Compute bounding box for normalization
+  const xs = traj.map(p=>p.loc[0]), ys = traj.map(p=>p.loc[1]);
+  const minX=Math.min(...xs), maxX=Math.max(...xs), minY=Math.min(...ys), maxY=Math.max(...ys);
+  const W=420, H=280, pad=24;
+  const rangeX = maxX-minX || 1, rangeY = maxY-minY || 1;
+  const scale = Math.min((W-2*pad)/rangeX, (H-2*pad)/rangeY);
+  const toSvg = (x,y) => [pad+(x-minX)*scale, H-pad-(y-minY)*scale];
+
+  const pathD = traj.map((p,i) => {
+    const [sx,sy] = toSvg(p.loc[0], p.loc[1]);
+    return `${i===0?'M':'L'} ${sx.toFixed(1)} ${sy.toFixed(1)}`;
+  }).join(' ');
+
+  // Collision positions on trajectory
+  const collisionPts = collisions.map(c => c.loc ? toSvg(c.loc[0],c.loc[1]) : null).filter(Boolean);
+
+  const last = traj[traj.length-1];
+  const [lastX, lastY] = toSvg(last.loc[0], last.loc[1]);
+  const yaw = last.rot ? ((last.rot[1]%360)+360)%360 : 0;
+  const arrowRad = yaw * Math.PI / 180;
+
+  return (
+    <div style={{ flex:1, overflow:"auto", padding:12 }}>
+      {/* SVG top-down trajectory map */}
+      <svg width={W} height={H} style={{ background:"var(--bg)", borderRadius:8, border:"1px solid var(--line)", display:"block", margin:"0 auto" }}>
+        {/* Grid lines */}
+        {[0.25,0.5,0.75].map(f => (
+          <line key={f} x1={pad} y1={H-pad-f*(H-2*pad)} x2={W-pad} y2={H-pad-f*(H-2*pad)}
+            stroke="var(--line)" strokeWidth={0.5} strokeDasharray="3,3" />
+        ))}
+        {/* Trajectory path */}
+        <path d={pathD} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" opacity={0.85} />
+        {/* Start point */}
+        {(() => { const [sx,sy]=toSvg(traj[0].loc[0],traj[0].loc[1]); return (
+          <circle cx={sx} cy={sy} r={5} fill="#22c55e" stroke="#fff" strokeWidth={1.5} />
+        ); })()}
+        {/* Collision markers */}
+        {collisionPts.map(([cx,cy],i) => (
+          <circle key={i} cx={cx} cy={cy} r={6} fill="#dc2626" opacity={0.7} />
+        ))}
+        {/* Current agent position with heading arrow */}
+        <circle cx={lastX} cy={lastY} r={7} fill={color} stroke="#fff" strokeWidth={2} />
+        <line x1={lastX} y1={lastY}
+          x2={lastX + Math.cos(arrowRad-Math.PI/2)*14}
+          y2={lastY + Math.sin(arrowRad-Math.PI/2)*14}
+          stroke="#fff" strokeWidth={2} strokeLinecap="round" />
+        {/* Legend */}
+        <circle cx={12} cy={H-10} r={4} fill="#22c55e" /><text x={20} y={H-7} fontSize={8} fill="var(--ink-3)">Start</text>
+        <circle cx={55} cy={H-10} r={4} fill={color} /><text x={63} y={H-7} fontSize={8} fill="var(--ink-3)">Current</text>
+        {collisionPts.length > 0 && <>
+          <circle cx={105} cy={H-10} r={4} fill="#dc2626" />
+          <text x={113} y={H-7} fontSize={8} fill="var(--ink-3)">Collision ({collisionPts.length})</text>
+        </>}
+      </svg>
+
+      {/* Stats row */}
+      <div style={{ display:"flex", gap:12, marginTop:10, fontSize:11 }}>
+        <div style={{ flex:1, padding:8, background:"var(--bg)", borderRadius:7, border:"1px solid var(--line)", textAlign:"center" }}>
+          <div style={{ fontSize:18, fontWeight:700, color }}>{traj.length}</div>
+          <div style={{ fontSize:9, color:"var(--ink-3)" }}>Track Points</div>
+        </div>
+        <div style={{ flex:1, padding:8, background:"var(--bg)", borderRadius:7, border:"1px solid var(--line)", textAlign:"center" }}>
+          <div style={{ fontSize:18, fontWeight:700, color: collisions.length>0?"#dc2626":color }}>{liveState?.collisionCount||0}</div>
+          <div style={{ fontSize:9, color:"var(--ink-3)" }}>Total Collisions</div>
+        </div>
+        <div style={{ flex:1, padding:8, background:"var(--bg)", borderRadius:7, border:"1px solid var(--line)", textAlign:"center" }}>
+          <div style={{ fontSize:18, fontWeight:700, color }}>{liveState?.totalTurns||0}</div>
+          <div style={{ fontSize:9, color:"var(--ink-3)" }}>Turns</div>
+        </div>
+        <div style={{ flex:1, padding:8, background:"var(--bg)", borderRadius:7, border:"1px solid var(--line)", textAlign:"center" }}>
+          <div style={{ fontSize:18, fontWeight:700, color }}>{Math.round((liveState?.speed||0)/100)}</div>
+          <div style={{ fontSize:9, color:"var(--ink-3)" }}>m/s</div>
+        </div>
+      </div>
+
+      {/* Recent collisions */}
+      {collisions.length > 0 && (
+        <div style={{ marginTop:10 }}>
+          <div style={{ fontSize:9, fontWeight:700, color:"#dc2626", marginBottom:4, textTransform:"uppercase" }}>Recent Collisions</div>
+          {collisions.slice(-5).map((c,i) => (
+            <div key={i} style={{ fontSize:10, color:"var(--ink-2)", padding:"3px 6px", background:"rgba(220,38,38,.06)", borderRadius:4, marginBottom:2, borderLeft:"2px solid #dc2626" }}>
+              {new Date(c.ts).toLocaleTimeString()} — overlapping: {c.overlapping?.join(", ")||"unknown"}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Environment feedback */}
+      {envEvents.length > 0 && (
+        <div style={{ marginTop:10 }}>
+          <div style={{ fontSize:9, fontWeight:700, color:"var(--ink-3)", marginBottom:4, textTransform:"uppercase" }}>Nearby Environment</div>
+          {envEvents.slice(-3).map((ev,i) => (
+            <div key={i} style={{ fontSize:10, color:"var(--ink-2)", padding:"3px 6px", background:"var(--bg)", borderRadius:4, marginBottom:2 }}>
+              {new Date(ev.ts).toLocaleTimeString()} — {ev.nearby?.length||0} objects within 3m: {ev.nearby?.slice(0,3).map(n=>n.name).join(", ")}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── AgentDetailPanel — expanded view with camera ────────────────────────────
 
 // Yaw → compass direction label
@@ -3548,20 +3682,35 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
             display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
       </div>
 
+      {/* ── Stats bar (speed, collisions) ── */}
+      <div style={{ padding:"4px 10px", background:"var(--bg)", display:"flex", gap:12,
+        fontSize:10, color:"var(--ink-3)", flexShrink:0, borderBottom:"1px solid var(--line)" }}>
+        {liveState?.speed > 0 && (
+          <span>⚡ {Math.round((liveState.speed||0)/100)} m/s</span>
+        )}
+        <span style={{ color: liveState?.collisionCount > 0 ? "#dc2626" : "var(--ink-3)" }}>
+          💥 {liveState?.collisionCount||0} collisions
+        </span>
+        <span>🔄 {liveState?.totalTurns||0} turns</span>
+        {liveState?.totalCostUsd > 0 && (
+          <span>💰 ${(liveState.totalCostUsd||0).toFixed(3)}</span>
+        )}
+      </div>
+
       {/* ── Tab bar ── */}
       <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--line)", flexShrink: 0, background: "var(--panel)" }}>
         {[
-          { id: "camera",   label: "📷 Camera"   },
-          { id: "activity", label: "📋 Activity" },
-          { id: "chat",     label: "💬 Chat"     },
+          { id: "camera",     label: "📷 Camera"     },
+          { id: "trajectory", label: "🗺️ Trajectory" },
+          { id: "activity",   label: "📋 Activity"   },
+          { id: "chat",       label: "💬 Chat"       },
         ].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
-            flex: 1, padding: "8px 4px", border: "none",
+            flex: 1, padding: "7px 2px", border: "none",
             borderBottom: `2px solid ${activeTab === t.id ? color : "transparent"}`,
             background: "none", cursor: "pointer",
-            fontSize: 11, fontWeight: activeTab === t.id ? 700 : 400,
+            fontSize: 10, fontWeight: activeTab === t.id ? 700 : 400,
             color: activeTab === t.id ? color : "var(--ink-3)",
-            transition: "all 0.12s",
           }}>{t.label}</button>
         ))}
       </div>
@@ -3620,6 +3769,11 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Trajectory tab ── */}
+      {activeTab === "trajectory" && (
+        <AgentTrajectoryView agentName={agent.name} color={color} liveState={liveState} />
       )}
 
       {/* ── Activity tab ── */}
@@ -3694,6 +3848,205 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Aggregate Panel: tabs for Overview / Testbed / Chat ─────────────────────
+
+function AgentAggregatePanelTabs({ agents, sessionId }) {
+  const [tab, setTab] = useState("overview");
+  const tabs = [
+    { id:"overview", label:"📊 Overview" },
+    { id:"testbed",  label:"🧪 Testbed"  },
+    { id:"chat",     label:"💬 Comm"     },
+  ];
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"var(--bg)" }}>
+      <div style={{ display:"flex", borderBottom:"1px solid var(--line)", flexShrink:0 }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            flex:1, padding:"5px 4px", border:"none", background:"none", cursor:"pointer",
+            fontSize:10, fontWeight: tab===t.id?700:400,
+            color: tab===t.id?"var(--blue)":"var(--ink-3)",
+            borderBottom:`2px solid ${tab===t.id?"var(--blue)":"transparent"}`,
+          }}>{t.label}</button>
+        ))}
+      </div>
+      <div style={{ flex:1, overflow:"hidden" }}>
+        {tab === "overview" && <AgentOverviewPanel agents={agents} />}
+        {tab === "testbed"  && <MultiAgentTestbed sessionId={sessionId} />}
+        {tab === "chat"     && <CommHistory agents={agents} />}
+      </div>
+    </div>
+  );
+}
+
+// ── Agent Overview: 2D map + collision timeline ───────────────────────────────
+function AgentOverviewPanel({ agents }) {
+  const pollData = usePoll();
+  const sessions = pollData.sessions || [];
+
+  if (sessions.length === 0) return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+      height:"100%", gap:8, color:"var(--ink-3)", fontSize:11 }}>
+      <div style={{ fontSize:24, opacity:.3 }}>🤖</div>No agents in scene
+    </div>
+  );
+
+  // Compute 2D bounding box from all agent positions
+  const pts = sessions.filter(s => s.location).map(s => s.location);
+  const W=440, H=110, pad=16;
+  if (pts.length === 0) return <div style={{ padding:12, color:"var(--ink-3)", fontSize:11 }}>No position data yet</div>;
+
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const minX=Math.min(...xs)-500, maxX=Math.max(...xs)+500;
+  const minY=Math.min(...ys)-500, maxY=Math.max(...ys)+500;
+  const rangeX=maxX-minX||1, rangeY=maxY-minY||1;
+  const sc = Math.min((W-2*pad)/rangeX, (H-2*pad)/rangeY);
+  const toSvg=(x,y)=>[pad+(x-minX)*sc, H-pad-(y-minY)*sc];
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto", padding:"6px 8px" }}>
+      {/* 2D top-down agent map */}
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`}
+        style={{ background:"var(--panel)", borderRadius:7, border:"1px solid var(--line)", marginBottom:6 }}>
+        {sessions.filter(s=>s.location).map((s,i) => {
+          const col = AGENT_COLORS[i % AGENT_COLORS.length];
+          const [sx,sy] = toSvg(s.location[0], s.location[1]);
+          const yaw = s.rotation ? ((s.rotation[1]%360)+360)%360 : 0;
+          const rad = yaw * Math.PI/180;
+          // Draw trajectory preview
+          if (s.trajectoryPreview?.length > 1) {
+            const pts = s.trajectoryPreview.map(p => toSvg(p.loc[0],p.loc[1]));
+            const d = pts.map((p,i) => `${i===0?'M':'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+            return (<g key={s.agentName}>
+              <path d={d} fill="none" stroke={col} strokeWidth={1.5} opacity={0.4} />
+              <circle cx={sx} cy={sy} r={6} fill={col} stroke="#fff" strokeWidth={1.5} />
+              <line x1={sx} y1={sy} x2={sx+Math.cos(rad-Math.PI/2)*11} y2={sy+Math.sin(rad-Math.PI/2)*11}
+                stroke="#fff" strokeWidth={1.5} strokeLinecap="round" />
+              <text x={sx} y={sy-9} textAnchor="middle" fontSize={7} fill={col} fontWeight="bold">{s.agentName}</text>
+            </g>);
+          }
+          return (<g key={s.agentName}>
+            <circle cx={sx} cy={sy} r={6} fill={col} stroke="#fff" strokeWidth={1.5} />
+            <text x={sx} y={sy-9} textAnchor="middle" fontSize={7} fill={col} fontWeight="bold">{s.agentName}</text>
+          </g>);
+        })}
+      </svg>
+
+      {/* Agent status rows */}
+      <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+        {sessions.map((s,i) => {
+          const col = AGENT_COLORS[i % AGENT_COLORS.length];
+          return (
+            <div key={s.agentName} style={{ display:"flex", alignItems:"center", gap:6, padding:"3px 6px",
+              background:"var(--panel)", borderRadius:5, border:"1px solid var(--line)", fontSize:10 }}>
+              <span style={{ width:6, height:6, borderRadius:"50%", flexShrink:0,
+                background: s.status==="running"?"#f59e0b":"#64748b" }} />
+              <span style={{ fontWeight:700, color:col, minWidth:80 }}>{s.agentName}</span>
+              <span style={{ color:"var(--ink-3)", minWidth:50 }}>
+                {s.speed > 0 ? `${Math.round(s.speed/100)}m/s` : "idle"}
+              </span>
+              <span style={{ color: s.collisionCount>0?"#dc2626":"var(--ink-3)" }}>
+                💥{s.collisionCount||0}
+              </span>
+              <span style={{ color:"var(--ink-3)" }}>🔄{s.totalTurns||0}</span>
+              {s.currentAction && <span style={{ color:"#f59e0b", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:80 }}>⚡{s.currentAction}</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Multi-Agent Testbed ───────────────────────────────────────────────────────
+function MultiAgentTestbed({ sessionId }) {
+  const [running, setRunning]   = useState(false);
+  const [log, setLog]           = useState([]);
+  const [count, setCount]       = useState(3);
+  const [goal, setGoal]         = useState("Explore the area and report obstacles you encounter");
+
+  const addLog = (msg) => setLog(prev => [...prev.slice(-30), `${new Date().toLocaleTimeString()} ${msg}`]);
+
+  const spawnAndRun = async () => {
+    setRunning(true);
+    setLog([]);
+    addLog(`Spawning ${count} agents…`);
+    try {
+      // Spawn agents via chat endpoint
+      const positions = Array.from({length: count}, (_,i) => {
+        const angle = (2*Math.PI*i)/count;
+        const r = 1500;
+        return [Math.round(r*Math.cos(angle)), Math.round(r*Math.sin(angle)), 110];
+      });
+      const spawnMsg = positions.map((p,i) =>
+        `spawn_agent(agent_name="TestAgent_${i+1}", agent_type="pedestrian", location=[${p.join(",")}])`
+      ).join("\n");
+
+      await fetch(`${API_BASE}/chat`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ message: spawnMsg, sessionId }),
+      });
+      addLog(`Spawned ${count} agents`);
+
+      // Send goal to each agent
+      for (let i = 1; i <= count; i++) {
+        addLog(`Sending goal to TestAgent_${i}…`);
+        await fetch(`${API_BASE}/agent-broadcast`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ text: goal, target: `TestAgent_${i}` }),
+        });
+        await new Promise(r => setTimeout(r, 500));
+      }
+      addLog("All agents received goals. Testbed running.");
+    } catch(e) {
+      addLog(`Error: ${e.message}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const stopAll = async () => {
+    setRunning(false);
+    await fetch(`${API_BASE}/agent-stop-all`, { method:"POST" }).catch(()=>{});
+    addLog("Stopped all agents");
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", padding:8, gap:6, overflow:"auto" }}>
+      <div style={{ fontSize:10, fontWeight:700, color:"var(--ink-2)" }}>Multi-Agent Testbed</div>
+      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+        <label style={{ fontSize:10, color:"var(--ink-3)" }}>Agents:</label>
+        <select value={count} onChange={e=>setCount(Number(e.target.value))}
+          style={{ fontSize:10, padding:"2px 4px", border:"1px solid var(--line)", borderRadius:4,
+            background:"var(--panel)", color:"var(--ink-1)" }}>
+          {[2,3,4,5].map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </div>
+      <textarea value={goal} onChange={e=>setGoal(e.target.value)} rows={2}
+        style={{ fontSize:10, padding:"4px 6px", border:"1px solid var(--line)", borderRadius:5,
+          background:"var(--bg)", color:"var(--ink-1)", resize:"none", fontFamily:"inherit" }}
+        placeholder="Navigation goal for all agents…" />
+      <div style={{ display:"flex", gap:6 }}>
+        <button onClick={spawnAndRun} disabled={running}
+          style={{ flex:1, padding:"5px 8px", borderRadius:6, border:"none",
+            background: running?"var(--line)":"var(--blue)", color:"#fff",
+            cursor: running?"default":"pointer", fontSize:11, fontWeight:600 }}>
+          {running ? "Running…" : "▶ Spawn & Run"}
+        </button>
+        <button onClick={stopAll}
+          style={{ padding:"5px 10px", borderRadius:6, border:"1px solid #dc2626",
+            background:"rgba(220,38,38,.1)", color:"#dc2626", cursor:"pointer", fontSize:11 }}>
+          ■ Stop
+        </button>
+      </div>
+      <div style={{ flex:1, overflow:"auto", background:"var(--bg)", borderRadius:6,
+        border:"1px solid var(--line)", padding:4, fontSize:9, fontFamily:"monospace", color:"var(--ink-2)" }}>
+        {log.map((l,i) => <div key={i}>{l}</div>)}
+        {log.length === 0 && <div style={{ color:"var(--ink-3)" }}>Log will appear here…</div>}
+      </div>
     </div>
   );
 }
@@ -3906,9 +4259,171 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange }) {
       {/* ── Vertical resize handle ── */}
       <div className="sw-resize-row" ref={resizeRef} onMouseDown={onMouseDown} title="Drag to resize" />
 
-      {/* ── Communication pane (fixed height, resizable) ── */}
+      {/* ── Aggregate / Testbed / Comm pane ── */}
       <div className="sw-comm-pane" style={{ height: commHeight }}>
-        <CommHistory agents={contextAgents} />
+        <AgentAggregatePanelTabs agents={contextAgents} sessionId={sessionId} />
+      </div>
+    </div>
+  );
+}
+
+// ─── Coding Agent Verifier Panel ─────────────────────────────────────────────
+// Rule-based feedback (scene collisions) + LLM-based (VLM score) per coding turn
+
+function CodingVerifierPanel({ sessionId }) {
+  const [tab, setTab]         = useState("collisions");
+  const [collData, setCollData] = useState(null);
+  const [scores, setScores]   = useState([]);   // [{ts, score, feedback, screenshot}]
+  const [checking, setChecking] = useState(false);
+  const [vlmRunning, setVlmRunning] = useState(false);
+  const [vlmError, setVlmError] = useState(null);
+  const pollData = usePoll();
+
+  // Auto-run collision check after each coding turn completes (chat done event)
+  // We trigger via the latestScreenshot changing (proxy for scene being updated)
+  const runCollisionCheck = useCallback(async () => {
+    setChecking(true);
+    try {
+      const raw = await fetch(`${API_BASE}/ue-command`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ command: "vget /scene/collisions" }),
+      }).then(r => r.json());
+      setCollData(raw.result ? JSON.parse(raw.result) : null);
+    } catch { setCollData(null); }
+    finally { setChecking(false); }
+  }, []);
+
+  const runVlmScore = useCallback(async () => {
+    setVlmRunning(true); setVlmError(null);
+    try {
+      const resp = await fetch(`${API_BASE}/screenshot/latest?t=${Date.now()}`);
+      if (!resp.ok) throw new Error("No screenshot");
+      const blob = await resp.blob();
+      const base64 = await new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+      // Send to VLM scoring endpoint
+      const result = await fetch(`${API_BASE}/vlm-score`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ imageDataUrl: base64, sessionId }),
+      }).then(r => r.json());
+      setScores(prev => [...prev.slice(-9), {
+        ts: Date.now(), score: result.score, feedback: result.feedback,
+        screenshot: base64, label: result.label,
+      }]);
+    } catch(e) { setVlmError(e.message); }
+    finally { setVlmRunning(false); }
+  }, [sessionId]);
+
+  const tabs = [
+    { id:"collisions", label:"💥 Collisions" },
+    { id:"vlm",        label:"🤖 VLM Score" },
+  ];
+
+  const collCount = collData?.collision_count ?? "—";
+  const collColor = typeof collCount === "number" ? (collCount === 0 ? "#16a34a" : "#dc2626") : "var(--ink-3)";
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"var(--bg)" }}>
+      {/* Header */}
+      <div style={{ display:"flex", alignItems:"center", padding:"4px 8px",
+        borderBottom:"1px solid var(--line)", flexShrink:0, gap:6 }}>
+        <span style={{ fontSize:10, fontWeight:700, color:"var(--orange)" }}>📐 Verifier</span>
+        <div style={{ display:"flex", gap:1, flex:1 }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding:"2px 8px", fontSize:9, borderRadius:4, border:"none", cursor:"pointer",
+              background: tab===t.id?"var(--orange)":"transparent",
+              color: tab===t.id?"#fff":"var(--ink-3)", fontWeight: tab===t.id?700:400,
+            }}>{t.label}</button>
+          ))}
+        </div>
+        {tab === "collisions" && (
+          <button onClick={runCollisionCheck} disabled={checking}
+            style={{ fontSize:9, padding:"2px 8px", borderRadius:4, border:"1px solid var(--line)",
+              background:"none", cursor:"pointer", color:"var(--ink-2)" }}>
+            {checking ? "…" : "↻ Check"}
+          </button>
+        )}
+        {tab === "vlm" && (
+          <button onClick={runVlmScore} disabled={vlmRunning}
+            style={{ fontSize:9, padding:"2px 8px", borderRadius:4, border:"1px solid var(--line)",
+              background:"none", cursor:"pointer", color:"var(--ink-2)" }}>
+            {vlmRunning ? "Scoring…" : "↻ Score"}
+          </button>
+        )}
+      </div>
+
+      {/* Body */}
+      <div style={{ flex:1, overflow:"auto", padding:6 }}>
+        {tab === "collisions" && (
+          collData ? (
+            <div>
+              <div style={{ display:"flex", gap:8, marginBottom:6 }}>
+                <div style={{ flex:1, textAlign:"center", padding:"5px", background:"var(--panel)",
+                  borderRadius:6, border:`1px solid ${collColor}44` }}>
+                  <div style={{ fontSize:20, fontWeight:700, color:collColor }}>{collData.collision_count}</div>
+                  <div style={{ fontSize:8, color:"var(--ink-3)" }}>Collisions</div>
+                </div>
+                <div style={{ flex:1, textAlign:"center", padding:"5px", background:"var(--panel)",
+                  borderRadius:6, border:"1px solid var(--line)" }}>
+                  <div style={{ fontSize:20, fontWeight:700, color:"var(--ink-2)" }}>{collData.checked_actors_count||0}</div>
+                  <div style={{ fontSize:8, color:"var(--ink-3)" }}>Actors Checked</div>
+                </div>
+                <div style={{ flex:1, textAlign:"center", padding:"5px", background:"var(--panel)",
+                  borderRadius:6, border:"1px solid var(--line)" }}>
+                  <div style={{ fontSize:20, fontWeight:700, color:"var(--ink-2)" }}>{collData.total_overlaps||0}</div>
+                  <div style={{ fontSize:8, color:"var(--ink-3)" }}>Overlaps</div>
+                </div>
+              </div>
+              {(collData.collision_pairs||[]).slice(0,5).map((p,i) => (
+                <div key={i} style={{ fontSize:9, padding:"3px 5px", background:"rgba(220,38,38,.06)",
+                  borderRadius:4, marginBottom:2, borderLeft:"2px solid #dc2626", color:"var(--ink-2)" }}>
+                  <strong>{p.actor1}</strong> ↔ <strong>{p.actor2}</strong>
+                  <span style={{ color:"var(--ink-3)", marginLeft:4 }}>
+                    [{p.collision_type}] pen={Math.round(p.penetration_depth)}cm
+                  </span>
+                </div>
+              ))}
+              {collData.collision_count === 0 && (
+                <div style={{ fontSize:10, color:"#16a34a", textAlign:"center", padding:8 }}>✓ No collisions detected</div>
+              )}
+            </div>
+          ) : (
+            <div style={{ fontSize:10, color:"var(--ink-3)", textAlign:"center", padding:12 }}>
+              {checking ? "Checking…" : "Click ↻ Check to run collision detection"}
+            </div>
+          )
+        )}
+        {tab === "vlm" && (
+          <div>
+            {vlmError && <div style={{ fontSize:9, color:"#dc2626", marginBottom:4 }}>{vlmError}</div>}
+            {scores.length === 0 && !vlmRunning && (
+              <div style={{ fontSize:10, color:"var(--ink-3)", textAlign:"center", padding:12 }}>
+                Click ↻ Score to evaluate the current scene with VLM
+              </div>
+            )}
+            {scores.slice().reverse().map((s,i) => (
+              <div key={i} style={{ marginBottom:6, padding:6, background:"var(--panel)",
+                borderRadius:6, border:"1px solid var(--line)" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
+                  <span style={{ fontSize:14, fontWeight:700,
+                    color: s.score >= 7?"#16a34a":s.score >= 4?"#f59e0b":"#dc2626" }}>
+                    {s.score}/10
+                  </span>
+                  <span style={{ fontSize:9, color:"var(--ink-3)" }}>
+                    {new Date(s.ts).toLocaleTimeString()}
+                  </span>
+                  {s.label && <span style={{ fontSize:8, background:"var(--bg)", borderRadius:3, padding:"1px 4px",
+                    color:"var(--ink-3)" }}>{s.label}</span>}
+                </div>
+                {s.feedback && <div style={{ fontSize:9, color:"var(--ink-2)", lineHeight:1.4 }}>{s.feedback}</div>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -8234,14 +8749,18 @@ function App() {
             </span>
             <div style={{ flex:1 }} />
           </div>
-          {/* Chat only — assets/scenes moved to drawer */}
-          <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+          {/* Chat — takes most vertical space */}
+          <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
             <ChatPanel
               onScreenshotUpdate={url => setLatestScreenshot(url)}
               onRef={setChatRef}
               onSessionChange={setCurrentSessionId}
               onChatDone={() => setContextRefreshKey(k => k + 1)}
             />
+          </div>
+          {/* Coding Agent Verifier — bottom, symmetric with aggregate panel */}
+          <div style={{ height: commHeight, flexShrink:0, borderTop:"1px solid var(--line)" }}>
+            <CodingVerifierPanel sessionId={currentSessionId} />
           </div>
         </div>
 

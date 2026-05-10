@@ -31,21 +31,37 @@ function ucvCommand(cmd, timeoutMs = 10000) {
 }
 
 async function getObservation(agentName) {
-  // Broker handles retry+reconnect; we set a generous queue deadline so a brief
-  // UCV stall (e.g. another agent spawning) doesn't make us silently return null.
   try {
-    const [loc, rot] = await Promise.all([
+    const [loc, rot, vel] = await Promise.all([
       broker.send(`vget /object/${agentName}/location`, { timeoutMs: 8000, retries: 3, queueDeadlineMs: 30000 }),
       broker.send(`vget /object/${agentName}/rotation`, { timeoutMs: 8000, retries: 3, queueDeadlineMs: 30000 }),
+      broker.send(`vget /object/${agentName}/velocity`, { timeoutMs: 4000, retries: 1, queueDeadlineMs: 10000 }),
     ]);
-    return {
-      location: loc.trim().split(/\s+/).map(Number),
-      rotation: rot.trim().split(/\s+/).map(Number),
-    };
+    const location = loc.trim().split(/\s+/).map(Number);
+    const rotation = rot.trim().split(/\s+/).map(Number);
+    const velocity = vel ? vel.trim().split(/\s+/).map(Number) : null;
+    const speed    = velocity ? Math.sqrt(velocity.reduce((s,v)=>s+v*v, 0)) : 0;
+    return { location, rotation, velocity, speed };
   } catch (err) {
     log.agent('warn', `getObservation(${agentName}) failed: ${err.message}`);
-    return { location: null, rotation: null };
+    return { location: null, rotation: null, velocity: null, speed: 0 };
   }
+}
+
+async function getEnvironmentFeedback(agentName, radiusCm = 300) {
+  try {
+    const raw = await broker.send(`vget /object/${agentName}/nearby ${radiusCm}`,
+      { timeoutMs: 3000, retries: 1, queueDeadlineMs: 5000 });
+    return JSON.parse(raw || '[]');
+  } catch { return []; }
+}
+
+async function getOverlaps(agentName) {
+  try {
+    const raw = await broker.send(`vget /object/${agentName}/overlaps`,
+      { timeoutMs: 3000, retries: 1, queueDeadlineMs: 5000 });
+    return JSON.parse(raw || '[]');
+  } catch { return []; }
 }
 
 // ---------------------------------------------------------------------------
@@ -63,18 +79,35 @@ async function getObservation(agentName) {
 
 class AgentSession {
   constructor({ agentName, agentClass, location }) {
-    this.agentName = agentName;
-    this.agentClass = agentClass;
-    this.location = location;
-    this.rotation = null;    // [pitch, yaw, roll] from UE
-    this.status = 'idle';    // idle | running
-    this.currentAction = null; // tool name of action in progress
-    this.proc = null;
-    this.history = [];       // conversation history
-    this.inbox = [];         // inter-agent messages
-    this.activity = [];      // ReAct activity log (last N turns)
-    this._currentActivity = null; // in-progress activity
-    this.positionUpdatedAt = null; // timestamp of last position refresh
+    this.agentName    = agentName;
+    this.agentClass   = agentClass;
+    this.location     = location;
+    this.rotation     = null;   // [pitch, yaw, roll] from UE
+    this.velocity     = null;   // [vx, vy, vz] cm/s
+    this.speed        = 0;      // scalar speed cm/s
+
+    this.status        = 'idle'; // idle | running
+    this.currentAction = null;   // tool name currently executing
+    this.proc          = null;
+
+    // Turn history & activity
+    this.history           = [];  // conversation turns
+    this.inbox             = [];  // inter-agent messages
+    this.activity          = [];  // ReAct logs (last 20 turns)
+    this._currentActivity  = null;
+
+    // Real-time tracking
+    this.positionUpdatedAt = null;
+    this.trajectory        = [];  // [{loc, rot, ts, action}] last 200 points
+    this.collisionCount    = 0;   // total collisions detected
+    this.recentCollisions  = [];  // last 20 collision events {ts, overlapping, loc}
+    this.envFeedback       = [];  // last 20 environment feedback events
+    this.memory            = [];  // summarized memory entries from past turns
+
+    // Stats
+    this.totalTurns  = 0;
+    this.totalCostUsd = 0;
+    this.createdAt   = Date.now();
   }
 
   _resolveType() {
@@ -177,11 +210,35 @@ class AgentSession {
 
     log.agent('info', `${this.agentName} turn start`, { message: message.slice(0, 200) });
 
-    // Get observation
+    // Get observation (location + rotation + velocity)
     const obs = await getObservation(this.agentName);
-    if (obs.location) { this.location = obs.location; this.positionUpdatedAt = Date.now(); }
-    if (obs.rotation) this.rotation = obs.rotation;
-    log.agent('debug', `${this.agentName} obs`, obs);
+    if (obs.location) {
+      this.location = obs.location;
+      this.positionUpdatedAt = Date.now();
+      // Append to trajectory (max 200 points)
+      this.trajectory.push({ loc: obs.location, rot: obs.rotation, ts: Date.now(), action: 'turn_start' });
+      if (this.trajectory.length > 200) this.trajectory.shift();
+    }
+    if (obs.rotation)  this.rotation  = obs.rotation;
+    if (obs.velocity)  this.velocity  = obs.velocity;
+    if (obs.speed !== undefined) this.speed = obs.speed;
+
+    // Check for overlapping actors (collision / proximity feedback)
+    const overlaps = await getOverlaps(this.agentName);
+    if (overlaps.length > 0) {
+      this.collisionCount += overlaps.length;
+      const ev = { ts: Date.now(), overlapping: overlaps.map(o=>o.name), loc: obs.location };
+      this.recentCollisions.push(ev);
+      if (this.recentCollisions.length > 20) this.recentCollisions.shift();
+    }
+
+    // Nearby environment feedback (300 cm radius)
+    const nearby = await getEnvironmentFeedback(this.agentName, 300);
+    if (nearby.length > 0) {
+      this.envFeedback.push({ ts: Date.now(), nearby, loc: obs.location });
+      if (this.envFeedback.length > 20) this.envFeedback.shift();
+    }
+    log.agent('debug', `${this.agentName} obs loc=${obs.location} overlaps=${overlaps.length} nearby=${nearby.length}`);
 
     const systemPrompt = this._systemPrompt();
 
@@ -407,23 +464,36 @@ class AgentSession {
   }
 
   toJSON() {
-    const lastAct = this.activity.length > 0 ? this.activity[this.activity.length - 1] : null;
-    const lastTool = lastAct?.actions?.length > 0
-      ? lastAct.actions[lastAct.actions.length - 1].tool : null;
+    const lastAct  = this.activity.length > 0 ? this.activity[this.activity.length - 1] : null;
+    const lastTool = lastAct?.actions?.length > 0 ? lastAct.actions[lastAct.actions.length - 1].tool : null;
     return {
-      agentName: this.agentName,
-      agentClass: this.agentClass,
-      location: this.location,
-      rotation: this.rotation,
-      positionUpdatedAt: this.positionUpdatedAt,
-      status: this.status,
-      currentAction: this.currentAction,
-      lastAction: lastTool,
-      historyLength: this.history.length,
-      lastActivity: lastAct,
-      activityCount: this.activity.length,
+      agentName:        this.agentName,
+      agentClass:       this.agentClass,
+      location:         this.location,
+      rotation:         this.rotation,
+      velocity:         this.velocity,
+      speed:            this.speed,
+      positionUpdatedAt:this.positionUpdatedAt,
+      status:           this.status,
+      currentAction:    this.currentAction,
+      lastAction:       lastTool,
+      historyLength:    this.history.length,
+      lastActivity:     lastAct,
+      activityCount:    this.activity.length,
+      collisionCount:   this.collisionCount,
+      recentCollisions: this.recentCollisions.slice(-5),
+      envFeedback:      this.envFeedback.slice(-3),
+      memory:           this.memory.slice(-10),
+      totalTurns:       this.totalTurns,
+      totalCostUsd:     this.totalCostUsd,
+      trajectoryLength: this.trajectory.length,
+      // Send last 10 trajectory points for the card display
+      trajectoryPreview: this.trajectory.slice(-10),
     };
   }
+
+  // Called externally to get full trajectory for the detail panel
+  getFullTrajectory() { return this.trajectory; }
 }
 
 // ---------------------------------------------------------------------------
@@ -446,9 +516,26 @@ class AgentController {
       for (const session of idle) {
         try {
           const obs = await getObservation(session.agentName);
-          if (obs.location) { session.location = obs.location; session.positionUpdatedAt = Date.now(); }
-          if (obs.rotation) session.rotation = obs.rotation;
-        } catch { /* ignore — broker handles retries */ }
+          if (obs.location) {
+            session.location = obs.location;
+            session.positionUpdatedAt = Date.now();
+            // Track trajectory for idle agents too
+            session.trajectory.push({ loc: obs.location, rot: obs.rotation, ts: Date.now(), action: null });
+            if (session.trajectory.length > 200) session.trajectory.shift();
+          }
+          if (obs.rotation)  session.rotation  = obs.rotation;
+          if (obs.velocity)  session.velocity  = obs.velocity;
+          if (obs.speed !== undefined) session.speed = obs.speed;
+
+          // Check overlaps (collision detection)
+          const overlaps = await getOverlaps(session.agentName);
+          if (overlaps.length > 0) {
+            session.collisionCount += overlaps.length;
+            const ev = { ts: Date.now(), overlapping: overlaps.map(o=>o.name), loc: obs.location };
+            session.recentCollisions.push(ev);
+            if (session.recentCollisions.length > 20) session.recentCollisions.shift();
+          }
+        } catch { /* broker handles retries */ }
       }
     }, 3000);
   }
