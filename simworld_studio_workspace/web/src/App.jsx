@@ -4957,7 +4957,7 @@ function AssetBrowser({ onInsert }) {
   const loadedRef    = useRef(false);
   const PAGE_SIZE    = 40;
 
-  // Load full tree ONCE on first visibility — no subsequent API calls for navigation
+  // Load tree on first visibility; re-poll until UE live scan is ready
   useEffect(() => {
     if (loadedRef.current) return;
     const el = containerRef.current;
@@ -4965,7 +4965,13 @@ function AssetBrowser({ onInsert }) {
     const obs = new IntersectionObserver(([e]) => {
       if (e.isIntersecting && !loadedRef.current) {
         loadedRef.current = true;
-        fetch(`${API_BASE}/asset-tree`).then(r => r.json()).then(setTreeData).catch(()=>{});
+        const load = () => fetch(`${API_BASE}/asset-tree`).then(r => r.json())
+          .then(d => {
+            setTreeData(d);
+            // If still serving static fallback, poll again in 5s
+            if (d.source !== 'ue-python') setTimeout(load, 5000);
+          }).catch(()=>{});
+        load();
         obs.disconnect();
       }
     }, { threshold: 0.1 });
@@ -4990,8 +4996,14 @@ function AssetBrowser({ onInsert }) {
 
   if (!treeData) {
     return <div ref={containerRef} style={{ padding:16, color:"var(--ink-3)", fontSize:"var(--fs-body)", height:"100%",
-      display:"flex", alignItems:"center", justifyContent:"center" }}>Loading asset catalog…</div>;
+      display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8 }}>
+      <div style={{ fontSize:24, opacity:.4 }}>📦</div>
+      <div>Loading asset catalog…</div>
+      <div style={{ fontSize:12, color:"var(--ink-3)" }}>Waiting for UE Python scan</div>
+    </div>;
   }
+
+  const isLive = treeData.source === 'ue-python';
 
   // Find current node in tree
   const curNode = findNode(treeData.tree, browsePath) || treeData.tree;
@@ -5018,13 +5030,18 @@ function AssetBrowser({ onInsert }) {
     <div ref={containerRef} style={{ display:"flex", height:"100%", background:"var(--bg)", overflow:"hidden" }}>
 
       {/* ── Left sidebar: category shortcuts ── */}
-      <div style={{ width:110, flexShrink:0, borderRight:"1px solid var(--line)", overflow:"auto",
+      <div style={{ width:120, flexShrink:0, borderRight:"1px solid var(--line)", overflow:"auto",
         display:"flex", flexDirection:"column", gap:1, padding:"6px 4px" }}>
-        <div style={{ fontSize:9, color:"var(--ink-3)", padding:"2px 6px", fontWeight:700, textTransform:"uppercase", letterSpacing:.5 }}>Categories</div>
+        {/* Source badge */}
+        <div style={{ fontSize:11, padding:"2px 6px", marginBottom:2,
+          color: isLive?"#16a34a":"var(--ink-3)", fontWeight:600 }}>
+          {isLive ? "🟢 Live UE" : "⏳ Scanning…"}
+        </div>
         {Object.entries(counts).map(([cat, cnt]) => (
-          <button key={cat} onClick={() => { setBrowsePath("/"); setCategory(cat); setSearch(""); }}
-            style={{ display:"flex", alignItems:"center", gap:5, padding:"4px 6px", borderRadius:5,
-              border:"none", cursor:"pointer", textAlign:"left", fontSize:10,
+          <button key={cat} onClick={() => { setBrowsePath("/Game/"); setCategory(cat); setSearch(""); setPage(0); }}
+            style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 7px", borderRadius:6,
+              border:"none", cursor:"pointer", textAlign:"left", fontSize:"var(--fs-body)",
+              fontFamily:"inherit",
               background: category === cat ? "var(--blue-soft)" : "transparent",
               color: category === cat ? "var(--blue)" : "var(--ink-2)",
               fontWeight: category === cat ? 700 : 400 }}>
@@ -5032,14 +5049,15 @@ function AssetBrowser({ onInsert }) {
             <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
               {cat.replace(/_/g," ")}
             </span>
-            <span style={{ fontSize:9, color:"var(--ink-3)" }}>{cnt}</span>
+            <span style={{ fontSize:11, color:"var(--ink-3)" }}>{cnt}</span>
           </button>
         ))}
         <div style={{ flex:1 }} />
-        <button onClick={() => { setBrowsePath("/"); setCategory(""); setSearch(""); }}
-          style={{ padding:"4px 6px", borderRadius:5, border:"none", cursor:"pointer",
-            fontSize:10, color:"var(--ink-3)", background:"transparent", textAlign:"left" }}>
-          All ({Object.values(counts).reduce((a,b)=>a+b,0)})
+        <button onClick={() => { setBrowsePath("/Game/"); setCategory(""); setSearch(""); setPage(0); }}
+          style={{ padding:"5px 7px", borderRadius:6, border:"none", cursor:"pointer",
+            fontSize:"var(--fs-body)", fontFamily:"inherit",
+            color:"var(--ink-3)", background:"transparent", textAlign:"left" }}>
+          All ({treeData.totalAssets || 0})
         </button>
       </div>
 
@@ -5050,11 +5068,12 @@ function AssetBrowser({ onInsert }) {
         <div style={{ flexShrink:0, padding:"5px 8px", borderBottom:"1px solid var(--line)",
           display:"flex", alignItems:"center", gap:4 }}>
           {browsePath !== "/Game/" && (
-            <button onClick={navigateUp} style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
-              border:"1px solid var(--line)", background:"none", cursor:"pointer", color:"var(--ink-2)" }}>↑</button>
+            <button onClick={navigateUp} style={{ fontSize:"var(--fs-body)", padding:"3px 8px", borderRadius:5,
+              border:"1px solid var(--line)", background:"none", cursor:"pointer", color:"var(--ink-2)",
+              fontFamily:"inherit" }}>↑</button>
           )}
           {/* Breadcrumb */}
-          <div style={{ display:"flex", alignItems:"center", gap:2, fontSize:10, color:"var(--ink-3)", flex:1, overflow:"hidden" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:2, fontSize:"var(--fs-body)", color:"var(--ink-3)", flex:1, overflow:"hidden" }}>
             <span style={{ cursor:"pointer", color:"var(--blue)" }} onClick={() => { setBrowsePath("/Game/"); setCategory(""); }}>Game</span>
             {breadcrumbs.filter(s=>s!=="Game").map((seg, i, arr) => (
               <span key={i} style={{ display:"flex", alignItems:"center", gap:2 }}>

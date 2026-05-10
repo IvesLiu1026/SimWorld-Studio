@@ -205,6 +205,141 @@ const _refreshPortCache=async()=>{
 _refreshPortCache();
 setInterval(_refreshPortCache,60000); // 15s — minimal interference with scene agent
 
+// ── Live asset scan — runs once after UE connects ────────────────────────────
+let _liveAssetTree = null;   // built from UE Python scan
+let _assetScanDone = false;
+
+async function _scanUeAssets() {
+  if (_assetScanDone) return;
+  _assetScanDone = true; // prevent re-entry; reset on failure
+  log.init('asset-scan', 'Starting UE asset scan via Python…');
+  const py = `
+import unreal, json
+roots = [
+  '/Game/CityDatabase/',
+  '/Game/TrafficSystem/',
+  '/Game/ChineseWaterTown/',
+  '/Game/Lighthouse_Island/',
+  '/Game/ModularGothicFantasyEnvironment/',
+  '/Game/CastleRiver/',
+  '/Game/Cave/',
+  '/Game/ModularTemplePlaza/',
+  '/Game/TrainStation/',
+  '/Game/ContainerYard/',
+  '/Game/ModularCourtyard/',
+  '/Game/MiddleEast/',
+  '/Game/Chinese_Landscape/',
+  '/Game/Village/',
+  '/Game/WinterTown/',
+  '/Game/ModularSciFi/',
+  '/Game/Dungeon/',
+  '/Game/HwaseongHaenggung/',
+]
+result = []
+for root in roots:
+    try:
+        paths = list(unreal.EditorAssetLibrary.list_assets(root, recursive=True, include_folder=True))
+        result.extend(paths)
+    except Exception as e:
+        pass
+print(json.dumps(result))
+`.trim();
+
+  try {
+    const raw = await new Promise((resolve, reject) => {
+      const sock = new (require('net').Socket)();
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 30000);
+      sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+        sock.write(JSON.stringify({ type:'execute_python_script', params:{ script:py } }) + '\n');
+      });
+      let buf = '';
+      sock.on('data', d => {
+        buf += d.toString();
+        try {
+          const r = JSON.parse(buf);
+          clearTimeout(timer); sock.destroy();
+          resolve(r);
+        } catch {}
+      });
+      sock.on('error', e => { clearTimeout(timer); reject(e); });
+    });
+
+    // Python prints JSON list of paths; extract from result.output or result directly
+    const output = raw?.result?.output || raw?.output || '';
+    const jsonMatch = output.match(/(\[[\s\S]*\])/);
+    if (!jsonMatch) throw new Error('No JSON array in output: ' + output.slice(0,200));
+    const paths = JSON.parse(jsonMatch[1]);
+    log.init('asset-scan', `Received ${paths.length} paths from UE`);
+
+    // Build nested tree from paths
+    // Folders end with '/' or match /Game/PackName/SubDir pattern without a '.' in last segment
+    const root = { name:'', path:'/', children:[], assets:[] };
+    const dirs = new Map([['/', root]]);
+
+    const getOrCreateDir = (dirPath) => {
+      if (dirs.has(dirPath)) return dirs.get(dirPath);
+      const parts = dirPath.replace(/\/$/, '').split('/').filter(Boolean);
+      let node = root, built = '/';
+      for (const seg of parts) {
+        built += seg + '/';
+        if (!dirs.has(built)) {
+          const child = { name:seg, path:built, children:[], assets:[] };
+          node.children.push(child);
+          dirs.set(built, child);
+        }
+        node = dirs.get(built);
+      }
+      return node;
+    };
+
+    const isFolder = (p) => p.endsWith('/') || !p.includes('.');
+
+    for (const p of paths) {
+      if (!p.startsWith('/Game/')) continue;
+      if (isFolder(p)) {
+        const fp = p.endsWith('/') ? p : p + '/';
+        getOrCreateDir(fp);
+      } else {
+        const parts = p.split('/');
+        const filename = parts.pop();
+        const dir = parts.join('/') + '/';
+        const name = filename.split('.')[0];
+        const dirNode = getOrCreateDir(dir);
+        // Classify asset type from path/name
+        const isBlueprint = filename.includes('_C') || p.includes('/blueprints/');
+        const isMesh = p.includes('/meshes/') || p.includes('/Meshes/') || name.startsWith('SM_');
+        const isMap = p.includes('/Maps/') || p.includes('/Levels/') || p.includes('/Map/');
+        const type = isMap ? 'map' : isBlueprint ? 'blueprint' : isMesh ? 'static_mesh' : 'asset';
+        const spawnTool = type === 'blueprint' ? 'spawn_blueprint_actor' : type === 'static_mesh' ? 'spawn_actor' : null;
+        dirNode.assets.push({ name, fullPath:p, type, spawnTool, icon: type==='map'?'🗺️': type==='blueprint'?'🏗️':'📦' });
+      }
+    }
+
+    // Sort
+    const sortNode = (node) => {
+      node.children.sort((a,b) => a.name.localeCompare(b.name));
+      node.children.forEach(sortNode);
+      node.assets.sort((a,b) => a.name.localeCompare(b.name));
+    };
+    sortNode(root);
+
+    const totalAssets = paths.filter(p => !isFolder(p)).length;
+    _liveAssetTree = { tree: root, totalAssets, scannedAt: Date.now(), source:'ue-python' };
+    log.init('asset-scan', `Asset tree built: ${totalAssets} assets, ${dirs.size} dirs`);
+  } catch(e) {
+    _assetScanDone = false; // allow retry
+    log.init('asset-scan', `Failed: ${e.message} — will retry on next UE connect`);
+  }
+}
+
+// Trigger scan once when UE is reachable — check every 5s until done
+const _assetScanInterval = setInterval(() => {
+  if (_cachedUeConn && !_assetScanDone) {
+    clearInterval(_assetScanInterval);
+    setTimeout(_scanUeAssets, 2000); // 2s grace for UE Python to be ready
+  }
+}, 5000);
+
 // Gather current status snapshot (shared by SSE push and legacy poll)
 function _gatherStatus(since=0){
   const ctx=ctxManager.getState(STUDIO_SESSION);
@@ -607,8 +742,15 @@ const _assetTree = (() => {
   return { tree: root, counts, totalAssets: _allAssets.length, builtAt: Date.now() };
 })();
 
-// Return full tree (built once at startup, ~50KB JSON)
-app.get('/api/asset-tree',(req,res) => res.json(_assetTree));
+// Return live UE-scanned tree if ready, else fall back to static catalog
+app.get('/api/asset-tree',(req,res) => res.json(_liveAssetTree || _assetTree));
+
+// Manual refresh — call after importing new assets into UE
+app.post('/api/asset-tree/refresh', async(req,res) => {
+  _assetScanDone = false;
+  try { await _scanUeAssets(); res.json({ ok:true, scannedAt:_liveAssetTree?.scannedAt }); }
+  catch(e) { res.status(503).json({ error:e.message }); }
+});
 
 app.get('/api/assets',(req,res)=>{
   let { path:browsePath='/', q='', page=0, limit=30, category='' } = req.query;
