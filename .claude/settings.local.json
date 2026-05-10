@@ -19,7 +19,8 @@
       "Bash(python -c ' *)",
       "Monitor(*)",
       "TodoWrite(*)",
-      "Skill(*)"
+      "Skill(*)",
+      "Bash(cd \"c:\\\\Users\\\\28262\\\\Desktop\\\\PlayGorund\\\\SimWorld-Studio-Dev\" && mv static_scene_eval_code/static_scene_eval/static_scene_eval/.git_bak static_scene_eval_code/static_scene_eval/static_scene_eval/.git && echo \"restored .git\")"
     ],
     "deny": [
       "Bash(rm -rf:*)",
@@ -36,6 +37,22 @@
       "Bash(shutdown:*)",
       "Bash(reboot:*)"
     ],
-    "defaultMode": "bypassPermissions"
+    "defaultMode": "bypassPermissions",
+    "additionalDirectories": [
+      "c:\\Users\\28262\\Desktop\\PlayGorund\\SimWorld-Studio-Dev\\static_scene_eval_code\\static_scene_eval\\static_scene_eval"
+    ]
+  },
+  "mcpServers": {
+    "simworld": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:/Users/28262/Desktop/PlayGorund/SimWorld-Studio-Dev/simworld_studio_workspace/web/server/mcp-server.js"
+      ],
+      "env": {
+        "UNREAL_HOST": "127.0.0.1",
+        "UNREAL_PORT": "55557"
+      }
+    }
   }
 }
