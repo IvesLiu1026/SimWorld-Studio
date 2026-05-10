@@ -350,8 +350,10 @@ const _assetScanInterval = setInterval(() => {
 
 // Auto-discover player-controlled agents via vget /objects
 // Patterns: actual agent pawns only — excludes cameras, controllers, HUDs, spectators
-const AGENT_PATTERNS  = /agent|pedestrian|base_user|base_ped|walker|npc|character|human|robot/i;
-const AGENT_EXCLUDE   = /camera|controller|manager|hud|spectator|default__|landscape|sky|light|fog|floor|ground|wall|brush|terrain|navmesh|trigger|volume|blocki|decal|post/i;
+// Match actual agent/pawn blueprints — covers Base_Demo, Base_Pedestrian, Base_User_Agent etc.
+const AGENT_PATTERNS  = /agent|pedestrian|base_user|base_ped|base_demo|walker|npc|character|human|robot|pawn/i;
+// Exclude helper/system actors that share keywords but are not agents
+const AGENT_EXCLUDE   = /camera|controller|manager|hud|spectator|default__|landscape|sky|light|fog|floor|ground|wall|brush|terrain|navmesh|trigger|volume|blockingvolume|decal|postprocess|atmosphericfog|exponentialheight/i;
 
 async function _autoDiscoverAgents() {
   if (!_cachedPie) return;
@@ -864,61 +866,75 @@ app.get('/api/agent-trajectory/:name', (req,res) => {
 
 // ── Agent camera snapshot — renders from agent's own POV ──────────────────────
 const _agentSnapCache = new Map(); // name -> {dataUrl, ts}
+
+// Helper: read a file path returned by UCV and convert to base64 dataUrl.
+// Returns null if path is invalid or file doesn't exist (rejects UCV error strings).
+function _ucvPathToDataUrl(raw) {
+  if (!raw) return null;
+  const p = raw.trim();
+  if (!p || p.includes('{') || p.toLowerCase().startsWith('error') || !fs.existsSync(p)) return null;
+  const buf = fs.readFileSync(p);
+  return `data:image/png;base64,${buf.toString('base64')}`;
+}
+
+// Helper: get latest screenshot from SCREENSHOT_DIR (< 5 min old)
+function _latestScreenshotDataUrl() {
+  try {
+    const files = fs.readdirSync(SCREENSHOT_DIR)
+      .filter(f => f.endsWith('.png'))
+      .map(f => ({ f, t: fs.statSync(path.join(SCREENSHOT_DIR, f)).mtimeMs }))
+      .filter(({ t }) => Date.now() - t < 300000)
+      .sort((a, b) => b.t - a.t);
+    if (!files[0]) return null;
+    const buf = fs.readFileSync(path.join(SCREENSHOT_DIR, files[0].f));
+    return `data:image/png;base64,${buf.toString('base64')}`;
+  } catch { return null; }
+}
+
 app.get('/api/agent-camera/:name', async(req,res) => {
   const name = req.params.name;
-  const CACHE_MS = 3500; // align with 4s frontend poll
+  const CACHE_MS = 3500;
   const cached = _agentSnapCache.get(name);
   if (cached && Date.now() - cached.ts < CACHE_MS) {
     return res.json({ dataUrl: cached.dataUrl, ts: cached.ts });
   }
 
-  // Get tracked agent state (location + rotation already fresh from background poller)
-  const session = agentCtrl.get(name);
-  const loc = session?.location;
-  const rot = session?.rotation; // [pitch, yaw, roll]
-
-  const _snapToDataUrl = (imgPath) => {
-    const p = imgPath.trim();
-    const buf = fs.existsSync(p) ? fs.readFileSync(p) : Buffer.from(p, 'binary');
-    return `data:image/png;base64,${buf.toString('base64')}`;
-  };
-
+  // Try strategies in order, use first that works
+  // Strategy 1: vget /camera/actor/{name}/lit — plugin renders from actor's own camera
+  //   Requires recompiled plugin with CameraHandler::GetActorCameraLit
+  let dataUrl = null;
   try {
-    // Primary: vget /camera/actor/{name}/lit (requires recompiled plugin)
-    // Falls back gracefully if command not yet available.
-    let imgPath = null;
-    try {
-      const raw = await ucvBroker.send(`vget /camera/actor/${name}/lit`, { timeoutMs: 6000, retries: 1 });
-      // Only treat as a valid file path — reject error strings and empty results
-      if (raw && raw.trim() && fs.existsSync(raw.trim())) {
-        imgPath = raw.trim();
-      }
-    } catch { /* plugin not yet compiled with this command */ }
+    const raw = await ucvBroker.send(`vget /camera/actor/${name}/lit`, { timeoutMs: 6000, retries: 1 });
+    dataUrl = _ucvPathToDataUrl(raw);
+  } catch { /* plugin not yet compiled */ }
 
-    if (imgPath) {
-      const buf = fs.readFileSync(imgPath);
-      const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
-      _agentSnapCache.set(name, { dataUrl, ts: Date.now() });
-      return res.json({ dataUrl, ts: Date.now() });
-    }
-    throw new Error('Actor camera not available (recompile plugin)');
-  } catch {
-    // Final fallback: latest saved screenshot file
-    const latest = (() => {
+  // Strategy 2: position camera/0 at agent's eye-level (tracked state) + capture
+  if (!dataUrl) {
+    const session = agentCtrl.get(name);
+    const loc = session?.location;
+    const rot = session?.rotation;
+    if (loc && rot) {
       try {
-        const files = fs.readdirSync(SCREENSHOT_DIR).filter(f=>f.endsWith('.png'))
-          .map(f=>({ f, t: fs.statSync(path.join(SCREENSHOT_DIR,f)).mtimeMs }))
-          .filter(({t})=>Date.now()-t<300000).sort((a,b)=>b.t-a.t);
-        return files[0] ? path.join(SCREENSHOT_DIR, files[0].f) : null;
-      } catch { return null; }
-    })();
-    if (latest) {
-      const buf = fs.readFileSync(latest);
-      res.json({ dataUrl:`data:image/png;base64,${buf.toString('base64')}`, ts:Date.now(), fallback:true });
-    } else {
-      res.status(503).json({ error:'No camera available' });
+        const eyeX = loc[0], eyeY = loc[1], eyeZ = loc[2] + 160;
+        const yaw = rot[1];
+        await ucvBroker.send(`vset /camera/0/location ${eyeX.toFixed(1)} ${eyeY.toFixed(1)} ${eyeZ.toFixed(1)}`, { timeoutMs: 3000 });
+        await ucvBroker.send(`vset /camera/0/rotation 0 ${yaw.toFixed(1)} 0`, { timeoutMs: 3000 });
+        const raw2 = await ucvBroker.send('vget /camera/0/lit', { timeoutMs: 5000 });
+        dataUrl = _ucvPathToDataUrl(raw2);
+      } catch { /* UCV not connected or agent not tracked */ }
     }
   }
+
+  // Strategy 3: latest scene screenshot (always available after take_screenshot)
+  if (!dataUrl) {
+    dataUrl = _latestScreenshotDataUrl();
+  }
+
+  if (dataUrl) {
+    _agentSnapCache.set(name, { dataUrl, ts: Date.now() });
+    return res.json({ dataUrl, ts: Date.now() });
+  }
+  res.status(503).json({ error:'No camera image available — take a screenshot first' });
 });
 
 
@@ -958,44 +974,75 @@ app.post('/api/ue-command', async(req,res) => {
 });
 
 // ── VLM scene scoring ─────────────────────────────────────────────────────────
+// Uses Claude Code CLI (already authenticated, no API key needed).
+// Image is saved to a temp file; Claude reads it via its built-in Read tool.
 app.post('/api/vlm-score', async(req,res) => {
   const { imageDataUrl } = req.body;
   if (!imageDataUrl) return res.status(400).json({ error:'imageDataUrl required' });
-  // Use @anthropic-ai/sdk directly — more reliable than CLI for vision tasks
+
+  const os = require('os');
+  const tmpImg = path.join(os.tmpdir(), `sw_vlm_${Date.now()}.png`);
+
   try {
-    const base64    = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
-    const mediaType = (imageDataUrl.match(/^data:(image\/\w+)/)?.[1] || 'image/png');
+    // Write image to disk so Claude Code can read it with its Read tool
+    const imgBuf = Buffer.from(imageDataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+    fs.writeFileSync(tmpImg, imgBuf);
 
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const prompt =
+      `You are a 3D scene quality evaluator. ` +
+      `Read the screenshot at "${tmpImg}" using your Read tool, then rate the scene 1-10. ` +
+      `Reply ONLY with a single JSON object on one line, nothing else: ` +
+      `{"score":N,"label":"one-word","feedback":"one sentence about the scene quality"}`;
 
-    const msg = await client.messages.create({
-      model:      'claude-opus-4-5',
-      max_tokens: 256,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-          { type: 'text',  text: 'Rate this 3D scene 1-10. Reply ONLY with JSON on one line: {"score":N,"label":"one-word","feedback":"one sentence"}' },
-        ],
-      }],
+    const result = await new Promise((resolve, reject) => {
+      const proc = spawn(CLAUDE_BIN, [
+        '-p', prompt,
+        '--output-format', 'json',
+        '--dangerously-skip-permissions',
+      ], { env: process.env, timeout: 60000 });
+
+      let out = '', err = '';
+      proc.stdout.on('data', d => { out += d.toString(); });
+      proc.stderr.on('data', d => { err += d.toString(); });
+
+      proc.on('close', code => {
+        // Clean up temp file
+        try { fs.unlinkSync(tmpImg); } catch {}
+
+        if (code !== 0 && !out) {
+          reject(new Error(`claude exit ${code}: ${err.slice(0,200)}`));
+          return;
+        }
+
+        // Claude --output-format json wraps result in {"result":"...","session_id":"..."}
+        let text = '';
+        try {
+          const parsed = JSON.parse(out);
+          text = parsed.result || parsed.text || out;
+        } catch {
+          text = out;
+        }
+
+        // Extract score JSON from response text
+        const m = text.match(/\{[^{}]*"score"\s*:\s*\d+[^{}]*\}/);
+        if (m) { try { resolve(JSON.parse(m[0])); return; } catch {} }
+
+        // Lenient: extract fields individually
+        const ms = text.match(/"score"\s*:\s*(\d+)/);
+        const ml = text.match(/"label"\s*:\s*"([^"]+)"/);
+        const mf = text.match(/"feedback"\s*:\s*"([^"]+)"/);
+        if (ms) { resolve({ score:parseInt(ms[1]), label:ml?.[1]||'ok', feedback:mf?.[1]||text.slice(0,100) }); return; }
+
+        // Last resort: just return the raw text as feedback with neutral score
+        resolve({ score:5, label:'ok', feedback: text.replace(/\n/g,' ').slice(0,150) });
+      });
+
+      proc.on('error', e => { try { fs.unlinkSync(tmpImg); } catch {} reject(e); });
     });
 
-    const text = msg.content?.[0]?.text || '';
-    // Extract JSON — handle markdown fences and plain inline JSON
-    const m = text.match(/\{[^{}]*"score"\s*:\s*\d+[^{}]*\}/);
-    if (m) {
-      const result = JSON.parse(m[0]);
-      return res.json({ score: result.score||5, label: result.label||'ok', feedback: result.feedback||'' });
-    }
-    // Lenient fallback
-    const ms = text.match(/"score"\s*:\s*(\d+)/);
-    const ml = text.match(/"label"\s*:\s*"([^"]+)"/);
-    const mf = text.match(/"feedback"\s*:\s*"([^"]+)"/);
-    if (ms) return res.json({ score:parseInt(ms[1]), label:ml?.[1]||'ok', feedback:mf?.[1]||'' });
-
-    res.json({ score:5, label:'ok', feedback: text.slice(0,120) });
+    res.json({ score: result.score||5, label: result.label||'ok', feedback: result.feedback||'' });
   } catch(e) {
+    try { fs.unlinkSync(tmpImg); } catch {}
     res.json({ score:5, label:'error', feedback:`Scoring failed: ${e.message}` });
   }
 });
