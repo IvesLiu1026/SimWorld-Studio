@@ -224,11 +224,10 @@ const _refreshPortCache=async()=>{
       const timer=setTimeout(()=>{sock.destroy();resolve(null)},3000);
       sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{
         // Lightweight ping — find a non-existent actor, UE returns fast empty result
-        sock.write(JSON.stringify({type:"find_actors_by_name",params:{pattern:"__healthcheck__"}})+"\n");
+        // TCP probe: connect+close only. No MCP command, zero UE log output.
+        clearTimeout(timer); sock.destroy(); resolve({ok:true});
       });
-      let buf="";
-      sock.on("data",d=>{buf+=d.toString();try{const r=JSON.parse(buf);clearTimeout(timer);sock.destroy();resolve(r)}catch{}});
-      sock.on("error",()=>{clearTimeout(timer);resolve(null)});
+      sock.on("error",()=>{clearTimeout(timer);resolve(null);});
       sock.on("close",()=>{clearTimeout(timer);if(!buf.trim())resolve(null)});
     });
     _cachedUeConn=!!result;_cachedPie=_cachedUeConn;
@@ -236,7 +235,7 @@ const _refreshPortCache=async()=>{
   _portCheckRunning=false;
 };
 _refreshPortCache();
-setInterval(_refreshPortCache,15000); // 15s — minimal interference with scene agent
+setInterval(_refreshPortCache,60000); // 15s — minimal interference with scene agent
 
 // Gather current status snapshot (shared by SSE push and legacy poll)
 function _gatherStatus(since=0){
