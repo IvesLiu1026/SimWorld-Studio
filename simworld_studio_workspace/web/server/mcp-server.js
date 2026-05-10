@@ -69,19 +69,20 @@ async function _execWithRetry(type,params,timeoutMs,retries){
   throw lastErr;
 }
 
-// Ensure actor names are unique by appending a short suffix if already used
+// Ensure actor names are unique by appending a session-unique suffix.
+// _SID = millisecond timestamp (base36) + 3 random chars → e.g. "lhq3k2_a7f"
+// This survives: server restarts, map reloads, PIE restarts, pre-existing map actors.
 const _usedNames=new Set();
-// 4-char hex session tag, changes every restart — prevents cross-session name collisions
-// even when delete_all_spawned fails to clean up (e.g. after map load crash)
-const _SID=Date.now().toString(16).slice(-4);
+const _SID=(Date.now().toString(36).slice(-5)+Math.random().toString(36).slice(2,5));
 function _uniqueName(name){
-  // Always append session tag so the name is unique across restarts and map loads
-  const base=`${name}_${_SID}`;
-  if(!_usedNames.has(base)){_usedNames.add(base);return base}
-  // Within-session collision (extremely rare): add counter
+  // Strip any previous suffix (in case Claude reuses names across turns)
+  const base=name.replace(/_[a-z0-9]{6,}$/i,'');
+  const tagged=`${base}_${_SID}`;
+  if(!_usedNames.has(tagged)){_usedNames.add(tagged);return tagged}
+  // Within-session duplicate: append incrementing counter
   let i=2;
-  while(_usedNames.has(`${base}_${i}`))i++;
-  const unique=`${base}_${i}`;
+  while(_usedNames.has(`${tagged}${i}`))i++;
+  const unique=`${tagged}${i}`;
   _usedNames.add(unique);
   return unique;
 }
