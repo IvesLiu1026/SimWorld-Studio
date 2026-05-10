@@ -34,7 +34,8 @@ function PollProvider({ children }) {
   const [sync,     setSync]     = useState({ staleAgents: new Set(), syncError: null, sseOk: true });
   const [metrics,  setMetrics]  = useState({ series: {}, sceneCollisions: [], sampledAt: 0, intervalMs: 5000 });
 
-  const agentLastSeen = useRef(new Map()); // agentName → timestamp
+  const agentLastSeen  = useRef(new Map()); // agentName → timestamp
+  const agentMissCnt   = useRef(new Map()); // agentName → consecutive miss count
   const legacyRef = useRef({ context: { agents:[], objects:[], environment:{ready:false}, round:0 }, sessions:[], activities:{}, chatLog:[], pieActive:false, health:null });
 
   useEffect(() => {
@@ -62,15 +63,25 @@ function PollProvider({ children }) {
         const liveNames = new Set();
         (d.sessions || d.context?.agents || []).forEach(a => {
           const name = a.agentName || a.name;
-          if (name) { agentLastSeen.current.set(name, now); liveNames.add(name); }
+          if (name) {
+            agentLastSeen.current.set(name, now);
+            agentMissCnt.current.delete(name); // reset on seen
+            liveNames.add(name);
+          }
         });
 
-        // Detect stale agents; prune entries absent > 5min to prevent memory leak
+        // Stale detection: require 3+ consecutive missed pushes (not just 1)
+        // to avoid false positives from SSE network jitter
         const stale = new Set();
         for (const [name, ts] of agentLastSeen.current) {
           if (!liveNames.has(name)) {
-            if (now - ts > STALE_AGENT_MS) stale.add(name);
-            if (now - ts > 300_000) agentLastSeen.current.delete(name); // prune
+            const misses = (agentMissCnt.current.get(name) || 0) + 1;
+            agentMissCnt.current.set(name, misses);
+            if (misses >= 3 && now - ts > STALE_AGENT_MS) stale.add(name);
+            if (now - ts > 300_000) {
+              agentLastSeen.current.delete(name);
+              agentMissCnt.current.delete(name);
+            }
           }
         }
         setSync(prev => {
@@ -88,7 +99,9 @@ function PollProvider({ children }) {
           // Check key agent state fields to detect actual changes
           const sessKey = s => `${s.agentName}:${s.status}:${s.collisionCount}:${Math.round((s.location?.[0]||0)/10)}:${s.currentAction||''}`;
           const sameKey  = sameCount && nextSessions.every((s,i) => sessKey(s) === sessKey(prevSess[i]));
-          const sameActs = Object.keys(nextActivities).join(',') === Object.keys(prev.activities || {}).join(',');
+          // Compare activity content (not just key names) to detect new turns
+          const actKey = acts => Object.entries(acts||{}).map(([k,v])=>`${k}:${(v||[]).length}:${(v||[])[v?.length-1]?.timestamp||0}`).join('|');
+          const sameActs = actKey(nextActivities) === actKey(prev.activities);
           if (sameKey && sameActs && (prev.agents||[]).length === nextAgentList.length) return prev;
           return { agents: nextAgentList, sessions: nextSessions, activities: nextActivities };
         });
@@ -4104,8 +4117,16 @@ function MultiAgentTestbed({ sessionId }) {
       const pieStatus = await fetch(`${API_BASE}/pie-status`).then(r=>r.json());
       if (!pieStatus.active) {
         await fetch(`${API_BASE}/pie-start`, { method:"POST" });
-        addLog("PIE start requested — waiting 5s…");
-        await new Promise(r => setTimeout(r, 5000));
+        addLog("PIE start requested — waiting up to 30s…");
+        // Poll until PIE is active (don't blindly wait fixed duration)
+        let pieReady = false;
+        for (let i = 0; i < 30; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const check = await fetch(`${API_BASE}/pie-status`).then(r=>r.json()).catch(()=>({active:false}));
+          if (check.active) { pieReady = true; break; }
+        }
+        if (!pieReady) { addLog("⚠ PIE did not start — agents may not work correctly"); }
+        else { addLog("✓ PIE active"); }
       } else {
         addLog("PIE already active");
       }
@@ -4415,7 +4436,7 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange, hideComm 
 // ─── Coding Agent Verifier Panel ─────────────────────────────────────────────
 // Rule-based feedback (scene collisions) + LLM-based (VLM score) per coding turn
 
-function CodingVerifierPanel({ sessionId }) {
+function CodingVerifierPanel({ sessionId, latestScreenshot }) {
   const [tab, setTab]         = useState("collisions");
   const [collData, setCollData] = useState(null);
   const [scores, setScores]   = useState([]);
@@ -4426,8 +4447,6 @@ function CodingVerifierPanel({ sessionId }) {
   const metrics   = useMetrics();
   const sceneCollHistory = (metrics.sceneCollisions || []).map(c => c.count);
 
-  // Auto-run collision check after each coding turn completes (chat done event)
-  // We trigger via the latestScreenshot changing (proxy for scene being updated)
   const runCollisionCheck = useCallback(async () => {
     setChecking(true);
     try {
@@ -4447,6 +4466,14 @@ function CodingVerifierPanel({ sessionId }) {
     } catch { setCollData(null); }
     finally { setChecking(false); }
   }, []);
+
+  // Auto-trigger collision check when scene changes (new screenshot = coding agent just built something)
+  const prevScreenRef = useRef(null);
+  useEffect(() => {
+    if (!latestScreenshot || latestScreenshot === prevScreenRef.current) return;
+    prevScreenRef.current = latestScreenshot;
+    if (tab === "collisions") runCollisionCheck();
+  }, [latestScreenshot, tab, runCollisionCheck]);
 
   const runVlmScore = useCallback(async () => {
     setVlmRunning(true); setVlmError(null);
@@ -9029,7 +9056,7 @@ function App() {
               </span>
             </div>
             <div style={{ flex:1, overflow:"hidden" }}>
-              <CodingVerifierPanel sessionId={currentSessionId} />
+              <CodingVerifierPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />
             </div>
           </div>
         </div>
