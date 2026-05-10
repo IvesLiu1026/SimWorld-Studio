@@ -8857,8 +8857,7 @@ function App() {
               <StatusDot label="Claude Code" active={true}                activeColor="#16a34a" inactiveColor="#64748b" />
             </div>
           )}
-          {healthError && <span style={{ fontSize:12, color:"#dc2626", fontWeight:600 }}>Backend unreachable</span>}
-          {!health && !healthError && <span style={{ fontSize:12, color:"#64748b" }}>Connecting…</span>}
+          {!health && <span style={{ fontSize:12, color:"#94a3b8" }}>Connecting…</span>}
 
           {/* Sync error / stale agent warnings */}
           {!syncStatus.sseOk && (

@@ -20,9 +20,10 @@
   --orange-soft: #fff1e6;
   --red: #dc2626;
   --amber: #f59e0b;
-  --shadow-card: none;   /* panels flat by default */
-  --shadow-hover: 0 0 0 1.5px rgba(37,99,235,.18), 0 4px 16px rgba(15,23,42,.10), 0 1px 4px rgba(15,23,42,.06);
-  --shadow-pop:  0 0 0 1px rgba(15,23,42,.08), 0 8px 24px rgba(15,23,42,.14);
+  --shadow-card: none;
+  /* Natural drop shadow: light from top-left → shadow bottom-right */
+  --shadow-hover: 3px 4px 12px rgba(15,23,42,.13), 1px 2px 4px rgba(15,23,42,.07);
+  --shadow-pop:   4px 6px 20px rgba(15,23,42,.16), 1px 2px 5px rgba(15,23,42,.08);
 
   /* ── Typography scale (3 levels only) ───────────────────────── */
   --fs-title:   20px;   /* logo, section headers */
@@ -171,7 +172,7 @@ button { font-family: inherit; }
 }
 .sw-panel-card:hover {
   box-shadow: var(--shadow-hover);
-  transform: translateY(-1px);
+  transform: translate(-1px, -1px);  /* shift up-left to match shadow direction */
 }
 
 /* Column panels */

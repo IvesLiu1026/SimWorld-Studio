@@ -936,40 +936,58 @@ app.post('/api/ue-command', async(req,res) => {
 app.post('/api/vlm-score', async(req,res) => {
   const { imageDataUrl } = req.body;
   if (!imageDataUrl) return res.status(400).json({ error:'imageDataUrl required' });
-  // Use Claude Code binary (already authenticated) — no API key needed
+  // Pass image via stream-json stdin — Claude Code CLI supports image content blocks
+  // No --image flag needed; encode as base64 content block in the user message.
   try {
-    const os = require('os'), path2 = require('path');
-    const tmpImg = path2.join(os.tmpdir(), `vlm_${Date.now()}.png`);
-    const imgBuf = Buffer.from(imageDataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    fs.writeFileSync(tmpImg, imgBuf);
+    const base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const mediaType = imageDataUrl.match(/^data:(image\/\w+)/)?.[1] || 'image/png';
 
-    const prompt = `Look at this 3D scene screenshot. Rate it from 1-10 for: visual coherence, spatial layout, asset diversity, and realism. Reply ONLY with JSON on one line: {"score":N,"label":"one-word","feedback":"one sentence max"}`;
+    // Build stream-json user message with image + text
+    const userMsg = JSON.stringify({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+          { type: 'text', text: 'Rate this 3D scene 1-10 for: visual coherence, spatial layout, asset diversity, realism. Reply ONLY with JSON on one line: {"score":N,"label":"one-word","feedback":"one sentence"}' }
+        ]
+      }
+    });
+
     const result = await new Promise((resolve, reject) => {
-      const args = ['-p', prompt, '--output-format', 'json',
-        '--dangerously-skip-permissions', '--image', tmpImg];
-      const proc = spawn(CLAUDE_BIN, args, { env: process.env, timeout: 30000 });
+      const args = [
+        '--input-format', 'stream-json',
+        '--output-format', 'stream-json',
+        '--dangerously-skip-permissions',
+        '--verbose',
+      ];
+      const proc = spawn(CLAUDE_BIN, args, { env: process.env });
+      proc.stdin.write(userMsg + '\n');
+      proc.stdin.end();
       let out = '';
       proc.stdout.on('data', d => out += d.toString());
       proc.on('close', code => {
-        try { fs.unlinkSync(tmpImg); } catch {}
-        if (code !== 0) { reject(new Error(`claude exit ${code}`)); return; }
-        // Parse result from Claude output
-        const jsonMatch = out.match(/\{"score"[^}]+\}/);
-        if (jsonMatch) resolve(JSON.parse(jsonMatch[0]));
-        else {
-          // Fallback: extract from stream-json result field
-          const lines = out.split('\n').filter(Boolean);
-          for (const l of lines) {
-            try {
-              const ev = JSON.parse(l);
-              if (ev.type === 'result' && ev.result) {
-                const m = ev.result.match(/\{"score"[^}]+\}/);
-                if (m) { resolve(JSON.parse(m[0])); return; }
-              }
-            } catch {}
-          }
-          reject(new Error('No JSON in claude output: ' + out.slice(0,200)));
+        if (code !== 0 && !out) { reject(new Error(`claude exit ${code}`)); return; }
+        // Extract JSON result from stream-json output
+        const lines = out.split('\n').filter(Boolean);
+        for (const l of lines) {
+          try {
+            const ev = JSON.parse(l);
+            const text = ev.result || (ev.message?.content?.[0]?.text) || '';
+            const m = text.match(/\{"score"[^}]+\}/);
+            if (m) { resolve(JSON.parse(m[0])); return; }
+            // Also check text_delta events
+            if (ev.type === 'stream_event') {
+              const delta = ev.event?.delta?.text || '';
+              const md = delta.match(/\{"score"[^}]+\}/);
+              if (md) { resolve(JSON.parse(md[0])); return; }
+            }
+          } catch {}
         }
+        // Final fallback: search raw output for the JSON pattern
+        const raw = out.match(/\{"score"\s*:\s*\d+[^}]*\}/);
+        if (raw) { try { resolve(JSON.parse(raw[0])); return; } catch {} }
+        reject(new Error('No score JSON in output: ' + out.slice(0,300)));
       });
       proc.on('error', reject);
     });
