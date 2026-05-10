@@ -8960,7 +8960,7 @@ function App() {
       {/* ══ 3-COLUMN RESIZABLE STUDIO LAYOUT ══ */}
       {activePage === "generate" && (
       <div ref={layoutRef} style={{
-        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:8, padding:"4px 0",
+        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:5, padding:"6px 0",
       }}>
         {/* ── LEFT: Coding Agent + Verifier (two independent panels) ── */}
         <div ref={leftColRef} style={{
@@ -8968,10 +8968,10 @@ function App() {
           display:"flex", flexDirection:"column", gap:0, overflow:"hidden",
         }}>
           {/* Panel 1: Coding Agent */}
-          <div style={{
+          <div className="sw-panel-card" style={{
             flex:1, minHeight:0,
             borderRadius:12, border:"1px solid var(--line)",
-            boxShadow:"var(--shadow-card)", display:"flex",
+             display:"flex",
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header">
@@ -9002,10 +9002,10 @@ function App() {
           </div>
 
           {/* Panel 2: Coding Agent Verifier (standalone) */}
-          <div style={{
+          <div className="sw-panel-card" style={{
             height: commHeight, flexShrink:0,
             borderRadius:12, border:"1px solid var(--line)",
-            boxShadow:"var(--shadow-card)", display:"flex",
+             display:"flex",
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
@@ -9027,10 +9027,10 @@ function App() {
         <div style={{ flex:1, minWidth:320, display:"flex", flexDirection:"column", gap:8, overflow:"hidden" }}>
 
           {/* UE Viewport card */}
-          <div style={{
+          <div className="sw-panel-card" style={{
             flex:1, minHeight:120,
-            borderRadius:12, border:"1px solid #0b1220",
-            boxShadow:"var(--shadow-pop)", overflow:"hidden", background:"#0b1220",
+            borderRadius:12, border:"1px solid #1e293b",
+            overflow:"hidden", background:"#0b1220",
           }}>
             <ViewportPanel latestScreenshot={latestScreenshot} />
           </div>
@@ -9112,10 +9112,10 @@ function App() {
           display:"flex", flexDirection:"column", gap:0, overflow:"hidden",
         }}>
           {/* Panel 1: Embodied Agent */}
-          <div style={{
+          <div className="sw-panel-card" style={{
             flex:1, minHeight:0,
             borderRadius:12, border:"1px solid var(--line)",
-            boxShadow:"var(--shadow-card)", display:"flex",
+             display:"flex",
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header" style={{ borderRadius:"12px 12px 0 0" }}>
@@ -9146,10 +9146,10 @@ function App() {
           </div>
 
           {/* Panel 2: Agent Statistics (standalone) */}
-          <div style={{
+          <div className="sw-panel-card" style={{
             height: rightBottomH, flexShrink:0,
             borderRadius:12, border:"1px solid var(--line)",
-            boxShadow:"var(--shadow-card)", display:"flex",
+             display:"flex",
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>

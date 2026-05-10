@@ -198,6 +198,7 @@ $ueArgs = @(
     "-MCPPort=$McpPort",
     "-NOSPLASH", "-NOSOUND",
     "-ResX=1920", "-ResY=1080",
+    "-ExecCmds=DisableAllScreenMessages 0",
     "-graphicsadapter=$Gpu",
     "-EditorPixelStreamingRes=1920x1080",
     "-EditorPixelStreamingStartOnLaunch=true",

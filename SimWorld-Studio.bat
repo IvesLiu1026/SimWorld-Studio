@@ -237,6 +237,7 @@ start "UnrealEditor" "%UE_EDITOR%" "%UE_PROJECT%" ^
     -MCPPort=%MCP_PORT% ^
     -NOSPLASH -NOSOUND ^
     -ResX=1920 -ResY=1080 ^
+    -ExecCmds="DisableAllScreenMessages 0" ^
     -graphicsadapter=%GPU_INDEX% ^
     %RENDER_OFFSCREEN% ^
     -EditorPixelStreamingRes=1920x1080 ^
