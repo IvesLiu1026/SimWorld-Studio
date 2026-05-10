@@ -382,7 +382,7 @@ def start_server(args):
     elif cirrus_js.exists():
         # Generate cirrus config
         cirrus_config = {
-            "UseFrontend": False,
+            "UseFrontend": True,
             "UseMatchmaker": False,
             "HttpPort": args.cirrus_http_port,
             "StreamerPort": args.cirrus_ws_port,

@@ -1,4 +1,4 @@
-# SimWorld Studio — Windows PowerShell startup script
+# SimWorld Studio - Windows PowerShell startup script
 # Usage: .\start.ps1 [-Dev] [-NoBuild]
 
 param(
@@ -10,12 +10,12 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║     SimWorld Studio — Starting Up        ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "===========================================" -ForegroundColor Cyan
+Write-Host "     SimWorld Studio - Starting Up" -ForegroundColor Cyan
+Write-Host "===========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# -- Config -------------------------------------------------------------------
 $env:PORT              = if ($env:PORT)              { $env:PORT }              else { "3002" }
 $env:UCV_PORT          = if ($env:UCV_PORT)          { $env:UCV_PORT }          else { "9001" }
 $env:UNREAL_PORT       = if ($env:UNREAL_PORT)       { $env:UNREAL_PORT }       else { "55557" }
@@ -32,7 +32,7 @@ Write-Host "  Cirrus HTTP  : $($env:CIRRUS_HTTP_PORT)"
 Write-Host "  Mode         : $($env:NODE_ENV)"
 Write-Host ""
 
-# ── Build frontend (unless -Dev or -NoBuild) ──────────────────────────────────
+# -- Build frontend (unless -Dev or -NoBuild) ---------------------------------
 if (-not $Dev -and -not $NoBuild) {
     Write-Host "Building frontend..." -ForegroundColor Yellow
     Push-Location "$ScriptDir"
@@ -43,7 +43,7 @@ if (-not $Dev -and -not $NoBuild) {
     Write-Host ""
 }
 
-# ── Start backend ─────────────────────────────────────────────────────────────
+# -- Start backend ------------------------------------------------------------
 Write-Host "Starting backend server on :$($env:PORT)..." -ForegroundColor Yellow
 $serverJob = Start-Job -ScriptBlock {
     param($serverDir, $envVars)
@@ -62,7 +62,7 @@ $serverJob = Start-Job -ScriptBlock {
 
 Start-Sleep -Seconds 3
 
-# ── Start frontend dev server (if -Dev) ───────────────────────────────────────
+# -- Start frontend dev server (if -Dev) --------------------------------------
 $frontendJob = $null
 if ($Dev) {
     Write-Host "Starting frontend dev server..." -ForegroundColor Yellow
@@ -75,17 +75,17 @@ if ($Dev) {
 }
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║  SimWorld Studio is running!             ║" -ForegroundColor Green
-Write-Host "╠══════════════════════════════════════════╣" -ForegroundColor Green
+Write-Host "===========================================" -ForegroundColor Green
+Write-Host "  SimWorld Studio is running!" -ForegroundColor Green
+Write-Host "===========================================" -ForegroundColor Green
 $url = if ($Dev) { "http://localhost:5173" } else { "http://localhost:$($env:PORT)" }
-Write-Host "║  Open: $url" -ForegroundColor Green
-Write-Host "╚══════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "  Open: $url" -ForegroundColor Green
+Write-Host "===========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Press Ctrl+C to stop all services." -ForegroundColor Gray
 Write-Host ""
 
-# ── Wait and stream logs ──────────────────────────────────────────────────────
+# -- Wait and stream logs -----------------------------------------------------
 try {
     while ($true) {
         $out = Receive-Job $serverJob 2>&1

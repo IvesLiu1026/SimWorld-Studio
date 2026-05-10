@@ -107,10 +107,11 @@ exit /b 0
 REM ============================================================
 REM  RELEASE PORTS (kill stale processes from previous runs)
 REM ============================================================
-for %%P in (%WEB_PORT% %MCP_PORT% %CIRRUS_HTTP_PORT% %CIRRUS_WS_PORT% 9000) do (
+for %%P in (%WEB_PORT% %MCP_PORT% %CIRRUS_HTTP_PORT% %CIRRUS_WS_PORT% %CIRRUS_SFU_PORT% 9001) do (
     powershell -Command "Get-NetTCPConnection -LocalPort %%P -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 )
-ping -n 2 127.0.0.1 >nul
+powershell -Command "Get-WmiObject Win32_Process -Filter 'Name=''node.exe''' | Where-Object { $_.CommandLine -match 'cirrus\.js' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+ping -n 3 127.0.0.1 >nul
 
 REM ============================================================
 REM  VALIDATE
@@ -145,6 +146,19 @@ if not exist "%WORKSPACE%\web\node_modules" (
     pushd "%WORKSPACE%\web"
     call npm install --no-audit --no-fund
     popd
+)
+
+REM Build frontend if dist is missing
+if not exist "%WORKSPACE%\web\dist\index.html" (
+    echo [INFO] Building frontend...
+    pushd "%WORKSPACE%\web"
+    call npm run build
+    if errorlevel 1 (
+        echo [!!] Frontend build failed. Aborting.
+        exit /b 1
+    )
+    popd
+    echo [OK] Frontend built.
 )
 
 REM Create directories
@@ -191,7 +205,7 @@ if not exist "%CIRRUS_DIR%\node_modules" (
 
 REM Generate cirrus config
 set "CIRRUS_CONFIG=%WORKSPACE%\cirrus-config.json"
-echo {"UseFrontend":false,"UseMatchmaker":false,"HttpPort":%CIRRUS_HTTP_PORT%,"StreamerPort":%CIRRUS_WS_PORT%,"SFUPort":%CIRRUS_SFU_PORT%} > "%CIRRUS_CONFIG%"
+echo {"UseFrontend":true,"UseMatchmaker":false,"HttpPort":%CIRRUS_HTTP_PORT%,"StreamerPort":%CIRRUS_WS_PORT%,"SFUPort":%CIRRUS_SFU_PORT%} > "%CIRRUS_CONFIG%"
 
 echo   Starting Cirrus signaling server...
 start "Cirrus" /min cmd /c "cd /d %CIRRUS_DIR% && node cirrus.js --configFile=%CIRRUS_CONFIG% > %WORKSPACE%\logs\cirrus.log 2>&1"
@@ -222,13 +236,24 @@ start "UnrealEditor" "%UE_EDITOR%" "%UE_PROJECT%" ^
     %UE_MAP% ^
     -MCPPort=%MCP_PORT% ^
     -NOSPLASH -NOSOUND ^
-    -ResX=1280 -ResY=720 ^
+    -ResX=1920 -ResY=1080 ^
     -graphicsadapter=%GPU_INDEX% ^
     %RENDER_OFFSCREEN% ^
-    -EditorPixelStreamingRes=1280x720 ^
+    -EditorPixelStreamingRes=1920x1080 ^
     -EditorPixelStreamingStartOnLaunch=true ^
     -EditorPixelStreamingUseRemoteSignallingServer=true ^
     -PixelStreamingURL=ws://127.0.0.1:%CIRRUS_WS_PORT% ^
+    -PixelStreamingEncoderCodec=h264 ^
+    -PixelStreamingEncoderKeyframeInterval=0 ^
+    -PixelStreamingEncoderTargetBitrate=50000000 ^
+    -PixelStreamingEncoderMaxBitrate=100000000 ^
+    -PixelStreamingEncoderMinQP=15 ^
+    -PixelStreamingEncoderMaxQP=25 ^
+    -PixelStreamingWebRTCFps=60 ^
+    -PixelStreamingWebRTCStartBitrate=50000000 ^
+    -PixelStreamingWebRTCMaxBitrate=100000000 ^
+    -PixelStreamingWebRTCMinBitrate=10000000 ^
+    -PixelStreamingWebRTCDisableReceiveAudio=true ^
     -log
 
 echo   [OK] UE Editor launched (GPU: %GPU_INDEX%, MCP: %MCP_PORT%)

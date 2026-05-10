@@ -8,20 +8,33 @@
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:hidden;
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff}
-
-/* Video: match viewport resolution via MatchViewportRes */
-#playerUI{width:100%!important;height:100%!important}
-#videoElementParent{width:100%!important;height:100%!important;background:#0b1220!important}
-#streamingVideo{object-fit:contain!important;width:100%!important;height:100%!important}
-
-/* Status overlay */
+/* Cirrus player fills full space */
+#playerUI,#videoElementParent{
+  position:absolute!important;inset:0!important;
+  width:100%!important;height:100%!important;
+  background:#000!important;margin:0!important;padding:0!important;
+}
+#streamingVideo{
+  width:100%!important;height:100%!important;
+  object-fit:contain!important;display:block!important;
+}
+/* Hide all Cirrus UI chrome */
+#uiFeatures,#controls,#settings-panel,#stats-panel,
+#settingsBtn,#statsBtn,#xrBtn,#fullscreen-btn,
+#connection,#qualityText,#ControlStats,
+#latencyTestContainer,#dataChannelLatencyTestContainer,
+#statisticsContainer{display:none!important}
+/* Keep click-to-start overlays in DOM (needed for dispatchEvent), just hide visually */
+#connectOverlay,#playOverlay{opacity:0!important;pointer-events:none!important}
 #sw-status-overlay{
   position:fixed;inset:0;
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   background:rgba(11,18,32,0.92);z-index:999;gap:16px;
   transition:opacity 0.3s;
+  pointer-events:none; /* clicks pass through to player.js activation layer */
 }
-#sw-status-overlay.hidden{opacity:0;pointer-events:none;}
+#sw-status-overlay.hidden{opacity:0;}
+#sw-retry-btn{ pointer-events:auto; }
 #sw-spinner{
   width:44px;height:44px;border-radius:50%;
   border:3px solid rgba(37,99,235,0.25);border-top-color:#2563eb;
@@ -36,16 +49,12 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
   font-size:13px;font-weight:600;cursor:pointer;display:none;
 }
 #sw-retry-btn:hover{background:#1d4ed8;}
-
-/* PIE hint */
 #sw-pie-hint{
   display:none;margin-top:4px;padding:8px 14px;
   border-radius:8px;background:rgba(245,158,11,.12);
   border:1px solid rgba(245,158,11,.3);
   font-size:11px;color:#fcd34d;text-align:center;line-height:1.5;
 }
-
-/* Compact controls */
 #controls{
   position:absolute!important;top:6px!important;right:6px!important;left:auto!important;
   display:flex!important;flex-direction:row!important;gap:3px!important;
@@ -60,7 +69,51 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 .panel-wrap{min-width:240px!important;max-width:300px!important;font-size:12px!important}
 .panel{padding:0.6em!important}
 </style>
+
+<script>
+// ── Step 1: Read cirrus port from URL, store globally ─────────────────────────
+(function() {
+  var _p = new URLSearchParams(location.search);
+  var _cirrusPort = _p.get('cirrus') || '8685';
+  var _proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  var _cirrusWsUrl = _proto + location.hostname + ':' + _cirrusPort;
+  window._swCirrusPort = _cirrusPort;
+  window._swCirrusWs   = _cirrusWsUrl;
+
+  // Also update URL params for MatchViewportRes (best-effort, timing not critical)
+  var _changed = false;
+  if (!_p.has('MatchViewportRes')) { _p.set('MatchViewportRes', 'true'); _changed = true; }
+  if (!_p.has('HoveringMouse'))    { _p.set('HoveringMouse', 'true');   _changed = true; }
+  if (_p.get('ss') !== _cirrusWsUrl){ _p.set('ss', _cirrusWsUrl);       _changed = true; }
+  if (_changed) history.replaceState({}, '', location.pathname + '?' + _p.toString());
+})();
+
+// ── Step 2: Monkey-patch WebSocket BEFORE player.js loads ─────────────────────
+// player.js default signalling URL is ws://localhost:<page-port> (i.e. 3002).
+// If it ignores ?ss= for any reason, this intercept guarantees it hits Cirrus.
+(function() {
+  var _OrigWS = window.WebSocket;
+  var _pageOriginWs = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+  window.WebSocket = function(url, protocols) {
+    // Redirect same-origin WebSocket to Cirrus
+    if (typeof url === 'string' && url.startsWith(_pageOriginWs)) {
+      url = window._swCirrusWs;
+    }
+    return protocols ? new _OrigWS(url, protocols) : new _OrigWS(url);
+  };
+  window.WebSocket.CONNECTING = _OrigWS.CONNECTING;
+  window.WebSocket.OPEN       = _OrigWS.OPEN;
+  window.WebSocket.CLOSING    = _OrigWS.CLOSING;
+  window.WebSocket.CLOSED     = _OrigWS.CLOSED;
+  window.WebSocket.prototype  = _OrigWS.prototype;
+})();
+</script>
+
+<!-- player.js loaded as static defer — guaranteed to run after inline scripts
+     but BEFORE window.onload, so document.body.onload set by player.js fires correctly -->
+<script defer src="/ue-assets/player.js"></script>
 </head>
+
 <body style="width:100%;height:100%">
 
 <!-- Connection status overlay -->
@@ -69,38 +122,22 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
   <div id="sw-status-text">Connecting to UE Stream…</div>
   <div id="sw-status-sub">Establishing WebRTC connection via Cirrus signalling server.</div>
   <div id="sw-pie-hint">
-    💡 <strong>Tip:</strong> Make sure Pixel Streaming is active in UE.<br>
-    In editor: <em>Plugins → Pixel Streaming → Enable</em> or start PIE.
+    Make sure Pixel Streaming is active in UE (Plugins → Pixel Streaming → Enable).
   </div>
-  <button id="sw-retry-btn" onclick="swRetry()">↻ Retry Connection</button>
+  <button id="sw-retry-btn" onclick="swRetry()">Retry Connection</button>
 </div>
 
 <script>
-// ── Silence "Data channel cannot send yet" info logs (non-error) ──────────────
-// These are harmless race-condition logs from player.js when resize happens
-// before data channel opens. Suppress to avoid console noise.
+// ── Silence benign player.js console noise ────────────────────────────────────
 (function() {
   var origLog = console.log;
   console.log = function() {
     var msg = Array.prototype.join.call(arguments, ' ');
-    // Suppress known benign pixel streaming info messages
     if (msg.indexOf('Data channel cannot send yet') !== -1) return;
     if (msg.indexOf('Skipping sending message') !== -1) return;
     origLog.apply(console, arguments);
   };
 })();
-
-// ── Parse params ──────────────────────────────────────────────────────────────
-var _p = new URLSearchParams(location.search);
-var _cirrusPort = _p.get('cirrus') || location.port || '8685';
-var _ssUrl      = 'ws://' + location.hostname + ':' + _cirrusPort;
-
-// Ensure required params — MatchViewportRes=true makes UE match browser resolution
-var _changed = false;
-if (_p.get('ss') !== _ssUrl)          { _p.set('ss', _ssUrl); _changed = true; }
-if (!_p.has('MatchViewportRes'))       { _p.set('MatchViewportRes', 'true'); _changed = true; }
-if (!_p.has('HoveringMouse'))          { _p.set('HoveringMouse', 'true'); _changed = true; }
-if (_changed) { location.replace(location.pathname + '?' + _p.toString()); }
 
 // ── Status helpers ────────────────────────────────────────────────────────────
 var _overlay   = null, _retryBtn  = null;
@@ -116,95 +153,46 @@ function swSetStatus(text, sub, showRetry, showPie) {
 }
 function swHideOverlay() {
   if (_overlay) _overlay.classList.add('hidden');
-  try { window.parent.postMessage({ type: 'sw-stream-connected', cirrusPort: _cirrusPort }, '*'); } catch {}
+  try { window.parent.postMessage({ type: 'sw-stream-connected', cirrusPort: window._swCirrusPort }, '*'); } catch {}
 }
 function swRetry() {
   swSetStatus('Reconnecting…', 'Please wait.', false, false);
-  var old = document.getElementById('sw-player-script');
-  if (old) old.remove();
-  setTimeout(swLoadPlayerJs, 400);
+  location.reload();
 }
 
-// ── Reconnect logic ───────────────────────────────────────────────────────────
-var _reconnectTimer = null;
+// ── Watch for active video stream ─────────────────────────────────────────────
 var _reconnectCount = 0;
-var _watchInterval  = null;
-var _connected      = false;
-var _lastVideoTime  = null;
+var _connected = false;
+var _lastVideoTime = null;
+var _watchInterval = null;
 
-function swScheduleReconnect() {
-  if (_reconnectTimer) return;
-  var delay = Math.min(1500 * Math.pow(1.5, _reconnectCount), 20000);
-  _reconnectCount++;
-  var secs = Math.round(delay / 1000);
-  swSetStatus(
-    'Stream Disconnected',
-    'Reconnecting in ' + secs + 's (attempt ' + _reconnectCount + ')',
-    true,
-    _reconnectCount >= 2 // show PIE hint after 2 failed attempts
-  );
-  _reconnectTimer = setTimeout(function() { _reconnectTimer = null; swRetry(); }, delay);
-}
-
-// Watch video element for actual playback (not just readyState)
 function swStartWatch() {
   if (_watchInterval) clearInterval(_watchInterval);
-  var noProgressCount = 0;
-
   _watchInterval = setInterval(function() {
     var v = document.getElementById('streamingVideo');
     if (!v) return;
-
-    var hasSource = v.srcObject !== null || (v.src && v.src !== location.href);
-    var isPlaying = hasSource && v.readyState >= 2 && !v.paused && !v.ended;
-
-    // Use currentTime progress as liveness indicator
-    if (isPlaying) {
-      if (v.currentTime !== _lastVideoTime) {
+    if (v.readyState >= 2 && v.currentTime > 0) {
+      if (_lastVideoTime === null || v.currentTime !== _lastVideoTime) {
         _lastVideoTime = v.currentTime;
-        noProgressCount = 0;
         if (!_connected) {
           _connected = true;
-          _reconnectCount = 0;
           swHideOverlay();
         }
         return;
       }
-      // Video paused or time not advancing
-      noProgressCount++;
-      if (noProgressCount > 5 && _connected) {
-        // Stalled for >10s
-        _connected = false;
-        swScheduleReconnect();
-      }
-    } else if (_connected) {
-      noProgressCount++;
-      if (noProgressCount > 3) {
-        _connected = false;
-        swScheduleReconnect();
-      }
     }
-  }, 2000);
-}
-
-// ── Load player.js from Cirrus ────────────────────────────────────────────────
-function swLoadPlayerJs() {
-  var s = document.createElement('script');
-  s.id  = 'sw-player-script';
-  s.defer = true;
-  s.src = location.protocol + '//' + location.hostname + ':' + _cirrusPort + '/player.js';
-  s.onerror = function() {
-    swSetStatus(
-      'Cannot load stream player',
-      'Cirrus not reachable at port ' + _cirrusPort + '. Check that UE pixel streaming is enabled.',
-      true, true
-    );
-  };
-  s.onload = function() {
-    // Give player 4s to initiate WebRTC before watching
-    setTimeout(swStartWatch, 4000);
-  };
-  document.head.appendChild(s);
+    // Video stalled or never started — show reconnect after a few checks
+    if (_connected) {
+      _connected = false;
+      _reconnectCount++;
+      swSetStatus(
+        'Stream disconnected',
+        'Attempting to reconnect…',
+        _reconnectCount >= 3,
+        _reconnectCount >= 3
+      );
+    }
+  }, 1500);
 }
 
 // ── Listen for parent frame messages ─────────────────────────────────────────
@@ -222,18 +210,40 @@ window.addEventListener('message', function(e) {
   }
 });
 
-// Auto-focus on mouseenter so keyboard events go to the stream
 document.addEventListener('mouseenter', function() { document.body.focus(); });
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Init on DOMContentLoaded ──────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {
   _overlay   = document.getElementById('sw-status-overlay');
   _retryBtn  = document.getElementById('sw-retry-btn');
   _statusTxt = document.getElementById('sw-status-text');
   _statusSub = document.getElementById('sw-status-sub');
   _pieHint   = document.getElementById('sw-pie-hint');
-  swSetStatus('Connecting to UE Stream…', 'Loading Cirrus player from port ' + _cirrusPort + '…', false, false);
-  swLoadPlayerJs();
+  swSetStatus('Connecting to UE Stream…', 'Cirrus :' + (window._swCirrusPort || '8685'), false, false);
+});
+
+// ── Start watching after player.js initialises (window load + 4s grace) ──────
+window.addEventListener('load', function() {
+  // Auto-click the Cirrus activation overlay — must target it directly since
+  // player.js attaches the click handler to #playOverlay, not a parent element.
+  setTimeout(function() {
+    var target = document.getElementById('playOverlay') ||
+                 document.getElementById('connectOverlay') ||
+                 document.getElementById('playerUI') || document.body;
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }, 1500);
+
+  // ResizeObserver — notify player.js when container size changes (MatchViewportRes)
+  setTimeout(function() {
+    var container = document.getElementById('videoElementParent');
+    if (!container || !window.ResizeObserver) return;
+    var ro = new ResizeObserver(function() {
+      window.dispatchEvent(new Event('resize'));
+    });
+    ro.observe(container);
+  }, 2000);
+
+  setTimeout(swStartWatch, 4000);
 });
 </script>
 </body>

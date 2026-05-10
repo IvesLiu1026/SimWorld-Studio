@@ -3887,8 +3887,7 @@ function ViewportPanel({ latestScreenshot }) {
       .then(d => {
         if (d.url) {
           try {
-            const cirrusPort = new URL(d.url).port;
-            setPlayerUrl(`/ue-player.html?cirrus=${cirrusPort}`);
+            setPlayerUrl(`${d.url}?MatchViewportRes=true&HoveringMouse=true`);
           } catch { setPlayerUrl(d.url); }
         }
       })

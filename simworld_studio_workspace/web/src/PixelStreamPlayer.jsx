@@ -56,7 +56,7 @@ export default function PixelStreamPlayer({ playerUrl }) {
     setActive(false);
   }, [playerUrl]);
 
-  // Listen for iframe postMessage
+  // Listen for iframe postMessage (ue-player.html sends sw-stream-connected)
   useEffect(() => {
     function onMsg(e) {
       if (e.data?.type === "sw-stream-connected") {
@@ -68,6 +68,17 @@ export default function PixelStreamPlayer({ playerUrl }) {
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
   }, []);
+
+  // Fallback: if no postMessage after 10s, assume connected (Cirrus direct URL case)
+  const connectTimer = useRef(null);
+  useEffect(() => {
+    if (status !== "connecting") return;
+    connectTimer.current = setTimeout(() => {
+      setStatus("connected");
+      lastConnected.current = Date.now();
+    }, 10000);
+    return () => clearTimeout(connectTimer.current);
+  }, [status]);
 
   // Heartbeat — detect silent drops after 45s no signal
   useEffect(() => {
@@ -117,8 +128,18 @@ export default function PixelStreamPlayer({ playerUrl }) {
   const showPieHint = reconnects >= 2 && status !== "connected";
   const url = effectiveUrl();
 
+  const [activated, setActivated] = React.useState(false);
+
+  const handleContainerClick = React.useCallback(() => {
+    if (!activated) setActivated(true);
+    iframeRef.current?.focus();
+  }, [activated]);
+
   return (
-    <div style={{ width:"100%", height:"100%", position:"relative", background:"#0b1220" }}>
+    <div
+      style={{ width:"100%", height:"100%", position:"relative", background:"#0b1220" }}
+      onClick={handleContainerClick}
+    >
 
       {/* iframe — always mounted */}
       {url && (
@@ -128,13 +149,26 @@ export default function PixelStreamPlayer({ playerUrl }) {
           onLoad={() => { if (status === "idle" || status === "disconnected") setStatus("connecting"); }}
           style={{
             width:"100%", height:"100%", border:"none", display:"block",
-            pointerEvents: (active && status === "connected") ? "auto" : "none",
+            pointerEvents: "auto",
           }}
           allow="pointer-lock *; fullscreen *; autoplay *; clipboard-read *; clipboard-write *"
           allowFullScreen
           tabIndex={0}
           title="UE Pixel Streaming"
         />
+      )}
+
+      {/* Click-to-activate hint — shows until first click */}
+      {url && !activated && (
+        <div style={{
+          position:"absolute", bottom:12, left:"50%", transform:"translateX(-50%)",
+          zIndex:20, pointerEvents:"none",
+          padding:"5px 14px", borderRadius:8,
+          background:"rgba(0,0,0,0.55)", backdropFilter:"blur(4px)",
+          color:"#94a3b8", fontSize:11, whiteSpace:"nowrap",
+        }}>
+          Click to activate mouse &amp; keyboard
+        </div>
       )}
 
       {/* ── Status badge (always visible, top-left) ── */}
@@ -228,27 +262,7 @@ export default function PixelStreamPlayer({ playerUrl }) {
         </div>
       )}
 
-      {/* ── Connecting overlay ── */}
-      {(status === "idle" || status === "connecting") && (
-        <div style={{
-          position:"absolute", inset:0, zIndex:10, pointerEvents:"none",
-          display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-          background:"rgba(11,18,32,0.85)", gap:14,
-        }}>
-          <div style={{
-            width:38, height:38, borderRadius:"50%",
-            border:"3px solid rgba(37,99,235,0.2)", borderTopColor:"#2563eb",
-            animation:"ps-spin 0.9s linear infinite",
-          }}/>
-          <div style={{ color:"#e2e8f0", fontSize:13, fontWeight:600 }}>Connecting to UE Stream</div>
-          {url && (
-            <div style={{ color:"#475569", fontSize:11 }}>
-              Cirrus :{url.match(/cirrus=(\d+)/)?.[1] || "?"}
-              {portOverride && <span style={{ color:"#f59e0b", marginLeft:4 }}>(manual)</span>}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Connecting overlay removed — Cirrus player handles its own UI */}
 
       {/* ── No URL ── */}
       {!url && (

@@ -228,7 +228,6 @@ const _refreshPortCache=async()=>{
         clearTimeout(timer); sock.destroy(); resolve({ok:true});
       });
       sock.on("error",()=>{clearTimeout(timer);resolve(null);});
-      sock.on("close",()=>{clearTimeout(timer);if(!buf.trim())resolve(null)});
     });
     _cachedUeConn=!!result;_cachedPie=_cachedUeConn;
   }catch{_cachedUeConn=false;_cachedPie=false}
