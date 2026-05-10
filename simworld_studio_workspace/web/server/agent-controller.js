@@ -581,7 +581,12 @@ class AgentController {
               session.recentCollisions.splice(0, session.recentCollisions.length - 50);
             }
           }
-        } catch { /* broker handles retries */ }
+        } catch(pollErr) {
+          // Broker handles reconnect; log persistent errors for diagnostics
+          if (pollErr?.message && !pollErr.message.includes('timeout')) {
+            log.agent('warn', `poller ${session.agentName}: ${pollErr.message?.slice(0,80)}`);
+          }
+        }
       }
     }, 3000);
   }

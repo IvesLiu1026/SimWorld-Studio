@@ -526,12 +526,13 @@ app.post("/api/agent-stop",(s,e)=>{
   e.json({ok:true});
 });
 
+// NOTE: these endpoints are not called by the frontend (data flows via SSE).
+// Kept for debugging / external tool access.
 app.get("/api/agent-history/:name",(s,e)=>{
   const agent=agentCtrl.get(s.params.name);
   if(!agent)return e.status(404).json({error:"Agent not found"});
   e.json({agentName:agent.agentName,history:agent.history});
 });
-
 app.get("/api/agent-activity/:name",(s,e)=>{
   e.json(agentCtrl.getActivity(s.params.name));
 });

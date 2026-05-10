@@ -1,6 +1,7 @@
 'use strict';
 
-const MAX_POINTS = 60; // 5 min at 5s interval
+const MAX_POINTS = 60;  // 5 min at 5s interval
+const MAX_SERIES = 50;  // max concurrent tracked agents (prevents unbounded memory on churn)
 
 /**
  * MetricsHub — time-series data store for all agents.
@@ -32,6 +33,8 @@ class MetricsHub {
     for (const s of sessions) {
       const name = s.agentName;
       if (!this._series[name]) {
+        // Cap total series to prevent unbounded memory on high-churn scenarios
+        if (Object.keys(this._series).length >= MAX_SERIES) continue;
         this._series[name] = { ts: [], collision: [], speed: [], turns: [], status: [] };
       }
       const series = this._series[name];

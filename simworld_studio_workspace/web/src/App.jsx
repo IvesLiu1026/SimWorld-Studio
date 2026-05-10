@@ -117,11 +117,12 @@ function PollProvider({ children }) {
           return { objects: nextObjs, environment: nextEnv, round: nextRound };
         });
 
-        // ChatLog — append new only
+        // ChatLog — append new only; stable dedup key includes content slice
         if (Array.isArray(d.chatLog) && d.chatLog.length > 0) {
           setChatLog(prev => {
-            const existing = new Set(prev.map(m => `${m.from}-${m.timestamp}`));
-            const news = d.chatLog.filter(m => !existing.has(`${m.from}-${m.timestamp}`));
+            const msgKey = m => `${m.from}|${m.timestamp}|${(m.text||'').slice(0,20)}`;
+            const existing = new Set(prev.map(msgKey));
+            const news = d.chatLog.filter(m => !existing.has(msgKey(m)));
             return news.length > 0 ? [...prev, ...news].slice(-200) : prev;
           });
         }
@@ -3611,8 +3612,9 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
     ).slice(-20),
   [pollData.chatLog, agent.name]);
 
-  // Use liveState when available, fall back to agent prop
-  const loc = (liveState?.location ?? (Array.isArray(agent.location) ? agent.location : null));
+  // Use liveState from SSE; fall back to agent prop until SSE syncs (max ~3s)
+  const isStillSyncing = !liveState;
+  const loc = liveState?.location ?? (Array.isArray(agent.location) ? agent.location : null);
   const rot = liveState?.rotation ?? null;
   const liveStatus = liveState?.status ?? agent.status ?? "idle";
   const currentAction = liveState?.currentAction ?? null;
@@ -3684,6 +3686,8 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
           animation: liveStatus==="running" ? "ps-pulse 1s infinite" : "none", flexShrink:0 }}/>
         <span style={{ fontSize: 13, fontWeight: 700, color }}>{agent.name}</span>
         <span style={{ fontSize: 12, color:"var(--ink-3)", background:"var(--bg)", borderRadius:4, padding:"1px 5px" }}>{agent.cls}</span>
+        {/* Syncing indicator — shows briefly until first SSE push arrives */}
+        {isStillSyncing && <span style={{ fontSize:11, color:"var(--ink-3)", fontStyle:"italic" }}>syncing…</span>}
         {/* Live position */}
         {loc && <span style={{ fontSize:12, color:"var(--ink-3)", fontFamily:"monospace", marginLeft:2 }}>
           {loc.map(v=>Math.round(v)).join(",")}
