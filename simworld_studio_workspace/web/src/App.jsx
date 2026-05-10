@@ -5046,15 +5046,30 @@ function AssetBrowser({ onInsert }) {
   const curNode = findNode(treeData.tree, browsePath) || treeData.tree;
   const counts  = treeData.counts || {};
 
-  // Assets to display: current node + optional filters
-  let displayAssets = category
-    ? flattenTree(treeData.tree).filter(a => a.category === category)
-    : (curNode.assets || []);
+  // ── UE Content Browser behaviour ────────────────────────────────────────────
+  // Normal: show ALL direct assets of current node (no category override)
+  // Category sidebar: global cross-tree filter (like UE's "All Classes" filter)
+  // Search: recursive subtree search with optional category narrowing
+  let displayAssets;
+  let displayDirs = curNode.children || [];
 
   if (search) {
+    // Search recursively through entire current subtree
     const q = search.toLowerCase();
-    displayAssets = (category ? displayAssets : flattenTree(curNode))
-      .filter(a => a.name.toLowerCase().includes(q));
+    displayAssets = flattenTree(curNode).filter(a =>
+      a.name.toLowerCase().includes(q) &&
+      (!category || a.category === category)
+    );
+    // Dirs not shown during search (results are flattened)
+    displayDirs = [];
+  } else if (category) {
+    // Category sidebar selected → global filter across whole tree, keep path context
+    displayAssets = flattenTree(treeData.tree).filter(a => a.category === category);
+    displayDirs = [];
+  } else {
+    // Default: direct children only (matches UE Content Browser exactly)
+    displayAssets = curNode.assets || [];
+    displayDirs   = curNode.children || [];
   }
 
   const totalShown = displayAssets.length;
@@ -5133,21 +5148,28 @@ function AssetBrowser({ onInsert }) {
 
         {/* Asset grid */}
         <div style={{ flex:1, overflow:"auto", padding:6 }}>
-          {/* Sub-directories — local navigation, no API call */}
-          {!search && !category && curNode.children?.length > 0 && (
+          {/* Sub-directories — shown always unless searching/category filtering */}
+          {displayDirs.length > 0 && (
             <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
-              {curNode.children.map(child => (
-                <button key={child.path} onClick={() => navigate(child.path)}
-                  style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 10px",
-                    border:"1px solid var(--line)", borderRadius:7, background:"var(--panel)",
-                    cursor:"pointer", fontSize:"var(--fs-body)", color:"var(--ink-2)",
-                    fontFamily:"inherit", fontWeight:500 }}>
-                  📁 {child.name}
-                  <span style={{ fontSize:12, color:"var(--ink-3)" }}>
-                    ({(child.assets?.length||0) + (child.children?.length>0 ? '+' : '')})
-                  </span>
-                </button>
-              ))}
+              {displayDirs.map(child => {
+                const childAssets = child.assets?.length || 0;
+                const childDirs   = child.children?.length || 0;
+                const childTotal  = childAssets + childDirs;
+                return (
+                  <button key={child.path} onClick={() => navigate(child.path)}
+                    style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 10px",
+                      border:"1px solid var(--line)", borderRadius:7, background:"var(--panel)",
+                      cursor:"pointer", fontSize:"var(--fs-body)", color:"var(--ink-2)",
+                      fontFamily:"inherit", fontWeight:500 }}>
+                    📁 {child.name}
+                    {childTotal > 0 && (
+                      <span style={{ fontSize:11, color:"var(--ink-3)" }}>
+                        {childTotal}{childDirs > 0 ? '+' : ''}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -5171,9 +5193,9 @@ function AssetBrowser({ onInsert }) {
             ))}
           </div>
 
-          {pageAssets.length === 0 && (
+          {pageAssets.length === 0 && displayDirs.length === 0 && (
             <div style={{ textAlign:"center", padding:24, color:"var(--ink-3)", fontSize:"var(--fs-body)" }}>
-              {search ? `No assets matching "${search}"` : "No assets here — browse a subfolder"}
+              {search ? `No results for "${search}"` : category ? `No ${category} assets` : "Empty folder"}
             </div>
           )}
 
@@ -5193,8 +5215,12 @@ function AssetBrowser({ onInsert }) {
         {/* Footer */}
         <div style={{ flexShrink:0, padding:"4px 10px", borderTop:"1px solid var(--line)",
           fontSize:12, color:"var(--ink-3)", display:"flex", justifyContent:"space-between" }}>
-          <span>{pageAssets.length} / {totalShown} assets</span>
-          <span>Click to insert spawn command</span>
+          <span>
+            {displayDirs.length > 0 && `${displayDirs.length} folders · `}
+            {pageAssets.length}/{totalShown} assets
+            {(search || category) && ` (filtered)`}
+          </span>
+          <span>Click to insert</span>
         </div>
       </div>
     </div>
