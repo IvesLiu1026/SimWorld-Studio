@@ -148,6 +148,27 @@ Open **http://localhost:3002** in Chrome.
 
 ---
 
+## Quick Start (macOS — Web stack only, no UE)
+
+Unreal Engine 5.3 has no native macOS build of this project, but the web stack (React UI, Node API, asset/skill/scene browsers, agent panel scaffolding) runs fine on Mac for frontend work and API exploration. UE-dependent features (viewport, scene spawn, agent control) will show `ueConnected: false` and are no-ops.
+
+### Prerequisites
+- Node.js 18+ (`brew install node`)
+
+### Run
+
+```bash
+./SimWorld-Studio-Mac.sh              # installs deps, builds frontend, starts backend on :3002
+./SimWorld-Studio-Mac.sh --no-build   # reuse existing dist/
+./SimWorld-Studio-Mac.sh --dev        # vite dev server on :5173 with HMR + backend on :3002
+```
+
+Then open **http://localhost:3002** (or `:5173` in `--dev`).
+
+The script sets `UNREAL_PORT=1` / `UCV_PORT=1` so the backend's UE probes fail fast and stay quiet — no Cirrus, no UE Editor, no MCP subprocess required.
+
+---
+
 ## Quick Start (Linux — Shared Server)
 
 See [`INTERNAL_SETUP.md`](INTERNAL_SETUP.md) for port assignment table and multi-user setup.
