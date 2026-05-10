@@ -20,8 +20,8 @@
   --orange-soft: #fff1e6;
   --red: #dc2626;
   --amber: #f59e0b;
-  --shadow-card: 0 1px 2px rgba(15,23,42,.04), 0 4px 12px rgba(15,23,42,.04);
-  --shadow-pop:  0 6px 18px rgba(15,23,42,.10);
+  --shadow-card: 0 1px 3px rgba(15,23,42,.07), 0 6px 24px rgba(15,23,42,.12);
+  --shadow-pop:  0 8px 32px rgba(15,23,42,.20), 0 2px 8px rgba(15,23,42,.08);
 
   /* ── Typography scale (3 levels only) ───────────────────────── */
   --fs-title:   20px;   /* logo, section headers */
@@ -134,6 +134,7 @@ button { font-family: inherit; }
 
 /* Drag resize handle between columns */
 .sw-resize-col {
+  width: 8px;
   background: transparent;
   cursor: col-resize;
   position: relative;
@@ -143,6 +144,7 @@ button { font-family: inherit; }
   justify-content: center;
   flex-shrink: 0;
   transition: background 0.15s;
+  border-radius: 4px;
 }
 .sw-resize-col:hover,
 .sw-resize-col.dragging {

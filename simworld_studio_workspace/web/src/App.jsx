@@ -8388,22 +8388,26 @@ function App() {
   const [commHeight,      setCommHeight]      = useState(200); // left bottom (Verifier)
   const [rightBottomH,   setRightBottomH]    = useState(200); // right bottom (Statistics)
 
-  // Generic row-resize factory: returns mousedown handler that adjusts height state
-  const makeRowResize = useCallback((setH, colRef) => (e) => {
+  const leftColRef  = useRef(null);
+  const rightColRef = useRef(null);
+
+  // Row-resize: snapshot current panel height at mousedown, compute absolute on move
+  // Pattern: startPanelH + (startY - currentY) tracks the mouse 1:1
+  const makeRowResize = useCallback((currentH, setH) => (e) => {
     e.preventDefault();
     const startY = e.clientY;
-    const colEl  = colRef?.current;
-    const startH = colEl ? colEl.getBoundingClientRect().height : 0;
+    const startPanelH = currentH; // snapshot — does NOT change during drag
     const onMove = (ev) => {
-      const delta = startY - ev.clientY; // dragging up = bigger bottom panel
-      setH(h => Math.max(80, Math.min(startH * 0.7, h + delta)));
+      const newH = startPanelH + (startY - ev.clientY); // up = bigger bottom
+      setH(Math.max(80, Math.min(600, newH)));
     };
-    const onUp = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }, []);
-  const leftColRef  = useRef(null);
-  const rightColRef = useRef(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab,  setDrawerTab]  = useState("assets");
   const [drawerH,    setDrawerH]    = useState(200);   // px when open
@@ -8908,7 +8912,7 @@ function App() {
       {/* ══ 3-COLUMN RESIZABLE STUDIO LAYOUT ══ */}
       {activePage === "generate" && (
       <div ref={layoutRef} style={{
-        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:0,
+        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:8, padding:"4px 0",
       }}>
         {/* ── LEFT: Coding Agent + Verifier (two independent panels) ── */}
         <div ref={leftColRef} style={{
@@ -8940,7 +8944,7 @@ function App() {
           </div>
 
           {/* Row resize handle — left column */}
-          <div onMouseDown={makeRowResize(setCommHeight, leftColRef)}
+          <div onMouseDown={makeRowResize(commHeight, setCommHeight)}
             style={{ height:6, cursor:"row-resize", flexShrink:0,
               display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
             <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)",
@@ -9084,7 +9088,7 @@ function App() {
           </div>
 
           {/* Row resize handle — right column */}
-          <div onMouseDown={makeRowResize(setRightBottomH, rightColRef)}
+          <div onMouseDown={makeRowResize(rightBottomH, setRightBottomH)}
             style={{ height:6, cursor:"row-resize", flexShrink:0,
               display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
             <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)",
