@@ -82,11 +82,12 @@ function PollProvider({ children }) {
         const nextActivities = d.activities || {};
         setAgents(prev => {
           const prevSess = prev.sessions || [];
-          // Fast check: count + first/last name
-          const sameCount = prevSess.length === nextSessions.length && (prev.agents||[]).length === nextAgentList.length;
-          const sameName  = sameCount && (nextSessions[0]?.agentName === prevSess[0]?.agentName);
-          const sameActs  = Object.keys(nextActivities).join(',') === Object.keys(prev.activities || {}).join(',');
-          if (sameCount && sameName && sameActs) return prev;
+          const sameCount = prevSess.length === nextSessions.length;
+          // Check key agent state fields to detect actual changes
+          const sessKey = s => `${s.agentName}:${s.status}:${s.collisionCount}:${Math.round((s.location?.[0]||0)/10)}:${s.currentAction||''}`;
+          const sameKey  = sameCount && nextSessions.every((s,i) => sessKey(s) === sessKey(prevSess[i]));
+          const sameActs = Object.keys(nextActivities).join(',') === Object.keys(prev.activities || {}).join(',');
+          if (sameKey && sameActs && (prev.agents||[]).length === nextAgentList.length) return prev;
           return { agents: nextAgentList, sessions: nextSessions, activities: nextActivities };
         });
 
@@ -3390,28 +3391,26 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
 // ─── AgentTrajectoryView ─────────────────────────────────────────────────────
 
 function AgentTrajectoryView({ agentName, color, liveState }) {
-  const [traj, setTraj] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Primary source: SSE trajectoryPreview (free, no extra request, updates with SSE)
+  // Full trajectory loaded on demand only.
+  const [fullTraj, setFullTraj] = useState(null);  // null = not yet loaded
+  const [loadingFull, setLoadingFull] = useState(false);
 
-  useEffect(() => {
-    setLoading(true);
+  const loadFull = useCallback(() => {
+    setLoadingFull(true);
     fetch(`${API_BASE}/agent-trajectory/${encodeURIComponent(agentName)}`)
       .then(r => r.json())
-      .then(d => { setTraj(d.trajectory || []); setLoading(false); })
-      .catch(() => setLoading(false));
-    const t = setInterval(() => {
-      fetch(`${API_BASE}/agent-trajectory/${encodeURIComponent(agentName)}`)
-        .then(r => r.json())
-        .then(d => setTraj(d.trajectory || []))
-        .catch(()=>{});
-    }, 2000);
-    return () => clearInterval(t);
+      .then(d => { setFullTraj(d.trajectory || []); })
+      .catch(()=>{})
+      .finally(() => setLoadingFull(false));
   }, [agentName]);
+
+  // Use full trajectory if loaded, else fall back to SSE preview
+  const traj = fullTraj ?? (liveState?.trajectoryPreview || []);
 
   const collisions = liveState?.recentCollisions || [];
   const envEvents  = liveState?.envFeedback || [];
 
-  if (loading) return <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", color:"var(--ink-3)", fontSize:12 }}>Loading trajectory…</div>;
   if (traj.length < 2) return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, color:"var(--ink-3)", fontSize:12 }}>
       <div style={{ fontSize:28, opacity:0.3 }}>🗺️</div>
@@ -3440,8 +3439,22 @@ function AgentTrajectoryView({ agentName, color, liveState }) {
   const yaw = last.rot ? ((last.rot[1]%360)+360)%360 : 0;
   const arrowRad = yaw * Math.PI / 180;
 
+  const isPreview = !fullTraj;
+  const totalPts  = liveState?.trajectoryLength ?? traj.length;
+
   return (
     <div style={{ flex:1, overflow:"auto", padding:12 }}>
+      {/* Header: preview vs full indicator + load button */}
+      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6, fontSize:10, color:"var(--ink-3)" }}>
+        <span>{isPreview ? `Preview (last ${traj.length})` : `Full (${traj.length} pts)`} of {totalPts} total</span>
+        {isPreview && totalPts > traj.length && (
+          <button onClick={loadFull} disabled={loadingFull}
+            style={{ fontSize:9, padding:"2px 7px", borderRadius:4, border:"1px solid var(--line)",
+              background:"none", cursor:"pointer", color:"var(--blue)" }}>
+            {loadingFull ? "Loading…" : `↓ Load all ${totalPts}`}
+          </button>
+        )}
+      </div>
       {/* SVG top-down trajectory map */}
       <svg width={W} height={H} style={{ background:"var(--bg)", borderRadius:8, border:"1px solid var(--line)", display:"block", margin:"0 auto" }}>
         {/* Grid lines */}
@@ -3538,24 +3551,21 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [input, setInput]             = useState("");
   const [sending, setSending]         = useState(false);
-  const [liveState, setLiveState]     = useState(null);  // 1s-fresh from /api/agent-state
   // Drag state for floating window
   const [winPos, setWinPos] = useState({ x: window.innerWidth - 540, y: 80 });
-  const dragRef = useRef(null);
   const camIntervalRef = useRef(null);
   const activityRef    = useRef(null);
 
-  // 1-second polling of live agent state
-  useEffect(() => {
-    const poll = () =>
-      fetch(`${API_BASE}/agent-state/${encodeURIComponent(agent.name)}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d) setLiveState(d); })
-        .catch(()=>{});
-    poll();
-    const t = setInterval(poll, 1000);
-    return () => clearInterval(t);
-  }, [agent.name]);
+  // Use SSE data (usePoll) as primary source — no separate 1s polling.
+  // SSE pushes every 3s; sessions already include location/rotation/speed/collisions/trajectory.
+  const pollData = usePoll();
+  const pastActivities = pollData.activities?.[agent.name] || [];
+
+  // Derive liveState from SSE sessions (free, no extra request)
+  const liveState = useMemo(() => {
+    const s = (pollData.sessions || []).find(s => s.agentName === agent.name);
+    return s || null;
+  }, [pollData.sessions, agent.name]);
 
   // Draggable window handlers
   const startDrag = useCallback((e) => {
@@ -3566,9 +3576,6 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }, [winPos]);
-
-  const pollData = usePoll();
-  const pastActivities = pollData.activities?.[agent.name] || [];
   const agentMessages  = useMemo(() =>
     (pollData.chatLog || []).filter(m =>
       m.from !== agent.name && (m.to === agent.name || m.to === "all" || !m.to)
@@ -3582,7 +3589,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
   const currentAction = liveState?.currentAction ?? null;
   const lastAction    = liveState?.lastAction ?? null;
 
-  // Camera: use dedicated /api/agent-camera endpoint (1.5s refresh)
+  // Camera: use dedicated /api/agent-camera endpoint (4s refresh)
   const focusAndShoot = useCallback(async () => {
     setCamLoading(true); setCamError(null);
     try {
@@ -3606,13 +3613,13 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
     } catch(e) { setCamError(e.message); } finally { setCamLoading(false); }
   }, [agent.name, loc]);
 
-  // Auto-refresh camera — 1.5s when tab active
+  // Auto-refresh camera — 4s when tab active (images are expensive)
   useEffect(() => {
     if (activeTab !== "camera" || !autoRefresh) {
       clearInterval(camIntervalRef.current); return;
     }
     focusAndShoot();
-    camIntervalRef.current = setInterval(focusAndShoot, 1500);
+    camIntervalRef.current = setInterval(focusAndShoot, 4000);
     return () => clearInterval(camIntervalRef.current);
   }, [activeTab, autoRefresh, focusAndShoot]);
 
@@ -3722,7 +3729,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
           <div style={{ padding: "6px 10px", display: "flex", alignItems: "center", gap: 6, borderBottom: "1px solid var(--line)", flexShrink: 0 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", color: "var(--ink-3)" }}>
               <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} style={{ accentColor: color }}/>
-              Auto (1.5s)
+              Auto (4s)
             </label>
             <button onClick={focusAndShoot} disabled={camLoading} style={{
               padding: "3px 10px", borderRadius: 6, border: `1px solid ${color}44`,
@@ -8250,8 +8257,10 @@ function useSession() {
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
-  const [health, setHealth] = useState(null);
-  const [healthError, setHealthError] = useState(false);
+  // Health comes from SSE StatusContext — no separate /api/health fetch needed
+  const statusCtxMain = useStatus();
+  const health      = statusCtxMain.health;
+  const healthError = !statusCtxMain.health && !statusCtxMain.pieActive; // only show error after SSE connects
   const [latestScreenshot, setLatestScreenshot] = useState(null);
   const [splitPct, setSplitPct] = useState(38);
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -8286,11 +8295,8 @@ function App() {
   const artifactToastSeqRef = useRef(0);
   const artifactToastTimersRef = useRef(new Map());
 
-  // Health check + fetch stable session
+  // Fetch stable session ID on mount (health now comes from SSE)
   useEffect(() => {
-    fetchHealth()
-      .then(setHealth)
-      .catch(() => setHealthError(true));
     fetch(`${API_BASE}/session`).then(r => r.json()).then(d => {
       if (d.sessionId) setCurrentSessionId(d.sessionId);
     }).catch(() => {});

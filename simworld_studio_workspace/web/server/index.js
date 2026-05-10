@@ -238,14 +238,34 @@ app.get("/api/events",(req,res)=>{
 });
 // Push status to all SSE clients every 3s
 let _sseSince=0;
+let _sseLastHash='';
+const _crypto=require('crypto');
 setInterval(()=>{
   if(_sseClients.size===0)return;
   const snapshot=_gatherStatus(_sseSince);
   if(snapshot.chatLog?.length>0) _sseSince=Math.max(...snapshot.chatLog.map(m=>m.timestamp));
+
+  // Hash-based conditional push — skip if nothing changed
+  // Include chatLog length so new messages always push
+  const hashInput=JSON.stringify({
+    sessionsSig: snapshot.sessions?.map(s=>`${s.agentName}:${s.status}:${s.collisionCount}:${s.positionUpdatedAt}`).join('|'),
+    objectCount: snapshot.context?.objects?.length,
+    agentCount:  snapshot.context?.agents?.length,
+    pieActive:   snapshot.pieActive,
+    ueConnected: snapshot.health?.ueConnected,
+    chatLen:     snapshot.chatLog?.length,
+    round:       snapshot.context?.round,
+  });
+  const newHash=_crypto.createHash('md5').update(hashInput).digest('hex').slice(0,8);
+  const unchanged=(newHash===_sseLastHash);
+  _sseLastHash=newHash;
+
+  // Always push at most every 9s even if unchanged (keepalive); skip intermediate pushes
   const payload=`data: ${JSON.stringify(snapshot)}\n\n`;
   const now=Date.now();
   for(const [id,c] of _sseClients){
     if(now-c.lastSeen>_SSE_IDLE_MS){_sseClients.delete(id);try{c.res.end()}catch{};continue;}
+    if(unchanged && now-c.lastSeen < 9000) continue; // skip unchanged within 9s window
     try{c.res.write(payload);c.lastSeen=now;}catch{_sseClients.delete(id);}
   }
 },3000);
