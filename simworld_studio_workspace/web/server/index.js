@@ -212,7 +212,7 @@ let _assetScanDone = false;
 async function _scanUeAssets() {
   if (_assetScanDone) return;
   _assetScanDone = true; // prevent re-entry; reset on failure
-  log.init('asset-scan', 'Starting UE asset scan via Python…');
+  log.system('info', 'Starting UE asset scan via Python…');
   const py = `
 import unreal, json
 roots = [
@@ -269,7 +269,7 @@ print(json.dumps(result))
     const jsonMatch = output.match(/(\[[\s\S]*\])/);
     if (!jsonMatch) throw new Error('No JSON array in output: ' + output.slice(0,200));
     const paths = JSON.parse(jsonMatch[1]);
-    log.init('asset-scan', `Received ${paths.length} paths from UE`);
+    log.system('info', `Received ${paths.length} paths from UE`);
 
     // Build nested tree from paths
     // Folders end with '/' or match /Game/PackName/SubDir pattern without a '.' in last segment
@@ -325,10 +325,10 @@ print(json.dumps(result))
 
     const totalAssets = paths.filter(p => !isFolder(p)).length;
     _liveAssetTree = { tree: root, totalAssets, scannedAt: Date.now(), source:'ue-python' };
-    log.init('asset-scan', `Asset tree built: ${totalAssets} assets, ${dirs.size} dirs`);
+    log.system('info', `Asset tree built: ${totalAssets} assets, ${dirs.size} dirs`);
   } catch(e) {
     _assetScanDone = false; // allow retry
-    log.init('asset-scan', `Failed: ${e.message} — will retry on next UE connect`);
+    log.system('info', `Failed: ${e.message} — will retry on next UE connect`);
   }
 }
 
