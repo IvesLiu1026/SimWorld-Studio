@@ -1,4 +1,4 @@
-"use strict";const net=require("net"),fs=require("fs"),path=require("path"),readline=require("readline"),UE_HOST=process.env.UNREAL_HOST||"127.0.0.1",UE_PORT=parseInt(process.env.UNREAL_PORT||"55559",10),SCREENSHOT_DIR=path.resolve(__dirname,"../../tmp/screens"),ASSETS=JSON.parse(fs.readFileSync(path.resolve(__dirname,process.env.SIMWORLD_ASSETS_FILE||"assets.json"),"utf-8"));fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0});const spawnedActors=new Set,cmdQueue=[];let cmdRunning=!1;
+"use strict";const net=require("net"),fs=require("fs"),path=require("path"),readline=require("readline"),UE_HOST=process.env.UNREAL_HOST||"127.0.0.1",UE_PORT=parseInt(process.env.UNREAL_PORT||"55559",10),SCREENSHOT_DIR=path.resolve(__dirname,"../../tmp/screens"),ASSETS=JSON.parse(fs.readFileSync(path.resolve(__dirname,process.env.SIMWORLD_ASSETS_FILE||"assets_full.json"),"utf-8"));fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0});const spawnedActors=new Set,cmdQueue=[];let cmdRunning=!1;
 
 // ---------------------------------------------------------------------------
 // Command queue with adaptive cooldown + retry

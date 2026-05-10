@@ -66,12 +66,15 @@ class AgentSession {
     this.agentName = agentName;
     this.agentClass = agentClass;
     this.location = location;
+    this.rotation = null;    // [pitch, yaw, roll] from UE
     this.status = 'idle';    // idle | running
+    this.currentAction = null; // tool name of action in progress
     this.proc = null;
     this.history = [];       // conversation history
     this.inbox = [];         // inter-agent messages
     this.activity = [];      // ReAct activity log (last N turns)
     this._currentActivity = null; // in-progress activity
+    this.positionUpdatedAt = null; // timestamp of last position refresh
   }
 
   _resolveType() {
@@ -176,7 +179,8 @@ class AgentSession {
 
     // Get observation
     const obs = await getObservation(this.agentName);
-    if (obs.location) this.location = obs.location;
+    if (obs.location) { this.location = obs.location; this.positionUpdatedAt = Date.now(); }
+    if (obs.rotation) this.rotation = obs.rotation;
     log.agent('debug', `${this.agentName} obs`, obs);
 
     const systemPrompt = this._systemPrompt();
@@ -286,6 +290,7 @@ class AgentSession {
             const displayName = tc.name.replace(/^mcp__\w+__/, '');
             if (act) act.actions.push({ tool: displayName, input: '', result: '', ok: null });
             toolInProgress = true;
+            this.currentAction = displayName;
             safeEvent('tool_start', { id: tc.id, name: tc.name, displayName });
           }
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'input_json_delta') {
@@ -313,6 +318,7 @@ class AgentSession {
           }
 
         } else if (msg.type === 'result') {
+          this.currentAction = null;
           if (act) {
             act.response = assistantText;
             act.cost = msg.total_cost_usd;
@@ -401,14 +407,20 @@ class AgentSession {
   }
 
   toJSON() {
+    const lastAct = this.activity.length > 0 ? this.activity[this.activity.length - 1] : null;
+    const lastTool = lastAct?.actions?.length > 0
+      ? lastAct.actions[lastAct.actions.length - 1].tool : null;
     return {
       agentName: this.agentName,
       agentClass: this.agentClass,
       location: this.location,
+      rotation: this.rotation,
+      positionUpdatedAt: this.positionUpdatedAt,
       status: this.status,
+      currentAction: this.currentAction,
+      lastAction: lastTool,
       historyLength: this.history.length,
-      // Last activity for display
-      lastActivity: this.activity.length > 0 ? this.activity[this.activity.length - 1] : null,
+      lastActivity: lastAct,
       activityCount: this.activity.length,
     };
   }
@@ -422,6 +434,23 @@ class AgentController {
   constructor() {
     this._sessions = new Map();
     this._publicChat = [];
+    this._startPositionPoller();
+  }
+
+  // Background poll: refresh position+rotation for all known agents every 3s.
+  // Running agents get fresh obs at turn-start already; idle agents would otherwise
+  // stay stale forever. Skip agents currently running (they handle their own obs).
+  _startPositionPoller() {
+    setInterval(async () => {
+      const idle = [...this._sessions.values()].filter(s => s.status === 'idle');
+      for (const session of idle) {
+        try {
+          const obs = await getObservation(session.agentName);
+          if (obs.location) { session.location = obs.location; session.positionUpdatedAt = Date.now(); }
+          if (obs.rotation) session.rotation = obs.rotation;
+        } catch { /* ignore — broker handles retries */ }
+      }
+    }, 3000);
   }
 
   getOrCreate(name, cls, location) {

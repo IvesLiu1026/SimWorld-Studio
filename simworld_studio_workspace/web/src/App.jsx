@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import PixelStreamPlayer from "./PixelStreamPlayer.jsx";
@@ -62,11 +63,13 @@ function PollProvider({ children }) {
           if (name) { agentLastSeen.current.set(name, now); liveNames.add(name); }
         });
 
-        // Detect stale agents (were seen before but not in current push)
+        // Detect stale agents; prune entries absent > 5min to prevent memory leak
         const stale = new Set();
         for (const [name, ts] of agentLastSeen.current) {
-          if (!liveNames.has(name) && now - ts > STALE_AGENT_MS) stale.add(name);
-          if (liveNames.has(name)) agentLastSeen.current.set(name, now); // refresh
+          if (!liveNames.has(name)) {
+            if (now - ts > STALE_AGENT_MS) stale.add(name);
+            if (now - ts > 300_000) agentLastSeen.current.delete(name); // prune
+          }
         }
         setSync(prev => {
           const same = prev.staleAgents.size === stale.size && [...stale].every(n => prev.staleAgents.has(n));
@@ -3241,11 +3244,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
   }, [pollData.chatLog, agent.name]);
 
   const handleSend = useCallback(async (text) => {
-    console.log("[AgentCard] handleSend called", { text, status, agentName: agent.name, sessionId, pieActive });
-    if (!text.trim() || status === "running") {
-      console.log("[AgentCard] handleSend BLOCKED", { empty: !text.trim(), running: status === "running" });
-      return;
-    }
+    if (!text.trim() || status === "running") return;
     setInput("");
     setStatus("running");
     setThought("");
@@ -3254,33 +3253,19 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
-      console.log("[AgentCard] calling sendAgentChat...", { agentName: agent.name, sessionId });
       await sendAgentChat(agent.name, text, sessionId, (event) => {
-        console.log("[AgentCard] event received", event.type, event.data);
         switch (event.type) {
-          case "text":
-            setThought(prev => prev + event.data.delta);
-            break;
-          case "thinking":
-            setThought(prev => prev + event.data.delta);
-            break;
-          case "tool_start":
-            setActions(prev => [...prev, { tool: event.data.displayName, ok: null }]);
-            break;
-          case "tool_result":
-            setActions(prev => prev.map((a, i) => i === prev.length - 1 ? { ...a, ok: !event.data.isError } : a));
-            break;
-          case "done":
-            break;
+          case "text":      setThought(prev => prev + event.data.delta); break;
+          case "thinking":  setThought(prev => prev + event.data.delta); break;
+          case "tool_start": setActions(prev => [...prev, { tool: event.data.displayName, ok: null }]); break;
+          case "tool_result": setActions(prev => prev.map((a, i) => i === prev.length - 1 ? { ...a, ok: !event.data.isError } : a)); break;
+          default: break;
         }
       }, controller.signal);
-      console.log("[AgentCard] sendAgentChat resolved OK");
       setStatus("done");
-      // Clear live thought so it doesn't duplicate pastActivities from SSE
       setThought("");
       setActions([]);
     } catch (err) {
-      console.error("[AgentCard] sendAgentChat ERROR", err.name, err.message);
       if (err.name !== "AbortError") {
         setThought(prev => prev || `Error: ${err.message}`);
         setStatus("error");
@@ -3298,7 +3283,30 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
 
   useEffect(() => { if (activityRef.current) activityRef.current.scrollTop = activityRef.current.scrollHeight; }, [thought, actions]);
 
-  const loc = Array.isArray(agent.location) && agent.location.length >= 3 ? agent.location.map(v => Math.round(v)).join(", ") : null;
+  const loc = Array.isArray(agent.location) && agent.location.length >= 3
+    ? agent.location.map(v => Math.round(v)).join(", ") : null;
+
+  // Yaw → compass heading
+  const heading = useMemo(() => {
+    const rot = agent.rotation;
+    if (!Array.isArray(rot) || rot.length < 3) return null;
+    const yaw = ((rot[1] % 360) + 360) % 360;
+    const dirs = ["N","NE","E","SE","S","SW","W","NW"];
+    const dir = dirs[Math.round(yaw / 45) % 8];
+    return `${dir} ${Math.round(yaw)}°`;
+  }, [agent.rotation]);
+
+  // Sync server-side status into local state when not actively streaming
+  const svrStatus = agent.status;
+  useEffect(() => {
+    if (status !== "running") setStatus(svrStatus === "running" ? "running" : status);
+  }, [svrStatus]); // eslint-disable-line
+
+  // Current action from server (for agents triggered externally)
+  const liveAction = status === "running"
+    ? (actions[actions.length - 1]?.tool || agent.currentAction)
+    : (agent.lastAction || null);
+
   const statusColors = { idle: "#64748b", running: "#f59e0b", done: "#16a34a", error: "#dc2626" };
 
   // Render a single activity (ReAct format)
@@ -3349,16 +3357,23 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
 
       {/* Quick info */}
       <div style={{ padding: "5px 10px 7px", fontSize: 10 }}>
-        {loc ? (
-          <div style={{ color: "#64748b", fontFamily: "monospace" }}>{loc}</div>
-        ) : (
-          <div style={{ color: "#94a3b8", fontStyle: "italic" }}>location unknown</div>
-        )}
-        {(thought || actions.length > 0) && (
+        {/* Position + heading row */}
+        <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+          {loc ? (
+            <span style={{ color: "#64748b", fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{loc}</span>
+          ) : (
+            <span style={{ color: "#94a3b8", fontStyle: "italic" }}>location unknown</span>
+          )}
+          {heading && (
+            <span style={{ color: "#94a3b8", flexShrink: 0, fontFamily: "monospace" }}>{heading}</span>
+          )}
+        </div>
+        {/* Live action / last action */}
+        {(liveAction || thought || actions.length > 0) && (
           <div style={{ color: "#64748b", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
-            {status === "running" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f59e0b", animation: "pulse 1s ease-in-out infinite" }}/>}
+            {status === "running" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f59e0b", animation: "pulse 1s ease-in-out infinite", flexShrink: 0 }}/>}
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {thought ? thought.slice(0, 50) + (thought.length > 50 ? "…" : "") : actions[actions.length-1]?.tool}
+              {thought ? thought.slice(0, 50) + (thought.length > 50 ? "…" : "") : (liveAction || actions[actions.length-1]?.tool)}
             </span>
           </div>
         )}
@@ -3374,17 +3389,49 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
 
 // ─── AgentDetailPanel — expanded view with camera ────────────────────────────
 
+// Yaw → compass direction label
+function yawToCompass(yaw) {
+  const dirs = ["N","NE","E","SE","S","SW","W","NW"];
+  return dirs[Math.round(((yaw % 360) + 360) % 360 / 45) % 8];
+}
+
 function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
   const color = AGENT_COLORS[colorIdx % AGENT_COLORS.length];
-  const [activeTab, setActiveTab]   = useState("camera"); // camera | activity | chat
-  const [camImg, setCamImg]         = useState(null);
-  const [camLoading, setCamLoading] = useState(false);
-  const [camError, setCamError]     = useState(null);
+  const [activeTab, setActiveTab]     = useState("camera");
+  const [camImg, setCamImg]           = useState(null);
+  const [camLoading, setCamLoading]   = useState(false);
+  const [camError, setCamError]       = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [input, setInput]           = useState("");
-  const [sending, setSending]       = useState(false);
+  const [input, setInput]             = useState("");
+  const [sending, setSending]         = useState(false);
+  const [liveState, setLiveState]     = useState(null);  // 1s-fresh from /api/agent-state
+  // Drag state for floating window
+  const [winPos, setWinPos] = useState({ x: window.innerWidth - 540, y: 80 });
+  const dragRef = useRef(null);
   const camIntervalRef = useRef(null);
   const activityRef    = useRef(null);
+
+  // 1-second polling of live agent state
+  useEffect(() => {
+    const poll = () =>
+      fetch(`${API_BASE}/agent-state/${encodeURIComponent(agent.name)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setLiveState(d); })
+        .catch(()=>{});
+    poll();
+    const t = setInterval(poll, 1000);
+    return () => clearInterval(t);
+  }, [agent.name]);
+
+  // Draggable window handlers
+  const startDrag = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX - winPos.x, startY = e.clientY - winPos.y;
+    const onMove = (ev) => setWinPos({ x: ev.clientX - startX, y: ev.clientY - startY });
+    const onUp   = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [winPos]);
 
   const pollData = usePoll();
   const pastActivities = pollData.activities?.[agent.name] || [];
@@ -3394,52 +3441,44 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
     ).slice(-20),
   [pollData.chatLog, agent.name]);
 
-  const loc = Array.isArray(agent.location) && agent.location.length >= 3
-    ? agent.location : null;
+  // Use liveState when available, fall back to agent prop
+  const loc = (liveState?.location ?? (Array.isArray(agent.location) ? agent.location : null));
+  const rot = liveState?.rotation ?? null;
+  const liveStatus = liveState?.status ?? agent.status ?? "idle";
+  const currentAction = liveState?.currentAction ?? null;
+  const lastAction    = liveState?.lastAction ?? null;
 
-  // Focus UE viewport camera on this agent and take screenshot
+  // Camera: use dedicated /api/agent-camera endpoint (1.5s refresh)
   const focusAndShoot = useCallback(async () => {
-    if (!loc) { setCamError("No location data"); return; }
-    setCamLoading(true);
-    setCamError(null);
+    setCamLoading(true); setCamError(null);
     try {
-      const [x, y, z] = loc;
-      // Position camera 400 units behind-left and 350 above agent
-      const camX = x - 400, camY = y - 400, camZ = z + 350;
-      const dx = x - camX, dy = y - camY, dz = z - camZ;
-      const horiz = Math.sqrt(dx*dx + dy*dy);
-      const pitch = horiz > 1 ? Math.atan2(dz, horiz) * (180 / Math.PI) : -45;
-      const yaw   = Math.atan2(dy, dx) * (180 / Math.PI);
+      const d = await fetch(`${API_BASE}/agent-camera/${encodeURIComponent(agent.name)}`).then(r => r.json());
+      if (d.dataUrl) {
+        setCamImg(d.dataUrl);
+      } else if (!d.dataUrl && loc) {
+        // Fallback: move viewport camera to agent and screenshot
+        const [x, y, z] = loc;
+        const camX = x - 400, camY = y - 400, camZ = z + 350;
+        const pitch = -35, yaw = Math.atan2(y - camY, x - camX) * 180 / Math.PI;
+        await fetch(`${API_BASE}/camera`, { method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ cmd:"set_camera", args:[camX,camY,camZ,pitch,yaw,0] }) });
+        await new Promise(r => setTimeout(r, 500));
+        const resp = await fetch(`${API_BASE}/screenshot/latest?t=${Date.now()}`);
+        if (!resp.ok) throw new Error("No screenshot");
+        const blob = await resp.blob();
+        setCamImg(prev => { if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
+      } else throw new Error("No camera available");
+    } catch(e) { setCamError(e.message); } finally { setCamLoading(false); }
+  }, [agent.name, loc]);
 
-      // 1) Move viewport camera
-      await fetch(`${API_BASE}/camera`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cmd: "set_camera", args: [camX, camY, camZ, pitch, yaw, 0] }),
-      });
-
-      // 2) Wait a tick for UE to update, then grab screenshot
-      await new Promise(r => setTimeout(r, 600));
-      const resp = await fetch(`${API_BASE}/screenshot/latest?t=${Date.now()}`);
-      if (!resp.ok) throw new Error("No screenshot available");
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      setCamImg(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
-    } catch (e) {
-      setCamError(e.message);
-    } finally {
-      setCamLoading(false);
-    }
-  }, [loc]);
-
-  // Auto-refresh camera when tab is active
+  // Auto-refresh camera — 1.5s when tab active
   useEffect(() => {
     if (activeTab !== "camera" || !autoRefresh) {
-      if (camIntervalRef.current) clearInterval(camIntervalRef.current);
-      return;
+      clearInterval(camIntervalRef.current); return;
     }
     focusAndShoot();
-    camIntervalRef.current = setInterval(focusAndShoot, 4000);
+    camIntervalRef.current = setInterval(focusAndShoot, 1500);
     return () => clearInterval(camIntervalRef.current);
   }, [activeTab, autoRefresh, focusAndShoot]);
 
@@ -3464,36 +3503,49 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
   };
 
   const statusColors = { idle:"#64748b", running:"#f59e0b", done:"#16a34a", error:"#dc2626" };
-  const status = agent.status || "idle";
 
   return (
     <div style={{
-      position: "absolute", inset: 0, zIndex: 50,
-      background: "var(--panel)",
-      display: "flex", flexDirection: "column",
-      borderRadius: 0,  // inside a panel — no extra radius
+      position: "fixed", left: winPos.x, top: winPos.y,
+      width: 480, height: 560, zIndex: 200,
+      background: "var(--panel)", borderRadius: 12,
+      border: `1px solid ${color}55`,
+      boxShadow: "0 8px 32px rgba(0,0,0,0.35)",
+      display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
-      {/* ── Panel header ── */}
-      <div style={{
-        padding: "10px 12px", borderBottom: "1px solid var(--line)",
-        display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
-        background: `${color}0a`,
+      {/* ── Draggable header ── */}
+      <div onMouseDown={startDrag} style={{
+        padding: "8px 10px", borderBottom: "1px solid var(--line)",
+        display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+        background: `${color}12`, cursor: "grab", userSelect: "none",
       }}>
-        <button onClick={onClose} style={{
-          background: "none", border: "1px solid var(--line)", borderRadius: 6,
-          padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "var(--ink-3)",
-          display: "flex", alignItems: "center", gap: 3,
-        }}>← Back</button>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status],
-          boxShadow: status === "running" ? `0 0 0 2px ${statusColors[status]}44` : "none" }}/>
-        <span style={{ fontSize: 14, fontWeight: 700, color }}>{agent.name}</span>
-        <span style={{ fontSize: 10, color: "var(--ink-3)", background: "var(--bg)", borderRadius: 4, padding: "1px 6px" }}>{agent.cls}</span>
-        <div style={{ flex: 1 }} />
-        {loc && (
-          <span style={{ fontSize: 9, color: "var(--ink-3)", fontFamily: "monospace" }}>
-            {loc.map(v => Math.round(v)).join(", ")}
-          </span>
-        )}
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[liveStatus],
+          boxShadow: liveStatus==="running" ? `0 0 0 3px ${statusColors[liveStatus]}44` : "none",
+          animation: liveStatus==="running" ? "ps-pulse 1s infinite" : "none", flexShrink:0 }}/>
+        <span style={{ fontSize: 13, fontWeight: 700, color }}>{agent.name}</span>
+        <span style={{ fontSize: 9, color:"var(--ink-3)", background:"var(--bg)", borderRadius:4, padding:"1px 5px" }}>{agent.cls}</span>
+        {/* Live position */}
+        {loc && <span style={{ fontSize:9, color:"var(--ink-3)", fontFamily:"monospace", marginLeft:2 }}>
+          {loc.map(v=>Math.round(v)).join(",")}
+        </span>}
+        {/* Heading */}
+        {rot && <span style={{ fontSize:10, color, fontWeight:700, marginLeft:2 }}>
+          {yawToCompass(rot[1])} {Math.round(((rot[1]%360)+360)%360)}°
+        </span>}
+        {/* Current action */}
+        {currentAction && <span style={{ fontSize:9, color:"#f59e0b", background:"rgba(245,158,11,.12)",
+          borderRadius:4, padding:"1px 5px", maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          ⚡ {currentAction}
+        </span>}
+        {!currentAction && lastAction && <span style={{ fontSize:9, color:"var(--ink-3)",
+          background:"var(--bg)", borderRadius:4, padding:"1px 5px" }}>
+          last: {lastAction}
+        </span>}
+        <div style={{ flex:1 }} />
+        <button onClick={onClose} onMouseDown={e=>e.stopPropagation()}
+          style={{ background:"none", border:"1px solid var(--line)", borderRadius:6,
+            width:22, height:22, cursor:"pointer", fontSize:12, color:"var(--ink-3)",
+            display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
       </div>
 
       {/* ── Tab bar ── */}
@@ -3521,7 +3573,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
           <div style={{ padding: "6px 10px", display: "flex", alignItems: "center", gap: 6, borderBottom: "1px solid var(--line)", flexShrink: 0 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", color: "var(--ink-3)" }}>
               <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} style={{ accentColor: color }}/>
-              Auto (4s)
+              Auto (1.5s)
             </label>
             <button onClick={focusAndShoot} disabled={camLoading} style={{
               padding: "3px 10px", borderRadius: 6, border: `1px solid ${color}44`,
@@ -3821,17 +3873,16 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange }) {
           </span>
         </div>
 
-        {/* Detail panel overlay — covers agents pane when expanded */}
-        {expandedAgent && (
-          <div style={{ position:"absolute", inset:0, zIndex:40 }}>
-            <AgentDetailPanel
-              agent={expandedAgent}
-              sessionId={sessionId}
-              pieActive={pieActive}
-              colorIdx={contextAgents.findIndex(a => a.name === expandedAgent.name)}
-              onClose={() => setExpandedAgent(null)}
-            />
-          </div>
+        {/* Floating detail window rendered at document.body level via portal */}
+        {expandedAgent && ReactDOM.createPortal(
+          <AgentDetailPanel
+            agent={expandedAgent}
+            sessionId={sessionId}
+            pieActive={pieActive}
+            colorIdx={contextAgents.findIndex(a => a.name === expandedAgent.name)}
+            onClose={() => setExpandedAgent(null)}
+          />,
+          document.body
         )}
 
         {empty ? (
@@ -3887,7 +3938,7 @@ function ViewportPanel({ latestScreenshot }) {
       .then(d => {
         if (d.url) {
           try {
-            setPlayerUrl(`${d.url}?MatchViewportRes=true&HoveringMouse=true`);
+            setPlayerUrl(`${d.url}?MatchViewportRes=true`);
           } catch { setPlayerUrl(d.url); }
         }
       })
@@ -4221,209 +4272,220 @@ function AssetListItem({ item, category, onInsert }) {
 
 // ─── AssetBrowser ────────────────────────────────────────────────────────────
 
-function AssetBrowser({ onInsert }) {
-  const [assets, setAssets] = useState(null);
-  const [activeCategory, setActiveCategory] = useState(null);
-  const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState("grid");
-  const containerRef = useRef(null);
-  const loadedRef = useRef(false);
+// ── Content Drawer (replaces old static AssetBrowser) ────────────────────────
+const CAT_ICONS = { buildings:"🏗️", trees:"🌳", vehicles:"🛵", street_furniture:"🪑",
+  static_meshes:"📦", agents:"🤖", maps:"🗺️" };
+const SPAWN_SNIPPETS = {
+  buildings: (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
+  trees:     (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
+  vehicles:  (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
+  street_furniture:(a)=>`spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
+  static_meshes:(a)=>`spawn_actor(name="${a.name}_1", static_mesh="${a.fullPath}", location=[0,0,0])`,
+  agents:(a)=>`spawn_agent(agent_name="${a.name}_1", agent_type="${a.agentType||"humanoid"}", location=[0,0,0])`,
+  maps:(a)=>`load_map(path="${a.fullPath}")`,
+};
 
-  // Lazy load: fetch assets only when this component becomes visible
-  // Uses IntersectionObserver so assets are not fetched until drawer is opened
+function AssetBrowser({ onInsert }) {
+  const [browsePath, setBrowsePath] = useState("/");
+  const [search, setSearch]         = useState("");
+  const [category, setCategory]     = useState("");
+  const [page, setPage]             = useState(0);
+  const [data, setData]             = useState(null);   // api response
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [allAssets, setAllAssets]   = useState([]);     // accumulated for load-more
+  const containerRef = useRef(null);
+  const loadedRef    = useRef(false);
+  const PAGE_SIZE    = 30;
+
+  const fetchPage = useCallback(async (path, q, cat, pg) => {
+    const params = new URLSearchParams({ path, q, category: cat, page: pg, limit: PAGE_SIZE });
+    return fetch(`${API_BASE}/assets?${params}`).then(r => r.json());
+  }, []);
+
+  // Lazy-load on first visibility
   useEffect(() => {
     if (loadedRef.current) return;
     const el = containerRef.current;
     if (!el) return;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !loadedRef.current) {
+    const obs = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting && !loadedRef.current) {
         loadedRef.current = true;
-        fetchAssets().then(setAssets).catch(() => {});
-        observer.disconnect();
+        fetchPage("/", "", "", 0).then(d => { setData(d); setAllAssets(d.assets || []); }).catch(()=>{});
+        obs.disconnect();
       }
     }, { threshold: 0.1 });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [fetchPage]);
 
-  if (!assets) {
-    return (
-      <div ref={containerRef} style={{ padding: 12, color: "#64748b", fontSize: 12, height:"100%" }}>
-        Loading assets…
-      </div>
-    );
+  // Re-fetch when path / search / category changes
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    setPage(0); setAllAssets([]);
+    fetchPage(browsePath, search, category, 0)
+      .then(d => { setData(d); setAllAssets(d.assets || []); })
+      .catch(()=>{});
+  }, [browsePath, search, category, fetchPage]);
+
+  const loadMore = async () => {
+    const next = page + 1;
+    setLoadingMore(true);
+    try {
+      const d = await fetchPage(browsePath, search, category, next);
+      setAllAssets(prev => [...prev, ...(d.assets || [])]);
+      setPage(next);
+      setData(d);
+    } finally { setLoadingMore(false); }
+  };
+
+  const navigate = (dir) => {
+    const newPath = browsePath === "/" ? `/${dir}/` : `${browsePath}${dir}/`;
+    setBrowsePath(newPath); setCategory(""); setSearch("");
+  };
+  const navigateUp = () => {
+    if (browsePath === "/") return;
+    const parts = browsePath.replace(/\/$/, "").split("/");
+    parts.pop();
+    setBrowsePath(parts.length <= 1 ? "/" : parts.join("/") + "/");
+    setCategory(""); setSearch("");
+  };
+
+  const breadcrumbs = browsePath === "/" ? [] : browsePath.replace(/\/$/, "").split("/").filter(Boolean);
+
+  const insertAsset = (a) => {
+    const snippet = (SPAWN_SNIPPETS[a.category] || ((x) => x.fullPath))(a);
+    onInsert?.(snippet);
+  };
+
+  if (!data && !loadedRef.current) {
+    return <div ref={containerRef} style={{ padding:12, color:"#64748b", fontSize:12, height:"100%" }}>Loading…</div>;
+  }
+  if (!data) {
+    return <div ref={containerRef} style={{ padding:12, color:"#64748b", fontSize:12, height:"100%" }}>Loading assets…</div>;
   }
 
-  const categories = Object.keys(assets);
-  const currentCategory = activeCategory || categories[0];
-  const categoryData = assets[currentCategory];
-  let items = categoryData?.items || [];
-
-  if (search) {
-    const q = search.toLowerCase();
-    items = items.filter((item) => item.id.toLowerCase().includes(q));
-  }
+  const counts = data.counts || {};
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "#f4f6fa",
-      }}
-    >
-      {/* Search bar */}
-      <div
-        style={{
-          padding: "8px 10px",
-          borderBottom: "1px solid #e6e9ef",
-          display: "flex",
-          gap: 6,
-          alignItems: "center",
-        }}
-      >
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search assets..."
-          style={{
-            flex: 1,
-            padding: "5px 8px",
-            fontSize: 12,
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: 4,
-            color: "#0f172a",
-            outline: "none",
-            boxSizing: "border-box",
-          }}
-        />
-        <button
-          onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}
-          style={{
-            padding: "4px 8px",
-            fontSize: 11,
-            background: "#e6e9ef",
-            border: "1px solid #e2e8f0",
-            borderRadius: 4,
-            color: "#64748b",
-            cursor: "pointer",
-          }}
-          title={viewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
-        >
-          {viewMode === "grid" ? "☰" : "▦"}
+    <div ref={containerRef} style={{ display:"flex", height:"100%", background:"var(--bg)", overflow:"hidden" }}>
+
+      {/* ── Left sidebar: category shortcuts ── */}
+      <div style={{ width:110, flexShrink:0, borderRight:"1px solid var(--line)", overflow:"auto",
+        display:"flex", flexDirection:"column", gap:1, padding:"6px 4px" }}>
+        <div style={{ fontSize:9, color:"var(--ink-3)", padding:"2px 6px", fontWeight:700, textTransform:"uppercase", letterSpacing:.5 }}>Categories</div>
+        {Object.entries(counts).map(([cat, cnt]) => (
+          <button key={cat} onClick={() => { setBrowsePath("/"); setCategory(cat); setSearch(""); }}
+            style={{ display:"flex", alignItems:"center", gap:5, padding:"4px 6px", borderRadius:5,
+              border:"none", cursor:"pointer", textAlign:"left", fontSize:10,
+              background: category === cat ? "var(--blue-soft)" : "transparent",
+              color: category === cat ? "var(--blue)" : "var(--ink-2)",
+              fontWeight: category === cat ? 700 : 400 }}>
+            <span>{CAT_ICONS[cat] || "📁"}</span>
+            <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+              {cat.replace(/_/g," ")}
+            </span>
+            <span style={{ fontSize:9, color:"var(--ink-3)" }}>{cnt}</span>
+          </button>
+        ))}
+        <div style={{ flex:1 }} />
+        <button onClick={() => { setBrowsePath("/"); setCategory(""); setSearch(""); }}
+          style={{ padding:"4px 6px", borderRadius:5, border:"none", cursor:"pointer",
+            fontSize:10, color:"var(--ink-3)", background:"transparent", textAlign:"left" }}>
+          All ({Object.values(counts).reduce((a,b)=>a+b,0)})
         </button>
       </div>
 
-      {/* Category tabs */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 2,
-          padding: "6px 10px",
-          borderBottom: "1px solid #e6e9ef",
-        }}
-      >
-        {categories.map((cat) => (
-          <button
-            key={cat}
-            onClick={() => {
-              setActiveCategory(cat);
-              setSearch("");
-            }}
-            style={{
-              padding: "3px 8px",
-              fontSize: 10,
-              borderRadius: 4,
-              border: `1px solid ${cat === currentCategory ? "#3b82f6" : "#e6e9ef"}`,
-              background: cat === currentCategory ? "#eff4ff" : "transparent",
-              color: cat === currentCategory ? "#2563eb" : "#64748b",
-              cursor: "pointer",
-            }}
-          >
-            {(CATEGORY_ICONS[cat] || ICONS.cube)(12)} {cat.replace(/_/g, " ")}
-          </button>
-        ))}
-      </div>
+      {/* ── Main area ── */}
+      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
 
-      {/* Category description */}
-      {categoryData?.description && (
-        <div
-          style={{
-            padding: "6px 10px",
-            fontSize: 10,
-            color: "#64748b",
-            borderBottom: "1px solid #e6e9ef",
-          }}
-        >
-          {categoryData.description}
+        {/* Toolbar: breadcrumb + search */}
+        <div style={{ flexShrink:0, padding:"5px 8px", borderBottom:"1px solid var(--line)",
+          display:"flex", alignItems:"center", gap:4 }}>
+          {browsePath !== "/" && (
+            <button onClick={navigateUp} style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
+              border:"1px solid var(--line)", background:"none", cursor:"pointer", color:"var(--ink-2)" }}>↑</button>
+          )}
+          {/* Breadcrumb */}
+          <div style={{ display:"flex", alignItems:"center", gap:2, fontSize:10, color:"var(--ink-3)", flex:1, overflow:"hidden" }}>
+            <span style={{ cursor:"pointer", color:"var(--blue)" }} onClick={() => { setBrowsePath("/"); setCategory(""); }}>Game</span>
+            {breadcrumbs.map((seg, i) => (
+              <span key={i} style={{ display:"flex", alignItems:"center", gap:2 }}>
+                <span>/</span>
+                <span style={{ cursor:"pointer", color: i===breadcrumbs.length-1?"var(--ink-1)":"var(--blue)" }}
+                  onClick={() => {
+                    const p = "/" + breadcrumbs.slice(0,i+1).join("/") + "/";
+                    setBrowsePath(p); setCategory("");
+                  }}>{seg}</span>
+              </span>
+            ))}
+          </div>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…"
+            style={{ width:100, padding:"3px 6px", fontSize:11, border:"1px solid var(--line)",
+              borderRadius:4, background:"var(--panel)", color:"var(--ink-1)", outline:"none" }} />
         </div>
-      )}
 
-      {/* Asset grid/list */}
-      <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
-        {viewMode === "grid" ? (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))",
-              gap: 6,
-            }}
-          >
-            {items.map((item) => (
-              <AssetCard
-                key={item.id}
-                item={item}
-                category={currentCategory}
-                onInsert={onInsert}
-              />
+        {/* Asset grid */}
+        <div style={{ flex:1, overflow:"auto", padding:6 }}>
+          {/* Sub-directories */}
+          {data.dirs?.length > 0 && (
+            <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:6 }}>
+              {data.dirs.map(dir => (
+                <button key={dir} onClick={() => navigate(dir)}
+                  style={{ display:"flex", alignItems:"center", gap:4, padding:"4px 8px",
+                    border:"1px solid var(--line)", borderRadius:6, background:"var(--panel)",
+                    cursor:"pointer", fontSize:10, color:"var(--ink-2)" }}>
+                  📁 {dir}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Asset tiles */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(100px,1fr))", gap:5 }}>
+            {allAssets.map((a, i) => (
+              <div key={`${a.fullPath}-${i}`}
+                title={a.fullPath}
+                onClick={() => insertAsset(a)}
+                style={{ padding:"7px 6px", borderRadius:7, border:"1px solid var(--line)",
+                  background:"var(--panel)", cursor:"pointer", textAlign:"center",
+                  fontSize:9, color:"var(--ink-2)", transition:"border-color .12s, box-shadow .12s",
+                  userSelect:"none" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor="var(--blue)"; e.currentTarget.style.boxShadow="0 0 0 2px var(--blue-soft)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor="var(--line)"; e.currentTarget.style.boxShadow="none"; }}>
+                <div style={{ fontSize:18, marginBottom:3 }}>{CAT_ICONS[a.category] || "📦"}</div>
+                <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontWeight:600 }}>
+                  {a.name.replace(/^BP_/,"").replace(/_/g," ")}
+                </div>
+                {a.agentType && <div style={{ color:"var(--ink-3)", fontSize:8, marginTop:1 }}>{a.agentType}</div>}
+                {a.biome && <div style={{ color:"var(--ink-3)", fontSize:8, marginTop:1 }}>{a.biome?.split(",")[0]}</div>}
+              </div>
             ))}
           </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {items.map((item) => (
-              <AssetListItem
-                key={item.id}
-                item={item}
-                category={currentCategory}
-                onInsert={onInsert}
-              />
-            ))}
-          </div>
-        )}
-        {items.length === 0 && (
-          <div
-            style={{
-              textAlign: "center",
-              padding: 20,
-              color: "#475569",
-              fontSize: 12,
-            }}
-          >
-            {search ? "No matching assets" : "No items in this category"}
-          </div>
-        )}
-      </div>
 
-      {/* Footer */}
-      <div
-        style={{
-          padding: "4px 10px",
-          borderTop: "1px solid #e6e9ef",
-          fontSize: 10,
-          color: "#475569",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <span>
-          {items.length} assets {search && `matching "${search}"`}
-        </span>
-        <span style={{ marginLeft: "auto", color: "#64748b" }}>Click to insert into chat</span>
+          {allAssets.length === 0 && (
+            <div style={{ textAlign:"center", padding:20, color:"var(--ink-3)", fontSize:11 }}>
+              {search ? `No assets matching "${search}"` : "No assets in this location"}
+            </div>
+          )}
+
+          {/* Load more */}
+          {data.hasMore && (
+            <div style={{ textAlign:"center", marginTop:8 }}>
+              <button onClick={loadMore} disabled={loadingMore}
+                style={{ padding:"5px 16px", borderRadius:6, border:"1px solid var(--line)",
+                  background:"var(--panel)", cursor:"pointer", fontSize:11, color:"var(--blue)" }}>
+                {loadingMore ? "Loading…" : `Load more (${data.total - allAssets.length} remaining)`}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ flexShrink:0, padding:"3px 8px", borderTop:"1px solid var(--line)",
+          fontSize:9, color:"var(--ink-3)", display:"flex", justifyContent:"space-between" }}>
+          <span>{allAssets.length} / {data.total} assets shown</span>
+          <span>Click to insert spawn command</span>
+        </div>
       </div>
     </div>
   );

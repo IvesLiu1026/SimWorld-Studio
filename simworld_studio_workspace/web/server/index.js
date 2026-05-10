@@ -9,68 +9,37 @@ You build city scenes in Unreal Engine 5 using MCP tools. The user sees a live v
 
 SimWorld assets are Blueprint actors. You MUST use spawn_blueprint_actor (NOT spawn_actor) for buildings, trees, vehicles, and props.
 
-### Buildings (6 varieties — ONLY these exist in this package)
-spawn_blueprint_actor with blueprint_id: BP_Building_01 through BP_Building_06 ONLY.
-Full path format: /Game/CityDatabase/blueprints/BP_Building_XX.BP_Building_XX_C
+### Buildings -- 125 varieties (BP_Building_01 through BP_Building_127, IDs 57 and 120 missing)
+Full path: /Game/CityDatabase/blueprints/BP_Building_XX.BP_Building_XX_C
+- Small (01-20), mid-rise (21-60), large/specialty (61-127) -- use VARIED IDs for diversity
+- Example: spawn_blueprint_actor(actor_name="Bldg_1", blueprint_id="BP_Building_42", location=[0,0,0])
 
-IMPORTANT: ONLY use BP_Building_01 through BP_Building_06. Do NOT use any building ID above 06 — those assets are not available and will appear as invisible/broken.
-- BP_Building_01: small residential
-- BP_Building_02: small residential
-- BP_Building_03: small residential
-- BP_Building_04: medium building
-- BP_Building_05: medium building
-- BP_Building_06: medium building
-
-Example \u2014 spawn a house:
-  spawn_blueprint_actor(actor_name="House_1", blueprint_id="BP_Building_05", location=[0, 0, 0])
-
-### Trees (6 varieties)
-  spawn_blueprint_actor(actor_name="Tree_1", blueprint_id="BP_Tree1", location=[500, 200, 0])
-  BP_Tree1 through BP_Tree6
-
-### Street furniture (ONLY these are available)
-  BP_Hydrant, BP_Trash_bin_a, BP_Trash_bin_b, BP_Trash_can, BP_Table, BP_Table2, BP_Table3
-  BP_RoadBlocker, BP_RoadCone, BP_Couch
-  Do NOT use: BP_Box, BP_Box2, BP_Box3, BP_Can, BP_Can2, BP_Rabbish, BP_Soda1, BP_Soda2 (meshes missing)
-
-### Vehicles
-  BP_Scooter_01 through BP_Scooter_04, BP_Cart, BP_Cart2
-
-### Roads (static mesh \u2014 use spawn_actor)
-  spawn_actor(name="Road_1", static_mesh="/Game/CityDatabase/meshes/SM_Road.SM_Road", location=[0,0,0], scale=[10,10,1])
+### Trees: BP_Tree1 through BP_Tree6
+### Vehicles: BP_Scooter_01-04, BP_Cart, BP_Cart2
+### Street furniture: BP_Table/2/3, BP_Hydrant, BP_Trash_bin_a/b, BP_Trash_can,
+  BP_RoadBlocker, BP_RoadCone, BP_Couch, BP_Box/2/3, BP_Can/2, BP_Rabbish, BP_Soda1-4
+### Static meshes (spawn_actor): SM_TrafficLight1, SM_hydrant_main, SM_road_cone, SM_chair_b ...
+### More assets: use list_assets(path="/Game/CityDatabase/") to discover all.
+  17 allow-AI marketplace packs: list_assets(path="/Game/<PackName>/")
 
 ## UNITS & SPACING
-- UE uses centimeters: 1 meter = 100 units
-- Small buildings (01-03): ~1000-3000 units tall, ~1000-2000 wide. Space 3000-5000 apart.
-- Medium buildings (04-06): ~3000-6000 units tall. Space 5000-8000 apart.
-- Trees: 1000-2000 units apart
-- A small residential block: roughly 15000x10000 units
+- UE uses centimeters: 1 m = 100 units
+- Small buildings: 1000-3000 tall, space 3000-5000 apart
+- Large buildings: 4000-8000 tall, space 6000-10000 apart
 
-## WORKFLOW \u2014 FOLLOW THIS EXACTLY
-1. Call delete_all_spawned() FIRST to clear previous session objects
-2. Call setup_environment() to create sun, sky, fog, ground. Without it the scene is BLACK.
-3. Plan the layout: calculate positions for all objects before spawning
-4. Spawn buildings using spawn_blueprint_actor with varied blueprint_ids
-5. Add trees along streets
-6. Add street furniture (hydrants, trash bins, etc.)
-7. Take a screenshot with take_screenshot() so the user sees results
-8. Tell the user what you built
+## WORKFLOW
+1. delete_all_spawned()
+2. setup_environment() -- scene is BLACK without this
+3. Spawn with varied blueprint_ids, add trees/props
+4. take_screenshot()
 
-## EXAMPLE: "Build 6 houses with trees"
+## EXAMPLE: city block
 1. delete_all_spawned()
 2. setup_environment()
-3. Spawn 6 buildings (01-06 only!) in a 2x3 grid, 4000 units apart:
-   spawn_blueprint_actor(actor_name="House_1", blueprint_id="BP_Building_01", location=[0, 0, 0])
-   spawn_blueprint_actor(actor_name="House_2", blueprint_id="BP_Building_03", location=[4000, 0, 0])
-   spawn_blueprint_actor(actor_name="House_3", blueprint_id="BP_Building_05", location=[8000, 0, 0])
-   spawn_blueprint_actor(actor_name="House_4", blueprint_id="BP_Building_02", location=[0, 5000, 0])
-   spawn_blueprint_actor(actor_name="House_5", blueprint_id="BP_Building_06", location=[4000, 5000, 0])
-   spawn_blueprint_actor(actor_name="House_6", blueprint_id="BP_Building_04", location=[8000, 5000, 0])
-4. Add trees between houses:
-   spawn_blueprint_actor(actor_name="Tree_1", blueprint_id="BP_Tree1", location=[2000, -800, 0])
-   spawn_blueprint_actor(actor_name="Tree_2", blueprint_id="BP_Tree3", location=[6000, -800, 0])
-   ... (more trees along the streets)
-5. take_screenshot()
+3. spawn_blueprint_actor(actor_name="Bldg_1", blueprint_id="BP_Building_12", location=[0,0,0])
+   spawn_blueprint_actor(actor_name="Bldg_2", blueprint_id="BP_Building_35", location=[5000,0,0])
+   spawn_blueprint_actor(actor_name="Bldg_3", blueprint_id="BP_Building_67", location=[0,6000,0])
+4. take_screenshot()
 
 ## SPAWNING CONTROLLABLE AGENTS
 When the user asks for "people", "pedestrians", "characters", "agents", or "someone walking":
@@ -488,6 +457,142 @@ app.get('/api/session/status',(req,res)=>{
   if(!_sessionMgr)return res.json({mode:'single-user'});
   res.json({totalSlots:_sessionMgr.totalSlots,freeSlots:_sessionMgr.freeSlots,activeSessions:_sessionMgr.activeSessions,queueLength:_sessionMgr.queueLength,sessions:_sessionMgr.snapshot()});
 });
+
+// ── Asset Catalog API ──────────────────────────────────────────────────────────
+const ASSETS_FULL = JSON.parse(fs.readFileSync(path.resolve(__dirname,'assets_full.json'),'utf-8'));
+
+function _flattenAssets(catalog) {
+  const out = [];
+  // Buildings (numbered IDs)
+  if (catalog.buildings?.ids) {
+    const pfx = '/Game/CityDatabase/blueprints/';
+    for (const id of catalog.buildings.ids) {
+      const n = `BP_Building_${String(id).padStart(2,'0')}`;
+      out.push({ name:n, dir:pfx, fullPath:`${pfx}${n}.${n}_C`, type:'blueprint', category:'buildings', spawnTool:'spawn_blueprint_actor' });
+    }
+  }
+  // Item-based categories
+  const catMeta = {
+    trees:           { type:'blueprint',    spawnTool:'spawn_blueprint_actor', icon:'🌳' },
+    vehicles:        { type:'blueprint',    spawnTool:'spawn_blueprint_actor', icon:'🛵' },
+    street_furniture:{ type:'blueprint',    spawnTool:'spawn_blueprint_actor', icon:'🪑' },
+    static_meshes:   { type:'static_mesh', spawnTool:'spawn_actor',           icon:'📦' },
+  };
+  for (const [cat, meta] of Object.entries(catMeta)) {
+    for (const item of (catalog[cat]?.items || [])) {
+      const fp = typeof item === 'string' ? item : item.path;
+      const segs = fp.split('/'); const filename = segs.pop();
+      const dir = segs.join('/') + '/';
+      const name = filename.split('.')[0];
+      out.push({ name, dir, fullPath:fp, type:meta.type, category:cat, spawnTool:meta.spawnTool, icon:meta.icon });
+    }
+  }
+  // Agents
+  for (const ag of (catalog.agents?.items || [])) {
+    const segs = ag.path.split('/'); segs.pop();
+    const dir = segs.join('/') + '/';
+    out.push({ name:ag.id, dir, fullPath:ag.path, type:'agent', category:'agents', spawnTool:'spawn_agent', agentType:ag.type, description:ag.description, icon:'🤖' });
+  }
+  // Map templates
+  for (const m of (catalog.map_templates?.items || [])) {
+    const segs = m.path.split('/'); segs.pop();
+    const dir = segs.join('/') + '/';
+    const name = m.path.split('/').pop();
+    out.push({ name, dir, fullPath:m.path, type:'map', category:'maps', spawnTool:null, biome:m.biome, pack:m.pack, icon:'🗺️' });
+  }
+  return out;
+}
+
+const _allAssets = _flattenAssets(ASSETS_FULL);
+
+app.get('/api/assets',(req,res)=>{
+  let { path:browsePath='/', q='', page=0, limit=30, category='' } = req.query;
+  page = Number(page); limit = Number(limit);
+  if (!browsePath.endsWith('/')) browsePath += '/';
+
+  // All assets whose dir starts with browsePath
+  const inScope = _allAssets.filter(a => a.dir.startsWith(browsePath));
+
+  // Virtual sub-dirs of current path
+  const subDirs = new Set();
+  for (const a of inScope) {
+    const rel = a.dir.slice(browsePath.length);
+    const seg = rel.split('/')[0];
+    if (seg) subDirs.add(seg);
+  }
+
+  // Assets directly in this dir
+  let here = inScope.filter(a => a.dir === browsePath);
+  if (category) here = here.filter(a => a.category === category);
+  if (q) here = here.filter(a => a.name.toLowerCase().includes(q.toLowerCase()));
+
+  const total = here.length;
+  const assets = here.slice(page * limit, (page+1) * limit);
+
+  // Category counts (for the sidebar shortcuts)
+  const counts = {};
+  for (const a of _allAssets) {
+    counts[a.category] = (counts[a.category] || 0) + 1;
+  }
+
+  res.json({ path:browsePath, dirs:[...subDirs].sort(), assets, total, page, hasMore:(page+1)*limit < total, counts });
+});
+
+// ── Agent state (fresh) ────────────────────────────────────────────────────────
+app.get('/api/agent-state/:name', async(req,res) => {
+  const name = req.params.name;
+  const session = agentCtrl.get(name);
+  if (!session) return res.status(404).json({ error:'Agent not found' });
+  // Return current in-memory state (background poller keeps it fresh)
+  const lastAct = session.activity.length > 0 ? session.activity[session.activity.length-1] : null;
+  res.json({
+    agentName: session.agentName,
+    agentClass: session.agentClass,
+    status: session.status,
+    currentAction: session.currentAction,
+    lastAction: lastAct?.actions?.length > 0 ? lastAct.actions[lastAct.actions.length-1].tool : null,
+    location: session.location,
+    rotation: session.rotation,
+    positionUpdatedAt: session.positionUpdatedAt,
+    activity: session.activity.slice(-5),
+    historyLength: session.history.length,
+  });
+});
+
+// ── Agent camera snapshot ──────────────────────────────────────────────────────
+const _agentSnapCache = new Map(); // name -> {dataUrl, ts}
+app.get('/api/agent-camera/:name', async(req,res) => {
+  const name = req.params.name;
+  const CACHE_MS = 1500;
+  const cached = _agentSnapCache.get(name);
+  if (cached && Date.now() - cached.ts < CACHE_MS) {
+    return res.json({ dataUrl: cached.dataUrl, ts: cached.ts });
+  }
+  try {
+    // Ask UCV for the agent's camera image
+    const imgData = await broker.send(`vget /object/${name}/camera/lit png`, { timeoutMs: 3000 });
+    const dataUrl = `data:image/png;base64,${Buffer.from(imgData,'binary').toString('base64')}`;
+    _agentSnapCache.set(name, { dataUrl, ts: Date.now() });
+    res.json({ dataUrl, ts: Date.now() });
+  } catch {
+    // Fallback: latest scene screenshot
+    const latest = (() => {
+      try {
+        const files = fs.readdirSync(SCREENSHOT_DIR).filter(f=>f.endsWith('.png'))
+          .map(f=>({ f, t: fs.statSync(path.join(SCREENSHOT_DIR,f)).mtimeMs }))
+          .filter(({t})=>Date.now()-t<300000).sort((a,b)=>b.t-a.t);
+        return files[0] ? path.join(SCREENSHOT_DIR, files[0].f) : null;
+      } catch { return null; }
+    })();
+    if (latest) {
+      const buf = fs.readFileSync(latest);
+      res.json({ dataUrl:`data:image/png;base64,${buf.toString('base64')}`, ts:Date.now(), fallback:true });
+    } else {
+      res.status(503).json({ error:'No camera available' });
+    }
+  }
+});
+
 app.all("/api/*",(s,e)=>{e.status(404).json({error:`Unknown API endpoint: ${s.method} ${s.path}`})});
 const FRONTEND_DIR=path.resolve(__dirname,"../dist");fs.existsSync(FRONTEND_DIR)&&(app.use(express.static(FRONTEND_DIR)),app.get("*",(s,e)=>{e.sendFile(path.join(FRONTEND_DIR,"index.html"))}),console.log("  Frontend served from:",FRONTEND_DIR)),app.listen(PORT,"0.0.0.0",()=>{console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557`),console.log("\u2551       SimWorld Studio Backend                      \u2551"),console.log("\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563"),console.log(`\u2551  Listening : http://0.0.0.0:${PORT}                  \u2551`),console.log(`\u2551  Claude    : ${CLAUDE_BIN}                            \u2551`),console.log("\u2551  MCP config: mcp.json (local stdio)               \u2551"),console.log(`\u2551  UE TCP    : ${UNREAL_HOST}:${UNREAL_PORT}                 \u2551`),console.log(`\u2551  Logs      : ${LOG_DIR}          \u2551`),console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
