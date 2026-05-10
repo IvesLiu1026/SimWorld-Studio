@@ -1,4 +1,4 @@
-"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();
+"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);
 // Stable session token — persists across all Claude subprocess spawns
 const STUDIO_SESSION=crypto.randomUUID();
 logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,arenaManager=new ArenaManager,agentManager=new AgentManager,SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
@@ -218,6 +218,7 @@ function _gatherStatus(since=0){
     sessions,activities,chatLog,
     pieActive:_cachedPie,
     health:{ueConnected:_cachedUeConn,mcpConnected:_cachedUeConn,pixelStreamingUrl:PIXEL_STREAMING_URL},
+    metrics:metricsHub.snapshot(),
   };
 }
 
@@ -628,23 +629,39 @@ app.get('/api/agent-trajectory/:name', (req,res) => {
   res.json({ trajectory: session.trajectory||[], agentName: session.agentName });
 });
 
-// ── Agent camera snapshot ──────────────────────────────────────────────────────
+// ── Agent camera snapshot — renders from agent's own POV ──────────────────────
 const _agentSnapCache = new Map(); // name -> {dataUrl, ts}
 app.get('/api/agent-camera/:name', async(req,res) => {
   const name = req.params.name;
-  const CACHE_MS = 1500;
+  const CACHE_MS = 3500; // align with 4s frontend poll
   const cached = _agentSnapCache.get(name);
   if (cached && Date.now() - cached.ts < CACHE_MS) {
     return res.json({ dataUrl: cached.dataUrl, ts: cached.ts });
   }
+
+  // Get tracked agent state (location + rotation already fresh from background poller)
+  const session = agentCtrl.get(name);
+  const loc = session?.location;
+  const rot = session?.rotation; // [pitch, yaw, roll]
+
   try {
-    // Ask UCV for the agent's camera image
-    const imgData = await broker.send(`vget /object/${name}/camera/lit png`, { timeoutMs: 3000 });
-    const dataUrl = `data:image/png;base64,${Buffer.from(imgData,'binary').toString('base64')}`;
-    _agentSnapCache.set(name, { dataUrl, ts: Date.now() });
-    res.json({ dataUrl, ts: Date.now() });
+    // Each agent has its own camera component registered in UCV.
+    // vget /object/{name}/camera/lit returns the path to a captured PNG from that camera.
+    // Returns file path (no "png" suffix = save-to-file mode, more reliable than binary stream).
+    const imgPath = await ucvBroker.send(
+      `vget /object/${name}/camera/lit`,
+      { timeoutMs: 5000, retries: 1 }
+    );
+    if (imgPath && imgPath.trim()) {
+      const p = imgPath.trim();
+      const imgBuf = fs.existsSync(p) ? fs.readFileSync(p) : Buffer.from(p, 'binary');
+      const dataUrl = `data:image/png;base64,${imgBuf.toString('base64')}`;
+      _agentSnapCache.set(name, { dataUrl, ts: Date.now() });
+      return res.json({ dataUrl, ts: Date.now() });
+    }
+    throw new Error('No image from agent camera');
   } catch {
-    // Fallback: latest scene screenshot
+    // Final fallback: latest saved screenshot file
     const latest = (() => {
       try {
         const files = fs.readdirSync(SCREENSHOT_DIR).filter(f=>f.endsWith('.png'))
@@ -734,6 +751,16 @@ app.post('/api/vlm-score', async(req,res) => {
 // ── Agent stop-all ─────────────────────────────────────────────────────────────
 app.post('/api/agent-stop-all', (req,res) => {
   agentCtrl.stopAll();
+  res.json({ ok:true });
+});
+
+// Metrics REST endpoint (also included in SSE)
+app.get('/api/metrics', (req,res) => res.json(metricsHub.snapshot()));
+
+// Record scene collision count into metrics hub (called from CodingVerifierPanel)
+app.post('/api/metrics/scene-collision', (req,res) => {
+  const { count } = req.body;
+  if (typeof count === 'number') metricsHub.recordSceneCollisions(count);
   res.json({ ok:true });
 });
 

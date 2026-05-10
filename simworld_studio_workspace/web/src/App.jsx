@@ -12,6 +12,7 @@ const AgentsContext  = React.createContext({ agents: [], sessions: [], activitie
 const SceneContext   = React.createContext({ objects: [], environment: { ready: false }, round: 0 });
 const ChatLogContext = React.createContext([]);
 const StatusContext  = React.createContext({ pieActive: false, health: null });
+const MetricsContext = React.createContext({ series: {}, sceneCollisions: [], sampledAt: 0, intervalMs: 5000 });
 
 // Stale agent context — agents last seen + any sync errors
 const SyncContext = React.createContext({ staleAgents: new Set(), syncError: null, sseOk: true });
@@ -31,6 +32,7 @@ function PollProvider({ children }) {
   const [chatLog,  setChatLog]  = useState([]);
   const [status,   setStatus]   = useState({ pieActive: false, health: null });
   const [sync,     setSync]     = useState({ staleAgents: new Set(), syncError: null, sseOk: true });
+  const [metrics,  setMetrics]  = useState({ series: {}, sceneCollisions: [], sampledAt: 0, intervalMs: 5000 });
 
   const agentLastSeen = useRef(new Map()); // agentName → timestamp
   const legacyRef = useRef({ context: { agents:[], objects:[], environment:{ready:false}, round:0 }, sessions:[], activities:{}, chatLog:[], pieActive:false, health:null });
@@ -121,6 +123,13 @@ function PollProvider({ children }) {
           return { pieActive: nextPie, health: nextHealth };
         });
 
+        // Metrics time-series (from MetricsHub, sampled every 5s)
+        if (d.metrics && d.metrics.sampledAt !== undefined) {
+          setMetrics(prev =>
+            prev.sampledAt === d.metrics.sampledAt ? prev : d.metrics
+          );
+        }
+
         legacyRef.current = d;
       } catch (e) {
         setSync(prev => ({ ...prev, syncError: "SSE parse error: " + e.message }));
@@ -154,11 +163,13 @@ function PollProvider({ children }) {
     <SceneContext.Provider   value={scene}>
     <ChatLogContext.Provider value={chatLog}>
     <StatusContext.Provider  value={status}>
+    <MetricsContext.Provider value={metrics}>
     <SyncContext.Provider    value={sync}>
     <PollContext.Provider    value={legacyValue}>
       {children}
     </PollContext.Provider>
     </SyncContext.Provider>
+    </MetricsContext.Provider>
     </StatusContext.Provider>
     </ChatLogContext.Provider>
     </SceneContext.Provider>
@@ -172,6 +183,7 @@ function useScene()   { return React.useContext(SceneContext); }
 function useChatLog() { return React.useContext(ChatLogContext); }
 function useStatus()  { return React.useContext(StatusContext); }
 function useSync()    { return React.useContext(SyncContext); }
+function useMetrics() { return React.useContext(MetricsContext); }
 
 // Legacy hook — works but causes full re-render on every SSE push
 function usePoll() { return React.useContext(PollContext); }
@@ -3589,29 +3601,19 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
   const currentAction = liveState?.currentAction ?? null;
   const lastAction    = liveState?.lastAction ?? null;
 
-  // Camera: use dedicated /api/agent-camera endpoint (4s refresh)
+  // Camera: /api/agent-camera renders from agent's own POV (eye-level, forward-facing)
+  // Backend handles: Python set_level_viewport_camera_info → UCV vget /camera/0/lit
   const focusAndShoot = useCallback(async () => {
     setCamLoading(true); setCamError(null);
     try {
       const d = await fetch(`${API_BASE}/agent-camera/${encodeURIComponent(agent.name)}`).then(r => r.json());
       if (d.dataUrl) {
         setCamImg(d.dataUrl);
-      } else if (!d.dataUrl && loc) {
-        // Fallback: move viewport camera to agent and screenshot
-        const [x, y, z] = loc;
-        const camX = x - 400, camY = y - 400, camZ = z + 350;
-        const pitch = -35, yaw = Math.atan2(y - camY, x - camX) * 180 / Math.PI;
-        await fetch(`${API_BASE}/camera`, { method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ cmd:"set_camera", args:[camX,camY,camZ,pitch,yaw,0] }) });
-        await new Promise(r => setTimeout(r, 500));
-        const resp = await fetch(`${API_BASE}/screenshot/latest?t=${Date.now()}`);
-        if (!resp.ok) throw new Error("No screenshot");
-        const blob = await resp.blob();
-        setCamImg(prev => { if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
-      } else throw new Error("No camera available");
+      } else {
+        throw new Error("No camera data available");
+      }
     } catch(e) { setCamError(e.message); } finally { setCamLoading(false); }
-  }, [agent.name, loc]);
+  }, [agent.name]);
 
   // Auto-refresh camera — 4s when tab active (images are expensive)
   useEffect(() => {
@@ -3889,101 +3891,163 @@ function AgentAggregatePanelTabs({ agents, sessionId }) {
   );
 }
 
-// ── Agent Overview: 2D map + collision timeline ───────────────────────────────
+// ── Reusable SVG Line Chart ───────────────────────────────────────────────────
+function LineChart({ series, label, unit = "", color = "var(--blue)", W = 440, H = 80 }) {
+  if (!series || series.length < 2) {
+    return (
+      <div style={{ width:W, height:H, display:"flex", alignItems:"center", justifyContent:"center",
+        background:"var(--bg)", borderRadius:6, border:"1px solid var(--line)",
+        color:"var(--ink-3)", fontSize:12 }}>
+        {label}: no data yet
+      </div>
+    );
+  }
+  const pad = { t:8, r:6, b:22, l:36 };
+  const iW = W - pad.l - pad.r;
+  const iH = H - pad.t - pad.b;
+  const minV = Math.min(...series), maxV = Math.max(...series);
+  const rangeV = maxV - minV || 1;
+  const toX = (i) => pad.l + (i / (series.length - 1)) * iW;
+  const toY = (v) => pad.t + iH - ((v - minV) / rangeV) * iH;
+
+  const pathD = series.map((v,i) => `${i===0?'M':'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+  const areaD = `${pathD} L${toX(series.length-1).toFixed(1)},${pad.t+iH} L${pad.l},${pad.t+iH} Z`;
+
+  // Tick values
+  const ticks = [minV, (minV+maxV)/2, maxV].map(v => Math.round(v * 10) / 10);
+
+  return (
+    <svg width={W} height={H} style={{ display:"block", background:"var(--bg)", borderRadius:6, border:"1px solid var(--line)" }}>
+      {/* Y grid + labels */}
+      {ticks.map((v,i) => {
+        const y = toY(v);
+        return (
+          <g key={i}>
+            <line x1={pad.l} y1={y} x2={pad.l+iW} y2={y} stroke="var(--line)" strokeWidth={0.5} strokeDasharray="3,3" />
+            <text x={pad.l-4} y={y+4} textAnchor="end" fontSize={10} fill="var(--ink-3)">{v}{unit}</text>
+          </g>
+        );
+      })}
+      {/* Area fill */}
+      <path d={areaD} fill={color} opacity={0.12} />
+      {/* Line */}
+      <path d={pathD} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      {/* Last value dot */}
+      <circle cx={toX(series.length-1)} cy={toY(series[series.length-1])} r={3} fill={color} />
+      {/* X label */}
+      <text x={pad.l + iW/2} y={H-4} textAnchor="middle" fontSize={10} fill="var(--ink-3)" fontWeight={600}>{label}</text>
+    </svg>
+  );
+}
+
+// Multi-series line chart (one line per agent)
+function MultiLineChart({ seriesMap, label, unit = "", W = 440, H = 90 }) {
+  const entries = Object.entries(seriesMap).filter(([,s]) => s && s.length >= 2);
+  if (entries.length === 0) {
+    return (
+      <div style={{ width:W, height:H, display:"flex", alignItems:"center", justifyContent:"center",
+        background:"var(--bg)", borderRadius:6, border:"1px solid var(--line)",
+        color:"var(--ink-3)", fontSize:12 }}>
+        {label}: no data yet
+      </div>
+    );
+  }
+  const pad = { t:8, r:6, b:22, l:36 };
+  const iW = W - pad.l - pad.r;
+  const iH = H - pad.t - pad.b;
+  const allVals = entries.flatMap(([,s]) => s);
+  const minV = Math.min(...allVals), maxV = Math.max(...allVals);
+  const rangeV = maxV - minV || 1;
+  const maxLen = Math.max(...entries.map(([,s]) => s.length));
+  const toX = (i, len) => pad.l + (i / (Math.max(len,2) - 1)) * iW;
+  const toY = (v) => pad.t + iH - ((v - minV) / rangeV) * iH;
+  const ticks = [minV, maxV].map(v => Math.round(v * 10) / 10);
+
+  return (
+    <svg width={W} height={H} style={{ display:"block", background:"var(--bg)", borderRadius:6, border:"1px solid var(--line)" }}>
+      {ticks.map((v,i) => {
+        const y = toY(v);
+        return (
+          <g key={i}>
+            <line x1={pad.l} y1={y} x2={pad.l+iW} y2={y} stroke="var(--line)" strokeWidth={0.5} strokeDasharray="3,3" />
+            <text x={pad.l-4} y={y+4} textAnchor="end" fontSize={10} fill="var(--ink-3)">{v}{unit}</text>
+          </g>
+        );
+      })}
+      {entries.map(([name, series], idx) => {
+        const col = AGENT_COLORS[idx % AGENT_COLORS.length];
+        const d = series.map((v,i) => `${i===0?'M':'L'}${toX(i,series.length).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+        return (
+          <g key={name}>
+            <path d={d} fill="none" stroke={col} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" opacity={0.9} />
+            <circle cx={toX(series.length-1, series.length)} cy={toY(series[series.length-1])} r={3} fill={col} />
+            <text x={toX(series.length-1, series.length)+5} y={toY(series[series.length-1])+4}
+              fontSize={9} fill={col} fontWeight="bold">{name}</text>
+          </g>
+        );
+      })}
+      <text x={pad.l + iW/2} y={H-4} textAnchor="middle" fontSize={10} fill="var(--ink-3)" fontWeight={600}>{label}</text>
+    </svg>
+  );
+}
+
+// ── Agent Overview: aggregate stats + time-series charts from MetricsHub ──────
 function AgentOverviewPanel({ agents }) {
   const pollData = usePoll();
   const sessions = pollData.sessions || [];
+  const metrics  = useMetrics();
+  const { series } = metrics;
 
   if (sessions.length === 0) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-      height:"100%", gap:8, color:"var(--ink-3)", fontSize:13 }}>
-      <div style={{ fontSize:32, opacity:.3 }}>🤖</div>No agents in scene
+      height:"100%", gap:8, color:"var(--ink-3)", fontSize:14 }}>
+      <div style={{ fontSize:36, opacity:.3 }}>🤖</div>No agents in scene
     </div>
   );
 
-  const pts = sessions.filter(s => s.location).map(s => s.location);
-  const W = 480, H = 130, pad = 20;
+  const totalCollisions = sessions.reduce((s,a) => s+(a.collisionCount||0), 0);
+  const totalTurns      = sessions.reduce((s,a) => s+(a.totalTurns||0), 0);
+  const running         = sessions.filter(s => s.status==="running").length;
 
-  // Aggregate stats
-  const totalCollisions = sessions.reduce((s,a)=>s+(a.collisionCount||0), 0);
-  const totalTurns      = sessions.reduce((s,a)=>s+(a.totalTurns||0), 0);
-  const running         = sessions.filter(s=>s.status==="running").length;
-
-  if (pts.length === 0) return (
-    <div style={{ padding:12 }}>
-      <div style={{ display:"flex", gap:8 }}>
-        {[
-          { label:"Agents", val:sessions.length, color:"var(--blue)" },
-          { label:"Running", val:running, color:"#f59e0b" },
-          { label:"Collisions", val:totalCollisions, color:"#dc2626" },
-          { label:"Total Turns", val:totalTurns, color:"var(--ink-2)" },
-        ].map(({label,val,color}) => (
-          <div key={label} style={{ flex:1, textAlign:"center", padding:8, background:"var(--panel)",
-            borderRadius:7, border:"1px solid var(--line)" }}>
-            <div style={{ fontSize:22, fontWeight:800, color }}>{val}</div>
-            <div style={{ fontSize:11, color:"var(--ink-3)" }}>{label}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop:8, fontSize:12, color:"var(--ink-3)", textAlign:"center" }}>No position data yet</div>
-    </div>
-  );
-
-  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
-  const minX=Math.min(...xs)-600, maxX=Math.max(...xs)+600;
-  const minY=Math.min(...ys)-600, maxY=Math.max(...ys)+600;
-  const rangeX=maxX-minX||1, rangeY=maxY-minY||1;
-  const sc = Math.min((W-2*pad)/rangeX, (H-2*pad)/rangeY);
-  const toSvg=(x,y)=>[pad+(x-minX)*sc, H-pad-(y-minY)*sc];
+  // Build multi-series data from MetricsHub
+  const collisionSeries = {}, speedSeries = {}, turnsSeries = {};
+  for (const [name, s] of Object.entries(series)) {
+    if (s.collision?.length > 1) collisionSeries[name] = s.collision;
+    if (s.speed?.length > 1)    speedSeries[name]    = s.speed;
+    if (s.turns?.length > 1)    turnsSeries[name]    = s.turns;
+  }
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto", padding:"6px 8px", gap:6 }}>
-      {/* Aggregate stat chips — big and legible */}
-      <div style={{ display:"flex", gap:6 }}>
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto",
+      padding:"8px 10px", gap:8 }}>
+
+      {/* Aggregate stat chips — large, one-glance readable */}
+      <div style={{ display:"flex", gap:6, flexShrink:0 }}>
         {[
-          { label:"Agents", val:sessions.length, color:"var(--blue)" },
-          { label:"Running", val:running, color:"#f59e0b" },
-          { label:"Collisions", val:totalCollisions, color: totalCollisions>0?"#dc2626":"#16a34a" },
-          { label:"Total Turns", val:totalTurns, color:"var(--ink-2)" },
+          { label:"Agents",       val:sessions.length, color:"var(--blue)" },
+          { label:"Running",      val:running,          color:"#f59e0b" },
+          { label:"Collisions",   val:totalCollisions,  color: totalCollisions>0?"#dc2626":"#16a34a" },
+          { label:"Total Turns",  val:totalTurns,       color:"var(--ink-2)" },
         ].map(({label,val,color}) => (
-          <div key={label} style={{ flex:1, textAlign:"center", padding:"6px 4px", background:"var(--panel)",
-            borderRadius:7, border:"1px solid var(--line)" }}>
-            <div style={{ fontSize:20, fontWeight:800, color, lineHeight:1 }}>{val}</div>
-            <div style={{ fontSize:11, color:"var(--ink-3)", marginTop:2 }}>{label}</div>
+          <div key={label} style={{ flex:1, textAlign:"center", padding:"8px 4px",
+            background:"var(--panel)", borderRadius:8, border:"1px solid var(--line)" }}>
+            <div style={{ fontSize:24, fontWeight:900, color, lineHeight:1 }}>{val}</div>
+            <div style={{ fontSize:12, color:"var(--ink-3)", marginTop:3 }}>{label}</div>
           </div>
         ))}
       </div>
 
-      {/* 2D top-down multi-agent map */}
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`}
-        style={{ background:"var(--panel)", borderRadius:8, border:"1px solid var(--line)" }}>
-        {/* Grid */}
-        {[0.33,0.67].map(f=>(
-          <line key={f} x1={pad} y1={H-pad-f*(H-2*pad)} x2={W-pad} y2={H-pad-f*(H-2*pad)}
-            stroke="var(--line)" strokeWidth={0.5} strokeDasharray="3,3" />
-        ))}
-        {sessions.filter(s=>s.location).map((s,i) => {
-          const col = AGENT_COLORS[i % AGENT_COLORS.length];
-          const [sx,sy] = toSvg(s.location[0], s.location[1]);
-          const yaw = s.rotation ? ((s.rotation[1]%360)+360)%360 : 0;
-          const rad = yaw * Math.PI/180;
-          const traj = s.trajectoryPreview;
-          return (<g key={s.agentName}>
-            {traj?.length > 1 && (() => {
-              const d = traj.map((p,i) => {
-                const [px,py] = toSvg(p.loc[0],p.loc[1]);
-                return `${i===0?'M':'L'}${px.toFixed(1)},${py.toFixed(1)}`;
-              }).join(' ');
-              return <path d={d} fill="none" stroke={col} strokeWidth={2} opacity={0.35} />;
-            })()}
-            <circle cx={sx} cy={sy} r={7} fill={col} stroke="#fff" strokeWidth={2} />
-            <line x1={sx} y1={sy} x2={sx+Math.cos(rad-Math.PI/2)*13} y2={sy+Math.sin(rad-Math.PI/2)*13}
-              stroke="#fff" strokeWidth={2} strokeLinecap="round" />
-            <text x={sx} y={sy-10} textAnchor="middle" fontSize={9} fill={col} fontWeight="bold"
-              style={{ filter:"drop-shadow(0 0 2px var(--panel))" }}>{s.agentName}</text>
-          </g>);
-        })}
-      </svg>
+      {/* Time-series charts */}
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        <MultiLineChart seriesMap={collisionSeries} label="Collisions over time" W={440} H={85} />
+        <MultiLineChart seriesMap={speedSeries}     label="Speed (m/s) over time" unit="m/s" W={440} H={85} />
+      </div>
+
+      {Object.keys(series).length === 0 && (
+        <div style={{ fontSize:12, color:"var(--ink-3)", textAlign:"center", padding:8 }}>
+          Charts will appear after agents start moving (sampled every 5s)
+        </div>
+      )}
     </div>
   );
 }
@@ -4317,11 +4381,13 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange }) {
 function CodingVerifierPanel({ sessionId }) {
   const [tab, setTab]         = useState("collisions");
   const [collData, setCollData] = useState(null);
-  const [scores, setScores]   = useState([]);   // [{ts, score, feedback, screenshot}]
+  const [scores, setScores]   = useState([]);
   const [checking, setChecking] = useState(false);
   const [vlmRunning, setVlmRunning] = useState(false);
   const [vlmError, setVlmError] = useState(null);
-  const pollData = usePoll();
+  const pollData  = usePoll();
+  const metrics   = useMetrics();
+  const sceneCollHistory = (metrics.sceneCollisions || []).map(c => c.count);
 
   // Auto-run collision check after each coding turn completes (chat done event)
   // We trigger via the latestScreenshot changing (proxy for scene being updated)
@@ -4332,7 +4398,15 @@ function CodingVerifierPanel({ sessionId }) {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ command: "vget /scene/collisions" }),
       }).then(r => r.json());
-      setCollData(raw.result ? JSON.parse(raw.result) : null);
+      const parsed = raw.result ? JSON.parse(raw.result) : null;
+      setCollData(parsed);
+      // Record into MetricsHub for time-series visualization
+      if (parsed?.collision_count !== undefined) {
+        fetch(`${API_BASE}/metrics/scene-collision`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ count: parsed.collision_count }),
+        }).catch(()=>{});
+      }
     } catch { setCollData(null); }
     finally { setChecking(false); }
   }, []);
@@ -4405,29 +4479,33 @@ function CodingVerifierPanel({ sessionId }) {
         {tab === "collisions" && (
           collData ? (
             <div>
-              <div style={{ display:"flex", gap:8, marginBottom:6 }}>
-                <div style={{ flex:1, textAlign:"center", padding:"5px", background:"var(--panel)",
-                  borderRadius:6, border:`1px solid ${collColor}44` }}>
-                  <div style={{ fontSize:20, fontWeight:700, color:collColor }}>{collData.collision_count}</div>
-                  <div style={{ fontSize:8, color:"var(--ink-3)" }}>Collisions</div>
-                </div>
-                <div style={{ flex:1, textAlign:"center", padding:"5px", background:"var(--panel)",
-                  borderRadius:6, border:"1px solid var(--line)" }}>
-                  <div style={{ fontSize:20, fontWeight:700, color:"var(--ink-2)" }}>{collData.checked_actors_count||0}</div>
-                  <div style={{ fontSize:8, color:"var(--ink-3)" }}>Actors Checked</div>
-                </div>
-                <div style={{ flex:1, textAlign:"center", padding:"5px", background:"var(--panel)",
-                  borderRadius:6, border:"1px solid var(--line)" }}>
-                  <div style={{ fontSize:20, fontWeight:700, color:"var(--ink-2)" }}>{collData.total_overlaps||0}</div>
-                  <div style={{ fontSize:8, color:"var(--ink-3)" }}>Overlaps</div>
-                </div>
+              {/* Big stat chips */}
+              <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                {[
+                  { val:collData.collision_count,     label:"Collisions",     color:collColor },
+                  { val:collData.checked_actors_count||0, label:"Actors",      color:"var(--ink-2)" },
+                  { val:collData.total_overlaps||0,   label:"Overlaps",      color:"var(--ink-3)" },
+                ].map(({val,label,color}) => (
+                  <div key={label} style={{ flex:1, textAlign:"center", padding:"6px 4px",
+                    background:"var(--panel)", borderRadius:7, border:"1px solid var(--line)" }}>
+                    <div style={{ fontSize:22, fontWeight:800, color }}>{val}</div>
+                    <div style={{ fontSize:11, color:"var(--ink-3)" }}>{label}</div>
+                  </div>
+                ))}
               </div>
+              {/* Collision history chart */}
+              {sceneCollHistory.length > 1 && (
+                <div style={{ marginBottom:8 }}>
+                  <LineChart series={sceneCollHistory} label="Scene collisions over checks" color="#dc2626" W={380} H={70} />
+                </div>
+              )}
+              {/* Collision pair list */}
               {(collData.collision_pairs||[]).slice(0,5).map((p,i) => (
-                <div key={i} style={{ fontSize:9, padding:"3px 5px", background:"rgba(220,38,38,.06)",
-                  borderRadius:4, marginBottom:2, borderLeft:"2px solid #dc2626", color:"var(--ink-2)" }}>
+                <div key={i} style={{ fontSize:11, padding:"4px 7px", background:"rgba(220,38,38,.06)",
+                  borderRadius:5, marginBottom:3, borderLeft:"2px solid #dc2626", color:"var(--ink-2)" }}>
                   <strong>{p.actor1}</strong> ↔ <strong>{p.actor2}</strong>
                   <span style={{ color:"var(--ink-3)", marginLeft:4 }}>
-                    [{p.collision_type}] pen={Math.round(p.penetration_depth)}cm
+                    [{p.collision_type}] {Math.round(p.penetration_depth)}cm
                   </span>
                 </div>
               ))}
