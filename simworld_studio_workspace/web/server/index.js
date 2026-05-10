@@ -348,25 +348,38 @@ const _assetScanInterval = setInterval(() => {
   }
 }, 5000);
 
-// Auto-discover player-controlled agents every 10s via vget /objects
-// Registers actual agent pawns — excludes camera managers, controllers, HUDs, spectators
-const AGENT_PATTERNS  = /agent|pedestrian|pawn|base_user|base_ped|walker|npc/i;
-const AGENT_EXCLUDE   = /camera|controller|manager|hud|spectator|default__/i;
-setInterval(async () => {
+// Auto-discover player-controlled agents via vget /objects
+// Patterns: actual agent pawns only — excludes cameras, controllers, HUDs, spectators
+const AGENT_PATTERNS  = /agent|pedestrian|base_user|base_ped|walker|npc|character|human|robot/i;
+const AGENT_EXCLUDE   = /camera|controller|manager|hud|spectator|default__|landscape|sky|light|fog|floor|ground|wall|brush|terrain|navmesh|trigger|volume|blocki|decal|post/i;
+
+async function _autoDiscoverAgents() {
   if (!_cachedPie) return;
   try {
-    const raw = await ucvBroker.send('vget /objects', { timeoutMs: 3000, retries: 1 });
-    const names = (raw || '').trim().split(/\s+/).filter(n =>
-      n && AGENT_PATTERNS.test(n) && !AGENT_EXCLUDE.test(n)
-    );
+    const raw = await ucvBroker.send('vget /objects', { timeoutMs: 4000, retries: 1 });
+    const all = (raw || '').trim().split(/\s+/).filter(Boolean);
+    const names = all.filter(n => AGENT_PATTERNS.test(n) && !AGENT_EXCLUDE.test(n));
+    let registered = 0;
     for (const name of names) {
       if (!agentCtrl.get(name)) {
         agentCtrl.getOrCreate(name, 'pedestrian', null);
-        log.system('info', `[agent-discover] Auto-registered: ${name}`);
+        registered++;
       }
     }
-  } catch { /* silent */ }
-}, 10000);
+    if (registered > 0) log.system('info', `[agent-discover] Registered ${registered}: ${names.join(', ')}`);
+  } catch { /* silent — UCV not connected */ }
+}
+
+// Run every 5s in PIE; also immediately when PIE first becomes active
+let _prevPie = false;
+setInterval(async () => {
+  if (_cachedPie && !_prevPie) {
+    // PIE just started — run discovery immediately
+    setTimeout(_autoDiscoverAgents, 1000);
+  }
+  _prevPie = _cachedPie;
+  if (_cachedPie) await _autoDiscoverAgents();
+}, 5000);
 
 // Gather current status snapshot (shared by SSE push and legacy poll)
 function _gatherStatus(since=0){

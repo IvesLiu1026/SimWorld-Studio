@@ -8953,7 +8953,7 @@ function App() {
         {/* ── LEFT: Coding Agent + Verifier (two independent panels) ── */}
         <div ref={leftColRef} style={{
           width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
-          display:"flex", flexDirection:"column", gap:0, overflow:"hidden",
+          display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
           {/* Panel 1: Coding Agent */}
           <div className="sw-panel-card" style={{
@@ -9012,7 +9012,7 @@ function App() {
         <div className="sw-resize-col" onMouseDown={startColResize("left")} />
 
         {/* ── CENTER: Viewport + drawer ── */}
-        <div style={{ flex:1, minWidth:320, display:"flex", flexDirection:"column", gap:8, overflow:"hidden" }}>
+        <div style={{ flex:1, minWidth:320, display:"flex", flexDirection:"column", gap:8, overflow:"visible", padding:"0 3px", margin:"0 -3px" }}>
 
           {/* UE Viewport card */}
           <div className="sw-panel-card" style={{
@@ -9097,7 +9097,7 @@ function App() {
         {/* ── RIGHT: Embodied Agent + Statistics (two independent panels) ── */}
         <div ref={rightColRef} style={{
           width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
-          display:"flex", flexDirection:"column", gap:0, overflow:"hidden",
+          display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
           {/* Panel 1: Embodied Agent */}
           <div className="sw-panel-card" style={{

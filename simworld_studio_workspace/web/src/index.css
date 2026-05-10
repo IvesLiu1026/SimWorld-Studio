@@ -165,14 +165,11 @@ button { font-family: inherit; }
   background: var(--blue);
 }
 
-/* ── Panel card — flat default, floating on hover ── */
+/* ── Panel card — static natural shadow, no hover animation ── */
+/* Hover effects are disabled because column overflow:hidden clips shadows.
+   Instead each panel has a permanent subtle drop shadow. */
 .sw-panel-card {
-  box-shadow: none;
-  transition: box-shadow 0.18s ease, transform 0.18s ease;
-}
-.sw-panel-card:hover {
-  box-shadow: var(--shadow-hover);
-  transform: translate(-1px, -1px);  /* shift up-left to match shadow direction */
+  box-shadow: 2px 3px 10px rgba(15,23,42,.09), 0 1px 3px rgba(15,23,42,.05);
 }
 
 /* Column panels */
