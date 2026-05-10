@@ -3865,6 +3865,30 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
 
 function AgentAggregatePanelTabs({ agents, sessionId }) {
   const [tab, setTab] = useState("overview");
+  const [trackName, setTrackName] = useState("");
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverMsg, setDiscoverMsg] = useState("");
+
+  const handleTrack = async () => {
+    const name = trackName.trim();
+    if (!name) return;
+    await fetch(`${API_BASE}/agent-track`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ name }),
+    });
+    setTrackName("");
+    setDiscoverMsg(`Tracking: ${name}`);
+    setTimeout(() => setDiscoverMsg(""), 3000);
+  };
+
+  const handleDiscover = async () => {
+    setDiscovering(true);
+    const d = await fetch(`${API_BASE}/agent-discover`, { method:"POST" }).then(r=>r.json()).catch(()=>null);
+    setDiscovering(false);
+    setDiscoverMsg(d ? `Found: ${d.discovered.join(", ")||"none"}` : "Discovery failed");
+    setTimeout(() => setDiscoverMsg(""), 5000);
+  };
+
   const tabs = [
     { id:"overview", label:"📊 Overview" },
     { id:"testbed",  label:"🧪 Testbed"  },
@@ -3872,6 +3896,27 @@ function AgentAggregatePanelTabs({ agents, sessionId }) {
   ];
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"var(--bg)" }}>
+      {/* Track agent + discover controls */}
+      <div style={{ display:"flex", alignItems:"center", gap:4, padding:"4px 8px",
+        borderBottom:"1px solid var(--line)", flexShrink:0, background:"var(--panel)" }}>
+        <input value={trackName} onChange={e=>setTrackName(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&handleTrack()}
+          placeholder="Agent name to track…"
+          style={{ flex:1, padding:"4px 8px", fontSize:"var(--fs-body)", border:"1px solid var(--line)",
+            borderRadius:5, background:"var(--bg)", color:"var(--ink-1)", outline:"none",
+            fontFamily:"inherit" }} />
+        <button onClick={handleTrack} style={{ padding:"4px 10px", borderRadius:5, border:"none",
+          background:"var(--blue)", color:"#fff", cursor:"pointer",
+          fontSize:"var(--fs-body)", fontFamily:"inherit" }}>Track</button>
+        <button onClick={handleDiscover} disabled={discovering}
+          style={{ padding:"4px 10px", borderRadius:5, border:"1px solid var(--line)",
+            background:"none", cursor:"pointer", fontSize:"var(--fs-body)", fontFamily:"inherit",
+            color:"var(--ink-2)" }}>
+          {discovering ? "…" : "🔍 Discover"}
+        </button>
+        {discoverMsg && <span style={{ fontSize:12, color:"var(--blue)", whiteSpace:"nowrap" }}>{discoverMsg}</span>}
+      </div>
+
       <div style={{ display:"flex", borderBottom:"1px solid var(--line)", flexShrink:0 }}>
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -4322,11 +4367,14 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange, hideComm 
           </span>
           <div style={{ flex:1 }} />
           <button
-            onClick={() => fetch(`${API_BASE}/context-snapshot`, { method:"POST" }).catch(()=>{})}
-            title="Refresh agent list from UE"
-            style={{ fontSize:12, padding:"2px 7px", borderRadius:5, border:"1px solid var(--line)",
-              background:"none", cursor:"pointer", color:"var(--ink-3)" }}>
-            ↻ Sync
+            onClick={() => {
+              fetch(`${API_BASE}/context-snapshot`, { method:"POST" }).catch(()=>{});
+              fetch(`${API_BASE}/agent-discover`,   { method:"POST" }).catch(()=>{});
+            }}
+            title="Sync context + auto-discover player agents from UE"
+            style={{ fontSize:12, padding:"3px 9px", borderRadius:5, border:"1px solid var(--line)",
+              background:"none", cursor:"pointer", color:"var(--ink-3)", fontFamily:"inherit" }}>
+            ↻ Discover
           </button>
           <span style={{ width:6, height:6, borderRadius:"50%", background:pieActive?"#22c55e":"#94a3b8", boxShadow: pieActive?"0 0 0 2px rgba(34,197,94,.2)":"none", flexShrink:0 }}/>
           <span style={{ fontSize:12, color:pieActive?"#16a34a":"var(--ink-3)" }}>

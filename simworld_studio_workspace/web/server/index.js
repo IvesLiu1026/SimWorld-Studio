@@ -348,6 +348,23 @@ const _assetScanInterval = setInterval(() => {
   }
 }, 5000);
 
+// Auto-discover player-controlled agents every 10s via vget /objects
+// Registers any pawn-like actors so the background poller can track them
+const AGENT_PATTERNS = /agent|pedestrian|pawn|player|user|walker|npc|base_user|base_ped/i;
+setInterval(async () => {
+  if (!_cachedPie) return; // only in PIE mode
+  try {
+    const raw = await ucvBroker.send('vget /objects', { timeoutMs: 3000, retries: 1 });
+    const names = (raw || '').trim().split(/\s+/).filter(n => n && AGENT_PATTERNS.test(n));
+    for (const name of names) {
+      if (!agentCtrl.get(name)) {
+        agentCtrl.getOrCreate(name, 'pedestrian', null);
+        log.system('info', `[agent-discover] Auto-registered agent: ${name}`);
+      }
+    }
+  } catch { /* silent — UCV might not be connected */ }
+}, 10000);
+
 // Gather current status snapshot (shared by SSE push and legacy poll)
 function _gatherStatus(since=0){
   const ctx=ctxManager.getState(STUDIO_SESSION);
@@ -917,32 +934,46 @@ app.post('/api/ue-command', async(req,res) => {
 
 // ── VLM scene scoring ─────────────────────────────────────────────────────────
 app.post('/api/vlm-score', async(req,res) => {
-  const { imageDataUrl, sessionId:sid } = req.body;
+  const { imageDataUrl } = req.body;
   if (!imageDataUrl) return res.status(400).json({ error:'imageDataUrl required' });
-  const CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!CLAUDE_API_KEY) return res.status(503).json({ error:'ANTHROPIC_API_KEY not set', score:5, feedback:'VLM scoring unavailable — set ANTHROPIC_API_KEY', label:'N/A' });
+  // Use Claude Code binary (already authenticated) — no API key needed
   try {
-    const base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
-    const mediaType = imageDataUrl.match(/^data:(image\/\w+)/)?.[1] || 'image/png';
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'x-api-key': CLAUDE_API_KEY, 'anthropic-version':'2023-06-01' },
-      body: JSON.stringify({
-        model:'claude-haiku-4-5-20251001',
-        max_tokens:200,
-        messages:[{
-          role:'user',
-          content:[
-            { type:'image', source:{ type:'base64', media_type:mediaType, data:base64 } },
-            { type:'text', text:'Rate this 3D scene from 1-10 for: visual coherence, spatial layout, asset diversity, and realism. Reply ONLY with JSON: {"score":N,"label":"one-word","feedback":"one sentence"}' }
-          ]
-        }]
-      })
+    const os = require('os'), path2 = require('path');
+    const tmpImg = path2.join(os.tmpdir(), `vlm_${Date.now()}.png`);
+    const imgBuf = Buffer.from(imageDataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+    fs.writeFileSync(tmpImg, imgBuf);
+
+    const prompt = `Look at this 3D scene screenshot. Rate it from 1-10 for: visual coherence, spatial layout, asset diversity, and realism. Reply ONLY with JSON on one line: {"score":N,"label":"one-word","feedback":"one sentence max"}`;
+    const result = await new Promise((resolve, reject) => {
+      const args = ['-p', prompt, '--output-format', 'json',
+        '--dangerously-skip-permissions', '--image', tmpImg];
+      const proc = spawn(CLAUDE_BIN, args, { env: process.env, timeout: 30000 });
+      let out = '';
+      proc.stdout.on('data', d => out += d.toString());
+      proc.on('close', code => {
+        try { fs.unlinkSync(tmpImg); } catch {}
+        if (code !== 0) { reject(new Error(`claude exit ${code}`)); return; }
+        // Parse result from Claude output
+        const jsonMatch = out.match(/\{"score"[^}]+\}/);
+        if (jsonMatch) resolve(JSON.parse(jsonMatch[0]));
+        else {
+          // Fallback: extract from stream-json result field
+          const lines = out.split('\n').filter(Boolean);
+          for (const l of lines) {
+            try {
+              const ev = JSON.parse(l);
+              if (ev.type === 'result' && ev.result) {
+                const m = ev.result.match(/\{"score"[^}]+\}/);
+                if (m) { resolve(JSON.parse(m[0])); return; }
+              }
+            } catch {}
+          }
+          reject(new Error('No JSON in claude output: ' + out.slice(0,200)));
+        }
+      });
+      proc.on('error', reject);
     });
-    const data = await resp.json();
-    const text = data.content?.[0]?.text || '{}';
-    const parsed = JSON.parse(text.match(/\{[^}]+\}/)?.[0] || '{}');
-    res.json({ score: parsed.score||5, label: parsed.label||'ok', feedback: parsed.feedback||text.slice(0,100) });
+    res.json({ score: result.score||5, label: result.label||'ok', feedback: result.feedback||'' });
   } catch(e) {
     res.json({ score:5, label:'error', feedback:`Scoring failed: ${e.message}` });
   }
@@ -952,6 +983,45 @@ app.post('/api/vlm-score', async(req,res) => {
 app.post('/api/agent-stop-all', (req,res) => {
   agentCtrl.stopAll();
   res.json({ ok:true });
+});
+
+// Manually register an agent for state tracking (for player-controlled agents
+// that exist in UE but weren't spawned via our spawn_agent MCP call).
+app.post('/api/agent-track', async(req,res) => {
+  const { name, agentClass='pedestrian' } = req.body;
+  if (!name) return res.status(400).json({ error:'name required' });
+  const session = agentCtrl.getOrCreate(name, agentClass, null);
+  // Immediately fetch position so the card shows data right away
+  try {
+    const { getBroker } = require('./unreal-bridge');
+    const br = getBroker();
+    const [loc, rot] = await Promise.all([
+      br.send(`vget /object/${name}/location`, { timeoutMs:4000 }),
+      br.send(`vget /object/${name}/rotation`, { timeoutMs:4000 }),
+    ]);
+    if (loc) { session.location = loc.trim().split(/\s+/).map(Number); session.positionUpdatedAt = Date.now(); }
+    if (rot) session.rotation = rot.trim().split(/\s+/).map(Number);
+  } catch {}
+  res.json({ ok:true, agent: session.toJSON() });
+});
+
+// Auto-discover agents: query UCV for all objects, register pawn-like ones
+app.post('/api/agent-discover', async(req,res) => {
+  try {
+    const { getBroker } = require('./unreal-bridge');
+    const br = getBroker();
+    const raw = await br.send('vget /objects', { timeoutMs:5000 });
+    const names = (raw||'').trim().split(/\s+/).filter(Boolean);
+    // Heuristic: names containing 'agent', 'pedestrian', 'pawn', 'player', 'user', 'walker'
+    const AGENT_PATTERNS = /agent|pedestrian|pawn|player|user|walker|npc|base_user|base_ped/i;
+    const discovered = names.filter(n => AGENT_PATTERNS.test(n));
+    for (const n of discovered) {
+      agentCtrl.getOrCreate(n, 'pedestrian', null);
+    }
+    res.json({ discovered, total: names.length });
+  } catch(e) {
+    res.status(503).json({ error: e.message });
+  }
 });
 
 // Metrics REST endpoint (also included in SSE)
