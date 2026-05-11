@@ -267,6 +267,214 @@ const ICONS = {
   maximize: (s) => <SvgIcon size={s}><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/></SvgIcon>,
 };
 
+// ─── Shared UI Primitives ─────────────────────────────────────────────────────
+// All themed, no hardcoded colors. Use these instead of inline styles.
+
+// Badge / label chip
+const BADGE_VARIANTS = {
+  blue:   { background: "var(--blue-soft)",        color: "var(--blue)",   border: "1px solid rgba(76,141,255,0.3)" },
+  green:  { background: "var(--green-soft)",        color: "var(--green)",  border: "1px solid rgba(53,208,127,0.3)" },
+  orange: { background: "var(--orange-soft)",       color: "var(--orange)", border: "1px solid rgba(255,157,66,0.3)"  },
+  red:    { background: "rgba(255,95,99,0.12)",     color: "var(--red)",    border: "1px solid rgba(255,95,99,0.3)"   },
+  muted:  { background: "var(--panel-2)",           color: "var(--ink-3)",  border: "1px solid var(--line)"           },
+  violet: { background: "var(--violet-soft)",       color: "var(--violet)", border: "1px solid rgba(165,110,255,0.3)"},
+};
+
+function Badge({ variant = "muted", children, style, dot }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      padding: "2px 8px", borderRadius: 6,
+      fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+      ...BADGE_VARIANTS[variant], ...style,
+    }}>
+      {dot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor", flexShrink: 0 }} />}
+      {children}
+    </span>
+  );
+}
+
+// Maps skill.source or tool status to the right Badge variant
+function SourceBadge({ source, style }) {
+  const map = {
+    builtin: ["muted",  "builtin"],
+    custom:  ["blue",   "custom"],
+    learned: ["blue",   "learned"],
+  };
+  const [v, label] = map[source] || ["muted", source];
+  return <Badge variant={v} style={style}>{label}</Badge>;
+}
+
+function StatusBadge({ enabled, readOnly, style }) {
+  if (readOnly) return <Badge variant="muted" style={style}>Static MCP</Badge>;
+  return <Badge variant={enabled ? "green" : "muted"} style={style}>{enabled ? "Enabled" : "Disabled"}</Badge>;
+}
+
+// Action button with consistent variants
+const BTN_VARIANTS = {
+  primary: { background: "var(--blue)",             color: "#fff",           border: "1px solid var(--blue)"              },
+  success: { background: "var(--green)",            color: "#fff",           border: "1px solid var(--green)"             },
+  danger:  { background: "rgba(255,95,99,0.1)",     color: "var(--red)",     border: "1px solid rgba(255,95,99,0.3)"     },
+  enable:  { background: "var(--blue-soft)",        color: "var(--blue)",    border: "1px solid rgba(76,141,255,0.4)"    },
+  disable: { background: "var(--panel-2)",          color: "var(--ink-2)",   border: "1px solid var(--line)"             },
+  cancel:  { background: "var(--panel-2)",          color: "var(--ink-2)",   border: "1px solid var(--line)"             },
+  ghost:   { background: "transparent",             color: "var(--ink-2)",   border: "1px solid var(--line)"             },
+};
+const BTN_SIZES = {
+  xs: { padding: "3px 8px",  fontSize: 11 },
+  sm: { padding: "5px 12px", fontSize: 12 },
+  md: { padding: "7px 16px", fontSize: 13 },
+};
+
+function Btn({ variant = "ghost", size = "sm", onClick, disabled, children, style, ...rest }) {
+  return (
+    <button onClick={onClick} disabled={disabled} style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      borderRadius: 6, fontFamily: "inherit", fontWeight: 600,
+      cursor: disabled ? "wait" : "pointer",
+      opacity: disabled ? 0.45 : 1,
+      transition: "opacity 0.12s",
+      ...BTN_SIZES[size], ...BTN_VARIANTS[variant], ...style,
+    }} {...rest}>
+      {children}
+    </button>
+  );
+}
+
+// Toggle enable/disable button — picks variant based on current state
+function ToggleBtn({ enabled, busy, onClick, style }) {
+  return (
+    <Btn variant={enabled ? "disable" : "enable"} disabled={busy} onClick={onClick} style={style}>
+      {busy ? "Working…" : enabled ? "Disable" : "Enable"}
+    </Btn>
+  );
+}
+
+// Colored tag chip based on TAG_COLORS
+function TagChip({ tag }) {
+  const color = TAG_COLORS[tag];
+  return (
+    <span style={{
+      fontSize: 11, padding: "2px 6px", borderRadius: 4,
+      background: color ? color + "33" : "var(--panel-2)",
+      color: color || "var(--ink-3)",
+      border: `1px solid ${color ? color + "44" : "var(--line)"}`,
+    }}>
+      {tag}
+    </span>
+  );
+}
+
+// Modal overlay + panel
+function ModalOverlay({ onClose, children, maxWidth = 750, maxHeight = "85vh" }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 9999, backdropFilter: "blur(3px)",
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: "90%", maxWidth, maxHeight,
+        background: "var(--panel)", border: "1px solid var(--line)",
+        borderRadius: 10, display: "flex", flexDirection: "column",
+        overflow: "hidden", boxShadow: "var(--shadow-pop)",
+      }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ModalHeader({ title, subtitle, onClose, children }) {
+  return (
+    <div style={{
+      padding: "14px 20px", borderBottom: "1px solid var(--line)",
+      display: "flex", alignItems: "center", gap: 10,
+      background: "var(--panel-3)", flexShrink: 0,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {title && <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>}
+        {subtitle && <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 3 }}>{subtitle}</div>}
+      </div>
+      {children}
+      {onClose && (
+        <button onClick={onClose} style={{
+          width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+          borderRadius: 6, border: "none", background: "transparent",
+          color: "var(--ink-3)", cursor: "pointer", flexShrink: 0,
+        }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--bg-hover)"}
+          onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+        >
+          {ICONS.close(14)}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ModalFooter({ children }) {
+  return (
+    <div style={{
+      padding: "12px 20px", borderTop: "1px solid var(--line)",
+      display: "flex", gap: 8, justifyContent: "flex-end",
+      background: "var(--panel-3)", flexShrink: 0,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// Page-level header bar (Gallery, Skills, Tools, Leaderboard)
+function PageHeader({ icon, title, subtitle, action }) {
+  return (
+    <div style={{
+      padding: "14px 24px", borderBottom: "1px solid var(--line)",
+      display: "flex", alignItems: "center", gap: 12, flexShrink: 0,
+      background: "var(--panel)",
+    }}>
+      {icon && (
+        <span style={{ display: "inline-flex", alignItems: "center", color: "var(--ink-2)", flexShrink: 0 }}>
+          {icon}
+        </span>
+      )}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)" }}>{title}</div>
+        {subtitle && <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>{subtitle}</div>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+// Section eyebrow heading
+function Eyebrow({ children, style }) {
+  return (
+    <div style={{
+      fontSize: 11, fontWeight: 700, letterSpacing: "0.07em",
+      textTransform: "uppercase", color: "var(--ink-2)", ...style,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// Themed form input/textarea wrapper
+function Field({ label, children }) {
+  return (
+    <div>
+      {label && <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>{label}</label>}
+      {children}
+    </div>
+  );
+}
+const inputSx = {
+  width: "100%", padding: "7px 12px", fontSize: 13, fontFamily: "inherit",
+  background: "var(--bg-tertiary)", border: "1px solid var(--line)",
+  borderRadius: 6, color: "var(--ink)", outline: "none",
+  cursor: "text", boxSizing: "border-box",
+};
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
@@ -6710,113 +6918,35 @@ function GalleryPage() {
 // ─── SkillsPage (full page) ──────────────────────────────────────────────────
 
 function SkillPageCard({ skill, onClick, isNew = false }) {
-  const desc =
-    skill.description.length > 120
-      ? skill.description.slice(0, 120) + "..."
-      : skill.description;
-
+  const desc = skill.description.length > 120
+    ? skill.description.slice(0, 120) + "…" : skill.description;
   return (
-    <div
-      onClick={onClick}
-      style={{
-        padding: "14px 16px",
-        borderRadius: 10,
-        border: "1px solid var(--line)",
-        background: "var(--panel)",
-        cursor: "pointer",
-        transition: "border-color 0.15s, transform 0.15s",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
+    <div onClick={onClick} style={{
+        padding: "14px 16px", borderRadius: 10, border: "1px solid var(--line)",
+        background: "var(--panel)", cursor: "pointer",
+        transition: "border-color 0.15s, box-shadow 0.15s",
+        display: "flex", flexDirection: "column", gap: 8,
       }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "var(--blue)";
-        e.currentTarget.style.transform = "translateY(-2px)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "var(--line)";
-        e.currentTarget.style.transform = "translateY(0)";
-      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--blue)"; e.currentTarget.style.boxShadow = "0 2px 12px rgba(76,141,255,0.1)"; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--line)";  e.currentTarget.style.boxShadow = "none"; }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {skill.name}
-        </div>
-        {isNew && (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontSize: 12,
-              padding: "2px 7px",
-              borderRadius: 10,
-              background: "rgba(255,95,99,0.13)",
-              color: "var(--red)",
-              border: "1px solid rgba(255,95,99,0.26)",
-              flexShrink: 0,
-              fontWeight: 700,
-              letterSpacing: 0.2,
-            }}
-          >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: "var(--red)",
-                boxShadow: "0 0 6px #dc2626",
-              }}
-            />
-            NEW
-          </span>
-        )}
-        <span
-          style={{
-            fontSize: 12,
-            padding: "2px 7px",
-            borderRadius: 10,
-            background: skill.source === "custom" ? "var(--blue-soft)" : "var(--panel-2)",
-            color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
-            border: `1px solid ${skill.source === "custom" ? "#3b82f644" : "var(--line)"}`,
-            flexShrink: 0,
-          }}
-        >
-          {skill.source}
         </span>
+        {isNew && <Badge variant="red" dot>NEW</Badge>}
+        <SourceBadge source={skill.source} />
       </div>
       <div style={{ fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>{desc}</div>
       {skill.tags.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-          {skill.tags.map((tag) => (
-            <span
-              key={tag}
-              style={{
-                fontSize: 12,
-                padding: "2px 6px",
-                borderRadius: 4,
-                background: (TAG_COLORS[tag] || "var(--line)") + "33",
-                color: TAG_COLORS[tag] || "#64748b",
-                border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
-              }}
-            >
-              {tag}
-            </span>
-          ))}
+          {skill.tags.map(tag => <TagChip key={tag} tag={tag} />)}
         </div>
       )}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          marginTop: "auto",
-          paddingTop: 4,
-          borderTop: "1px solid var(--line)",
-          fontSize: 12,
-          color: "var(--ink-2)",
-        }}
-      >
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8, marginTop: "auto",
+        paddingTop: 4, borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--ink-3)",
+      }}>
         <span>v{skill.version}</span>
         <span style={{ marginLeft: "auto" }}>{skill.author}</span>
       </div>
@@ -6826,160 +6956,48 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
 
 function SkillPageDetailModal({ skill, onClose, onDelete }) {
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.8)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 9999,
-      }}
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "90%",
-          maxWidth: 750,
-          maxHeight: "85vh",
-          background: "var(--bg)",
-          border: "1px solid var(--line)",
-          borderRadius: 12,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
+    <ModalOverlay onClose={onClose}>
+      <ModalHeader
+        title={skill.name}
+        subtitle={<>v{skill.version} by {skill.author} <SourceBadge source={skill.source} style={{ marginLeft: 6 }} /></>}
+        onClose={onClose}
       >
-        <div
-          style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid var(--line)",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: "var(--ink)" }}>{skill.name}</div>
-            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
-              v{skill.version} by {skill.author}
-              <span
-                style={{
-                  marginLeft: 8,
-                  padding: "2px 7px",
-                  borderRadius: 10,
-                  background: skill.source === "custom" ? "var(--blue-soft)" : "#e6e9ef",
-                  color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
-                  fontSize: 12,
-                }}
-              >
-                {skill.source}
+        {onDelete && <Btn variant="danger" onClick={onDelete}>Delete</Btn>}
+      </ModalHeader>
+
+      <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)" }}>
+        <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.6 }}>{skill.description}</div>
+        {skill.tags.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 10 }}>
+            {skill.tags.map(tag => <TagChip key={tag} tag={tag} />)}
+          </div>
+        )}
+        {skill.dependencies.length > 0 && (
+          <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 10 }}>
+            <span style={{ fontWeight: 600 }}>Dependencies: </span>
+            {skill.dependencies.map((dep, i) => (
+              <span key={dep}>
+                <span style={{ color: "var(--blue)" }}>{dep}</span>
+                {i < skill.dependencies.length - 1 ? ", " : ""}
               </span>
-            </div>
+            ))}
           </div>
-          {onDelete && (
-            <button
-              onClick={onDelete}
-              style={{
-                padding: "5px 12px",
-                fontSize: 12,
-                background: "rgba(255,95,99,0.1)",
-                border: "1px solid rgba(255,95,99,0.3)",
-                borderRadius: 6,
-                color: "var(--red)",
-                cursor: "pointer",
-              }}
-            >
-              Delete
-            </button>
-          )}
-          <button
-            onClick={onClose}
-            style={{
-              padding: "4px 10px",
-              fontSize: 16,
-              background: "transparent",
-              border: "none",
-              color: "var(--ink-3)",
-              cursor: "pointer",
-            }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)" }}>
-          <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.5 }}>
-            {skill.description}
-          </div>
-          {skill.tags.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10 }}>
-              {skill.tags.map((tag) => (
-                <span
-                  key={tag}
-                  style={{
-                    fontSize: 12,
-                    padding: "2px 7px",
-                    borderRadius: 4,
-                    background: (TAG_COLORS[tag] || "var(--line)") + "33",
-                    color: TAG_COLORS[tag] || "#64748b",
-                    border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
-                  }}
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
-          {skill.dependencies.length > 0 && (
-            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 10 }}>
-              <span style={{ fontWeight: 600 }}>Dependencies:</span>{" "}
-              {skill.dependencies.map((dep, i) => (
-                <span key={dep}>
-                  <span style={{ color: "var(--blue)" }}>{dep}</span>
-                  {i < skill.dependencies.length - 1 ? ", " : ""}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div style={{ flex: 1, overflow: "auto", padding: "14px 20px" }}>
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--ink-2)",
-              fontWeight: 600,
-              marginBottom: 8,
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-            }}
-          >
-            Skill Content
-          </div>
-          <pre
-            style={{
-              fontSize: 12,
-              color: "var(--ink)",
-              lineHeight: 1.6,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              fontFamily:
-                "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace",
-              margin: 0,
-              background: "var(--panel)",
-              border: "1px solid var(--line)",
-              borderRadius: 8,
-              padding: 16,
-            }}
-          >
-            {skill.content}
-          </pre>
-        </div>
+        )}
       </div>
-    </div>
+
+      <div style={{ flex: 1, overflow: "auto", padding: "14px 20px" }}>
+        <Eyebrow style={{ marginBottom: 8 }}>Skill Content</Eyebrow>
+        <pre style={{
+          fontSize: 12, color: "var(--ink-2)", lineHeight: 1.6,
+          whiteSpace: "pre-wrap", wordBreak: "break-word",
+          fontFamily: "ui-monospace, 'Cascadia Code', Menlo, monospace",
+          margin: 0, background: "var(--bg-tertiary)",
+          border: "1px solid var(--line)", borderRadius: 8, padding: 16,
+        }}>
+          {skill.content}
+        </pre>
+      </div>
+    </ModalOverlay>
   );
 }
 
@@ -6988,175 +7006,50 @@ function SkillPageCreateModal({ onClose, onCreated }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
-  const [content, setContent] = useState(`# My Custom Skill
-
-## Overview
-Describe what this skill does.
-
-## Instructions
-Provide detailed instructions for the AI agent.
-`);
+  const [content, setContent] = useState("# My Custom Skill\n\n## Overview\nDescribe what this skill does.\n\n## Instructions\nProvide detailed instructions for the AI agent.\n");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
-    if (!id.trim() || !name.trim() || !content.trim()) {
-      setError("ID, name, and content are required");
-      return;
-    }
-    if (!/^[a-z0-9_]+$/.test(id)) {
-      setError("ID must be lowercase letters, numbers, and underscores only");
-      return;
-    }
+    if (!id.trim() || !name.trim() || !content.trim()) { setError("ID, name, and content are required"); return; }
+    if (!/^[a-z0-9_]+$/.test(id)) { setError("ID must be lowercase letters, numbers, and underscores only"); return; }
     setSaving(true);
     try {
-      await createSkill({
-        id: id.trim(),
-        name: name.trim(),
-        description: description.trim(),
-        tags: tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-        content: content.trim(),
-      });
+      await createSkill({ id: id.trim(), name: name.trim(), description: description.trim(),
+        tags: tags.split(",").map(t => t.trim()).filter(Boolean), content: content.trim() });
       onCreated();
-    } catch {
-      setError("Failed to save skill");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const inputStyle = {
-    width: "100%",
-    padding: "7px 12px",
-    fontSize: 13,
-    background: "var(--panel)",
-    border: "1px solid var(--line)",
-    borderRadius: 6,
-    color: "var(--ink)",
-    outline: "none",
-    boxSizing: "border-box",
+    } catch { setError("Failed to save skill"); } finally { setSaving(false); }
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.8)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 9999,
-      }}
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "90%",
-          maxWidth: 650,
-          maxHeight: "85vh",
-          background: "var(--bg)",
-          border: "1px solid var(--line)",
-          borderRadius: 12,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid var(--line)",
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          <span style={{ fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>
-            Create Custom Skill
-          </span>
-          <button
-            onClick={onClose}
-            style={{
-              marginLeft: "auto",
-              padding: "4px 10px",
-              fontSize: 16,
-              background: "transparent",
-              border: "none",
-              color: "var(--ink-3)",
-              cursor: "pointer",
-            }}
-          >
-            ✕
-          </button>
-        </div>
+    <ModalOverlay onClose={onClose} maxWidth={650}>
+      <ModalHeader title="Create Custom Skill" onClose={onClose} />
 
-        <div
-          style={{
-            flex: 1,
-            overflow: "auto",
-            padding: "14px 20px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 14,
-          }}
-        >
-          <div>
-            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
-              Skill ID (lowercase, no spaces)
-            </label>
-            <input value={id} onChange={(e) => setId(e.target.value)} placeholder="my_custom_skill" style={inputStyle} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Custom Skill" style={inputStyle} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>Description (short summary)</label>
-            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this skill teaches the agent to do" style={inputStyle} />
-          </div>
-          <div>
-            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>Tags (comma-separated)</label>
-            <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="buildings, layout, custom" style={inputStyle} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
-              Content (Markdown -- instructions for the AI agent)
-            </label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              style={{
-                ...inputStyle,
-                height: 220,
-                resize: "vertical",
-                fontFamily: "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace",
-                lineHeight: 1.5,
-              }}
-            />
-          </div>
-          {error && <div style={{ fontSize: 12, color: "var(--red)", padding: "2px 0" }}>{error}</div>}
-        </div>
-
-        <div
-          style={{
-            padding: "12px 20px",
-            borderTop: "1px solid var(--line)",
-            display: "flex",
-            gap: 8,
-            justifyContent: "flex-end",
-          }}
-        >
-          <button onClick={onClose} className="act-btn act-btn-cancel">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="act-btn act-btn-success">
-            {saving ? "Saving..." : "Create Skill"}
-          </button>
-        </div>
+      <div style={{ flex: 1, overflow: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+        <Field label="Skill ID (lowercase, no spaces)">
+          <input value={id} onChange={e => setId(e.target.value)} placeholder="my_custom_skill" style={inputSx} />
+        </Field>
+        <Field label="Name">
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="My Custom Skill" style={inputSx} />
+        </Field>
+        <Field label="Description (short summary)">
+          <input value={description} onChange={e => setDescription(e.target.value)} placeholder="What this skill teaches the agent to do" style={inputSx} />
+        </Field>
+        <Field label="Tags (comma-separated)">
+          <input value={tags} onChange={e => setTags(e.target.value)} placeholder="buildings, layout, custom" style={inputSx} />
+        </Field>
+        <Field label="Content (Markdown — instructions for the AI agent)" style={{ flex: 1 }}>
+          <textarea value={content} onChange={e => setContent(e.target.value)}
+            style={{ ...inputSx, height: 200, resize: "vertical", fontFamily: "ui-monospace, Menlo, monospace", lineHeight: 1.5 }} />
+        </Field>
+        {error && <div style={{ fontSize: 12, color: "var(--red)" }}>{error}</div>}
       </div>
-    </div>
+
+      <ModalFooter>
+        <Btn variant="cancel" onClick={onClose}>Cancel</Btn>
+        <Btn variant="success" disabled={saving} onClick={handleSave}>{saving ? "Saving…" : "Create Skill"}</Btn>
+      </ModalFooter>
+    </ModalOverlay>
   );
 }
 
@@ -7293,42 +7186,12 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
         background: "var(--bg)",
       }}
     >
-      <div
-        style={{
-          padding: "16px 24px",
-          borderBottom: "1px solid var(--line)",
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
-        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.book(24)}</span>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Skills</div>
-          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-            Browse, create, and manage skills that teach the AI agent new capabilities
-          </div>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={{
-            marginLeft: "auto",
-            padding: "6px 14px",
-            fontSize: 12,
-            background: "var(--green)",
-            border: "1px solid var(--green)",
-            borderRadius: 6,
-            color: "#fff",
-            cursor: "pointer",
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          + Create Skill
-        </button>
-      </div>
+      <PageHeader
+        icon={ICONS.book(22)}
+        title="Skills"
+        subtitle="Browse, create, and manage skills that teach the AI agent new capabilities"
+        action={<Btn variant="success" size="md" onClick={() => setShowCreate(true)}>+ Create Skill</Btn>}
+      />
 
       <div
         style={{
@@ -7339,38 +7202,12 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
           alignItems: "center",
         }}
       >
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search skills by name, description, or tags..."
-          style={{
-            flex: 1,
-            padding: "7px 12px",
-            fontSize: 13,
-            background: "var(--panel)",
-            border: "1px solid var(--line)",
-            borderRadius: 6,
-            color: "var(--ink)",
-            outline: "none",
-          }}
-        />
+        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search skills…" style={{ ...inputSx, flex: 1 }} />
         <div style={{ display: "flex", gap: 4 }}>
-          {["all", "builtin", "custom"].map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              style={{
-                padding: "5px 12px",
-                fontSize: 12,
-                borderRadius: 6,
-                border: `1px solid ${filter === f ? "var(--blue)" : "var(--line)"}`,
-                background: filter === f ? "var(--blue-soft)" : "transparent",
-                color: filter === f ? "var(--blue)" : "var(--ink-3)",
-                cursor: "pointer",
-                textTransform: "capitalize",
-              }}
-            >
+          {["all", "builtin", "custom"].map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`filter-pill${filter === f ? " active" : ""}`}>
               {f}
             </button>
           ))}
@@ -7442,144 +7279,40 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
 
 
 function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = false }) {
-  const successRate =
-    tool.metrics?.usageCount > 0
-      ? Math.round((tool.metrics.successCount / tool.metrics.usageCount) * 100)
-      : null;
+  const successRate = tool.metrics?.usageCount > 0
+    ? Math.round((tool.metrics.successCount / tool.metrics.usageCount) * 100) : null;
 
   return (
-    <div
-      onClick={onClick}
-      style={{
-        padding: "14px 16px",
-        borderRadius: 10,
-        border: "1px solid var(--line)",
-        background: "var(--panel)",
-        cursor: "pointer",
-        transition: "border-color 0.15s, transform 0.15s",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
+    <div onClick={onClick} style={{
+        padding: "14px 16px", borderRadius: 10, border: "1px solid var(--line)",
+        background: "var(--panel)", cursor: "pointer",
+        transition: "border-color 0.15s, box-shadow 0.15s",
+        display: "flex", flexDirection: "column", gap: 8,
       }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "var(--blue)";
-        e.currentTarget.style.transform = "translateY(-2px)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "var(--line)";
-        e.currentTarget.style.transform = "translateY(0)";
-      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--blue)"; e.currentTarget.style.boxShadow = "0 2px 12px rgba(76,141,255,0.1)"; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--line)";  e.currentTarget.style.boxShadow = "none"; }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", flex: 1 }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {tool.name || tool.id}
-        </div>
-        {isNew && (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 5,
-              fontSize: 12,
-              padding: "2px 7px",
-              borderRadius: 10,
-              background: "rgba(255,95,99,0.13)",
-              color: "var(--red)",
-              border: "1px solid rgba(255,95,99,0.26)",
-              flexShrink: 0,
-              fontWeight: 700,
-              letterSpacing: 0.2,
-            }}
-          >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: "var(--red)",
-                boxShadow: "0 0 6px #dc2626",
-              }}
-            />
-            NEW
-          </span>
-        )}
-        <span
-          style={{
-            fontSize: 12,
-            padding: "2px 7px",
-            borderRadius: 10,
-            background: tool.enabled ? "var(--green-soft)" : "transparent",
-            color: tool.enabled ? "#16a34a" : "#64748b",
-            border: "1px solid var(--line)",
-            flexShrink: 0,
-          }}
-        >
-          {tool.enabled ? "Enabled" : "Disabled"}
         </span>
-      </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 4,
-          marginTop: 4,
-          paddingTop: 4,
-          borderTop: "1px solid var(--line)",
-          fontSize: 12,
-          color: "var(--ink-3)",
-        }}
-      >
-        <div>
-          Template: <span style={{ color: "var(--ink)" }}>{tool.template || "–"}</span>
-        </div>
-        <div>
-          Primitive: <span style={{ color: "var(--ink)" }}>{tool.primitive || "–"}</span>
-        </div>
-        <div>
-          Usage: <span style={{ color: "var(--ink)" }}>{tool.metrics?.usageCount || 0}</span>
-        </div>
-        <div>
-          Success: <span style={{ color: "var(--ink)" }}>{successRate == null ? "–" : `${successRate}%`}</span>
-        </div>
+        {isNew && <Badge variant="red" dot>NEW</Badge>}
+        <StatusBadge enabled={tool.enabled} />
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: "auto", paddingTop: 6 }}>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleEnabled();
-          }}
-          disabled={busy}
-          style={{
-            padding: "5px 10px",
-            fontSize: 12,
-            borderRadius: 6,
-            border: "1px solid var(--line)",
-            background: tool.enabled ? "#e6e9ef" : "var(--blue-soft)",
-            color: tool.enabled ? "var(--ink-2)" : "var(--blue)",
-            cursor: busy ? "wait" : "pointer",
-          }}
-        >
-          {busy ? "Working…" : tool.enabled ? "Disable" : "Enable"}
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          disabled={busy}
-          style={{
-            padding: "5px 10px",
-            fontSize: 12,
-            borderRadius: 6,
-            border: "1px solid rgba(255,95,99,0.3)",
-            background: "rgba(255,95,99,0.1)",
-            color: "var(--red)",
-            cursor: busy ? "wait" : "pointer",
-          }}
-        >
-          Delete
-        </button>
+      {/* Metrics grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 3, paddingTop: 4, borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--ink-3)" }}>
+        <div>Template: <span style={{ color: "var(--ink)" }}>{tool.template || "–"}</span></div>
+        <div>Primitive: <span style={{ color: "var(--ink)" }}>{tool.primitive || "–"}</span></div>
+        <div>Usage: <span style={{ color: "var(--ink)" }}>{tool.metrics?.usageCount || 0}</span></div>
+        <div>Success: <span style={{ color: "var(--ink)" }}>{successRate == null ? "–" : `${successRate}%`}</span></div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: 6, marginTop: "auto" }}>
+        <ToggleBtn enabled={tool.enabled} busy={busy} onClick={e => { e.stopPropagation(); onToggleEnabled(); }} />
+        <Btn variant="danger" disabled={busy} onClick={e => { e.stopPropagation(); onDelete(); }}>Delete</Btn>
       </div>
     </div>
   );
