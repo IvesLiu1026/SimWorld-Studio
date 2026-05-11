@@ -810,7 +810,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
         {paramSummary && (
           <span
             style={{
-              color: "#475569",
+              color: "var(--ink-2)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -837,7 +837,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
             <div style={{ marginBottom: 6 }}>
               <div
                 style={{
-                  color: "#475569",
+                  color: "var(--ink-2)",
                   fontSize: 12,
                   marginBottom: 3,
                   textTransform: "uppercase",
@@ -967,7 +967,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
           style={{
             padding: "2px 6px",
             fontSize: 12,
-            background: "#e6e9ef",
+            background: "var(--panel-2)",
             border: "1px solid var(--line)",
             borderRadius: 4,
             color: "var(--ink-3)",
@@ -982,7 +982,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
             fontSize: 12,
             padding: "1px 5px",
             borderRadius: 4,
-            background: skill.source === "custom" ? "var(--blue-soft)" : "#e6e9ef",
+            background: skill.source === "custom" ? "var(--blue-soft)" : "var(--panel-2)",
             color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
           }}
         >
@@ -1034,7 +1034,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
         <div
           style={{
             fontSize: 12,
-            color: "#475569",
+            color: "var(--ink-2)",
             marginTop: 4,
             marginLeft: 20,
           }}
@@ -1112,8 +1112,8 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
               style={{
                 padding: "4px 10px",
                 fontSize: 12,
-                background: "#b91c1c22",
-                border: "1px solid #b91c1c66",
+                background: "rgba(255,95,99,0.1)",
+                border: "1px solid rgba(255,95,99,0.3)",
                 borderRadius: 6,
                 color: "var(--red)",
                 cursor: "pointer",
@@ -1175,7 +1175,7 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
           <pre
             style={{
               fontSize: 12,
-              color: "#1e293b",
+              color: "var(--ink)",
               lineHeight: 1.6,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
@@ -1398,10 +1398,10 @@ Provide detailed instructions for the AI agent.
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#e6e9ef",
+              background: "var(--panel-2)",
               border: "1px solid var(--line)",
               borderRadius: 6,
-              color: "#1e293b",
+              color: "var(--ink)",
               cursor: "pointer",
             }}
           >
@@ -1554,7 +1554,7 @@ function SkillsPanel({
             />
           </button>
         </div>
-        <span style={{ fontSize: 12, color: "#475569", marginLeft: 6 }}>
+        <span style={{ fontSize: 12, color: "var(--ink-2)", marginLeft: 6 }}>
           {skills.length} available
         </span>
       </div>
@@ -1591,7 +1591,7 @@ function SkillsPanel({
             <div
               style={{
                 fontSize: 12,
-                color: "#475569",
+                color: "var(--ink-2)",
                 fontWeight: 600,
                 padding: "4px 0 2px",
               }}
@@ -1614,7 +1614,7 @@ function SkillsPanel({
             <div
               style={{
                 fontSize: 12,
-                color: "#475569",
+                color: "var(--ink-2)",
                 fontWeight: 600,
                 padding: "6px 0 2px",
               }}
@@ -1747,7 +1747,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
               fontSize: 12,
               borderRadius: 4,
               border: "1px solid var(--line)",
-              background: "#e6e9ef",
+              background: "var(--panel-2)",
               color: "var(--ink-3)",
               cursor: "pointer",
             }}
@@ -1833,7 +1833,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                     position: "absolute",
                     left: 16,
                     top: -4,
-                    background: "#e6e9ef",
+                    background: "var(--panel-2)",
                     border: "1px solid var(--line)",
                     borderRadius: 4,
                     padding: "2px 6px",
@@ -1910,7 +1910,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                   >
                     {i + 1}
                   </span>
-                  <span style={{ fontSize: 12, color: "#1e293b" }}>{pt.text}</span>
+                  <span style={{ fontSize: 12, color: "var(--ink)" }}>{pt.text}</span>
                 </div>
               ))}
             </div>
@@ -2528,7 +2528,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                 <span>·</span>
                 <span style={{ color: "var(--ink-3)" }}>session: {sessionId.slice(0, 8)}</span>
                 <span>·</span>
-                <span style={{ color: "#475569" }}>turn {turnCount}</span>
+                <span style={{ color: "var(--ink-2)" }}>turn {turnCount}</span>
               </>
             )}
           </div>
@@ -2541,7 +2541,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               height: 24,
               padding: "0 10px",
               borderRadius: 7,
-              border: selfEvolutionOn ? "1px solid #fed7aa" : "1px solid #e6e9ef",
+              border: selfEvolutionOn ? "1px solid rgba(255,157,66,0.4)" : "1px solid var(--line)",
               background: selfEvolutionOn ? "#fff7ed" : "#f8fafc",
               color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)",
               cursor: selfEvolutionReady ? "pointer" : "not-allowed",
@@ -3053,7 +3053,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
         style={{
           padding: "6px 18px",
           fontSize: 13,
-          background: "#e6e9ef",
+          background: "var(--panel-2)",
           border: "1px solid var(--line)",
           borderRadius: 6,
           color: "var(--ink)",
@@ -3358,7 +3358,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
       <div style={{ fontSize: 12, lineHeight: "1.5" }}>
         {/* Thought */}
         {t && (
-          <div style={{ color: "#1e293b", whiteSpace: "pre-wrap", marginBottom: 4 }}>
+          <div style={{ color: "var(--ink)", whiteSpace: "pre-wrap", marginBottom: 4 }}>
             <span style={{ color: "var(--ink-3)", fontWeight: 600 }}>Thought: </span>{t.slice(0, 500)}
           </div>
         )}
@@ -3794,13 +3794,13 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 10 }}>
                 {camLoading ? (
                   <>
-                    <div style={{ width: 32, height: 32, borderRadius: "50%", border: "3px solid rgba(37,99,235,.2)", borderTopColor: "#2563eb", animation: "ps-spin 0.9s linear infinite" }}/>
+                    <div style={{ width: 32, height: 32, borderRadius: "50%", border: "3px solid rgba(37,99,235,.2)", borderTopColor: "var(--blue)", animation: "ps-spin 0.9s linear infinite" }}/>
                     <div style={{ color: "var(--ink-3)", fontSize: 12 }}>Focusing camera…</div>
                   </>
                 ) : (
                   <>
                     <div style={{ fontSize: 28, opacity: 0.3 }}>📷</div>
-                    <div style={{ color: "#475569", fontSize: 12 }}>Click "Capture" to take a screenshot</div>
+                    <div style={{ color: "var(--ink-2)", fontSize: 12 }}>Click "Capture" to take a screenshot</div>
                   </>
                 )}
               </div>
@@ -4271,7 +4271,7 @@ function CommHistory({ agents }) {
     return parts.map((part, i) => {
       if (part.startsWith("@")) {
         const name = part.slice(1);
-        return <span key={i} style={{ color: colors[name] || "#2563eb", fontWeight: 600 }}>{part}</span>;
+        return <span key={i} style={{ color: colors[name] || "var(--blue)", fontWeight: 600 }}>{part}</span>;
       }
       return part;
     });
@@ -4284,17 +4284,17 @@ function CommHistory({ agents }) {
       </div>
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
         {messages.length === 0 ? (
-          <div style={{ color: "#475569", fontSize: 12, textAlign: "center", marginTop: 40 }}>
+          <div style={{ color: "var(--ink-2)", fontSize: 12, textAlign: "center", marginTop: 40 }}>
             Messages between you and agents will appear here.
           </div>
         ) : messages.map((m, i) => (
           <div key={i} style={{ marginBottom: 8, fontSize: 12, lineHeight: "1.5" }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
               <span style={{ fontWeight: 700, color: colors[m.from] || "#64748b" }}>{m.from === "user" ? "You" : m.from}</span>
-              {m.to && m.to !== "all" && <span style={{ fontSize: 12, color: "var(--ink-3)" }}>to <span style={{ color: colors[m.to] || "#2563eb" }}>@{m.to}</span></span>}
-              <span style={{ fontSize: 12, color: "#475569", marginLeft: "auto" }}>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+              {m.to && m.to !== "all" && <span style={{ fontSize: 12, color: "var(--ink-3)" }}>to <span style={{ color: colors[m.to] || "var(--blue)" }}>@{m.to}</span></span>}
+              <span style={{ fontSize: 12, color: "var(--ink-2)", marginLeft: "auto" }}>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
-            <div style={{ color: "#1e293b", marginTop: 2 }}>{renderText(m.text)}</div>
+            <div style={{ color: "var(--ink)", marginTop: 2 }}>{renderText(m.text)}</div>
           </div>
         ))}
       </div>
@@ -4764,7 +4764,7 @@ function ViewportPanel({ latestScreenshot }) {
               color:"#e2e8f0",
             }}>↻ Refresh</button>
             <label style={{ display:"flex", alignItems:"center", gap:3, fontSize:12, color:"#64748b", cursor:"pointer" }}>
-              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} style={{ accentColor:"#2563eb" }}/>
+              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} style={{ accentColor:"var(--blue)" }}/>
               Auto
             </label>
             <select value={refreshInterval} onChange={e => setRefreshInterval(Number(e.target.value))} style={{
@@ -4891,7 +4891,7 @@ function AssetCard({ item, category, onInsert }) {
         transition: "border-color 0.15s",
       }}
       onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--blue)")}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#e6e9ef")}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--line)")}
     >
       <div
         style={{
@@ -4982,7 +4982,7 @@ function AssetListItem({ item, category, onInsert }) {
           <div
             style={{
               fontSize: 12,
-              color: "#475569",
+              color: "var(--ink-2)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -5337,7 +5337,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
             marginLeft: "auto",
             padding: "3px 8px",
             fontSize: 12,
-            background: "#e6e9ef",
+            background: "var(--panel-2)",
             border: "1px solid var(--line)",
             borderRadius: 4,
             color: "var(--ink-3)",
@@ -5357,7 +5357,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
             style={{
               padding: 20,
               textAlign: "center",
-              color: "#475569",
+              color: "var(--ink-2)",
               fontSize: 12,
             }}
           >
@@ -5412,7 +5412,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                   marginTop: 6,
                 }}
               >
-                <span style={{ fontSize: 12, color: "#475569" }}>
+                <span style={{ fontSize: 12, color: "var(--ink-2)" }}>
                   {new Date(scene.updatedAt).toLocaleDateString()}
                 </span>
                 <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
@@ -5488,7 +5488,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
             style={{
               fontSize: 12,
               color: "var(--ink-3)",
-              background: "#e6e9ef",
+              background: "var(--panel-2)",
               padding: "2px 8px",
               borderRadius: 4,
             }}
@@ -5497,7 +5497,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
           </span>
         )}
         {!revealed && (
-          <span style={{ fontSize: 12, color: "#475569" }}>Identity hidden</span>
+          <span style={{ fontSize: 12, color: "var(--ink-2)" }}>Identity hidden</span>
         )}
       </div>
 
@@ -5517,7 +5517,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
           />
         ) : (
-          <div style={{ color: "#475569", fontSize: 13 }}>
+          <div style={{ color: "var(--ink-2)", fontSize: 13 }}>
             {side ? "No screenshot available" : "Waiting for generation..."}
           </div>
         )}
@@ -5552,7 +5552,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
 const tieButtonStyle = {
   padding: "8px 20px",
   fontSize: 12,
-  background: "#e6e9ef",
+  background: "var(--panel-2)",
   border: "1px solid var(--line)",
   borderRadius: 6,
   color: "var(--ink-3)",
@@ -5689,7 +5689,7 @@ function ArenaPage() {
               borderRadius: 4,
               border: "1px solid var(--line)",
               background: showAgents ? "#eff4ff" : "#e6e9ef",
-              color: showAgents ? "#2563eb" : "#64748b",
+              color: showAgents ? "var(--blue)" : "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -5747,7 +5747,7 @@ function ArenaPage() {
                     {agent.model ? ` (${agent.model})` : ""}
                   </div>
                   {agent.description && (
-                    <div style={{ fontSize: 12, color: "#475569", marginTop: 2 }}>
+                    <div style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 2 }}>
                       {agent.description}
                     </div>
                   )}
@@ -5820,7 +5820,7 @@ function ArenaPage() {
                 Start Battle
               </button>
             </div>
-            <div style={{ fontSize: 12, color: "#475569", marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 12 }}>
               {agents.filter((a) => a.enabled).length} agent
               {agents.filter((a) => a.enabled).length !== 1 ? "s" : ""} enabled
             </div>
@@ -5861,7 +5861,7 @@ function ArenaPage() {
                 marginTop: 24,
                 width: 200,
                 height: 4,
-                background: "#e6e9ef",
+                background: "var(--panel-2)",
                 borderRadius: 2,
                 overflow: "hidden",
                 margin: "24px auto 0",
@@ -5999,10 +5999,10 @@ function ArenaPage() {
                     style={{
                       padding: "8px 20px",
                       fontSize: 13,
-                      background: shared ? "#e6e9ef" : "#15803d",
-                      border: `1px solid ${shared ? "#e2e8f0" : "#15803d"}`,
+                      background: shared ? "var(--panel-2)" : "var(--green)",
+                      border: `1px solid ${shared ? "var(--line)" : "var(--green)"}`,
                       borderRadius: 6,
-                      color: shared ? "#64748b" : "#fff",
+                      color: shared ? "var(--ink-3)" : "#fff",
                       cursor: shared ? "default" : "pointer",
                     }}
                   >
@@ -6057,7 +6057,7 @@ function LeaderboardPage() {
           </div>
         </div>
         {entries.length > 0 && (
-          <div style={{ marginLeft: "auto", fontSize: 12, color: "#475569" }}>
+          <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-2)" }}>
             {entries.reduce((sum, e) => sum + e.numBattles, 0)} total battles
           </div>
         )}
@@ -6092,7 +6092,7 @@ function LeaderboardPage() {
                 gridTemplateColumns: "40px 1fr 100px 80px 80px 80px 80px",
                 padding: "8px 16px",
                 fontSize: 12,
-                color: "#475569",
+                color: "var(--ink-2)",
                 fontWeight: 600,
                 borderBottom: "1px solid var(--line)",
                 textTransform: "uppercase",
@@ -6258,7 +6258,7 @@ function GalleryCard({ scene, onClick }) {
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#e6e9ef";
+        e.currentTarget.style.borderColor = "var(--line)";
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
@@ -6276,7 +6276,7 @@ function GalleryCard({ scene, onClick }) {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#475569",
+              color: "var(--ink-2)",
               fontSize: 13,
             }}
           >
@@ -6325,14 +6325,14 @@ function GalleryCard({ scene, onClick }) {
                 fontSize: 12,
                 padding: "1px 5px",
                 borderRadius: 4,
-                background: "#e6e9ef",
+                background: "var(--panel-2)",
                 color: "var(--ink-3)",
               }}
             >
               {tag}
             </span>
           ))}
-          <span style={{ marginLeft: "auto", fontSize: 12, color: "#475569" }}>
+          <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-2)" }}>
             {new Date(scene.created_at).toLocaleDateString()}
           </span>
         </div>
@@ -6394,10 +6394,10 @@ function GalleryDetailModal({ scene, onClose }) {
               style={{
                 padding: "4px 10px",
                 fontSize: 12,
-                background: "#e6e9ef",
+                background: "var(--panel-2)",
                 border: "1px solid var(--line)",
                 borderRadius: 6,
-                color: "#1e293b",
+                color: "var(--ink)",
                 cursor: "pointer",
               }}
             >
@@ -6435,7 +6435,7 @@ function GalleryDetailModal({ scene, onClose }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                color: "#475569",
+                color: "var(--ink-2)",
               }}
             >
               No screenshots
@@ -6461,7 +6461,7 @@ function GalleryDetailModal({ scene, onClose }) {
                     height: 8,
                     borderRadius: "50%",
                     border: "none",
-                    background: i === currentImg ? "#2563eb" : "#94a3b8",
+                    background: i === currentImg ? "var(--blue)" : "var(--ink-3)",
                     cursor: "pointer",
                   }}
                 />
@@ -6495,7 +6495,7 @@ function GalleryDetailModal({ scene, onClose }) {
                   fontSize: 12,
                   padding: "2px 7px",
                   borderRadius: 4,
-                  background: "#e6e9ef",
+                  background: "var(--panel-2)",
                   color: "var(--ink-3)",
                 }}
               >
@@ -6518,7 +6518,7 @@ function GalleryDetailModal({ scene, onClose }) {
               <pre
                 style={{
                   fontSize: 12,
-                  color: "#1e293b",
+                  color: "var(--ink)",
                   background: "var(--panel)",
                   border: "1px solid var(--line)",
                   borderRadius: 6,
@@ -6613,7 +6613,7 @@ function GalleryPage() {
             <option value="newest">Newest first</option>
             <option value="oldest">Oldest first</option>
           </select>
-          <span style={{ fontSize: 12, color: "#475569" }}>
+          <span style={{ fontSize: 12, color: "var(--ink-2)" }}>
             {filtered.length} scene{filtered.length !== 1 ? "s" : ""}
           </span>
         </div>
@@ -6631,16 +6631,16 @@ function GalleryPage() {
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 12, color: "#475569", marginRight: 4 }}>Tags:</span>
+          <span style={{ fontSize: 12, color: "var(--ink-2)", marginRight: 4 }}>Tags:</span>
           <button
             onClick={() => setActiveTag(null)}
             style={{
               fontSize: 12,
               padding: "2px 8px",
               borderRadius: 10,
-              border: `1px solid ${activeTag ? "#e2e8f0" : "#2563eb"}`,
+              border: `1px solid ${activeTag ? "var(--line)" : "var(--blue)"}`,
               background: activeTag ? "transparent" : "var(--blue-soft)",
-              color: activeTag ? "#64748b" : "#2563eb",
+              color: activeTag ? "var(--ink-3)" : "var(--blue)",
               cursor: "pointer",
             }}
           >
@@ -6654,9 +6654,9 @@ function GalleryPage() {
                 fontSize: 12,
                 padding: "2px 8px",
                 borderRadius: 10,
-                border: `1px solid ${activeTag === tag ? "#2563eb" : "var(--line)"}`,
+                border: `1px solid ${activeTag === tag ? "var(--blue)" : "var(--line)"}`,
                 background: activeTag === tag ? "var(--blue-soft)" : "transparent",
-                color: activeTag === tag ? "#2563eb" : "#64748b",
+                color: activeTag === tag ? "var(--blue)" : "var(--ink-3)",
                 cursor: "pointer",
               }}
             >
@@ -6734,7 +6734,7 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#e6e9ef";
+        e.currentTarget.style.borderColor = "var(--line)";
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
@@ -6776,7 +6776,7 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
             fontSize: 12,
             padding: "2px 7px",
             borderRadius: 10,
-            background: skill.source === "custom" ? "var(--blue-soft)" : "#e6e9ef",
+            background: skill.source === "custom" ? "var(--blue-soft)" : "var(--panel-2)",
             color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
             border: `1px solid ${skill.source === "custom" ? "#3b82f644" : "var(--line)"}`,
             flexShrink: 0,
@@ -6814,7 +6814,7 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
           paddingTop: 4,
           borderTop: "1px solid var(--line)",
           fontSize: 12,
-          color: "#475569",
+          color: "var(--ink-2)",
         }}
       >
         <span>v{skill.version}</span>
@@ -6885,8 +6885,8 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
               style={{
                 padding: "5px 12px",
                 fontSize: 12,
-                background: "#b91c1c22",
-                border: "1px solid #b91c1c66",
+                background: "rgba(255,95,99,0.1)",
+                border: "1px solid rgba(255,95,99,0.3)",
                 borderRadius: 6,
                 color: "var(--red)",
                 cursor: "pointer",
@@ -6911,7 +6911,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
         </div>
 
         <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)" }}>
-          <div style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.5 }}>
             {skill.description}
           </div>
           {skill.tags.length > 0 && (
@@ -6950,7 +6950,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           <div
             style={{
               fontSize: 12,
-              color: "#475569",
+              color: "var(--ink-2)",
               fontWeight: 600,
               marginBottom: 8,
               textTransform: "uppercase",
@@ -6962,7 +6962,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           <pre
             style={{
               fontSize: 12,
-              color: "#1e293b",
+              color: "var(--ink)",
               lineHeight: 1.6,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
@@ -7150,35 +7150,8 @@ Provide detailed instructions for the AI agent.
             justifyContent: "flex-end",
           }}
         >
-          <button
-            onClick={onClose}
-            style={{
-              padding: "6px 14px",
-              fontSize: 12,
-              background: "#e6e9ef",
-              border: "1px solid var(--line)",
-              borderRadius: 6,
-              color: "#1e293b",
-              cursor: "pointer",
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            style={{
-              padding: "6px 14px",
-              fontSize: 12,
-              background: "var(--green)",
-              border: "1px solid var(--green)",
-              borderRadius: 6,
-              color: "#fff",
-              cursor: saving ? "wait" : "pointer",
-              opacity: saving ? 0.7 : 1,
-              fontWeight: 600,
-            }}
-          >
+          <button onClick={onClose} className="act-btn act-btn-cancel">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="act-btn act-btn-success">
             {saving ? "Saving..." : "Create Skill"}
           </button>
         </div>
@@ -7223,10 +7196,10 @@ function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#e6e9ef",
+              background: "var(--panel-2)",
               border: "1px solid var(--line)",
               borderRadius: 6,
-              color: "#1e293b",
+              color: "var(--ink)",
               cursor: "pointer",
             }}
           >
@@ -7237,8 +7210,8 @@ function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#b91c1c",
-              border: "1px solid #b91c1c66",
+              background: "var(--red)",
+              border: "1px solid rgba(255,95,99,0.3)",
               borderRadius: 6,
               color: "#fff",
               cursor: "pointer",
@@ -7329,7 +7302,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
           gap: 12,
         }}
       >
-        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.tools(24)}</span>
+        <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.book(24)}</span>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Skills</div>
           <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
@@ -7391,9 +7364,9 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
                 padding: "5px 12px",
                 fontSize: 12,
                 borderRadius: 6,
-                border: `1px solid ${filter === f ? "#2563eb" : "var(--line)"}`,
+                border: `1px solid ${filter === f ? "var(--blue)" : "var(--line)"}`,
                 background: filter === f ? "var(--blue-soft)" : "transparent",
-                color: filter === f ? "#2563eb" : "#64748b",
+                color: filter === f ? "var(--blue)" : "var(--ink-3)",
                 cursor: "pointer",
                 textTransform: "capitalize",
               }}
@@ -7402,7 +7375,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 12, color: "#475569", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 12, color: "var(--ink-2)", whiteSpace: "nowrap" }}>
           {filtered.length} skill{filtered.length !== 1 ? "s" : ""}
         </span>
       </div>
@@ -7412,7 +7385,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
           <div style={{ textAlign: "center", padding: 60, color: "var(--ink-3)" }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.tools(40)}</div>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.book(40)}</div>
             <div style={{ fontSize: 16, color: "var(--ink)", fontWeight: 600, marginBottom: 8 }}>
               No skills found
             </div>
@@ -7493,7 +7466,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = "#e6e9ef";
+        e.currentTarget.style.borderColor = "var(--line)";
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
@@ -7557,16 +7530,16 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
         }}
       >
         <div>
-          Template: <span style={{ color: "#1e293b" }}>{tool.template || "–"}</span>
+          Template: <span style={{ color: "var(--ink)" }}>{tool.template || "–"}</span>
         </div>
         <div>
-          Primitive: <span style={{ color: "#1e293b" }}>{tool.primitive || "–"}</span>
+          Primitive: <span style={{ color: "var(--ink)" }}>{tool.primitive || "–"}</span>
         </div>
         <div>
-          Usage: <span style={{ color: "#1e293b" }}>{tool.metrics?.usageCount || 0}</span>
+          Usage: <span style={{ color: "var(--ink)" }}>{tool.metrics?.usageCount || 0}</span>
         </div>
         <div>
-          Success: <span style={{ color: "#1e293b" }}>{successRate == null ? "–" : `${successRate}%`}</span>
+          Success: <span style={{ color: "var(--ink)" }}>{successRate == null ? "–" : `${successRate}%`}</span>
         </div>
       </div>
 
@@ -7583,7 +7556,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             borderRadius: 6,
             border: "1px solid var(--line)",
             background: tool.enabled ? "#e6e9ef" : "var(--blue-soft)",
-            color: tool.enabled ? "#1e293b" : "#2563eb",
+            color: tool.enabled ? "var(--ink-2)" : "var(--blue)",
             cursor: busy ? "wait" : "pointer",
           }}
         >
@@ -7599,8 +7572,8 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             padding: "5px 10px",
             fontSize: 12,
             borderRadius: 6,
-            border: "1px solid #b91c1c66",
-            background: "#b91c1c22",
+            border: "1px solid rgba(255,95,99,0.3)",
+            background: "rgba(255,95,99,0.1)",
             color: "var(--red)",
             cursor: busy ? "wait" : "pointer",
           }}
@@ -7699,7 +7672,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                   borderRadius: 10,
                   border: "1px solid var(--line)",
                   background: readOnly ? "var(--blue-soft)" : tool.enabled ? "var(--green-soft)" : "transparent",
-                  color: readOnly ? "#2563eb" : tool.enabled ? "#16a34a" : "#64748b",
+                  color: readOnly ? "var(--blue)" : tool.enabled ? "var(--green)" : "var(--ink-3)",
                   fontSize: 12,
                 }}
               >
@@ -7714,8 +7687,8 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               style={{
                 padding: "5px 12px",
                 fontSize: 12,
-                background: "#b91c1c22",
-                border: "1px solid #b91c1c66",
+                background: "rgba(255,95,99,0.1)",
+                border: "1px solid rgba(255,95,99,0.3)",
                 borderRadius: 6,
                 color: "var(--red)",
                 cursor: busy ? "wait" : "pointer",
@@ -7740,13 +7713,13 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
         </div>
 
         <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)" }}>
-          <div style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.5 }}>
             {tool.description || "No description"}
           </div>
           {!readOnly && (
             <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
               Related skills:{" "}
-              <span style={{ color: "#1e293b" }}>{relatedSkills && relatedSkills.length > 0 ? relatedSkills.length : 0}</span>
+              <span style={{ color: "var(--ink)" }}>{relatedSkills && relatedSkills.length > 0 ? relatedSkills.length : 0}</span>
             </div>
           )}
           {!readOnly && relatedSkills && relatedSkills.length > 0 && (
@@ -7784,10 +7757,10 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 color: "var(--ink-3)",
               }}
             >
-              <div>Template: <span style={{ color: "#1e293b" }}>{tool.template || "–"}</span></div>
-              <div>Primitive: <span style={{ color: "#1e293b" }}>{tool.primitive || "–"}</span></div>
-              <div>Usage: <span style={{ color: "#1e293b" }}>{tool.metrics?.usageCount || 0}</span></div>
-              <div>Success: <span style={{ color: "#1e293b" }}>{successRate == null ? "–" : `${successRate}%`}</span></div>
+              <div>Template: <span style={{ color: "var(--ink)" }}>{tool.template || "–"}</span></div>
+              <div>Primitive: <span style={{ color: "var(--ink)" }}>{tool.primitive || "–"}</span></div>
+              <div>Usage: <span style={{ color: "var(--ink)" }}>{tool.metrics?.usageCount || 0}</span></div>
+              <div>Success: <span style={{ color: "var(--ink)" }}>{successRate == null ? "–" : `${successRate}%`}</span></div>
             </div>
           )}
 
@@ -7795,7 +7768,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
             style={{
               marginTop: 16,
               fontSize: 12,
-              color: "#475569",
+              color: "var(--ink-2)",
               fontWeight: 600,
               textTransform: "uppercase",
               letterSpacing: 0.5,
@@ -7808,7 +7781,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           </div>
           <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
             Required arguments:{" "}
-            <span style={{ color: "#1e293b" }}>
+            <span style={{ color: "var(--ink)" }}>
               {requiredKeys.length > 0 ? requiredKeys.join(", ") : "none"}
             </span>
           </div>
@@ -7821,7 +7794,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               borderRadius: 8,
               padding: 12,
               fontSize: 12,
-              color: "#1e293b",
+              color: "var(--ink)",
               lineHeight: 1.45,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
@@ -7851,7 +7824,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 borderRadius: 6,
                 border: "1px solid var(--line)",
                 background: tool.enabled ? "#e6e9ef" : "var(--blue-soft)",
-                color: tool.enabled ? "#1e293b" : "#2563eb",
+                color: tool.enabled ? "var(--ink-2)" : "var(--blue)",
                 cursor: busy ? "wait" : "pointer",
               }}
             >
@@ -8334,7 +8307,7 @@ function ArtifactToastStack({ items }) {
                   flexShrink: 0,
                   fontSize: 12,
                   color: "var(--ink-3)",
-                  background: "#e6e9ef",
+                  background: "var(--panel-2)",
                   border: "1px solid var(--line)",
                   borderRadius: 999,
                   padding: "2px 8px",
@@ -8489,9 +8462,9 @@ function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClo
     },
   ];
   const layouts = [
-    { id: "coevolve", label: "Co-evolve",          desc: "All panels — scene + agents", left: true, right: true },
-    { id: "scene",    label: "Scene Generation",    desc: "Coding Agent + Viewport",     left: true, right: false },
-    { id: "training", label: "Embodied Learning",   desc: "Viewport + Agent panels",     left: false, right: true },
+    { id: "scene",    label: "Scene Generation",    desc: "Coding Agent + Viewport",     left: true,  right: false },
+    { id: "training", label: "Embodied Learning",   desc: "Viewport + Agent panels",     left: false, right: true  },
+    { id: "coevolve", label: "Co-evolve",           desc: "All panels — scene + agents", left: true,  right: true  },
     { id: "pure",     label: "Overview",            desc: "Full-screen viewport only",   left: false, right: false },
   ];
 
@@ -9193,8 +9166,8 @@ function App() {
           <ol className="sw-mode-steps">
             {[
               { id: "scene",    label: "Scene Generation" },
-              { id: "coevolve", label: "Co-evolve" },
               { id: "training", label: "Embodied Learning" },
+              { id: "coevolve", label: "Co-evolve" },
               { id: "pure",     label: "Overview" },
             ].map((m) => (
               <li

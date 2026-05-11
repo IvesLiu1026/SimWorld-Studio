@@ -799,6 +799,96 @@ input, textarea, select { cursor: text; }
 [data-theme="light"] .sw-nav-dot { background: var(--red); }
 [data-theme="light"] .sw-mode-guide { background: var(--panel); }
 
+/* ══════════════════════════════════════════════════════════════
+   SEMANTIC UTILITY CLASSES — theme-aware, no hardcoded colors
+══════════════════════════════════════════════════════════════ */
+
+/* Source / status labels (inline badges) */
+.lbl {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 6px;
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+  border: 1px solid;
+}
+.lbl-blue    { background: var(--blue-soft);         color: var(--blue);   border-color: rgba(76,141,255,0.3); }
+.lbl-green   { background: var(--green-soft);         color: var(--green);  border-color: rgba(53,208,127,0.3); }
+.lbl-orange  { background: var(--orange-soft);        color: var(--orange); border-color: rgba(255,157,66,0.3); }
+.lbl-red     { background: rgba(255,95,99,0.12);      color: var(--red);    border-color: rgba(255,95,99,0.3); }
+.lbl-muted   { background: var(--panel-2);            color: var(--ink-3);  border-color: var(--line); }
+.lbl-violet  { background: var(--violet-soft);        color: var(--violet); border-color: rgba(165,110,255,0.3); }
+
+/* Action buttons */
+.act-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 12px; font-size: 12px; font-weight: 600;
+  border-radius: 6px; border: 1px solid;
+  cursor: pointer; font-family: inherit;
+  transition: opacity 0.12s;
+}
+.act-btn:disabled { opacity: 0.45; cursor: wait; }
+.act-btn:hover:not(:disabled) { opacity: 0.82; }
+
+.act-btn-primary { background: var(--blue);   color: #fff; border-color: var(--blue); }
+.act-btn-success { background: var(--green);  color: #fff; border-color: var(--green); }
+.act-btn-enable  { background: var(--blue-soft);        color: var(--blue);  border-color: rgba(76,141,255,0.4); }
+.act-btn-disable { background: var(--panel-2);          color: var(--ink-2); border-color: var(--line); }
+.act-btn-danger  { background: rgba(255,95,99,0.1);     color: var(--red);   border-color: rgba(255,95,99,0.3); }
+.act-btn-cancel  { background: var(--panel-2);          color: var(--ink-2); border-color: var(--line); }
+
+/* Filter pills */
+.filter-pill {
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+  border: 1px solid var(--line);
+  background: transparent; color: var(--ink-3);
+  text-transform: capitalize; transition: all 0.12s;
+}
+.filter-pill:hover:not(.active) { border-color: var(--blue); color: var(--ink); }
+.filter-pill.active { background: var(--blue-soft); color: var(--blue); border-color: rgba(76,141,255,0.5); }
+
+/* Section label / eyebrow */
+.section-eyebrow {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+
+/* Metric values */
+.metric-val { color: var(--ink); font-weight: 600; }
+
+/* Close button */
+.close-btn {
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  border-radius: 6px; border: none; background: transparent;
+  color: var(--ink-3); cursor: pointer; flex-shrink: 0;
+  transition: background 0.12s;
+}
+.close-btn:hover { background: var(--bg-hover); }
+
+/* Modal inner panel */
+.modal-panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; overflow: hidden;
+}
+.modal-header {
+  padding: 14px 20px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel-3);
+}
+.modal-footer {
+  padding: 12px 20px; border-top: 1px solid var(--line);
+  display: flex; gap: 8px; justify-content: flex-end;
+  background: var(--panel-3);
+}
+
+/* Input inside modals/forms */
+.form-input {
+  width: 100%; padding: 7px 12px; font-size: 13px; font-family: inherit;
+  background: var(--bg-tertiary); border: 1px solid var(--line);
+  border-radius: 6px; color: var(--ink); outline: none; cursor: text;
+  transition: border-color 0.12s;
+}
+.form-input:focus { border-color: var(--blue); }
+
 /* ── Mode step interactive states ── */
 .sw-mode-step {
   cursor: pointer;
