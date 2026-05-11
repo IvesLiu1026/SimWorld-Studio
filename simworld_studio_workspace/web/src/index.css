@@ -29,6 +29,8 @@
   --fs-title:   20px;   /* logo, section headers */
   --fs-panel:   15px;   /* panel titles, tab labels, sub-headers */
   --fs-body:    13px;   /* all content, labels, data */
+  --fs-nav:     22px;   /* navbar items — 1.5× panel */
+  --fs-panel-title: 22px; /* panel section titles — 1.5× panel */
   --fw-normal:  400;
   --fw-medium:  500;
   --fw-semibold:600;
@@ -330,9 +332,9 @@ button { font-family: inherit; }
   gap: 7px;
   padding: 7px 14px;
   border-radius: 10px;
-  color: var(--ink-2);
+  color: var(--ink);
   font-weight: 600;
-  font-size: var(--fs-panel);
+  font-size: var(--fs-nav);
   cursor: pointer;
   border: 1px solid transparent;
   background: none;
@@ -376,8 +378,9 @@ button { font-family: inherit; }
   align-items: center;
   gap: 8px;
   font-weight: 700;
-  font-size: var(--fs-panel);
+  font-size: var(--fs-panel-title);
   letter-spacing: -0.01em;
+  color: var(--ink);
 }
 .sw-num-chip {
   display: inline-flex;
@@ -792,4 +795,191 @@ button { font-family: inherit; }
 @keyframes bounce {
   0%, 60%, 100% { transform: translateY(0); }
   30% { transform: translateY(-6px); }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   THEME: GitHub Dark  (VS Code GitHub Dark style)
+══════════════════════════════════════════════════════════════ */
+[data-theme="github"] {
+  --bg: #010409;
+  --panel: #0d1117;
+  --bg-primary: #010409;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-hover: #30363d;
+  --ink: #e6edf3;
+  --ink-2: #8b949e;
+  --ink-3: #6e7681;
+  --line: #21262d;
+  --line-2: #30363d;
+  --blue: #58a6ff;
+  --blue-soft: #0d2137;
+  --green: #3fb950;
+  --green-soft: #0d2314;
+  --green-deep: #26a641;
+  --violet: #d2a8ff;
+  --violet-soft: #2d1b69;
+  --orange: #f0883e;
+  --orange-soft: #3d1f00;
+  --red: #f85149;
+  --amber: #e3b341;
+  --accent: #58a6ff;
+  --accent-dim: #79c0ff;
+  --success: #3fb950;
+  --warning: #e3b341;
+  --error: #f85149;
+  --tool-bg: #0d1117;
+  --user-bubble: #0d2137;
+  --assistant-bubble: #161b22;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --border: #21262d;
+  --border-light: #30363d;
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.5);
+  --shadow-hover: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-pop: 0 8px 24px rgba(0,0,0,0.6);
+  --fs-nav: 14px;
+  --fs-panel-title: 13px;
+}
+
+/* ── GitHub theme border-radius overrides (sharp, compact) ── */
+[data-theme="github"] .sw-panel-card,
+[data-theme="github"] .sw-card,
+[data-theme="github"] .sw-drawer,
+[data-theme="github"] .sw-viewport-card { border-radius: 4px !important; }
+[data-theme="github"] .sw-panel-header  { border-radius: 4px 4px 0 0 !important; }
+[data-theme="github"] .sw-nav-item      { border-radius: 4px !important; }
+[data-theme="github"] .sw-tab-btn       { border-radius: 4px !important; }
+[data-theme="github"] .sw-btn-blue,
+[data-theme="github"] .sw-btn-green,
+[data-theme="github"] .sw-btn-orange,
+[data-theme="github"] .sw-btn-ghost     { border-radius: 4px !important; }
+[data-theme="github"] .sw-brand-mark    { border-radius: 4px !important; }
+[data-theme="github"] .sw-chat-input    { border-radius: 4px !important; }
+[data-theme="github"] .sw-send-btn      { border-radius: 4px !important; }
+[data-theme="github"] .sw-icon-btn      { border-radius: 4px !important; }
+[data-theme="github"] .sw-bubble-user,
+[data-theme="github"] .sw-bubble-assistant { border-radius: 4px !important; }
+[data-theme="github"] .sw-drawer-header:hover { background: #21262d; }
+[data-theme="github"] .sw-nav-item:hover { background: #21262d; }
+[data-theme="github"] .sw-nav-item.active { background: #21262d; color: var(--blue); border-color: var(--blue); }
+
+/* ══════════════════════════════════════════════════════════════
+   THEME: Pro / Adobe  (PS-style dark, sharp-edge panels)
+══════════════════════════════════════════════════════════════ */
+[data-theme="pro"] {
+  --bg: #1c1c1c;
+  --panel: #252525;
+  --bg-primary: #1c1c1c;
+  --bg-secondary: #2b2b2b;
+  --bg-tertiary: #323232;
+  --bg-hover: #383838;
+  --ink: #d4d4d4;
+  --ink-2: #a8a8a8;
+  --ink-3: #727272;
+  --line: #3d3d3d;
+  --line-2: #454545;
+  --blue: #4d9cf8;
+  --blue-soft: #1a2d4a;
+  --green: #52c46a;
+  --green-soft: #1a3a22;
+  --green-deep: #2d7c3d;
+  --violet: #c084fc;
+  --violet-soft: #2d1a4a;
+  --orange: #f08030;
+  --orange-soft: #3d2200;
+  --red: #f04040;
+  --amber: #e8a020;
+  --accent: #4d9cf8;
+  --accent-dim: #6db3ff;
+  --success: #52c46a;
+  --warning: #e8a020;
+  --error: #f04040;
+  --tool-bg: #252525;
+  --user-bubble: #1a2d4a;
+  --assistant-bubble: #2b2b2b;
+  --text-primary: #d4d4d4;
+  --text-secondary: #a8a8a8;
+  --text-muted: #727272;
+  --border: #3d3d3d;
+  --border-light: #454545;
+  --shadow-card: 0 1px 4px rgba(0,0,0,0.6);
+  --shadow-hover: 0 4px 12px rgba(0,0,0,0.6);
+  --shadow-pop: 0 8px 24px rgba(0,0,0,0.7);
+  --fs-nav: 13px;
+  --fs-panel-title: 13px;
+}
+
+/* ── Pro theme: zero border-radius everywhere ── */
+[data-theme="pro"] .sw-panel-card,
+[data-theme="pro"] .sw-card,
+[data-theme="pro"] .sw-drawer,
+[data-theme="pro"] .sw-viewport-card { border-radius: 0 !important; }
+[data-theme="pro"] .sw-panel-header  { border-radius: 0 !important; }
+[data-theme="pro"] .sw-nav-item      { border-radius: 0 !important; }
+[data-theme="pro"] .sw-tab-btn       { border-radius: 0 !important; }
+[data-theme="pro"] .sw-btn-blue,
+[data-theme="pro"] .sw-btn-green,
+[data-theme="pro"] .sw-btn-orange,
+[data-theme="pro"] .sw-btn-ghost     { border-radius: 2px !important; }
+[data-theme="pro"] .sw-brand-mark    { border-radius: 4px !important; }
+[data-theme="pro"] .sw-chat-input    { border-radius: 2px !important; }
+[data-theme="pro"] .sw-send-btn      { border-radius: 2px !important; }
+[data-theme="pro"] .sw-icon-btn      { border-radius: 2px !important; }
+[data-theme="pro"] .sw-bubble-user,
+[data-theme="pro"] .sw-bubble-assistant { border-radius: 2px !important; }
+
+/* ── Pro theme: compact panel header with tab-bar style ── */
+[data-theme="pro"] .sw-panel-header {
+  background: #1c1c1c !important;
+  border-bottom: 1px solid #3d3d3d !important;
+  padding: 0 8px !important;
+  min-height: 32px !important;
+}
+[data-theme="pro"] .sw-drawer-header { background: #1c1c1c !important; }
+[data-theme="pro"] .sw-drawer-header:hover { background: #252525 !important; }
+[data-theme="pro"] .sw-nav-item:hover { background: #383838; }
+[data-theme="pro"] .sw-nav-item.active { background: #383838; color: var(--blue); border-color: #4d9cf8; }
+[data-theme="pro"] .sw-num-chip { border-radius: 2px !important; }
+[data-theme="pro"] header { border-radius: 0 !important; }
+[data-theme="github"] header { border-radius: 4px !important; }
+
+/* ── Pro/GitHub: ensure body background matches theme ── */
+[data-theme="github"] body,
+[data-theme="github"] html { background: var(--bg) !important; }
+[data-theme="pro"] body,
+[data-theme="pro"] html { background: var(--bg) !important; }
+
+/* ── Pro: tab-strip style panel headers ── */
+[data-theme="pro"] .sw-pro-tab-strip {
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  border-bottom: 1px solid #3d3d3d;
+  background: #1c1c1c;
+}
+[data-theme="pro"] .sw-pro-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #a8a8a8;
+  border-right: 1px solid #3d3d3d;
+  cursor: pointer;
+  white-space: nowrap;
+  position: relative;
+}
+[data-theme="pro"] .sw-pro-tab.active {
+  color: #d4d4d4;
+  background: #252525;
+}
+[data-theme="pro"] .sw-pro-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: #4d9cf8;
 }
