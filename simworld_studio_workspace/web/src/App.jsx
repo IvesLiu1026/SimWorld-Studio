@@ -8479,23 +8479,19 @@ function useSession() {
 function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClose }) {
   const themes = [
     {
-      id: "default", label: "Default", desc: "Light, rounded",
+      id: "dark", label: "Dark", desc: "Paper UI — default",
+      preview: { nav: "#171b21", bg: "#111418", left: "#1b2028", center: "#090b10", right: "#1b2028", border: "#323946", radius: 8 },
+    },
+    {
+      id: "light", label: "Light", desc: "Clean & bright",
       preview: { nav: "#fff", bg: "#f4f6fa", left: "#fff", center: "#0b1220", right: "#fff", border: "#e6e9ef", radius: 8 },
-    },
-    {
-      id: "github", label: "GitHub Dark", desc: "VS Code style",
-      preview: { nav: "#0d1117", bg: "#010409", left: "#161b22", center: "#0b1220", right: "#161b22", border: "#21262d", radius: 3 },
-    },
-    {
-      id: "pro", label: "Pro / Adobe", desc: "Sharp, compact",
-      preview: { nav: "#1c1c1c", bg: "#1c1c1c", left: "#252525", center: "#0b1220", right: "#252525", border: "#3d3d3d", radius: 0 },
     },
   ];
   const layouts = [
-    { id: "coevolve", label: "Co-Evolve", desc: "All panels visible", left: true, right: true },
-    { id: "scene",    label: "Scene Generation", desc: "Coding + Viewport", left: true, right: false },
-    { id: "agent",    label: "Embodied Learning", desc: "Viewport + Agent", left: false, right: true },
-    { id: "pure",     label: "Pure View", desc: "Viewport only", left: false, right: false },
+    { id: "coevolve", label: "Co-evolve",          desc: "All panels — scene + agents", left: true, right: true },
+    { id: "scene",    label: "Scene Generation",    desc: "Coding Agent + Viewport",     left: true, right: false },
+    { id: "training", label: "Embodied Learning",   desc: "Viewport + Agent panels",     left: false, right: true },
+    { id: "pure",     label: "Overview",            desc: "Full-screen viewport only",   left: false, right: false },
   ];
 
   return (
@@ -8615,12 +8611,14 @@ function App() {
   const healthError = !statusCtxMain.health && !statusCtxMain.pieActive; // only show error after SSE connects
 
   // ── UI Theme & Layout Mode ─────────────────────────────────────────────────
-  const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "default");
+  const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "dark");
   const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem("sw_layout_mode") || "coevolve");
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", uiTheme);
+    // Map our theme IDs to data-theme values
+    const themeMap = { dark: "", light: "light" };
+    document.documentElement.setAttribute("data-theme", themeMap[uiTheme] ?? "");
     localStorage.setItem("sw_ui_theme", uiTheme);
   }, [uiTheme]);
 
@@ -8629,7 +8627,16 @@ function App() {
   }, [layoutMode]);
 
   const showLeft  = layoutMode === "coevolve" || layoutMode === "scene";
-  const showRight = layoutMode === "coevolve" || layoutMode === "agent";
+  const showRight = layoutMode === "coevolve" || layoutMode === "training";
+
+  // Mode metadata for mode-guide strip
+  const MODE_META = {
+    scene:    { name: "Scene Generation",    desc: "Prompt SimCoder to build a verified UE scene with MCP tools, assets, and scene-level feedback.", steps: ["Prompt SimCoder","MCP Tools","Verify Scene"] },
+    training: { name: "Embodied Learning",   desc: "Observe and evaluate embodied agents navigating the generated scene in real time.", steps: ["Spawn Agents","Navigate","Collect Stats"] },
+    coevolve: { name: "Co-evolve",           desc: "Scene and embodied agent co-evolve — SimCoder adapts the scene based on agent performance feedback.", steps: ["Generate Scene","Run Agents","Feedback","Adapt Scene","↺ Feedback"] },
+    pure:     { name: "Overview",            desc: "Full-screen UE viewport — no side panels.", steps: ["UE Viewport"] },
+  };
+  const activeMeta = MODE_META[layoutMode] || MODE_META.coevolve;
 
   const [latestScreenshot, setLatestScreenshot] = useState(null);
   const [splitPct, setSplitPct] = useState(38);
@@ -8979,7 +8986,7 @@ function App() {
 
   return (
     <PollProvider>
-    <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:"var(--bg)", overflow:"hidden", padding:"10px", gap:0, position:"relative" }}>
+    <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:"var(--bg)", overflow:"hidden", padding:"8px", gap:8, position:"relative" }}>
 
       {/* ══ POOL FULL — waiting room (only shows when all UE slots are occupied) ══ */}
       {poolFull && (
@@ -9017,19 +9024,20 @@ function App() {
 
       {/* ══ TOP NAV BAR — floating card ══ */}
       <header style={{
-        height: 62,
-        background: "var(--panel)",
-        borderRadius: 12,
+        height: 56,
+        background: "var(--topbar,var(--panel))",
+        borderRadius: "var(--radius,8px)",
         border: "1px solid var(--line)",
-        boxShadow: "var(--shadow-card)",
-        display: "flex",
+        boxShadow: "var(--shadow-pop)",
+        display: "grid",
+        gridTemplateColumns: "auto minmax(0,1fr) auto",
         alignItems: "center",
-        padding: "0 20px",
-        gap: 14,
+        padding: "6px 12px",
+        gap: 10,
         flexShrink: 0,
         userSelect: "none",
         zIndex: 20,
-        marginBottom: 10,
+        marginBottom: 8,
       }}>
         {/* Brand */}
         <div className="sw-brand">
@@ -9057,7 +9065,7 @@ function App() {
         </nav>
 
         {/* Right side */}
-        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"flex-end" }}>
 
           {/* Status dots */}
           {health && (
@@ -9172,10 +9180,28 @@ function App() {
 
       <ArtifactToastStack items={artifactToasts} />
 
+      {/* ══ MODE GUIDE STRIP ══ */}
+      {activePage === "generate" && (
+        <div className="sw-mode-guide">
+          <div>
+            <span className="sw-mode-guide-name">{activeMeta.name}</span>
+            <span className="sw-mode-guide-desc">{activeMeta.desc}</span>
+          </div>
+          <ol className="sw-mode-steps">
+            {activeMeta.steps.map((s, i) => (
+              <li key={i} className={`sw-mode-step${s.startsWith("↺") ? " feedback" : ""}`}>
+                <span style={{ color:"var(--ink-3)", flexShrink:0 }}>{i + 1}</span>
+                {s}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
       {/* ══ 3-COLUMN RESIZABLE STUDIO LAYOUT ══ */}
       {activePage === "generate" && (
       <div ref={layoutRef} style={{
-        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:5, padding:"6px 0",
+        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:5, padding:"4px 0",
       }}>
         {/* ── LEFT: Coding Agent + Verifier (two independent panels) ── */}
         {showLeft && <div ref={leftColRef} style={{
