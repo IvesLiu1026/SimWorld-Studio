@@ -66,12 +66,13 @@
   --shadow-hover: 0 6px 20px rgba(0,0,0,0.4);
   --shadow-pop:   0 18px 42px rgba(0,0,0,0.5);
 
-  /* ── Typography ── */
-  --fs-title:       15px;
-  --fs-nav:         13px;
-  --fs-panel-title: 13px;
-  --fs-panel:       12px;
-  --fs-body:        12px;
+  /* ── Typography — clamp(min, fluid-vw, max) scales with viewport ── */
+  /* laptop ~1366px: near min | 1080p ~1920px: mid | 4K/monitor: near max */
+  --fs-title:       clamp(0.9rem, 1.1vw, 1.2rem);   /* 14→18→19px */
+  --fs-nav:         clamp(0.82rem, 0.85vw, 1rem);   /* 13→16px    */
+  --fs-panel-title: clamp(0.82rem, 0.85vw, 1rem);   /* 13→16px    */
+  --fs-panel:       clamp(0.8rem,  0.78vw, 0.95rem); /* 13→15px    */
+  --fs-body:        clamp(0.78rem, 0.72vw, 0.9rem);  /* 12→14px    */
   --fw-normal:  400;
   --fw-medium:  500;
   --fw-semibold:600;
@@ -142,7 +143,13 @@
 ══════════════════════════════════════════════════════════════ */
 *, *::before, *::after { box-sizing: border-box; }
 
-html, body {
+html {
+  /* Root font scales from 14px (laptop) → 16px (1080p) → 17px (large monitor) */
+  font-size: clamp(14px, 0.9vw, 17px);
+  height: 100%;
+}
+
+body {
   height: 100%;
   margin: 0;
   padding: 0;
