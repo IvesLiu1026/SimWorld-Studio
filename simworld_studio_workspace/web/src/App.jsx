@@ -265,6 +265,14 @@ const ICONS = {
   clock: (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none"/><polyline points="12 6 12 12 16 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></SvgIcon>,
   ghost: (s) => <SvgIcon size={s}><path d="M9 10h.01M15 10h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M12 2a7 7 0 017 7v6l-2-1-2 1-2-1-2 1-2-1-2 1V9a7 7 0 017-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></SvgIcon>,
   maximize: (s) => <SvgIcon size={s}><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/></SvgIcon>,
+  zap:      (s) => <SvgIcon size={s}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></SvgIcon>,
+  refresh:  (s) => <SvgIcon size={s}><polyline points="23 4 23 10 17 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/><polyline points="1 20 1 14 7 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/></SvgIcon>,
+  collision:(s) => <SvgIcon size={s}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none"/><line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/><line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></SvgIcon>,
+  target:   (s) => <SvgIcon size={s}><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none"/><circle cx="12" cy="12" r="6" stroke="currentColor" strokeWidth="2" fill="none"/><circle cx="12" cy="12" r="2" fill="currentColor"/></SvgIcon>,
+  activity: (s) => <SvgIcon size={s}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></SvgIcon>,
+  folder:   (s) => <SvgIcon size={s}><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/></SvgIcon>,
+  scan:     (s) => <SvgIcon size={s}><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/><line x1="7" y1="12" x2="17" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></SvgIcon>,
+  users:    (s) => <SvgIcon size={s}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" fill="none"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/></SvgIcon>,
 };
 
 // ─── Shared UI Primitives ─────────────────────────────────────────────────────
@@ -3182,7 +3190,7 @@ function PixelStreamView({ playerUrl }) {
             cursor: "pointer",
           }}
         >
-          ✕ Deactivate
+          Deactivate
         </button>
       )}
     </div>
@@ -3268,7 +3276,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
           cursor: "pointer",
         }}
       >
-        ↻ Fetch Latest
+        Fetch Latest
       </button>
     </div>
   );
@@ -3661,7 +3669,7 @@ function AgentTrajectoryView({ agentName, color, liveState }) {
 
   if (traj.length < 2) return (
     <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, color:"var(--ink-3)", fontSize:12 }}>
-      <div style={{ fontSize:28, opacity:0.3 }}>🗺️</div>
+      <div style={{ opacity:0.3, display:"flex", justifyContent:"center" }}>{ICONS.map(28)}</div>
       <div>No trajectory data yet — agent needs to move</div>
     </div>
   );
@@ -3921,7 +3929,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
         {/* Current action */}
         {currentAction && <span style={{ fontSize:12, color:"#f59e0b", background:"rgba(245,158,11,.12)",
           borderRadius:4, padding:"1px 5px", maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-          ⚡ {currentAction}
+          {ICONS.zap(11)} {currentAction}
         </span>}
         {!currentAction && lastAction && <span style={{ fontSize:12, color:"var(--ink-3)",
           background:"var(--bg)", borderRadius:4, padding:"1px 5px" }}>
@@ -3938,10 +3946,10 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
       <div style={{ padding:"4px 10px", background:"var(--bg)", display:"flex", gap:12,
         fontSize:12, color:"var(--ink-3)", flexShrink:0, borderBottom:"1px solid var(--line)" }}>
         {liveState?.speed > 0 && (
-          <span>⚡ {Math.round((liveState.speed||0)/100)} m/s</span>
+          <span style={{ display:"inline-flex", alignItems:"center", gap:3 }}>{ICONS.zap(11)} {Math.round((liveState.speed||0)/100)} m/s</span>
         )}
         <span style={{ color: liveState?.collisionCount > 0 ? "#dc2626" : "var(--ink-3)" }}>
-          💥 {liveState?.collisionCount||0} collisions
+          <span style={{ display:"inline-flex", alignItems:"center", gap:3 }}>{ICONS.collision(11)} {liveState?.collisionCount||0} collisions</span>
         </span>
         <span>🔄 {liveState?.totalTurns||0} turns</span>
         {liveState?.totalCostUsd > 0 && (
@@ -3953,7 +3961,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
       <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--line)", flexShrink: 0, background: "var(--panel)" }}>
         {[
           { id: "camera",     label: "📷 Camera"     },
-          { id: "trajectory", label: "🗺️ Trajectory" },
+          { id: "trajectory", label: "Trajectory" },
           { id: "activity",   label: "📋 Activity"   },
           { id: "chat",       label: "💬 Chat"       },
         ].map(t => (
@@ -3981,7 +3989,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
               background: `${color}11`, color, cursor: camLoading ? "wait" : "pointer",
               fontSize: 12, fontWeight: 600, opacity: camLoading ? 0.6 : 1,
             }}>
-              {camLoading ? "Capturing…" : "↻ Capture"}
+              {camLoading ? "Capturing…" : "Capture"}
             </button>
             {!loc && <span style={{ fontSize: 12, color: "var(--red)" }}>No location — no camera</span>}
           </div>
@@ -4124,7 +4132,7 @@ function AgentAggregatePanelTabs({ agents, sessionId }) {
   };
 
   const tabs = [
-    { id:"overview", label:"📊 Overview" },
+    { id:"overview", label:"Overview" },
     { id:"testbed",  label:"🧪 Testbed"  },
     { id:"chat",     label:"💬 Comm"     },
   ];
@@ -4274,7 +4282,7 @@ function AgentOverviewPanel({ agents }) {
   if (sessions.length === 0) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
       height:"100%", gap:8, color:"var(--ink-3)", fontSize:14 }}>
-      <div style={{ fontSize:36, opacity:.3 }}>🤖</div>No agents in scene
+      <div style={{ opacity:.3, display:"flex", justifyContent:"center", marginBottom:6 }}>{ICONS.robot(36)}</div>No agents in scene
     </div>
   );
 
@@ -4610,7 +4618,7 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange, hideComm 
             title="Sync context + auto-discover player agents from UE"
             style={{ fontSize:12, padding:"3px 9px", borderRadius:5, border:"1px solid var(--line)",
               background:"none", cursor:"pointer", color:"var(--ink-3)", fontFamily:"inherit" }}>
-            ↻ Discover
+            Discover
           </button>
           <span style={{ width:6, height:6, borderRadius:"50%", background:pieActive?"#22c55e":"#94a3b8", boxShadow: pieActive?"0 0 0 2px rgba(34,197,94,.2)":"none", flexShrink:0 }}/>
           <span style={{ fontSize:12, color:pieActive?"#16a34a":"var(--ink-3)" }}>
@@ -4632,7 +4640,7 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange, hideComm 
 
         {empty ? (
           <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, padding:20 }}>
-            <div style={{ fontSize:28, opacity:0.3 }}>🤖</div>
+            <div style={{ opacity:0.3, display:"flex", justifyContent:"center", marginBottom:6 }}>{ICONS.robot(28)}</div>
             <div style={{ fontSize:12, color:"var(--ink-3)", textAlign:"center", lineHeight:1.5 }}>
               {pieActive ? "Spawn agents to see them here." : "Start PIE in Unreal Engine\nto enable agent control."}
             </div>
@@ -4726,8 +4734,8 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
   }, [sessionId]);
 
   const tabs = [
-    { id:"collisions", label:"💥 Collisions" },
-    { id:"vlm",        label:"🤖 VLM Score" },
+    { id:"collisions", label:"Collisions" },
+    { id:"vlm",        label:"VLM Score" },
   ];
 
   const collCount = collData?.collision_count ?? "—";
@@ -4806,7 +4814,7 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
               ))}
               {collData.collision_count === 0 && (
                 <div style={{ fontSize:FS, color:"#16a34a", textAlign:"center", padding:12, fontWeight:600 }}>
-                  ✓ No collisions detected
+                  No collisions detected
                 </div>
               )}
             </div>
@@ -4950,7 +4958,7 @@ function ViewportPanel({ latestScreenshot }) {
         {/* Mode toggle */}
         <div style={{ display:"flex", gap:3 }}>
           {[
-            { id:"pixelstream", label:"🔴 Live" },
+            { id:"pixelstream", label:"Live" },
             { id:"screenshot",  label:"📷 Shot" },
           ].map(m => (
             <button key={m.id} onClick={() => setMode(m.id)} style={{
@@ -5036,7 +5044,7 @@ function ViewportPanel({ latestScreenshot }) {
       }}>
         <span>UE 5.3.2 · SimWorld Studio</span>
         {playerUrl && <span>{playerUrl.match(/cirrus=(\d+)/)?.[1] ? `Cirrus :${playerUrl.match(/cirrus=(\d+)/)[1]}` : playerUrl}</span>}
-        {mode==="screenshot" && screenshotUrl && <span style={{ color:"#16a34a", marginLeft:"auto" }}>● Screenshot ready</span>}
+        {mode==="screenshot" && screenshotUrl && <span style={{ color:"var(--green)", marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:4 }}>{ICONS.check(12)} Screenshot ready</span>}
       </div>
     </div>
   );
@@ -5207,8 +5215,15 @@ function AssetListItem({ item, category, onInsert }) {
 // ─── AssetBrowser ────────────────────────────────────────────────────────────
 
 // ── Content Drawer (replaces old static AssetBrowser) ────────────────────────
-const CAT_ICONS = { buildings:"🏗️", trees:"🌳", vehicles:"🛵", street_furniture:"🪑",
-  static_meshes:"📦", agents:"🤖", maps:"🗺️" };
+const CAT_ICONS = {
+  buildings:       s => ICONS.building(s),
+  trees:           s => ICONS.tree(s),
+  vehicles:        s => ICONS.car(s),
+  street_furniture:s => ICONS.hydrant(s),
+  static_meshes:   s => ICONS.cube(s),
+  agents:          s => ICONS.users(s),
+  maps:            s => ICONS.map(s),
+};
 const SPAWN_SNIPPETS = {
   buildings: (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
   trees:     (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
@@ -5287,7 +5302,7 @@ function AssetBrowser({ onInsert }) {
   if (!treeData) {
     return <div ref={containerRef} style={{ padding:16, color:"var(--ink-3)", fontSize:"var(--fs-body)", height:"100%",
       display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8 }}>
-      <div style={{ fontSize:24, opacity:.4 }}>📦</div>
+      <div style={{ opacity:.4, display:"flex", justifyContent:"center", marginBottom:4 }}>{ICONS.cube(24)}</div>
       <div>Loading asset catalog…</div>
       <div style={{ fontSize:12, color:"var(--ink-3)" }}>Waiting for UE Python scan</div>
     </div>;
@@ -5340,7 +5355,10 @@ function AssetBrowser({ onInsert }) {
         {/* Source badge */}
         <div style={{ fontSize:12, padding:"2px 6px", marginBottom:2,
           color: isLive?"#16a34a":"var(--ink-3)", fontWeight:600 }}>
-          {isLive ? "🟢 Live UE" : "⏳ Scanning…"}
+          <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+            <span style={{ width:7, height:7, borderRadius:"50%", background: isLive ? "var(--green)" : "var(--ink-3)", flexShrink:0 }} />
+            {isLive ? "Live UE" : "Scanning…"}
+          </span>
         </div>
         {Object.entries(counts).map(([cat, cnt]) => (
           <button key={cat} onClick={() => { setBrowsePath("/Game/"); setCategory(cat); setSearch(""); setPage(0); }}
@@ -5350,7 +5368,7 @@ function AssetBrowser({ onInsert }) {
               background: category === cat ? "var(--blue-soft)" : "transparent",
               color: category === cat ? "var(--blue)" : "var(--ink-2)",
               fontWeight: category === cat ? 700 : 400 }}>
-            <span>{CAT_ICONS[cat] || "📁"}</span>
+            <span style={{ display:"inline-flex", alignItems:"center", flexShrink:0 }}>{(CAT_ICONS[cat] || ICONS.folder)(15)}</span>
             <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
               {cat.replace(/_/g," ")}
             </span>
@@ -5436,7 +5454,7 @@ function AssetBrowser({ onInsert }) {
                   transition:"border-color .12s, box-shadow .12s", userSelect:"none" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor="var(--blue)"; e.currentTarget.style.boxShadow="0 0 0 2px var(--blue-soft)"; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor="var(--line)"; e.currentTarget.style.boxShadow="none"; }}>
-                <div style={{ fontSize:20, marginBottom:4 }}>{CAT_ICONS[a.category] || a.icon || "📦"}</div>
+                <div style={{ display:"flex", justifyContent:"center", marginBottom:4, color:"var(--ink-3)" }}>{(CAT_ICONS[a.category] || ICONS.cube)(22)}</div>
                 <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontWeight:600, fontSize:12 }}>
                   {a.name.replace(/^BP_/,"").replace(/_/g," ")}
                 </div>
@@ -5689,7 +5707,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
       >
         <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
           {label}
-          {isWinner && " ✅"}
+          {isWinner && <span style={{ display:"inline-flex", alignItems:"center", marginLeft:4, color:"var(--green)" }}>{ICONS.check(12)}</span>}
         </span>
         {revealed && side && (
           <span
@@ -8195,10 +8213,10 @@ function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClo
     },
   ];
   const layouts = [
-    { id: "scene",    label: "Scene Generation",    desc: "Coding Agent + Viewport",     left: true,  right: false },
-    { id: "training", label: "Embodied Learning",   desc: "Viewport + Agent panels",     left: false, right: true  },
-    { id: "coevolve", label: "Co-evolve",           desc: "All panels — scene + agents", left: true,  right: true  },
-    { id: "pure",     label: "Overview",            desc: "Full-screen viewport only",   left: false, right: false },
+    { id: "scene",    label: "Scene Generation",    desc: "Chat Agent | Viewport | Verifier",          left: true,  right: true  },
+    { id: "training", label: "Embodied Learning",   desc: "Statistics | Viewport | Embodied Agent",    left: true,  right: true  },
+    { id: "coevolve", label: "Co-evolve",           desc: "Agent+Verifier | Viewport | Agent+Stats",   left: true,  right: true  },
+    { id: "pure",     label: "Overview",            desc: "Full-screen viewport only",                 left: false, right: false },
   ];
 
   return (
@@ -8333,14 +8351,23 @@ function App() {
     localStorage.setItem("sw_layout_mode", layoutMode);
   }, [layoutMode]);
 
-  const showLeft  = layoutMode === "coevolve" || layoutMode === "scene";
-  const showRight = layoutMode === "coevolve" || layoutMode === "training";
+  // All non-pure modes show both columns; content within each column varies by mode
+  const showLeft  = layoutMode !== "pure";
+  const showRight = layoutMode !== "pure";
+
+  // Per-panel visibility within columns
+  const showCodingAgent  = layoutMode === "coevolve" || layoutMode === "scene";
+  const showVerifierLeft = layoutMode === "coevolve";   // verifier stays left only in co-evolve
+  const showVerifierRight= layoutMode === "scene";      // verifier moves to right in scene mode
+  const showStatsLeft    = layoutMode === "training";   // stats moves to left in training mode
+  const showAgentRight   = layoutMode === "coevolve" || layoutMode === "training";
+  const showStatsRight   = layoutMode === "coevolve";   // stats stays right only in co-evolve
 
   // Mode metadata for mode-guide strip
   const MODE_META = {
-    scene:    { name: "Scene Generation",    desc: "Prompt SimCoder to build a verified UE scene with MCP tools, assets, and scene-level feedback.", steps: ["Prompt SimCoder","MCP Tools","Verify Scene"] },
-    training: { name: "Embodied Learning",   desc: "Observe and evaluate embodied agents navigating the generated scene in real time.", steps: ["Spawn Agents","Navigate","Collect Stats"] },
-    coevolve: { name: "Co-evolve",           desc: "Scene and embodied agent co-evolve — SimCoder adapts the scene based on agent performance feedback.", steps: ["Generate Scene","Run Agents","Feedback","Adapt Scene","↺ Feedback"] },
+    scene:    { name: "Scene Generation",    desc: "Left: Coding Agent chat — Right: Scene Verifier", steps: ["Prompt SimCoder","MCP Tools","Verify Scene"] },
+    training: { name: "Embodied Learning",   desc: "Left: Agent Statistics — Right: Embodied Agent", steps: ["Spawn Agents","Navigate","Collect Stats"] },
+    coevolve: { name: "Co-evolve",           desc: "Left: Coding Agent + Verifier — Right: Embodied Agent + Statistics", steps: ["Generate Scene","Run Agents","Feedback","Adapt"] },
     pure:     { name: "Overview",            desc: "Full-screen UE viewport — no side panels.", steps: ["UE Viewport"] },
   };
   const activeMeta = MODE_META[layoutMode] || MODE_META.coevolve;
@@ -8926,57 +8953,78 @@ function App() {
           width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
-          {/* Panel 1: Coding Agent */}
-          <div className="sw-panel-card" style={{
-            flex:1, minHeight:0,
-            borderRadius:12, border:"1px solid var(--line)",
-             display:"flex",
-            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-          }}>
-            <div className="sw-panel-header">
-              <span className="sw-section-title">
-                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>1</span>
-                Coding Agent
-              </span>
-              <div style={{ flex:1 }} />
+          {/* Coding Agent — scene + coevolve modes */}
+          {showCodingAgent && (
+            <div className="sw-panel-card" style={{
+              flex: showVerifierLeft ? 1 : 1, minHeight:0,
+              borderRadius:12, border:"1px solid var(--line)",
+              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+            }}>
+              <div className="sw-panel-header">
+                <span className="sw-section-title">
+                  <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>{ICONS.chat(11)}</span>
+                  Coding Agent
+                </span>
+              </div>
+              <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
+                <ChatPanel
+                  onScreenshotUpdate={url => setLatestScreenshot(url)}
+                  onRef={setChatRef}
+                  onSessionChange={setCurrentSessionId}
+                  onChatDone={() => setContextRefreshKey(k => k + 1)}
+                />
+              </div>
             </div>
-            <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
-              <ChatPanel
-                onScreenshotUpdate={url => setLatestScreenshot(url)}
-                onRef={setChatRef}
-                onSessionChange={setCurrentSessionId}
-                onChatDone={() => setContextRefreshKey(k => k + 1)}
-              />
-            </div>
-          </div>
+          )}
 
-          {/* Row resize handle — left column */}
-          <div onMouseDown={makeRowResize(commHeight, setCommHeight)}
-            style={{ height:6, cursor:"row-resize", flexShrink:0,
-              display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
-            <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)",
-              transition:"background .15s" }}
-              onMouseEnter={e=>e.currentTarget.style.background="var(--orange)"}
-              onMouseLeave={e=>e.currentTarget.style.background="var(--line)"} />
-          </div>
+          {/* Row resize — only when both panels visible in left col */}
+          {showCodingAgent && showVerifierLeft && (
+            <div onMouseDown={makeRowResize(commHeight, setCommHeight)}
+              style={{ height:6, cursor:"row-resize", flexShrink:0,
+                display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
+              <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)", transition:"background .15s" }}
+                onMouseEnter={e=>e.currentTarget.style.background="var(--blue)"}
+                onMouseLeave={e=>e.currentTarget.style.background="var(--line)"} />
+            </div>
+          )}
 
-          {/* Panel 2: Coding Agent Verifier (standalone) */}
-          <div className="sw-panel-card" style={{
-            height: commHeight, flexShrink:0,
-            borderRadius:12, border:"1px solid var(--line)",
-             display:"flex",
-            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-          }}>
-            <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-              <span className="sw-section-title">
-                <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.check(11)}</span>
-                Verifier
-              </span>
+          {/* Verifier — left col in coevolve only */}
+          {showVerifierLeft && (
+            <div className="sw-panel-card" style={{
+              height: commHeight, flexShrink:0,
+              borderRadius:12, border:"1px solid var(--line)",
+              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+            }}>
+              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
+                <span className="sw-section-title">
+                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.check(11)}</span>
+                  Verifier
+                </span>
+              </div>
+              <div style={{ flex:1, overflow:"hidden" }}>
+                <CodingVerifierPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />
+              </div>
             </div>
-            <div style={{ flex:1, overflow:"hidden" }}>
-              <CodingVerifierPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />
+          )}
+
+          {/* Statistics — left col in training mode */}
+          {showStatsLeft && (
+            <div className="sw-panel-card" style={{
+              flex:1, minHeight:0,
+              borderRadius:12, border:"1px solid var(--line)",
+              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+            }}>
+              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
+                <span className="sw-section-title">
+                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.chartBar(11)}</span>
+                  Agent Statistics
+                </span>
+              </div>
+              <div style={{ flex:1, overflow:"hidden" }}>
+                <AgentAggregatePanelTabs agents={[]} sessionId={currentSessionId} />
+              </div>
             </div>
-          </div>
+          )}
         </div>}
 
         {/* ── Resize handle left ── */}
@@ -9070,57 +9118,73 @@ function App() {
           width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
-          {/* Panel 1: Embodied Agent */}
-          <div className="sw-panel-card" style={{
-            flex:1, minHeight:0,
-            borderRadius:12, border:"1px solid var(--line)",
-             display:"flex",
-            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-          }}>
-            <div className="sw-panel-header" style={{ borderRadius:"12px 12px 0 0" }}>
-              <span className="sw-section-title">
-                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>2</span>
-                Embodied Agent
-              </span>
-              <div style={{ flex:1 }} />
+          {/* Verifier — right col in scene mode */}
+          {showVerifierRight && (
+            <div className="sw-panel-card" style={{
+              flex:1, minHeight:0,
+              borderRadius:12, border:"1px solid var(--line)",
+              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+            }}>
+              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
+                <span className="sw-section-title">
+                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.check(11)}</span>
+                  Verifier
+                </span>
+              </div>
+              <div style={{ flex:1, overflow:"hidden" }}>
+                <CodingVerifierPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />
+              </div>
             </div>
-            <div style={{ flex:1, overflow:"hidden" }}>
-              <AgentPanel
-                sessionId={currentSessionId}
-                commHeight={0}
-                onCommHeightChange={() => {}}
-                hideComm
-              />
-            </div>
-          </div>
+          )}
 
-          {/* Row resize handle — right column */}
-          <div onMouseDown={makeRowResize(rightBottomH, setRightBottomH)}
-            style={{ height:6, cursor:"row-resize", flexShrink:0,
-              display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
-            <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)",
-              transition:"background .15s" }}
-              onMouseEnter={e=>e.currentTarget.style.background="var(--blue)"}
-              onMouseLeave={e=>e.currentTarget.style.background="var(--line)"} />
-          </div>
+          {/* Embodied Agent — coevolve + training modes */}
+          {showAgentRight && (
+            <div className="sw-panel-card" style={{
+              flex:1, minHeight:0,
+              borderRadius:12, border:"1px solid var(--line)",
+              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+            }}>
+              <div className="sw-panel-header">
+                <span className="sw-section-title">
+                  <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>{ICONS.robot(11)}</span>
+                  Embodied Agent
+                </span>
+              </div>
+              <div style={{ flex:1, overflow:"hidden" }}>
+                <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />
+              </div>
+            </div>
+          )}
 
-          {/* Panel 2: Agent Statistics (standalone) */}
-          <div className="sw-panel-card" style={{
-            height: rightBottomH, flexShrink:0,
-            borderRadius:12, border:"1px solid var(--line)",
-             display:"flex",
-            flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-          }}>
-            <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-              <span className="sw-section-title">
-                <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.chartBar(11)}</span>
-                Agent Statistics
-              </span>
+          {/* Row resize — only when both agent + stats visible in right col */}
+          {showAgentRight && showStatsRight && (
+            <div onMouseDown={makeRowResize(rightBottomH, setRightBottomH)}
+              style={{ height:6, cursor:"row-resize", flexShrink:0,
+                display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
+              <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)", transition:"background .15s" }}
+                onMouseEnter={e=>e.currentTarget.style.background="var(--blue)"}
+                onMouseLeave={e=>e.currentTarget.style.background="var(--line)"} />
             </div>
-            <div style={{ flex:1, overflow:"hidden" }}>
-              <AgentAggregatePanelTabs agents={[]} sessionId={currentSessionId} />
+          )}
+
+          {/* Agent Statistics — right col in coevolve only */}
+          {showStatsRight && (
+            <div className="sw-panel-card" style={{
+              height: rightBottomH, flexShrink:0,
+              borderRadius:12, border:"1px solid var(--line)",
+              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+            }}>
+              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
+                <span className="sw-section-title">
+                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.chartBar(11)}</span>
+                  Agent Statistics
+                </span>
+              </div>
+              <div style={{ flex:1, overflow:"hidden" }}>
+                <AgentAggregatePanelTabs agents={[]} sessionId={currentSessionId} />
+              </div>
             </div>
-          </div>
+          )}
         </div>}
 
       </div>
