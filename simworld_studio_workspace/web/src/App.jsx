@@ -804,7 +804,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
           }}
         />
         <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center" }}>{iconFn(13)}</span>
-        <span style={{ fontFamily: "monospace", color: "#2563eb", fontWeight: 600 }}>
+        <span style={{ fontFamily: "monospace", color: "var(--blue)", fontWeight: 600 }}>
           {displayName}
         </span>
         {paramSummary && (
@@ -921,8 +921,8 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
       style={{
         padding: "8px 10px",
         borderRadius: 6,
-        border: `1px solid ${active ? "#3b82f6" : "#e6e9ef"}`,
-        background: active ? "#2563eb11" : "#ffffff",
+        border: `1px solid ${active ? "var(--blue)" : "var(--line)"}`,
+        background: active ? "var(--blue-soft)" : "#ffffff",
         transition: "all 0.15s",
         opacity: disabled ? 0.75 : 1,
       }}
@@ -935,7 +935,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
             height: 14,
             borderRadius: 3,
             border: `2px solid ${active ? "var(--blue)" : "var(--line)"}`,
-            background: active ? "#3b82f6" : "transparent",
+            background: active ? "var(--blue)" : "transparent",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -982,8 +982,8 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
             fontSize: 12,
             padding: "1px 5px",
             borderRadius: 4,
-            background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
-            color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
+            background: skill.source === "custom" ? "var(--blue-soft)" : "#e6e9ef",
+            color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
           }}
         >
           {skill.source}
@@ -1097,8 +1097,8 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
                   marginLeft: 8,
                   padding: "1px 5px",
                   borderRadius: 4,
-                  background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
-                  color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
+                  background: skill.source === "custom" ? "var(--blue-soft)" : "#e6e9ef",
+                  color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
                   fontSize: 12,
                 }}
               >
@@ -1115,7 +1115,7 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
                 background: "#b91c1c22",
                 border: "1px solid #b91c1c66",
                 borderRadius: 6,
-                color: "#dc2626",
+                color: "var(--red)",
                 cursor: "pointer",
               }}
             >
@@ -1379,7 +1379,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           {error && (
-            <div style={{ fontSize: 12, color: "#dc2626", padding: "4px 0" }}>{error}</div>
+            <div style={{ fontSize: 12, color: "var(--red)", padding: "4px 0" }}>{error}</div>
           )}
         </div>
 
@@ -1413,8 +1413,8 @@ Provide detailed instructions for the AI agent.
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#15803d",
-              border: "1px solid #15803d",
+              background: "var(--green)",
+              border: "1px solid var(--green)",
               borderRadius: 6,
               color: "#fff",
               cursor: saving ? "wait" : "pointer",
@@ -1510,7 +1510,7 @@ function SkillsPanel({
           <span
             style={{
               fontSize: 12,
-              background: "#3b82f6",
+              background: "var(--blue)",
               color: "#fff",
               borderRadius: 8,
               padding: "1px 6px",
@@ -1532,7 +1532,7 @@ function SkillsPanel({
               height: 18,
               borderRadius: 999,
               border: "1px solid var(--line)",
-              background: autoEnabled ? "#3b82f6" : "#e6e9ef",
+              background: autoEnabled ? "var(--blue)" : "var(--line)",
               padding: 1,
               position: "relative",
               cursor: "pointer",
@@ -1644,7 +1644,7 @@ function SkillsPanel({
               borderRadius: 6,
               border: "1px dashed var(--line)",
               background: "transparent",
-              color: "#2563eb",
+              color: "var(--blue)",
               fontSize: 12,
               cursor: "pointer",
               display: "flex",
@@ -1733,7 +1733,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
           background: "var(--panel)",
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: "#ea580c" }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--orange)" }}>
           Annotate Screenshot
         </span>
         <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
@@ -1761,8 +1761,8 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
               padding: "4px 12px",
               fontSize: 12,
               borderRadius: 4,
-              border: "1px solid #3b82f6",
-              background: "#3b82f6",
+              border: "1px solid var(--blue)",
+              background: "var(--blue)",
               color: "#fff",
               cursor: "pointer",
               opacity: !feedbackText && points.length === 0 ? 0.5 : 1,
@@ -1811,7 +1811,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                     width: 24,
                     height: 24,
                     borderRadius: "50%",
-                    background: "#ea580c",
+                    background: "var(--orange)",
                     border: "2px solid #fff",
                     display: "flex",
                     alignItems: "center",
@@ -1899,7 +1899,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                       width: 16,
                       height: 16,
                       borderRadius: "50%",
-                      background: "#ea580c",
+                      background: "var(--orange)",
                       fontSize: 12,
                       color: "#fff",
                       display: "flex",
@@ -1932,7 +1932,7 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
     <>
       {message.waiting && (
         <div style={{ color:"#64748b", fontSize:12, display:"flex", alignItems:"center", gap:8, padding:"2px 0" }}>
-          <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", border:"2px solid #2563eb", borderTopColor:"transparent", animation:"spin 1s linear infinite" }} />
+          <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", border:"2px solid var(--blue)", borderTopColor:"transparent", animation:"spin 1s linear infinite" }} />
           Waiting for Claude...
         </div>
       )}
@@ -2520,7 +2520,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               MCP: {mcpStatus}
             </span>
             <span>·</span>
-            <span style={{ color: selfEvolutionOn ? "#ea580c" : "#64748b" }}>
+            <span style={{ color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)" }}>
               Self-evolution: {selfEvolutionReady ? (selfEvolutionOn ? "on" : "off") : "syncing"}
             </span>
             {sessionId && (
@@ -2543,7 +2543,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               borderRadius: 7,
               border: selfEvolutionOn ? "1px solid #fed7aa" : "1px solid #e6e9ef",
               background: selfEvolutionOn ? "#fff7ed" : "#f8fafc",
-              color: selfEvolutionOn ? "#ea580c" : "#64748b",
+              color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)",
               cursor: selfEvolutionReady ? "pointer" : "not-allowed",
               display: "flex",
               alignItems: "center",
@@ -2560,8 +2560,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                 width: 8,
                 height: 8,
                 borderRadius: "50%",
-                background: selfEvolutionOn ? "#ea580c" : "#cbd5e1",
-                boxShadow: selfEvolutionOn ? "0 0 8px #ea580c66" : "none",
+                background: selfEvolutionOn ? "var(--orange)" : "var(--line)",
+                boxShadow: selfEvolutionOn ? "0 0 8px rgba(255,157,66,0.4)" : "none",
                 animation: selfEvolutionOn ? "selfEvoPulse 1.3s ease-in-out infinite" : "none",
                 flexShrink: 0,
               }}
@@ -2733,6 +2733,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               maxHeight: 160,
               overflow: "auto",
               fontFamily: "inherit",
+              cursor: "text",
             }}
           />
           <button
@@ -2759,16 +2760,16 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         </div>
         <div style={{ marginTop: 5, fontSize: 12, color: "var(--ink-3)" }}>
           Enter to send · Shift+Enter for new line
-          <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "#2563eb" : "#94a3b8" }}>
+          <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "var(--blue)" : "var(--ink-3)" }}>
             {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
             {autoSelectingSkills ? " (selecting...)" : ""}
           </span>          {activeSkills.length > 0 && (
-            <span style={{ color: "#2563eb", marginLeft: 8 }}>
+            <span style={{ color: "var(--blue)", marginLeft: 8 }}>
               {activeSkills.length} skill{activeSkills.length > 1 ? "s" : ""} active
             </span>
           )}
           {autoSelectionError && (
-            <span style={{ color: "#dc2626", marginLeft: 8 }}>{autoSelectionError}</span>
+            <span style={{ color: "var(--red)", marginLeft: 8 }}>{autoSelectionError}</span>
           )}
         </div>
       </div>
@@ -2926,7 +2927,7 @@ function PixelStreamView({ playerUrl }) {
             top: 8,
             left: 8,
             background: "rgba(0,0,0,0.6)",
-            color: "#16a34a",
+            color: "var(--green)",
             fontSize: 12,
             padding: "3px 8px",
             borderRadius: 4,
@@ -2942,7 +2943,7 @@ function PixelStreamView({ playerUrl }) {
               width: 6,
               height: 6,
               borderRadius: "50%",
-              background: "#16a34a",
+              background: "var(--green)",
               animation: "livebeat 2s ease-in-out infinite",
             }}
           />
@@ -3079,7 +3080,7 @@ const EntityRow = React.memo(function EntityRow({ entity }) {
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ color: "var(--ink)", fontSize: 12, fontWeight: 500 }}>{entity.name}</span>
           {entity.cls && (
-            <span style={{ fontSize: 12, color: "#2563eb", background: "#eff4ff", borderRadius: 3, padding: "1px 5px" }}>
+            <span style={{ fontSize: 12, color: "var(--blue)", background: "#eff4ff", borderRadius: 3, padding: "1px 5px" }}>
               {entity.cls}
             </span>
           )}
@@ -3160,7 +3161,7 @@ function ContextPanel({ sessionId, refreshKey }) {
         {/* Agents section */}
         <div style={sectionStyle}>
           <div style={sectionTitleStyle}>
-            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "#2563eb" }}>{(scene.agents || []).length}</span>
+            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "var(--blue)" }}>{(scene.agents || []).length}</span>
           </div>
           {(scene.agents || []).length === 0
             ? <div style={{ fontSize: 12, color: "var(--ink-3)", paddingBottom: 8 }}>No agents in scene</div>
@@ -3172,7 +3173,7 @@ function ContextPanel({ sessionId, refreshKey }) {
         <div style={{ ...sectionStyle, marginTop: 12 }}>
           <div style={sectionTitleStyle}>
             {ICONS.box(13)} Objects &nbsp;
-            <span style={{ color: "#2563eb" }}>{totalObjects}</span>
+            <span style={{ color: "var(--blue)" }}>{totalObjects}</span>
             {truncated && <span style={{ color: "#f59e0b", fontSize: 12, marginLeft: 4 }}>(showing {MAX_DISPLAY})</span>}
           </div>
           {totalObjects === 0
@@ -3367,7 +3368,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
             <span style={{ color: a.ok === null ? "#f59e0b" : a.ok ? "#16a34a" : "#dc2626", fontWeight: 600 }}>
               {a.ok === null ? "..." : a.ok ? "ok" : "err"}
             </span>
-            <span style={{ color: "#2563eb" }}>{a.tool || a.name}</span>
+            <span style={{ color: "var(--blue)" }}>{a.tool || a.name}</span>
           </div>
         ))}
       </div>
@@ -3786,8 +3787,8 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
             ) : camError ? (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8 }}>
                 <div style={{ fontSize: 28, opacity: 0.4 }}>📷</div>
-                <div style={{ color: "#dc2626", fontSize: 12 }}>{camError}</div>
-                <button onClick={focusAndShoot} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid #2563eb", background: "rgba(37,99,235,.15)", color: "#93c5fd", cursor: "pointer", fontSize: 12 }}>Retry</button>
+                <div style={{ color: "var(--red)", fontSize: 12 }}>{camError}</div>
+                <button onClick={focusAndShoot} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid var(--blue)", background: "rgba(37,99,235,.15)", color: "#93c5fd", cursor: "pointer", fontSize: 12 }}>Retry</button>
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 10 }}>
@@ -4210,7 +4211,7 @@ function MultiAgentTestbed({ sessionId }) {
           {running ? "Running…" : "▶ Spawn & Run"}
         </button>
         <button onClick={stopAll}
-          style={{ padding:"5px 10px", borderRadius:6, border:"1px solid #dc2626",
+          style={{ padding:"5px 10px", borderRadius:6, border:"1px solid var(--red)",
             background:"rgba(220,38,38,.1)", color:"#dc2626", cursor:"pointer", fontSize:12 }}>
           ■ Stop
         </button>
@@ -4746,7 +4747,7 @@ function ViewportPanel({ latestScreenshot }) {
           ].map(m => (
             <button key={m.id} onClick={() => setMode(m.id)} style={{
               padding:"3px 10px", fontSize:12, borderRadius:6, cursor:"pointer",
-              border: `1px solid ${mode===m.id?"#2563eb":"rgba(255,255,255,.1)"}`,
+              border: `1px solid ${mode===m.id?"var(--blue)":"rgba(255,255,255,.1)"}`,
               background: mode===m.id?"rgba(37,99,235,.25)":"transparent",
               color: mode===m.id?"#93c5fd":"#94a3b8",
               fontWeight: mode===m.id?700:400,
@@ -4889,7 +4890,7 @@ function AssetCard({ item, category, onInsert }) {
         cursor: "pointer",
         transition: "border-color 0.15s",
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#2563eb")}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--blue)")}
       onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#e6e9ef")}
     >
       <div
@@ -5421,9 +5422,9 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                       padding: "2px 8px",
                       fontSize: 12,
                       borderRadius: 3,
-                      border: "1px solid #3b82f6",
+                      border: "1px solid var(--blue)",
                       background: "transparent",
-                      color: "#2563eb",
+                      color: "var(--blue)",
                       cursor: "pointer",
                     }}
                   >
@@ -5437,7 +5438,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                       borderRadius: 3,
                       border: "1px solid var(--line)",
                       background: "transparent",
-                      color: "#dc2626",
+                      color: "var(--red)",
                       cursor: "pointer",
                     }}
                   >
@@ -5530,8 +5531,8 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
               padding: "8px 24px",
               fontSize: 13,
               fontWeight: 600,
-              background: "#15803d",
-              border: "1px solid #15803d",
+              background: "var(--green)",
+              border: "1px solid var(--green)",
               borderRadius: 6,
               color: "#fff",
               cursor: "pointer",
@@ -5723,8 +5724,8 @@ function ArenaPage() {
                 style={{
                   padding: "8px 14px",
                   borderRadius: 6,
-                  border: `1px solid ${agent.enabled ? "#15803d" : "var(--line)"}`,
-                  background: agent.enabled ? "#15803d11" : "transparent",
+                  border: `1px solid ${agent.enabled ? "var(--green)" : "var(--line)"}`,
+                  background: agent.enabled ? "var(--green-soft)" : "transparent",
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
@@ -5809,7 +5810,7 @@ function ArenaPage() {
                   padding: "10px 28px",
                   fontSize: 14,
                   background: prompt.trim() ? "#15803d" : "#e6e9ef",
-                  border: `1px solid ${prompt.trim() ? "#15803d" : "var(--line)"}`,
+                  border: `1px solid ${prompt.trim() ? "var(--green)" : "var(--line)"}`,
                   borderRadius: 8,
                   color: prompt.trim() ? "#fff" : "#94a3b8",
                   cursor: prompt.trim() ? "pointer" : "default",
@@ -5839,17 +5840,17 @@ function ArenaPage() {
             {progress && (
               <div style={{ marginTop: 20 }}>
                 {progress.phase === "starting" && (
-                  <div style={{ fontSize: 12, color: "#2563eb" }}>
+                  <div style={{ fontSize: 12, color: "var(--blue)" }}>
                     Matched: {progress.agentA} vs {progress.agentB}
                   </div>
                 )}
                 {progress.phase === "generating_a" && (
-                  <div style={{ fontSize: 12, color: "#16a34a" }}>
+                  <div style={{ fontSize: 12, color: "var(--green)" }}>
                     Agent A ({progress.agent}) is generating...
                   </div>
                 )}
                 {progress.phase === "generating_b" && (
-                  <div style={{ fontSize: 12, color: "#16a34a" }}>
+                  <div style={{ fontSize: 12, color: "var(--green)" }}>
                     Agent A done. Agent B ({progress.agent}) is generating...
                   </div>
                 )}
@@ -5870,7 +5871,7 @@ function ArenaPage() {
                 style={{
                   width: progress?.phase === "generating_b" ? "80%" : "40%",
                   height: "100%",
-                  background: "#3b82f6",
+                  background: "var(--blue)",
                   borderRadius: 2,
                   transition: "width 0.5s",
                 }}
@@ -5954,7 +5955,7 @@ function ArenaPage() {
                 <div
                   style={{
                     fontSize: 14,
-                    color: "#16a34a",
+                    color: "var(--green)",
                     fontWeight: 600,
                     marginBottom: 12,
                   }}
@@ -5983,7 +5984,7 @@ function ArenaPage() {
                     style={{
                       padding: "8px 20px",
                       fontSize: 13,
-                      background: "#3b82f6",
+                      background: "var(--blue)",
                       border: "1px solid #388bfd",
                       borderRadius: 6,
                       color: "#fff",
@@ -6118,7 +6119,7 @@ function LeaderboardPage() {
                     padding: "12px 16px",
                     alignItems: "center",
                     borderBottom: "1px solid var(--line)",
-                    background: i === 0 ? "#2563eb0a" : "transparent",
+                    background: i === 0 ? "var(--blue-soft)" : "transparent",
                   }}
                 >
                   <span
@@ -6186,10 +6187,10 @@ function LeaderboardPage() {
                   <span style={{ textAlign: "right", fontSize: 13, color: "var(--ink-3)" }}>
                     {entry.numBattles}
                   </span>
-                  <span style={{ textAlign: "right", fontSize: 13, color: "#16a34a" }}>
+                  <span style={{ textAlign: "right", fontSize: 13, color: "var(--green)" }}>
                     {entry.wins}
                   </span>
-                  <span style={{ textAlign: "right", fontSize: 13, color: "#dc2626" }}>
+                  <span style={{ textAlign: "right", fontSize: 13, color: "var(--red)" }}>
                     {entry.losses}
                   </span>
                   <span
@@ -6253,7 +6254,7 @@ function GalleryCard({ scene, onClick }) {
         transition: "border-color 0.15s, transform 0.15s",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#2563eb";
+        e.currentTarget.style.borderColor = "var(--blue)";
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
@@ -6310,9 +6311,9 @@ function GalleryCard({ scene, onClick }) {
               fontSize: 12,
               padding: "2px 6px",
               borderRadius: 4,
-              background: "#3b82f622",
-              color: "#2563eb",
-              border: "1px solid #3b82f644",
+              background: "var(--blue-soft)",
+              color: "var(--blue)",
+              border: "1px solid rgba(76,141,255,0.26)",
             }}
           >
             {scene.agentName}
@@ -6479,9 +6480,9 @@ function GalleryDetailModal({ scene, onClose }) {
                   fontSize: 12,
                   padding: "2px 7px",
                   borderRadius: 4,
-                  background: "#3b82f622",
-                  color: "#2563eb",
-                  border: "1px solid #3b82f644",
+                  background: "var(--blue-soft)",
+                  color: "var(--blue)",
+                  border: "1px solid rgba(76,141,255,0.26)",
                 }}
               >
                 {s}
@@ -6638,7 +6639,7 @@ function GalleryPage() {
               padding: "2px 8px",
               borderRadius: 10,
               border: `1px solid ${activeTag ? "#e2e8f0" : "#2563eb"}`,
-              background: activeTag ? "transparent" : "#3b82f622",
+              background: activeTag ? "transparent" : "var(--blue-soft)",
               color: activeTag ? "#64748b" : "#2563eb",
               cursor: "pointer",
             }}
@@ -6654,7 +6655,7 @@ function GalleryPage() {
                 padding: "2px 8px",
                 borderRadius: 10,
                 border: `1px solid ${activeTag === tag ? "#2563eb" : "var(--line)"}`,
-                background: activeTag === tag ? "#3b82f622" : "transparent",
+                background: activeTag === tag ? "var(--blue-soft)" : "transparent",
                 color: activeTag === tag ? "#2563eb" : "#64748b",
                 cursor: "pointer",
               }}
@@ -6729,7 +6730,7 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
         gap: 8,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#2563eb";
+        e.currentTarget.style.borderColor = "var(--blue)";
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
@@ -6750,9 +6751,9 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
               fontSize: 12,
               padding: "2px 7px",
               borderRadius: 10,
-              background: "#dc262622",
-              color: "#dc2626",
-              border: "1px solid #dc262644",
+              background: "rgba(255,95,99,0.13)",
+              color: "var(--red)",
+              border: "1px solid rgba(255,95,99,0.26)",
               flexShrink: 0,
               fontWeight: 700,
               letterSpacing: 0.2,
@@ -6763,7 +6764,7 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
                 width: 6,
                 height: 6,
                 borderRadius: "50%",
-                background: "#dc2626",
+                background: "var(--red)",
                 boxShadow: "0 0 6px #dc2626",
               }}
             />
@@ -6775,8 +6776,8 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
             fontSize: 12,
             padding: "2px 7px",
             borderRadius: 10,
-            background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
-            color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
+            background: skill.source === "custom" ? "var(--blue-soft)" : "#e6e9ef",
+            color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
             border: `1px solid ${skill.source === "custom" ? "#3b82f644" : "var(--line)"}`,
             flexShrink: 0,
           }}
@@ -6869,8 +6870,8 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
                   marginLeft: 8,
                   padding: "2px 7px",
                   borderRadius: 10,
-                  background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
-                  color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
+                  background: skill.source === "custom" ? "var(--blue-soft)" : "#e6e9ef",
+                  color: skill.source === "custom" ? "var(--blue)" : "var(--ink-3)",
                   fontSize: 12,
                 }}
               >
@@ -6887,7 +6888,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
                 background: "#b91c1c22",
                 border: "1px solid #b91c1c66",
                 borderRadius: 6,
-                color: "#dc2626",
+                color: "var(--red)",
                 cursor: "pointer",
               }}
             >
@@ -6937,7 +6938,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
               <span style={{ fontWeight: 600 }}>Dependencies:</span>{" "}
               {skill.dependencies.map((dep, i) => (
                 <span key={dep}>
-                  <span style={{ color: "#2563eb" }}>{dep}</span>
+                  <span style={{ color: "var(--blue)" }}>{dep}</span>
                   {i < skill.dependencies.length - 1 ? ", " : ""}
                 </span>
               ))}
@@ -7137,7 +7138,7 @@ Provide detailed instructions for the AI agent.
               }}
             />
           </div>
-          {error && <div style={{ fontSize: 12, color: "#dc2626", padding: "2px 0" }}>{error}</div>}
+          {error && <div style={{ fontSize: 12, color: "var(--red)", padding: "2px 0" }}>{error}</div>}
         </div>
 
         <div
@@ -7169,8 +7170,8 @@ Provide detailed instructions for the AI agent.
             style={{
               padding: "6px 14px",
               fontSize: 12,
-              background: "#15803d",
-              border: "1px solid #15803d",
+              background: "var(--green)",
+              border: "1px solid var(--green)",
               borderRadius: 6,
               color: "#fff",
               cursor: saving ? "wait" : "pointer",
@@ -7341,8 +7342,8 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
             marginLeft: "auto",
             padding: "6px 14px",
             fontSize: 12,
-            background: "#15803d",
-            border: "1px solid #15803d",
+            background: "var(--green)",
+            border: "1px solid var(--green)",
             borderRadius: 6,
             color: "#fff",
             cursor: "pointer",
@@ -7391,7 +7392,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
                 fontSize: 12,
                 borderRadius: 6,
                 border: `1px solid ${filter === f ? "#2563eb" : "var(--line)"}`,
-                background: filter === f ? "#3b82f622" : "transparent",
+                background: filter === f ? "var(--blue-soft)" : "transparent",
                 color: filter === f ? "#2563eb" : "#64748b",
                 cursor: "pointer",
                 textTransform: "capitalize",
@@ -7488,7 +7489,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
         gap: 8,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = "#2563eb";
+        e.currentTarget.style.borderColor = "var(--blue)";
         e.currentTarget.style.transform = "translateY(-2px)";
       }}
       onMouseLeave={(e) => {
@@ -7509,9 +7510,9 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
               fontSize: 12,
               padding: "2px 7px",
               borderRadius: 10,
-              background: "#dc262622",
-              color: "#dc2626",
-              border: "1px solid #dc262644",
+              background: "rgba(255,95,99,0.13)",
+              color: "var(--red)",
+              border: "1px solid rgba(255,95,99,0.26)",
               flexShrink: 0,
               fontWeight: 700,
               letterSpacing: 0.2,
@@ -7522,7 +7523,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
                 width: 6,
                 height: 6,
                 borderRadius: "50%",
-                background: "#dc2626",
+                background: "var(--red)",
                 boxShadow: "0 0 6px #dc2626",
               }}
             />
@@ -7534,7 +7535,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             fontSize: 12,
             padding: "2px 7px",
             borderRadius: 10,
-            background: tool.enabled ? "#15803d22" : "transparent",
+            background: tool.enabled ? "var(--green-soft)" : "transparent",
             color: tool.enabled ? "#16a34a" : "#64748b",
             border: "1px solid var(--line)",
             flexShrink: 0,
@@ -7581,7 +7582,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             fontSize: 12,
             borderRadius: 6,
             border: "1px solid var(--line)",
-            background: tool.enabled ? "#e6e9ef" : "#3b82f622",
+            background: tool.enabled ? "#e6e9ef" : "var(--blue-soft)",
             color: tool.enabled ? "#1e293b" : "#2563eb",
             cursor: busy ? "wait" : "pointer",
           }}
@@ -7600,7 +7601,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             borderRadius: 6,
             border: "1px solid #b91c1c66",
             background: "#b91c1c22",
-            color: "#dc2626",
+            color: "var(--red)",
             cursor: busy ? "wait" : "pointer",
           }}
         >
@@ -7690,14 +7691,14 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 18, fontWeight: 600, color: "var(--ink)" }}>{tool.name || tool.id}</div>
             <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
-              <span style={{ color: "#2563eb", fontFamily: "monospace" }}>{tool.mcpName}</span>
+              <span style={{ color: "var(--blue)", fontFamily: "monospace" }}>{tool.mcpName}</span>
               <span
                 style={{
                   marginLeft: 8,
                   padding: "2px 7px",
                   borderRadius: 10,
                   border: "1px solid var(--line)",
-                  background: readOnly ? "#3b82f622" : tool.enabled ? "#15803d22" : "transparent",
+                  background: readOnly ? "var(--blue-soft)" : tool.enabled ? "var(--green-soft)" : "transparent",
                   color: readOnly ? "#2563eb" : tool.enabled ? "#16a34a" : "#64748b",
                   fontSize: 12,
                 }}
@@ -7716,7 +7717,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 background: "#b91c1c22",
                 border: "1px solid #b91c1c66",
                 borderRadius: 6,
-                color: "#dc2626",
+                color: "var(--red)",
                 cursor: busy ? "wait" : "pointer",
               }}
             >
@@ -7758,9 +7759,9 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                     fontSize: 12,
                     padding: "2px 7px",
                     borderRadius: 10,
-                    background: "#3b82f622",
-                    color: "#2563eb",
-                    border: "1px solid #3b82f644",
+                    background: "var(--blue-soft)",
+                    color: "var(--blue)",
+                    border: "1px solid rgba(76,141,255,0.26)",
                     cursor: "pointer",
                   }}
                 >
@@ -7803,7 +7804,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
             How Claude Calls This Tool
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
-            Use <span style={{ color: "#2563eb", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
+            Use <span style={{ color: "var(--blue)", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
           </div>
           <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
             Required arguments:{" "}
@@ -7849,7 +7850,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 fontSize: 12,
                 borderRadius: 6,
                 border: "1px solid var(--line)",
-                background: tool.enabled ? "#e6e9ef" : "#3b82f622",
+                background: tool.enabled ? "#e6e9ef" : "var(--blue-soft)",
                 color: tool.enabled ? "#1e293b" : "#2563eb",
                 cursor: busy ? "wait" : "pointer",
               }}
@@ -8054,7 +8055,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
           style={{
             padding: "8px 24px",
             borderBottom: "1px solid var(--line)",
-            color: "#dc2626",
+            color: "var(--red)",
             fontSize: 12,
           }}
         >

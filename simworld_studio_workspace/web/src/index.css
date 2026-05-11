@@ -165,7 +165,9 @@ body {
   background: var(--bg);
 }
 
-button, input, textarea { font: inherit; cursor: pointer; }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; }
+input, textarea, select { cursor: text; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -535,6 +537,7 @@ button, input, textarea { font: inherit; cursor: pointer; }
   flex: 1;
   height: 44px;
   padding: 0 11px;
+  cursor: text;
   border-radius: 7px;
   border: 1px solid var(--line);
   background: #12161d;
