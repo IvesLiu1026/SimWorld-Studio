@@ -50,5 +50,5 @@ static_scene_eval_code.zip
 .codex/
 simworld_studio_workspace/.mcp.json
 
-!simworld_studio_workspace/web/SimCoder.png
-!simworld_studio_workspace/web/simworld-studio-logo.png
+!simworld_studio_workspace/web/public/SimCoder.png
+!simworld_studio_workspace/web/public/simworld-studio-logo.png

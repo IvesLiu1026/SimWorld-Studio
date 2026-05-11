@@ -10,7 +10,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ARENA_ROOT="$(cd "$SCRIPT_DIR/../simworld_arena" && pwd)"
+ARENA_ROOT="$(cd "$SCRIPT_DIR/simworld_studio_workspace" && pwd)"
 PKG_DIR="$SCRIPT_DIR/packaging"
 SERVER_SRC="$ARENA_ROOT/web/server"
 FRONTEND_SRC="$ARENA_ROOT/web"
