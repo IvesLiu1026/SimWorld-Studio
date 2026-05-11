@@ -801,11 +801,11 @@ button { font-family: inherit; }
    THEME: GitHub Dark  (VS Code GitHub Dark style)
 ══════════════════════════════════════════════════════════════ */
 [data-theme="github"] {
-  --bg: #010409;
-  --panel: #0d1117;
-  --bg-primary: #010409;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #21262d;
+  --bg: #0e1117;
+  --panel: #161b22;
+  --bg-primary: #0e1117;
+  --bg-secondary: #1c2128;
+  --bg-tertiary: #272e38;
   --bg-hover: #30363d;
   --ink: #e6edf3;
   --ink-2: #8b949e;
@@ -839,8 +839,6 @@ button { font-family: inherit; }
   --shadow-card: 0 1px 3px rgba(0,0,0,0.5);
   --shadow-hover: 0 4px 12px rgba(0,0,0,0.5);
   --shadow-pop: 0 8px 24px rgba(0,0,0,0.6);
-  --fs-nav: 14px;
-  --fs-panel-title: 13px;
 }
 
 /* ── GitHub theme border-radius overrides (sharp, compact) ── */
@@ -907,8 +905,6 @@ button { font-family: inherit; }
   --shadow-card: 0 1px 4px rgba(0,0,0,0.6);
   --shadow-hover: 0 4px 12px rgba(0,0,0,0.6);
   --shadow-pop: 0 8px 24px rgba(0,0,0,0.7);
-  --fs-nav: 13px;
-  --fs-panel-title: 13px;
 }
 
 /* ── Pro theme: zero border-radius everywhere ── */
@@ -950,6 +946,157 @@ button { font-family: inherit; }
 [data-theme="github"] html { background: var(--bg) !important; }
 [data-theme="pro"] body,
 [data-theme="pro"] html { background: var(--bg) !important; }
+
+/* ══════════════════════════════════════════════════════════════
+   DARK THEME — global background overrides
+   These catch hardcoded #fff / #f8fafc in chat, agent, and tool UIs
+══════════════════════════════════════════════════════════════ */
+
+/* Shared selector for both dark themes */
+[data-theme="github"],
+[data-theme="pro"] {
+  color-scheme: dark;
+}
+
+/* Any direct child div/span/section inside a panel card that has white bg */
+[data-theme="github"] .sw-panel-card,
+[data-theme="pro"]    .sw-panel-card,
+[data-theme="github"] .sw-card,
+[data-theme="pro"]    .sw-card {
+  background: var(--panel) !important;
+  color: var(--ink);
+}
+
+/* Chat bubbles - override inline styles */
+[data-theme="github"] .sw-bubble-user,
+[data-theme="pro"]    .sw-bubble-user {
+  background: var(--user-bubble) !important;
+  border-color: var(--line) !important;
+}
+[data-theme="github"] .sw-bubble-assistant,
+[data-theme="pro"]    .sw-bubble-assistant {
+  background: var(--bg-secondary) !important;
+  border-color: var(--line) !important;
+}
+
+/* Chat input */
+[data-theme="github"] .sw-chat-input,
+[data-theme="pro"]    .sw-chat-input {
+  background: var(--bg-secondary) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+/* Agent card inline overrides — target the agent card container */
+[data-theme="github"] .sw-agent-card,
+[data-theme="pro"]    .sw-agent-card {
+  background: var(--panel) !important;
+}
+
+/* Generic: any element that sets background to pure white inline gets overridden
+   by a catch-all for elements inside the panel columns */
+[data-theme="github"] .sw-col-left *[style*="background: rgb(255, 255, 255)"],
+[data-theme="github"] .sw-col-left *[style*="background: #fff"],
+[data-theme="github"] .sw-col-right *[style*="background: rgb(255, 255, 255)"],
+[data-theme="github"] .sw-col-right *[style*="background: #fff"],
+[data-theme="pro"] .sw-col-left *[style*="background: rgb(255, 255, 255)"],
+[data-theme="pro"] .sw-col-left *[style*="background: #fff"],
+[data-theme="pro"] .sw-col-right *[style*="background: rgb(255, 255, 255)"],
+[data-theme="pro"] .sw-col-right *[style*="background: #fff"] {
+  background: var(--panel) !important;
+}
+
+/* Markdown text color */
+[data-theme="github"] .markdown,
+[data-theme="pro"]    .markdown {
+  color: var(--ink);
+}
+[data-theme="github"] .markdown code,
+[data-theme="pro"]    .markdown code {
+  background: var(--bg-tertiary);
+  color: var(--blue);
+  border-color: var(--line);
+}
+[data-theme="github"] .markdown pre,
+[data-theme="pro"]    .markdown pre {
+  background: var(--bg-tertiary);
+  border-color: var(--line);
+}
+
+/* Tab buttons */
+[data-theme="github"] .sw-tab-btn,
+[data-theme="pro"]    .sw-tab-btn {
+  background: var(--bg-secondary);
+  color: var(--ink-2);
+  border-color: var(--line);
+}
+[data-theme="github"] .sw-tab-btn:hover,
+[data-theme="pro"]    .sw-tab-btn:hover {
+  background: var(--bg-hover);
+  color: var(--ink);
+}
+[data-theme="github"] .sw-tab-btn.active,
+[data-theme="pro"]    .sw-tab-btn.active {
+  background: var(--blue-soft);
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+/* Toolbar pills */
+[data-theme="github"] .sw-tb-pill,
+[data-theme="pro"]    .sw-tb-pill {
+  background: var(--bg-secondary);
+  color: var(--ink-2);
+  border-color: var(--line);
+}
+[data-theme="github"] .sw-tb-pill:hover,
+[data-theme="pro"]    .sw-tb-pill:hover {
+  background: var(--bg-hover);
+}
+
+/* Suggestion pills */
+[data-theme="github"] .sw-suggestion-pill,
+[data-theme="pro"]    .sw-suggestion-pill {
+  background: var(--bg-secondary);
+  color: var(--ink-2);
+  border-color: var(--line);
+}
+
+/* Icon buttons */
+[data-theme="github"] .sw-icon-btn:hover,
+[data-theme="pro"]    .sw-icon-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* Drawer */
+[data-theme="github"] .sw-drawer,
+[data-theme="pro"]    .sw-drawer {
+  background: var(--panel);
+  border-color: var(--line);
+}
+[data-theme="github"] .sw-drawer-header,
+[data-theme="pro"]    .sw-drawer-header {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+/* Running pill and simcoder pill */
+[data-theme="github"] .sw-running-pill,
+[data-theme="pro"]    .sw-running-pill {
+  background: var(--bg-secondary);
+  border-color: var(--line);
+}
+[data-theme="github"] .sw-simcoder-pill,
+[data-theme="pro"]    .sw-simcoder-pill {
+  background: var(--orange-soft);
+  border-color: var(--orange);
+}
+
+/* Scrollbar for dark themes */
+[data-theme="github"] ::-webkit-scrollbar-thumb,
+[data-theme="pro"]    ::-webkit-scrollbar-thumb { background: var(--line-2); }
+[data-theme="github"] ::-webkit-scrollbar-thumb:hover,
+[data-theme="pro"]    ::-webkit-scrollbar-thumb:hover { background: var(--ink-3); }
 
 /* ── Pro: tab-strip style panel headers ── */
 [data-theme="pro"] .sw-pro-tab-strip {

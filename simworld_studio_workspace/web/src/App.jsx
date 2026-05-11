@@ -1950,7 +1950,7 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
           )
         : [
             message.content && (
-              <div className="markdown" key="content" style={{ color:"#0f172a", fontSize:13 }}>
+              <div className="markdown" key="content" style={{ color:"var(--ink,#0f172a)", fontSize:13 }}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
               </div>
             ),
@@ -1960,11 +1960,11 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
   );
 
   const bubble = (
-    <div style={{
+    <div className={isUser ? "sw-bubble-user" : "sw-bubble-assistant"} style={{
       padding:"9px 12px",
       borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
-      background: isUser ? "#eff4ff" : "#ffffff",
-      border:`1px solid ${isUser?"#dbe6ff":"#e6e9ef"}`,
+      background: isUser ? "var(--user-bubble,#eff4ff)" : "var(--assistant-bubble,#ffffff)",
+      border:`1px solid ${isUser?"var(--blue-soft,#dbe6ff)":"var(--line,#e6e9ef)"}`,
       boxShadow:"0 1px 2px rgba(15,23,42,.04)",
     }}>
       {bubbleContent}
@@ -3379,7 +3379,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
     <div
       onClick={() => onExpand?.(agent)}
       style={{
-        border: `1px solid ${color}33`, borderRadius: 8, background: "#ffffff",
+        border: `1px solid ${color}33`, borderRadius: 8, background: "var(--panel,#ffffff)",
         display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0,
         cursor: "pointer", transition: "box-shadow 0.15s, border-color 0.15s",
       }}
@@ -8246,14 +8246,15 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
 
 function StatusDot({ label, active, activeColor, inactiveColor }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#64748b" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 500, color: "var(--ink-3)" }}>
       <div
         style={{
-          width: 6,
-          height: 6,
+          width: 8,
+          height: 8,
           borderRadius: "50%",
+          flexShrink: 0,
           background: active ? activeColor : inactiveColor,
-          boxShadow: active ? `0 0 4px ${activeColor}` : "none",
+          boxShadow: active ? `0 0 5px ${activeColor}` : "none",
         }}
       />
       {label}
@@ -9016,15 +9017,15 @@ function App() {
 
       {/* ══ TOP NAV BAR — floating card ══ */}
       <header style={{
-        height: 50,
+        height: 62,
         background: "var(--panel)",
         borderRadius: 12,
         border: "1px solid var(--line)",
         boxShadow: "var(--shadow-card)",
         display: "flex",
         alignItems: "center",
-        padding: "0 16px",
-        gap: 12,
+        padding: "0 20px",
+        gap: 14,
         flexShrink: 0,
         userSelect: "none",
         zIndex: 20,
@@ -9032,7 +9033,7 @@ function App() {
       }}>
         {/* Brand */}
         <div className="sw-brand">
-          <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, boxShadow:"0 2px 8px rgba(2,6,23,.2)" }}>
+          <div style={{ width:38, height:38, borderRadius:"50%", overflow:"hidden", flexShrink:0, boxShadow:"0 2px 8px rgba(2,6,23,.2)" }}>
             <img src="/simworld-studio-logo.png" style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} alt="SimWorld" />
           </div>
           <span className="sw-brand-name">SimWorld Studio</span>
@@ -9056,90 +9057,87 @@ function App() {
         </nav>
 
         {/* Right side */}
-        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
 
           {/* Status dots */}
           {health && (
-            <div style={{ display:"flex", alignItems:"center", gap:12, paddingRight:10, borderRight:"1px solid var(--line-2)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:14, paddingRight:14, borderRight:"1px solid var(--line-2)" }}>
               <StatusDot label="UE Engine"   active={health.ueConnected}  activeColor="#16a34a" inactiveColor="#dc2626" />
               <StatusDot label="MCP Server"  active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
               <StatusDot label="Claude Code" active={true}                activeColor="#16a34a" inactiveColor="#64748b" />
             </div>
           )}
-          {!health && <span style={{ fontSize:12, color:"#94a3b8" }}>Connecting…</span>}
+          {!health && <span style={{ fontSize:13, color:"var(--ink-3)" }}>Connecting…</span>}
 
           {/* Sync error / stale agent warnings */}
           {!syncStatus.sseOk && (
-            <div style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 8px", borderRadius:7, background:"#fef2f2", border:"1px solid #fecaca", fontSize:12, fontWeight:600, color:"#dc2626" }}>
-              {ICONS.warning(13)} {syncStatus.syncError || "SSE disconnected"}
+            <div style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:7, background:"var(--error-soft,#fef2f2)", border:"1px solid var(--error-border,#fecaca)", fontSize:13, fontWeight:600, color:"var(--red)" }}>
+              {ICONS.warning(14)} {syncStatus.syncError || "SSE disconnected"}
             </div>
           )}
           {syncStatus.staleAgents?.size > 0 && (
             <div title={`Stale: ${[...syncStatus.staleAgents].join(", ")}`}
-              style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 8px", borderRadius:7, background:"#fff7ed", border:"1px solid #fed7aa", fontSize:12, fontWeight:600, color:"#ea580c" }}>
-              {ICONS.ghost(13)} {syncStatus.staleAgents.size} stale agent{syncStatus.staleAgents.size > 1 ? "s" : ""}
+              style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:7, background:"var(--orange-soft)", border:"1px solid var(--amber)", fontSize:13, fontWeight:600, color:"var(--orange)" }}>
+              {ICONS.ghost(14)} {syncStatus.staleAgents.size} stale
             </div>
           )}
 
           {/* Session countdown — shown when < 5 min remaining */}
           {secsLeft !== null && !session?.dev && (
             <div style={{
-              display:"inline-flex", alignItems:"center", gap:5,
-              padding:"4px 10px", borderRadius:8,
-              background: warningSoon ? "#fef2f2" : "#f0fdf4",
-              border: `1px solid ${warningSoon ? "#fecaca" : "#bbf7d0"}`,
-              fontSize:12, fontWeight:700,
-              color: warningSoon ? "#dc2626" : "#16a34a",
+              display:"inline-flex", alignItems:"center", gap:6,
+              padding:"5px 12px", borderRadius:8,
+              background: warningSoon ? "var(--orange-soft,#fff1e6)" : "var(--green-soft,#ecfdf5)",
+              border: `1px solid ${warningSoon ? "var(--amber,#f59e0b)" : "var(--green,#16a34a)"}`,
+              fontSize:13, fontWeight:700,
+              color: warningSoon ? "var(--orange,#ea580c)" : "var(--green,#16a34a)",
             }}>
-              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-              </svg>
+              {ICONS.clock(14)}
               {Math.floor(secsLeft/60)}:{String(secsLeft%60).padStart(2,"0")}
             </div>
           )}
 
           {/* Running pill */}
-          <div style={{
-            display:"inline-flex", alignItems:"center", gap:7,
-            padding:"5px 8px 5px 11px",
+          <div className="sw-running-pill" style={{
+            display:"inline-flex", alignItems:"center", gap:8,
+            padding:"6px 10px 6px 14px",
             border:"1px solid var(--line)", borderRadius:999,
-            background:"var(--panel)", fontSize:12, fontWeight:600,
+            background:"var(--panel)", fontSize:13, fontWeight:600,
           }}>
             <span style={{
-              width:8, height:8, borderRadius:"50%", background:"#22c55e",
-              boxShadow:"0 0 0 3px rgba(34,197,94,.18)",
+              width:9, height:9, borderRadius:"50%", background:"#22c55e",
+              boxShadow:"0 0 0 3px rgba(34,197,94,.18)", flexShrink:0,
               animation: health?.ueConnected ? "sw-glow-pulse 2s ease-in-out infinite" : "none",
             }}/>
             <span style={{ color:"var(--ink-2)" }}>
               {health?.ueConnected ? "Running" : "Standby"}
             </span>
-            {/* play/pause controls */}
             {[
-              <svg key="play" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style={{color:"var(--ink-2)"}}><polygon points="5,3 19,12 5,21"/></svg>,
-              <svg key="pause" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style={{color:"var(--ink-2)"}}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
+              <svg key="play" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{color:"var(--ink-2)"}}><polygon points="5,3 19,12 5,21"/></svg>,
+              <svg key="pause" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{color:"var(--ink-2)"}}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
             ].map((icon,i) => (
               <span key={i} style={{
-                width:24, height:24, borderRadius:"50%", background:"var(--bg-tertiary,#f1f5f9)",
+                width:26, height:26, borderRadius:"50%", background:"var(--bg-tertiary,#f1f5f9)",
                 display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
               }}>{icon}</span>
             ))}
           </div>
 
           {/* SimCoder pill */}
-          <div className="sw-simcoder-pill">
-            <img src="/SimCoder.png" style={{ width:20, height:20, objectFit:"contain", borderRadius:5 }} alt="SimCoder" />
+          <div className="sw-simcoder-pill" style={{ fontSize:14, padding:"6px 14px 6px 10px" }}>
+            <img src="/SimCoder.png" style={{ width:24, height:24, objectFit:"contain", borderRadius:5 }} alt="SimCoder" />
             <span>SimCoder</span>
           </div>
 
           {/* Avatar */}
           <div style={{
-            width:32, height:32, borderRadius:"50%",
+            width:36, height:36, borderRadius:"50%",
             background:"linear-gradient(135deg,#e0e7ff,#c7d2fe)",
             display:"flex", alignItems:"center", justifyContent:"center",
-            boxShadow:"0 0 0 2px #fff, 0 0 0 3px var(--line)",
-            cursor:"pointer",
+            boxShadow:"0 0 0 2px var(--panel), 0 0 0 3px var(--line)",
+            cursor:"pointer", flexShrink:0,
           }}>
-            <svg viewBox="0 0 24 24" fill="none" width="17" height="17">
+            <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
               <circle cx="12" cy="8" r="4" fill="#6366f1"/>
               <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" fill="#6366f1"/>
             </svg>
@@ -9147,15 +9145,15 @@ function App() {
 
           {/* Settings icon */}
           <button onClick={() => setShowSettings(true)} style={{
-            width:32, height:32, borderRadius:8, border:"none", background:"transparent",
+            width:36, height:36, borderRadius:8, border:"none", background:"transparent",
             display:"flex", alignItems:"center", justifyContent:"center",
-            color:"var(--ink-2)", cursor:"pointer",
+            color:"var(--ink-2)", cursor:"pointer", flexShrink:0,
           }}
             onMouseEnter={e=>e.currentTarget.style.background="var(--bg-hover,#f1f5f9)"}
             onMouseLeave={e=>e.currentTarget.style.background="transparent"}
             title="Settings"
           >
-            {ICONS.gear(18)}
+            {ICONS.gear(22)}
           </button>
 
         </div>
