@@ -796,6 +796,21 @@ button, input, textarea { font: inherit; cursor: pointer; }
 [data-theme="light"] .sw-nav-dot { background: var(--red); }
 [data-theme="light"] .sw-mode-guide { background: var(--panel); }
 
+/* ── Mode step interactive states ── */
+.sw-mode-step {
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.sw-mode-step:hover { border-color: var(--blue); background: var(--panel-2); }
+.sw-mode-step.active {
+  border-color: rgba(76,141,255,0.75);
+  background: var(--blue-soft);
+  color: var(--blue-2);
+}
+[data-theme="light"] .sw-mode-step        { background: #f0f4f8; }
+[data-theme="light"] .sw-mode-step:hover  { background: #e8eef8; }
+[data-theme="light"] .sw-mode-step.active { background: #eff4ff; color: var(--blue); }
+
 /* ══════════════════════════════════════════════════════════════
    ANIMATIONS
 ══════════════════════════════════════════════════════════════ */

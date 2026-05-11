@@ -724,7 +724,7 @@ function headerButtonStyle(color) {
   return {
     padding: "3px 11px",
     fontSize: 12,
-    background: "#ffffff",
+    background: "var(--panel)",
     border: `1px solid ${color}55`,
     borderRadius: 8,
     color,
@@ -768,10 +768,10 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
     <div
       style={{
         margin: "4px 0",
-        border: "1px solid #e6e9ef",
+        border: "1px solid var(--line)",
         borderRadius: 8,
         overflow: "hidden",
-        background: "#f8fafc",
+        background: "var(--panel-2)",
       }}
     >
       <button
@@ -784,7 +784,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
           padding: "5px 10px",
           background: "none",
           border: "none",
-          color: "#64748b",
+          color: "var(--ink-3)",
           cursor: "pointer",
           textAlign: "left",
           fontSize: 12,
@@ -832,7 +832,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
       </button>
 
       {expanded && (
-        <div style={{ padding: "8px 10px", borderTop: "1px solid #e6e9ef" }}>
+        <div style={{ padding: "8px 10px", borderTop: "1px solid var(--line)" }}>
           {(tool.input || tool.inputBuffer) && (
             <div style={{ marginBottom: 6 }}>
               <div
@@ -850,7 +850,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
                 style={{
                   margin: 0,
                   fontSize: 12,
-                  color: "#334155",
+                  color: "var(--ink-2)",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                 }}
@@ -863,7 +863,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
             <div>
               <div
                 style={{
-                  color: "#64748b",
+                  color: "var(--ink-3)",
                   fontSize: 12,
                   marginBottom: 3,
                   textTransform: "uppercase",
@@ -895,7 +895,7 @@ const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
                 style={{
                   maxWidth: "100%",
                   borderRadius: 4,
-                  border: "1px solid #e2e8f0",
+                  border: "1px solid var(--line)",
                 }}
               />
             </div>
@@ -934,7 +934,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
             width: 14,
             height: 14,
             borderRadius: 3,
-            border: `2px solid ${active ? "#3b82f6" : "#e2e8f0"}`,
+            border: `2px solid ${active ? "var(--blue)" : "var(--line)"}`,
             background: active ? "#3b82f6" : "transparent",
             display: "flex",
             alignItems: "center",
@@ -952,7 +952,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
           style={{
             fontSize: 12,
             fontWeight: 500,
-            color: "#0f172a",
+            color: "var(--ink)",
             cursor: disabled ? "not-allowed" : "pointer",
             flex: 1,
           }}
@@ -968,9 +968,9 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
             padding: "2px 6px",
             fontSize: 12,
             background: "#e6e9ef",
-            border: "1px solid #e2e8f0",
+            border: "1px solid var(--line)",
             borderRadius: 4,
-            color: "#64748b",
+            color: "var(--ink-3)",
             cursor: "pointer",
           }}
           title="Preview skill details"
@@ -993,7 +993,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
       <div
         style={{
           fontSize: 12,
-          color: "#64748b",
+          color: "var(--ink-3)",
           marginTop: 4,
           marginLeft: 20,
           lineHeight: 1.4,
@@ -1019,9 +1019,9 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
                 fontSize: 12,
                 padding: "1px 5px",
                 borderRadius: 4,
-                background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                background: (TAG_COLORS[tag] || "var(--line)") + "33",
                 color: TAG_COLORS[tag] || "#64748b",
-                border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
+                border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
               }}
             >
               {tag}
@@ -1068,8 +1068,8 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
           width: "90%",
           maxWidth: 700,
           maxHeight: "80vh",
-          background: "#f4f6fa",
-          border: "1px solid #e2e8f0",
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -1080,17 +1080,17 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
         <div
           style={{
             padding: "14px 18px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             display: "flex",
             alignItems: "center",
             gap: 10,
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>
               {skill.name}
             </div>
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 3 }}>
+            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 3 }}>
               v{skill.version} by {skill.author}
               <span
                 style={{
@@ -1129,7 +1129,7 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
               fontSize: 14,
               background: "transparent",
               border: "none",
-              color: "#64748b",
+              color: "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -1138,8 +1138,8 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
         </div>
 
         {/* Description + Tags */}
-        <div style={{ padding: "10px 18px", borderBottom: "1px solid #e6e9ef" }}>
-          <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+        <div style={{ padding: "10px 18px", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
             {skill.description}
           </div>
           {skill.tags.length > 0 && (
@@ -1158,9 +1158,9 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
                     fontSize: 12,
                     padding: "2px 7px",
                     borderRadius: 4,
-                    background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                    background: (TAG_COLORS[tag] || "var(--line)") + "33",
                     color: TAG_COLORS[tag] || "#64748b",
-                    border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
+                    border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
                   }}
                 >
                   {tag}
@@ -1243,10 +1243,10 @@ Provide detailed instructions for the AI agent.
     width: "100%",
     padding: "6px 10px",
     fontSize: 12,
-    background: "#ffffff",
-    border: "1px solid #e2e8f0",
+    background: "var(--panel)",
+    border: "1px solid var(--line)",
     borderRadius: 6,
-    color: "#0f172a",
+    color: "var(--ink)",
     outline: "none",
     boxSizing: "border-box",
   };
@@ -1270,8 +1270,8 @@ Provide detailed instructions for the AI agent.
           width: "90%",
           maxWidth: 650,
           maxHeight: "85vh",
-          background: "#f4f6fa",
-          border: "1px solid #e2e8f0",
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -1282,12 +1282,12 @@ Provide detailed instructions for the AI agent.
         <div
           style={{
             padding: "14px 18px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             display: "flex",
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>
             Create Custom Skill
           </span>
           <button
@@ -1298,7 +1298,7 @@ Provide detailed instructions for the AI agent.
               fontSize: 14,
               background: "transparent",
               border: "none",
-              color: "#64748b",
+              color: "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -1318,7 +1318,7 @@ Provide detailed instructions for the AI agent.
           }}
         >
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
               Skill ID (lowercase, no spaces)
             </label>
             <input
@@ -1329,7 +1329,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
               Name
             </label>
             <input
@@ -1340,7 +1340,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
               Description (short summary)
             </label>
             <input
@@ -1351,7 +1351,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
               Tags (comma-separated)
             </label>
             <input
@@ -1362,7 +1362,7 @@ Provide detailed instructions for the AI agent.
             />
           </div>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
               Content (Markdown — instructions for the AI agent)
             </label>
             <textarea
@@ -1387,7 +1387,7 @@ Provide detailed instructions for the AI agent.
         <div
           style={{
             padding: "12px 18px",
-            borderTop: "1px solid #e6e9ef",
+            borderTop: "1px solid var(--line)",
             display: "flex",
             gap: 8,
             justifyContent: "flex-end",
@@ -1399,7 +1399,7 @@ Provide detailed instructions for the AI agent.
               padding: "6px 14px",
               fontSize: 12,
               background: "#e6e9ef",
-              border: "1px solid #e2e8f0",
+              border: "1px solid var(--line)",
               borderRadius: 6,
               color: "#1e293b",
               cursor: "pointer",
@@ -1487,8 +1487,8 @@ function SkillsPanel({
     <div
       style={{
         padding: "6px 12px",
-        borderBottom: "1px solid #e6e9ef",
-        background: "#f4f6fa",
+        borderBottom: "1px solid var(--line)",
+        background: "var(--bg)",
       }}
     >
       {/* Toggle header */}
@@ -1502,10 +1502,10 @@ function SkillsPanel({
         }}
         onClick={() => setExpanded(!expanded)}
       >
-        <span style={{ fontSize: 12, color: "#64748b", fontFamily: "monospace" }}>
+        <span style={{ fontSize: 12, color: "var(--ink-3)", fontFamily: "monospace" }}>
           {expanded ? "▼" : "▶"}
         </span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Skills</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Skills</span>
         {activeSkills.length > 0 && (
           <span
             style={{
@@ -1524,14 +1524,14 @@ function SkillsPanel({
           onClick={(e) => e.stopPropagation()}
           style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}
         >
-          <span style={{ fontSize: 12, color: "#64748b" }}>Auto-select skills</span>
+          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Auto-select skills</span>
           <button
             onClick={() => onAutoEnabledChange(!autoEnabled)}
             style={{
               width: 34,
               height: 18,
               borderRadius: 999,
-              border: "1px solid #e2e8f0",
+              border: "1px solid var(--line)",
               background: autoEnabled ? "#3b82f6" : "#e6e9ef",
               padding: 1,
               position: "relative",
@@ -1575,9 +1575,9 @@ function SkillsPanel({
           <div
             style={{
               fontSize: 12,
-              color: "#64748b",
-              border: "1px solid #e6e9ef",
-              background: "#f4f6fa",
+              color: "var(--ink-3)",
+              border: "1px solid var(--line)",
+              background: "var(--bg)",
               borderRadius: 6,
               padding: "6px 8px",
               marginBottom: 2,
@@ -1642,7 +1642,7 @@ function SkillsPanel({
               padding: "6px 10px",
               marginTop: 4,
               borderRadius: 6,
-              border: "1px dashed #e2e8f0",
+              border: "1px dashed var(--line)",
               background: "transparent",
               color: "#2563eb",
               fontSize: 12,
@@ -1726,17 +1726,17 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
       <div
         style={{
           padding: "8px 14px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           gap: 8,
-          background: "#ffffff",
+          background: "var(--panel)",
         }}
       >
         <span style={{ fontSize: 13, fontWeight: 600, color: "#ea580c" }}>
           Annotate Screenshot
         </span>
-        <span style={{ fontSize: 12, color: "#64748b" }}>
+        <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
           Click on the image to add feedback points
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -1746,9 +1746,9 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
               padding: "4px 12px",
               fontSize: 12,
               borderRadius: 4,
-              border: "1px solid #e2e8f0",
+              border: "1px solid var(--line)",
               background: "#e6e9ef",
-              color: "#64748b",
+              color: "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -1834,11 +1834,11 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
                     left: 16,
                     top: -4,
                     background: "#e6e9ef",
-                    border: "1px solid #e2e8f0",
+                    border: "1px solid var(--line)",
                     borderRadius: 4,
                     padding: "2px 6px",
                     fontSize: 12,
-                    color: "#0f172a",
+                    color: "var(--ink)",
                     whiteSpace: "nowrap",
                     maxWidth: 200,
                     overflow: "hidden",
@@ -1857,14 +1857,14 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
           style={{
             width: 260,
             borderLeft: "1px solid #e6e9ef",
-            background: "#f4f6fa",
+            background: "var(--bg)",
             display: "flex",
             flexDirection: "column",
             padding: 12,
             gap: 8,
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Feedback</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Feedback</span>
           <textarea
             value={feedbackText}
             onChange={(e) => setFeedbackText(e.target.value)}
@@ -1872,17 +1872,17 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
             style={{
               flex: 1,
               resize: "none",
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
+              background: "var(--panel)",
+              border: "1px solid var(--line)",
               borderRadius: 6,
-              color: "#0f172a",
+              color: "var(--ink)",
               padding: 8,
               fontSize: 12,
               fontFamily: "inherit",
             }}
           />
           {points.length > 0 && (
-            <div style={{ fontSize: 12, color: "#64748b" }}>
+            <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Annotations:</div>
               {points.map((pt, i) => (
                 <div
@@ -2477,7 +2477,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         display: "flex",
         flexDirection: "column",
         height: "100%",
-        background: "#f4f6fa",
+        background: "var(--bg)",
         position: "relative",
       }}
     >
@@ -2494,8 +2494,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       <div
         style={{
           padding: "10px 14px",
-          borderBottom: "1px solid #e6e9ef",
-          background: "#ffffff",
+          borderBottom: "1px solid var(--line)",
+          background: "var(--panel)",
           display: "flex",
           alignItems: "center",
           gap: 10,
@@ -2504,11 +2504,11 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>Scene Agent</div>
+          <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>Scene Agent</div>
           <div
             style={{
               fontSize: 12,
-              color: "#64748b",
+              color: "var(--ink-3)",
               display: "flex",
               gap: 8,
               alignItems: "center",
@@ -2526,7 +2526,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             {sessionId && (
               <>
                 <span>·</span>
-                <span style={{ color: "#64748b" }}>session: {sessionId.slice(0, 8)}</span>
+                <span style={{ color: "var(--ink-3)" }}>session: {sessionId.slice(0, 8)}</span>
                 <span>·</span>
                 <span style={{ color: "#475569" }}>turn {turnCount}</span>
               </>
@@ -2660,8 +2660,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         <div
           style={{
             padding: "6px 14px",
-            borderTop: "1px solid #e6e9ef",
-            background: "#ffffff",
+            borderTop: "1px solid var(--line)",
+            background: "var(--panel)",
             display: "flex",
             gap: 6,
             flexWrap: "wrap",
@@ -2675,9 +2675,9 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
                 padding: "4px 11px",
                 fontSize: 12,
                 borderRadius: 999,
-                border: "1px solid #e6e9ef",
-                background: "#f8fafc",
-                color: "#334155",
+                border: "1px solid var(--line)",
+                background: "var(--panel-2)",
+                color: "var(--ink-2)",
                 cursor: "pointer",
                 fontWeight: 600,
                 fontFamily: "inherit",
@@ -2693,9 +2693,9 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       <div
         style={{
           padding: "10px 14px",
-          borderTop: "1px solid #e6e9ef",
+          borderTop: "1px solid var(--line)",
           flexShrink: 0,
-          background: "#ffffff",
+          background: "var(--panel)",
         }}
       >
         <div
@@ -2703,8 +2703,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             display: "flex",
             gap: 8,
             alignItems: "flex-end",
-            background: "#fafbfd",
-            border: "1px solid #e6e9ef",
+            background: "var(--bg-tertiary)",
+            border: "1px solid var(--line)",
             borderRadius: 10,
             padding: "8px 12px",
           }}
@@ -2726,7 +2726,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               background: "none",
               border: "none",
               outline: "none",
-              color: "#0f172a",
+              color: "var(--ink)",
               fontSize: 13,
               resize: "none",
               lineHeight: 1.5,
@@ -2744,8 +2744,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               height: 34,
               borderRadius: 10,
               border: "none",
-              background: loading ? "#fee2e2" : input.trim() ? "#2563eb" : "#e2e8f0",
-              color: loading ? "#dc2626" : input.trim() ? "#ffffff" : "#94a3b8",
+              background: loading ? "rgba(255,95,99,0.15)" : input.trim() ? "var(--blue)" : "var(--panel-2)",
+              color: loading ? "var(--red)" : input.trim() ? "#ffffff" : "var(--ink-3)",
               cursor: loading || input.trim() ? "pointer" : "default",
               display: "flex",
               alignItems: "center",
@@ -2757,7 +2757,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             {loading ? "⏹" : "▶"}
           </button>
         </div>
-        <div style={{ marginTop: 5, fontSize: 12, color: "#64748b" }}>
+        <div style={{ marginTop: 5, fontSize: 12, color: "var(--ink-3)" }}>
           Enter to send · Shift+Enter for new line
           <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "#2563eb" : "#94a3b8" }}>
             {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
@@ -2803,7 +2803,7 @@ function KeyHint({ icon, label }) {
       >
         {icon}
       </div>
-      <div style={{ color: "#94a3b8", fontSize: 12 }}>{label}</div>
+      <div style={{ color: "var(--ink-3)", fontSize: 12 }}>{label}</div>
     </div>
   );
 }
@@ -2883,7 +2883,7 @@ function PixelStreamView({ playerUrl }) {
               display: "flex",
               gap: 24,
               marginTop: 8,
-              color: "#94a3b8",
+              color: "var(--ink-3)",
               fontSize: 12,
             }}
           >
@@ -2908,7 +2908,7 @@ function PixelStreamView({ playerUrl }) {
             display: "flex",
             gap: 20,
             pointerEvents: "none",
-            border: "1px solid #e2e8f0",
+            border: "1px solid var(--line)",
           }}
         >
           <KeyHint icon={ICONS.mouse(14)} label="Click & drag to look" />
@@ -2967,9 +2967,9 @@ function PixelStreamView({ playerUrl }) {
             padding: "3px 10px",
             fontSize: 12,
             background: "rgba(0,0,0,0.6)",
-            border: "1px solid #e2e8f0",
+            border: "1px solid var(--line)",
             borderRadius: 4,
-            color: "#64748b",
+            color: "var(--ink-3)",
             cursor: "pointer",
           }}
         >
@@ -3011,10 +3011,10 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
           onError={() => { setErrored(true); setTimeout(() => onRefresh?.(), 1000); }}
         />
         {!loaded && !errored && (
-          <span style={{ color: "#64748b", fontSize: 13 }}>Loading screenshot...</span>
+          <span style={{ color: "var(--ink-3)", fontSize: 13 }}>Loading screenshot...</span>
         )}
         {errored && (
-          <span style={{ color: "#64748b", fontSize: 13 }}>Retrying screenshot...</span>
+          <span style={{ color: "var(--ink-3)", fontSize: 13 }}>Retrying screenshot...</span>
         )}
       </div>
     );
@@ -3030,7 +3030,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
         alignItems: "center",
         justifyContent: "center",
         gap: 14,
-        color: "#64748b",
+        color: "var(--ink-3)",
       }}
     >
       <div style={{ fontSize: 44 }}>{ICONS.camera(44)}</div>
@@ -3038,7 +3038,7 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
       <div
         style={{
           fontSize: 12,
-          color: "#e2e8f0",
+          color: "var(--ink-2)",
           textAlign: "center",
           maxWidth: 280,
         }}
@@ -3053,9 +3053,9 @@ function ScreenshotView({ src, imgKey, onRefresh }) {
           padding: "6px 18px",
           fontSize: 13,
           background: "#e6e9ef",
-          border: "1px solid #e2e8f0",
+          border: "1px solid var(--line)",
           borderRadius: 6,
-          color: "#0f172a",
+          color: "var(--ink)",
           cursor: "pointer",
         }}
       >
@@ -3073,18 +3073,18 @@ const EntityRow = React.memo(function EntityRow({ entity }) {
     ? entity.location.map((v) => Math.round(v)).join(", ")
     : null;
   return (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", borderBottom: "1px solid #e6e9ef" }}>
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", borderBottom: "1px solid var(--line)" }}>
       <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1, display: "inline-flex", alignItems: "center" }}>{iconFn(14)}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ color: "#0f172a", fontSize: 12, fontWeight: 500 }}>{entity.name}</span>
+          <span style={{ color: "var(--ink)", fontSize: 12, fontWeight: 500 }}>{entity.name}</span>
           {entity.cls && (
             <span style={{ fontSize: 12, color: "#2563eb", background: "#eff4ff", borderRadius: 3, padding: "1px 5px" }}>
               {entity.cls}
             </span>
           )}
         </div>
-        {loc && <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>@ ({loc})</div>}
+        {loc && <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>@ ({loc})</div>}
       </div>
     </div>
   );
@@ -3101,15 +3101,15 @@ function ContextPanel({ sessionId, refreshKey }) {
 
   const containerStyle = {
     height: "100%", display: "flex", flexDirection: "column",
-    background: "#f4f6fa", color: "#0f172a", overflow: "hidden",
+    background: "var(--bg)", color: "var(--ink)", overflow: "hidden",
   };
   const headerStyle = {
-    padding: "10px 14px", borderBottom: "1px solid #e6e9ef",
+    padding: "10px 14px", borderBottom: "1px solid var(--line)",
     display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
   };
   const sectionStyle = { padding: "10px 14px 0" };
   const sectionTitleStyle = {
-    fontSize: 12, fontWeight: 600, color: "#64748b",
+    fontSize: 12, fontWeight: 600, color: "var(--ink-3)",
     textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6,
   };
 
@@ -3117,7 +3117,7 @@ function ContextPanel({ sessionId, refreshKey }) {
     return (
       <div style={containerStyle}>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "#64748b", fontSize: 13 }}>
+          <span style={{ color: "var(--ink-3)", fontSize: 13 }}>
             {sessionId ? "No scene data yet — complete a round to populate." : "Start a chat session to see scene context."}
           </span>
         </div>
@@ -3147,10 +3147,10 @@ function ContextPanel({ sessionId, refreshKey }) {
             borderRadius: 3, padding: "1px 6px" }}>
             {state.environment?.ready ? "env ready" : "env not initialized"}
           </span>
-          <span style={{ fontSize: 12, color: "#64748b" }}>round {state.round ?? 0}</span>
+          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>round {state.round ?? 0}</span>
         </div>
         {lastUpdated && (
-          <span style={{ fontSize: 12, color: "#64748b" }}>
+          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
             updated {lastUpdated.toLocaleTimeString()}
           </span>
         )}
@@ -3163,7 +3163,7 @@ function ContextPanel({ sessionId, refreshKey }) {
             {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "#2563eb" }}>{(scene.agents || []).length}</span>
           </div>
           {(scene.agents || []).length === 0
-            ? <div style={{ fontSize: 12, color: "#64748b", paddingBottom: 8 }}>No agents in scene</div>
+            ? <div style={{ fontSize: 12, color: "var(--ink-3)", paddingBottom: 8 }}>No agents in scene</div>
             : (scene.agents || []).map((a) => <EntityRow key={a.name} entity={a} />)
           }
         </div>
@@ -3176,10 +3176,10 @@ function ContextPanel({ sessionId, refreshKey }) {
             {truncated && <span style={{ color: "#f59e0b", fontSize: 12, marginLeft: 4 }}>(showing {MAX_DISPLAY})</span>}
           </div>
           {totalObjects === 0
-            ? <div style={{ fontSize: 12, color: "#64748b" }}>No objects in scene</div>
+            ? <div style={{ fontSize: 12, color: "var(--ink-3)" }}>No objects in scene</div>
             : Object.entries(byCategory).map(([cat, items]) => (
                 <div key={cat} style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>
+                  <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 4 }}>
                     {(CATEGORY_ICONS[cat] || ICONS.box)(11)} {cat}s ({items.length})
                   </div>
                   {items.map((o) => <EntityRow key={o.name} entity={o} />)}
@@ -3358,7 +3358,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
         {/* Thought */}
         {t && (
           <div style={{ color: "#1e293b", whiteSpace: "pre-wrap", marginBottom: 4 }}>
-            <span style={{ color: "#64748b", fontWeight: 600 }}>Thought: </span>{t.slice(0, 500)}
+            <span style={{ color: "var(--ink-3)", fontWeight: 600 }}>Thought: </span>{t.slice(0, 500)}
           </div>
         )}
         {/* Actions */}
@@ -3391,8 +3391,8 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: statusColors[status], flexShrink: 0,
           boxShadow: status === "running" ? `0 0 0 2px ${statusColors[status]}44` : "none" }} />
         <span style={{ fontSize: 12, fontWeight: 700, color, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{agent.name}</span>
-        <span style={{ fontSize: 12, color: "#94a3b8", background: "#f1f5f9", borderRadius: 3, padding: "1px 5px", flexShrink: 0 }}>{agent.cls || "?"}</span>
-        <span style={{ fontSize: 12, color: "#94a3b8" }}>›</span>
+        <span style={{ fontSize: 12, color: "var(--ink-3)", background: "var(--bg-tertiary)", borderRadius: 3, padding: "1px 5px", flexShrink: 0 }}>{agent.cls || "?"}</span>
+        <span style={{ fontSize: 12, color: "var(--ink-3)" }}>›</span>
       </div>
 
       {/* Quick info */}
@@ -3400,17 +3400,17 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
         {/* Position + heading row */}
         <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
           {loc ? (
-            <span style={{ color: "#64748b", fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{loc}</span>
+            <span style={{ color: "var(--ink-3)", fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{loc}</span>
           ) : (
-            <span style={{ color: "#94a3b8", fontStyle: "italic" }}>location unknown</span>
+            <span style={{ color: "var(--ink-3)", fontStyle: "italic" }}>location unknown</span>
           )}
           {heading && (
-            <span style={{ color: "#94a3b8", flexShrink: 0, fontFamily: "monospace" }}>{heading}</span>
+            <span style={{ color: "var(--ink-3)", flexShrink: 0, fontFamily: "monospace" }}>{heading}</span>
           )}
         </div>
         {/* Live action / last action */}
         {(liveAction || thought || actions.length > 0) && (
-          <div style={{ color: "#64748b", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+          <div style={{ color: "var(--ink-3)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
             {status === "running" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f59e0b", animation: "pulse 1s ease-in-out infinite", flexShrink: 0 }}/>}
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {thought ? thought.slice(0, 50) + (thought.length > 50 ? "…" : "") : (liveAction || actions[actions.length-1]?.tool)}
@@ -3418,7 +3418,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
           </div>
         )}
         {pastActivities.length > 0 && !thought && (
-          <div style={{ color: "#94a3b8", marginTop: 2, fontSize: 12 }}>
+          <div style={{ color: "var(--ink-3)", marginTop: 2, fontSize: 12 }}>
             {pastActivities.length} past action{pastActivities.length > 1 ? "s" : ""}
           </div>
         )}
@@ -3794,7 +3794,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
                 {camLoading ? (
                   <>
                     <div style={{ width: 32, height: 32, borderRadius: "50%", border: "3px solid rgba(37,99,235,.2)", borderTopColor: "#2563eb", animation: "ps-spin 0.9s linear infinite" }}/>
-                    <div style={{ color: "#64748b", fontSize: 12 }}>Focusing camera…</div>
+                    <div style={{ color: "var(--ink-3)", fontSize: 12 }}>Focusing camera…</div>
                   </>
                 ) : (
                   <>
@@ -4277,8 +4277,8 @@ function CommHistory({ agents }) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "#f4f6fa" }}>
-      <div style={{ padding: "10px 12px", borderBottom: "1px solid #e6e9ef", fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg)" }}>
+      <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--line)", fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>
         Communication
       </div>
       <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "8px 12px" }}>
@@ -4290,23 +4290,23 @@ function CommHistory({ agents }) {
           <div key={i} style={{ marginBottom: 8, fontSize: 12, lineHeight: "1.5" }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
               <span style={{ fontWeight: 700, color: colors[m.from] || "#64748b" }}>{m.from === "user" ? "You" : m.from}</span>
-              {m.to && m.to !== "all" && <span style={{ fontSize: 12, color: "#64748b" }}>to <span style={{ color: colors[m.to] || "#2563eb" }}>@{m.to}</span></span>}
+              {m.to && m.to !== "all" && <span style={{ fontSize: 12, color: "var(--ink-3)" }}>to <span style={{ color: colors[m.to] || "#2563eb" }}>@{m.to}</span></span>}
               <span style={{ fontSize: 12, color: "#475569", marginLeft: "auto" }}>{new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
             <div style={{ color: "#1e293b", marginTop: 2 }}>{renderText(m.text)}</div>
           </div>
         ))}
       </div>
-      <div style={{ padding: "8px 12px", borderTop: "1px solid #e6e9ef", display: "flex", gap: 6 }}>
+      <div style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", display: "flex", gap: 6 }}>
         <select value={target} onChange={e => setTarget(e.target.value)}
-          style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 4, color: "#64748b", fontSize: 12, padding: "4px 6px" }}>
+          style={{ background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 4, color: "var(--ink-3)", fontSize: 12, padding: "4px 6px" }}>
           <option value="all">@all</option>
           {(agents || []).map(a => <option key={a.name} value={a.name}>@{a.name}</option>)}
         </select>
         <input value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleSend(); } }}
           placeholder="Message..."
-          style={{ flex: 1, background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 4, padding: "5px 8px", color: "#0f172a", fontSize: 12, outline: "none" }}
+          style={{ flex: 1, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 4, padding: "5px 8px", color: "var(--ink)", fontSize: 12, outline: "none" }}
         />
         <button onClick={handleSend} disabled={!input.trim()} style={{
           background: input.trim() ? "#15803d" : "#e6e9ef", border: "none", borderRadius: 4,
@@ -4836,7 +4836,7 @@ function ViewportPanel({ latestScreenshot }) {
 // ─── AssetPlaceholder ────────────────────────────────────────────────────────
 
 function AssetPlaceholder({ id, category }) {
-  const color = CATEGORY_COLORS[category] || "#e2e8f0";
+  const color = CATEGORY_COLORS[category] || "var(--line)";
   const numMatch = id.match(/(\d+)/);
   if (numMatch) parseInt(numMatch[1]);
 
@@ -4884,8 +4884,8 @@ function AssetCard({ item, category, onInsert }) {
       style={{
         borderRadius: 6,
         overflow: "hidden",
-        border: "1px solid #e6e9ef",
-        background: "#ffffff",
+        border: "1px solid var(--line)",
+        background: "var(--panel)",
         cursor: "pointer",
         transition: "border-color 0.15s",
       }}
@@ -4895,7 +4895,7 @@ function AssetCard({ item, category, onInsert }) {
       <div
         style={{
           height: 90,
-          background: "#f4f6fa",
+          background: "var(--bg)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -4918,7 +4918,7 @@ function AssetCard({ item, category, onInsert }) {
           style={{
             fontSize: 12,
             fontWeight: 500,
-            color: "#0f172a",
+            color: "var(--ink)",
             wordBreak: "break-all",
             lineHeight: 1.3,
           }}
@@ -4956,12 +4956,12 @@ function AssetListItem({ item, category, onInsert }) {
           height: 36,
           borderRadius: 4,
           overflow: "hidden",
-          background: "#f4f6fa",
+          background: "var(--bg)",
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          border: "1px solid #e6e9ef",
+          border: "1px solid var(--line)",
         }}
       >
         {imgError ? (
@@ -4976,7 +4976,7 @@ function AssetListItem({ item, category, onInsert }) {
         )}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12, color: "#0f172a", fontWeight: 500 }}>{item.id}</div>
+        <div style={{ fontSize: 12, color: "var(--ink)", fontWeight: 500 }}>{item.id}</div>
         {item.path && (
           <div
             style={{
@@ -5317,19 +5317,19 @@ function SceneManager({ onLoadScene, currentSessionId }) {
         display: "flex",
         flexDirection: "column",
         height: "100%",
-        background: "#f4f6fa",
+        background: "var(--bg)",
       }}
     >
       <div
         style={{
           padding: "8px 12px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           gap: 8,
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>Saved Scenes</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Saved Scenes</span>
         <button
           onClick={reload}
           style={{
@@ -5337,9 +5337,9 @@ function SceneManager({ onLoadScene, currentSessionId }) {
             padding: "3px 8px",
             fontSize: 12,
             background: "#e6e9ef",
-            border: "1px solid #e2e8f0",
+            border: "1px solid var(--line)",
             borderRadius: 4,
-            color: "#64748b",
+            color: "var(--ink-3)",
             cursor: "pointer",
           }}
         >
@@ -5349,7 +5349,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
 
       <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
         {loading && (
-          <div style={{ padding: 12, color: "#64748b", fontSize: 12 }}>Loading...</div>
+          <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 12 }}>Loading...</div>
         )}
         {!loading && scenes.length === 0 && (
           <div
@@ -5370,8 +5370,8 @@ function SceneManager({ onLoadScene, currentSessionId }) {
               marginBottom: 8,
               borderRadius: 6,
               overflow: "hidden",
-              border: "1px solid #e6e9ef",
-              background: "#ffffff",
+              border: "1px solid var(--line)",
+              background: "var(--panel)",
             }}
           >
             {scene.thumbnail && (
@@ -5379,7 +5379,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                 style={{
                   height: 100,
                   overflow: "hidden",
-                  borderBottom: "1px solid #e6e9ef",
+                  borderBottom: "1px solid var(--line)",
                 }}
               >
                 <img
@@ -5390,12 +5390,12 @@ function SceneManager({ onLoadScene, currentSessionId }) {
               </div>
             )}
             <div style={{ padding: "8px 10px" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: "#0f172a" }}>{scene.name}</div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)" }}>{scene.name}</div>
               {scene.prompt && (
                 <div
                   style={{
                     fontSize: 12,
-                    color: "#64748b",
+                    color: "var(--ink-3)",
                     marginTop: 3,
                     lineHeight: 1.4,
                   }}
@@ -5435,7 +5435,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
                       padding: "2px 8px",
                       fontSize: 12,
                       borderRadius: 3,
-                      border: "1px solid #e2e8f0",
+                      border: "1px solid var(--line)",
                       background: "transparent",
                       color: "#dc2626",
                       cursor: "pointer",
@@ -5456,7 +5456,7 @@ function SceneManager({ onLoadScene, currentSessionId }) {
 // ─── BattleSide ──────────────────────────────────────────────────────────────
 
 function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
-  const borderColor = isWinner ? "#16a34a" : isLoser ? "#dc262633" : "#e2e8f0";
+  const borderColor = isWinner ? "#16a34a" : isLoser ? "#dc262633" : "var(--line)";
 
   return (
     <div
@@ -5464,7 +5464,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
         border: `2px solid ${borderColor}`,
         borderRadius: 12,
         overflow: "hidden",
-        background: "#ffffff",
+        background: "var(--panel)",
         transition: "border-color 0.2s",
         opacity: isLoser ? 0.6 : 1,
       }}
@@ -5472,13 +5472,13 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
       <div
         style={{
           padding: "10px 16px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
         }}
       >
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
           {label}
           {isWinner && " ✅"}
         </span>
@@ -5486,7 +5486,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
           <span
             style={{
               fontSize: 12,
-              color: "#64748b",
+              color: "var(--ink-3)",
               background: "#e6e9ef",
               padding: "2px 8px",
               borderRadius: 4,
@@ -5503,7 +5503,7 @@ function BattleSide({ label, side, isWinner, isLoser, revealed, onVote }) {
       <div
         style={{
           height: 250,
-          background: "#f4f6fa",
+          background: "var(--bg)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -5552,9 +5552,9 @@ const tieButtonStyle = {
   padding: "8px 20px",
   fontSize: 12,
   background: "#e6e9ef",
-  border: "1px solid #e2e8f0",
+  border: "1px solid var(--line)",
   borderRadius: 6,
-  color: "#64748b",
+  color: "var(--ink-3)",
   cursor: "pointer",
 };
 
@@ -5659,14 +5659,14 @@ function ArenaPage() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#f4f6fa",
+        background: "var(--bg)",
       }}
     >
       {/* Header */}
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -5674,8 +5674,8 @@ function ArenaPage() {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.swords(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Arena Battle</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Arena Battle</div>
+          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
             Two agents generate scenes from the same prompt. You decide which is better.
           </div>
         </div>
@@ -5686,7 +5686,7 @@ function ArenaPage() {
               padding: "4px 12px",
               fontSize: 12,
               borderRadius: 4,
-              border: "1px solid #e2e8f0",
+              border: "1px solid var(--line)",
               background: showAgents ? "#eff4ff" : "#e6e9ef",
               color: showAgents ? "#2563eb" : "#64748b",
               cursor: "pointer",
@@ -5702,14 +5702,14 @@ function ArenaPage() {
         <div
           style={{
             padding: "12px 24px",
-            borderBottom: "1px solid #e6e9ef",
-            background: "#ffffff",
+            borderBottom: "1px solid var(--line)",
+            background: "var(--panel)",
           }}
         >
           <div
             style={{
               fontSize: 12,
-              color: "#64748b",
+              color: "var(--ink-3)",
               marginBottom: 8,
               fontWeight: 600,
             }}
@@ -5723,7 +5723,7 @@ function ArenaPage() {
                 style={{
                   padding: "8px 14px",
                   borderRadius: 6,
-                  border: `1px solid ${agent.enabled ? "#15803d" : "#e2e8f0"}`,
+                  border: `1px solid ${agent.enabled ? "#15803d" : "var(--line)"}`,
                   background: agent.enabled ? "#15803d11" : "transparent",
                   display: "flex",
                   alignItems: "center",
@@ -5738,10 +5738,10 @@ function ArenaPage() {
                   style={{ accentColor: "#15803d" }}
                 />
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>
                     {agent.name}
                   </div>
-                  <div style={{ fontSize: 12, color: "#64748b" }}>
+                  <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
                     {agent.type}
                     {agent.model ? ` (${agent.model})` : ""}
                   </div>
@@ -5766,13 +5766,13 @@ function ArenaPage() {
               style={{
                 fontSize: 28,
                 fontWeight: 700,
-                color: "#0f172a",
+                color: "var(--ink)",
                 marginBottom: 8,
               }}
             >
               Enter a Scene Prompt
             </div>
-            <div style={{ fontSize: 14, color: "#64748b", marginBottom: 24 }}>
+            <div style={{ fontSize: 14, color: "var(--ink-3)", marginBottom: 24 }}>
               Both agents will try to build this scene. Vote for the better result.
             </div>
             <textarea
@@ -5784,10 +5784,10 @@ function ArenaPage() {
                 height: 100,
                 padding: 14,
                 fontSize: 14,
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
+                background: "var(--panel)",
+                border: "1px solid var(--line)",
                 borderRadius: 8,
-                color: "#0f172a",
+                color: "var(--ink)",
                 resize: "vertical",
                 outline: "none",
                 boxSizing: "border-box",
@@ -5809,7 +5809,7 @@ function ArenaPage() {
                   padding: "10px 28px",
                   fontSize: 14,
                   background: prompt.trim() ? "#15803d" : "#e6e9ef",
-                  border: `1px solid ${prompt.trim() ? "#15803d" : "#e2e8f0"}`,
+                  border: `1px solid ${prompt.trim() ? "#15803d" : "var(--line)"}`,
                   borderRadius: 8,
                   color: prompt.trim() ? "#fff" : "#94a3b8",
                   cursor: prompt.trim() ? "pointer" : "default",
@@ -5830,10 +5830,10 @@ function ArenaPage() {
         {phase === "generating" && (
           <div style={{ textAlign: "center", padding: 80 }}>
             <div style={{ fontSize: 40, marginBottom: 16 }}>{ICONS.swords(40)}</div>
-            <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 600 }}>
+            <div style={{ fontSize: 16, color: "var(--ink)", fontWeight: 600 }}>
               Generating scenes...
             </div>
-            <div style={{ fontSize: 13, color: "#64748b", marginTop: 8 }}>
+            <div style={{ fontSize: 13, color: "var(--ink-3)", marginTop: 8 }}>
               "{prompt}"
             </div>
             {progress && (
@@ -5883,9 +5883,9 @@ function ArenaPage() {
                 padding: "6px 16px",
                 fontSize: 12,
                 background: "transparent",
-                border: "1px solid #e2e8f0",
+                border: "1px solid var(--line)",
                 borderRadius: 6,
-                color: "#64748b",
+                color: "var(--ink-3)",
                 cursor: "pointer",
               }}
             >
@@ -5898,8 +5898,8 @@ function ArenaPage() {
         {(phase === "voting" || phase === "result") && battle && (
           <div>
             <div style={{ textAlign: "center", marginBottom: 20 }}>
-              <div style={{ fontSize: 13, color: "#64748b" }}>Prompt</div>
-              <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 500 }}>
+              <div style={{ fontSize: 13, color: "var(--ink-3)" }}>Prompt</div>
+              <div style={{ fontSize: 16, color: "var(--ink)", fontWeight: 500 }}>
                 "{battle.prompt}"
               </div>
             </div>
@@ -5966,7 +5966,7 @@ function ArenaPage() {
                       : `You voted: Agent ${voted?.toUpperCase()} wins!`}
                 </div>
                 {battle.side_a && battle.side_b && (
-                  <div style={{ fontSize: 12, color: "#64748b" }}>
+                  <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
                     Agent A: {battle.side_a.agentName} | Agent B: {battle.side_b.agentName}
                   </div>
                 )}
@@ -6036,13 +6036,13 @@ function LeaderboardPage() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#f4f6fa",
+        background: "var(--bg)",
       }}
     >
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -6050,8 +6050,8 @@ function LeaderboardPage() {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.trophy(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Leaderboard</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Leaderboard</div>
+          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
             Agent rankings based on Elo ratings from arena battles
           </div>
         </div>
@@ -6064,21 +6064,21 @@ function LeaderboardPage() {
 
       <div style={{ flex: 1, overflow: "auto", padding: 24 }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: 60, color: "#64748b" }}>Loading...</div>
+          <div style={{ textAlign: "center", padding: 60, color: "var(--ink-3)" }}>Loading...</div>
         ) : entries.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.trophy(40)}</div>
             <div
               style={{
                 fontSize: 16,
-                color: "#0f172a",
+                color: "var(--ink)",
                 fontWeight: 600,
                 marginBottom: 8,
               }}
             >
               No battles yet
             </div>
-            <div style={{ fontSize: 13, color: "#64748b" }}>
+            <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
               Run arena battles to see agents compete and build the leaderboard.
             </div>
           </div>
@@ -6093,7 +6093,7 @@ function LeaderboardPage() {
                 fontSize: 12,
                 color: "#475569",
                 fontWeight: 600,
-                borderBottom: "1px solid #e6e9ef",
+                borderBottom: "1px solid var(--line)",
                 textTransform: "uppercase",
               }}
             >
@@ -6117,7 +6117,7 @@ function LeaderboardPage() {
                     gridTemplateColumns: "40px 1fr 100px 80px 80px 80px 80px",
                     padding: "12px 16px",
                     alignItems: "center",
-                    borderBottom: "1px solid #e6e9ef",
+                    borderBottom: "1px solid var(--line)",
                     background: i === 0 ? "#2563eb0a" : "transparent",
                   }}
                 >
@@ -6138,7 +6138,7 @@ function LeaderboardPage() {
                     {i === 0 ? ICONS.gold(18) : i === 1 ? ICONS.silver(18) : i === 2 ? ICONS.bronze(18) : i + 1}
                   </span>
                   <div>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
                       {entry.agentName}
                     </span>
                     {i === 0 && (
@@ -6183,7 +6183,7 @@ function LeaderboardPage() {
                       {delta}
                     </span>
                   </div>
-                  <span style={{ textAlign: "right", fontSize: 13, color: "#64748b" }}>
+                  <span style={{ textAlign: "right", fontSize: 13, color: "var(--ink-3)" }}>
                     {entry.numBattles}
                   </span>
                   <span style={{ textAlign: "right", fontSize: 13, color: "#16a34a" }}>
@@ -6217,14 +6217,14 @@ function LeaderboardPage() {
                 marginTop: 24,
                 padding: 16,
                 borderRadius: 8,
-                background: "#ffffff",
-                border: "1px solid #e6e9ef",
+                background: "var(--panel)",
+                border: "1px solid var(--line)",
                 fontSize: 12,
-                color: "#64748b",
+                color: "var(--ink-3)",
                 lineHeight: 1.6,
               }}
             >
-              <div style={{ fontWeight: 600, marginBottom: 4, color: "#0f172a" }}>
+              <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--ink)" }}>
                 How ratings work
               </div>
               Agents start at 1200 Elo. Each battle updates ratings using the Bradley-Terry model
@@ -6247,8 +6247,8 @@ function GalleryCard({ scene, onClick }) {
       style={{
         borderRadius: 10,
         overflow: "hidden",
-        border: "1px solid #e6e9ef",
-        background: "#ffffff",
+        border: "1px solid var(--line)",
+        background: "var(--panel)",
         cursor: "pointer",
         transition: "border-color 0.15s, transform 0.15s",
       }}
@@ -6261,7 +6261,7 @@ function GalleryCard({ scene, onClick }) {
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
-      <div style={{ height: 180, background: "#f4f6fa", overflow: "hidden" }}>
+      <div style={{ height: 180, background: "var(--bg)", overflow: "hidden" }}>
         {scene.screenshots.length > 0 ? (
           <img
             src={scene.screenshots[0]}
@@ -6288,7 +6288,7 @@ function GalleryCard({ scene, onClick }) {
           style={{
             fontSize: 13,
             fontWeight: 500,
-            color: "#0f172a",
+            color: "var(--ink)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -6325,7 +6325,7 @@ function GalleryCard({ scene, onClick }) {
                 padding: "1px 5px",
                 borderRadius: 4,
                 background: "#e6e9ef",
-                color: "#64748b",
+                color: "var(--ink-3)",
               }}
             >
               {tag}
@@ -6364,8 +6364,8 @@ function GalleryDetailModal({ scene, onClose }) {
           width: "90%",
           maxWidth: 900,
           maxHeight: "85vh",
-          background: "#f4f6fa",
-          border: "1px solid #e2e8f0",
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
           borderRadius: 12,
           overflow: "hidden",
           display: "flex",
@@ -6376,14 +6376,14 @@ function GalleryDetailModal({ scene, onClose }) {
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             display: "flex",
             alignItems: "center",
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>{scene.prompt}</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+            <div style={{ fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>{scene.prompt}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
               Generated by {scene.agentName} on {new Date(scene.created_at).toLocaleString()}
             </div>
           </div>
@@ -6394,7 +6394,7 @@ function GalleryDetailModal({ scene, onClose }) {
                 padding: "4px 10px",
                 fontSize: 12,
                 background: "#e6e9ef",
-                border: "1px solid #e2e8f0",
+                border: "1px solid var(--line)",
                 borderRadius: 6,
                 color: "#1e293b",
                 cursor: "pointer",
@@ -6410,7 +6410,7 @@ function GalleryDetailModal({ scene, onClose }) {
                 fontSize: 16,
                 background: "transparent",
                 border: "none",
-                color: "#64748b",
+                color: "var(--ink-3)",
                 cursor: "pointer",
               }}
             >
@@ -6495,7 +6495,7 @@ function GalleryDetailModal({ scene, onClose }) {
                   padding: "2px 7px",
                   borderRadius: 4,
                   background: "#e6e9ef",
-                  color: "#64748b",
+                  color: "var(--ink-3)",
                 }}
               >
                 {tag}
@@ -6507,7 +6507,7 @@ function GalleryDetailModal({ scene, onClose }) {
               <div
                 style={{
                   fontSize: 12,
-                  color: "#64748b",
+                  color: "var(--ink-3)",
                   fontWeight: 600,
                   marginBottom: 6,
                 }}
@@ -6518,8 +6518,8 @@ function GalleryDetailModal({ scene, onClose }) {
                 style={{
                   fontSize: 12,
                   color: "#1e293b",
-                  background: "#ffffff",
-                  border: "1px solid #e6e9ef",
+                  background: "var(--panel)",
+                  border: "1px solid var(--line)",
                   borderRadius: 6,
                   padding: 12,
                   overflow: "auto",
@@ -6568,14 +6568,14 @@ function GalleryPage() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#f4f6fa",
+        background: "var(--bg)",
       }}
     >
       {/* Header */}
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -6583,8 +6583,8 @@ function GalleryPage() {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.frame(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Gallery</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Gallery</div>
+          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
             Browse AI-generated scenes shared by the community
           </div>
         </div>
@@ -6603,9 +6603,9 @@ function GalleryPage() {
               padding: "3px 8px",
               fontSize: 12,
               borderRadius: 4,
-              border: "1px solid #e2e8f0",
-              background: "#ffffff",
-              color: "#64748b",
+              border: "1px solid var(--line)",
+              background: "var(--panel)",
+              color: "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -6623,7 +6623,7 @@ function GalleryPage() {
         <div
           style={{
             padding: "8px 24px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             display: "flex",
             gap: 6,
             flexWrap: "wrap",
@@ -6653,7 +6653,7 @@ function GalleryPage() {
                 fontSize: 12,
                 padding: "2px 8px",
                 borderRadius: 10,
-                border: `1px solid ${activeTag === tag ? "#2563eb" : "#e2e8f0"}`,
+                border: `1px solid ${activeTag === tag ? "#2563eb" : "var(--line)"}`,
                 background: activeTag === tag ? "#3b82f622" : "transparent",
                 color: activeTag === tag ? "#2563eb" : "#64748b",
                 cursor: "pointer",
@@ -6668,21 +6668,21 @@ function GalleryPage() {
       {/* Content */}
       <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: 60, color: "#64748b" }}>Loading...</div>
+          <div style={{ textAlign: "center", padding: 60, color: "var(--ink-3)" }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.frame(40)}</div>
             <div
               style={{
                 fontSize: 16,
-                color: "#0f172a",
+                color: "var(--ink)",
                 fontWeight: 600,
                 marginBottom: 8,
               }}
             >
               No scenes yet
             </div>
-            <div style={{ fontSize: 13, color: "#64748b" }}>
+            <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
               Generate scenes in the chat and share them to the gallery, or run arena battles.
             </div>
           </div>
@@ -6720,8 +6720,8 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
       style={{
         padding: "14px 16px",
         borderRadius: 10,
-        border: "1px solid #e6e9ef",
-        background: "#ffffff",
+        border: "1px solid var(--line)",
+        background: "var(--panel)",
         cursor: "pointer",
         transition: "border-color 0.15s, transform 0.15s",
         display: "flex",
@@ -6738,7 +6738,7 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a", flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", flex: 1 }}>
           {skill.name}
         </div>
         {isNew && (
@@ -6777,14 +6777,14 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
             borderRadius: 10,
             background: skill.source === "custom" ? "#3b82f622" : "#e6e9ef",
             color: skill.source === "custom" ? "#2563eb" : "#94a3b8",
-            border: `1px solid ${skill.source === "custom" ? "#3b82f644" : "#e2e8f0"}`,
+            border: `1px solid ${skill.source === "custom" ? "#3b82f644" : "var(--line)"}`,
             flexShrink: 0,
           }}
         >
           {skill.source}
         </span>
       </div>
-      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>{desc}</div>
+      <div style={{ fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>{desc}</div>
       {skill.tags.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
           {skill.tags.map((tag) => (
@@ -6794,9 +6794,9 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
                 fontSize: 12,
                 padding: "2px 6px",
                 borderRadius: 4,
-                background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                background: (TAG_COLORS[tag] || "var(--line)") + "33",
                 color: TAG_COLORS[tag] || "#64748b",
-                border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
+                border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
               }}
             >
               {tag}
@@ -6811,7 +6811,7 @@ function SkillPageCard({ skill, onClick, isNew = false }) {
           gap: 8,
           marginTop: "auto",
           paddingTop: 4,
-          borderTop: "1px solid #e6e9ef",
+          borderTop: "1px solid var(--line)",
           fontSize: 12,
           color: "#475569",
         }}
@@ -6843,8 +6843,8 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           width: "90%",
           maxWidth: 750,
           maxHeight: "85vh",
-          background: "#f4f6fa",
-          border: "1px solid #e2e8f0",
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -6854,15 +6854,15 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             display: "flex",
             alignItems: "center",
             gap: 10,
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: "#0f172a" }}>{skill.name}</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+            <div style={{ fontSize: 18, fontWeight: 600, color: "var(--ink)" }}>{skill.name}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
               v{skill.version} by {skill.author}
               <span
                 style={{
@@ -6901,7 +6901,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
               fontSize: 16,
               background: "transparent",
               border: "none",
-              color: "#64748b",
+              color: "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -6909,7 +6909,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
           </button>
         </div>
 
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid #e6e9ef" }}>
+        <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)" }}>
           <div style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>
             {skill.description}
           </div>
@@ -6922,9 +6922,9 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
                     fontSize: 12,
                     padding: "2px 7px",
                     borderRadius: 4,
-                    background: (TAG_COLORS[tag] || "#e2e8f0") + "33",
+                    background: (TAG_COLORS[tag] || "var(--line)") + "33",
                     color: TAG_COLORS[tag] || "#64748b",
-                    border: `1px solid ${TAG_COLORS[tag] || "#e2e8f0"}44`,
+                    border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
                   }}
                 >
                   {tag}
@@ -6933,7 +6933,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
             </div>
           )}
           {skill.dependencies.length > 0 && (
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 10 }}>
               <span style={{ fontWeight: 600 }}>Dependencies:</span>{" "}
               {skill.dependencies.map((dep, i) => (
                 <span key={dep}>
@@ -6968,8 +6968,8 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
               fontFamily:
                 "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace",
               margin: 0,
-              background: "#ffffff",
-              border: "1px solid #e6e9ef",
+              background: "var(--panel)",
+              border: "1px solid var(--line)",
               borderRadius: 8,
               padding: 16,
             }}
@@ -7031,10 +7031,10 @@ Provide detailed instructions for the AI agent.
     width: "100%",
     padding: "7px 12px",
     fontSize: 13,
-    background: "#ffffff",
-    border: "1px solid #e2e8f0",
+    background: "var(--panel)",
+    border: "1px solid var(--line)",
     borderRadius: 6,
-    color: "#0f172a",
+    color: "var(--ink)",
     outline: "none",
     boxSizing: "border-box",
   };
@@ -7058,8 +7058,8 @@ Provide detailed instructions for the AI agent.
           width: "90%",
           maxWidth: 650,
           maxHeight: "85vh",
-          background: "#f4f6fa",
-          border: "1px solid #e2e8f0",
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -7069,12 +7069,12 @@ Provide detailed instructions for the AI agent.
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             display: "flex",
             alignItems: "center",
           }}
         >
-          <span style={{ fontSize: 16, fontWeight: 600, color: "#0f172a" }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: "var(--ink)" }}>
             Create Custom Skill
           </span>
           <button
@@ -7085,7 +7085,7 @@ Provide detailed instructions for the AI agent.
               fontSize: 16,
               background: "transparent",
               border: "none",
-              color: "#64748b",
+              color: "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -7104,25 +7104,25 @@ Provide detailed instructions for the AI agent.
           }}
         >
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
               Skill ID (lowercase, no spaces)
             </label>
             <input value={id} onChange={(e) => setId(e.target.value)} placeholder="my_custom_skill" style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>Name</label>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>Name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Custom Skill" style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>Description (short summary)</label>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>Description (short summary)</label>
             <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this skill teaches the agent to do" style={inputStyle} />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>Tags (comma-separated)</label>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>Tags (comma-separated)</label>
             <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="buildings, layout, custom" style={inputStyle} />
           </div>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 }}>
+            <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>
               Content (Markdown -- instructions for the AI agent)
             </label>
             <textarea
@@ -7143,7 +7143,7 @@ Provide detailed instructions for the AI agent.
         <div
           style={{
             padding: "12px 20px",
-            borderTop: "1px solid #e6e9ef",
+            borderTop: "1px solid var(--line)",
             display: "flex",
             gap: 8,
             justifyContent: "flex-end",
@@ -7155,7 +7155,7 @@ Provide detailed instructions for the AI agent.
               padding: "6px 14px",
               fontSize: 12,
               background: "#e6e9ef",
-              border: "1px solid #e2e8f0",
+              border: "1px solid var(--line)",
               borderRadius: 6,
               color: "#1e293b",
               cursor: "pointer",
@@ -7204,16 +7204,16 @@ function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           width: 400,
-          background: "#f4f6fa",
-          border: "1px solid #e2e8f0",
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
           borderRadius: 12,
           padding: 24,
         }}
       >
-        <div style={{ fontSize: 14, color: "#0f172a", fontWeight: 600, marginBottom: 8 }}>
+        <div style={{ fontSize: 14, color: "var(--ink)", fontWeight: 600, marginBottom: 8 }}>
           Confirm Delete
         </div>
-        <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.5, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, color: "var(--ink-3)", lineHeight: 1.5, marginBottom: 20 }}>
           {message}
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -7223,7 +7223,7 @@ function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
               padding: "6px 14px",
               fontSize: 12,
               background: "#e6e9ef",
-              border: "1px solid #e2e8f0",
+              border: "1px solid var(--line)",
               borderRadius: 6,
               color: "#1e293b",
               cursor: "pointer",
@@ -7316,13 +7316,13 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#f4f6fa",
+        background: "var(--bg)",
       }}
     >
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -7330,8 +7330,8 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.tools(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Skills</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Skills</div>
+          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
             Browse, create, and manage skills that teach the AI agent new capabilities
           </div>
         </div>
@@ -7359,7 +7359,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
       <div
         style={{
           padding: "10px 24px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           gap: 10,
           alignItems: "center",
@@ -7374,10 +7374,10 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
             flex: 1,
             padding: "7px 12px",
             fontSize: 13,
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
+            background: "var(--panel)",
+            border: "1px solid var(--line)",
             borderRadius: 6,
-            color: "#0f172a",
+            color: "var(--ink)",
             outline: "none",
           }}
         />
@@ -7390,7 +7390,7 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
                 padding: "5px 12px",
                 fontSize: 12,
                 borderRadius: 6,
-                border: `1px solid ${filter === f ? "#2563eb" : "#e2e8f0"}`,
+                border: `1px solid ${filter === f ? "#2563eb" : "var(--line)"}`,
                 background: filter === f ? "#3b82f622" : "transparent",
                 color: filter === f ? "#2563eb" : "#64748b",
                 cursor: "pointer",
@@ -7408,14 +7408,14 @@ function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
 
       <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
         {loading ? (
-          <div style={{ textAlign: "center", padding: 60, color: "#64748b" }}>Loading...</div>
+          <div style={{ textAlign: "center", padding: 60, color: "var(--ink-3)" }}>Loading...</div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.tools(40)}</div>
-            <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 600, marginBottom: 8 }}>
+            <div style={{ fontSize: 16, color: "var(--ink)", fontWeight: 600, marginBottom: 8 }}>
               No skills found
             </div>
-            <div style={{ fontSize: 13, color: "#64748b" }}>
+            <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
               {search ? "Try a different search term." : "Create a custom skill to get started."}
             </div>
           </div>
@@ -7479,8 +7479,8 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
       style={{
         padding: "14px 16px",
         borderRadius: 10,
-        border: "1px solid #e6e9ef",
-        background: "#ffffff",
+        border: "1px solid var(--line)",
+        background: "var(--panel)",
         cursor: "pointer",
         transition: "border-color 0.15s, transform 0.15s",
         display: "flex",
@@ -7497,7 +7497,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a", flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", flex: 1 }}>
           {tool.name || tool.id}
         </div>
         {isNew && (
@@ -7536,7 +7536,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             borderRadius: 10,
             background: tool.enabled ? "#15803d22" : "transparent",
             color: tool.enabled ? "#16a34a" : "#64748b",
-            border: "1px solid #e2e8f0",
+            border: "1px solid var(--line)",
             flexShrink: 0,
           }}
         >
@@ -7550,9 +7550,9 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
           gap: 4,
           marginTop: 4,
           paddingTop: 4,
-          borderTop: "1px solid #e6e9ef",
+          borderTop: "1px solid var(--line)",
           fontSize: 12,
-          color: "#64748b",
+          color: "var(--ink-3)",
         }}
       >
         <div>
@@ -7580,7 +7580,7 @@ function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = 
             padding: "5px 10px",
             fontSize: 12,
             borderRadius: 6,
-            border: "1px solid #e2e8f0",
+            border: "1px solid var(--line)",
             background: tool.enabled ? "#e6e9ef" : "#3b82f622",
             color: tool.enabled ? "#1e293b" : "#2563eb",
             cursor: busy ? "wait" : "pointer",
@@ -7617,21 +7617,21 @@ function StaticToolRefCard({ tool }) {
       style={{
         padding: "10px 12px",
         borderRadius: 8,
-        border: "1px solid #e6e9ef",
-        background: "#ffffff",
+        border: "1px solid var(--line)",
+        background: "var(--panel)",
         display: "flex",
         alignItems: "center",
         gap: 8,
         cursor: "pointer",
       }}
     >
-      <span style={{ color: "#0f172a", fontSize: 12, fontWeight: 600 }}>{tool.name}</span>
+      <span style={{ color: "var(--ink)", fontSize: 12, fontWeight: 600 }}>{tool.name}</span>
       <span
         style={{
           marginLeft: "auto",
           fontSize: 12,
-          color: "#64748b",
-          border: "1px solid #e2e8f0",
+          color: "var(--ink-3)",
+          border: "1px solid var(--line)",
           borderRadius: 10,
           padding: "2px 7px",
         }}
@@ -7670,8 +7670,8 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           width: "90%",
           maxWidth: 750,
           maxHeight: "85vh",
-          background: "#f4f6fa",
-          border: "1px solid #e2e8f0",
+          background: "var(--bg)",
+          border: "1px solid var(--line)",
           borderRadius: 12,
           display: "flex",
           flexDirection: "column",
@@ -7681,22 +7681,22 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
         <div
           style={{
             padding: "14px 20px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             display: "flex",
             alignItems: "center",
             gap: 10,
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: "#0f172a" }}>{tool.name || tool.id}</div>
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+            <div style={{ fontSize: 18, fontWeight: 600, color: "var(--ink)" }}>{tool.name || tool.id}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
               <span style={{ color: "#2563eb", fontFamily: "monospace" }}>{tool.mcpName}</span>
               <span
                 style={{
                   marginLeft: 8,
                   padding: "2px 7px",
                   borderRadius: 10,
-                  border: "1px solid #e2e8f0",
+                  border: "1px solid var(--line)",
                   background: readOnly ? "#3b82f622" : tool.enabled ? "#15803d22" : "transparent",
                   color: readOnly ? "#2563eb" : tool.enabled ? "#16a34a" : "#64748b",
                   fontSize: 12,
@@ -7730,7 +7730,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               fontSize: 16,
               background: "transparent",
               border: "none",
-              color: "#64748b",
+              color: "var(--ink-3)",
               cursor: "pointer",
             }}
           >
@@ -7738,12 +7738,12 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           </button>
         </div>
 
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid #e6e9ef" }}>
+        <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)" }}>
           <div style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>
             {tool.description || "No description"}
           </div>
           {!readOnly && (
-            <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
+            <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
               Related skills:{" "}
               <span style={{ color: "#1e293b" }}>{relatedSkills && relatedSkills.length > 0 ? relatedSkills.length : 0}</span>
             </div>
@@ -7780,7 +7780,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 gridTemplateColumns: "repeat(2, minmax(140px, 1fr))",
                 gap: 8,
                 fontSize: 12,
-                color: "#64748b",
+                color: "var(--ink-3)",
               }}
             >
               <div>Template: <span style={{ color: "#1e293b" }}>{tool.template || "–"}</span></div>
@@ -7802,21 +7802,21 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           >
             How Claude Calls This Tool
           </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
             Use <span style={{ color: "#2563eb", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
           </div>
-          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
             Required arguments:{" "}
             <span style={{ color: "#1e293b" }}>
               {requiredKeys.length > 0 ? requiredKeys.join(", ") : "none"}
             </span>
           </div>
-          <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>Input schema</div>
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>Input schema</div>
           <pre
             style={{
               margin: "6px 0 0",
-              background: "#ffffff",
-              border: "1px solid #e6e9ef",
+              background: "var(--panel)",
+              border: "1px solid var(--line)",
               borderRadius: 8,
               padding: 12,
               fontSize: 12,
@@ -7835,7 +7835,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
           <div
             style={{
               padding: "12px 20px",
-              borderTop: "1px solid #e6e9ef",
+              borderTop: "1px solid var(--line)",
               display: "flex",
               gap: 8,
               justifyContent: "flex-end",
@@ -7848,7 +7848,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
                 padding: "6px 14px",
                 fontSize: 12,
                 borderRadius: 6,
-                border: "1px solid #e2e8f0",
+                border: "1px solid var(--line)",
                 background: tool.enabled ? "#e6e9ef" : "#3b82f622",
                 color: tool.enabled ? "#1e293b" : "#2563eb",
                 cursor: busy ? "wait" : "pointer",
@@ -8028,13 +8028,13 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "#f4f6fa",
+        background: "var(--bg)",
       }}
     >
       <div
         style={{
           padding: "16px 24px",
-          borderBottom: "1px solid #e6e9ef",
+          borderBottom: "1px solid var(--line)",
           display: "flex",
           alignItems: "center",
           gap: 12,
@@ -8042,8 +8042,8 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
       >
         <span style={{ fontSize: 24, display: "inline-flex", alignItems: "center" }}>{ICONS.wrench(24)}</span>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#0f172a" }}>Tools</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Tools</div>
+          <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
             Static MCP tools for reference + learned tools you can manage
           </div>
         </div>
@@ -8053,7 +8053,7 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
         <div
           style={{
             padding: "8px 24px",
-            borderBottom: "1px solid #e6e9ef",
+            borderBottom: "1px solid var(--line)",
             color: "#dc2626",
             fontSize: 12,
           }}
@@ -8065,28 +8065,28 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
       <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
         <div
           style={{
-            border: "1px solid #e6e9ef",
+            border: "1px solid var(--line)",
             borderRadius: 10,
             marginBottom: 16,
             overflow: "hidden",
-            background: "#f4f6fa",
+            background: "var(--bg)",
           }}
         >
           <div
             style={{
               padding: "10px 12px",
-              borderBottom: "1px solid #e6e9ef",
+              borderBottom: "1px solid var(--line)",
               display: "flex",
               alignItems: "center",
               gap: 8,
-              background: "#ffffff",
+              background: "var(--panel)",
             }}
           >
             <span style={{ fontSize: 14, display: "inline-flex", alignItems: "center" }}>{ICONS.book(14)}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>
               Static MCP Tools (Reference)
             </span>
-            <span style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-3)" }}>
               {STATIC_MCP_TOOL_DEFS.length} tools
             </span>
           </div>
@@ -8108,34 +8108,34 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
 
         <div
           style={{
-            border: "1px solid #e6e9ef",
+            border: "1px solid var(--line)",
             borderRadius: 10,
             overflow: "hidden",
-            background: "#f4f6fa",
+            background: "var(--bg)",
           }}
         >
           <div
             style={{
               padding: "10px 12px",
-              borderBottom: "1px solid #e6e9ef",
+              borderBottom: "1px solid var(--line)",
               display: "flex",
               alignItems: "center",
               gap: 8,
-              background: "#ffffff",
+              background: "var(--panel)",
             }}
           >
             <span style={{ fontSize: 14, display: "inline-flex", alignItems: "center" }}>{ICONS.brain(14)}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>
               Dynamic Learned Tools
             </span>
-            <span style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-3)" }}>
               {filteredTools.length} tool{filteredTools.length !== 1 ? "s" : ""}
             </span>
           </div>
           <div
             style={{
               padding: 12,
-              borderBottom: "1px solid #e6e9ef",
+              borderBottom: "1px solid var(--line)",
               display: "flex",
               gap: 10,
               alignItems: "center",
@@ -8150,24 +8150,24 @@ function ToolsPage({ newlyAddedToolIds = [], onMarkToolSeen }) {
                 flex: 1,
                 padding: "7px 12px",
                 fontSize: 13,
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
+                background: "var(--panel)",
+                border: "1px solid var(--line)",
                 borderRadius: 6,
-                color: "#0f172a",
+                color: "var(--ink)",
                 outline: "none",
               }}
             />
           </div>
           <div style={{ padding: 12 }}>
             {loading ? (
-              <div style={{ color: "#64748b", padding: 20 }}>Loading…</div>
+              <div style={{ color: "var(--ink-3)", padding: 20 }}>Loading…</div>
             ) : filteredTools.length === 0 ? (
               <div style={{ textAlign: "center", padding: 40 }}>
                 <div style={{ fontSize: 32, marginBottom: 10 }}>{ICONS.wrench(32)}</div>
-                <div style={{ fontSize: 15, color: "#0f172a", fontWeight: 600, marginBottom: 6 }}>
+                <div style={{ fontSize: 15, color: "var(--ink)", fontWeight: 600, marginBottom: 6 }}>
                   No learned tools found
                 </div>
-                <div style={{ fontSize: 12, color: "#64748b" }}>
+                <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
                   {search.trim()
                     ? "Try a different search term."
                     : "No learned tools have been promoted yet."}
@@ -8291,7 +8291,7 @@ function ArtifactToastStack({ items }) {
               borderRadius: 6,
               border: `1px solid ${accent}44`,
               borderLeft: `4px solid ${accent}`,
-              background: "linear-gradient(90deg, #ffffff 0%, #f1f5f9 100%)",
+              background: "linear-gradient(90deg, var(--panel) 0%, var(--bg) 100%)",
               padding: "6px 10px",
               display: "flex",
               alignItems: "center",
@@ -8316,7 +8316,7 @@ function ArtifactToastStack({ items }) {
                 style={{
                   marginTop: 2,
                   fontSize: 12,
-                  color: "#0f172a",
+                  color: "var(--ink)",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -8332,9 +8332,9 @@ function ArtifactToastStack({ items }) {
                 style={{
                   flexShrink: 0,
                   fontSize: 12,
-                  color: "#64748b",
+                  color: "var(--ink-3)",
                   background: "#e6e9ef",
-                  border: "1px solid #e2e8f0",
+                  border: "1px solid var(--line)",
                   borderRadius: 999,
                   padding: "2px 8px",
                 }}
@@ -8978,7 +8978,7 @@ function App() {
     { id: "generate", label: "Studio", icon: ICONS.chat },
     { id: "arena", label: "Arena", icon: ICONS.swords },
     { id: "gallery", label: "Gallery", icon: ICONS.frame },
-    { id: "skills", label: "Skills", icon: ICONS.tools },
+    { id: "skills", label: "Skills", icon: ICONS.book },
     { id: "tools", label: "Tools", icon: ICONS.wrench },
     { id: "leaderboard", label: "Leaderboard", icon: ICONS.trophy },
   ];
@@ -9183,15 +9183,26 @@ function App() {
       {/* ══ MODE GUIDE STRIP ══ */}
       {activePage === "generate" && (
         <div className="sw-mode-guide">
-          <div>
+          {/* Left: current mode name + description */}
+          <div style={{ minWidth:0 }}>
             <span className="sw-mode-guide-name">{activeMeta.name}</span>
             <span className="sw-mode-guide-desc">{activeMeta.desc}</span>
           </div>
+          {/* Right: clickable mode tabs */}
           <ol className="sw-mode-steps">
-            {activeMeta.steps.map((s, i) => (
-              <li key={i} className={`sw-mode-step${s.startsWith("↺") ? " feedback" : ""}`}>
-                <span style={{ color:"var(--ink-3)", flexShrink:0 }}>{i + 1}</span>
-                {s}
+            {[
+              { id: "scene",    label: "Scene Generation" },
+              { id: "coevolve", label: "Co-evolve" },
+              { id: "training", label: "Embodied Learning" },
+              { id: "pure",     label: "Overview" },
+            ].map((m) => (
+              <li
+                key={m.id}
+                onClick={() => setLayoutMode(m.id)}
+                className={`sw-mode-step${layoutMode === m.id ? " active" : ""}`}
+                title={MODE_META[m.id]?.desc}
+              >
+                {m.label}
               </li>
             ))}
           </ol>
