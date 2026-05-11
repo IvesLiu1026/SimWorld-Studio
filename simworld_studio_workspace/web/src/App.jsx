@@ -8473,6 +8473,138 @@ function useSession() {
   };
 }
 
+// ─── Settings Modal ──────────────────────────────────────────────────────────
+
+function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClose }) {
+  const themes = [
+    {
+      id: "default", label: "Default", desc: "Light, rounded",
+      preview: { nav: "#fff", bg: "#f4f6fa", left: "#fff", center: "#0b1220", right: "#fff", border: "#e6e9ef", radius: 8 },
+    },
+    {
+      id: "github", label: "GitHub Dark", desc: "VS Code style",
+      preview: { nav: "#0d1117", bg: "#010409", left: "#161b22", center: "#0b1220", right: "#161b22", border: "#21262d", radius: 3 },
+    },
+    {
+      id: "pro", label: "Pro / Adobe", desc: "Sharp, compact",
+      preview: { nav: "#1c1c1c", bg: "#1c1c1c", left: "#252525", center: "#0b1220", right: "#252525", border: "#3d3d3d", radius: 0 },
+    },
+  ];
+  const layouts = [
+    { id: "coevolve", label: "Co-Evolve", desc: "All panels visible", left: true, right: true },
+    { id: "scene",    label: "Scene Generation", desc: "Coding + Viewport", left: true, right: false },
+    { id: "agent",    label: "Embodied Learning", desc: "Viewport + Agent", left: false, right: true },
+    { id: "pure",     label: "Pure View", desc: "Viewport only", left: false, right: false },
+  ];
+
+  return (
+    <div
+      style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        zIndex:9800, backdropFilter:"blur(4px)" }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style={{ background:"var(--panel)", border:"1px solid var(--line)",
+        borderRadius:12, padding:"28px 32px", width:560, maxWidth:"92vw",
+        boxShadow:"var(--shadow-pop)", maxHeight:"90vh", overflowY:"auto" }}>
+
+        {/* Header */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>
+          <span style={{ fontSize:18, fontWeight:700, color:"var(--ink)", letterSpacing:"-0.01em" }}>Settings</span>
+          <button onClick={onClose} style={{ width:30, height:30, borderRadius:6, border:"none",
+            background:"transparent", cursor:"pointer", color:"var(--ink-3)",
+            display:"flex", alignItems:"center", justifyContent:"center" }}
+            onMouseEnter={e=>e.currentTarget.style.background="var(--bg-hover)"}
+            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+            {ICONS.close(16)}
+          </button>
+        </div>
+
+        {/* ── Appearance ── */}
+        <div style={{ marginBottom:28 }}>
+          <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.07em",
+            color:"var(--ink-3)", textTransform:"uppercase", marginBottom:14 }}>
+            Appearance
+          </div>
+          <div style={{ display:"flex", gap:10 }}>
+            {themes.map(t => {
+              const p = t.preview;
+              const active = uiTheme === t.id;
+              return (
+                <button key={t.id} onClick={() => onThemeChange(t.id)} style={{
+                  flex:1, padding:"10px 10px 12px", borderRadius:8, cursor:"pointer",
+                  border: active ? "2px solid var(--blue)" : "1px solid var(--line)",
+                  background: active ? "var(--blue-soft)" : "var(--bg)",
+                  textAlign:"center", fontFamily:"inherit", transition:"all 0.12s",
+                }}>
+                  {/* Mini layout preview */}
+                  <div style={{ width:"100%", height:44, borderRadius:p.radius+2, marginBottom:10,
+                    overflow:"hidden", border:`1px solid ${p.border}`, background:p.bg,
+                    display:"flex", flexDirection:"column" }}>
+                    {/* Navbar strip */}
+                    <div style={{ height:10, background:p.nav, borderBottom:`1px solid ${p.border}`, flexShrink:0 }}/>
+                    {/* 3-col content */}
+                    <div style={{ flex:1, display:"flex", gap:1 }}>
+                      <div style={{ width:"28%", background:p.left, borderRadius:p.radius, margin:2 }}/>
+                      <div style={{ flex:1, background:p.center, borderRadius:p.radius, margin:"2px 0" }}/>
+                      <div style={{ width:"28%", background:p.right, borderRadius:p.radius, margin:2 }}/>
+                    </div>
+                  </div>
+                  <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)" }}>{t.label}</div>
+                  <div style={{ fontSize:11, color:"var(--ink-3)", marginTop:2 }}>{t.desc}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── Layout Mode ── */}
+        <div>
+          <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.07em",
+            color:"var(--ink-3)", textTransform:"uppercase", marginBottom:14 }}>
+            Layout Mode
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {layouts.map(l => {
+              const active = layoutMode === l.id;
+              return (
+                <button key={l.id} onClick={() => onLayoutMode(l.id)} style={{
+                  display:"flex", alignItems:"center", gap:14,
+                  padding:"11px 14px", borderRadius:8, cursor:"pointer",
+                  border: active ? "2px solid var(--blue)" : "1px solid var(--line)",
+                  background: active ? "var(--blue-soft)" : "transparent",
+                  textAlign:"left", fontFamily:"inherit", transition:"all 0.12s",
+                }}>
+                  {/* Mini panel diagram */}
+                  <div style={{ display:"flex", gap:3, flexShrink:0 }}>
+                    <div style={{ width:14, height:22, borderRadius:3,
+                      background: l.left ? "var(--blue)" : "var(--line)",
+                      opacity: l.left ? 1 : 0.35,
+                    }}/>
+                    <div style={{ width:20, height:22, borderRadius:3, background:"var(--blue)" }}/>
+                    <div style={{ width:14, height:22, borderRadius:3,
+                      background: l.right ? "var(--blue)" : "var(--line)",
+                      opacity: l.right ? 1 : 0.35,
+                    }}/>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)" }}>{l.label}</div>
+                    <div style={{ fontSize:11, color:"var(--ink-3)", marginTop:1 }}>{l.desc}</div>
+                  </div>
+                  {active && (
+                    <div style={{ marginLeft:"auto", color:"var(--blue)" }}>{ICONS.check(16)}</div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -8480,6 +8612,24 @@ function App() {
   const statusCtxMain = useStatus();
   const health      = statusCtxMain.health;
   const healthError = !statusCtxMain.health && !statusCtxMain.pieActive; // only show error after SSE connects
+
+  // ── UI Theme & Layout Mode ─────────────────────────────────────────────────
+  const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "default");
+  const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem("sw_layout_mode") || "coevolve");
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", uiTheme);
+    localStorage.setItem("sw_ui_theme", uiTheme);
+  }, [uiTheme]);
+
+  useEffect(() => {
+    localStorage.setItem("sw_layout_mode", layoutMode);
+  }, [layoutMode]);
+
+  const showLeft  = layoutMode === "coevolve" || layoutMode === "scene";
+  const showRight = layoutMode === "coevolve" || layoutMode === "agent";
+
   const [latestScreenshot, setLatestScreenshot] = useState(null);
   const [splitPct, setSplitPct] = useState(38);
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -8833,8 +8983,8 @@ function App() {
       {/* ══ POOL FULL — waiting room (only shows when all UE slots are occupied) ══ */}
       {poolFull && (
         <div style={{ position:"fixed", inset:0, background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
-          <div style={{ background:"#fff", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:420, boxShadow:"var(--shadow-pop)" }}>
-            <div style={{ fontSize:40, marginBottom:16 }}>⏳</div>
+          <div style={{ background:"var(--panel)", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:420, boxShadow:"var(--shadow-pop)" }}>
+            <div style={{ width:56, height:56, marginBottom:16, marginLeft:"auto", marginRight:"auto", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--ink-3)" }}>{ICONS.clock(48)}</div>
             <div style={{ fontSize:20, fontWeight:800, color:"var(--ink)", marginBottom:8 }}>Server at capacity</div>
             <div style={{ fontSize:13, color:"var(--ink-3)", lineHeight:1.6, marginBottom:24 }}>
               All simulation slots are currently in use.<br/>
@@ -8851,8 +9001,8 @@ function App() {
       {/* ══ SESSION EXPIRED modal ══ */}
       {expired && (
         <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, backdropFilter:"blur(4px)" }}>
-          <div style={{ background:"#fff", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:380, boxShadow:"var(--shadow-pop)" }}>
-            <div style={{ fontSize:40, marginBottom:16 }}>🔒</div>
+          <div style={{ background:"var(--panel)", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:380, boxShadow:"var(--shadow-pop)" }}>
+            <div style={{ width:56, height:56, marginBottom:16, marginLeft:"auto", marginRight:"auto", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--ink-3)" }}>{ICONS.lock(48)}</div>
             <div style={{ fontSize:20, fontWeight:800, color:"var(--ink)", marginBottom:8 }}>Session ended</div>
             <div style={{ fontSize:13, color:"var(--ink-3)", lineHeight:1.6, marginBottom:24 }}>
               Your 30-minute session has expired.<br/>Refresh to start a new session.
@@ -8867,7 +9017,7 @@ function App() {
       {/* ══ TOP NAV BAR — floating card ══ */}
       <header style={{
         height: 50,
-        background: "#fff",
+        background: "var(--panel)",
         borderRadius: 12,
         border: "1px solid var(--line)",
         boxShadow: "var(--shadow-card)",
@@ -8896,7 +9046,7 @@ function App() {
               onClick={() => handleNavClick(id)}
               className={`sw-nav-item${activePage === id ? " active" : ""}`}
             >
-              <span style={{ display:"inline-flex", alignItems:"center" }}>{icon(13)}</span>
+              <span style={{ display:"inline-flex", alignItems:"center" }}>{icon(20)}</span>
               <span>{label}</span>
               {((id === "skills" && artifactUnread.skills) || (id === "tools" && artifactUnread.tools)) && (
                 <span className="sw-nav-dot" />
@@ -8921,13 +9071,13 @@ function App() {
           {/* Sync error / stale agent warnings */}
           {!syncStatus.sseOk && (
             <div style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 8px", borderRadius:7, background:"#fef2f2", border:"1px solid #fecaca", fontSize:12, fontWeight:600, color:"#dc2626" }}>
-              ⚠ {syncStatus.syncError || "SSE disconnected"}
+              {ICONS.warning(13)} {syncStatus.syncError || "SSE disconnected"}
             </div>
           )}
           {syncStatus.staleAgents?.size > 0 && (
             <div title={`Stale: ${[...syncStatus.staleAgents].join(", ")}`}
               style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 8px", borderRadius:7, background:"#fff7ed", border:"1px solid #fed7aa", fontSize:12, fontWeight:600, color:"#ea580c" }}>
-              👻 {syncStatus.staleAgents.size} stale agent{syncStatus.staleAgents.size > 1 ? "s" : ""}
+              {ICONS.ghost(13)} {syncStatus.staleAgents.size} stale agent{syncStatus.staleAgents.size > 1 ? "s" : ""}
             </div>
           )}
 
@@ -8953,7 +9103,7 @@ function App() {
             display:"inline-flex", alignItems:"center", gap:7,
             padding:"5px 8px 5px 11px",
             border:"1px solid var(--line)", borderRadius:999,
-            background:"#fff", fontSize:12, fontWeight:600,
+            background:"var(--panel)", fontSize:12, fontWeight:600,
           }}>
             <span style={{
               width:8, height:8, borderRadius:"50%", background:"#22c55e",
@@ -8965,11 +9115,11 @@ function App() {
             </span>
             {/* play/pause controls */}
             {[
-              <svg key="play" viewBox="0 0 24 24" width="11" height="11" fill="var(--ink-2)"><polygon points="5,3 19,12 5,21"/></svg>,
-              <svg key="pause" viewBox="0 0 24 24" width="11" height="11" fill="var(--ink-2)"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
+              <svg key="play" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style={{color:"var(--ink-2)"}}><polygon points="5,3 19,12 5,21"/></svg>,
+              <svg key="pause" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style={{color:"var(--ink-2)"}}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
             ].map((icon,i) => (
               <span key={i} style={{
-                width:24, height:24, borderRadius:"50%", background:"#f1f5f9",
+                width:24, height:24, borderRadius:"50%", background:"var(--bg-tertiary,#f1f5f9)",
                 display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
               }}>{icon}</span>
             ))}
@@ -8996,22 +9146,31 @@ function App() {
           </div>
 
           {/* Settings icon */}
-          <button style={{
+          <button onClick={() => setShowSettings(true)} style={{
             width:32, height:32, borderRadius:8, border:"none", background:"transparent",
             display:"flex", alignItems:"center", justifyContent:"center",
             color:"var(--ink-2)", cursor:"pointer",
           }}
-            onMouseEnter={e=>e.currentTarget.style.background="#f1f5f9"}
+            onMouseEnter={e=>e.currentTarget.style.background="var(--bg-hover,#f1f5f9)"}
             onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+            title="Settings"
           >
-            <svg viewBox="0 0 24 24" fill="none" width="17" height="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h0a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v0a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
-            </svg>
+            {ICONS.gear(18)}
           </button>
 
         </div>
       </header>
+
+      {/* Settings modal */}
+      {showSettings && (
+        <SettingsModal
+          uiTheme={uiTheme}
+          onThemeChange={setUiTheme}
+          layoutMode={layoutMode}
+          onLayoutMode={setLayoutMode}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
 
       <ArtifactToastStack items={artifactToasts} />
 
@@ -9021,7 +9180,7 @@ function App() {
         flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:5, padding:"6px 0",
       }}>
         {/* ── LEFT: Coding Agent + Verifier (two independent panels) ── */}
-        <div ref={leftColRef} style={{
+        {showLeft && <div ref={leftColRef} style={{
           width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
@@ -9033,8 +9192,8 @@ function App() {
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header">
-              <span className="sw-section-title" style={{ color:"var(--orange)" }}>
-                <span className="sw-num-chip" style={{ background:"var(--orange)" }}>1</span>
+              <span className="sw-section-title">
+                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>1</span>
                 Coding Agent
               </span>
               <div style={{ flex:1 }} />
@@ -9067,8 +9226,8 @@ function App() {
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-              <span className="sw-section-title" style={{ color:"var(--orange)", fontSize:"var(--fs-panel)" }}>
-                <span className="sw-num-chip" style={{ background:"var(--orange)", fontSize:12 }}>✓</span>
+              <span className="sw-section-title">
+                <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.check(11)}</span>
                 Verifier
               </span>
             </div>
@@ -9076,10 +9235,10 @@ function App() {
               <CodingVerifierPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* ── Resize handle left ── */}
-        <div className="sw-resize-col" onMouseDown={startColResize("left")} />
+        {showLeft && <div className="sw-resize-col" onMouseDown={startColResize("left")} />}
 
         {/* ── CENTER: Viewport + drawer ── */}
         <div style={{ flex:1, minWidth:320, display:"flex", flexDirection:"column", gap:8, overflow:"visible", padding:"0 3px", margin:"0 -3px" }}>
@@ -9162,10 +9321,10 @@ function App() {
         </div>
 
         {/* ── Resize handle right ── */}
-        <div className="sw-resize-col" onMouseDown={startColResize("right")} />
+        {showRight && <div className="sw-resize-col" onMouseDown={startColResize("right")} />}
 
         {/* ── RIGHT: Embodied Agent + Statistics (two independent panels) ── */}
-        <div ref={rightColRef} style={{
+        {showRight && <div ref={rightColRef} style={{
           width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
@@ -9177,8 +9336,8 @@ function App() {
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header" style={{ borderRadius:"12px 12px 0 0" }}>
-              <span className="sw-section-title" style={{ color:"var(--blue)" }}>
-                <span className="sw-num-chip" style={{ background:"var(--blue)" }}>2</span>
+              <span className="sw-section-title">
+                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>2</span>
                 Embodied Agent
               </span>
               <div style={{ flex:1 }} />
@@ -9211,8 +9370,8 @@ function App() {
             flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-              <span className="sw-section-title" style={{ color:"var(--blue)", fontSize:"var(--fs-panel)" }}>
-                <span className="sw-num-chip" style={{ background:"var(--blue)", fontSize:12 }}>📊</span>
+              <span className="sw-section-title">
+                <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.chartBar(11)}</span>
                 Agent Statistics
               </span>
             </div>
@@ -9220,7 +9379,7 @@ function App() {
               <AgentAggregatePanelTabs agents={[]} sessionId={currentSessionId} />
             </div>
           </div>
-        </div>
+        </div>}
 
       </div>
       )}
