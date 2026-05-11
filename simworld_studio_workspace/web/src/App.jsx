@@ -483,6 +483,421 @@ const inputSx = {
   cursor: "text", boxSizing: "border-box",
 };
 
+// ─── Pipeline + Artifact UI ──────────────────────────────────────────────────
+
+const STUDIO_MODES = [
+  { id:"scene",    num:1, label:"Scene Generation", sub:"Create & verify UE5 environments from text/image/edit",     cta:"Generate Scene",   ctaColor:"blue",   icon: s=>ICONS.chat(s)     },
+  { id:"task",     num:2, label:"Task Generation",  sub:"Generate PointNav / ObjectNav tasks from verified scenes",  cta:"Generate Tasks",   ctaColor:"green",  icon: s=>ICONS.target(s)  },
+  { id:"training", num:3, label:"Agent Training",   sub:"Run embodied agent experiments and collect trajectories",   cta:"Start Training",   ctaColor:"violet", icon: s=>ICONS.robot(s)   },
+  { id:"coevolve", num:4, label:"Co-evolution",     sub:"Adaptive curriculum driven by agent-environment feedback",  cta:"Run Co-evolution", ctaColor:"orange", icon: s=>ICONS.refresh(s) },
+];
+
+function PipelineStepper({ activeMode, onChange }) {
+  return (
+    <div className="pipeline-stepper">
+      {STUDIO_MODES.map((m, i) => (
+        <React.Fragment key={m.id}>
+          <button className={`pipeline-tab${activeMode === m.id ? " active" : ""}`}
+            onClick={() => onChange(m.id)} title={m.sub}>
+            <span className="pipeline-tab-num">{m.num}</span>
+            {m.label}
+          </button>
+          {i < STUDIO_MODES.length - 1 && (
+            <svg className="pipeline-arrow" viewBox="0 0 16 16" width="14" height="14" fill="none">
+              <polyline points="5,3 11,8 5,13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function ArtifactChain({ artifacts, activeMode, onSelect }) {
+  const stages = [
+    { id:"scene",    label:"Scene",    placeholder:"No scene yet",    icon: s=>ICONS.cube(s)    },
+    { id:"task",     label:"Task Set", placeholder:"No tasks yet",    icon: s=>ICONS.target(s)  },
+    { id:"training", label:"Training", placeholder:"No run yet",      icon: s=>ICONS.activity(s)},
+    { id:"coevolve", label:"Curriculum",placeholder:"No curriculum",  icon: s=>ICONS.refresh(s) },
+  ];
+  return (
+    <div className="artifact-chain">
+      <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:"var(--ink-3)", flexShrink:0 }}>Pipeline</span>
+      {stages.map((s, i) => {
+        const art = artifacts[s.id];
+        const isActive = activeMode === s.id;
+        return (
+          <React.Fragment key={s.id}>
+            {i > 0 && <span className="artifact-sep">→</span>}
+            <button
+              className={`artifact-chip${!art ? " empty" : art ? " ready" : ""}${isActive ? " active" : ""}`}
+              onClick={() => art && onSelect(s.id)}
+              title={art ? art.name : s.placeholder}
+            >
+              <span style={{ display:"inline-flex", alignItems:"center" }}>{s.icon(11)}</span>
+              {art ? art.name : s.placeholder}
+            </button>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Studio mode landing cards ─────────────────────────────────────────────────
+function StudioLanding({ activeMode, onSelect, artifacts }) {
+  return (
+    <div style={{ flex:1, overflow:"auto", background:"var(--bg)" }}>
+      <div style={{ padding:"28px 28px 12px", borderBottom:"1px solid var(--line)" }}>
+        <div style={{ fontSize:16, fontWeight:700, color:"var(--ink)", marginBottom:4 }}>SimWorld Studio</div>
+        <div style={{ fontSize:12, color:"var(--ink-3)" }}>Select a pipeline stage to begin or continue your work.</div>
+      </div>
+      <div className="mode-landing">
+        {STUDIO_MODES.map(m => {
+          const art = artifacts[m.id];
+          return (
+            <div key={m.id} className={`mode-card${activeMode === m.id ? " current" : ""}`}
+              onClick={() => onSelect(m.id)}>
+              <div className="mode-card-num">{m.num}</div>
+              <div>
+                <div className="mode-card-title">{m.label}</div>
+                <div className="mode-card-sub">{m.sub}</div>
+              </div>
+              <div className={`mode-card-status${art ? " has-data" : ""}`}>
+                {art ? `${ICONS.check(11) } ${art.name}` : "No output yet"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Task Generation panels ────────────────────────────────────────────────────
+function TaskGenPanel({ sessionId }) {
+  const [taskType, setTaskType] = React.useState("PointNav");
+  const [episodes, setEpisodes] = React.useState("500");
+  const [minPath, setMinPath] = React.useState("3");
+  const [maxPath, setMaxPath] = React.useState("20");
+  const [successR, setSuccessR] = React.useState("0.5");
+  const [maxSteps, setMaxSteps] = React.useState("500");
+  const [generating, setGenerating] = React.useState(false);
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div className="config-section">
+        <div className="config-section-title">Task Builder</div>
+        <div className="config-row">
+          <label>Task type</label>
+          <select className="config-select" value={taskType} onChange={e=>setTaskType(e.target.value)}>
+            <option>PointNav</option>
+            <option>ObjectNav</option>
+            <option>Exploration</option>
+            <option>Custom</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="config-section" style={{ flex:1, overflow:"auto" }}>
+        <div className="config-section-title">Sampling Parameters</div>
+        {[
+          ["Episodes", episodes, setEpisodes],
+          ["Min path (m)", minPath, setMinPath],
+          ["Max path (m)", maxPath, setMaxPath],
+          ["Success radius (m)", successR, setSuccessR],
+          ["Max episode steps", maxSteps, setMaxSteps],
+        ].map(([label, val, set]) => (
+          <div key={label} className="config-row">
+            <label>{label}</label>
+            <input className="config-input" value={val} onChange={e=>set(e.target.value)} />
+          </div>
+        ))}
+
+        {taskType === "PointNav" && (
+          <>
+            <div className="config-section-title" style={{ marginTop:12 }}>PointNav Options</div>
+            {[["Require NavMesh", true],["Filter by path length", true],["Sample reachable pairs", true]].map(([l,v])=>(
+              <div key={l} className="config-row">
+                <label>{l}</label>
+                <span style={{ fontSize:12, color: v?"var(--green)":"var(--ink-3)", fontWeight:600 }}>{v?"On":"Off"}</span>
+              </div>
+            ))}
+          </>
+        )}
+        {taskType === "ObjectNav" && (
+          <>
+            <div className="config-section-title" style={{ marginTop:12 }}>ObjectNav Options</div>
+            {[["Target category","Any"],["Require reachable","Yes"],["Visible from path","Yes"]].map(([l,v])=>(
+              <div key={l} className="config-row">
+                <label>{l}</label>
+                <span className="config-val">{v}</span>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
+        <button className="primary-cta green" style={{ width:"100%", justifyContent:"center" }}
+          onClick={()=>setGenerating(g=>!g)} disabled={generating}>
+          {generating ? "Generating…" : `${ICONS.target(13)} Generate Tasks`}
+        </button>
+        <div style={{ display:"flex", gap:6 }}>
+          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Validate Tasks</Btn>
+          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Preview Gym API</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TaskInspectorPanel() {
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto" }}>
+      <div className="config-section">
+        <div className="config-section-title">Task Set</div>
+        {[["Type","PointNav"],["Total episodes","500"],["Valid","486"],["Rejected","14"]].map(([l,v])=>(
+          <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
+        ))}
+      </div>
+      <div className="config-section">
+        <div className="config-section-title">Validation</div>
+        {[["NavMesh connected","pass"],["Task solvable","pass"],["Goal reachable","pass"],["Collision-free path","pass"]].map(([l,s])=>(
+          <div key={l} className="status-row">
+            <span style={{ fontSize:12, color:"var(--ink-2)" }}>{l}</span>
+            <span className={s==="pass"?"status-pass":"status-fail"}>{s.toUpperCase()}</span>
+          </div>
+        ))}
+      </div>
+      <div className="config-section">
+        <div className="config-section-title">Selected Episode</div>
+        {[["Start","(−420, 130, 200)"],["Goal","(1840, −650, 200)"],["Path length","18.4 m"],["Max steps","500"],["Success radius","0.5 m"]].map(([l,v])=>(
+          <div key={l} className="status-row"><span style={{ fontSize:11, color:"var(--ink-3)" }}>{l}</span><span style={{ fontSize:12, color:"var(--ink)", fontFamily:"monospace" }}>{v}</span></div>
+        ))}
+      </div>
+      <div className="config-section">
+        <div className="config-section-title">Output Artifact</div>
+        <div style={{ padding:"8px 10px", borderRadius:6, border:"1px solid var(--line)", background:"var(--bg-tertiary)", fontSize:12, color:"var(--ink-2)" }}>
+          <div style={{ fontWeight:700, color:"var(--ink)", marginBottom:2 }}>TaskSet_PointNav_500</div>
+          <div style={{ fontSize:11 }}>486 valid episodes · PointNav · Urban Avenue</div>
+        </div>
+        <Btn variant="success" size="sm" style={{ width:"100%", justifyContent:"center", marginTop:8 }}>Export Task Set</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ── Agent Training config panel ───────────────────────────────────────────────
+function TrainingConfigPanel({ sessionId }) {
+  const [running, setRunning] = React.useState(false);
+  const [obsMode, setObsMode] = React.useState("RGB-D");
+  const [method, setMethod] = React.useState("PPO");
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div className="config-section">
+        <div className="config-section-title">Experiment Setup</div>
+        {[["Scene","Urban Avenue v3"],["Task Set","PointNav_500"],["Agent","Qwen2.5-VL-7B"]].map(([l,v])=>(
+          <div key={l} className="config-row"><label>{l}</label><span className="config-val" style={{ fontSize:11 }}>{v}</span></div>
+        ))}
+      </div>
+
+      <div className="config-section" style={{ flex:1, overflow:"auto" }}>
+        <div className="config-section-title">Training Config</div>
+        <div className="config-row">
+          <label>Observation</label>
+          <select className="config-select" value={obsMode} onChange={e=>setObsMode(e.target.value)}>
+            {["RGB","Depth","RGB-D","Pose","Text"].map(o=><option key={o}>{o}</option>)}
+          </select>
+        </div>
+        <div className="config-row">
+          <label>Method</label>
+          <select className="config-select" value={method} onChange={e=>setMethod(e.target.value)}>
+            {["PPO","DAgger","BC","DDPPO"].map(o=><option key={o}>{o}</option>)}
+          </select>
+        </div>
+        {[["Episode budget","10,000"],["Eval split","20%"],["Memory","Enabled"]].map(([l,v])=>(
+          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
+        ))}
+
+        <div className="config-section-title" style={{ marginTop:12 }}>Live Metrics</div>
+        {[["Success Rate","64%"],["SPL","0.42"],["SoftSPL","0.58"],["nDTW","0.71"],["Avg Reward","0.37"]].map(([l,v])=>(
+          <div key={l} className="status-row"><span>{l}</span><span className="status-score">{v}</span></div>
+        ))}
+      </div>
+
+      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
+        <button className={`primary-cta ${running?"orange":"violet"}`}
+          style={{ width:"100%", justifyContent:"center" }} onClick={()=>setRunning(r=>!r)}>
+          {running ? `${ICONS.collision(13)} Pause Training` : `${ICONS.activity(13)} Start Training`}
+        </button>
+        <div style={{ display:"flex", gap:6 }}>
+          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Run Evaluation</Btn>
+          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Export</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Co-evolution curriculum builder ──────────────────────────────────────────
+function CurriculumBuilderPanel({ sessionId }) {
+  const [running, setRunning] = React.useState(false);
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div className="config-section">
+        <div className="config-section-title">Curriculum Status</div>
+        {[["Round","12 / 25"],["Difficulty","Level 4"],["Current SR","64%"],["Next action","Advance to L5"]].map(([l,v])=>(
+          <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
+        ))}
+      </div>
+
+      <div className="config-section" style={{ flex:1, overflow:"auto" }}>
+        <div className="config-section-title">Difficulty Axes</div>
+        {[["Path length","12–22 m"],["Heading offset","0–90°"],["Obstacle density","0.20"],["Object clutter","medium"],["Distractors","3"]].map(([l,v])=>(
+          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
+        ))}
+
+        <div className="config-section-title" style={{ marginTop:12 }}>Curriculum Config</div>
+        {[["Mastery threshold","70%"],["Episodes per round","500"],["Max rounds","25"],["Advance policy","Consecutive"],["Agent update","Online"]].map(([l,v])=>(
+          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
+        ))}
+
+        <div className="config-section-title" style={{ marginTop:12 }}>SimCoder Adaptation</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+          {["Increase obstacle density","Add longer routes","Preserve successful layouts","Oversample sharp-turn failures"].map(s=>(
+            <div key={s} style={{ fontSize:11, color:"var(--ink-3)", padding:"3px 0", display:"flex", alignItems:"center", gap:5 }}>
+              <span style={{ width:4, height:4, borderRadius:"50%", background:"var(--blue)", flexShrink:0 }}/>
+              {s}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
+        <button className={`primary-cta ${running?"orange":"orange"}`}
+          style={{ width:"100%", justifyContent:"center" }} onClick={()=>setRunning(r=>!r)}>
+          {running ? `${ICONS.collision(13)} Pause` : `${ICONS.refresh(13)} Run Co-evolution`}
+        </button>
+        <div style={{ display:"flex", gap:6 }}>
+          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Evaluate</Btn>
+          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Export</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Scene Inspector (right in scene mode) ─────────────────────────────────────
+function SceneInspectorPanel({ sessionId, latestScreenshot }) {
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div className="config-section">
+        <div className="config-section-title">Scene Health</div>
+        {[["Collision","pass"],["Gravity","pass"],["In Bounds","pass"],["Prompt Fidelity","8 / 10"],["Aesthetics","8 / 10"]].map(([l,v])=>(
+          <div key={l} className="status-row">
+            <span style={{ fontSize:12, color:"var(--ink-2)" }}>{l}</span>
+            {v==="pass" ? <span className="status-pass">PASS</span>
+              : <span className="status-score">{v}</span>}
+          </div>
+        ))}
+      </div>
+
+      <div className="config-section">
+        <div className="config-section-title">Scene Summary</div>
+        {[["Actors","42"],["Lighting","Afternoon"],["Ground size","200 m"],["Version","v3"]].map(([l,v])=>(
+          <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
+        ))}
+      </div>
+
+      {/* Live verifier panel */}
+      <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+        <div className="config-section-title" style={{ padding:"8px 14px 4px" }}>VLM Verifier</div>
+        <div style={{ flex:1, overflow:"hidden" }}>
+          <CodingVerifierPanel sessionId={sessionId} latestScreenshot={latestScreenshot} />
+        </div>
+      </div>
+
+      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)" }}>
+        <div style={{ fontSize:11, color:"var(--ink-3)", marginBottom:6, fontWeight:600 }}>Output Artifact</div>
+        <div style={{ padding:"7px 10px", borderRadius:6, border:"1px solid var(--line)", background:"var(--bg-tertiary)", fontSize:12, color:"var(--ink-2)" }}>
+          <span style={{ fontWeight:700, color:"var(--ink)" }}>Scene v3</span>
+          <span style={{ marginLeft:8 }}>Urban Avenue · 42 actors</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Round Inspector (right in co-evolve mode) ─────────────────────────────────
+function RoundInspectorPanel({ sessionId }) {
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div className="config-section">
+        <div className="config-section-title">Round History</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+          {[["R1","L0","82%","Advance"],["R2","L1","76%","Advance"],["R3","L2","58%","Hold"],["R4","L2","71%","Advance"],["R5","L3","49%","Hold"],["R12","L4","64%","Active"]].map(([r,l,sr,action])=>(
+            <div key={r} style={{ display:"grid", gridTemplateColumns:"2.5rem 2.5rem 2.5rem 1fr", gap:4, padding:"4px 6px", borderRadius:5, background:"var(--bg-tertiary)", fontSize:11, fontFamily:"monospace", alignItems:"center" }}>
+              <span style={{ color:"var(--ink-3)" }}>{r}</span>
+              <span style={{ color:"var(--ink-2)" }}>{l}</span>
+              <span style={{ color:"var(--blue)", fontWeight:700 }}>{sr}</span>
+              <span style={{ color: action==="Hold"?"var(--orange)": action==="Active"?"var(--green)":"var(--ink-3)", fontFamily:"inherit", fontSize:11 }}>{action}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ flex:1, overflow:"auto" }}>
+        <AgentAggregatePanelTabs agents={[]} sessionId={sessionId} />
+      </div>
+    </div>
+  );
+}
+
+// ── Library page (Skills + Tools + Assets) ───────────────────────────────────
+function LibraryPage({ newlyAddedSkillIds, onMarkSkillSeen, newlyAddedToolIds, onMarkToolSeen }) {
+  const [tab, setTab] = React.useState("skills");
+  return (
+    <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
+      <div style={{ padding:"10px 20px", borderBottom:"1px solid var(--line)", display:"flex", alignItems:"center", gap:8, background:"var(--panel)" }}>
+        <span style={{ fontSize:14, fontWeight:700, color:"var(--ink)", marginRight:8 }}>Library</span>
+        {[["skills","Skills",ICONS.book],["tools","Tools",ICONS.wrench],["arena","Arena",ICONS.swords]].map(([id,label,icon])=>(
+          <button key={id} className={`sw-tab-btn${tab===id?" active":""}`} onClick={()=>setTab(id)}>
+            <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>{icon(13)} {label}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ flex:1, overflow:"hidden" }}>
+        {tab==="skills" && <SkillsPage newlyAddedSkillIds={newlyAddedSkillIds} onMarkSkillSeen={onMarkSkillSeen} />}
+        {tab==="tools"  && <ToolsPage  newlyAddedToolIds={newlyAddedToolIds}   onMarkToolSeen={onMarkToolSeen}  />}
+        {tab==="arena"  && <ArenaPage />}
+      </div>
+    </div>
+  );
+}
+
+// ── Results page (Gallery + Leaderboard) ─────────────────────────────────────
+function ResultsPage() {
+  const [tab, setTab] = React.useState("gallery");
+  return (
+    <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
+      <div style={{ padding:"10px 20px", borderBottom:"1px solid var(--line)", display:"flex", alignItems:"center", gap:8, background:"var(--panel)" }}>
+        <span style={{ fontSize:14, fontWeight:700, color:"var(--ink)", marginRight:8 }}>Results</span>
+        {[["gallery","Scenes",ICONS.frame],["leaderboard","Leaderboard",ICONS.trophy]].map(([id,label,icon])=>(
+          <button key={id} className={`sw-tab-btn${tab===id?" active":""}`} onClick={()=>setTab(id)}>
+            <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>{icon(13)} {label}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ flex:1, overflow:"hidden" }}>
+        {tab==="gallery"     && <GalleryPage />}
+        {tab==="leaderboard" && <LeaderboardPage />}
+      </div>
+    </div>
+  );
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
@@ -8213,10 +8628,10 @@ function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClo
     },
   ];
   const layouts = [
-    { id: "scene",    label: "Scene Generation",    desc: "Chat Agent | Viewport | Verifier",          left: true,  right: true  },
-    { id: "training", label: "Embodied Learning",   desc: "Statistics | Viewport | Embodied Agent",    left: true,  right: true  },
-    { id: "coevolve", label: "Co-evolve",           desc: "Agent+Verifier | Viewport | Agent+Stats",   left: true,  right: true  },
-    { id: "pure",     label: "Overview",            desc: "Full-screen viewport only",                 left: false, right: false },
+    { id: "scene",    label: "Scene Generation",  desc: "Intent+SimCoder | Viewport | Scene Inspector", left: true,  right: true  },
+    { id: "task",     label: "Task Generation",   desc: "Task Builder | Viewport | Task Inspector",     left: true,  right: true  },
+    { id: "training", label: "Agent Training",    desc: "Training Config | Viewport | Agent Monitor",   left: true,  right: true  },
+    { id: "coevolve", label: "Co-evolution",      desc: "Curriculum Builder | Viewport | Round Inspector", left: true, right: true },
   ];
 
   return (
@@ -8335,42 +8750,40 @@ function App() {
   const health      = statusCtxMain.health;
   const healthError = !statusCtxMain.health && !statusCtxMain.pieActive; // only show error after SSE connects
 
-  // ── UI Theme & Layout Mode ─────────────────────────────────────────────────
+  // ── Theme + Studio Mode ───────────────────────────────────────────────────
   const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "dark");
-  const [layoutMode, setLayoutMode] = useState(() => localStorage.getItem("sw_layout_mode") || "coevolve");
+  const [studioMode, setStudioMode] = useState(() => localStorage.getItem("sw_studio_mode") || "scene");
+  const [topSection, setTopSection] = useState("studio"); // "studio" | "library" | "results"
   const [showSettings, setShowSettings] = useState(false);
 
+  // Artifact chain — tracks what's been produced
+  const [artifacts, setArtifacts] = useState({
+    scene: null, task: null, training: null, coevolve: null,
+  });
+
   useEffect(() => {
-    // Map our theme IDs to data-theme values
     const themeMap = { dark: "", light: "light" };
     document.documentElement.setAttribute("data-theme", themeMap[uiTheme] ?? "");
     localStorage.setItem("sw_ui_theme", uiTheme);
   }, [uiTheme]);
 
   useEffect(() => {
-    localStorage.setItem("sw_layout_mode", layoutMode);
-  }, [layoutMode]);
+    localStorage.setItem("sw_studio_mode", studioMode);
+  }, [studioMode]);
 
-  // All non-pure modes show both columns; content within each column varies by mode
-  const showLeft  = layoutMode !== "pure";
-  const showRight = layoutMode !== "pure";
+  // Column visibility
+  const showLeft  = topSection === "studio";
+  const showRight = topSection === "studio";
 
-  // Per-panel visibility within columns
-  const showCodingAgent  = layoutMode === "coevolve" || layoutMode === "scene";
-  const showVerifierLeft = layoutMode === "coevolve";   // verifier stays left only in co-evolve
-  const showVerifierRight= layoutMode === "scene";      // verifier moves to right in scene mode
-  const showStatsLeft    = layoutMode === "training";   // stats moves to left in training mode
-  const showAgentRight   = layoutMode === "coevolve" || layoutMode === "training";
-  const showStatsRight   = layoutMode === "coevolve";   // stats stays right only in co-evolve
-
-  // Mode metadata for mode-guide strip
-  const MODE_META = {
-    scene:    { name: "Scene Generation",    desc: "Left: Coding Agent chat — Right: Scene Verifier", steps: ["Prompt SimCoder","MCP Tools","Verify Scene"] },
-    training: { name: "Embodied Learning",   desc: "Left: Agent Statistics — Right: Embodied Agent", steps: ["Spawn Agents","Navigate","Collect Stats"] },
-    coevolve: { name: "Co-evolve",           desc: "Left: Coding Agent + Verifier — Right: Embodied Agent + Statistics", steps: ["Generate Scene","Run Agents","Feedback","Adapt"] },
-    pure:     { name: "Overview",            desc: "Full-screen UE viewport — no side panels.", steps: ["UE Viewport"] },
-  };
-  const activeMeta = MODE_META[layoutMode] || MODE_META.coevolve;
+  // One panel per side per mode (clean 1:1 mapping from the plan)
+  // Scene     → L: Intent+SimCoder (ChatPanel)     R: Scene Inspector (SceneInspectorPanel)
+  // Task      → L: Task Builder (TaskGenPanel)      R: Task Inspector  (TaskInspectorPanel)
+  // Training  → L: Training Config (TrainingConfig) R: Agent Monitor   (AgentPanel)
+  // Co-evolve → L: Curriculum Builder              R: Round Inspector (RoundInspector)
+  const LEFT_PANEL  = { scene:"chat",     task:"taskgen",   training:"trainconfig", coevolve:"curriculum" };
+  const RIGHT_PANEL = { scene:"sceneinsp",task:"taskinsp",  training:"agentmonitor",coevolve:"roundinsp"  };
+  const leftPanel  = LEFT_PANEL[studioMode]  || "chat";
+  const rightPanel2= RIGHT_PANEL[studioMode] || "sceneinsp";
 
   const [latestScreenshot, setLatestScreenshot] = useState(null);
   const [splitPct, setSplitPct] = useState(38);
@@ -8378,7 +8791,8 @@ function App() {
   const [contextRefreshKey, setContextRefreshKey] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [rightPanel, setRightPanel] = useState("viewport");
-  const [activePage, setActivePage] = useState("generate");
+  // activePage kept for compatibility with drawer/panel refs; main nav uses topSection+studioMode
+  const activePage = topSection === "studio" ? "generate" : topSection;
   const [chatRef, setChatRef] = useState(null);
   const [leftTab,    setLeftTab]    = useState("chat");
   const [rightTab,   setRightTab]   = useState("agent");
@@ -8682,12 +9096,12 @@ function App() {
   }, [drawerH, drawerOpen]);
 
   const handleNavClick = useCallback((id) => {
-    setActivePage(id);
-    if (id === "skills") {
-      setArtifactUnread((prev) => (prev.skills ? { ...prev, skills: false } : prev));
-    } else if (id === "tools") {
-      setArtifactUnread((prev) => (prev.tools ? { ...prev, tools: false } : prev));
-    }
+    // kept for compatibility with any remaining callers
+    if (id === "generate") setTopSection("studio");
+    else if (id === "skills" || id === "tools" || id === "arena") { setTopSection("library"); }
+    else if (id === "gallery" || id === "leaderboard") { setTopSection("results"); }
+    if (id === "skills") setArtifactUnread(p => p.skills ? { ...p, skills: false } : p);
+    if (id === "tools")  setArtifactUnread(p => p.tools  ? { ...p, tools:  false } : p);
   }, []);
 
   const markSkillArtifactSeen = useCallback((skillId) => {
@@ -8708,15 +9122,7 @@ function App() {
     }));
   }, []);
 
-  const NAV_ITEMS = [
-    { id: "generate", label: "Studio", icon: ICONS.chat },
-    { id: "arena", label: "Arena", icon: ICONS.swords },
-    { id: "gallery", label: "Gallery", icon: ICONS.frame },
-    { id: "skills", label: "Skills", icon: ICONS.book },
-    { id: "tools", label: "Tools", icon: ICONS.wrench },
-    { id: "leaderboard", label: "Leaderboard", icon: ICONS.trophy },
-  ];
-  const SPLIT_PAGES = ["generate"];
+  const activeModeInfo = STUDIO_MODES.find(m => m.id === studioMode) || STUDIO_MODES[0];
 
   return (
     <PollProvider>
@@ -8756,50 +9162,54 @@ function App() {
         </div>
       )}
 
-      {/* ══ TOP NAV BAR — floating card ══ */}
+      {/* ══ TOP NAV BAR ══ */}
       <header style={{
-        height: 56,
-        background: "var(--topbar,var(--panel))",
-        borderRadius: "var(--radius,8px)",
-        border: "1px solid var(--line)",
-        boxShadow: "var(--shadow-pop)",
-        display: "grid",
-        gridTemplateColumns: "auto minmax(0,1fr) auto",
-        alignItems: "center",
-        padding: "6px 12px",
-        gap: 10,
-        flexShrink: 0,
-        userSelect: "none",
-        zIndex: 20,
-        marginBottom: 8,
+        height: 56, background: "var(--topbar,var(--panel))",
+        borderRadius: "var(--radius,8px)", border: "1px solid var(--line)",
+        boxShadow: "var(--shadow-pop)", display: "flex", alignItems: "center",
+        padding: "0 12px", gap: 10, flexShrink: 0, userSelect: "none", zIndex: 20, marginBottom: 8,
       }}>
         {/* Brand */}
-        <div className="sw-brand">
-          <div style={{ width:38, height:38, borderRadius:"50%", overflow:"hidden", flexShrink:0, boxShadow:"0 2px 8px rgba(2,6,23,.2)" }}>
-            <img src="/simworld-studio-logo.png" style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} alt="SimWorld" />
+        <div className="sw-brand" style={{ paddingRight:12 }}>
+          <div style={{ width:34, height:34, borderRadius:"50%", overflow:"hidden", flexShrink:0, boxShadow:"0 0 0 1px #4b5563, 0 4px 12px rgba(0,0,0,0.3)" }}>
+            <img src="/simworld-studio-logo.png" style={{ width:"100%", height:"100%", objectFit:"cover" }} alt="SimWorld" />
           </div>
-          <span className="sw-brand-name">SimWorld Studio</span>
+          <span className="sw-brand-name" style={{ fontSize:14 }}>SimWorld Studio</span>
         </div>
 
-        {/* Main nav */}
-        <nav className="sw-nav">
-          {NAV_ITEMS.map(({ id, label, icon }) => (
-            <button
-              key={id}
-              onClick={() => handleNavClick(id)}
-              className={`sw-nav-item${activePage === id ? " active" : ""}`}
-            >
-              <span style={{ display:"inline-flex", alignItems:"center" }}>{icon(20)}</span>
-              <span>{label}</span>
-              {((id === "skills" && artifactUnread.skills) || (id === "tools" && artifactUnread.tools)) && (
-                <span className="sw-nav-dot" />
-              )}
-            </button>
-          ))}
-        </nav>
+        {/* Pipeline stepper — primary nav */}
+        {topSection === "studio"
+          ? <PipelineStepper activeMode={studioMode} onChange={m => { setStudioMode(m); setTopSection("studio"); }} />
+          : <div style={{ flex:1, fontSize:13, fontWeight:700, color:"var(--ink-2)" }}>
+              {topSection === "library" ? "Library" : "Results"}
+            </div>
+        }
+
+        {/* Secondary nav */}
+        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0 }}>
+          <button className={`sec-nav-btn${topSection==="studio"?"active":""}`}
+            onClick={()=>setTopSection("studio")}>{ICONS.layout(13)} Studio</button>
+          <button className={`sec-nav-btn${topSection==="library"?"active":""}`}
+            onClick={()=>setTopSection("library")}>
+            {ICONS.book(13)} Library
+            {(artifactUnread.skills || artifactUnread.tools) && <span className="sw-nav-dot" />}
+          </button>
+          <button className={`sec-nav-btn${topSection==="results"?"active":""}`}
+            onClick={()=>setTopSection("results")}>{ICONS.frame(13)} Results</button>
+        </div>
+
+        <div style={{ width:1, height:28, background:"var(--line)", flexShrink:0 }} />
 
         {/* Right side */}
-        <div style={{ display:"flex", alignItems:"center", gap:10, justifyContent:"flex-end" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end", marginLeft:"auto" }}>
+
+          {/* Mode-aware primary CTA */}
+          {topSection === "studio" && (
+            <button className={`primary-cta ${activeModeInfo.ctaColor}`}>
+              <span style={{ display:"inline-flex", alignItems:"center" }}>{activeModeInfo.icon(13)}</span>
+              {activeModeInfo.cta}
+            </button>
+          )}
 
           {/* Status dots */}
           {health && (
@@ -8906,125 +9316,66 @@ function App() {
         <SettingsModal
           uiTheme={uiTheme}
           onThemeChange={setUiTheme}
-          layoutMode={layoutMode}
-          onLayoutMode={setLayoutMode}
+          layoutMode={studioMode}
+          onLayoutMode={setStudioMode}
           onClose={() => setShowSettings(false)}
         />
       )}
 
       <ArtifactToastStack items={artifactToasts} />
 
-      {/* ══ MODE GUIDE STRIP ══ */}
-      {activePage === "generate" && (
-        <div className="sw-mode-guide">
-          {/* Left: current mode name + description */}
-          <div style={{ minWidth:0 }}>
-            <span className="sw-mode-guide-name">{activeMeta.name}</span>
-            <span className="sw-mode-guide-desc">{activeMeta.desc}</span>
-          </div>
-          {/* Right: clickable mode tabs */}
-          <ol className="sw-mode-steps">
-            {[
-              { id: "scene",    label: "Scene Generation" },
-              { id: "training", label: "Embodied Learning" },
-              { id: "coevolve", label: "Co-evolve" },
-              { id: "pure",     label: "Overview" },
-            ].map((m) => (
-              <li
-                key={m.id}
-                onClick={() => setLayoutMode(m.id)}
-                className={`sw-mode-step${layoutMode === m.id ? " active" : ""}`}
-                title={MODE_META[m.id]?.desc}
-              >
-                {m.label}
-              </li>
-            ))}
-          </ol>
-        </div>
+      {/* ══ ARTIFACT CHAIN ══ */}
+      {topSection === "studio" && (
+        <ArtifactChain
+          artifacts={artifacts}
+          activeMode={studioMode}
+          onSelect={m => setStudioMode(m)}
+        />
       )}
 
       {/* ══ 3-COLUMN RESIZABLE STUDIO LAYOUT ══ */}
-      {activePage === "generate" && (
+      {topSection === "studio" && (
       <div ref={layoutRef} style={{
         flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:5, padding:"4px 0",
       }}>
-        {/* ── LEFT: Coding Agent + Verifier (two independent panels) ── */}
+        {/* ── LEFT PANEL ── */}
         {showLeft && <div ref={leftColRef} style={{
           width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
-          {/* Coding Agent — scene + coevolve modes */}
-          {showCodingAgent && (
-            <div className="sw-panel-card" style={{
-              flex: showVerifierLeft ? 1 : 1, minHeight:0,
-              borderRadius:12, border:"1px solid var(--line)",
-              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-            }}>
-              <div className="sw-panel-header">
-                <span className="sw-section-title">
-                  <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>{ICONS.chat(11)}</span>
-                  Coding Agent
+          {/* ── Left panel content — driven by studioMode ── */}
+          <div className="sw-panel-card" style={{
+            flex:1, minHeight:0, borderRadius:12, border:"1px solid var(--line)",
+            display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          }}>
+            <div className="sw-panel-header">
+              <span className="sw-section-title">
+                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>
+                  {leftPanel === "chat"       ? ICONS.chat(11)
+                  : leftPanel === "taskgen"   ? ICONS.target(11)
+                  : leftPanel === "trainconfig"? ICONS.activity(11)
+                  :                             ICONS.refresh(11)}
                 </span>
-              </div>
-              <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
+                {leftPanel === "chat"        ? "Intent + SimCoder"
+                : leftPanel === "taskgen"    ? "Task Builder"
+                : leftPanel === "trainconfig"? "Training Config"
+                :                              "Curriculum Builder"}
+              </span>
+            </div>
+            <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
+              {leftPanel === "chat" && (
                 <ChatPanel
                   onScreenshotUpdate={url => setLatestScreenshot(url)}
                   onRef={setChatRef}
                   onSessionChange={setCurrentSessionId}
                   onChatDone={() => setContextRefreshKey(k => k + 1)}
                 />
-              </div>
+              )}
+              {leftPanel === "taskgen"    && <TaskGenPanel sessionId={currentSessionId} />}
+              {leftPanel === "trainconfig"&& <TrainingConfigPanel sessionId={currentSessionId} />}
+              {leftPanel === "curriculum" && <CurriculumBuilderPanel sessionId={currentSessionId} />}
             </div>
-          )}
-
-          {/* Row resize — only when both panels visible in left col */}
-          {showCodingAgent && showVerifierLeft && (
-            <div onMouseDown={makeRowResize(commHeight, setCommHeight)}
-              style={{ height:6, cursor:"row-resize", flexShrink:0,
-                display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
-              <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)", transition:"background .15s" }}
-                onMouseEnter={e=>e.currentTarget.style.background="var(--blue)"}
-                onMouseLeave={e=>e.currentTarget.style.background="var(--line)"} />
-            </div>
-          )}
-
-          {/* Verifier — left col in coevolve only */}
-          {showVerifierLeft && (
-            <div className="sw-panel-card" style={{
-              height: commHeight, flexShrink:0,
-              borderRadius:12, border:"1px solid var(--line)",
-              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-            }}>
-              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-                <span className="sw-section-title">
-                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.check(11)}</span>
-                  Verifier
-                </span>
-              </div>
-              <div style={{ flex:1, overflow:"hidden" }}>
-                <CodingVerifierPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />
-              </div>
-            </div>
-          )}
-
-          {/* Statistics — left col in training mode */}
-          {showStatsLeft && (
-            <div className="sw-panel-card" style={{
-              flex:1, minHeight:0,
-              borderRadius:12, border:"1px solid var(--line)",
-              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-            }}>
-              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-                <span className="sw-section-title">
-                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.chartBar(11)}</span>
-                  Agent Statistics
-                </span>
-              </div>
-              <div style={{ flex:1, overflow:"hidden" }}>
-                <AgentAggregatePanelTabs agents={[]} sessionId={currentSessionId} />
-              </div>
-            </div>
-          )}
+          </div>
         </div>}
 
         {/* ── Resize handle left ── */}
@@ -9061,24 +9412,27 @@ function App() {
             </div>
             {/* Drawer header — always visible */}
             <div className="sw-drawer-header" onClick={() => setDrawerOpen(o => !o)}>
-              <span style={{ fontSize:12, color:"#94a3b8", marginRight:4 }}>
-                {drawerOpen ? "▾" : "▸"}
+              <span style={{ fontSize:11, color:"var(--ink-3)", marginRight:4 }}>
+                {drawerOpen ? ICONS.chevronDown?.(10) : ICONS.folder(10)}
               </span>
               <span style={{ fontSize:12, fontWeight:700, color:"var(--ink-2)" }}>
-                {drawerOpen ? drawerTab.charAt(0).toUpperCase()+drawerTab.slice(1) : "Drawer — Assets / Scenes / Context"}
+                {drawerOpen ? drawerTab.charAt(0).toUpperCase()+drawerTab.slice(1) : "Build Timeline — Assets / Scenes / Context"}
               </span>
               <div style={{ flex:1 }} />
               {drawerOpen && (
                 <div style={{ display:"flex", gap:2 }}>
-                  {[
-                    { id:"assets",  label:"Assets"  },
-                    { id:"scenes",  label:"Scenes"  },
-                    { id:"context", label:"Context" },
-                  ].map(t => (
+                  {(studioMode === "scene"
+                    ? [{ id:"assets",  label:"Assets" },{ id:"scenes",  label:"Scene Versions" },{ id:"context", label:"Tool Calls" }]
+                    : studioMode === "task"
+                    ? [{ id:"assets",  label:"Task Sets" },{ id:"scenes",  label:"Episodes" },{ id:"context", label:"Validation" }]
+                    : studioMode === "training"
+                    ? [{ id:"assets",  label:"Episodes" },{ id:"scenes",  label:"Trajectories" },{ id:"context", label:"Metrics" }]
+                    : [{ id:"assets",  label:"Rounds" },{ id:"scenes",  label:"Difficulty" },{ id:"context", label:"Rules" }]
+                  ).map(t => (
                     <button key={t.id}
                       className={`sw-tab-btn${drawerTab===t.id?" active":""}`}
                       onClick={e => { e.stopPropagation(); setDrawerTab(t.id); }}
-                      style={{ fontSize:12, padding:"2px 8px" }}
+                      style={{ fontSize:11, padding:"2px 8px" }}
                     >{t.label}</button>
                   ))}
                   {/* Height adjusters */}
@@ -9113,110 +9467,59 @@ function App() {
         {/* ── Resize handle right ── */}
         {showRight && <div className="sw-resize-col" onMouseDown={startColResize("right")} />}
 
-        {/* ── RIGHT: Embodied Agent + Statistics (two independent panels) ── */}
+        {/* ── RIGHT PANEL — driven by studioMode ── */}
         {showRight && <div ref={rightColRef} style={{
           width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
-          {/* Verifier — right col in scene mode */}
-          {showVerifierRight && (
-            <div className="sw-panel-card" style={{
-              flex:1, minHeight:0,
-              borderRadius:12, border:"1px solid var(--line)",
-              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-            }}>
-              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-                <span className="sw-section-title">
-                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.check(11)}</span>
-                  Verifier
+          <div className="sw-panel-card" style={{
+            flex:1, minHeight:0, borderRadius:12, border:"1px solid var(--line)",
+            display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
+          }}>
+            <div className="sw-panel-header">
+              <span className="sw-section-title">
+                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>
+                  {rightPanel2 === "sceneinsp"    ? ICONS.scan(11)
+                  : rightPanel2 === "taskinsp"    ? ICONS.check(11)
+                  : rightPanel2 === "agentmonitor"? ICONS.robot(11)
+                  :                                 ICONS.chartBar(11)}
                 </span>
-              </div>
-              <div style={{ flex:1, overflow:"hidden" }}>
-                <CodingVerifierPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />
-              </div>
+                {rightPanel2 === "sceneinsp"    ? "Scene Inspector"
+                : rightPanel2 === "taskinsp"    ? "Task Inspector"
+                : rightPanel2 === "agentmonitor"? "Agent Monitor"
+                :                                 "Round Inspector"}
+              </span>
             </div>
-          )}
-
-          {/* Embodied Agent — coevolve + training modes */}
-          {showAgentRight && (
-            <div className="sw-panel-card" style={{
-              flex:1, minHeight:0,
-              borderRadius:12, border:"1px solid var(--line)",
-              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-            }}>
-              <div className="sw-panel-header">
-                <span className="sw-section-title">
-                  <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>{ICONS.robot(11)}</span>
-                  Embodied Agent
-                </span>
-              </div>
-              <div style={{ flex:1, overflow:"hidden" }}>
-                <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />
-              </div>
+            <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
+              {rightPanel2 === "sceneinsp"    && <SceneInspectorPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />}
+              {rightPanel2 === "taskinsp"     && <TaskInspectorPanel />}
+              {rightPanel2 === "agentmonitor" && <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />}
+              {rightPanel2 === "roundinsp"    && <RoundInspectorPanel sessionId={currentSessionId} />}
             </div>
-          )}
-
-          {/* Row resize — only when both agent + stats visible in right col */}
-          {showAgentRight && showStatsRight && (
-            <div onMouseDown={makeRowResize(rightBottomH, setRightBottomH)}
-              style={{ height:6, cursor:"row-resize", flexShrink:0,
-                display:"flex", alignItems:"center", justifyContent:"center", background:"transparent" }}>
-              <div style={{ width:40, height:2, borderRadius:2, background:"var(--line)", transition:"background .15s" }}
-                onMouseEnter={e=>e.currentTarget.style.background="var(--blue)"}
-                onMouseLeave={e=>e.currentTarget.style.background="var(--line)"} />
-            </div>
-          )}
-
-          {/* Agent Statistics — right col in coevolve only */}
-          {showStatsRight && (
-            <div className="sw-panel-card" style={{
-              height: rightBottomH, flexShrink:0,
-              borderRadius:12, border:"1px solid var(--line)",
-              display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
-            }}>
-              <div className="sw-panel-header" style={{ minHeight:38, padding:"7px 12px" }}>
-                <span className="sw-section-title">
-                  <span className="sw-num-chip" style={{ background:"var(--ink-3)", fontSize:12 }}>{ICONS.chartBar(11)}</span>
-                  Agent Statistics
-                </span>
-              </div>
-              <div style={{ flex:1, overflow:"hidden" }}>
-                <AgentAggregatePanelTabs agents={[]} sessionId={currentSessionId} />
-              </div>
-            </div>
-          )}
+          </div>
         </div>}
 
       </div>
       )}
 
-      {/* ══ FULL-PAGE CONTENT (non-generate pages) — floating card ══ */}
-      <div style={{
-        flex: activePage !== "generate" ? 1 : 0,
-        overflow: "hidden",
-        display: activePage !== "generate" ? "block" : "none",
-        borderRadius: 12,
-        border: "1px solid var(--line)",
-        boxShadow: "var(--shadow-card)",
-        background: "var(--panel)",
-        minHeight: 0,
-      }}>
-        {activePage === "arena" && <ArenaPage />}
-        {activePage === "skills" && (
-          <SkillsPage
-            newlyAddedSkillIds={artifactNewIds.skills}
-            onMarkSkillSeen={markSkillArtifactSeen}
-          />
-        )}
-        {activePage === "tools" && (
-          <ToolsPage
-            newlyAddedToolIds={artifactNewIds.tools}
-            onMarkToolSeen={markToolArtifactSeen}
-          />
-        )}
-        {activePage === "leaderboard" && <LeaderboardPage />}
-        {activePage === "gallery"     && <GalleryPage />}
-      </div>
+      {/* ══ LIBRARY / RESULTS pages ══ */}
+      {(topSection === "library" || topSection === "results") && (
+        <div style={{
+          flex: 1, overflow: "hidden",
+          borderRadius: 12, border: "1px solid var(--line)",
+          boxShadow: "var(--shadow-card)", background: "var(--panel)", minHeight: 0,
+        }}>
+          {topSection === "library" && (
+            <LibraryPage
+              newlyAddedSkillIds={artifactNewIds.skills}
+              onMarkSkillSeen={markSkillArtifactSeen}
+              newlyAddedToolIds={artifactNewIds.tools}
+              onMarkToolSeen={markToolArtifactSeen}
+            />
+          )}
+          {topSection === "results" && <ResultsPage />}
+        </div>
+      )}
 
     </div>
     </PollProvider>
