@@ -159,7 +159,7 @@ if (Test-Path $CirrusJs) {
 
     $CirrusConfig = Join-Path $Workspace "cirrus-config.json"
     $cirrusJson = [ordered]@{
-        UseFrontend   = $true
+        UseFrontend   = $false   # We serve our own frontend; no need for Cirrus built-in
         UseMatchmaker = $false
         HttpPort      = $CirrusHttpPort
         StreamerPort  = $CirrusWsPort
