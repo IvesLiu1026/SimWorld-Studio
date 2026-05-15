@@ -1,6 +1,12 @@
 # SimWorld Studio
 
+[![arXiv](https://img.shields.io/badge/arXiv-2605.09423-b31b1b.svg)](https://arxiv.org/abs/2605.09423v2)
+<a href="https://join.slack.com/t/simworld-ai/shared_invite/zt-3v3xsbroz-ELkLT3rOK1rCStDxRKUYKw"><img src="https://img.shields.io/badge/Slack-SimWorld-4A154B?logo=slack&logoColor=white" alt="Slack" /></a>
+<a href="https://github.com/SimWorld-AI/SimWorld-Studio/stargazers"><img src="https://img.shields.io/github/stars/SimWorld-AI/SimWorld-Studio?style=flat&logo=github&color=181717&logoColor=white&label=Stars" alt="GitHub stars" /></a>
+
 **Vibe code the physical world.** Chat with an AI coding agent to build, simulate, and control 3D environments in Unreal Engine 5 — with embodied agent support, real-time pixel streaming, and a full data visualization stack.
+
+https://github.com/user-attachments/assets/36a43835-e1c5-4304-a506-bcae9cd4126a
 
 ---
 
@@ -105,6 +111,86 @@ SimWorld Studio is an AI-native 3D scene authoring and embodied agent testbed bu
 - Session management: slot-based with heartbeat and TTL
 - Skills: pre-made prompts for city layout, weather, navigation
 - Learned tools: Claude can save custom tool recipes
+
+> **Note on demo assets:** The featured demo showcases scenes built with high-quality commercial 3D assets (buildings, vehicles, characters, etc.) that are **not included** in the open-source release due to licensing restrictions. The redistributable Minimal build ships with a different set of freely licensed assets, so the visual appearance will differ from the demo. The functionality and workflow remain the same.
+
+---
+
+## Quick Start (Google Colab — no local GPU needed)
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SimWorld-AI/SimWorld-Studio/blob/main/SimWorld_Studio.ipynb)
+
+Run all cells in order. Setup takes ~5 minutes. Requires a free Colab GPU runtime and an Anthropic API key.
+
+---
+
+## Quick Start (Linux — One-Command Install)
+
+For end users on a Linux machine with an NVIDIA GPU. For internal multi-user shared servers, see [Linux — Shared Server](#quick-start-linux--shared-server) below.
+
+### Prerequisites
+
+- **OS**: Linux (Ubuntu 20.04+ recommended)
+- **GPU**: NVIDIA GPU with 8GB+ VRAM (tested on L40S, T4, A100)
+- **NVIDIA drivers**: 525+ with Vulkan support
+- **Node.js**: 18+
+- **Python**: 3.9+
+- **Disk**: ~40 GB free (15 GB download + 21 GB extracted)
+
+### 1. Download the Minimal SimWorld Binary
+
+```bash
+# Download (~15 GB compressed, ~21 GB extracted)
+wget -O SimWorld-Studio-Minimal.tar.gz \
+    https://huggingface.co/datasets/SimWorld-AI/SimWorld-Studio/resolve/main/SimWorld-Studio-Minimal.tar.gz
+
+tar xzf SimWorld-Studio-Minimal.tar.gz
+```
+
+### 2. Install SimWorld Studio
+
+```bash
+pip install git+https://github.com/SimWorld-AI/SimWorld-Studio.git#subdirectory=packaging
+npm install -g @anthropic-ai/claude-code
+```
+
+### 3. Authenticate with Claude
+
+**Option A — API Key:**
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+Get your key at [console.anthropic.com](https://console.anthropic.com).
+
+**Option B — Claude Code Login (no API key needed):**
+```bash
+claude
+```
+This opens a browser for OAuth login. If on a headless server, use the API key option instead.
+
+### 4. Launch (one command)
+
+```bash
+simworld-studio start
+```
+
+This will:
+- Detect your GPU and authenticate with Claude
+- Launch Unreal Engine (headless)
+- Wait for the engine to be ready
+- Start the Studio web server
+- Print the URL to open in your browser
+
+On multi-GPU systems, it will ask which GPU to use (or pass `--gpu INDEX`). For remote servers, it auto-detects your IP and prints SSH tunnel instructions.
+
+**Options:**
+```
+--gpu INDEX    GPU to use (auto-detected if omitted)
+--port PORT    Web UI port (default: 3002)
+--binary PATH  Path to SimWorld-Studio-Minimal directory
+```
+
+Try: *"Set up the environment with a sunny sky, then build a small neighborhood with 4 houses and trees"*
 
 ---
 
@@ -214,6 +300,23 @@ The UnrealCV plugin has been extended with:
 
 ---
 
+## For Developers
+
+### Build from Source
+
+```bash
+# Requires access to the simworld_arena source repo
+./build.sh
+```
+
+### Release
+
+1. `./build.sh` → creates `dist/simworld_studio-{VERSION}.tar.gz`
+2. Upload to GitHub Releases
+3. Update `version.json`
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -225,6 +328,23 @@ The UnrealCV plugin has been extended with:
 | Agent not detected after PIE | Auto-discovery runs every 5s; or use **↻ Sync** button in Agent panel |
 | VLM Scoring fails | Ensure Claude Code is authenticated: `claude` |
 | Camera tab black | Recompile UE plugin for `vget /camera/actor/{name}/lit` |
+| `Vulkan memory crash` (Linux) | Use `--gpu 0` flag; install `vulkan-tools mesa-vulkan-drivers` |
+| `MCP port not opening` (Linux) | Wait 60s more; check GPU drivers with `nvidia-smi` |
+| `game module not found` (Linux) | Ensure you extracted the full archive; check `gym_citynav/Binaries/Linux/` |
+| `CUDA context error` (Linux) | Set `--gpu INDEX` to isolate a single GPU |
+| `Claude errors` | Run `claude login` or verify `ANTHROPIC_API_KEY` is set |
+| `No GPU detected` (Linux) | Install NVIDIA drivers 525+; verify with `nvidia-smi` |
+| Can't access UI remotely | Use SSH tunnel: `ssh -L 3002:localhost:3002 -L 8585:localhost:8585 user@server` |
+
+### View Logs
+
+```bash
+# UE logs (Linux Minimal binary)
+tail -f gym_citynav/Saved/Logs/gym_citynav.log
+
+# Studio backend logs
+tail -f simworld_studio_workspace/logs/server.log
+```
 
 ---
 
