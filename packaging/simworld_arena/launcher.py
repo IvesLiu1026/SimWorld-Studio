@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import signal
+import re
 import socket
 import subprocess
 import sys
@@ -25,6 +26,34 @@ from . import __version__
 def get_package_dir():
     """Return the directory where this package is installed."""
     return Path(__file__).parent
+
+
+def sync_unrealcv_port_in_saved_ini(project_root: Path, port: int) -> None:
+    """Set UnrealCV listen port in Saved/unrealcv.ini.
+
+    The bundled UnrealCV plugin uses FParse::Value(..., TEXT("UnrealCVPort"), ...)
+    without '='; passing -UnrealCVPort=NNN on the command line is parsed as port 0.
+    Configuring the port via ini avoids that bug.
+    """
+    saved = project_root / "Saved" / "unrealcv.ini"
+    saved.parent.mkdir(parents=True, exist_ok=True)
+    default = (
+        "[UnrealCV.Core]\n"
+        f"Port={port}\n"
+        "Width=640\n"
+        "Height=480\n"
+        "FOV=90\n"
+        "EnableInput=True\n"
+        "EnableRightEye=False\n\n"
+    )
+    if not saved.exists():
+        saved.write_text(default)
+        return
+    text = saved.read_text(encoding="utf-8", errors="replace")
+    if re.search(r"(?m)^Port=\d+$", text):
+        saved.write_text(re.sub(r"(?m)^Port=\d+$", f"Port={port}", text, count=1))
+    else:
+        saved.write_text(text.rstrip() + f"\n\n[UnrealCV.Core]\nPort={port}\n")
 
 
 def find_node():
@@ -432,6 +461,10 @@ def start_server(args):
 
     ue_map = normalize_map_path(args.map)
 
+    # UnrealCV TCP port (default 9000). On shared hosts 9000 often races at boot; set UNREALCV_PORT + UCV_PORT to match.
+    unrealcv_port = int(os.environ.get("UNREALCV_PORT", os.environ.get("UCV_PORT", "9000")))
+    sync_unrealcv_port_in_saved_ini(Path(project_file).parent, unrealcv_port)
+
     ue_cmd = [
         ue_editor, project_file,
         ue_map,
@@ -477,7 +510,8 @@ def start_server(args):
     env["PIXEL_STREAMING_URL"] = f"http://127.0.0.1:{args.cirrus_http_port}"
     env["CIRRUS_HTTP_PORT"] = str(args.cirrus_http_port)
     env["CIRRUS_WS_PORT"] = str(args.cirrus_ws_port)
-    
+    env["UCV_PORT"] = str(unrealcv_port)
+
     # Mock mode
     if args.mock:
         env["MOCK_MODE"] = "1"
