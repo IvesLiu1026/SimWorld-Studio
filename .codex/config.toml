@@ -1,0 +1,37 @@
+# SimWorld Studio — Codex MCP Configuration
+# Safe tools only. Dangerous tools are explicitly disabled.
+
+[mcp_servers.simworld_ue]
+command = "node"
+args    = ["simworld_studio_workspace/web/server/mcp-server.js"]
+cwd     = "."
+startup_timeout_sec = 30
+tool_timeout_sec    = 120
+
+[mcp_servers.simworld_ue.env]
+UNREAL_HOST = "127.0.0.1"
+UNREAL_PORT = "55557"
+
+# Safe tools — inspect, spawn, and verify only
+enabled_tools = [
+  "list_assets",
+  "take_screenshot",
+  "get_actors_in_level",
+  "find_actors_by_name",
+  "set_actor_transform",
+  "spawn_actor",
+  "spawn_blueprint_actor",
+  "delete_actor",
+  "setup_environment",
+  "verify_scene",
+  "get_agent_state",
+  "agent_action",
+  "agent_rotate",
+  "agent_stop",
+]
+
+# Restricted — require explicit user approval before use
+disabled_tools = [
+  "execute_python_script",
+  "delete_all_spawned",
+]

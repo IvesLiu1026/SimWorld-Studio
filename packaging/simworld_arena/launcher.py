@@ -105,6 +105,13 @@ def wait_for_port(port, host="127.0.0.1", timeout=120):
     return False
 
 
+def normalize_map_path(map_path: str) -> str:
+    """Normalize UE map path to include .umap suffix when omitted."""
+    if not map_path:
+        return "/Game/Main.umap"
+    return map_path if map_path.endswith(".umap") else f"{map_path}.umap"
+
+
 def setup_workspace(workspace, pkg_dir):
     """
     Create/update workspace with bundled files.
@@ -219,11 +226,27 @@ def generate_mcp_config(workspace, ue_host, ue_port):
 
 
 def find_simworld_binary(binary_path=None):
-    """Find the SimWorld binary directory."""
+    """Find the SimWorld binary directory or UE installation.
+    
+    Supports:
+    1. Environment variable UE_ROOT (for local UE installation)
+    2. Command line argument --binary
+    3. SimWorld-Studio-Minimal in common locations
+    """
     search_paths = []
+    
+    # Priority 1: Environment variable UE_ROOT (for local UE installation)
+    ue_root = os.environ.get("UE_ROOT")
+    if ue_root:
+        ue_root_path = Path(ue_root)
+        if (ue_root_path / "Engine" / "Binaries" / "Linux" / "UnrealEditor").exists():
+            return ue_root_path
+    
+    # Priority 2: Command line argument
     if binary_path:
         search_paths.append(Path(binary_path))
-    # Common locations relative to cwd
+    
+    # Priority 3: Common locations for SimWorld-Studio-Minimal
     search_paths.extend([
         Path.cwd() / "SimWorld-Studio-Minimal",
         Path.cwd(),
@@ -233,6 +256,39 @@ def find_simworld_binary(binary_path=None):
     for p in search_paths:
         if (p / "Engine" / "Binaries" / "Linux" / "UnrealEditor").exists():
             return p
+    return None
+
+
+def find_ue_project(ue_root_path):
+    """Find the UE project file.
+    
+    Supports:
+    1. Environment variable UE_PROJECT_PATH (for local project)
+    2. Default gym_citynav project in SimWorld-Studio-Minimal
+    """
+    # Priority 1: Environment variable UE_PROJECT_PATH
+    ue_project_path = os.environ.get("UE_PROJECT_PATH")
+    if ue_project_path:
+        project_path = Path(ue_project_path)
+        # If it's a directory, look for .uproject file
+        if project_path.is_dir():
+            uproject_files = list(project_path.glob("*.uproject"))
+            if uproject_files:
+                return str(uproject_files[0])
+        # If it's already a .uproject file
+        elif project_path.is_file() and project_path.suffix == ".uproject":
+            return str(project_path)
+        # If it's a path to a project directory
+        elif project_path.exists():
+            uproject_files = list(project_path.glob("*.uproject"))
+            if uproject_files:
+                return str(uproject_files[0])
+    
+    # Priority 2: Default gym_citynav project (for SimWorld-Studio-Minimal)
+    default_project = ue_root_path / "gym_citynav" / "gym_citynav.uproject"
+    if default_project.exists():
+        return str(default_project)
+    
     return None
 
 
@@ -281,16 +337,22 @@ def start_server(args):
     elif gpu_index is None:
         gpu_index = 0
 
-    # ── Step 3: Find SimWorld binary ──
+    # ── Step 3: Find SimWorld binary or UE installation ──
     binary_dir = find_simworld_binary(args.binary)
     if not binary_dir:
-        print("  [!!] SimWorld binary not found!")
-        print("       Download it first:")
-        print("       wget -O SimWorld-Studio-Minimal.tar.gz \\")
-        print("           https://huggingface.co/datasets/SimWorld-AI/SimWorld-Studio/resolve/main/SimWorld-Studio-Minimal.tar.gz")
-        print("       tar xzf SimWorld-Studio-Minimal.tar.gz")
+        print("  [!!] UE binary not found!")
+        print()
+        print("       Option 1: Use local UE installation (recommended)")
+        print("       Set environment variables:")
+        print("         export UE_ROOT=/path/to/UE_5.3.2")
+        print("         export UE_PROJECT_PATH=/path/to/your/project")
+        print()
+        print("       Option 2: Download SimWorld-Studio-Minimal")
+        print("         wget -O SimWorld-Studio-Minimal.tar.gz \\")
+        print("             https://huggingface.co/datasets/SimWorld-AI/SimWorld-Studio/resolve/main/SimWorld-Studio-Minimal.tar.gz")
+        print("         tar xzf SimWorld-Studio-Minimal.tar.gz")
         sys.exit(1)
-    print(f"  [OK] Binary: {binary_dir}")
+    print(f"  [OK] UE Root: {binary_dir}")
 
     # ── Step 4: Setup workspace ──
     workspace = Path(args.data_dir) if args.data_dir else Path.cwd() / "simworld_studio_workspace"
@@ -309,22 +371,22 @@ def start_server(args):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(1)
-        s.connect(("127.0.0.1", 8585))
+        s.connect(("127.0.0.1", args.cirrus_http_port))
         s.close()
         cirrus_already_running = True
     except (ConnectionRefusedError, socket.timeout, OSError):
         pass
 
     if cirrus_already_running:
-        print("  [OK] Cirrus already running (HTTP :8585, WS :8586)")
+        print(f"  [OK] Cirrus already running (HTTP :{args.cirrus_http_port}, WS :{args.cirrus_ws_port})")
     elif cirrus_js.exists():
         # Generate cirrus config
         cirrus_config = {
-            "UseFrontend": False,
+            "UseFrontend": True,
             "UseMatchmaker": False,
-            "HttpPort": 8585,
-            "StreamerPort": 8586,
-            "SFUPort": 8889,
+            "HttpPort": args.cirrus_http_port,
+            "StreamerPort": args.cirrus_ws_port,
+            "SFUPort": args.cirrus_sfu_port,
         }
         cirrus_config_path = workspace / "cirrus-config.json"
         cirrus_config_path.write_text(json.dumps(cirrus_config, indent=2))
@@ -339,7 +401,7 @@ def start_server(args):
         )
         time.sleep(2)
         if cirrus_proc.poll() is None:
-            print("  [OK] Cirrus signaling server (HTTP :8585, WS :8586)")
+            print(f"  [OK] Cirrus signaling server (HTTP :{args.cirrus_http_port}, WS :{args.cirrus_ws_port})")
         else:
             print("  [!!] Cirrus failed to start — Pixel Streaming may not work")
             cirrus_proc = None
@@ -349,7 +411,16 @@ def start_server(args):
     # ── Step 6: Launch UE ──
     print("  Launching Unreal Engine (headless)...")
     ue_editor = str(binary_dir / "Engine" / "Binaries" / "Linux" / "UnrealEditor")
-    project_file = str(binary_dir / "gym_citynav" / "gym_citynav.uproject")
+    
+    # Find project file (supports local UE_PROJECT_PATH or default gym_citynav)
+    project_file = find_ue_project(binary_dir)
+    if not project_file:
+        print("  [!!] UE project file not found!")
+        print("       Set UE_PROJECT_PATH environment variable:")
+        print("         export UE_PROJECT_PATH=/path/to/your/project")
+        print("       Or ensure gym_citynav/gym_citynav.uproject exists in SimWorld-Studio-Minimal")
+        sys.exit(1)
+    print(f"  [OK] Project: {project_file}")
 
     ue_env = os.environ.copy()
     ue_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
@@ -359,9 +430,11 @@ def start_server(args):
 
     ue_log = workspace / "logs" / "ue.log"
 
+    ue_map = normalize_map_path(args.map)
+
     ue_cmd = [
         ue_editor, project_file,
-        "/Game/Maps/Empty.umap",
+        ue_map,
         f"-MCPPort={args.mcp_port}",
         "-Unattended", "-NOSPLASH", "-NOSOUND", "-Messaging",
         "-ResX=1280", "-ResY=720",
@@ -372,7 +445,7 @@ def start_server(args):
         "-EditorPixelStreamingRes=1280x720",
         "-EditorPixelStreamingStartOnLaunch=true",
         "-EditorPixelStreamingUseRemoteSignallingServer=true",
-        "-PixelStreamingURL=ws://127.0.0.1:8586",
+        f"-PixelStreamingURL=ws://127.0.0.1:{args.cirrus_ws_port}",
         "-log",
     ]
 
@@ -384,6 +457,7 @@ def start_server(args):
         stderr=subprocess.STDOUT,
     )
     print(f"  UE PID: {ue_proc.pid} (log: {ue_log})")
+    print(f"  Map: {ue_map}")
 
     # ── Step 6: Wait for MCP port ──
     print(f"  Waiting for MCP port {args.mcp_port}...", end="", flush=True)
@@ -400,9 +474,31 @@ def start_server(args):
     env["PORT"] = str(args.port)
     env["UNREAL_HOST"] = "127.0.0.1"
     env["UNREAL_PORT"] = str(args.mcp_port)
-    env["PIXEL_STREAMING_URL"] = "http://127.0.0.1:8585"
+    env["PIXEL_STREAMING_URL"] = f"http://127.0.0.1:{args.cirrus_http_port}"
+    env["CIRRUS_HTTP_PORT"] = str(args.cirrus_http_port)
+    env["CIRRUS_WS_PORT"] = str(args.cirrus_ws_port)
+    
+    # Mock mode
+    if args.mock:
+        env["MOCK_MODE"] = "1"
+        if args.mock_file:
+            # If provided, use it (could be relative or absolute)
+            mock_file = args.mock_file if os.path.isabs(args.mock_file) else str(workspace / args.mock_file)
+        else:
+            # Default to workspace/mock_responses.txt
+            mock_file = str(workspace / "mock_responses.txt")
+        # Always use absolute path
+        env["MOCK_FILE"] = os.path.abspath(mock_file)
+        print(f"  [MOCK] Mock mode enabled, using file: {env['MOCK_FILE']}")
 
     entry = str(workspace / "web" / "server" / "index.js")
+    
+    # Patch index.js for mock mode if enabled
+    if args.mock:
+        patch_script = str(workspace / "web" / "server" / "patch-mock-mode.js")
+        if os.path.exists(patch_script):
+            print("  [MOCK] Patching index.js for mock mode...")
+            subprocess.run([node, patch_script], cwd=str(workspace / "web" / "server"), check=False)
 
     server_proc = subprocess.Popen(
         [node, entry],
@@ -425,10 +521,10 @@ def start_server(args):
         print(f"  Remote access: http://{server_ip}:{args.port}")
         print()
         print(f"  Or use SSH tunnel from your laptop:")
-        print(f"    ssh -L {args.port}:localhost:{args.port} -L 8585:localhost:8585 user@{server_ip}")
+        print(f"    ssh -L {args.port}:localhost:{args.port} -L {args.cirrus_http_port}:localhost:{args.cirrus_http_port} user@{server_ip}")
         print(f"    Then open: http://localhost:{args.port}")
     print()
-    print(f"  GPU: {gpu_index}  |  MCP: {args.mcp_port}  |  Web: {args.port}")
+    print(f"  GPU: {gpu_index}  |  MCP: {args.mcp_port}  |  Web: {args.port}  |  Cirrus: HTTP:{args.cirrus_http_port} WS:{args.cirrus_ws_port} SFU:{args.cirrus_sfu_port}")
     print("=" * 55)
     print()
     print('  Try: "Set up a sunset scene with 4 houses and trees"')
@@ -491,11 +587,17 @@ def main():
     sp_start = subparsers.add_parser("start", help="Launch SimWorld Studio (UE + web server)")
     sp_start.add_argument("--port", type=int, default=3002, help="Web UI port (default: 3002)")
     sp_start.add_argument("--gpu", type=int, default=None, help="GPU index (auto-detected if omitted)")
-    sp_start.add_argument("--mcp-port", type=int, default=55559, help="UE MCP port (default: 55559)")
-    sp_start.add_argument("--binary", default=None, help="Path to SimWorld-Studio-Minimal directory")
+    sp_start.add_argument("--mcp-port", type=int, default=55560, help="UE MCP port (default: 55560)")
+    sp_start.add_argument("--cirrus-http-port", type=int, default=8585, help="Cirrus HTTP port for Pixel Streaming (default: 8585)")
+    sp_start.add_argument("--cirrus-ws-port", type=int, default=8586, help="Cirrus WebSocket port for Pixel Streaming (default: 8586)")
+    sp_start.add_argument("--cirrus-sfu-port", type=int, default=8889, help="Cirrus SFU port for Pixel Streaming (default: 8889)")
+    sp_start.add_argument("--map", default="/Game/Main", help="UE map path to open (default: /Game/Main)")
+    sp_start.add_argument("--binary", default=None, help="Path to UE installation or SimWorld-Studio-Minimal directory (overrides UE_ROOT env var)")
     sp_start.add_argument("--data-dir", default=None, help="Workspace directory")
     sp_start.add_argument("--skip-auth-check", action="store_true", help="Skip Claude auth check")
     sp_start.add_argument("--skip-gpu-check", action="store_true", help="Skip GPU check")
+    sp_start.add_argument("--mock", action="store_true", help="Enable mock mode (use mock_responses.txt instead of calling Claude)")
+    sp_start.add_argument("--mock-file", default=None, help="Path to mock responses file (default: workspace/mock_responses.txt)")
 
     subparsers.add_parser("version", help="Show version")
 
