@@ -18,7 +18,7 @@ Usage
     python -m gym_env.epoch_runner \
         --model claude --memory mem0 \
         --train-size 2 --test-size 5 --epochs 5 \
-        --ucv-port 9001 --mcp-port 55561
+        --ucv-port 9002 --mcp-port 55561
 
 WandB logs: RGB frames, LLM reasoning, memory contents, per-step metrics.
 """
@@ -408,9 +408,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--memory", default="none", choices=["none", "text", "mem0", "strategy"])
     # UE connection
     p.add_argument("--ucv-host", default="127.0.0.1")
-    p.add_argument("--ucv-port", type=int, default=9001)
+    p.add_argument("--ucv-port", type=int, default=9002)
     p.add_argument("--mcp-host", default="127.0.0.1")
-    p.add_argument("--mcp-port", type=int, default=55557)
+    p.add_argument("--mcp-port", type=int, default=55558)
     p.add_argument("--no-start-pie", action="store_true")
     p.add_argument("--agent-name", default="GymNavAgent_0")
     # WandB

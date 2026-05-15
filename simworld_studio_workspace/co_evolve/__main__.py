@@ -30,8 +30,8 @@ def main(argv=None):
     p.add_argument("--coding-base-url", default=None, help="Coding LLM API URL (default: from env CODING_BASE_URL)")
     p.add_argument("--coding-api-key", default=None)
 
-    p.add_argument("--ucv-port", type=int, default=9001)
-    p.add_argument("--mcp-port", type=int, default=55557)
+    p.add_argument("--ucv-port", type=int, default=9002)
+    p.add_argument("--mcp-port", type=int, default=55558)
 
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output-dir", default="runs/co_evolve")

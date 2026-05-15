@@ -4,7 +4,7 @@
 env:
   ucv_host: 127.0.0.1
   ucv_port: 9000
-  mcp_port: 55557
+  mcp_port: 55558
   agent_name: GymNavAgent_0
   agent_blueprint: /Game/TrafficSystem/Pedestrian/Base_User_Agent.Base_User_Agent_C
   camera_id: null             # null = auto-discover after spawn (recommended)

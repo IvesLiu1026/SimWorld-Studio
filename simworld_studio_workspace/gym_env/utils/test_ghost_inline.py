@@ -2,7 +2,7 @@
 import unrealcv, time, sys, threading
 
 BP = '/Game/TrafficSystem/Pedestrian/Base_User_Agent.Base_User_Agent_C'
-PORT = 9001
+PORT = 9002
 GHOST_CH = 8
 
 def client():

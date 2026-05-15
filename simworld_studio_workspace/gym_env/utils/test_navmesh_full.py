@@ -12,8 +12,8 @@ sys.path.insert(0, "simworld_studio_workspace/gym_env")
 from mcp_client import MCPClient
 from ucv_client import UCVClient
 
-MCP_PORT = 55557
-UCV_PORT = 9001
+MCP_PORT = 55558
+UCV_PORT = 9002
 
 def mcp_exec(mcp, script, label=""):
     """Execute Python in UE editor and print logs."""

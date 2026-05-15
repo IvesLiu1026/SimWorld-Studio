@@ -13,7 +13,7 @@ CLI::
 
     python -m gym_env.batch \
         --models claude,gpt \
-        --ucv-ports 9000,9001 \
+        --ucv-ports 9000,9002 \
         --task pointnav --seed 42 --max-steps 40
 """
 
@@ -33,7 +33,7 @@ class WorkerConfig:
     model: str
     ucv_port: int
     seed: int
-    mcp_port: int = 55557
+    mcp_port: int = 55558
     start_pie: bool = True
     task: str = "pointnav"
     target_distance_cm: float = 2000.0

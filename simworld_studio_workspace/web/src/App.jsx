@@ -792,39 +792,21 @@ function CurriculumBuilderPanel({ sessionId }) {
 
 // ── Scene Inspector (right in scene mode) ─────────────────────────────────────
 function SceneInspectorPanel({ sessionId, latestScreenshot }) {
+  const scene = useScene();
+  const actorCount = ((scene.objects || []).length + (scene.agents || []).length) || "—";
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div className="config-section">
-        <div className="config-section-title">Scene Health</div>
-        {[["Collision","pass"],["Gravity","pass"],["In Bounds","pass"],["Prompt Fidelity","8 / 10"],["Aesthetics","8 / 10"]].map(([l,v])=>(
-          <div key={l} className="status-row">
-            <span style={{ fontSize:12, color:"var(--ink-2)" }}>{l}</span>
-            {v==="pass" ? <span className="status-pass">PASS</span>
-              : <span className="status-score">{v}</span>}
-          </div>
-        ))}
-      </div>
-
-      <div className="config-section">
         <div className="config-section-title">Scene Summary</div>
-        {[["Actors","42"],["Lighting","Afternoon"],["Ground size","200 m"],["Version","v3"]].map(([l,v])=>(
+        {[["Actors", actorCount], ["Ground size","200 m"], ["Version","v3"]].map(([l,v])=>(
           <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
         ))}
       </div>
 
       {/* Live verifier panel */}
       <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
-        <div className="config-section-title" style={{ padding:"8px 14px 4px" }}>VLM Verifier</div>
         <div style={{ flex:1, overflow:"hidden" }}>
           <CodingVerifierPanel sessionId={sessionId} latestScreenshot={latestScreenshot} />
-        </div>
-      </div>
-
-      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)" }}>
-        <div style={{ fontSize:11, color:"var(--ink-3)", marginBottom:6, fontWeight:600 }}>Output Artifact</div>
-        <div style={{ padding:"7px 10px", borderRadius:6, border:"1px solid var(--line)", background:"var(--bg-tertiary)", fontSize:12, color:"var(--ink-2)" }}>
-          <span style={{ fontWeight:700, color:"var(--ink)" }}>Scene v3</span>
-          <span style={{ marginLeft:8 }}>Urban Avenue · 42 actors</span>
         </div>
       </div>
     </div>
@@ -2558,7 +2540,7 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
   const isUser = message.role === "user";
 
   const bubbleContent = isUser ? (
-    <div style={{ color:"#0f172a", fontSize:13, whiteSpace:"pre-wrap" }}>{message.content}</div>
+    <div style={{ color:"var(--ink)", fontSize:13, whiteSpace:"pre-wrap" }}>{message.content}</div>
   ) : (
     <>
       {message.waiting && (
@@ -5092,37 +5074,22 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
   const [checking, setChecking] = useState(false);
   const [vlmRunning, setVlmRunning] = useState(false);
   const [vlmError, setVlmError] = useState(null);
-  const pollData  = usePoll();
   const metrics   = useMetrics();
   const sceneCollHistory = (metrics.sceneCollisions || []).map(c => c.count);
 
   const runCollisionCheck = useCallback(async () => {
     setChecking(true);
     try {
-      const raw = await fetch(`${API_BASE}/ue-command`, {
+      // /api/scene-check runs UE Python AABB overlap + floating detection
+      // Works in editor mode (no PIE needed), no UnrealCV vget required
+      const data = await fetch(`${API_BASE}/scene-check`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ command: "vget /scene/collisions" }),
+        body: JSON.stringify({}),
       }).then(r => r.json());
-      const parsed = raw.result ? JSON.parse(raw.result) : null;
-      setCollData(parsed);
-      // Record into MetricsHub for time-series visualization
-      if (parsed?.collision_count !== undefined) {
-        fetch(`${API_BASE}/metrics/scene-collision`, {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ count: parsed.collision_count }),
-        }).catch(()=>{});
-      }
+      setCollData(data);
     } catch { setCollData(null); }
     finally { setChecking(false); }
   }, []);
-
-  // Auto-trigger collision check when scene changes (new screenshot = coding agent just built something)
-  const prevScreenRef = useRef(null);
-  useEffect(() => {
-    if (!latestScreenshot || latestScreenshot === prevScreenRef.current) return;
-    prevScreenRef.current = latestScreenshot;
-    if (tab === "collisions") runCollisionCheck();
-  }, [latestScreenshot, tab, runCollisionCheck]);
 
   const runVlmScore = useCallback(async () => {
     setVlmRunning(true); setVlmError(null);
@@ -5148,13 +5115,25 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
     finally { setVlmRunning(false); }
   }, [sessionId]);
 
+  // Auto-trigger both checkers when scene screenshot changes
+  // Defined AFTER runVlmScore to avoid TDZ in the dependency array
+  const prevScreenRef = useRef(null);
+  useEffect(() => {
+    if (!latestScreenshot || latestScreenshot === prevScreenRef.current) return;
+    prevScreenRef.current = latestScreenshot;
+    runCollisionCheck();
+    runVlmScore();
+  }, [latestScreenshot, runCollisionCheck, runVlmScore]);
+
   const tabs = [
-    { id:"collisions", label:"Collisions" },
+    { id:"collisions", label:"Rule-based Checker" },
     { id:"vlm",        label:"VLM Score" },
   ];
 
-  const collCount = collData?.collision_count ?? "—";
-  const collColor = typeof collCount === "number" ? (collCount === 0 ? "#16a34a" : "#dc2626") : "var(--ink-3)";
+  const collCount  = collData?.collision_count ?? "—";
+  const floatCount = collData?.floating_count  ?? "—";
+  const collColor  = typeof collCount  === "number" ? (collCount  === 0 ? "#16a34a" : "#dc2626") : "var(--ink-3)";
+  const floatColor = typeof floatCount === "number" ? (floatCount === 0 ? "#16a34a" : "#f59e0b") : "var(--ink-3)";
 
   const FS = "var(--fs-body)"; // 13px minimum throughout
 
@@ -5197,16 +5176,16 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
           collData ? (
             <div>
               {/* Stat chips */}
-              <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+              <div style={{ display:"flex", gap:5, marginBottom:10 }}>
                 {[
-                  { val:collData.collision_count,          label:"Collisions", color:collColor },
-                  { val:collData.checked_actors_count||0,  label:"Actors",     color:"var(--ink-2)" },
-                  { val:collData.total_overlaps||0,        label:"Overlaps",   color:"var(--ink-3)" },
+                  { val:collData.collision_count ?? 0,      label:"Collisions", color:collColor },
+                  { val:collData.floating_count  ?? 0,      label:"Floating",   color:floatColor },
+                  { val:collData.checked_actors_count ?? 0, label:"Actors",     color:"var(--ink-2)" },
                 ].map(({val,label,color}) => (
                   <div key={label} style={{ flex:1, textAlign:"center", padding:"8px 4px",
                     background:"var(--panel)", borderRadius:8, border:"1px solid var(--line)" }}>
-                    <div style={{ fontSize:26, fontWeight:900, color, lineHeight:1 }}>{val}</div>
-                    <div style={{ fontSize:FS, color:"var(--ink-3)", marginTop:3 }}>{label}</div>
+                    <div style={{ fontSize:24, fontWeight:900, color, lineHeight:1 }}>{val}</div>
+                    <div style={{ fontSize:11, color:"var(--ink-3)", marginTop:3 }}>{label}</div>
                   </div>
                 ))}
               </div>
@@ -5228,8 +5207,35 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
                 </div>
               ))}
               {collData.collision_count === 0 && (
-                <div style={{ fontSize:FS, color:"#16a34a", textAlign:"center", padding:12, fontWeight:600 }}>
+                <div style={{ fontSize:FS, color:"#16a34a", textAlign:"center", padding:"8px 0 4px", fontWeight:600 }}>
                   No collisions detected
+                </div>
+              )}
+              {/* Floating actors */}
+              {(collData.floating_actors||[]).length > 0 && (
+                <div style={{ marginTop:8 }}>
+                  <div style={{ fontSize:11, fontWeight:600, color:"var(--ink-3)", marginBottom:4 }}>
+                    FLOATING ACTORS
+                  </div>
+                  {(collData.floating_actors||[]).slice(0,5).map((f,i) => (
+                    <div key={i} style={{ fontSize:FS, padding:"5px 8px",
+                      background: f.no_surface ? "rgba(239,68,68,.08)" : "rgba(245,158,11,.08)",
+                      borderRadius:6, marginBottom:3,
+                      borderLeft: `3px solid ${f.no_surface ? "#ef4444" : "#f59e0b"}`,
+                      color:"var(--ink-2)" }}>
+                      <strong>{f.name}</strong>
+                      <span style={{ color:"var(--ink-3)", marginLeft:6, fontSize:12 }}>
+                        {f.no_surface
+                          ? "no surface below"
+                          : `+${Math.round(f.gap_cm)}cm above surface (Z=${f.surface_z})`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {collData.floating_count === 0 && collData.collision_count === 0 && (
+                <div style={{ fontSize:FS, color:"var(--ink-3)", textAlign:"center", paddingBottom:8 }}>
+                  All actors grounded · no overlaps
                 </div>
               )}
             </div>
@@ -5294,9 +5300,32 @@ function ViewportPanel({ latestScreenshot }) {
       .then(r => r.json())
       .then(d => {
         if (d.url) {
-          try {
-            setPlayerUrl(`${d.url}?MatchViewportRes=true`);
-          } catch { setPlayerUrl(d.url); }
+          // Load our custom ue-player.html (not the default Cirrus player.html)
+          // Pass the Cirrus port as a query param so ue-player.html can connect
+          const cirrusPort = d.detectedPort || (() => {
+            try { return new URL(d.url).port || 8685; } catch { return 8685; }
+          })();
+          // All PS settings passed as URL params — player.js reads them via useUrlParams:true
+          const ps = new URLSearchParams({
+            cirrus:           String(cirrusPort),
+            StreamerId:             'Editor',   // subscribe directly, skip streamer-select UI
+            StreamerAutoJoinInterval: '3',      // retry every 3s when no streamer yet
+            MaxReconnectAttempts:     '0',      // unlimited retries
+            AutoConnect:      'true',
+            AutoPlayVideo:    'true',
+            StartVideoMuted:  'true',
+            WaitForStreamer:  'true',
+            HoveringMouse:    'true',
+            KeyboardInput:    'true',
+            MouseInput:       'true',
+            GamepadInput:     'true',
+            TouchInput:       'true',
+            ControlsQuality:  'true',
+            MatchViewportRes: 'true',
+            TimeoutIfIdle:    'false',
+            WebRTCFPS:        '60',
+          });
+          setPlayerUrl(`/ue-player.html?${ps.toString()}`);
         }
       })
       .catch(() => {});
@@ -5627,287 +5656,281 @@ function AssetListItem({ item, category, onInsert }) {
   );
 }
 
-// ─── AssetBrowser ────────────────────────────────────────────────────────────
-
-// ── Content Drawer (replaces old static AssetBrowser) ────────────────────────
-const CAT_ICONS = {
-  buildings:       s => ICONS.building(s),
-  trees:           s => ICONS.tree(s),
-  vehicles:        s => ICONS.car(s),
-  street_furniture:s => ICONS.hydrant(s),
-  static_meshes:   s => ICONS.cube(s),
-  agents:          s => ICONS.users(s),
-  maps:            s => ICONS.map(s),
-};
-const SPAWN_SNIPPETS = {
-  buildings: (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
-  trees:     (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
-  vehicles:  (a) => `spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
-  street_furniture:(a)=>`spawn_blueprint_actor(actor_name="${a.name}_1", blueprint_id="${a.name}", location=[0,0,0])`,
-  static_meshes:(a)=>`spawn_actor(name="${a.name}_1", static_mesh="${a.fullPath}", location=[0,0,0])`,
-  agents:(a)=>`spawn_agent(agent_name="${a.name}_1", agent_type="${a.agentType||"humanoid"}", location=[0,0,0])`,
-  maps:(a)=>`load_map(path="${a.fullPath}")`,
-};
-
-// Find a node in the tree by path
-function findNode(root, targetPath) {
-  if (!root) return null;
-  if (root.path === targetPath) return root;
-  for (const child of root.children || []) {
-    const found = findNode(child, targetPath);
-    if (found) return found;
-  }
-  return null;
-}
-
-// Flatten all assets in subtree for search
-function flattenTree(node) {
-  const out = [...(node.assets || [])];
-  for (const c of (node.children || [])) out.push(...flattenTree(c));
-  return out;
-}
+// ─── AssetBrowser (lazy one-level-at-a-time, UE only) ────────────────────────
 
 function AssetBrowser({ onInsert }) {
-  const [treeData, setTreeData]   = useState(null);   // full tree from /api/asset-tree (loaded once)
   const [browsePath, setBrowsePath] = useState("/Game/");
-  const [search, setSearch]       = useState("");
-  const [category, setCategory]   = useState("");
-  const [page, setPage]           = useState(0);
+  const [search, setSearch]         = useState("");
+  const [page,   setPage]           = useState(0);
+  // dirCache: Map<path, { loading, loaded, dirs, assets, source }>
+  const [dirCache, setDirCache]     = useState(() => new Map());
   const containerRef = useRef(null);
-  const loadedRef    = useRef(false);
   const PAGE_SIZE    = 40;
 
-  // Load tree on first visibility; re-poll until UE live scan is ready
+  // Ref that always holds the latest dirCache — safe to read synchronously in callbacks
+  const dirCacheRef = useRef(new Map());
+  dirCacheRef.current = dirCache;  // updated every render, no stale reads
+
+  // Tracks in-flight fetches to prevent duplicates
+  const pendingRef = useRef(new Set());
+
+  // fetchDir: no side-effects inside setState, state read via ref
+  const fetchDir = useCallback((path) => {
+    const entry = dirCacheRef.current.get(path);
+    if (entry?.loading || entry?.loaded || pendingRef.current.has(path)) return;
+
+    pendingRef.current.add(path);
+    setDirCache(prev => {
+      const next = new Map(prev);
+      next.set(path, { loading: true, loaded: false, dirs: [], assets: [], source: null });
+      return next;
+    });
+
+    fetch(`${API_BASE}/asset-ls?path=${encodeURIComponent(path)}`)
+      .then(r => r.json())
+      .then(data => setDirCache(p => {
+        const m = new Map(p);
+        m.set(path, { loading: false, loaded: true,
+          dirs: data.dirs || [], assets: data.assets || [], source: data.source });
+        return m;
+      }))
+      .catch(() => setDirCache(p => {
+        const m = new Map(p);
+        m.set(path, { loading: false, loaded: true, dirs: [], assets: [], source: 'error' });
+        return m;
+      }))
+      .finally(() => pendingRef.current.delete(path));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load root the first time the drawer becomes visible
   useEffect(() => {
-    if (loadedRef.current) return;
     const el = containerRef.current;
     if (!el) return;
     const obs = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting && !loadedRef.current) {
-        loadedRef.current = true;
-        const load = () => fetch(`${API_BASE}/asset-tree`).then(r => r.json())
-          .then(d => {
-            setTreeData(d);
-            // If still serving static fallback, poll again in 5s
-            if (d.source !== 'ue-python') setTimeout(load, 5000);
-          }).catch(()=>{});
-        load();
-        obs.disconnect();
-      }
+      if (e.isIntersecting) { fetchDir("/Game/"); obs.disconnect(); }
     }, { threshold: 0.1 });
     obs.observe(el);
     return () => obs.disconnect();
-  }, []);
+  }, [fetchDir]);
 
-  // All navigation is now local — no API calls
-  const navigate = (childPath) => { setBrowsePath(childPath); setCategory(""); setSearch(""); setPage(0); };
+  // Load a directory whenever browsePath changes
+  useEffect(() => { fetchDir(browsePath); }, [browsePath, fetchDir]);
+
+  // Auto-retry every 3 s when UE is not reachable
+  useEffect(() => {
+    const cur = dirCache.get(browsePath);
+    if (cur?.source !== 'unavailable' && cur?.source !== 'error') return;
+    const t = setTimeout(() => {
+      // Clear cached result so fetchDir will re-run
+      pendingRef.current.delete(browsePath);
+      setDirCache(p => { const m = new Map(p); m.delete(browsePath); return m; });
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [dirCache, browsePath]);
+
+  const navigate = (path) => { setBrowsePath(path); setSearch(""); setPage(0); };
   const navigateUp = () => {
     const parts = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
-    if (parts.length <= 1) { setBrowsePath("/Game/"); setCategory(""); setSearch(""); setPage(0); return; }
+    if (parts.length <= 1) return navigate("/Game/");
     parts.pop();
-    setBrowsePath("/" + parts.join("/") + "/");
-    setCategory(""); setSearch(""); setPage(0);
+    navigate("/" + parts.join("/") + "/");
   };
 
-  const insertAsset = (a) => {
-    const snippet = (SPAWN_SNIPPETS[a.category] || ((x) => x.fullPath))(a);
-    onInsert?.(snippet);
+  const [loadingMap, setLoadingMap] = useState(null);  // fullPath being loaded
+
+  const handleDblClick = (a) => {
+    if (a.type === 'map') {
+      // Tell UE to open the map in-editor
+      setLoadingMap(a.fullPath);
+      fetch(`${API_BASE}/load-map`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: a.fullPath }),
+      })
+        .then(r => r.json())
+        .then(d => { if (d.error) console.warn('load-map:', d.error); })
+        .catch(() => {})
+        .finally(() => setLoadingMap(null));
+    } else if (a.type === 'blueprint' || a.type === 'static_mesh') {
+      // Insert into Coding Agent context
+      onInsert?.(a.fullPath);
+    }
+    // other types: no-op
   };
 
-  if (!treeData) {
-    return <div ref={containerRef} style={{ padding:16, color:"var(--ink-3)", fontSize:"var(--fs-body)", height:"100%",
-      display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8 }}>
-      <div style={{ opacity:.4, display:"flex", justifyContent:"center", marginBottom:4 }}>{ICONS.cube(24)}</div>
-      <div>Loading asset catalog…</div>
-      <div style={{ fontSize:12, color:"var(--ink-3)" }}>Waiting for UE Python scan</div>
-    </div>;
-  }
+  const retry = () => {
+    pendingRef.current.delete(browsePath);
+    setDirCache(prev => { const m = new Map(prev); m.delete(browsePath); return m; });
+  };
 
-  const isLive = treeData.source === 'ue-python';
+  const cur = dirCache.get(browsePath) || { loading: false, loaded: false, dirs: [], assets: [], source: null };
+  const { loading, loaded, dirs, assets, source } = cur;
 
-  // Find current node in tree
-  const curNode = findNode(treeData.tree, browsePath) || treeData.tree;
-  const counts  = treeData.counts || {};
-
-  // ── UE Content Browser behaviour ────────────────────────────────────────────
-  // Normal: show ALL direct assets of current node (no category override)
-  // Category sidebar: global cross-tree filter (like UE's "All Classes" filter)
-  // Search: recursive subtree search with optional category narrowing
-  let displayAssets;
-  let displayDirs = curNode.children || [];
-
-  if (search) {
-    // Search recursively through entire current subtree
-    const q = search.toLowerCase();
-    displayAssets = flattenTree(curNode).filter(a =>
-      a.name.toLowerCase().includes(q) &&
-      (!category || a.category === category)
-    );
-    // Dirs not shown during search (results are flattened)
-    displayDirs = [];
-  } else if (category) {
-    // Category sidebar selected → global filter across whole tree, keep path context
-    displayAssets = flattenTree(treeData.tree).filter(a => a.category === category);
-    displayDirs = [];
-  } else {
-    // Default: direct children only (matches UE Content Browser exactly)
-    displayAssets = curNode.assets || [];
-    displayDirs   = curNode.children || [];
-  }
-
-  const totalShown = displayAssets.length;
-  const pageAssets = displayAssets.slice(0, (page + 1) * PAGE_SIZE);
-  const hasMore    = pageAssets.length < totalShown;
-
+  const q = search.toLowerCase();
+  const filteredAssets = q ? assets.filter(a => a.name.toLowerCase().includes(q)) : assets;
+  const pageAssets = filteredAssets.slice(0, (page + 1) * PAGE_SIZE);
+  const hasMore    = pageAssets.length < filteredAssets.length;
   const breadcrumbs = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
 
-  return (
-    <div ref={containerRef} style={{ display:"flex", height:"100%", background:"var(--bg)", overflow:"hidden" }}>
+  // ── States: unloaded / loading / unavailable / ready ──
+  if (!loaded && !loading) {
+    return (
+      <div ref={containerRef} style={{ flex:1, display:"flex", flexDirection:"column",
+        alignItems:"center", justifyContent:"center", gap:8,
+        color:"var(--ink-3)", fontSize:"var(--fs-body)" }}>
+        <div style={{ opacity:.3 }}>{ICONS.cube(24)}</div>
+        <div>Assets</div>
+      </div>
+    );
+  }
 
-      {/* ── Left sidebar: category shortcuts ── */}
-      <div style={{ width:120, flexShrink:0, borderRight:"1px solid var(--line)", overflow:"auto",
-        display:"flex", flexDirection:"column", gap:1, padding:"6px 4px" }}>
-        {/* Source badge */}
-        <div style={{ fontSize:12, padding:"2px 6px", marginBottom:2,
-          color: isLive?"#16a34a":"var(--ink-3)", fontWeight:600 }}>
-          <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
-            <span style={{ width:7, height:7, borderRadius:"50%", background: isLive ? "var(--green)" : "var(--ink-3)", flexShrink:0 }} />
-            {isLive ? "Live UE" : "Scanning…"}
-          </span>
-        </div>
-        {Object.entries(counts).map(([cat, cnt]) => (
-          <button key={cat} onClick={() => { setBrowsePath("/Game/"); setCategory(cat); setSearch(""); setPage(0); }}
-            style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 7px", borderRadius:6,
-              border:"none", cursor:"pointer", textAlign:"left", fontSize:"var(--fs-body)",
-              fontFamily:"inherit",
-              background: category === cat ? "var(--blue-soft)" : "transparent",
-              color: category === cat ? "var(--blue)" : "var(--ink-2)",
-              fontWeight: category === cat ? 700 : 400 }}>
-            <span style={{ display:"inline-flex", alignItems:"center", flexShrink:0 }}>{(CAT_ICONS[cat] || ICONS.folder)(15)}</span>
-            <span style={{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-              {cat.replace(/_/g," ")}
-            </span>
-            <span style={{ fontSize:12, color:"var(--ink-3)" }}>{cnt}</span>
-          </button>
-        ))}
-        <div style={{ flex:1 }} />
-        <button onClick={() => { setBrowsePath("/Game/"); setCategory(""); setSearch(""); setPage(0); }}
-          style={{ padding:"5px 7px", borderRadius:6, border:"none", cursor:"pointer",
-            fontSize:"var(--fs-body)", fontFamily:"inherit",
-            color:"var(--ink-3)", background:"transparent", textAlign:"left" }}>
-          All ({treeData.totalAssets || 0})
+  if (loading) {
+    return (
+      <div ref={containerRef} style={{ flex:1, display:"flex", flexDirection:"column",
+        alignItems:"center", justifyContent:"center", gap:8,
+        color:"var(--ink-3)", fontSize:"var(--fs-body)" }}>
+        <div style={{ opacity:.4 }}>{ICONS.cube(24)}</div>
+        <div>Loading…</div>
+      </div>
+    );
+  }
+
+  if (source === 'unavailable' || source === 'error') {
+    return (
+      <div ref={containerRef} style={{ flex:1, display:"flex", flexDirection:"column",
+        alignItems:"center", justifyContent:"center", gap:8,
+        color:"var(--ink-3)", fontSize:"var(--fs-body)" }}>
+        <div style={{ opacity:.3 }}>{ICONS.cube(24)}</div>
+        <div style={{ fontWeight:600 }}>UE not running</div>
+        <div style={{ fontSize:12 }}>Start Unreal Engine to browse assets</div>
+        <button onClick={retry}
+          style={{ marginTop:4, padding:"4px 14px", borderRadius:6, border:"1px solid var(--line)",
+            background:"var(--panel)", cursor:"pointer", fontSize:"var(--fs-body)",
+            color:"var(--blue)", fontFamily:"inherit" }}>
+          Retry
         </button>
       </div>
+    );
+  }
 
-      {/* ── Main area ── */}
-      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+  return (
+    <div ref={containerRef} style={{ display:"flex", flexDirection:"column", height:"100%",
+      background:"var(--bg)", overflow:"hidden" }}>
 
-        {/* Toolbar: breadcrumb + search */}
-        <div style={{ flexShrink:0, padding:"5px 8px", borderBottom:"1px solid var(--line)",
-          display:"flex", alignItems:"center", gap:4 }}>
-          {browsePath !== "/Game/" && (
-            <button onClick={navigateUp} style={{ fontSize:"var(--fs-body)", padding:"3px 8px", borderRadius:5,
-              border:"1px solid var(--line)", background:"none", cursor:"pointer", color:"var(--ink-2)",
-              fontFamily:"inherit" }}>↑</button>
-          )}
-          {/* Breadcrumb */}
-          <div style={{ display:"flex", alignItems:"center", gap:2, fontSize:"var(--fs-body)", color:"var(--ink-3)", flex:1, overflow:"hidden" }}>
-            <span style={{ cursor:"pointer", color:"var(--blue)" }} onClick={() => { setBrowsePath("/Game/"); setCategory(""); }}>Game</span>
-            {breadcrumbs.filter(s=>s!=="Game").map((seg, i, arr) => (
-              <span key={i} style={{ display:"flex", alignItems:"center", gap:2 }}>
-                <span>/</span>
-                <span style={{ cursor:"pointer", color: i===arr.length-1?"var(--ink-1)":"var(--blue)" }}
-                  onClick={() => {
-                    const fullSegs = ["Game", ...arr.slice(0,i+1)];
-                    const p = "/" + fullSegs.join("/") + "/";
-                    setBrowsePath(p); setCategory("");
-                  }}>{seg}</span>
-              </span>
-            ))}
-          </div>
-          <input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
-            placeholder="Search…"
-            style={{ width:110, padding:"4px 8px", fontSize:"var(--fs-body)",
-              border:"1px solid var(--line)", borderRadius:5,
-              background:"var(--panel)", color:"var(--ink-1)", outline:"none" }} />
+      {/* Toolbar */}
+      <div style={{ flexShrink:0, padding:"5px 8px", borderBottom:"1px solid var(--line)",
+        display:"flex", alignItems:"center", gap:4 }}>
+        {browsePath !== "/Game/" && (
+          <button onClick={navigateUp} style={{ fontSize:"var(--fs-body)", padding:"3px 8px",
+            borderRadius:5, border:"1px solid var(--line)", background:"none",
+            cursor:"pointer", color:"var(--ink-2)", fontFamily:"inherit" }}>↑</button>
+        )}
+        <div style={{ display:"flex", alignItems:"center", gap:2, fontSize:"var(--fs-body)",
+          color:"var(--ink-3)", flex:1, overflow:"hidden" }}>
+          <span style={{ cursor:"pointer", color:"var(--blue)" }} onClick={() => navigate("/Game/")}>Game</span>
+          {breadcrumbs.filter(s => s !== "Game").map((seg, i, arr) => (
+            <span key={i} style={{ display:"flex", alignItems:"center", gap:2 }}>
+              <span>/</span>
+              <span style={{ cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                color: i === arr.length - 1 ? "var(--ink-1)" : "var(--blue)" }}
+                onClick={() => {
+                  const segs = ["Game", ...arr.slice(0, i + 1)];
+                  navigate("/" + segs.join("/") + "/");
+                }}>{seg}</span>
+            </span>
+          ))}
         </div>
+        <input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }}
+          placeholder="Filter…"
+          style={{ width:100, padding:"4px 8px", fontSize:"var(--fs-body)",
+            border:"1px solid var(--line)", borderRadius:5,
+            background:"var(--panel)", color:"var(--ink-1)", outline:"none" }} />
+      </div>
 
-        {/* Asset grid */}
-        <div style={{ flex:1, overflow:"auto", padding:6 }}>
-          {/* Sub-directories — shown always unless searching/category filtering */}
-          {displayDirs.length > 0 && (
-            <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
-              {displayDirs.map(child => {
-                const childAssets = child.assets?.length || 0;
-                const childDirs   = child.children?.length || 0;
-                const childTotal  = childAssets + childDirs;
-                return (
-                  <button key={child.path} onClick={() => navigate(child.path)}
-                    style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 10px",
-                      border:"1px solid var(--line)", borderRadius:7, background:"var(--panel)",
-                      cursor:"pointer", fontSize:"var(--fs-body)", color:"var(--ink-2)",
-                      fontFamily:"inherit", fontWeight:500 }}>
-                    📁 {child.name}
-                    {childTotal > 0 && (
-                      <span style={{ fontSize:11, color:"var(--ink-3)" }}>
-                        {childTotal}{childDirs > 0 ? '+' : ''}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+      {/* Body */}
+      <div style={{ flex:1, overflow:"auto", padding:6 }}>
 
-          {/* Asset tiles */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))", gap:5 }}>
-            {pageAssets.map((a, i) => (
-              <div key={`${a.fullPath}-${i}`} title={a.fullPath} onClick={() => insertAsset(a)}
-                style={{ padding:"8px 6px", borderRadius:8, border:"1px solid var(--line)",
-                  background:"var(--panel)", cursor:"pointer", textAlign:"center",
-                  fontSize:"var(--fs-body)", color:"var(--ink-2)",
-                  transition:"border-color .12s, box-shadow .12s", userSelect:"none" }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor="var(--blue)"; e.currentTarget.style.boxShadow="0 0 0 2px var(--blue-soft)"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor="var(--line)"; e.currentTarget.style.boxShadow="none"; }}>
-                <div style={{ display:"flex", justifyContent:"center", marginBottom:4, color:"var(--ink-3)" }}>{(CAT_ICONS[a.category] || ICONS.cube)(22)}</div>
-                <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontWeight:600, fontSize:12 }}>
-                  {a.name.replace(/^BP_/,"").replace(/_/g," ")}
-                </div>
-                {a.agentType && <div style={{ color:"var(--ink-3)", fontSize:12, marginTop:1 }}>{a.agentType}</div>}
-                {a.biome && <div style={{ color:"var(--ink-3)", fontSize:12, marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{a.biome.split(",")[0]}</div>}
-              </div>
-            ))}
-          </div>
-
-          {pageAssets.length === 0 && displayDirs.length === 0 && (
-            <div style={{ textAlign:"center", padding:24, color:"var(--ink-3)", fontSize:"var(--fs-body)" }}>
-              {search ? `No results for "${search}"` : category ? `No ${category} assets` : "Empty folder"}
-            </div>
-          )}
-
-          {/* Load more (local pagination — no API) */}
-          {hasMore && (
-            <div style={{ textAlign:"center", marginTop:8 }}>
-              <button onClick={() => setPage(p => p + 1)}
-                style={{ padding:"6px 18px", borderRadius:7, border:"1px solid var(--line)",
-                  background:"var(--panel)", cursor:"pointer",
-                  fontSize:"var(--fs-body)", color:"var(--blue)", fontFamily:"inherit" }}>
-                Load more ({totalShown - pageAssets.length} remaining)
+        {/* Folder tiles */}
+        {!search && dirs.length > 0 && (
+          <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:8 }}>
+            {dirs.map(d => (
+              <button key={d.path} onClick={() => navigate(d.path)}
+                style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 10px",
+                  border:"1px solid var(--line)", borderRadius:7, background:"var(--panel)",
+                  cursor:"pointer", fontSize:"var(--fs-body)", color:"var(--ink-2)",
+                  fontFamily:"inherit", fontWeight:500 }}>
+                📁 {d.name}
               </button>
-            </div>
-          )}
-        </div>
+            ))}
+          </div>
+        )}
 
-        {/* Footer */}
-        <div style={{ flexShrink:0, padding:"4px 10px", borderTop:"1px solid var(--line)",
-          fontSize:12, color:"var(--ink-3)", display:"flex", justifyContent:"space-between" }}>
-          <span>
-            {displayDirs.length > 0 && `${displayDirs.length} folders · `}
-            {pageAssets.length}/{totalShown} assets
-            {(search || category) && ` (filtered)`}
-          </span>
-          <span>Click to insert</span>
-        </div>
+        {/* Asset tiles */}
+        {pageAssets.length > 0 && (
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))", gap:5 }}>
+            {pageAssets.map((a, i) => {
+              const isActionable = a.type === 'map' || a.type === 'blueprint' || a.type === 'static_mesh';
+              const isLoading    = loadingMap === a.fullPath;
+              return (
+                <div key={`${a.fullPath}-${i}`}
+                  title={isActionable
+                    ? (a.type === 'map' ? 'Double-click to open map in UE' : 'Double-click to add to context')
+                    : a.fullPath}
+                  onDoubleClick={() => handleDblClick(a)}
+                  style={{ padding:"8px 6px", borderRadius:8, border:"1px solid var(--line)",
+                    background: isLoading ? "var(--blue-soft)" : "var(--panel)",
+                    cursor: isActionable ? "pointer" : "default", textAlign:"center",
+                    fontSize:"var(--fs-body)", color:"var(--ink-2)",
+                    transition:"border-color .12s, box-shadow .12s, background .12s", userSelect:"none",
+                    opacity: isActionable ? 1 : 0.6 }}
+                  onMouseEnter={e => { if (isActionable) { e.currentTarget.style.borderColor="var(--blue)"; e.currentTarget.style.boxShadow="0 0 0 2px var(--blue-soft)"; } }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor="var(--line)"; e.currentTarget.style.boxShadow="none"; }}>
+                  <div style={{ display:"flex", justifyContent:"center", marginBottom:4, color:"var(--ink-3)" }}>
+                    {isLoading ? ICONS.refresh(22)
+                      : a.type === 'blueprint' ? ICONS.building(22)
+                      : a.type === 'map' ? ICONS.map(22)
+                      : ICONS.cube(22)}
+                  </div>
+                  <div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                    fontWeight:600, fontSize:12 }}>
+                    {a.name.replace(/^BP_/, "").replace(/_/g, " ")}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {pageAssets.length === 0 && dirs.length === 0 && (
+          <div style={{ textAlign:"center", padding:24, color:"var(--ink-3)", fontSize:"var(--fs-body)" }}>
+            {search ? `No results for "${search}"` : "Empty folder"}
+          </div>
+        )}
+
+        {hasMore && (
+          <div style={{ textAlign:"center", marginTop:8 }}>
+            <button onClick={() => setPage(p => p + 1)}
+              style={{ padding:"6px 18px", borderRadius:7, border:"1px solid var(--line)",
+                background:"var(--panel)", cursor:"pointer",
+                fontSize:"var(--fs-body)", color:"var(--blue)", fontFamily:"inherit" }}>
+              Load more ({filteredAssets.length - pageAssets.length} remaining)
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div style={{ flexShrink:0, padding:"4px 10px", borderTop:"1px solid var(--line)",
+        fontSize:12, color:"var(--ink-3)", display:"flex", justifyContent:"space-between" }}>
+        <span>
+          {!search && dirs.length > 0 && `${dirs.length} folders · `}
+          {pageAssets.length}/{filteredAssets.length} assets{search && " (filtered)"}
+        </span>
+        <span style={{ display:"flex", alignItems:"center", gap:4 }}>
+          <span style={{ width:6, height:6, borderRadius:"50%", background:"#16a34a", display:"inline-block" }} />
+          Live UE
+        </span>
       </div>
     </div>
   );
@@ -8408,11 +8431,11 @@ function ArtifactToastStack({ items }) {
   return (
     <div
       style={{
-        position: "absolute",
-        top: 52,
-        right: 16,
-        zIndex: 1200,
-        width: 320,
+        position: "fixed",
+        bottom: 20,
+        right: 20,
+        zIndex: 2000,
+        width: 300,
         display: "flex",
         flexDirection: "column",
         gap: 8,
@@ -9451,7 +9474,7 @@ function App() {
             {drawerOpen && (
               <div className="sw-drawer-body">
                 {drawerTab === "assets" && (
-                  <AssetBrowser onInsert={id => chatRef?.insertText(`Use asset: ${id}`)} />
+                  <AssetBrowser onInsert={path => chatRef?.insertText(`Use Asset: ${path}`)} />
                 )}
                 {drawerTab === "scenes" && (
                   <SceneManager onLoadScene={scene => chatRef?.loadScene(scene)} currentSessionId={currentSessionId} />

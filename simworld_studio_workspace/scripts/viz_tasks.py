@@ -21,7 +21,7 @@ import matplotlib.patches as patches
 from matplotlib.lines import Line2D
 import numpy as np
 
-UCV_PORT = 9001
+UCV_PORT = 9002
 OUT_DIR = os.path.dirname(__file__)
 
 

@@ -419,10 +419,10 @@ def _build_parser() -> argparse.ArgumentParser:
     import os as _os
     p.add_argument("--ucv-host", default=_os.environ.get("UNREALCV_HOST", "127.0.0.1"))
     p.add_argument("--ucv-port", type=int,
-                   default=int(_os.environ.get("UNREALCV_PORT", "9001")))
+                   default=int(_os.environ.get("UNREALCV_PORT", "9002")))
     p.add_argument("--mcp-host", default=_os.environ.get("UNREAL_MCP_HOST", "127.0.0.1"))
     p.add_argument("--mcp-port", type=int,
-                   default=int(_os.environ.get("UNREAL_MCP_PORT", "55557")),
+                   default=int(_os.environ.get("UNREAL_MCP_PORT", "55558")),
                    help="UE editor MCP TCP port (used to start PIE)")
     p.add_argument("--no-start-pie", action="store_true",
                    help="Skip the auto PIE-start on first reset (assume PIE is already running)")

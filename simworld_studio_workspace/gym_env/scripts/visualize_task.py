@@ -2,7 +2,7 @@
 
 Usage:
     cd simworld_studio_workspace
-    python -m gym_env.scripts.visualize_task --ucv-port 9001
+    python -m gym_env.scripts.visualize_task --ucv-port 9002
 """
 import os, sys, math, json, argparse
 
@@ -106,7 +106,7 @@ def draw_episode(ax, label, result, color, show_waypoints=True):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--ucv-port", type=int, default=9001)
+    p.add_argument("--ucv-port", type=int, default=9002)
     p.add_argument("--scene-graph", default=os.path.join(_PROJECT_ROOT, "test_map_scene_graph.json"))
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output", default=os.path.join(_SCRIPT_DIR, "demo_pointnav_task.png"))

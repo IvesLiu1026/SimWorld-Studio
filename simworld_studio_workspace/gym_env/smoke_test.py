@@ -64,9 +64,9 @@ def _make_action_sequence(n_steps: int):
 def main(argv=None):
     p = argparse.ArgumentParser(prog="gym_env.smoke_test")
     p.add_argument("--ucv-host", default="127.0.0.1")
-    p.add_argument("--ucv-port", type=int, default=9001)
+    p.add_argument("--ucv-port", type=int, default=9002)
     p.add_argument("--mcp-host", default="127.0.0.1")
-    p.add_argument("--mcp-port", type=int, default=55557)
+    p.add_argument("--mcp-port", type=int, default=55558)
     p.add_argument("--no-start-pie", action="store_true")
     p.add_argument("--no-rgb", action="store_true")
     p.add_argument("--steps", type=int, default=6)

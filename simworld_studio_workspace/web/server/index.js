@@ -268,12 +268,13 @@ print('SWASSET_BEGIN' + __import__('json').dumps(result) + 'SWASSET_END')
       sock.on('close', () => { clearTimeout(timer); try { resolve(JSON.parse(buf)); } catch {} });
     });
 
-    // Extract JSON using delimiters — robust against Python warnings/logs in output
-    const fullText = JSON.stringify(raw);
-    const start = fullText.indexOf('SWASSET_BEGIN');
-    const end   = fullText.indexOf('SWASSET_END');
-    if (start === -1 || end === -1) throw new Error('Missing SWASSET delimiters. Raw: ' + fullText.slice(0,300));
-    const paths = JSON.parse(fullText.slice(start + 'SWASSET_BEGIN'.length, end));
+    // Search in python_logs directly — avoids JSON double-encoding bug where
+    // JSON.stringify(raw) escapes quotes to \" making JSON.parse fail on the slice.
+    const logText = (raw?.result?.python_logs || []).join('\n');
+    const start = logText.indexOf('SWASSET_BEGIN');
+    const end   = logText.indexOf('SWASSET_END');
+    if (start === -1 || end === -1) throw new Error('Missing SWASSET delimiters. LogText: ' + logText.slice(0,300));
+    const paths = JSON.parse(logText.slice(start + 'SWASSET_BEGIN'.length, end));
     log.system('info', `Received ${paths.length} paths from UE`);
 
     // Build nested tree from paths
@@ -796,6 +797,157 @@ app.post('/api/asset-tree/refresh', async(req,res) => {
   catch(e) { res.status(503).json({ error:e.message }); }
 });
 
+// ── Lazy per-directory asset listing (one level at a time) ────────────────────
+const _dirListCache = new Map();  // path → { dirs, assets, cachedAt }
+const DIR_CACHE_TTL_MS = 90_000;
+
+// Top-level content roots (same as full scan)
+const _TOP_LEVEL_DIRS = [
+  'CityDatabase','TrafficSystem','ChineseWaterTown','Lighthouse_Island',
+  'ModularGothicFantasyEnvironment','CastleRiver','Cave','ModularTemplePlaza',
+  'TrainStation','ContainerYard','ModularCourtyard','MiddleEast',
+  'Chinese_Landscape','Village','WinterTown','ModularSciFi','Dungeon','HwaseongHaenggung',
+];
+
+app.get('/api/asset-ls', async (req, res) => {
+  let browsePath = (req.query.path || '/Game/');
+  if (!browsePath.endsWith('/')) browsePath += '/';
+
+  if (!_cachedUeConn) {
+    return res.json({ source: 'unavailable', dirs: [], assets: [] });
+  }
+
+  const cached = _dirListCache.get(browsePath);
+  if (cached && Date.now() - cached.cachedAt < DIR_CACHE_TTL_MS) {
+    return res.json({ source: 'ue-python', dirs: cached.dirs, assets: cached.assets });
+  }
+
+  // Root: scan /Game/ non-recursively to discover what actually exists in this project.
+  // Subdir: scan recursively so nested folders can be inferred from deeper asset paths.
+  const py = browsePath === '/Game/'
+    ? `import unreal, json
+items = []
+try:
+    items = list(unreal.EditorAssetLibrary.list_assets('/Game/', recursive=False, include_folder=True))
+except Exception:
+    pass
+print('SWASSET_BEGIN' + json.dumps(items) + 'SWASSET_END')`.trim()
+    : `import unreal, json
+items = []
+try:
+    items = list(unreal.EditorAssetLibrary.list_assets(${JSON.stringify(browsePath)}, recursive=True, include_folder=True))
+except Exception:
+    pass
+print('SWASSET_BEGIN' + json.dumps(items) + 'SWASSET_END')`.trim();
+
+  try {
+    const raw = await new Promise((resolve, reject) => {
+      const sock = new (require('net').Socket)();
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 20_000);
+      sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+        sock.write(JSON.stringify({ type: 'execute_python_script', params: { script: py } }) + '\n');
+      });
+      let buf = '';
+      sock.on('data', d => {
+        buf += d.toString();
+        if (buf.includes('SWASSET_END')) {
+          try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch {}
+        }
+      });
+      sock.on('error', e => { clearTimeout(timer); reject(e); });
+      sock.on('close', () => { clearTimeout(timer); try { resolve(JSON.parse(buf)); } catch { resolve({}); } });
+    });
+
+    // Search python_logs directly — JSON.stringify double-escapes quotes, breaking JSON.parse
+    const logText = (raw?.result?.python_logs || []).join('\n');
+    const si = logText.indexOf('SWASSET_BEGIN');
+    const ei = logText.indexOf('SWASSET_END');
+    if (si === -1 || ei === -1) throw new Error('no SWASSET delimiters in logs');
+    const paths = JSON.parse(logText.slice(si + 'SWASSET_BEGIN'.length, ei));
+
+    const seenDirs = new Set();
+    const dirs = [], assets = [];
+
+    for (const p of paths) {
+      if (!p.startsWith('/Game/')) continue;
+      const isFolder = p.endsWith('/') || !p.split('/').pop().includes('.');
+      if (isFolder) {
+        const fp = p.endsWith('/') ? p : p + '/';
+        const rel = fp.slice(browsePath.length).replace(/\/$/, '');
+        const seg = rel.split('/')[0];
+        if (seg && !seenDirs.has(seg)) { seenDirs.add(seg); dirs.push({ name: seg, path: browsePath + seg + '/' }); }
+      } else {
+        const parts = p.split('/');
+        const filename = parts.pop();
+        const fileDir = parts.join('/') + '/';
+        if (fileDir !== browsePath) {
+          const rel = fileDir.slice(browsePath.length).replace(/\/$/, '');
+          const seg = rel.split('/')[0];
+          if (seg && !seenDirs.has(seg)) { seenDirs.add(seg); dirs.push({ name: seg, path: browsePath + seg + '/' }); }
+          continue;
+        }
+        const name = filename.split('.')[0];
+        const isBP   = filename.includes('_C') || /\/[Bb]lueprints?\//.test(p);
+        const isMesh = /\/[Mm]eshes?\//.test(p) || name.startsWith('SM_');
+        const isMapAsset = /\/(Maps|Levels|Map)\//i.test(p);
+        const type = isBP ? 'blueprint' : isMesh ? 'static_mesh' : isMapAsset ? 'map' : 'asset';
+        assets.push({ name, fullPath: p, type });
+      }
+    }
+
+    dirs.sort((a, b) => a.name.localeCompare(b.name));
+    assets.sort((a, b) => a.name.localeCompare(b.name));
+    _dirListCache.set(browsePath, { dirs, assets, cachedAt: Date.now() });
+    res.json({ source: 'ue-python', dirs, assets });
+  } catch (e) {
+    log.system('warn', `asset-ls ${browsePath}: ${e.message}`);
+    res.json({ source: 'error', dirs: [], assets: [] });
+  }
+});
+
+// ── Load a UE map directly in the editor ──────────────────────────────────────
+app.post('/api/load-map', async (req, res) => {
+  const { path } = req.body || {};
+  if (!path || typeof path !== 'string') return res.status(400).json({ error: 'path required' });
+  if (!_cachedUeConn) return res.status(503).json({ error: 'UE not connected' });
+
+  // Strip asset reference suffix: /Game/Pack/Maps/Level.Level → /Game/Pack/Maps/Level
+  const cleanPath = path.includes('.') ? path.split('.')[0] : path;
+
+  const py = `import unreal
+try:
+    ls = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    ls.load_level(${JSON.stringify(cleanPath)})
+    print("MAP_LOADED_OK")
+except Exception as e:
+    print("MAP_LOAD_ERR " + str(e))`.trim();
+
+  try {
+    const raw = await new Promise((resolve, reject) => {
+      const sock = new (require('net').Socket)();
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 15_000);
+      sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+        sock.write(JSON.stringify({ type: 'execute_python_script', params: { script: py } }) + '\n');
+      });
+      let buf = '';
+      sock.on('data', d => {
+        buf += d.toString();
+        try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch {}
+      });
+      sock.on('error', e => { clearTimeout(timer); reject(e); });
+      sock.on('close', () => { clearTimeout(timer); try { resolve(JSON.parse(buf)); } catch { resolve({}); } });
+    });
+    const logs = (raw?.result?.python_logs || []).join('\n');
+    if (logs.includes('MAP_LOAD_ERR')) {
+      const msg = logs.split('MAP_LOAD_ERR ').pop()?.trim() || 'unknown error';
+      return res.status(500).json({ error: msg });
+    }
+    res.json({ ok: true, path: cleanPath });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/assets',(req,res)=>{
   let { path:browsePath='/', q='', page=0, limit=30, category='' } = req.query;
   page = Number(page); limit = Number(limit);
@@ -1099,6 +1251,194 @@ app.post('/api/metrics/scene-collision', (req,res) => {
   const { count } = req.body;
   if (typeof count === 'number') metricsHub.recordSceneCollisions(count);
   res.json({ ok:true });
+});
+
+// ── Scene check: AABB collision + floating detection via UE Python ─────────────
+// Only checks actors spawned in this session (from ctxManager).
+// Uses prefix-matching to find the UE actor with session suffix.
+// Does NOT require PIE — runs against the editor world directly.
+app.post('/api/scene-check', async (req, res) => {
+  const FLOAT_THRESHOLD = (req.body && req.body.threshold_cm) || 10;
+
+  // Get session-spawned actor names from context manager (names WITHOUT session suffix)
+  const sessionState  = ctxManager.getState(STUDIO_SESSION);
+  const ctxObjects    = (sessionState?.objects || []);
+  const ctxAgents     = (sessionState?.agents  || []);
+  const ctxNames      = [...ctxObjects, ...ctxAgents].map(o => o.name).filter(Boolean);
+
+  // Only check actors from the current session. If nothing was spawned yet, return empty.
+  if (ctxNames.length === 0) {
+    return res.json({
+      collision_count: 0, collision_pairs: [], checked_actors_count: 0,
+      total_overlaps: 0, floating_count: 0, floating_actors: [],
+      threshold_cm: FLOAT_THRESHOLD,
+      note: 'No session actors tracked yet — spawn objects first',
+    });
+  }
+
+  const script = `
+import unreal, json
+
+world = unreal.EditorLevelLibrary.get_editor_world()
+ctx_names      = ${JSON.stringify(ctxNames)}   # may be empty
+FLOAT_THRESHOLD = ${FLOAT_THRESHOLD}
+TOUCH_TOL       = 5.0
+
+all_actors = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)
+
+# Infrastructure classes to skip entirely (volumes, system actors, atmosphere, etc.)
+INFRA_CLS = frozenset(['skyatmosphere','directionallight','skylightcomponent',
+    'exponentialheightfog','worldsettings','defaultphysicsvolume',
+    'navmeshboundingvolume','postprocessvolume','triggervolume','brushactor',
+    'recastnavmesh','atmosphericfog','smartobjectsubsystem'])
+INFRA_NM  = frozenset(['navmesh','recast','worldsettings','smartobject','subsystem',
+    'gameplaydebugger','atmosphericfog','postprocess'])
+
+INFRA_LABEL_PREFIX = frozenset(['sm_bg', 'bp_bg'])
+def is_infra(actor):
+    cls = actor.get_class().get_name().lower()
+    if any(s in cls for s in INFRA_CLS): return True
+    if any(s in actor.get_name().lower() for s in INFRA_NM): return True
+    try:
+        lbl = actor.get_actor_label().lower()
+        return any(lbl.startswith(p) for p in INFRA_LABEL_PREFIX)
+    except: return False
+
+# Build label + name lookup tables (non-infra actors only)
+by_label, by_name = {}, {}
+for a in all_actors:
+    if is_infra(a): continue
+    try:
+        lbl = a.get_actor_label()
+        if lbl: by_label[lbl] = a
+    except: pass
+    by_name[a.get_name()] = a
+
+# Session mode only: resolve by label-prefix matching
+# ctx_names are the base names (without session suffix) from ctxManager
+def find_actor(cn):
+    prefix = cn + '_'
+    if cn in by_label: return by_label[cn]
+    for lbl, actor in by_label.items():
+        if lbl.startswith(prefix): return actor
+    if cn in by_name: return by_name[cn]
+    for nm, actor in by_name.items():
+        if nm.startswith(prefix): return actor
+    return None
+resolved = {cn: find_actor(cn) for cn in ctx_names if find_actor(cn)}
+
+# Build per-actor bounds list for actors we are checking
+scene = []
+for key, actor in resolved.items():
+    origin, ext = actor.get_actor_bounds(False)
+    if ext.x < 1 and ext.y < 1 and ext.z < 1: continue
+    loc = actor.get_actor_location()
+    scene.append({'actor': actor, 'name': key,
+        'ox': origin.x, 'oy': origin.y, 'oz': origin.z,
+        'ex': max(ext.x,1), 'ey': max(ext.y,1), 'ez': max(ext.z,1),
+        'bot_z': origin.z - ext.z, 'top_z': origin.z + ext.z,
+        'lx': loc.x, 'ly': loc.y})
+
+# All non-infra actors as potential support surfaces (includes scene actors)
+all_bounds = []
+for a in all_actors:
+    if is_infra(a): continue
+    origin, ext = a.get_actor_bounds(False)
+    if ext.x < 1 and ext.y < 1 and ext.z < 1: continue
+    all_bounds.append({'actor': a,
+        'ox': origin.x, 'oy': origin.y, 'oz': origin.z,
+        'ex': max(ext.x,1), 'ey': max(ext.y,1), 'ez': max(ext.z,1),
+        'top_z': origin.z + ext.z})
+
+# 1. FLOATING CHECK
+# Per-actor: find highest top surface strictly below this actor within its footprint.
+# Fallback = Z=0 (ground assumption) when nothing is found below.
+# Note: other scene actors ARE valid supports (e.g. L2 wall sitting on L1 wall).
+floating = []
+for a in scene:
+    best = None  # None = no surface found below
+    for other in all_bounds:
+        if other['actor'] is a['actor']: continue  # skip self
+        if other['top_z'] >= a['bot_z'] - 1: continue  # not strictly below
+        if abs(other['ox'] - a['lx']) > (a['ex']*0.5 + other['ex']): continue
+        if abs(other['oy'] - a['ly']) > (a['ey']*0.5 + other['ey']): continue
+        if best is None or other['top_z'] > best: best = other['top_z']
+    # No surface found above Z=0 -> always floating (actor is unsupported above ground)
+    # bot_z <= 0 means actor is at/below ground plane (embedded) -> skip
+    # Surface found -> floating only if gap exceeds threshold
+    if best is None and a['bot_z'] > 0:
+        floating.append({'name': a['name'],
+                         'gap_cm': None,
+                         'bottom_z': round(a['bot_z'], 1),
+                         'surface_z': None, 'no_surface': True})
+    elif best is not None and a['bot_z'] - best > FLOAT_THRESHOLD:
+        floating.append({'name': a['name'],
+                         'gap_cm': round(a['bot_z'] - best, 1),
+                         'bottom_z': round(a['bot_z'], 1),
+                         'surface_z': round(best, 1)})
+
+# 2. COLLISION CHECK: AABB overlap, ignoring surface contacts (<=5 cm)
+collisions = []
+for i in range(len(scene)):
+    a = scene[i]
+    for j in range(i+1, len(scene)):
+        b = scene[j]
+        dx = abs(a['ox']-b['ox']) - (a['ex']+b['ex'])
+        dy = abs(a['oy']-b['oy']) - (a['ey']+b['ey'])
+        dz = abs(a['oz']-b['oz']) - (a['ez']+b['ez'])
+        if dx < -TOUCH_TOL and dy < -TOUCH_TOL and dz < -TOUCH_TOL:
+            pen = min(abs(dx),abs(dy),abs(dz)) - TOUCH_TOL
+            collisions.append({'actor1': a['name'], 'actor2': b['name'],
+                               'penetration_depth': round(pen,1)})
+
+result = {
+    'collision_count': len(collisions),
+    'collision_pairs': collisions[:10],
+    'checked_actors_count': len(scene),
+    'total_overlaps': len(collisions),
+    'floating_count': len(floating),
+    'floating_actors': sorted(floating, key=lambda x: (0 if x.get('no_surface') else 1, -(x.get('gap_cm') or 0)))[:20],
+    'threshold_cm': FLOAT_THRESHOLD,
+    'unresolved_count': len(ctx_names) - len(resolved) if ctx_names else 0,
+    'mode': 'session' if ctx_names else 'full_scan',
+}
+print('SCENE_CHECK:' + json.dumps(result))
+`;
+
+  try {
+    const raw = await new Promise((resolve, reject) => {
+      const sock = new (require('net').Socket)();
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('scene-check timeout')); }, 25000);
+      sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+        sock.write(JSON.stringify({ type: 'execute_python_script', params: { script } }) + '\n');
+      });
+      let buf = '';
+      sock.on('data', d => {
+        buf += d.toString();
+        try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch {}
+      });
+      sock.on('error', e => { clearTimeout(timer); reject(e); });
+      sock.on('close', () => { if (buf.trim()) { try { resolve(JSON.parse(buf)); } catch {} } });
+    });
+
+    const logs = (raw?.result?.python_logs || []);
+    let data = null;
+    for (const line of logs) {
+      if (line.includes('SCENE_CHECK:')) {
+        try { data = JSON.parse(line.split('SCENE_CHECK:')[1]); } catch {}
+        break;
+      }
+    }
+    if (!data) {
+      logToFile('scene-check', `No result — logs: ${logs.slice(0,5).join(' | ')}`);
+      return res.status(502).json({ error: 'No result from UE', logs: logs.slice(0, 5) });
+    }
+    if (typeof data.collision_count === 'number') metricsHub.recordSceneCollisions(data.collision_count);
+    res.json(data);
+  } catch (e) {
+    logToFile('scene-check', `Error: ${e.message}`);
+    res.status(503).json({ error: e.message });
+  }
 });
 
 app.all("/api/*",(s,e)=>{e.status(404).json({error:`Unknown API endpoint: ${s.method} ${s.path}`})});

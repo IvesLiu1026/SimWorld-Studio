@@ -1,18 +1,18 @@
-"use strict";const net=require("net"),fs=require("fs"),path=require("path"),readline=require("readline"),UE_HOST=process.env.UNREAL_HOST||"127.0.0.1",UE_PORT=parseInt(process.env.UNREAL_PORT||"55559",10),SCREENSHOT_DIR=path.resolve(__dirname,"../../tmp/screens"),ASSETS=JSON.parse(fs.readFileSync(path.resolve(__dirname,process.env.SIMWORLD_ASSETS_FILE||"assets_full.json"),"utf-8"));fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0});const spawnedActors=new Set,cmdQueue=[];let cmdRunning=!1;
+﻿"use strict";const net=require("net"),fs=require("fs"),path=require("path"),readline=require("readline"),UE_HOST=process.env.UNREAL_HOST||"127.0.0.1",UE_PORT=parseInt(process.env.UNREAL_PORT||"55559",10),SCREENSHOT_DIR=path.resolve(__dirname,"../../tmp/screens"),ASSETS=JSON.parse(fs.readFileSync(path.resolve(__dirname,process.env.SIMWORLD_ASSETS_FILE||"assets_full.json"),"utf-8"));fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0});const spawnedActors=new Set,cmdQueue=[];let cmdRunning=!1;
 
 // ---------------------------------------------------------------------------
 // Command queue with adaptive cooldown + retry
 // ---------------------------------------------------------------------------
-// UE's MCP server: one TCP connection per command, accepts → reads → responds.
+// UE's MCP server: one TCP connection per command, accepts ΓåÆ reads ΓåÆ responds.
 // After responding it needs time to re-enter its accept loop, especially after
 // heavy commands (spawn, python_script) that block the game thread.
 //
-// Queue is serial: wait for UE response → cooldown → next command.
+// Queue is serial: wait for UE response ΓåÆ cooldown ΓåÆ next command.
 // Cooldown is adaptive: heavy commands get more breathing room.
 // Retry with backoff on transient connection failures.
 // ---------------------------------------------------------------------------
 const COOLDOWN={
-  spawn_blueprint_actor:200, // UE loads BP + instantiates — needs time
+  spawn_blueprint_actor:200, // UE loads BP + instantiates ΓÇö needs time
   execute_python_script:200, // Python runs on game thread
   spawn_actor:200,
   delete_all_spawned:300,    // bulk delete is heavy
@@ -70,7 +70,7 @@ async function _execWithRetry(type,params,timeoutMs,retries){
 }
 
 // Ensure actor names are unique by appending a session-unique suffix.
-// _SID = millisecond timestamp (base36) + 3 random chars → e.g. "lhq3k2_a7f"
+// _SID = millisecond timestamp (base36) + 3 random chars ΓåÆ e.g. "lhq3k2_a7f"
 // This survives: server restarts, map reloads, PIE restarts, pre-existing map actors.
 const _usedNames=new Set();
 const _SID=(Date.now().toString(36).slice(-5)+Math.random().toString(36).slice(2,5));
@@ -300,7 +300,7 @@ for a in subsys.get_all_level_actors():
 print("Culling disabled on all spawned actors")
 `});return spawnedActors.add("Arena_Env_Ground"),{status:"success",message:`Environment set up: sun (${n}), sky atmosphere, sky light, fog, ground (${s*100}m x ${s*100}m), view distance culling disabled`,steps:{atmosphere:c?.result?.python_logs,sun:a?.result?.python_logs,skylight:i?.result?.python_logs,fog:p?.result?.python_logs},ground:l?.result?.python_logs}}function _notifyBackend(body){try{const http=require('http');const data=JSON.stringify(body);const req=http.request({host:'127.0.0.1',port:parseInt(process.env.PORT||'3002'),path:'/api/verifier-update',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(data)}});req.on('error',()=>{});req.write(data);req.end();}catch(e){}}async function toolVerifyScene({original_request:R,focus_areas:F}){const ts='verify_'+Date.now()+'.png',sp=path.join(SCREENSHOT_DIR,ts);try{await ueCommand('take_screenshot',{filepath:sp})}catch(e){return{status:'error',message:'Screenshot failed: '+e.message}}let ar;try{ar=await toolGetActors()}catch(e){ar={status:'error'}}// Notify backend: screenshot ready (show panel immediately)
 _notifyBackend({type:'screenshot',data:sp});const actorsList=JSON.stringify(ar,null,2);const uc=[];try{if(fs.existsSync(sp)){const imgData=fs.readFileSync(sp);const isJpeg=imgData[0]===255&&imgData[1]===216;const mediaType=isJpeg?'image/jpeg':'image/png';uc.push({type:'image',source:{type:'base64',media_type:mediaType,data:imgData.toString('base64')}})}}catch(e){}const promptText='Please verify this 3D scene in SimWorld Studio (Unreal Engine 5).\n\n'+(R?'Original scene request: "'+R+'"\n\n':'')+'Current actors in the scene:\n'+actorsList+(F?'\n\nFocus on: '+F:'');uc.push({type:'text',text:promptText});const sysPrompt='You are a 3D scene verification expert for SimWorld Studio (Unreal Engine 5).\nAnalyze the scene screenshot and actor list, then provide concise actionable feedback.\n\nEvaluate:\n1. Completeness: Are all requested objects present?\n2. Placement: Are objects in good positions? (X/Y within -9500 to 9500, not overlapping, not outside ground)\n3. Scale: Do objects look appropriately sized relative to each other?\n4. Realism: Does the scene match the original request?\n5. Issues: Any obvious problems (floating objects above ground, buried below ground, misaligned)?\n6. Navigation/walkability (IMPORTANT): Large buildings (BP_Building_*) have a large footprint and BLOCK agent navigation if placed in the walkable area near PlayerStart. They should be placed as background scenery far from center (>2500 UU from PlayerStart). Small props (hydrants, bins, cones, benches, trash) are fine anywhere. Trees belong at the scene edge. If you see large buildings close to the center/PlayerStart, flag NEEDS_IMPROVEMENT and suggest moving them to a background ring 2500-5000 UU away.\n\nFormat your response as:\n- **Status**: PASS / NEEDS_IMPROVEMENT / FAIL\n- **Issues**: (bullet list of specific problems, or "None" if PASS)\n- **Suggestions**: (bullet list of specific actionable improvements the agent should make)';const CLAUDE=process.env.CLAUDE_BIN||'claude';const args=['--input-format','stream-json','--output-format','stream-json','--verbose','--dangerously-skip-permissions','--append-system-prompt',sysPrompt];return new Promise((resolve)=>{const p=require('child_process').spawn(CLAUDE,args,{stdio:['pipe','pipe','pipe'],env:process.env});p.stdin.write(JSON.stringify({type:'user',message:{role:'user',content:uc}})+'\n');p.stdin.end();let buf='',feedback='';p.stdout.on('data',d=>{buf+=d.toString();const lines=buf.split('\n');buf=lines.pop()||'';for(const line of lines){if(!line.trim())continue;try{const ev=JSON.parse(line);if(ev.type==='result'&&typeof ev.result==='string'&&ev.result){feedback=ev.result}else if(ev.type==='assistant'){for(const b of(ev.message&&ev.message.content||[])){if(b.type==='text'&&b.text){feedback+=b.text;_notifyBackend({type:'delta',data:b.text})}}}else if(ev.type==='stream_event'){const evt=ev.event||{};if(evt.type==='content_block_delta'&&evt.delta&&evt.delta.type==='text_delta'&&evt.delta.text){feedback+=evt.delta.text;_notifyBackend({type:'delta',data:evt.delta.text})}}}catch{}}});p.stderr.on('data',d=>process.stderr.write('[verifier] '+d));p.on('close',()=>{resolve({status:'success',screenshot:sp,actors_count:(ar&&ar.result&&ar.result.actors&&ar.result.actors.length)||0,feedback:feedback||'No feedback generated'})})});}// ---------------------------------------------------------------------------
-// UnrealCV access (Phase 2) — UCV traffic now goes through the main server's
+// UnrealCV access (Phase 2) ΓÇö UCV traffic now goes through the main server's
 // singleton UcvBroker via HTTP RPC, instead of each mcp-server subprocess
 // opening its own TCP socket to UE port 9000. This eliminates the cross-process
 // race on UCV that was silently dropping commands when one agent's spawn reset
@@ -359,14 +359,14 @@ async function ensurePIE(){
   // Check if PIE is already running
   const running=await checkPIE();
   if(running){pieStarted=true;return}
-  // Not running — return error telling user to start PIE manually
+  // Not running ΓÇö return error telling user to start PIE manually
   throw new Error("PIE mode is not active. Please start Play-In-Editor (PIE) mode in Unreal Engine first, then try again. You can start PIE by clicking the Play button in the UE toolbar.")
 }
 
 async function ucvCommandRetry(cmd,retries=3,delay=2000,timeout=10000){
   mcpLog('debug','ucv: '+cmd.slice(0,80));
   // The broker handles retries+reconnect internally now (Phase 2). We just
-  // pass `retries` through. `delay` is unused — broker uses its own backoff.
+  // pass `retries` through. `delay` is unused ΓÇö broker uses its own backoff.
   return ucvCommand(cmd,timeout,{retries});
 }
 
@@ -382,7 +382,7 @@ async function toolSpawnAgent({agent_name,agent_type,location,rotation}){
   const loc=location||[0,0,typeDef.spawnZ||110];
   const rot=rotation||[0,0,0];
   try{
-    // Spawn may cause UE to reset the socket — retry after delay
+    // Spawn may cause UE to reset the socket ΓÇö retry after delay
     try{await ucvCommand(`vset /objects/spawn_bp_asset ${bp} ${agent_name}`,15000)}
     catch(e){/* spawn often resets connection, that's OK */}
     // Wait for UE to finish loading the character
@@ -448,7 +448,166 @@ async function toolGetAgentState({agent_name}){
   }catch(e){return{status:"error",message:e.message}}
 }
 
-const TOOL_DEFS=[{name:"spawn_blueprint_actor",description:"Spawn a SimWorld Blueprint actor (building, tree, vehicle, prop). Use this for all CityDatabase assets. The blueprint_id can be a full path like '/Game/CityDatabase/blueprints/BP_Building_01.BP_Building_01_C', or a shorthand like 'BP_Building_01', 'BP_Tree1', etc. For buildings you can even use just the number like '01' through '06'.",inputSchema:{type:"object",properties:{actor_name:{type:"string",description:"Unique name for this actor (e.g. 'House_01', 'Tree_Left_1')"},blueprint_id:{type:"string",description:"Blueprint path or shorthand. Buildings: 'BP_Building_01' to 'BP_Building_06' (ONLY 01-06 available) (or just number). Trees: 'BP_Tree1'-'BP_Tree6'. Vehicles: 'BP_Scooter_01'-'BP_Scooter_04', 'BP_Cart'. Props: 'BP_Hydrant', 'BP_Trash_bin_a', 'BP_Table', etc."},location:{type:"array",items:{type:"number"},description:"[x, y, z] in UE units (cm). 1m=100 units. Ground is 200m x 200m centered at origin, so keep X and Y between -9500 and 9500. Values outside this range will be clamped to stay on the ground."},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll] in degrees"},scale:{type:"array",items:{type:"number"},description:"[x, y, z] scale multipliers, default [1,1,1]"}},required:["actor_name","blueprint_id","location"]}},{name:"spawn_actor",description:"Spawn a static mesh actor. Use for basic shapes (/Engine/BasicShapes/Cube, Plane, etc.) or SM_ meshes. For SimWorld buildings/trees/props, prefer spawn_blueprint_actor instead.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Unique actor name"},static_mesh:{type:"string",description:"Full mesh path, e.g. '/Engine/BasicShapes/Cube.Cube' or '/Game/CityDatabase/meshes/SM_Road.SM_Road'"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name","static_mesh","location"]}},{name:"delete_actor",description:"Delete an actor by its name.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name to delete"}},required:["name"]}},{name:"delete_all_spawned",description:"Delete ALL actors spawned in this session. Use to clear the scene before rebuilding.",inputSchema:{type:"object",properties:{}}},{name:"get_actors_in_level",description:"List all actors currently in the UE level.",inputSchema:{type:"object",properties:{}}},{name:"find_actors_by_name",description:"Search for actors whose name matches a pattern.",inputSchema:{type:"object",properties:{pattern:{type:"string",description:"Name pattern to search"}},required:["pattern"]}},{name:"set_actor_transform",description:"Move, rotate, or scale an existing actor.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name"]}},{name:"take_screenshot",description:"Capture a screenshot of the current UE viewport and save it as PNG.",inputSchema:{type:"object",properties:{filename:{type:"string",description:"Output filename (optional, auto-generated if omitted)"}}}},{name:"execute_python_script",description:"Execute arbitrary Unreal Engine Python script. Use for advanced operations not covered by other tools.",inputSchema:{type:"object",properties:{script:{type:"string",description:"Python code to execute in UE"}},required:["script"]}},{name:"list_assets",description:"List available SimWorld assets. Returns buildings, trees, vehicles, street furniture, roads, and static meshes with their paths.",inputSchema:{type:"object",properties:{category:{type:"string",description:"Optional: 'buildings', 'trees', 'vehicles', 'street_furniture', 'roads', 'static_meshes'. Omit for all."}}}},{name:"setup_environment",description:"CALL THIS FIRST before spawning any objects! Sets up the scene environment: directional light (sun), sky atmosphere, sky light, fog, ground plane, and increases view distance. Without this, the scene will be black/empty.",inputSchema:{type:"object",properties:{ground_size:{type:"number",description:"Ground plane scale (default 200 = 20km x 20km). Use 100 for small scenes, 300 for large cities."},time_of_day:{type:"string",description:"'morning', 'noon', 'afternoon' (default), 'sunset', or 'night'"}}}},{name:"verify_scene",description:"Call a verifier AI (Claude) to analyze the current scene. Takes a screenshot, gets all actors, then asks Claude to evaluate if placement is correct and matches the original request. Returns structured feedback with status (PASS/NEEDS_IMPROVEMENT/FAIL), issues found, and actionable suggestions. Use this after placing objects to check quality before finishing.",inputSchema:{type:"object",properties:{original_request:{type:"string",description:"The original scene generation request to verify against (e.g. 'a suburban street with 3 houses and 2 trees')"},focus_areas:{type:"string",description:"Optional: specific aspects to focus on (e.g. 'check building spacing', 'verify tree placement')"}},required:[]}},{name:"spawn_agent",description:"Spawn a controllable agent. Requires PIE mode. Types: "+Object.keys(AGENT_REGISTRY.agentTypes).join(", "),inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Unique name"},agent_type:{type:"string",description:"Agent type: "+Object.keys(AGENT_REGISTRY.agentTypes).join(", ")},location:{type:"array",items:{type:"number"},description:"[x, y, z] spawn location"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"}},required:["agent_name","agent_type"]}},{name:"agent_stop",description:"Stop an agent's movement.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},agent_type:{type:"string",description:"Agent type (determines stop command)"}},required:["agent_name"]}},{name:"agent_rotate",description:"Rotate an agent.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},angle:{type:"number",description:"Degrees"},direction:{type:"string",enum:["left","right"]},agent_type:{type:"string"}},required:["agent_name","angle","direction"]}},{name:"agent_action",description:"Perform an action. Actions vary by agent type — call with an invalid action to see available ones.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},action:{type:"string",description:"Action name (e.g. move_forward, set_speed, sit_down, pick_up, wave, etc.)"},agent_type:{type:"string",description:"Agent type"},params:{type:"object",description:"Action parameters (e.g. {speed:200}, {target:'Box_1'}, {duration:3})"}},required:["agent_name","action"]}},{name:"get_agent_state",description:"Get agent position and rotation.",inputSchema:{type:"object",properties:{agent_name:{type:"string"}},required:["agent_name"]}}],TOOL_HANDLERS={spawn_blueprint_actor:toolSpawnBlueprintActor,spawn_actor:toolSpawnActor,delete_actor:toolDeleteActor,delete_all_spawned:toolDeleteAllSpawned,get_actors_in_level:toolGetActors,find_actors_by_name:toolFindActors,set_actor_transform:toolSetActorTransform,take_screenshot:toolTakeScreenshot,execute_python_script:toolExecutePython,list_assets:toolListAssets,setup_environment:toolSetupEnvironment,verify_scene:toolVerifyScene,spawn_agent:toolSpawnAgent,agent_stop:toolAgentStop,agent_rotate:toolAgentRotate,agent_action:toolAgentAction,get_agent_state:toolGetAgentState};function sendResponse(e,t){const s=JSON.stringify({jsonrpc:"2.0",id:e,result:t});process.stdout.write(s+`
+// Shared helper: build UE Python script for scene checks.
+// Works in editor mode (no PIE). Uses actor labels for lookup.
+// When names list is empty, falls back to scanning all non-infra actors.
+// Floating: per-actor downward column search; fallback = Z=0 (no global ground_z).
+// Collisions: AABB overlap with 5cm touch tolerance.
+function _buildSceneCheckScript(names, floatThreshold, checkType) {
+  return `
+import unreal, json
+world = unreal.EditorLevelLibrary.get_editor_world()
+names_list     = ${JSON.stringify(names)}
+FLOAT_THRESHOLD = ${floatThreshold}
+TOUCH_TOL       = 5.0
+
+all_actors = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)
+
+INFRA_CLS = frozenset(['skyatmosphere','directionallight','skylightcomponent',
+    'exponentialheightfog','worldsettings','defaultphysicsvolume',
+    'navmeshboundingvolume','postprocessvolume','triggervolume','brushactor',
+    'recastnavmesh','atmosphericfog','smartobjectsubsystem'])
+INFRA_NM  = frozenset(['navmesh','recast','worldsettings','smartobject','subsystem',
+    'gameplaydebugger','atmosphericfog','postprocess'])
+
+INFRA_LABEL_PREFIX = frozenset(['sm_bg', 'bp_bg'])
+def is_infra(actor):
+    cls = actor.get_class().get_name().lower()
+    if any(s in cls for s in INFRA_CLS): return True
+    if any(s in actor.get_name().lower() for s in INFRA_NM): return True
+    try:
+        lbl = actor.get_actor_label().lower()
+        return any(lbl.startswith(p) for p in INFRA_LABEL_PREFIX)
+    except: return False
+
+# spawnedActors stores the full session-suffixed labels — match by exact label
+by_label = {}
+for a in all_actors:
+    if is_infra(a): continue
+    try:
+        lbl = a.get_actor_label()
+        if lbl: by_label[lbl] = a
+    except: pass
+
+if names_list:
+    resolved = {n: by_label[n] for n in names_list if n in by_label}
+else:
+    # Fallback: scan all non-infra actors with reasonable bounds
+    resolved = {}
+    for a in all_actors:
+        if is_infra(a): continue
+        origin, ext = a.get_actor_bounds(False)
+        if ext.x < 1 and ext.y < 1 and ext.z < 1: continue
+        if max(ext.x, ext.y, ext.z) > 50000: continue
+        lbl = ''
+        try: lbl = a.get_actor_label()
+        except: pass
+        resolved[lbl if lbl else a.get_name()] = a
+
+scene = []
+for key, actor in resolved.items():
+    origin, ext = actor.get_actor_bounds(False)
+    if ext.x < 1 and ext.y < 1 and ext.z < 1: continue
+    loc = actor.get_actor_location()
+    scene.append({'actor': actor, 'name': key,
+        'ox': origin.x, 'oy': origin.y, 'oz': origin.z,
+        'ex': max(ext.x,1), 'ey': max(ext.y,1), 'ez': max(ext.z,1),
+        'bot_z': origin.z - ext.z, 'lx': loc.x, 'ly': loc.y})
+
+all_bounds = []
+for a in all_actors:
+    if is_infra(a): continue
+    origin, ext = a.get_actor_bounds(False)
+    if ext.x < 1 and ext.y < 1 and ext.z < 1: continue
+    all_bounds.append({'actor': a,
+        'ox': origin.x, 'oy': origin.y, 'oz': origin.z,
+        'ex': max(ext.x,1), 'ey': max(ext.y,1), 'ez': max(ext.z,1),
+        'top_z': origin.z + ext.z})
+
+floating = []
+if ${checkType === 'floating' || checkType === 'both' ? 'True' : 'False'}:
+    for a in scene:
+        best = None  # None = no surface found below
+        for other in all_bounds:
+            if other['actor'] is a['actor']: continue
+            if other['top_z'] >= a['bot_z'] - 1: continue
+            if abs(other['ox'] - a['lx']) > (a['ex']*0.5 + other['ex']): continue
+            if abs(other['oy'] - a['ly']) > (a['ey']*0.5 + other['ey']): continue
+            if best is None or other['top_z'] > best: best = other['top_z']
+        if best is None and a['bot_z'] > 0:
+            floating.append({'name': a['name'], 'gap_cm': None,
+                             'bottom_z': round(a['bot_z'], 1), 'surface_z': None, 'no_surface': True})
+        elif best is not None and a['bot_z'] - best > FLOAT_THRESHOLD:
+            floating.append({'name': a['name'], 'gap_cm': round(a['bot_z'] - best, 1),
+                             'bottom_z': round(a['bot_z'], 1), 'surface_z': round(best, 1)})
+
+collisions = []
+if ${checkType === 'collisions' || checkType === 'both' ? 'True' : 'False'}:
+    for i in range(len(scene)):
+        a = scene[i]
+        for j in range(i+1, len(scene)):
+            b = scene[j]
+            dx = abs(a['ox']-b['ox']) - (a['ex']+b['ex'])
+            dy = abs(a['oy']-b['oy']) - (a['ey']+b['ey'])
+            dz = abs(a['oz']-b['oz']) - (a['ez']+b['ez'])
+            if dx < -TOUCH_TOL and dy < -TOUCH_TOL and dz < -TOUCH_TOL:
+                pen = min(abs(dx),abs(dy),abs(dz)) - TOUCH_TOL
+                collisions.append({'actor1': a['name'], 'actor2': b['name'],
+                                   'penetration_depth': round(pen,1)})
+
+print('RESULT:' + json.dumps({
+    'floating': floating, 'floating_count': len(floating),
+    'collisions': collisions, 'collision_count': len(collisions),
+    'checked': len(scene),
+}))
+`;
+}
+
+async function toolCheckFloating({threshold_cm, actor_names} = {}) {
+  const threshold = threshold_cm || 10;
+  const names = (actor_names && actor_names.length > 0) ? actor_names : [...spawnedActors];
+  if (names.length === 0)
+    return {status:"ok", message:"No spawned actors to check", floating:[], checked:0};
+  const script = _buildSceneCheckScript(names, threshold, 'floating');
+  const raw  = await ueCommand("execute_python_script", {script}, 30000);
+  const logs = (raw?.result?.python_logs || []);
+  let data   = {floating:[], checked:names.length};
+  for (const l of logs) {
+    if (l.includes("RESULT:")) { try { data = JSON.parse(l.split("RESULT:")[1]); } catch {} break; }
+  }
+  const n = data.floating_count ?? data.floating.length;
+  return {
+    status: n > 0 ? "warning" : "ok",
+    message: n > 0
+      ? `${n} actor(s) floating >${threshold}cm above surface — fix with set_actor_transform`
+      : `All ${data.checked} actor(s) grounded (gap ≤ ${threshold}cm)`,
+    floating: (data.floating||[]).sort((a,b)=>a.gap_cm-b.gap_cm), checked: data.checked, threshold_cm: threshold,
+    ground_z: data.ground_z,
+  };
+}
+
+async function toolCheckCollisions({actor_names, touch_tolerance_cm} = {}) {
+  const names = (actor_names && actor_names.length > 0) ? actor_names : [...spawnedActors];
+  if (names.length === 0)
+    return {status:"ok", message:"No spawned actors to check", collisions:[], checked:0};
+  const script = _buildSceneCheckScript(names, 50, 'collisions');
+  const raw  = await ueCommand("execute_python_script", {script}, 30000);
+  const logs = (raw?.result?.python_logs || []);
+  let data   = {collisions:[], checked:names.length};
+  for (const l of logs) {
+    if (l.includes("RESULT:")) { try { data = JSON.parse(l.split("RESULT:")[1]); } catch {} break; }
+  }
+  const n = data.collision_count ?? data.collisions.length;
+  return {
+    status: n > 0 ? "warning" : "ok",
+    message: n > 0
+      ? `${n} collision pair(s) detected — overlapping actors need repositioning`
+      : `No collisions detected among ${data.checked} actor(s)`,
+    collisions: data.collisions, checked: data.checked,
+  };
+}
+
+const TOOL_DEFS=[{name:"spawn_blueprint_actor",description:"Spawn a SimWorld Blueprint actor (building, tree, vehicle, prop). Use this for all CityDatabase assets. The blueprint_id can be a full path like '/Game/CityDatabase/blueprints/BP_Building_01.BP_Building_01_C', or a shorthand like 'BP_Building_01', 'BP_Tree1', etc. For buildings you can even use just the number like '01' through '06'.",inputSchema:{type:"object",properties:{actor_name:{type:"string",description:"Unique name for this actor (e.g. 'House_01', 'Tree_Left_1')"},blueprint_id:{type:"string",description:"Blueprint path or shorthand. Buildings: 'BP_Building_01' to 'BP_Building_06' (ONLY 01-06 available) (or just number). Trees: 'BP_Tree1'-'BP_Tree6'. Vehicles: 'BP_Scooter_01'-'BP_Scooter_04', 'BP_Cart'. Props: 'BP_Hydrant', 'BP_Trash_bin_a', 'BP_Table', etc."},location:{type:"array",items:{type:"number"},description:"[x, y, z] in UE units (cm). 1m=100 units. Ground is 200m x 200m centered at origin, so keep X and Y between -9500 and 9500. Values outside this range will be clamped to stay on the ground."},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll] in degrees"},scale:{type:"array",items:{type:"number"},description:"[x, y, z] scale multipliers, default [1,1,1]"}},required:["actor_name","blueprint_id","location"]}},{name:"spawn_actor",description:"Spawn a static mesh actor. Use for basic shapes (/Engine/BasicShapes/Cube, Plane, etc.) or SM_ meshes. For SimWorld buildings/trees/props, prefer spawn_blueprint_actor instead.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Unique actor name"},static_mesh:{type:"string",description:"Full mesh path, e.g. '/Engine/BasicShapes/Cube.Cube' or '/Game/CityDatabase/meshes/SM_Road.SM_Road'"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name","static_mesh","location"]}},{name:"delete_actor",description:"Delete an actor by its name.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name to delete"}},required:["name"]}},{name:"delete_all_spawned",description:"Delete ALL actors spawned in this session. Use to clear the scene before rebuilding.",inputSchema:{type:"object",properties:{}}},{name:"get_actors_in_level",description:"List all actors currently in the UE level.",inputSchema:{type:"object",properties:{}}},{name:"find_actors_by_name",description:"Search for actors whose name matches a pattern.",inputSchema:{type:"object",properties:{pattern:{type:"string",description:"Name pattern to search"}},required:["pattern"]}},{name:"set_actor_transform",description:"Move, rotate, or scale an existing actor.",inputSchema:{type:"object",properties:{name:{type:"string",description:"Actor name"},location:{type:"array",items:{type:"number"},description:"[x, y, z]"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"},scale:{type:"array",items:{type:"number"},description:"[x, y, z]"}},required:["name"]}},{name:"take_screenshot",description:"Capture a screenshot of the current UE viewport and save it as PNG.",inputSchema:{type:"object",properties:{filename:{type:"string",description:"Output filename (optional, auto-generated if omitted)"}}}},{name:"execute_python_script",description:"Execute arbitrary Unreal Engine Python script. Use for advanced operations not covered by other tools.",inputSchema:{type:"object",properties:{script:{type:"string",description:"Python code to execute in UE"}},required:["script"]}},{name:"list_assets",description:"List available SimWorld assets. Returns buildings, trees, vehicles, street furniture, roads, and static meshes with their paths.",inputSchema:{type:"object",properties:{category:{type:"string",description:"Optional: 'buildings', 'trees', 'vehicles', 'street_furniture', 'roads', 'static_meshes'. Omit for all."}}}},{name:"verify_scene",description:"Call a verifier AI (Claude) to analyze the current scene. Takes a screenshot, gets all actors, then asks Claude to evaluate if placement is correct and matches the original request. Returns structured feedback with status (PASS/NEEDS_IMPROVEMENT/FAIL), issues found, and actionable suggestions. Use this after placing objects to check quality before finishing.",inputSchema:{type:"object",properties:{original_request:{type:"string",description:"The original scene generation request to verify against (e.g. 'a suburban street with 3 houses and 2 trees')"},focus_areas:{type:"string",description:"Optional: specific aspects to focus on (e.g. 'check building spacing', 'verify tree placement')"}},required:[]}},{name:"check_floating",description:"Check if spawned actors are floating above the ground. Uses bounding-box column search to find the nearest surface below each actor (works in editor mode without PIE). Warns if the gap exceeds threshold_cm. Call after placing objects to detect floating placement errors.",inputSchema:{type:"object",properties:{actor_names:{type:"array",items:{type:"string"},description:"Actor names to check. Omit to check all actors spawned this session."},threshold_cm:{type:"number",description:"Warning threshold in cm (default 50). Actors with gap > this are flagged."}}}},{name:"check_collisions",description:"Check if spawned actors are overlapping each other using AABB intersection. Works in editor mode without PIE. Surface contacts <=5cm are ignored as normal touching. Call after placing objects to detect interpenetrating actors.",inputSchema:{type:"object",properties:{actor_names:{type:"array",items:{type:"string"},description:"Actor names to check. Omit to check all actors spawned this session."}}}},{name:"spawn_agent",description:"Spawn a controllable agent. Requires PIE mode. Types: "+Object.keys(AGENT_REGISTRY.agentTypes).join(", "),inputSchema:{type:"object",properties:{agent_name:{type:"string",description:"Unique name"},agent_type:{type:"string",description:"Agent type: "+Object.keys(AGENT_REGISTRY.agentTypes).join(", ")},location:{type:"array",items:{type:"number"},description:"[x, y, z] spawn location"},rotation:{type:"array",items:{type:"number"},description:"[pitch, yaw, roll]"}},required:["agent_name","agent_type"]}},{name:"agent_stop",description:"Stop an agent's movement.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},agent_type:{type:"string",description:"Agent type (determines stop command)"}},required:["agent_name"]}},{name:"agent_rotate",description:"Rotate an agent.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},angle:{type:"number",description:"Degrees"},direction:{type:"string",enum:["left","right"]},agent_type:{type:"string"}},required:["agent_name","angle","direction"]}},{name:"agent_action",description:"Perform an action. Actions vary by agent type ΓÇö call with an invalid action to see available ones.",inputSchema:{type:"object",properties:{agent_name:{type:"string"},action:{type:"string",description:"Action name (e.g. move_forward, set_speed, sit_down, pick_up, wave, etc.)"},agent_type:{type:"string",description:"Agent type"},params:{type:"object",description:"Action parameters (e.g. {speed:200}, {target:'Box_1'}, {duration:3})"}},required:["agent_name","action"]}},{name:"get_agent_state",description:"Get agent position and rotation.",inputSchema:{type:"object",properties:{agent_name:{type:"string"}},required:["agent_name"]}}],TOOL_HANDLERS={spawn_blueprint_actor:toolSpawnBlueprintActor,spawn_actor:toolSpawnActor,delete_actor:toolDeleteActor,delete_all_spawned:toolDeleteAllSpawned,get_actors_in_level:toolGetActors,find_actors_by_name:toolFindActors,set_actor_transform:toolSetActorTransform,take_screenshot:toolTakeScreenshot,execute_python_script:toolExecutePython,list_assets:toolListAssets,verify_scene:toolVerifyScene,check_floating:toolCheckFloating,check_collisions:toolCheckCollisions,spawn_agent:toolSpawnAgent,agent_stop:toolAgentStop,agent_rotate:toolAgentRotate,agent_action:toolAgentAction,get_agent_state:toolGetAgentState};function sendResponse(e,t){const s=JSON.stringify({jsonrpc:"2.0",id:e,result:t});process.stdout.write(s+`
 `)}function sendError(e,t,s){const n=JSON.stringify({jsonrpc:"2.0",id:e,error:{code:t,message:s}});process.stdout.write(n+`
 `)}async function handleRequest(e){const{id:t,method:s,params:n}=e;if(s==="initialize")return sendResponse(t,{protocolVersion:"2024-11-05",capabilities:{tools:{listChanged:!1}},serverInfo:{name:"simworld-arena-mcp",version:"1.0.0"}});if(s!=="notifications/initialized"){if(s==="tools/list")return sendResponse(t,{tools:TOOL_DEFS});if(s==="tools/call"){const o=n?.name,r=n?.arguments||{},c=TOOL_HANDLERS[o];if(!c)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:`Unknown tool: ${o}`})}],isError:!0});try{const a=await c(r);return sendResponse(t,{content:[{type:"text",text:JSON.stringify(a,null,2)}],isError:!1})}catch(a){return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:a.message})}],isError:!0})}}if(s==="resources/list")return sendResponse(t,{resources:[]});if(s==="prompts/list")return sendResponse(t,{prompts:[]});t!==void 0&&sendError(t,-32601,`Method not found: ${s}`)}}const rl=readline.createInterface({input:process.stdin,terminal:!1});rl.on("line",e=>{const t=e.trim();if(t)try{const s=JSON.parse(t);handleRequest(s).catch(n=>{process.stderr.write(`[mcp-server] Error: ${n.message}
 `),s.id!==void 0&&sendError(s.id,-32603,n.message)})}catch{process.stderr.write(`[mcp-server] Invalid JSON: ${t.slice(0,100)}

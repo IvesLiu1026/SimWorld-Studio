@@ -17,7 +17,7 @@ from gym_env.episode_builder import (
     snapshot_scene,
 )
 
-UCV_PORT = 9001
+UCV_PORT = 9002
 SCENE_GRAPH = "test_map_scene_graph.json"
 
 
@@ -160,7 +160,7 @@ def main():
     # UnrealCV needs a live game world (PIE) for /nav/* and /objects
     # commands, so make sure PIE is running before any UCV queries.
     from gym_env.mcp_client import MCPClient
-    mcp = MCPClient(port=55557, name="taskgen-mcp")
+    mcp = MCPClient(port=55558, name="taskgen-mcp")
     try:
         mcp.start_pie(wait_seconds=8.0)
         print("PIE started")

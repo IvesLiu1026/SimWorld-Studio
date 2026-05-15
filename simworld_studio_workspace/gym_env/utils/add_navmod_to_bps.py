@@ -7,7 +7,7 @@ import sys, time, json
 sys.path.insert(0, "simworld_studio_workspace/gym_env")
 from mcp_client import MCPClient
 
-mcp = MCPClient(port=55557)
+mcp = MCPClient(port=55558)
 print("Waiting for editor...")
 mcp._wait_until_ready(timeout=60)
 

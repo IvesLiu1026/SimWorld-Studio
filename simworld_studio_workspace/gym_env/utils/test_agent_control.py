@@ -1,7 +1,7 @@
 """
 Test script for SimWorld agent control.
 Flow:
-  1. Connect to MCP (port 55557) to start PIE mode via Python script
+  1. Connect to MCP (port 55558) to start PIE mode via Python script
   2. Connect to UnrealCV (port 9000) to spawn and control agents
   3. Run movement/rotation/path tests
 
@@ -26,10 +26,10 @@ if sys.platform == 'win32':
 
 
 # ---------------------------------------------------------------------------
-# MCP TCP client (port 55557) — for executing UE Python scripts
+# MCP TCP client (port 55558) — for executing UE Python scripts
 # ---------------------------------------------------------------------------
 
-def mcp_command(cmd_type, params, host='127.0.0.1', port=55557, timeout=30):
+def mcp_command(cmd_type, params, host='127.0.0.1', port=55558, timeout=30):
     """Send a command to UE via MCP TCP protocol."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(timeout)

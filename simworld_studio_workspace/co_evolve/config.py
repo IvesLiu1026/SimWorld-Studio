@@ -40,9 +40,9 @@ class CoEvolveConfig:
 
     # ── UE connection ──
     ucv_host: str = "127.0.0.1"
-    ucv_port: int = int(os.environ.get("UCV_PORT", "9001"))
+    ucv_port: int = int(os.environ.get("UCV_PORT", "9002"))
     mcp_host: str = "127.0.0.1"
-    mcp_port: int = int(os.environ.get("MCP_PORT", "55557"))
+    mcp_port: int = int(os.environ.get("MCP_PORT", "55558"))
 
     # ── Output ──
     output_dir: str = "runs/co_evolve"

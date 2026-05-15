@@ -9,7 +9,7 @@ sys.path.insert(0, r"c:\Users\28262\Desktop\PlayGorund\SimWorld-Studio-Dev\simwo
 from gym_env.ucv_client import UCVClient, UCVError
 
 HOST = "127.0.0.1"
-PORT = 9001
+PORT = 9002
 
 client = UCVClient(host=HOST, port=PORT, name="grab_depth")
 client.connect()

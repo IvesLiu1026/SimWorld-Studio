@@ -4,7 +4,7 @@
 
 param(
     [int]   $Port            = 3002,
-    [int]   $McpPort         = 55557,
+    [int]   $McpPort         = 55558,
     [int]   $CirrusHttpPort  = 8685,
     [int]   $CirrusWsPort    = 8686,
     [int]   $CirrusSfuPort   = 8989,
@@ -23,7 +23,7 @@ Usage: .\SimWorld-Studio.ps1 [OPTIONS]
 
 Options:
   -Port            Web UI port          (default: 3002)
-  -McpPort         UE MCP/TCP port      (default: 55557)
+  -McpPort         UE MCP/TCP port      (default: 55558)
   -CirrusHttpPort  Cirrus HTTP port      (default: 8685)
   -CirrusWsPort    Cirrus WS port        (default: 8686)
   -CirrusSfuPort   Cirrus SFU port       (default: 8989)
@@ -89,7 +89,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Workspace "tmp\screens") |
 #  RELEASE STALE PORTS
 # ============================================================
 Write-Host "Releasing stale ports..." -ForegroundColor Yellow
-foreach ($p in @($Port, $McpPort, $CirrusHttpPort, $CirrusWsPort, $CirrusSfuPort, 9001)) {
+foreach ($p in @($Port, $McpPort, $CirrusHttpPort, $CirrusWsPort, $CirrusSfuPort, 9002)) {
     Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue |
         ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 }
@@ -101,20 +101,23 @@ Start-Sleep -Seconds 2
 # ============================================================
 #  SYNC CIRRUS player.js -> web/public/ue-assets/
 # ============================================================
-$CirrusPlayerJs   = Join-Path $CirrusDir "Public\player.js"
 $UeAssetsDir      = Join-Path $Workspace "web\public\ue-assets"
-$UeAssetsPlayerJs = Join-Path $UeAssetsDir "player.js"
 $needRebuild = $false
-if (Test-Path $CirrusPlayerJs) {
-    New-Item -ItemType Directory -Force -Path $UeAssetsDir | Out-Null
-    if (-not (Test-Path $UeAssetsPlayerJs) -or
-        (Get-Item $CirrusPlayerJs).LastWriteTime -gt (Get-Item $UeAssetsPlayerJs).LastWriteTime) {
-        Copy-Item $CirrusPlayerJs $UeAssetsPlayerJs -Force
-        Write-Host "[OK] Synced Cirrus player.js -> ue-assets" -ForegroundColor Green
-        $needRebuild = $true
+New-Item -ItemType Directory -Force -Path $UeAssetsDir | Out-Null
+# Sync player.js and uiless.js from Cirrus public dir
+foreach ($jsFile in @("player.js", "uiless.js")) {
+    $src  = Join-Path $CirrusDir "Public\$jsFile"
+    $dest = Join-Path $UeAssetsDir $jsFile
+    if (Test-Path $src) {
+        if (-not (Test-Path $dest) -or
+            (Get-Item $src).LastWriteTime -gt (Get-Item $dest).LastWriteTime) {
+            Copy-Item $src $dest -Force
+            Write-Host "[OK] Synced Cirrus $jsFile -> ue-assets" -ForegroundColor Green
+            $needRebuild = $true
+        }
+    } else {
+        Write-Warning "[!!] Cirrus $jsFile not found at $src"
     }
-} else {
-    Write-Warning "[!!] Cirrus player.js not found at $CirrusPlayerJs"
 }
 
 # ============================================================
@@ -204,18 +207,20 @@ $ueArgs = @(
     "-EditorPixelStreamingStartOnLaunch=true",
     "-EditorPixelStreamingUseRemoteSignallingServer=true",
     "-PixelStreamingURL=ws://127.0.0.1:$CirrusWsPort",
-    # Low-latency encoder — localhost has unlimited bandwidth so push quality high
+    # Encoder: H264 + CBR for consistent low latency (vs VBR default)
     "-PixelStreamingEncoderCodec=h264",
+    "-PixelStreamingEncoderRateControl=CBR",
     "-PixelStreamingEncoderKeyframeInterval=0",
     "-PixelStreamingEncoderTargetBitrate=50000000",
     "-PixelStreamingEncoderMaxBitrate=100000000",
     "-PixelStreamingEncoderMinQP=15",
     "-PixelStreamingEncoderMaxQP=25",
-    # WebRTC — start at max bitrate, 60fps, minimize buffering
+    # WebRTC: start at max bitrate, 60fps, maintain framerate under congestion
     "-PixelStreamingWebRTCFps=60",
     "-PixelStreamingWebRTCStartBitrate=50000000",
     "-PixelStreamingWebRTCMaxBitrate=100000000",
     "-PixelStreamingWebRTCMinBitrate=10000000",
+    "-PixelStreamingWebRTCDegradationPreference=MAINTAIN_FRAMERATE",
     "-PixelStreamingWebRTCDisableReceiveAudio=true",
     "-log"
 )
@@ -260,7 +265,7 @@ $webJob = Start-Job -Name "server" -ScriptBlock {
     PORT                = "$Port"
     UNREAL_HOST         = "127.0.0.1"
     UNREAL_PORT         = "$McpPort"
-    UCV_PORT            = "9001"
+    UCV_PORT            = "9002"
     CIRRUS_HTTP_PORT    = "$CirrusHttpPort"
     CIRRUS_WS_PORT      = "$CirrusWsPort"
     PIXEL_STREAMING_URL = "http://127.0.0.1:$CirrusHttpPort"

@@ -4,8 +4,8 @@
 
 param(
     [int]$Port          = 3002,
-    [string]$UcvPort    = "9001",
-    [string]$UnrealPort = "55557",
+    [string]$UcvPort    = "9002",
+    [string]$UnrealPort = "55558",
     [string]$UnrealHost = "127.0.0.1",
     [int]$CirrusHttpPort = 8685,
     [int]$CirrusWsPort   = 8686

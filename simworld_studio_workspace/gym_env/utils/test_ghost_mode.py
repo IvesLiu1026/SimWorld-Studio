@@ -20,7 +20,7 @@ if sys.platform == 'win32':
 
 BP_HUMANOID = "/Game/TrafficSystem/Pedestrian/Base_User_Agent.Base_User_Agent_C"
 GHOST_CHANNEL = 8
-UCV_PORT = 9001
+UCV_PORT = 9002
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ UCV_PORT = 9001
 def mcp(script, timeout=15):
     sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     sock.settimeout(timeout)
-    sock.connect(('127.0.0.1', 55557))
+    sock.connect(('127.0.0.1', 55558))
     msg = json.dumps({'type': 'execute_python_script', 'params': {'script': script}}) + '\n'
     sock.sendall(msg.encode('utf-8'))
     buf = ''

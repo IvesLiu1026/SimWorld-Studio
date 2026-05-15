@@ -1,7 +1,7 @@
 """End-to-end ghost agent spawn test.
 
 Usage:
-    python -m gym_env.utils.test_ghost_spawn --ucv-port 9001
+    python -m gym_env.utils.test_ghost_spawn --ucv-port 9002
 
 Spawns 3 ghost agents, tests hide + collision commands, prints every
 response from UE so we can see which commands succeed / fail.
@@ -15,7 +15,7 @@ import time
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--ucv-port", type=int, default=9001)
+    p.add_argument("--ucv-port", type=int, default=9002)
     p.add_argument("--n-agents", type=int, default=3)
     args = p.parse_args()
 

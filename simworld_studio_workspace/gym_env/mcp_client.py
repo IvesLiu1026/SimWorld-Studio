@@ -2,7 +2,7 @@
 
 The SimWorld JS server uses the same channel via ``mcp-server.js``.  We
 do NOT touch the JS server here — this client speaks the JSON-line
-protocol (port 55557 by default) directly.
+protocol (port 55558 by default) directly.
 
 Lifecycle note
 --------------
@@ -67,7 +67,7 @@ class MCPClient:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: int = 55557,
+        port: int = 55558,
         timeout: float = 30.0,
         name: str = "mcp",
     ) -> None:

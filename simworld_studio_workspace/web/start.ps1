@@ -17,8 +17,8 @@ Write-Host ""
 
 # -- Config -------------------------------------------------------------------
 $env:PORT              = if ($env:PORT)              { $env:PORT }              else { "3002" }
-$env:UCV_PORT          = if ($env:UCV_PORT)          { $env:UCV_PORT }          else { "9001" }
-$env:UNREAL_PORT       = if ($env:UNREAL_PORT)       { $env:UNREAL_PORT }       else { "55557" }
+$env:UCV_PORT          = if ($env:UCV_PORT)          { $env:UCV_PORT }          else { "9002" }
+$env:UNREAL_PORT       = if ($env:UNREAL_PORT)       { $env:UNREAL_PORT }       else { "55558" }
 $env:CIRRUS_HTTP_PORT  = if ($env:CIRRUS_HTTP_PORT)  { $env:CIRRUS_HTTP_PORT }  else { "8685" }
 $env:CIRRUS_WS_PORT    = if ($env:CIRRUS_WS_PORT)    { $env:CIRRUS_WS_PORT }    else { "8686" }
 $env:LOG_LEVEL         = if ($env:LOG_LEVEL)         { $env:LOG_LEVEL }         else { "info" }

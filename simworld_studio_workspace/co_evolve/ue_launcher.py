@@ -36,8 +36,8 @@ import os
 
 UE_EDITOR = os.environ.get("UE_EDITOR", "")
 UE_PROJECT = os.environ.get("UE_PROJECT", "")
-UCV_PORT = int(os.environ.get("UCV_PORT", "9001"))
-MCP_PORT = int(os.environ.get("MCP_PORT", "55557"))
+UCV_PORT = int(os.environ.get("UCV_PORT", "9002"))
+MCP_PORT = int(os.environ.get("MCP_PORT", "55558"))
 
 
 def wait_for_port(port: int, timeout: float = 200.0) -> bool:

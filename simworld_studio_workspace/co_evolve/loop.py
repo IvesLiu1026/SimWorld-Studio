@@ -231,11 +231,11 @@ class CoEvolutionRunner:
 
         Order policy:
         1) caller-provided preferred port
-        2) 9001 (project default)
+        2) 9002 (project default)
         3) 9000 (legacy fallback)
         """
         candidates: List[int] = []
-        for p in [preferred_port, 9001, 9000]:
+        for p in [preferred_port, 9002, 9000]:
             if p not in candidates:
                 candidates.append(p)
         return candidates
@@ -248,7 +248,7 @@ class CoEvolutionRunner:
         attempts_per_port: int,
         sleep_s: float = 2.0,
     ):
-        """Connect UnrealCV by probing preferred port, then 9001/9000."""
+        """Connect UnrealCV by probing preferred port, then 9002/9000."""
         from gym_env.ucv_client import UCVClient
 
         ports = CoEvolutionRunner._ucv_port_candidates(preferred_port)
