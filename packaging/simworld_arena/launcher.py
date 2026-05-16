@@ -50,8 +50,19 @@ def sync_unrealcv_port_in_saved_ini(project_root: Path, port: int) -> None:
         saved.write_text(default)
         return
     text = saved.read_text(encoding="utf-8", errors="replace")
-    if re.search(r"(?m)^Port=\d+$", text):
-        saved.write_text(re.sub(r"(?m)^Port=\d+$", f"Port={port}", text, count=1))
+    section_match = re.search(
+        r"(?ms)^(\[UnrealCV\.Core\][^\S\r\n]*\r?\n)(.*?)(?=^\[.*?\][^\S\r\n]*\r?\n|\Z)",
+        text,
+    )
+    if section_match:
+        section_header = section_match.group(1)
+        section_body = section_match.group(2)
+        if re.search(r"(?m)^Port=\d+$", section_body):
+            section_body = re.sub(r"(?m)^Port=\d+$", f"Port={port}", section_body, count=1)
+        else:
+            section_body = f"Port={port}\n" + section_body
+        updated = text[:section_match.start()] + section_header + section_body + text[section_match.end():]
+        saved.write_text(updated)
     else:
         saved.write_text(text.rstrip() + f"\n\n[UnrealCV.Core]\nPort={port}\n")
 
