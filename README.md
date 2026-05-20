@@ -1,11 +1,32 @@
-<img width="1024" height="1024" alt="SimiWorldStudio_logo" src="https://github.com/user-attachments/assets/5e670cf3-d263-4d37-b851-8afaf3c30856" />
-# SimWorld Studio
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/5e670cf3-d263-4d37-b851-8afaf3c30856"
+    alt="SimWorld Studio Logo"
+    width="180"
+  />
+</p>
 
-[![arXiv](https://img.shields.io/badge/arXiv-2605.09423-b31b1b.svg)](https://arxiv.org/abs/2605.09423v2)
-<a href="https://join.slack.com/t/simworld-ai/shared_invite/zt-3v3xsbroz-ELkLT3rOK1rCStDxRKUYKw"><img src="https://img.shields.io/badge/Slack-SimWorld-4A154B?logo=slack&logoColor=white" alt="Slack" /></a>
-<a href="https://github.com/SimWorld-AI/SimWorld-Studio/stargazers"><img src="https://img.shields.io/github/stars/SimWorld-AI/SimWorld-Studio?style=flat&logo=github&color=181717&logoColor=white&label=Stars" alt="GitHub stars" /></a>
+<h1 align="center">SimWorld Studio</h1>
 
-**Vibe code the physical world.** Chat with an AI coding agent to build, simulate, and control 3D environments in Unreal Engine 5 — with embodied agent support, real-time pixel streaming, and a full data visualization stack.
+<p align="center">
+  <a href="https://arxiv.org/abs/2605.09423v2">
+    <img src="https://img.shields.io/badge/arXiv-2605.09423-b31b1b.svg" alt="arXiv" />
+  </a>
+  <a href="https://join.slack.com/t/simworld-ai/shared_invite/zt-3v3xsbroz-ELkLT3rOK1rCStDxRKUYKw">
+    <img src="https://img.shields.io/badge/Slack-SimWorld-4A154B?logo=slack&logoColor=white" alt="Slack" />
+  </a>
+  <a href="https://github.com/SimWorld-AI/SimWorld-Studio/stargazers">
+    <img src="https://img.shields.io/github/stars/SimWorld-AI/SimWorld-Studio?style=flat&logo=github&color=181717&logoColor=white&label=Stars" alt="GitHub stars" />
+  </a>
+</p>
+
+<p align="center">
+  <strong>Vibe code the physical world.</strong>
+</p>
+
+<p align="center">
+  Chat with an AI coding agent to build, simulate, and control 3D environments in Unreal Engine 5 — with embodied agent support, real-time pixel streaming, and a full data visualization stack.
+</p>
 
 ---
 
