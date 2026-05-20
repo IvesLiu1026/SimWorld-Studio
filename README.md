@@ -1,3 +1,4 @@
+<img width="1024" height="1024" alt="SimiWorldStudio_logo" src="https://github.com/user-attachments/assets/5e670cf3-d263-4d37-b851-8afaf3c30856" />
 # SimWorld Studio
 
 [![arXiv](https://img.shields.io/badge/arXiv-2605.09423-b31b1b.svg)](https://arxiv.org/abs/2605.09423v2)
@@ -5,8 +6,6 @@
 <a href="https://github.com/SimWorld-AI/SimWorld-Studio/stargazers"><img src="https://img.shields.io/github/stars/SimWorld-AI/SimWorld-Studio?style=flat&logo=github&color=181717&logoColor=white&label=Stars" alt="GitHub stars" /></a>
 
 **Vibe code the physical world.** Chat with an AI coding agent to build, simulate, and control 3D environments in Unreal Engine 5 — with embodied agent support, real-time pixel streaming, and a full data visualization stack.
-
-https://github.com/user-attachments/assets/36a43835-e1c5-4304-a506-bcae9cd4126a
 
 ---
 
