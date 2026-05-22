@@ -1088,6 +1088,53 @@ async function deleteScene(id) {
   await fetch(`${API_BASE}/scenes/${id}`, { method: "DELETE" });
 }
 
+// ── Scene checkpoints ──────────────────────────────────────────────────────
+async function listCheckpoints(sessionId) {
+  const r = await fetch(`${API_BASE}/checkpoints?sessionId=${encodeURIComponent(sessionId)}`);
+  return (await r.json()).checkpoints || [];
+}
+async function createCheckpoint(body) {
+  const r = await fetch(`${API_BASE}/checkpoints`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error("checkpoint create failed");
+  return r.json();
+}
+async function restoreCheckpoint(sessionId, id) {
+  const r = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(sessionId)}/${id}/restore`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  if (!r.ok) throw new Error("restore failed");
+  return r.json();
+}
+async function getCheckpoint(sessionId, id) {
+  const r = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(sessionId)}/${id}`);
+  return r.ok ? r.json() : null;
+}
+async function clearCheckpoints(sessionId) {
+  await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch(() => {});
+}
+async function resetScene() {
+  await fetch(`${API_BASE}/scene/reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+}
+
+// Tools whose successful use changes the scene → worth a checkpoint.
+const SCENE_TOOLS = new Set([
+  "spawn_blueprint_actor", "spawn_actor", "spawn_agent",
+  "delete_actor", "delete_all_spawned", "setup_environment", "set_actor_transform",
+]);
+function turnChangedScene(msg) {
+  return (msg?.toolCalls || []).some((tc) => {
+    const name = tc.displayName || (tc.name || "").replace(/^mcp__\w+__/, "");
+    return SCENE_TOOLS.has(name) && tc.status !== "error";
+  });
+}
+// latestScreenshot is "/api/screenshot/file?path=<abs>" → pull the absolute path for the thumbnail.
+function screenshotPathFromUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  try { return new URLSearchParams(url.split("?")[1] || "").get("path"); } catch { return null; }
+}
+
 async function fetchAssets() {
   return (await fetch(`${API_BASE}/assets`)).json();
 }
@@ -2655,8 +2702,61 @@ function TypingIndicator() {
 
 // ─── ChatPanel ───────────────────────────────────────────────────────────────
 
+function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRestore }) {
+  if (!checkpoint) return null;
+  const parent = checkpoint.parentId || null;
+  const siblings = checkpoints.filter((c) => (c.parentId || null) === parent);
+  const idx = siblings.findIndex((c) => c.id === checkpoint.id);
+  const hasBranches = siblings.length > 1;
+  const isActive = activeLeafId === checkpoint.id;
+  // Switching a branch lands on the END of that branch — its deepest, most-recently-built
+  // leaf — so the full depth of each branch is preserved (not just the branch-point node).
+  // The per-message Restore below still reverts to this exact checkpoint.
+  const leafOf = (cid) => {
+    let cur = cid;
+    for (let guard = 0; guard < 1000; guard++) {
+      const kids = checkpoints.filter((c) => c.parentId === cur);
+      if (!kids.length) return cur;
+      kids.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      cur = kids[0].id;
+    }
+    return cur;
+  };
+  const pill = {
+    display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 8px",
+    borderRadius: 999, border: "1px solid var(--line)", background: "var(--panel-2)",
+    fontSize: 11, fontWeight: 600, color: "var(--ink-3)", cursor: "pointer", fontFamily: "inherit",
+  };
+  const pager = { ...pill, padding: "0 6px", minWidth: 18, justifyContent: "center" };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "-4px 0 2px 38px", flexWrap: "wrap" }}>
+      <span title={`Scene checkpoint · turn ${checkpoint.turnIndex} · ${checkpoint.actorCount} object(s)`}
+        style={{ ...pill, cursor: "default", color: isActive ? "var(--blue)" : "var(--ink-3)", borderColor: isActive ? "var(--blue)" : "var(--line)" }}>
+        📍 Checkpoint{isActive ? " · current" : ""}
+      </span>
+      <button style={pill} disabled={restoring} title="Revert the live scene to this checkpoint"
+        onClick={() => onRestore(checkpoint.id)}>
+        {restoring ? "Restoring…" : "↩ Restore scene"}
+      </button>
+      {hasBranches && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--ink-3)", fontSize: 11 }}
+          title="Parallel branches that diverge from this point">
+          <button style={pager} disabled={restoring}
+            onClick={() => onRestore(leafOf(siblings[(idx - 1 + siblings.length) % siblings.length].id))}>‹</button>
+          <span>branch {idx + 1}/{siblings.length}</span>
+          <button style={pager} disabled={restoring}
+            onClick={() => onRestore(leafOf(siblings[(idx + 1) % siblings.length].id))}>›</button>
+        </span>
+      )}
+    </div>
+  );
+}
+
 function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
   const [messages, setMessages] = useState(() => [buildWelcomeMessage()]);
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [activeLeafId, setActiveLeafId] = useState(null);
+  const [restoringId, setRestoringId] = useState(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState(null);
@@ -2725,6 +2825,58 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // ── Checkpoint state mirrors (so async handlers read the latest values) ──
+  const messagesRef = useRef(messages);
+  const sessionIdRef = useRef(sessionId);
+  const activeLeafRef = useRef(activeLeafId);
+  const latestScreenshotRef = useRef(latestScreenshot);
+  const turnCountRef = useRef(turnCount);
+  // Checkpoints key off the STABLE studio session (STUDIO_SESSION from /api/session),
+  // NOT the chat's `sessionId` — that changes every turn (each turn is a fresh `claude -p`),
+  // which would scatter checkpoints across per-turn ids so only the latest turn's bar shows.
+  const [studioSession, setStudioSession] = useState(null);
+  const studioSessionRef = useRef(null);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  useEffect(() => { activeLeafRef.current = activeLeafId; }, [activeLeafId]);
+  useEffect(() => { latestScreenshotRef.current = latestScreenshot; }, [latestScreenshot]);
+  useEffect(() => { turnCountRef.current = turnCount; }, [turnCount]);
+
+  // Fetch the stable studio session id once, then load its checkpoint tree.
+  useEffect(() => {
+    fetch(`${API_BASE}/session`)
+      .then((r) => r.json())
+      .then((d) => { if (d?.sessionId) { studioSessionRef.current = d.sessionId; setStudioSession(d.sessionId); } })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!studioSession) return;
+    listCheckpoints(studioSession)
+      .then((cps) => {
+        setCheckpoints(cps);
+        if (cps.length && !activeLeafRef.current) setActiveLeafId(cps[cps.length - 1].id);
+      })
+      .catch(() => {});
+  }, [studioSession]);
+
+  // Restore (or switch branch to) a checkpoint: revert the live scene + load that chat path.
+  const handleRestoreCheckpoint = useCallback(async (id) => {
+    const sid = studioSessionRef.current;
+    if (!sid || restoringId) return;
+    setRestoringId(id);
+    try {
+      await restoreCheckpoint(sid, id);
+      const ck = await getCheckpoint(sid, id);
+      if (ck && Array.isArray(ck.chatHistory)) setMessages(ck.chatHistory);
+      setActiveLeafId(id);
+      onChatDone?.();  // nudge the viewport/screenshot to refresh — the scene changed
+    } catch (_e) {
+      setMessages((prev) => [...prev, { id: generateMessageId(), role: "assistant", content: "⚠️ Could not restore that checkpoint.", timestamp: Date.now() }]);
+    } finally {
+      setRestoringId(null);
+    }
+  }, [restoringId, onChatDone]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -2962,6 +3114,25 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
           }
         );
+        // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
+        try {
+          const finalMsgs = messagesRef.current;
+          const aMsg = finalMsgs.find((m) => m.id === assistantId);
+          const sid = studioSessionRef.current;
+          if (sid && aMsg && turnChangedScene(aMsg)) {
+            const rec = await createCheckpoint({
+              sessionId: sid, ownerId: sid,
+              parentCheckpointId: activeLeafRef.current,
+              messageId: assistantId,
+              prompt: text, turnIndex: turnCountRef.current,
+              chatHistory: finalMsgs,
+              thumbnailPath: screenshotPathFromUrl(latestScreenshotRef.current),
+            });
+            const withUrl = { ...rec, thumbnailUrl: rec.thumbnail ? `${API_BASE}/checkpoints/${sid}/${rec.id}/thumbnail` : null };
+            setCheckpoints((prev) => [...prev, withUrl]);
+            setActiveLeafId(rec.id);
+          }
+        } catch (_e) { /* checkpoint is best-effort — never block the chat */ }
       } catch (err) {
         if (err instanceof Error && err.name !== "AbortError") {
           setMessages((prev) => {
@@ -3014,6 +3185,10 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
     setAutoSelectionError("");
     setTurnCount(0);
     setLatestScreenshot(null);
+    resetScene();  // wipe the UE scene so we start from scratch
+    if (studioSessionRef.current) clearCheckpoints(studioSessionRef.current);
+    setCheckpoints([]);
+    setActiveLeafId(null);
     abortRef.current = null;
     setMessages([
       {
@@ -3261,9 +3436,23 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           gap: 14,
         }}
       >
-        {messages.map((msg) => (
-          <ChatMessage key={msg.id} message={msg} />
-        ))}
+        {messages.map((msg) => {
+          const ckpt = checkpoints.find((c) => c.messageId === msg.id);
+          return (
+            <React.Fragment key={msg.id}>
+              <ChatMessage message={msg} />
+              {ckpt && (
+                <CheckpointBar
+                  checkpoint={ckpt}
+                  checkpoints={checkpoints}
+                  activeLeafId={activeLeafId}
+                  restoring={restoringId === ckpt.id}
+                  onRestore={handleRestoreCheckpoint}
+                />
+              )}
+            </React.Fragment>
+          );
+        })}
         {loading && lastMessage?.role === "user" && <TypingIndicator />}
         <div ref={scrollRef} />
       </div>

@@ -1,7 +1,7 @@
-"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);
+"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);
 // Stable session token — persists across all Claude subprocess spawns
 const STUDIO_SESSION=crypto.randomUUID();
-logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,arenaManager=new ArenaManager,agentManager=new AgentManager,SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
+logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
 `;try{fs.appendFileSync(getLogFilePath(),n)}catch{}console.log(`[${s}] ${e}`)}const ARENA_SYSTEM_PROMPT=`You are the SimWorld Studio scene-generation agent.
 You build city scenes in Unreal Engine 5 using MCP tools. The user sees a live viewport on the right.
 
@@ -662,6 +662,214 @@ g.on("exit",()=>_chatProcs.delete(n||"_global"));let f="",w=new Set,v=new Set,S=
 `);f=r.pop()??"";for(const u of r)j(u)});let stderrBuf="";g.stderr.on("data",d=>{lastOutputTime=Date.now();const r=d.toString().trim();if(r){stderrBuf+=r+"\n";logToFile("stderr",r.slice(0,300))}});let gotResultEvent=false;g.on("close",d=>{clearInterval(c),clearInterval(idleTimer);/* P0-3: cleaned up via g.on(exit) */f.trim()&&j(f),logToFile("claude",`Process exited with code ${d} gotResult=${gotResultEvent}`);if(gotResultEvent)return;if(!e.writableEnded){const errDetail=stderrBuf.slice(0,400).trim()||(d!==0?`exit code ${d}`:`no output received`);a("text",{delta:`\n\n⚠️ Agent exited unexpectedly: ${errDetail}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:k()});e.end()}}),e.on("close",()=>{if(!e.writableEnded){clearInterval(c);try{e.end()}catch{}logToFile("claude","Browser closed SSE — agent continues in background (use /api/chat-stop to kill)")}})});// Catch-all 404 for unknown /api/ routes — prevents hanging connections
 
 // ── Session Routes ──────────────────────────────────────────────────────────
+// ── Scene Checkpoints ────────────────────────────────────────────────────────
+// Per-session scene snapshots + branch tree (parentId). A checkpoint captures the
+// user-built actors as a manifest (class + transform + mesh); restore replays them into
+// the LIVE world (delete current + respawn). No map load: load_level crashes the headless
+// Pixel-Streaming editor (a duplicated UWorld stays resident → UE "old world not cleaned
+// up" fatal), whereas spawn/destroy are safe and never interrupt the stream. Checkpoints
+// are pure filesystem state (no UE assets), so cleanup is a directory removal.
+const CKPT_TTL_MS = parseInt(process.env.CKPT_TTL_MS || String(30 * 60 * 1000), 10);
+// Actor-label prefixes that are base-map infrastructure (not user content): skipped on
+// capture and preserved on restore.
+const CKPT_INFRA_PREFIXES = ["Floor","SkySphere","Sky","Light","Atmo","Fog","PostProcess",
+  "SphereReflection","WorldSettings","Brush","Default","Player","GameMode","Nav","LevelBounds",
+  "Landscape","Volume","Note","Camera","Directional","ExponentialHeight"];
+const _PY_INFRA = "(" + CKPT_INFRA_PREFIXES.map(p => JSON.stringify(p)).join(",") + ",)";
+
+function ueExecScript(script, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    const sock = new (require("net").Socket)();
+    const timer = setTimeout(() => { try { sock.destroy(); } catch (_e) {} resolve(null); }, timeoutMs);
+    let buf = "";
+    sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+      sock.write(JSON.stringify({ type: "execute_python_script", params: { script } }) + "\n");
+    });
+    sock.on("data", (d) => {
+      buf += d.toString();
+      try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch (_e) {}
+    });
+    sock.on("error", () => { clearTimeout(timer); try { sock.destroy(); } catch (_e) {} resolve(null); });
+  });
+}
+function _ueLogs(r) { try { return (r.result.python_logs || []).join("\n"); } catch (_e) { return ""; } }
+
+// Capture the current scene's user-built actors (read-only — never loads or saves a map).
+async function ckptCaptureManifest() {
+  const script = [
+    "import unreal, json",
+    "eas=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
+    "INFRA=" + _PY_INFRA,
+    "items=[]",
+    "for a in eas.get_all_level_actors():",
+    "    try:",
+    "        lbl=a.get_actor_label()",
+    "        if (not lbl) or lbl.startswith(INFRA): continue",
+    "        loc=a.get_actor_location(); rot=a.get_actor_rotation(); scl=a.get_actor_scale3d()",
+    "        mesh=''",
+    "        smc=a.get_component_by_class(unreal.StaticMeshComponent)",
+    "        if smc is not None:",
+    "            sm=smc.get_editor_property('static_mesh')",
+    "            if sm is not None: mesh=sm.get_path_name()",
+    "        items.append({'label':lbl,'cls':a.get_class().get_path_name(),'loc':[round(loc.x,2),round(loc.y,2),round(loc.z,2)],'rot':[round(rot.pitch,3),round(rot.yaw,3),round(rot.roll,3)],'scl':[round(scl.x,4),round(scl.y,4),round(scl.z,4)],'mesh':mesh})",
+    "    except Exception as _e:",
+    "        pass",
+    "print('CKPT_MANIFEST='+json.dumps(items))",
+  ].join("\n");
+  const r = await ueExecScript(script, 60000);
+  const m = _ueLogs(r).match(/CKPT_MANIFEST=(.*)$/m);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch (_e) { return null; }
+}
+
+// Restore: delete current user actors, then respawn the checkpoint's manifest. No map load.
+async function ckptRestoreManifest(manifest) {
+  const script = [
+    "import unreal, json",
+    "eas=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
+    "INFRA=" + _PY_INFRA,
+    "for a in list(eas.get_all_level_actors()):",
+    "    try:",
+    "        lbl=a.get_actor_label()",
+    "        if lbl and not lbl.startswith(INFRA): eas.destroy_actor(a)",
+    "    except Exception as _e:",
+    "        pass",
+    "unreal.SystemLibrary.collect_garbage()",
+    "items=json.loads(" + JSON.stringify(JSON.stringify(manifest || [])) + ")",
+    "n=0",
+    "for it in items:",
+    "    try:",
+    "        cls=unreal.load_object(None, it['cls'])",
+    "        if cls is None: continue",
+    "        a=eas.spawn_actor_from_class(cls, unreal.Vector(it['loc'][0],it['loc'][1],it['loc'][2]), unreal.Rotator(it['rot'][0],it['rot'][1],it['rot'][2]))",
+    "        if a is None: continue",
+    "        a.set_actor_scale3d(unreal.Vector(it['scl'][0],it['scl'][1],it['scl'][2]))",
+    "        try: a.set_actor_label(it['label'])",
+    "        except Exception: pass",
+    "        if it.get('mesh'):",
+    "            smc=a.get_component_by_class(unreal.StaticMeshComponent)",
+    "            m=unreal.load_asset(it['mesh'])",
+    "            if smc is not None and m is not None: smc.set_static_mesh(m)",
+    "        n+=1",
+    "    except Exception as _e:",
+    "        pass",
+    "print('CKPT_RESTORE_OK spawned='+str(n))",
+  ].join("\n");
+  const r = await ueExecScript(script, 90000);
+  return _ueLogs(r).includes("CKPT_RESTORE_OK");
+}
+
+// Clear all user-built actors → blank scene (used by the chat Reset button).
+async function ckptClearScene() {
+  const script = [
+    "import unreal",
+    "eas=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
+    "INFRA=" + _PY_INFRA,
+    "n=0",
+    "for a in list(eas.get_all_level_actors()):",
+    "    try:",
+    "        lbl=a.get_actor_label()",
+    "        if lbl and not lbl.startswith(INFRA): eas.destroy_actor(a); n+=1",
+    "    except Exception as _e:",
+    "        pass",
+    "unreal.SystemLibrary.collect_garbage()",
+    "print('CKPT_SCENE_CLEARED '+str(n))",
+  ].join("\n");
+  const r = await ueExecScript(script, 60000);
+  return _ueLogs(r).includes("CKPT_SCENE_CLEARED");
+}
+
+// POST /api/checkpoints — snapshot current scene (frontend calls this after a scene-changing turn)
+app.post("/api/checkpoints", async (req, res) => {
+  const body = req.body || {};
+  const sid = body.sessionId || STUDIO_SESSION;
+  const owner = body.ownerId || sid;
+  let thumb = null;
+  if (body.thumbnailPath && typeof body.thumbnailPath === "string" && body.thumbnailPath.endsWith(".png") && fs.existsSync(body.thumbnailPath)) thumb = body.thumbnailPath;
+  try {
+    const manifest = await ckptCaptureManifest();
+    if (manifest === null) return res.status(502).json({ error: "UE scene capture failed" });
+    const rec = await checkpointManager.create({
+      sessionId: sid, ownerId: owner, parentId: body.parentCheckpointId || null,
+      messageId: body.messageId || null,
+      prompt: body.prompt || "", turnIndex: body.turnIndex || 0,
+      manifest, chatHistory: body.chatHistory || null, thumbnailSrcPath: thumb,
+    });
+    await checkpointManager.touch(sid, owner);
+    logToFile("ckpt", "created " + rec.id + " (turn " + rec.turnIndex + ", " + rec.actorCount + " actors, parent " + (rec.parentId || "root") + ") for " + sid);
+    res.status(201).json(rec);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/checkpoints?sessionId=&ownerId= — list the branch tree
+app.get("/api/checkpoints", (req, res) => {
+  const sid = req.query.sessionId || STUDIO_SESSION;
+  res.json({ sessionId: sid, checkpoints: checkpointManager.list(sid, req.query.ownerId || null) });
+});
+
+// GET /api/checkpoints/:sid/:id — full record incl chatHistory
+app.get("/api/checkpoints/:sid/:id", (req, res) => {
+  const rec = checkpointManager.get(req.params.sid, req.params.id, req.query.ownerId || null);
+  if (!rec) return res.status(404).json({ error: "Checkpoint not found" });
+  res.json(rec);
+});
+
+// GET /api/checkpoints/:sid/:id/thumbnail
+app.get("/api/checkpoints/:sid/:id/thumbnail", (req, res) => {
+  const p = checkpointManager.getThumbnailPath(req.params.sid, req.params.id);
+  if (!p) return res.status(404).json({ error: "No thumbnail" });
+  res.sendFile(p);
+});
+
+// POST /api/checkpoints/:sid/:id/restore — revert the live UE scene to this checkpoint
+app.post("/api/checkpoints/:sid/:id/restore", async (req, res) => {
+  const { sid, id } = req.params;
+  const owner = (req.body && req.body.ownerId) || req.query.ownerId || null;
+  const manifest = checkpointManager.getManifest(sid, id, owner);
+  if (manifest === null) return res.status(404).json({ error: "Checkpoint not found" });
+  const ok = await ckptRestoreManifest(manifest);
+  if (!ok) return res.status(502).json({ error: "UE restore failed" });
+  await checkpointManager.touch(sid, owner);
+  logToFile("ckpt", "restored " + id + " (" + manifest.length + " actors) for " + sid);
+  res.json({ ok: true, checkpoint: checkpointManager.get(sid, id, owner) });
+});
+
+// POST /api/scene/reset — wipe all user-built actors so the scene starts from scratch.
+app.post("/api/scene/reset", async (req, res) => {
+  const ok = await ckptClearScene();
+  if (!ok) return res.status(502).json({ error: "UE scene reset failed" });
+  res.json({ ok: true });
+});
+
+// DELETE /api/checkpoints/:sid/:id — delete one checkpoint
+app.delete("/api/checkpoints/:sid/:id", async (req, res) => {
+  const r = await checkpointManager.delete(req.params.sid, req.params.id, req.query.ownerId || null);
+  if (r === "forbidden") return res.status(403).json({ error: "Forbidden" });
+  if (r === null) return res.status(404).json({ error: "Checkpoint not found" });
+  res.json({ ok: true });
+});
+
+// DELETE /api/checkpoints/:sid — clear an entire session (new-session / clear chat)
+app.delete("/api/checkpoints/:sid", async (req, res) => {
+  const r = await checkpointManager.clearSession(req.params.sid, req.query.ownerId || null);
+  if (r === "forbidden") return res.status(403).json({ error: "Forbidden" });
+  res.json({ ok: true });
+});
+
+// Idle-TTL sweep — clear checkpoints of sessions idle beyond TTL
+const _ckptSweep = setInterval(() => {
+  try { checkpointManager.sweepIdle(CKPT_TTL_MS); } catch (_e) {}
+}, 60000);
+if (_ckptSweep.unref) _ckptSweep.unref();
+
+// Startup purge — clear any leftovers from a previous run (server-stop / crash recovery)
+try { checkpointManager.clearAll(); logToFile("ckpt", "startup purge done"); } catch (_e) {}
+
+// Server-stop cleanup
+function _ckptShutdown() { try { checkpointManager.clearAll(); } catch (_e) {} process.exit(0); }
+process.on("SIGTERM", _ckptShutdown);
+process.on("SIGINT", _ckptShutdown);
+
 let _sessionMgr=null;
 try{const{sessionManager}=require('./session-manager');_sessionMgr=sessionManager;}
 catch(e){logToFile('session','session-manager not loaded: '+e.message);}
