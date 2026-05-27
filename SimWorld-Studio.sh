@@ -82,6 +82,18 @@ fi
 
 mkdir -p "$WORKSPACE/logs"
 
+# ── Rotate logs (keep last run clean) ────────────────────────────────────────
+for f in cirrus ue web; do
+    > "$WORKSPACE/logs/$f.log"
+done
+
+# ── Write mcp.json for coding agent (keep in sync with MCP_PORT) ─────────────
+MCP_SERVER_JS="$WEB_DIR/mcp-server.js"
+cat > "$WORKSPACE/web/mcp.json" <<EOF
+{"mcpServers":{"simworld":{"command":"node","args":["$MCP_SERVER_JS"],"env":{"UNREAL_HOST":"127.0.0.1","UNREAL_PORT":"$MCP_PORT"}}}}
+EOF
+echo "[mcp.json] Written → UNREAL_PORT=$MCP_PORT"
+
 echo ""
 echo "======================================================="
 echo "  SimWorld Studio"
@@ -123,11 +135,31 @@ if [ -f "$CIRRUS_JS" ]; then
     echo "[cirrus] Starting on HTTP:$CIRRUS_HTTP_PORT WS:$CIRRUS_WS_PORT..."
     node "$CIRRUS_JS" --configFile="$CIRRUS_CONFIG" \
         >> "$WORKSPACE/logs/cirrus.log" 2>&1 &
-    PIDS+=($!)
-    sleep 2
-    echo "[cirrus] PID ${PIDS[-1]}"
+    CIRRUS_PID=$!
+    PIDS+=($CIRRUS_PID)
+    # Verify cirrus actually bound the HTTP port (up to 8s)
+    CIRRUS_OK=0
+    for i in 1 2 3 4; do
+        sleep 2
+        if nc -z 127.0.0.1 $CIRRUS_HTTP_PORT 2>/dev/null; then
+            CIRRUS_OK=1; break
+        fi
+        if ! kill -0 $CIRRUS_PID 2>/dev/null; then
+            echo "[cirrus] ERROR: cirrus exited. Last log:"
+            tail -20 "$WORKSPACE/logs/cirrus.log"
+            cleanup
+        fi
+    done
+    if [ $CIRRUS_OK -eq 1 ]; then
+        echo "[cirrus] PID $CIRRUS_PID — port $CIRRUS_HTTP_PORT OK"
+    else
+        echo "[cirrus] ERROR: port $CIRRUS_HTTP_PORT not listening after 8s. Last log:"
+        tail -20 "$WORKSPACE/logs/cirrus.log"
+        cleanup
+    fi
 else
     echo "[cirrus] WARNING: cirrus.js not found — Pixel Streaming viewport unavailable"
+    CIRRUS_PID=""
 fi
 
 # ── 2. UE Editor ──────────────────────────────────────────────────────────────
@@ -191,11 +223,19 @@ echo "  Open: http://localhost:$WEB_PORT"
 echo "  Press Ctrl+C to stop all services."
 echo ""
 
-# ── Monitor: restart if any core process dies ─────────────────────────────────
+# ── Monitor: watch all three processes ───────────────────────────────────────
 while true; do
+    sleep 5
     if ! kill -0 $UE_PID 2>/dev/null; then
         echo "[studio] UE exited unexpectedly. Check $WORKSPACE/logs/ue.log"
         cleanup
     fi
-    sleep 5
+    if [ -n "$CIRRUS_PID" ] && ! kill -0 $CIRRUS_PID 2>/dev/null; then
+        echo "[studio] Cirrus exited unexpectedly. Check $WORKSPACE/logs/cirrus.log"
+        cleanup
+    fi
+    if [ -n "$WEB_PID" ] && ! kill -0 $WEB_PID 2>/dev/null; then
+        echo "[studio] Web server exited unexpectedly. Check $WORKSPACE/logs/web.log"
+        cleanup
+    fi
 done
