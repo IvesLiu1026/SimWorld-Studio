@@ -1,15 +1,15 @@
 #!/bin/bash
-# Apply the MCPServerRunnable TCP accumulation fix to a SimWorld UE project.
+# Apply the MCPServerRunnable TCP accumulation fix and rebuild the plugin.
 #
 # Usage:
 #   ./apply-mcp-fix.sh                          # auto-detect project under /data/$USER
 #   ./apply-mcp-fix.sh /path/to/MyProject       # explicit project root
 #
 # The bug fixed:
-#   UE's MCPServerRunnable read TCP data in 8192-byte chunks and tried to parse
-#   each chunk as a complete JSON message. Large execute_python_script payloads
-#   (> 8KB) were silently dropped because they arrived in multiple TCP packets.
-#   The fix accumulates data across reads until a complete JSON object is received.
+#   UE's MCPServerRunnable read TCP in 8192-byte chunks and immediately tried to
+#   parse each chunk as JSON. Scripts > 8KB were silently dropped because TCP
+#   split them across multiple reads. Fix: accumulate chunks until a complete
+#   JSON object arrives.
 
 set -e
 
@@ -50,17 +50,16 @@ if [ ! -f "$CPP_TARGET" ]; then
     echo "ERROR: Plugin source not found at $CPP_TARGET"
     exit 1
 fi
+if [ -z "$UPROJECT" ]; then
+    echo "ERROR: No .uproject found in $PROJECT_ROOT"
+    exit 1
+fi
 
 echo "Project : $PROJECT_ROOT"
 echo "uproject: $UPROJECT"
 echo ""
 
-# ── Patch source ───────────────────────────────────────────────────────────────
-cp "$CPP_TARGET" "${CPP_TARGET}.bak"
-cp "$FIXED_CPP"  "$CPP_TARGET"
-echo "[1/2] Patched MCPServerRunnable.cpp"
-
-# ── Rebuild plugin ─────────────────────────────────────────────────────────────
+# ── Find UE root ───────────────────────────────────────────────────────────────
 UE_ROOT="${UE_ROOT:-}"
 if [ -z "$UE_ROOT" ]; then
     for candidate in \
@@ -69,7 +68,7 @@ if [ -z "$UE_ROOT" ]; then
         "/data/murray/ue/UE_5.3.2" \
         "/data/siddhant/ue/UE_5.3.2"
     do
-        if [ -f "$candidate/Engine/Build/BatchFiles/RunUAT.sh" ]; then
+        if [ -f "$candidate/Engine/Build/BatchFiles/Linux/Build.sh" ]; then
             UE_ROOT="$candidate"
             break
         fi
@@ -81,20 +80,27 @@ if [ -z "$UE_ROOT" ]; then
     exit 1
 fi
 
-echo "[2/2] Building UnrealMCP plugin (UE: $UE_ROOT)..."
-"$UE_ROOT/Engine/Build/BatchFiles/RunUAT.sh" BuildPlugin \
-    -Plugin="$PROJECT_ROOT/Plugins/UnrealMCP/UnrealMCP.uplugin" \
-    -Package="/tmp/UnrealMCP_build_$$" \
-    -Rocket 2>&1 | grep -E "ERROR|WARNING|Building|Compile|Link|succeeded|failed" || true
+echo "UE root : $UE_ROOT"
+echo ""
 
-BUILD_SO="/tmp/UnrealMCP_build_$$/HostProject/Plugins/UnrealMCP/Binaries/Linux/libUnrealEditor-UnrealMCP.so"
-if [ ! -f "$BUILD_SO" ]; then
-    echo "ERROR: Build failed — .so not found. Check output above."
+# ── Patch source ───────────────────────────────────────────────────────────────
+cp "$CPP_TARGET" "${CPP_TARGET}.bak"
+cp "$FIXED_CPP"  "$CPP_TARGET"
+echo "[1/2] Patched MCPServerRunnable.cpp"
+
+# ── Rebuild ────────────────────────────────────────────────────────────────────
+echo "[2/2] Rebuilding (incremental)..."
+"$UE_ROOT/Engine/Build/BatchFiles/Linux/Build.sh" \
+    UnrealEditor Linux Development \
+    -Project="$UPROJECT" \
+    2>&1 | grep -E "error:|Compiling|Linking|MCPServer|succeeded|failed|ERROR" || true
+
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    echo ""
+    echo "ERROR: Build failed. Restoring original .cpp..."
+    cp "${CPP_TARGET}.bak" "$CPP_TARGET"
     exit 1
 fi
-
-cp "$BUILD_SO" "$PROJECT_ROOT/Plugins/UnrealMCP/Binaries/Linux/libUnrealEditor-UnrealMCP.so"
-rm -rf "/tmp/UnrealMCP_build_$$"
 
 echo ""
 echo "Done. Restart UE to pick up the fix."
