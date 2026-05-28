@@ -2,6 +2,24 @@
 
 Lab-scale multi-tenant deploy (≤5 users, 2–3 concurrent) on a single GPU EC2 instance.
 
+## What gets `git clone`-d vs not
+
+`git clone` of this repo gives you:
+
+- Web server, frontend, scripts, configs (this whole tree)
+- The empty workspace structure under `simworld_studio_workspace/`
+
+It does **not** include (too big or licensed):
+
+| Asset | Size | Where to get it |
+|---|---|---|
+| UE 5.3.2 engine | 58 GB | Epic launcher, or pre-stage on host / S3 / HF |
+| UE project skeleton (`SimWorld.uproject`, `Plugins/`, `Source/`, `Config/`) | ~500 MB | Your dev box / HF dataset |
+| UE Content (`Content/`) | 100+ GB | HuggingFace — `bootstrap.sh` pulls automatically |
+
+`bootstrap.sh` handles everything except the first two — it'll print
+clear rsync commands if it can't auto-fetch them.
+
 ## Architecture
 
 ```
@@ -63,65 +81,107 @@ All these listen on `127.0.0.1` only; public access goes through Nginx.
 
 | Path | Purpose |
 |---|---|
+| `scripts/bootstrap.sh` | **One-command** post-clone provision (calls everything below) |
 | `scripts/slot-launcher.sh` | Launch one UE instance for a given slot |
 | `scripts/slot-pool.js` | Node module: child-process lifecycle for N slots |
 | `scripts/session-shim.js` | Wires SlotPool into session-manager via env var |
 | `scripts/per-session-ports.js` | Helper for index.js to route by `x-session-token` |
-| `scripts/bake-ami.sh` | Provision a fresh Ubuntu 22.04 box → ready to launch |
+| `scripts/bake-ami.sh` | Provision OS deps, NVIDIA driver, users, systemd units |
 | `scripts/download-content.sh` | Pull Content from HuggingFace once |
-| `scripts/init-slot-dirs.sh` | Create `/var/lib/simworld/slots/N` with symlinks |
+| `scripts/test-slot-pool.js` | Smoke-test the pool with a fake launcher (no UE needed) |
 | `templates/nginx.conf` | Reverse proxy + auth + WebSocket upgrades |
 | `templates/coturn.conf` | TURN server for Pixel Streaming |
 | `templates/htpasswd.example` | Basic Auth password file template |
+| `templates/simworld.env` | Tunables for `/etc/default/simworld` |
 | `systemd/simworld-web.service` | Manages the Node web server |
 | `systemd/simworld-content-init.service` | One-shot Content download on first boot |
-| `systemd/coturn.service` | TURN server unit (overrides distro default) |
+| `systemd/coturn.service.d-override.conf` | Override for distro's coturn unit |
+| `docker/Dockerfile.web` | Optional: containerize web stack (UE stays on host) |
+| `docker/docker-compose.yml` | Optional: compose for web + nginx + coturn |
 
-## Deploy in 10 steps
+## Deploy
+
+You have three paths, in increasing order of "more containerized".
+
+### Path 1 — One command (recommended)
 
 ```bash
 # 1. Launch EC2 (g5.12xlarge or g6.12xlarge, 1 TB gp3, Ubuntu 22.04 LTS)
-#    Security Group: 22 (your IP), 80, 443, 3478/udp, 49152-65535/udp (TURN relay)
+#    Security Group: 22 (your IP), 80, 443, 3478/udp, 49152-65535/udp
 
 # 2. SSH in
 ssh -i your-key.pem ubuntu@<EC2_IP>
 
-# 3. Clone repo to /opt/simworld-studio (aws branch)
-sudo git clone -b aws https://github.com/SimWorld-AI/SimWorld-Studio.git /opt/simworld-studio
+# 3. Bootstrap
+curl -fsSL https://raw.githubusercontent.com/SimWorld-AI/SimWorld-Studio/aws/deploy/aws/scripts/bootstrap.sh \
+  | sudo bash
 
-# 4. Run bake script (installs deps, NVIDIA driver, Claude Code, etc.)
-sudo /opt/simworld-studio/deploy/aws/scripts/bake-ami.sh
-sudo reboot  # for NVIDIA driver
+# 4. Stage UE engine + project (if the bootstrap couldn't auto-fetch them)
+#    See bootstrap output for the exact rsync commands.
 
-# 5. After reboot, download Content from HF
-sudo /opt/simworld-studio/deploy/aws/scripts/download-content.sh
+# 5. Reboot if NVIDIA driver was installed
+sudo reboot
 
-# 6. Place UE 5.3.2 binary at /opt/ue-engine/
-#    (Linux_Unreal_Engine_5.3.2 from your existing source)
-sudo rsync -a /your/source/Linux_Unreal_Engine_5.3.2/ /opt/ue-engine/
+# 6. Re-run bootstrap to finish (idempotent — skips done steps)
+sudo /opt/simworld-studio/deploy/aws/scripts/bootstrap.sh
 
-# 7. Place project (uproject + Plugins + Config, NOT Content)
-sudo rsync -a --exclude Content /your/source/SimWorld/ /opt/simworld-project/
-sudo ln -s /opt/simworld-content /opt/simworld-project/Content
-
-# 8. First-time Claude OAuth (run as the simworld user)
-sudo -u simworld HOME=/var/lib/simworld/claude-home claude
-# Follow device-code flow in browser
-
-# 9. Configure auth — pick ONE
-#    a) Basic Auth (5 fixed accounts):
-sudo cp /opt/simworld-studio/deploy/aws/templates/htpasswd.example /etc/nginx/htpasswd
-sudo htpasswd /etc/nginx/htpasswd alice
-#    b) oauth2-proxy in front of nginx (GitHub org gate) — see docs/oauth2-proxy.md
-
-# 10. Domain + TLS
-sudo certbot --nginx -d simworld.your-lab.edu
-
-# 11. Enable services
-sudo systemctl enable --now coturn simworld-web
+# 7. Claude OAuth, htpasswd, certbot, systemctl enable — follow bootstrap's
+#    printed "Next" section.
 ```
 
-Open https://simworld.your-lab.edu in browser, log in, you get assigned a slot.
+### Path 2 — Manual step-by-step
+
+If you want to control each step (or the bootstrap fails partway):
+
+```bash
+sudo git clone -b aws https://github.com/SimWorld-AI/SimWorld-Studio.git /opt/simworld-studio
+sudo /opt/simworld-studio/deploy/aws/scripts/bake-ami.sh
+sudo reboot                                                     # NVIDIA driver
+# After reboot:
+sudo rsync -a /src/Linux_Unreal_Engine_5.3.2/   /opt/ue-engine/
+sudo rsync -a --exclude Content /src/SimWorld/  /opt/simworld-project/
+sudo ln -s /opt/simworld-content /opt/simworld-project/Content
+sudo systemctl start simworld-content-init                       # HF download
+sudo -u simworld HOME=/var/lib/simworld/claude-home claude       # OAuth
+sudo htpasswd -c /etc/nginx/htpasswd alice
+sudo certbot --nginx -d simworld.your-lab.edu
+sudo systemctl enable --now coturn simworld-web nginx
+```
+
+### Path 3 — Docker (optional)
+
+The web stack (Node server + nginx + coturn) can be containerized. **UE
+itself stays on the host** — see "Why not full Docker" below.
+
+```bash
+# Prereq: docker + docker compose + nvidia-container-toolkit
+# (bake-ami.sh does NOT install these by default — add them if you go this route)
+
+# After steps 1-2 of bootstrap (host OS deps + UE staged + Content downloaded):
+cd /opt/simworld-studio
+docker compose -f deploy/aws/docker/docker-compose.yml build
+docker compose -f deploy/aws/docker/docker-compose.yml up -d
+```
+
+#### Why not full Docker (UE included)
+
+We considered putting UE in containers too. Trade-off:
+
+| Aspect | Host UE (current) | UE in container |
+|---|---|---|
+| Image size | small (~500 MB web image) | 58 GB+ |
+| GPU access | direct | needs NVIDIA Container Toolkit |
+| Pixel Streaming UDP | works out of box | needs `--net=host`, defeats isolation |
+| Per-slot isolation | per-slot dirs | per-container, cleaner |
+| Spawn latency | ~60s (UE startup) | ~60s + ~5s container start |
+| Operations debug | journalctl + log files | docker logs, extra layer |
+
+For a 5-person lab the marginal isolation gain doesn't justify the
+operational complexity. If you need stronger isolation later, the path is
+to make `slot-pool.js` exec `docker run` instead of bash — its interface
+is already abstracted enough to swap.
+
+Open https://simworld.your-lab.edu in a browser, log in, get a slot.
 
 ## Operations
 
