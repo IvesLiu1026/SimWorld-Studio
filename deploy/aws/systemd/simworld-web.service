@@ -1,0 +1,61 @@
+[Unit]
+Description=SimWorld Studio web server + UE slot pool
+After=network-online.target
+Wants=network-online.target
+# Wait for the one-shot Content download
+After=simworld-content-init.service
+Requires=simworld-content-init.service
+
+[Service]
+Type=simple
+User=simworld
+Group=simworld
+WorkingDirectory=/opt/simworld-studio/simworld_studio_workspace/web/server
+
+# Per-deploy configuration. Override via /etc/default/simworld or
+# `systemctl edit simworld-web`.
+EnvironmentFile=-/etc/default/simworld
+Environment=NODE_ENV=production
+Environment=PORT=3002
+Environment=UE_POOL_ENABLED=1
+Environment=UE_POOL_SIZE=4
+Environment=UE_BASE_MCP_PORT=55559
+Environment=UE_BASE_CIRRUS_HTTP=8585
+Environment=UE_BASE_CIRRUS_WS=8586
+Environment=UE_BASE_CIRRUS_SFU=8989
+Environment=UE_BASE_UCV=9017
+Environment=UE_PORT_STRIDE=2
+Environment=UE_ENGINE_DIR=/opt/ue-engine
+Environment=UE_PROJECT_DIR_SHARED=/opt/simworld-project
+Environment=SLOTS_ROOT=/var/lib/simworld/slots
+Environment=SESSION_TTL_MS=1800000
+Environment=SESSION_HARD_MAX_MS=10800000
+# Claude OAuth is stored in a per-deploy HOME owned by the simworld user.
+Environment=HOME=/var/lib/simworld/claude-home
+# Per-session port routing shim
+Environment=NODE_OPTIONS=--require=/opt/simworld-studio/deploy/aws/scripts/session-shim.js
+
+ExecStart=/usr/bin/node /opt/simworld-studio/simworld_studio_workspace/web/server/index.js
+
+# Generous startup time — UE slots take ~60-180s to come up if pre-warmed.
+TimeoutStartSec=300
+# Graceful shutdown — the shim's SIGTERM handler stops all UEs first.
+TimeoutStopSec=60
+KillSignal=SIGTERM
+KillMode=mixed
+
+Restart=on-failure
+RestartSec=10s
+
+# Hardening — but UE needs broad access, so we can't be too strict
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/simworld /opt/simworld-studio/simworld_studio_workspace/logs
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=simworld-web
+
+[Install]
+WantedBy=multi-user.target
