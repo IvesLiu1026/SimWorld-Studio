@@ -16,12 +16,11 @@
 #   │                              of GB)      │                      │
 #   └──────────────────────────────────────────┴──────────────────────┘
 #
-# Usage on a fresh box:
-#   curl -fsSL https://raw.githubusercontent.com/SimWorld-AI/SimWorld-Studio/aws/deploy/aws/scripts/bootstrap.sh \
-#     | sudo bash
-#
-# OR if you've already cloned:
+# Usage (the repo is private, so clone first with a deploy key, then run):
+#   sudo git clone -b aws git@github.com:SimWorld-AI/SimWorld-Studio-Internal.git /opt/simworld-studio
 #   sudo /opt/simworld-studio/deploy/aws/scripts/bootstrap.sh
+#
+# Re-run any time — every step is idempotent.
 
 set -euo pipefail
 
@@ -29,7 +28,7 @@ if [[ "$EUID" -ne 0 ]]; then
     echo "ERROR: run as root (sudo)" >&2; exit 1
 fi
 
-REPO_URL="${REPO_URL:-https://github.com/SimWorld-AI/SimWorld-Studio.git}"
+REPO_URL="${REPO_URL:-git@github.com:SimWorld-AI/SimWorld-Studio-Internal.git}"
 REPO_BRANCH="${REPO_BRANCH:-aws}"
 REPO_DIR="${REPO_DIR:-/opt/simworld-studio}"
 

@@ -82,6 +82,7 @@ All these listen on `127.0.0.1` only; public access goes through Nginx.
 | Path | Purpose |
 |---|---|
 | `scripts/bootstrap.sh` | **One-command** post-clone provision (calls everything below) |
+| `scripts/stage-project-to-aws.sh` | Run on local dev box — rsyncs UE project skeleton to EC2 |
 | `scripts/slot-launcher.sh` | Launch one UE instance for a given slot |
 | `scripts/slot-pool.js` | Node module: child-process lifecycle for N slots |
 | `scripts/session-shim.js` | Wires SlotPool into session-manager via env var |
@@ -103,7 +104,10 @@ All these listen on `127.0.0.1` only; public access goes through Nginx.
 
 You have three paths, in increasing order of "more containerized".
 
-### Path 1 — One command (recommended)
+### Path 1 — Clone + one command (recommended)
+
+The repo is **private**, so the bootstrap can't be `curl | bash`-ed
+anonymously. The cleanest workflow:
 
 ```bash
 # 1. Launch EC2 (g5.12xlarge or g6.12xlarge, 1 TB gp3, Ubuntu 22.04 LTS)
@@ -112,34 +116,45 @@ You have three paths, in increasing order of "more containerized".
 # 2. SSH in
 ssh -i your-key.pem ubuntu@<EC2_IP>
 
-# 3. Bootstrap
-curl -fsSL https://raw.githubusercontent.com/SimWorld-AI/SimWorld-Studio/aws/deploy/aws/scripts/bootstrap.sh \
-  | sudo bash
+# 3. Add a GitHub deploy key on the EC2 box (one-time)
+ssh-keygen -t ed25519 -C "ec2-simworld" -f ~/.ssh/id_ed25519 -N ""
+cat ~/.ssh/id_ed25519.pub
+# Copy that public key → GitHub repo Settings → Deploy keys → Add (read-only OK)
 
-# 4. Stage UE engine + project (if the bootstrap couldn't auto-fetch them)
-#    See bootstrap output for the exact rsync commands.
-
-# 5. Reboot if NVIDIA driver was installed
-sudo reboot
-
-# 6. Re-run bootstrap to finish (idempotent — skips done steps)
+# 4. Clone + bootstrap
+sudo git clone -b aws git@github.com:SimWorld-AI/SimWorld-Studio-Internal.git /opt/simworld-studio
 sudo /opt/simworld-studio/deploy/aws/scripts/bootstrap.sh
 
-# 7. Claude OAuth, htpasswd, certbot, systemctl enable — follow bootstrap's
+# 5. Stage UE engine + project (if the bootstrap couldn't auto-fetch them)
+#    From your local dev box (NOT the EC2):
+./deploy/aws/scripts/stage-project-to-aws.sh ubuntu@<EC2_IP>
+sudo rsync -av /data/koe/Linux_Unreal_Engine_5.3.2/ ubuntu@<EC2_IP>:/opt/ue-engine/
+
+# 6. Reboot if NVIDIA driver was installed (the bootstrap will tell you)
+sudo reboot
+
+# 7. Re-run bootstrap to finish (idempotent — skips done steps)
+sudo /opt/simworld-studio/deploy/aws/scripts/bootstrap.sh
+
+# 8. Claude OAuth, htpasswd, certbot, systemctl enable — follow bootstrap's
 #    printed "Next" section.
 ```
+
+> **Alternative**: if you don't want a deploy key, use HTTPS with a fine-grained
+> Personal Access Token: `git clone -b aws https://<TOKEN>@github.com/SimWorld-AI/SimWorld-Studio-Internal.git /opt/simworld-studio`
 
 ### Path 2 — Manual step-by-step
 
 If you want to control each step (or the bootstrap fails partway):
 
 ```bash
-sudo git clone -b aws https://github.com/SimWorld-AI/SimWorld-Studio.git /opt/simworld-studio
+sudo git clone -b aws git@github.com:SimWorld-AI/SimWorld-Studio-Internal.git /opt/simworld-studio
 sudo /opt/simworld-studio/deploy/aws/scripts/bake-ami.sh
 sudo reboot                                                     # NVIDIA driver
 # After reboot:
 sudo rsync -a /src/Linux_Unreal_Engine_5.3.2/   /opt/ue-engine/
-sudo rsync -a --exclude Content /src/SimWorld/  /opt/simworld-project/
+# Or from your dev box (302 MB, ~1 min on a fast link):
+./deploy/aws/scripts/stage-project-to-aws.sh ubuntu@<EC2_IP>
 sudo ln -s /opt/simworld-content /opt/simworld-project/Content
 sudo systemctl start simworld-content-init                       # HF download
 sudo -u simworld HOME=/var/lib/simworld/claude-home claude       # OAuth
