@@ -126,7 +126,9 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
   logToFile("codex", `User: "${String(message).slice(0, 200)}" model=${model || "default"} sessionId=${sessionId || "new"}`);
   try { fs.writeFileSync(path.join(LOG_DIR, "raw_latest.jsonl"), ""); } catch {}
 
-  const proc = spawn(CODEX_BIN, args, {
+  // OS sandbox: repo read-only so the agent can't modify Studio source (see agent-sandbox.js).
+  const _sb = require("./agent-sandbox").sandboxedSpawn(CODEX_BIN, args, codexCwd);
+  const proc = spawn(_sb.cmd, _sb.args, {
     cwd: codexCwd,
     env,
     stdio: ["ignore", "pipe", "pipe"],
