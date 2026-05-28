@@ -89,7 +89,7 @@ SimWorld Studio is an AI-native 3D scene authoring and embodied agent testbed bu
 
 ### 🏗️ Coding Agent (Scene Generation)
 - Natural language → 3D scene in real time
-- **Pluggable backends** — Claude Code, Codex, OpenCode, or Gemini CLI, each with a selectable model, chosen from the top-left of the UI (see [Coding Agent Backends](#coding-agent-backends))
+- **Pluggable backends** — Claude Code, Codex, OpenCode, or Gemini CLI, each with a selectable model, chosen from the top-left of the UI (see [Step 1 — Set Up a Coding Agent](#step-1--set-up-a-coding-agent))
 - **125 buildings** (BP_Building_01–127), 6 trees, vehicles, street furniture, static meshes
 - **17 marketplace packs** discoverable via `list_assets()` (allow-AI licensed)
 - Auto session-suffix on actor names prevents cross-map name collision crashes
@@ -137,6 +137,31 @@ SimWorld Studio is an AI-native 3D scene authoring and embodied agent testbed bu
 
 ---
 
+## Step 1 — Set Up a Coding Agent
+
+SimWorld Studio's chat is driven by a **coding-agent CLI** of your choice — **Claude Code** (default), **Codex**, **Gemini CLI**, or **OpenCode**. Set one up *before* installing Studio. It's the same 3 steps for any of them:
+
+1. **Install the CLI:**
+
+   | Agent | Install |
+   |-------|---------|
+   | Claude Code | `npm i -g @anthropic-ai/claude-code` |
+   | Codex | `npm i -g @openai/codex` |
+   | Gemini CLI | `npm i -g @google/gemini-cli` |
+   | OpenCode | `npm i -g opencode-ai` |
+
+2. **Log in once, in your terminal** — run the CLI and sign in (`claude`, `codex login`, `gemini`, `opencode auth login`), or export the provider's API key. Do this as the **same user that runs the Studio server**; Studio reuses that login and never asks you for keys.
+
+3. **Pick it in the UI** — choose the **Agent** and **Model** from the dropdowns in the **top-left** of the app. That's it.
+
+> Studio connects each agent to the UE scene tools automatically — no extra MCP setup. You only need one agent to start; switch anytime from the dropdown.
+
+<sub>Advanced: change the model menus in `simworld_studio_workspace/web/server/coding-agents.json`, or override a CLI path / default model with the `*_BIN` / `*_MODEL` env vars.</sub>
+
+Now install Studio for your platform:
+
+---
+
 ## Quick Start (Google Colab — no local GPU needed)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SimWorld-AI/SimWorld-Studio/blob/main/SimWorld_Studio.ipynb)
@@ -175,7 +200,9 @@ pip install git+https://github.com/SimWorld-AI/SimWorld-Studio.git#subdirectory=
 npm install -g @anthropic-ai/claude-code
 ```
 
-### 3. Authenticate with Claude
+### 3. Set up your coding agent
+
+You did this in [Step 1](#step-1--set-up-a-coding-agent). The default is **Claude Code** — authenticate it now if you haven't:
 
 **Option A — API Key:**
 ```bash
@@ -212,44 +239,6 @@ On multi-GPU systems, it will ask which GPU to use (or pass `--gpu INDEX`). For 
 ```
 
 Try: *"Set up the environment with a sunny sky, then build a small neighborhood with 4 houses and trees"*
-
----
-
-## Coding Agent Backends
-
-The Studio chat is **backend-agnostic**: the same scene-generation prompt can be driven by any of four coding-agent CLIs, each with a model of your choice. Pick the **Agent** and **Model** from the two dropdowns in the **top-left of the nav bar** — the choice is remembered per browser (and a per-agent model is remembered too). The Model dropdown lists curated models per backend plus a **Custom…** entry for anything not listed; leaving it on **Default** lets the CLI/env decide.
-
-### Setup flow (same 3 steps for every backend)
-
-Studio does **not** manage credentials itself — it simply shells out to the agent CLI you already have on `PATH`, using **whatever auth that CLI is already logged in with**. So enabling a backend is always:
-
-1. **Install the CLI** (see the table below) so its binary is on `PATH`.
-2. **Authenticate it once, in your terminal** — either log in (`claude`, `codex login`, `gemini`, `opencode auth login`) or export the provider API key. Do this on the **same machine/user that runs the Studio server**, because Studio inherits that login. Verify with a quick `codex exec "say hi"` / `gemini -p "say hi"` etc.
-3. **Select it in the UI** (top-left Agent + Model dropdowns) and chat. No keys are entered in Studio.
-
-That's it — once a CLI works standalone in your shell, Studio can drive it. The only extra wiring is MCP (so the agent can reach the UE scene tools), and for Claude/Codex/Gemini that's handled automatically (see the **Notes** column). The per-backend specifics:
-
-| Backend | CLI binary | Install | Authenticate | Notes |
-|---------|-----------|---------|--------------|-------|
-| **Claude Code** | `claude` | `npm i -g @anthropic-ai/claude-code` | `ANTHROPIC_API_KEY`, or run `claude` for OAuth login | Default backend. MCP via `web/mcp.json` (`--mcp-config`). |
-| **Codex** | `codex` | `npm i -g @openai/codex` (or `brew install codex`) | `codex login`, or `OPENAI_API_KEY` | Runs `codex exec --json`. The simworld MCP server is **auto-injected** from `web/mcp.json` (with the live UE port) via `-c` overrides — no manual `~/.codex/config.toml` edit needed. |
-| **Gemini CLI** | `gemini` | `npm i -g @google/gemini-cli` | run `gemini` for OAuth, or `GEMINI_API_KEY` | MCP config is auto-mirrored into `web/.gemini/settings.json` on first use. |
-| **OpenCode** ⚠️ | `opencode` | see [opencode.ai/docs](https://opencode.ai) | `opencode auth login` (per-provider keys) | **Experimental / untested in Studio.** Add the simworld MCP server to your `opencode.json` `mcp` section for scene tools. Model uses `provider/model` form (e.g. `anthropic/claude-opus-4-8`). |
-
-**How it's wired:** the UI sends `{ agent, model }` to `POST /api/chat`; the server dispatches to the matching runner (`web/server/index.js` → `gemini-runner.js` / `codex-runner.js` / `opencode-runner.js`, or the inline Claude path). All runners translate their CLI's output into the same event stream, so screenshots, the scene-state panel, and `verify_scene` work identically across backends.
-
-**Configuration knobs (optional):**
-
-```bash
-# Override a CLI's binary path (if not on PATH):
-export CLAUDE_BIN=/path/to/claude   CODEX_BIN=/path/to/codex
-export GEMINI_BIN=/path/to/gemini   OPENCODE_BIN=/path/to/opencode
-
-# Fallback model when the UI Model dropdown is left on "Default":
-export CLAUDE_MODEL=...  CODEX_MODEL=...  GEMINI_MODEL=...  OPENCODE_MODEL=...
-```
-
-To change which models appear in the dropdowns, edit **`simworld_studio_workspace/web/server/coding-agents.json`** (the single source of truth — the UI fetches it from `GET /api/coding-agents`). No rebuild needed for that file; just restart the web server.
 
 ---
 

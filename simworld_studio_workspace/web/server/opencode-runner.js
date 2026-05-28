@@ -1,45 +1,78 @@
 "use strict";
 
-// opencode-runner.js — drives the OpenCode CLI (`opencode run`) as a drop-in coding
-// agent for /api/chat, mirroring gemini-runner.js / codex-runner.js.
+// opencode-runner.js — drives the OpenCode CLI (`opencode run --format json`) as a
+// drop-in coding agent for /api/chat, mirroring gemini-runner.js / codex-runner.js.
 //
-// ⚠️ UNTESTED: authored without a local `opencode` CLI on this machine. The spawn flags
-// and output handling below follow OpenCode's documented `run` interface and need a live
-// verification pass once `opencode` is installed (see README → Coding Agent Backends).
-// Because OpenCode's `run` command streams human-readable assistant text on stdout (no
-// stable stream-json contract like Claude/Gemini/Codex expose), this translator relays
-// assistant output as `text` deltas and best-effort detects screenshot paths; rich
-// tool_start/tool_result framing may need refinement against real output.
+// The frontend talks SSE to /api/chat and expects Claude-shaped events
+// (system/text/tool_start/tool_details/tool_result/screenshot/verifier_*/done). This
+// module spawns `opencode run --format json --dangerously-skip-permissions` and
+// translates OpenCode's part-event vocabulary into that shape.
 //
-// MCP: OpenCode reads MCP servers from an `opencode.json` (`mcp` section) in the project
-// or ~/.config/opencode. The simworld MCP server must be added there for scene tools to
-// work — see README. We do not inject it here (OpenCode has no CLI MCP-override flag).
+// Event schema (verified against opencode 1.15.12, `run --format json`): newline-
+// delimited JSON, each line `{ type, sessionID, part }` where `part.type` is one of:
+//   step-start                            → ignored
+//   text   { text }                       → text delta (deduped by part.id)
+//   tool   { tool, callID, state:{ status, input, output } } → tool_start/details/result
+//   step-finish { cost, tokens }          → cost accounting
 //
-// System prompt: prepended to the user message (OpenCode takes per-run system prompts via
-// agent config / AGENTS.md, not a CLI flag).
+// MCP: OpenCode reads MCP servers from `opencode.json` in the working dir. We mirror
+// web/mcp.json into a scratch dir's opencode.json (rewriting UNREAL_PORT to the live UE
+// port) and run from there — the same auto-wiring approach as the Gemini path. Auth comes
+// from the user's existing `opencode auth login` / provider env keys (e.g. OPENAI_API_KEY).
+//
+// System prompt: prepended to the user message (OpenCode has no system-prompt CLI flag).
 
 const fs    = require("fs");
+const os    = require("os");
 const path  = require("path");
 const { spawn } = require("child_process");
+const { stripToolPrefix } = require("./gemini-runner");
 
 const OPENCODE_BIN   = process.env.OPENCODE_BIN   || "opencode";
-const OPENCODE_MODEL = process.env.OPENCODE_MODEL || ""; // empty → opencode default; form: provider/model
+const OPENCODE_MODEL = process.env.OPENCODE_MODEL || ""; // provider/model form; empty → opencode default
 const OPENCODE_IDLE_TIMEOUT_MS = parseInt(process.env.OPENCODE_IDLE_TIMEOUT_MS || "1800000", 10);
+
+// Mirror web/mcp.json → <scratch>/opencode.json so OpenCode auto-loads the simworld MCP
+// server (rewriting UNREAL_PORT to the live engine port). Returns the scratch cwd.
+function ensureOpenCodeWorkspace(mcpConfigPath, unrealPort, logToFile) {
+  const cwd = path.join(os.tmpdir(), "simworld-opencode");
+  try {
+    fs.mkdirSync(cwd, { recursive: true });
+    const mcp = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8"));
+    const servers = {};
+    for (const [name, cfg] of Object.entries(mcp.mcpServers || {})) {
+      const environment = { ...(cfg.env || {}) };
+      if (unrealPort) environment.UNREAL_PORT = String(unrealPort);
+      servers[name] = {
+        type: "local",
+        command: [cfg.command, ...(cfg.args || [])],
+        enabled: true,
+        environment,
+      };
+    }
+    const config = { $schema: "https://opencode.ai/config.json", mcp: servers };
+    fs.writeFileSync(path.join(cwd, "opencode.json"), JSON.stringify(config, null, 2));
+  } catch (e) {
+    logToFile && logToFile("opencode", `failed to write opencode.json: ${e.message}`);
+  }
+  return cwd;
+}
 
 /**
  * @param {object} args  req, res, body{message,sessionId,model,...}, systemPrompt, ctx
- *   ctx: { ctxManager, snapshotScene, STUDIO_SESSION, LOG_DIR, SCREENSHOT_DIR,
- *          _chatProcs, logToFile, MOCK_MODE }
+ *   ctx: { ctxManager, snapshotScene, STUDIO_SESSION, MCP_CONFIG, UNREAL_PORT,
+ *          LOG_DIR, SCREENSHOT_DIR, _chatProcs, logToFile, MOCK_MODE }
  */
 function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
   const { message, sessionId } = body || {};
   const model = (body && body.model) || OPENCODE_MODEL;
   const {
     ctxManager, snapshotScene, STUDIO_SESSION,
-    LOG_DIR, SCREENSHOT_DIR, _chatProcs, logToFile, MOCK_MODE,
+    MCP_CONFIG, UNREAL_PORT, LOG_DIR, SCREENSHOT_DIR,
+    _chatProcs, logToFile, MOCK_MODE,
   } = ctx;
 
-  const cwd = path.resolve(__dirname, "..");
+  const cwd = ensureOpenCodeWorkspace(MCP_CONFIG, UNREAL_PORT, logToFile);
 
   if (!res.headersSent) {
     res.setHeader("Content-Type", "text/event-stream");
@@ -56,7 +89,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
 
   const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${message}` : String(message || "");
 
-  const args = ["run"];
+  const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
   if (model) args.push("--model", model);
   args.push(fullPrompt);
 
@@ -64,6 +97,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
   Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
 
   logToFile("opencode", `User: "${String(message).slice(0, 200)}" model=${model || "default"} sessionId=${sessionId || "new"}`);
+  try { fs.writeFileSync(path.join(LOG_DIR, "raw_latest.jsonl"), ""); } catch {}
 
   let proc;
   try {
@@ -81,9 +115,22 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
   _chatProcs.set(procKey, proc);
   proc.on("exit", () => { if (_chatProcs.get(procKey) === proc) _chatProcs.delete(procKey); });
 
-  let latestShot = null;
-  let stderrBuf  = "";
+  // ---- per-call state ------------------------------------------------------
+  let stdoutBuf      = "";
+  let stderrBuf      = "";
+  let latestShot     = null;
+  let session        = sessionId || null;
   let lastOutputTime = Date.now();
+  const textEmitted  = new Map();   // text part id → chars already emitted (dedupe streaming)
+  const startedTools = new Set();   // tool callID → tool_start emitted
+  const verifierTools= new Set();
+  const toolInputs   = new Map();   // callID → {name, input} for ctx tracking
+
+  let knownMcpServers = [];
+  try {
+    const mcp = JSON.parse(fs.readFileSync(MCP_CONFIG, "utf-8"));
+    knownMcpServers = Object.keys(mcp.mcpServers || {});
+  } catch {}
 
   function sweepLatestScreenshot() {
     if (!fs.existsSync(SCREENSHOT_DIR)) return;
@@ -104,19 +151,141 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
     return latestShot ? `/api/screenshot/file?path=${encodeURIComponent(latestShot)}` : null;
   };
 
+  // ---- ctxManager hooks (mirror Claude/Gemini/Codex paths) -----------------
   ctxManager.resolveSession(STUDIO_SESSION);
   ctxManager.beginRound(STUDIO_SESSION);
 
-  // Relay stdout as assistant text; detect any screenshot paths it prints.
+  const CTX_TOOLS = new Set([
+    "spawn_blueprint_actor", "spawn_actor", "spawn_agent",
+    "delete_actor", "delete_all_spawned", "setup_environment",
+  ]);
+  function recordToolUseForCtx(callId, bareName, input) {
+    if (CTX_TOOLS.has(bareName)) toolInputs.set(callId, { name: bareName, input: input || {} });
+  }
+  function applyCtxOnToolResult(callId, resultText, isError) {
+    const st = toolInputs.get(callId);
+    if (!st) return;
+    try {
+      if (!isError && session) {
+        const tr = JSON.parse(resultText);
+        if (tr.status === "success") {
+          if (st.name === "spawn_blueprint_actor" || st.name === "spawn_actor" || st.name === "spawn_agent") {
+            const an  = st.input.actor_name || st.input.agent_name || st.input.name;
+            const cls = st.input.blueprint_id || st.input.static_mesh || st.input.agent_type || "";
+            const cat = st.name === "spawn_agent" ? "agent" : undefined;
+            ctxManager.addActor(STUDIO_SESSION, { name: an, cls, category: cat, location: st.input.location });
+          } else if (st.name === "delete_actor") {
+            ctxManager.removeActor(STUDIO_SESSION, st.input.name);
+          } else if (st.name === "delete_all_spawned") {
+            ctxManager.clearAllSpawned(STUDIO_SESSION);
+          } else if (st.name === "setup_environment") {
+            ctxManager.setEnvironmentReady(STUDIO_SESSION);
+          }
+        }
+      }
+    } catch (e) {
+      logToFile("ctx", `opencode parse error: ${e.message}`);
+    }
+    toolInputs.delete(callId);
+  }
+
+  // ---- part handling -------------------------------------------------------
+  function handlePart(part) {
+    if (!part || typeof part !== "object") return;
+    const ptype = part.type;
+
+    if (ptype === "text") {
+      const id = part.id || "_t";
+      const full = typeof part.text === "string" ? part.text : "";
+      const prev = textEmitted.get(id) || 0;
+      if (full.length > prev) { emit("text", { delta: full.slice(prev) }); textEmitted.set(id, full.length); }
+      return;
+    }
+
+    if (ptype === "tool") {
+      const callId   = part.callID || part.id;
+      const fullName = part.tool || "tool";
+      const bare     = stripToolPrefix(fullName, knownMcpServers);
+      const state    = part.state || {};
+      const input    = state.input || {};
+
+      if (!startedTools.has(callId)) {
+        startedTools.add(callId);
+        emit("tool_start",  { id: callId, name: fullName, displayName: bare });
+        emit("tool_details",{ id: callId, name: fullName, displayName: bare, input });
+        logToFile("tool", `Starting (opencode): ${fullName}`);
+        if (bare === "verify_scene") { verifierTools.add(callId); emit("verifier_start", { toolUseId: callId }); }
+        recordToolUseForCtx(callId, bare, input);
+      }
+
+      if (state.status === "completed" || state.status === "error") {
+        let resultText = "";
+        if (typeof state.output === "string") resultText = state.output;
+        else if (state.output != null) resultText = JSON.stringify(state.output);
+        else if (state.metadata && state.metadata.output) resultText = String(state.metadata.output);
+        const isError = state.status === "error";
+
+        const shotMatch = resultText.match(/([\/][\w\/\-._]+\.png)/);
+        if (shotMatch && fs.existsSync(shotMatch[1])) {
+          latestShot = shotMatch[1];
+          emit("screenshot", { toolUseId: callId, filepath: `/api/screenshot/file?path=${encodeURIComponent(latestShot)}` });
+        }
+        emit("tool_result", { toolUseId: callId, result: resultText.slice(0, 2000), isError });
+        logToFile("tool_result", `${callId} (opencode ${bare}) → ${resultText.slice(0, 200)}`);
+        applyCtxOnToolResult(callId, resultText, isError);
+
+        if (verifierTools.has(callId)) {
+          let fb = "", ss = "";
+          try { const r2 = JSON.parse(resultText); fb = r2.feedback || ""; ss = r2.screenshot || ""; } catch {}
+          emit("verifier_result", {
+            toolUseId: callId,
+            feedback: fb,
+            screenshot: ss ? `/api/screenshot/file?path=${encodeURIComponent(ss)}` : "",
+          });
+          verifierTools.delete(callId);
+        }
+      }
+      return;
+    }
+    // step-start / step-finish → nothing user-facing.
+  }
+
+  function handleEvent(ev) {
+    if (!ev || typeof ev !== "object") return;
+    if (ev.sessionID && !session) {
+      session = ev.sessionID;
+      let mcpServers = [];
+      try {
+        const mcp = JSON.parse(fs.readFileSync(MCP_CONFIG, "utf-8"));
+        mcpServers = Object.keys(mcp.mcpServers || {}).map(name => ({ name, status: "connected" }));
+      } catch {}
+      emit("system", { sessionId: session, mcpServers });
+    }
+    if (ev.type === "error") {
+      const msg = (ev.error && (ev.error.message || ev.error.data)) || ev.message || "opencode error";
+      logToFile("opencode-err", String(msg).slice(0, 400));
+      emit("text", { delta: `\n\n⚠️ ${msg}\n` });
+      return;
+    }
+    if (ev.part) handlePart(ev.part);
+  }
+
+  function flushLine(line) {
+    line = line.trim();
+    if (!line) return;
+    try { fs.appendFileSync(path.join(LOG_DIR, "raw_latest.jsonl"), line + "\n"); } catch {}
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    try { handleEvent(ev); }
+    catch (e) { logToFile("opencode", `event handler error: ${e.message}`); }
+  }
+
   proc.stdout.on("data", chunk => {
     lastOutputTime = Date.now();
-    const s = chunk.toString();
-    if (s) emit("text", { delta: s });
-    const m = s.match(/([\/][\w\/\-._]+\.png)/);
-    if (m && fs.existsSync(m[1])) {
-      latestShot = m[1];
-      emit("screenshot", { filepath: `/api/screenshot/file?path=${encodeURIComponent(latestShot)}` });
-    }
+    stdoutBuf += chunk.toString();
+    const lines = stdoutBuf.split("\n");
+    stdoutBuf = lines.pop() ?? "";
+    for (const line of lines) flushLine(line);
   });
 
   proc.stderr.on("data", chunk => {
@@ -156,6 +325,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
 
   proc.on("close", code => {
     clearInterval(idleTimer);
+    if (stdoutBuf.trim()) flushLine(stdoutBuf);
     logToFile("opencode", `Process exited code=${code}`);
     if (code !== 0 && !finished) {
       const detail = stderrBuf.slice(0, 400).trim() || `exit code ${code}`;
@@ -173,4 +343,4 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
   });
 }
 
-module.exports = { runOpenCodeChat };
+module.exports = { runOpenCodeChat, ensureOpenCodeWorkspace };

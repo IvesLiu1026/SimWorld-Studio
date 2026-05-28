@@ -894,7 +894,7 @@ const agentLabel = (a) => AGENT_LABELS[a] || a || "Code Agent";
 const DEFAULT_CODING_AGENTS = {
   claude:   { label: "Claude Code", defaultModel: "", models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
   codex:    { label: "Codex",       defaultModel: "", models: ["gpt-5-codex", "gpt-5", "o3"] },
-  opencode: { label: "OpenCode",    defaultModel: "", models: ["anthropic/claude-opus-4-8", "openai/gpt-5", "google/gemini-2.5-pro"] },
+  opencode: { label: "OpenCode",    defaultModel: "", models: ["anthropic/claude-opus-4-8", "openai/gpt-5", "openai/gpt-4o", "google/gemini-2.5-pro"] },
   gemini:   { label: "Gemini CLI",  defaultModel: "", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
 };
 
