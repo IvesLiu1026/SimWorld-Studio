@@ -41,102 +41,6 @@ SimWorld Studio is an AI-native 3D scene authoring and embodied agent testbed bu
 
 ---
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Browser (React UI)                    │
-│  Coding Agent │ Viewport │ Embodied Agent │ Statistics   │
-└──────┬────────────┬──────────────┬────────────┬─────────┘
-       │ SSE/HTTP   │ WebSocket    │ SSE/HTTP   │
-       ▼            ▼              ▼            ▼
-┌─────────────────────────────────────────────────────────┐
-│              Web Server  (Node.js / Express)             │
-│  index.js  │  AgentController  │  MetricsHub  │  SSE    │
-└──────┬──────────────┬──────────────────────────────────-┘
-       │              │
-       ▼              ▼
-┌────────────┐  ┌─────────────────────────────────────────┐
-│ Claude CLI │  │            Unreal Engine 5.3             │
-│ (MCP tools)│  │  UnrealMCP (TCP:55557)  │  UnrealCV      │
-│            │──│  spawn / delete / move  │  vget / vset   │
-└────────────┘  │  Python scripting       │  camera / obj  │
-                └─────────────────────────────────────────-┘
-                              │
-                ┌─────────────┴──────────────┐
-                │  Cirrus Signalling Server   │
-                │  Pixel Streaming  :8685/86  │
-                └────────────────────────────┘
-```
-
-### Component Map
-
-| Component | Path | Description |
-|---|---|---|
-| **Launch Scripts** | `SimWorld-Studio.ps1 / .bat` | One-click launcher: Cirrus → UE → Web Server |
-| **Web Server** | `web/server/index.js` | Express API, SSE push, asset catalog, metrics |
-| **MCP Server** | `web/server/mcp-server.js` | Claude ↔ UE tool bridge via TCP |
-| **Agent Controller** | `web/server/agent-controller.js` | Per-agent sessions, trajectory, collision tracking |
-| **Metrics Hub** | `web/server/metrics-hub.js` | Time-series data for all agents (collision, speed, turns) |
-| **Context Manager** | `web/server/context-manager.js` | Scene state (actors, environment, round) |
-| **UnrealCV Bridge** | `web/server/unreal-bridge.js` | Persistent TCP socket to UCV with FIFO queue + retry |
-| **Frontend** | `web/src/App.jsx` | React app: chat, viewport, agents, stats, asset browser |
-| **UE Plugin** | `UE_Project/Plugins/unrealcv/` | Extended UnrealCV with hit tracking, actor camera commands |
-
----
-
-## Features
-
-### 🏗️ Coding Agent (Scene Generation)
-- Natural language → 3D scene in real time
-- **Pluggable backends** — Claude Code, Codex, OpenCode, or Gemini CLI, each with a selectable model, chosen from the top-left of the UI (see [Step 1 — Set Up a Coding Agent](#step-1--set-up-a-coding-agent))
-- **125 buildings** (BP_Building_01–127), 6 trees, vehicles, street furniture, static meshes
-- **17 marketplace packs** discoverable via `list_assets()` (allow-AI licensed)
-- Auto session-suffix on actor names prevents cross-map name collision crashes
-- `verify_scene` tool: the agent evaluates a screenshot and returns PASS/NEEDS_IMPROVEMENT/FAIL
-
-### 👁️ Live Viewport
-- Pixel Streaming via Cirrus signalling server — full UE viewport in browser
-- Click to activate mouse/keyboard input
-- 1920×1080 default, adaptive resolution via MatchViewportRes
-
-### 🤖 Embodied Agent Panel
-- Spawn and control `Base_Pedestrian` / `Base_User_Agent` / `Base_Demo` agents
-- Per-agent session: position, rotation, heading (compass), speed, status
-- **Real-time state**: background poller every 3s via UnrealCV
-- **Trajectory view**: top-down SVG map with heading arrows, collision markers (red dots)
-- **Camera tab**: 3-strategy agent POV (actor camera → camera/0 at eye-level → latest screenshot)
-- **Activity log**: ReAct thought → tool actions → response per turn
-- **Hit tracking**: `OnActorHit` plugin event → collision count, impulse, impact point
-- Floating draggable detail window per agent
-
-### 📊 Statistics Panels
-- **Embodied Agent Statistics**: aggregate map (2D top-down, all agents), collision/speed time-series charts
-- **Coding Agent Verifier**: rule-based (scene collision count) + VLM-based (Claude reads screenshot, scores 1–10)
-- **MetricsHub**: server-side 5s sampling → real-time SVG `LineChart` / `MultiLineChart`
-
-### 📁 Asset Content Drawer
-- Built once at startup from live UE Python scan (`EditorAssetLibrary.list_assets`)
-- UE Content Browser–style navigation: folder → shows subfolders + direct assets
-- Left sidebar: global category filter (Buildings / Trees / Vehicles / etc.)
-- Search: recursive subtree, category-aware
-- Click any asset → inserts correct spawn command into chat
-
-### 🧪 Multi-Agent Testbed
-- Auto-start PIE (polls until confirmed active)
-- Spawn N agents at configurable radius, broadcast goal
-- Testbed log with per-step status
-
-### 🔧 Developer Tools
-- Mock mode: replay pre-recorded sessions without GPU
-- Session management: slot-based with heartbeat and TTL
-- Skills: pre-made prompts for city layout, weather, navigation
-- Learned tools: Claude can save custom tool recipes
-
-> **Note on demo assets:** The featured demo showcases scenes built with high-quality commercial 3D assets (buildings, vehicles, characters, etc.) that are **not included** in the open-source release due to licensing restrictions. The redistributable Minimal build ships with a different set of freely licensed assets, so the visual appearance will differ from the demo. The functionality and workflow remain the same.
-
----
-
 ## Step 1 — Set Up a Coding Agent
 
 SimWorld Studio's chat is driven by a **coding-agent CLI** of your choice — **Claude Code** (default), **Codex**, **Gemini CLI**, or **OpenCode**. Set one up *before* installing Studio. It's the same 3 steps for any of them:
@@ -316,6 +220,102 @@ simworld-studio start \
   --cirrus-http-port 8687 --cirrus-ws-port 8688 --cirrus-sfu-port 8990 \
   --gpu 0
 ```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Browser (React UI)                    │
+│  Coding Agent │ Viewport │ Embodied Agent │ Statistics   │
+└──────┬────────────┬──────────────┬────────────┬─────────┘
+       │ SSE/HTTP   │ WebSocket    │ SSE/HTTP   │
+       ▼            ▼              ▼            ▼
+┌─────────────────────────────────────────────────────────┐
+│              Web Server  (Node.js / Express)             │
+│  index.js  │  AgentController  │  MetricsHub  │  SSE    │
+└──────┬──────────────┬──────────────────────────────────-┘
+       │              │
+       ▼              ▼
+┌────────────┐  ┌─────────────────────────────────────────┐
+│ Claude CLI │  │            Unreal Engine 5.3             │
+│ (MCP tools)│  │  UnrealMCP (TCP:55557)  │  UnrealCV      │
+│            │──│  spawn / delete / move  │  vget / vset   │
+└────────────┘  │  Python scripting       │  camera / obj  │
+                └─────────────────────────────────────────-┘
+                              │
+                ┌─────────────┴──────────────┐
+                │  Cirrus Signalling Server   │
+                │  Pixel Streaming  :8685/86  │
+                └────────────────────────────┘
+```
+
+### Component Map
+
+| Component | Path | Description |
+|---|---|---|
+| **Launch Scripts** | `SimWorld-Studio.ps1 / .bat` | One-click launcher: Cirrus → UE → Web Server |
+| **Web Server** | `web/server/index.js` | Express API, SSE push, asset catalog, metrics |
+| **MCP Server** | `web/server/mcp-server.js` | Claude ↔ UE tool bridge via TCP |
+| **Agent Controller** | `web/server/agent-controller.js` | Per-agent sessions, trajectory, collision tracking |
+| **Metrics Hub** | `web/server/metrics-hub.js` | Time-series data for all agents (collision, speed, turns) |
+| **Context Manager** | `web/server/context-manager.js` | Scene state (actors, environment, round) |
+| **UnrealCV Bridge** | `web/server/unreal-bridge.js` | Persistent TCP socket to UCV with FIFO queue + retry |
+| **Frontend** | `web/src/App.jsx` | React app: chat, viewport, agents, stats, asset browser |
+| **UE Plugin** | `UE_Project/Plugins/unrealcv/` | Extended UnrealCV with hit tracking, actor camera commands |
+
+---
+
+## Features
+
+### 🏗️ Coding Agent (Scene Generation)
+- Natural language → 3D scene in real time
+- **Pluggable backends** — Claude Code, Codex, OpenCode, or Gemini CLI, each with a selectable model, chosen from the top-left of the UI (see [Step 1 — Set Up a Coding Agent](#step-1--set-up-a-coding-agent))
+- **125 buildings** (BP_Building_01–127), 6 trees, vehicles, street furniture, static meshes
+- **17 marketplace packs** discoverable via `list_assets()` (allow-AI licensed)
+- Auto session-suffix on actor names prevents cross-map name collision crashes
+- `verify_scene` tool: the agent evaluates a screenshot and returns PASS/NEEDS_IMPROVEMENT/FAIL
+
+### 👁️ Live Viewport
+- Pixel Streaming via Cirrus signalling server — full UE viewport in browser
+- Click to activate mouse/keyboard input
+- 1920×1080 default, adaptive resolution via MatchViewportRes
+
+### 🤖 Embodied Agent Panel
+- Spawn and control `Base_Pedestrian` / `Base_User_Agent` / `Base_Demo` agents
+- Per-agent session: position, rotation, heading (compass), speed, status
+- **Real-time state**: background poller every 3s via UnrealCV
+- **Trajectory view**: top-down SVG map with heading arrows, collision markers (red dots)
+- **Camera tab**: 3-strategy agent POV (actor camera → camera/0 at eye-level → latest screenshot)
+- **Activity log**: ReAct thought → tool actions → response per turn
+- **Hit tracking**: `OnActorHit` plugin event → collision count, impulse, impact point
+- Floating draggable detail window per agent
+
+### 📊 Statistics Panels
+- **Embodied Agent Statistics**: aggregate map (2D top-down, all agents), collision/speed time-series charts
+- **Coding Agent Verifier**: rule-based (scene collision count) + VLM-based (Claude reads screenshot, scores 1–10)
+- **MetricsHub**: server-side 5s sampling → real-time SVG `LineChart` / `MultiLineChart`
+
+### 📁 Asset Content Drawer
+- Built once at startup from live UE Python scan (`EditorAssetLibrary.list_assets`)
+- UE Content Browser–style navigation: folder → shows subfolders + direct assets
+- Left sidebar: global category filter (Buildings / Trees / Vehicles / etc.)
+- Search: recursive subtree, category-aware
+- Click any asset → inserts correct spawn command into chat
+
+### 🧪 Multi-Agent Testbed
+- Auto-start PIE (polls until confirmed active)
+- Spawn N agents at configurable radius, broadcast goal
+- Testbed log with per-step status
+
+### 🔧 Developer Tools
+- Mock mode: replay pre-recorded sessions without GPU
+- Session management: slot-based with heartbeat and TTL
+- Skills: pre-made prompts for city layout, weather, navigation
+- Learned tools: Claude can save custom tool recipes
+
+> **Note on demo assets:** The featured demo showcases scenes built with high-quality commercial 3D assets (buildings, vehicles, characters, etc.) that are **not included** in the open-source release due to licensing restrictions. The redistributable Minimal build ships with a different set of freely licensed assets, so the visual appearance will differ from the demo. The functionality and workflow remain the same.
 
 ---
 
