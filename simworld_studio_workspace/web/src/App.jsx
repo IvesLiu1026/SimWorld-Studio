@@ -883,6 +883,62 @@ function ResultsPage() {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
+
+// Display labels for coding-agent CLI choices. Keys match /api/chat's `agent` body field.
+const AGENT_LABELS = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", gemini: "Gemini CLI" };
+const agentLabel = (a) => AGENT_LABELS[a] || a || "Code Agent";
+
+// Fallback backend+model registry used until GET /api/coding-agents resolves (or if it
+// fails). The server's coding-agents.json is the source of truth; keep this roughly in
+// sync as a graceful default. `defaultModel: ""` means "let the CLI/env decide".
+const DEFAULT_CODING_AGENTS = {
+  claude:   { label: "Claude Code", defaultModel: "", models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
+  codex:    { label: "Codex",       defaultModel: "", models: ["gpt-5-codex", "gpt-5", "o3"] },
+  opencode: { label: "OpenCode",    defaultModel: "", models: ["anthropic/claude-opus-4-8", "openai/gpt-5", "google/gemini-2.5-pro"] },
+  gemini:   { label: "Gemini CLI",  defaultModel: "", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
+};
+
+// Prominent top-left Agent + Model picker shown in the top nav bar. The Model dropdown
+// repopulates per agent and offers a "Custom…" free-text entry for unlisted models.
+function CodingAgentSelector({ agents, agent, setAgent, model, setModel }) {
+  const cfg    = agents[agent] || {};
+  const models = cfg.models || [];
+  const derivedCustom = !!model && !models.includes(model);
+  const [forceCustom, setForceCustom] = useState(false);
+  // Drop custom mode when switching to an agent whose saved model is a listed one.
+  useEffect(() => { if (!derivedCustom) setForceCustom(false); }, [agent]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showCustom = forceCustom || derivedCustom;
+
+  const selStyle = {
+    fontSize: 12, fontWeight: 600, height: 28, padding: "0 6px",
+    background: "var(--bg-2)", color: "var(--ink-1)",
+    border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer",
+  };
+  const onModelChange = (v) => {
+    if (v === "__custom__") setForceCustom(true);
+    else { setForceCustom(false); setModel(v); }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
+         title="Coding agent backend and model used for scene generation">
+      {ICONS.bot ? <span style={{ display: "inline-flex", color: "var(--ink-3)" }}>{ICONS.bot(14)}</span> : null}
+      <select value={agent} onChange={(e) => setAgent(e.target.value)} style={selStyle} aria-label="Coding agent">
+        {Object.entries(agents).map(([id, a]) => <option key={id} value={id}>{a.label || id}</option>)}
+      </select>
+      <select value={showCustom ? "__custom__" : model} onChange={(e) => onModelChange(e.target.value)}
+              style={{ ...selStyle, maxWidth: 170 }} aria-label="Model">
+        <option value="">Default</option>
+        {models.map((m) => <option key={m} value={m}>{m}</option>)}
+        <option value="__custom__">Custom…</option>
+      </select>
+      {showCustom && (
+        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model id"
+               style={{ ...selStyle, width: 130, fontWeight: 400, cursor: "text" }} aria-label="Custom model id" />
+      )}
+    </div>
+  );
+}
 const EVOLUTION_ARTIFACT_POLL_MS = 5000;
 const EVOLUTION_TOAST_MAX = 2;
 const EVOLUTION_TOAST_TTL_MS = 5200;
@@ -1122,6 +1178,7 @@ async function resetScene() {
 const SCENE_TOOLS = new Set([
   "spawn_blueprint_actor", "spawn_actor", "spawn_agent",
   "delete_actor", "delete_all_spawned", "setup_environment", "set_actor_transform",
+  "execute_python_script",
 ]);
 function turnChangedScene(msg) {
   return (msg?.toolCalls || []).some((tc) => {
@@ -1156,6 +1213,8 @@ async function sendChat(message, sessionId, onEvent, signal, options) {
         skills: options?.skills,
         feedback: options?.feedback,
         skillSelectionMode: options?.skillSelectionMode,
+        agent: options?.agent,
+        model: options?.model,
       }),
       signal: effectiveSignal,
     });
@@ -2244,7 +2303,7 @@ function SkillsPanel({
             }}
           >
             {autoEnabled
-              ? "Auto mode: Claude pre-selects relevant skills before each run."
+              ? "Auto mode: the agent pre-selects relevant skills before each run."
               : "Manual mode: check the exact skills you want active."}
           </div>
           {builtinSkills.length > 0 && (
@@ -2583,7 +2642,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
 
 // ─── ChatMessage ─────────────────────────────────────────────────────────────
 
-const ChatMessage = React.memo(function ChatMessage({ message }) {
+const ChatMessage = React.memo(function ChatMessage({ message, agentLabel: agentLabelText }) {
   const isUser = message.role === "user";
 
   const bubbleContent = isUser ? (
@@ -2593,7 +2652,7 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
       {message.waiting && (
         <div style={{ color:"#64748b", fontSize:12, display:"flex", alignItems:"center", gap:8, padding:"2px 0" }}>
           <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", border:"2px solid var(--blue)", borderTopColor:"transparent", animation:"spin 1s linear infinite" }} />
-          Waiting for Claude...
+          Waiting for {agentLabelText || "agent"}...
         </div>
       )}
       {message.blocks
@@ -2752,7 +2811,7 @@ function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRes
   );
 }
 
-function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
+function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, codingAgent, setCodingAgent, codingModel }) {
   const [messages, setMessages] = useState(() => [buildWelcomeMessage()]);
   const [checkpoints, setCheckpoints] = useState([]);
   const [activeLeafId, setActiveLeafId] = useState(null);
@@ -2907,7 +2966,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         id: assistantId,
         role: "assistant",
         content: "",
-        waiting: true,  // Show "Waiting for Claude..." until first event
+        waiting: true,  // Show "Waiting for {agent}..." until first event
         toolCalls: [],
         timestamp: Date.now(),
       };
@@ -3112,6 +3171,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             skills: selectedSkills.length > 0 ? selectedSkills : undefined,
             feedback: feedbackText,
             skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
+            agent: codingAgent,
+            model: codingModel,
           }
         );
         // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
@@ -3153,7 +3214,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         abortRef.current = null;
       }
     },
-    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, onScreenshotUpdate]
+    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, codingAgent, codingModel, onScreenshotUpdate]
   );
 
   const handleStop = () => {
@@ -3302,7 +3363,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               alignItems: "center",
             }}
           >
-            <span>Claude Code CLI</span>
+            <span>{agentLabel(codingAgent)}</span>
             <span>·</span>
             <span style={{ color: mcpStatus.startsWith("✓") ? "#16a34a" : "#dc2626" }}>
               MCP: {mcpStatus}
@@ -3440,7 +3501,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           const ckpt = checkpoints.find((c) => c.messageId === msg.id);
           return (
             <React.Fragment key={msg.id}>
-              <ChatMessage message={msg} />
+              <ChatMessage message={msg} agentLabel={agentLabel(codingAgent)} />
               {ckpt && (
                 <CheckpointBar
                   checkpoint={ckpt}
@@ -3562,6 +3623,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         </div>
         <div style={{ marginTop: 5, fontSize: 12, color: "var(--ink-3)" }}>
           Enter to send · Shift+Enter for new line
+          {/* Agent/model picker moved to the top-left nav bar (see CodingAgentSelector). */}
           <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "var(--blue)" : "var(--ink-3)" }}>
             {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
             {autoSelectingSkills ? " (selecting...)" : ""}
@@ -5466,6 +5528,63 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
   );
 }
 
+// ─── SaveAsButton ────────────────────────────────────────────────────────────
+// Saves the current editor world to /Game/SavedScenes/<name>.umap via the
+// /api/scene/save-as endpoint. Does NOT modify /Game/Main.umap on disk.
+// Hover for a tip explaining where the file lands.
+
+function SaveAsButton() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg]   = useState(null); // {kind:'ok'|'err', text}
+  const onClick = async () => {
+    if (busy) return;
+    const raw = window.prompt("Save current scene as (alphanumeric, _, -):", "");
+    if (raw == null) return;
+    const name = raw.trim();
+    if (!/^[A-Za-z0-9_\-]+$/.test(name)) {
+      setMsg({ kind: "err", text: "name must be [A-Za-z0-9_-]" });
+      setTimeout(() => setMsg(null), 4000);
+      return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/api/scene/save-as", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, revert_to_original: false }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setMsg({ kind: "err", text: (j.error || "save failed").slice(0, 80) });
+      } else {
+        setMsg({ kind: "ok", text: "Saved → " + j.asset_path });
+      }
+    } catch (e) {
+      setMsg({ kind: "err", text: e.message.slice(0, 80) });
+    } finally {
+      setBusy(false);
+      setTimeout(() => setMsg(null), 6000);
+    }
+  };
+  return (
+    <>
+      <button title="Save current scene as a new .umap (does NOT modify /Game/Main)"
+        disabled={busy} onClick={onClick}
+        style={{
+          padding:"2px 7px", fontSize:12, borderRadius:4, cursor:busy?"wait":"pointer",
+          border:"1px solid rgba(34,197,94,.3)", background:"rgba(34,197,94,.1)",
+          color: busy?"#334155":"#86efac",
+        }}>{busy ? "Saving…" : "💾 Save As"}</button>
+      {msg && (
+        <span style={{
+          fontSize:11, marginLeft:4,
+          color: msg.kind === "ok" ? "#86efac" : "#fca5a5",
+        }}>{msg.text}</span>
+      )}
+    </>
+  );
+}
+
 // ─── ViewportPanel ───────────────────────────────────────────────────────────
 
 function ViewportPanel({ latestScreenshot }) {
@@ -5643,6 +5762,7 @@ function ViewportPanel({ latestScreenshot }) {
               border:"1px solid rgba(220,38,38,.3)", background:"rgba(220,38,38,.1)",
               color: cameraMoving?"#334155":"#fca5a5",
             }}>✕ Unlock</button>
+          <SaveAsButton />
         </div>
 
         <div style={{ flex:1 }}/>
@@ -8152,7 +8272,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               letterSpacing: 0.5,
             }}
           >
-            How Claude Calls This Tool
+            How the Agent Calls This Tool
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
             Use <span style={{ color: "var(--blue)", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
@@ -8965,6 +9085,41 @@ function App() {
   // ── Theme + Studio Mode ───────────────────────────────────────────────────
   const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "dark");
   const [studioMode, setStudioMode] = useState(() => localStorage.getItem("sw_studio_mode") || "scene");
+  // Coding agent + model selection. Lives at the root so the topbar selector, the status
+  // badge, and the chat panel all reflect the choice without duplicate state. The backend
+  // list comes from GET /api/coding-agents (falls back to DEFAULT_CODING_AGENTS). The model
+  // is persisted per-agent under simworld.codingModel.<agent>.
+  const [codingAgents, setCodingAgents] = useState(DEFAULT_CODING_AGENTS);
+  const [codingAgent, setCodingAgentState] = useState(() => {
+    try { return localStorage.getItem("simworld.codingAgent") || "claude"; } catch { return "claude"; }
+  });
+  const modelKeyFor = (a) => `simworld.codingModel.${a}`;
+  const [codingModel, setCodingModelState] = useState(() => {
+    try { return localStorage.getItem(modelKeyFor(localStorage.getItem("simworld.codingAgent") || "claude")) || ""; }
+    catch { return ""; }
+  });
+  const setCodingModel = (v) => {
+    setCodingModelState(v);
+    try { localStorage.setItem(modelKeyFor(codingAgent), v); } catch {}
+  };
+  const setCodingAgent = (v) => {
+    setCodingAgentState(v);
+    try { localStorage.setItem("simworld.codingAgent", v); } catch {}
+    // Load the model previously chosen for this agent, else its default ("" = CLI default).
+    let m = "";
+    try { m = localStorage.getItem(modelKeyFor(v)) || ""; } catch {}
+    if (!m) m = codingAgents[v]?.defaultModel || "";
+    setCodingModelState(m);
+  };
+  // Pull the backend/model registry from the server once on mount.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/coding-agents`)
+      .then((r) => r.json())
+      .then((d) => { if (alive && d && d.agents && Object.keys(d.agents).length) setCodingAgents(d.agents); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const [topSection, setTopSection] = useState("studio"); // "studio" | "library" | "results"
   const [showSettings, setShowSettings] = useState(false);
 
@@ -9389,6 +9544,16 @@ function App() {
           <span className="sw-brand-name" style={{ fontSize:14 }}>SimWorld Studio</span>
         </div>
 
+        {/* Coding agent + model picker — prominent, top-left */}
+        <CodingAgentSelector
+          agents={codingAgents}
+          agent={codingAgent}
+          setAgent={setCodingAgent}
+          model={codingModel}
+          setModel={setCodingModel}
+        />
+        <div style={{ width:1, height:28, background:"var(--line)", flexShrink:0 }} />
+
         {/* Pipeline stepper — primary nav */}
         {topSection === "studio"
           ? <PipelineStepper activeMode={studioMode} onChange={m => { setStudioMode(m); setTopSection("studio"); }} />
@@ -9428,7 +9593,7 @@ function App() {
             <div style={{ display:"flex", alignItems:"center", gap:14, paddingRight:14, borderRight:"1px solid var(--line-2)" }}>
               <StatusDot label="UE Engine"   active={health.ueConnected}  activeColor="#16a34a" inactiveColor="#dc2626" />
               <StatusDot label="MCP Server"  active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label="Claude Code" active={true}                activeColor="#16a34a" inactiveColor="#64748b" />
+              <StatusDot label={agentLabel(codingAgent)} active={true}    activeColor="#16a34a" inactiveColor="#64748b" />
             </div>
           )}
           {!health && <span style={{ fontSize:13, color:"var(--ink-3)" }}>Connecting…</span>}
@@ -9581,6 +9746,9 @@ function App() {
                   onRef={setChatRef}
                   onSessionChange={setCurrentSessionId}
                   onChatDone={() => setContextRefreshKey(k => k + 1)}
+                  codingAgent={codingAgent}
+                  setCodingAgent={setCodingAgent}
+                  codingModel={codingModel}
                 />
               )}
               {leftPanel === "taskgen"    && <TaskGenPanel sessionId={currentSessionId} />}
