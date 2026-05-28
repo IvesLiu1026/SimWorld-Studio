@@ -1,139 +1,241 @@
 #!/bin/bash
 # SimWorld Studio - Launch Script
-# Usage: ./SimWorld-Studio.sh [--gpu INDEX] [--render-offscreen] [--port PORT]
-
-set -e
+# Starts: Cirrus (Pixel Streaming) + UE Editor + Web UI
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENGINE_DIR="$SCRIPT_DIR/Engine"
-PROJECT_DIR="$SCRIPT_DIR/gym_citynav"
-PROJECT_FILE="$PROJECT_DIR/gym_citynav.uproject"
+UE_ROOT="${UE_ROOT:-/data/koe/Linux_Unreal_Engine_5.3.2}"
+UE_PROJECT_PATH="${UE_PROJECT_PATH:-/data/koe/simworld_studio_projects}"
+ENGINE_DIR="$UE_ROOT/Engine"
+PROJECT_DIR="$UE_PROJECT_PATH"
+PROJECT_FILE="$PROJECT_DIR/SimWorld.uproject"
 UE_EDITOR="$ENGINE_DIR/Binaries/Linux/UnrealEditor"
+WEB_DIR="$SCRIPT_DIR/simworld_studio_workspace/web/server"
+WORKSPACE="$SCRIPT_DIR/simworld_studio_workspace"
+CIRRUS_JS="$ENGINE_DIR/Plugins/Media/PixelStreaming/Resources/WebServers/SignallingWebServer/cirrus.js"
 
-# Default settings
+# Defaults
+WEB_PORT=3002
 MCP_PORT=55559
-GPU_INDEX=""
-RENDER_OFFSCREEN=""
-RESOLUTION="-ResX=1280 -ResY=720"
-PIXEL_STREAMING_ARGS=""
-FPSMAX=""
+GPU_INDEX=0
+CIRRUS_HTTP_PORT=8585
+CIRRUS_WS_PORT=8586
+CIRRUS_SFU_PORT=8889
+MAP="/Game/Main.umap"
 
-# Parse arguments
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --gpu INDEX               GPU index (default: 0)"
+    echo "  --port PORT               Web UI port (default: 3002)"
+    echo "  --mcp-port PORT           UE MCP port (default: 55559)"
+    echo "  --cirrus-http-port PORT   Cirrus HTTP port (default: 8585)"
+    echo "  --cirrus-ws-port PORT     Cirrus WebSocket port (default: 8586)"
+    echo "  --cirrus-sfu-port PORT    Cirrus SFU port (default: 8889)"
+    echo "  --map MAP                 UE map path (default: /Game/Main.umap)"
+    echo "  --help                    Show this help"
+    echo ""
+    echo "Examples:"
+    echo "  $0 --gpu 0"
+    echo "  $0 --gpu 1 --port 3003 --mcp-port 55560"
+}
+
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --port)
-            MCP_PORT="$2"
-            shift 2
-            ;;
-        --gpu)
-            GPU_INDEX="$2"
-            shift 2
-            ;;
-        --render-offscreen)
-            RENDER_OFFSCREEN="-RenderOffScreen"
-            # In headless server mode, throttle the editor to save GPU.
-            # Interactive editing should NOT have this — it makes Slate UI laggy.
-            FPSMAX="-FPSMAX=15"
-            shift
-            ;;
-        --pixel-streaming)
-            PIXEL_STREAMING_ARGS="-PixelStreamingIP=127.0.0.1 -PixelStreamingPort=8586"
-            shift
-            ;;
-        --res)
-            RESOLUTION="-ResX=$2 -ResY=$3"
-            shift 3
-            ;;
-        --help|-h)
-            echo "SimWorld Studio Launcher"
-            echo ""
-            echo "Usage: $0 [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --gpu INDEX           GPU index to use (default: 0). Required on multi-GPU systems."
-            echo "  --render-offscreen    Run without display window (headless mode)"
-            echo "  --port PORT           MCP TCP port (default: 55559)"
-            echo "  --pixel-streaming     Enable Pixel Streaming on port 8586"
-            echo "  --res WIDTH HEIGHT    Set resolution (default: 1280 720)"
-            echo "  --help                Show this help"
-            echo ""
-            echo "Examples:"
-            echo "  $0 --gpu 0 --render-offscreen          # Headless on GPU 0"
-            echo "  $0 --gpu 1 --render-offscreen --port 55560  # GPU 1, custom port"
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1 (use --help for usage)"
-            exit 1
-            ;;
+        --port)             WEB_PORT="$2";           shift 2 ;;
+        --mcp-port)         MCP_PORT="$2";            shift 2 ;;
+        --gpu)              GPU_INDEX="$2";           shift 2 ;;
+        --cirrus-http-port) CIRRUS_HTTP_PORT="$2";    shift 2 ;;
+        --cirrus-ws-port)   CIRRUS_WS_PORT="$2";      shift 2 ;;
+        --cirrus-sfu-port)  CIRRUS_SFU_PORT="$2";     shift 2 ;;
+        --map)              MAP="$2";                 shift 2 ;;
+        --help|-h)          usage; exit 0 ;;
+        *) echo "Unknown option: $1 (use --help)"; exit 1 ;;
     esac
 done
 
-# Check if editor exists
+# ── Preflight checks ─────────────────────────────────────────────────────────
 if [ ! -f "$UE_EDITOR" ]; then
-    echo "ERROR: UnrealEditor not found at $UE_EDITOR"
-    echo "Make sure you extracted the SimWorld-Studio-Minimal archive correctly."
-    exit 1
+    echo "ERROR: UnrealEditor not found at $UE_EDITOR"; exit 1
 fi
-
-# Check if project exists
 if [ ! -f "$PROJECT_FILE" ]; then
-    echo "ERROR: Project file not found at $PROJECT_FILE"
-    exit 1
+    echo "ERROR: Project file not found at $PROJECT_FILE"; exit 1
 fi
 
-# --- GPU isolation for multi-GPU systems ---
-# On multi-GPU servers, Vulkan can crash trying to enumerate all GPUs.
-# We isolate to a single GPU using CUDA_VISIBLE_DEVICES and VK_DRIVER_FILES.
-if [ -n "$GPU_INDEX" ]; then
-    export CUDA_VISIBLE_DEVICES="$GPU_INDEX"
+# ── GPU isolation ─────────────────────────────────────────────────────────────
+export CUDA_VISIBLE_DEVICES="$GPU_INDEX"
+NVIDIA_ICD="/usr/share/vulkan/icd.d/nvidia_icd.json"
+[ -f "$NVIDIA_ICD" ] && export VK_ICD_FILENAMES="$NVIDIA_ICD"
 
-    # Try to find the Vulkan ICD file for GPU isolation
-    # This prevents Vulkan from enumerating all GPUs (which causes crashes)
-    NVIDIA_ICD="/usr/share/vulkan/icd.d/nvidia_icd.json"
-    if [ -f "$NVIDIA_ICD" ]; then
-        export VK_ICD_FILENAMES="$NVIDIA_ICD"
-    fi
+# ── SDL: prevent Wayland/X11 message-box crash on headless servers ────────────
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-offscreen}"
 
-    # Also set the UE graphics adapter flag
-    GPU_ADAPTER="-graphicsadapter=$GPU_INDEX"
+# ── UnrealCV port (write to Saved ini — command-line arg is broken upstream) ──
+UNREALCV_PORT="${UNREALCV_PORT:-${UCV_PORT:-9017}}"
+SAVED_INI="$PROJECT_DIR/Saved/unrealcv.ini"
+mkdir -p "$(dirname "$SAVED_INI")"
+if [ -f "$SAVED_INI" ]; then
+    sed -i "s/^Port=.*/Port=$UNREALCV_PORT/" "$SAVED_INI"
 else
-    # Default to GPU 0 on multi-GPU systems to avoid Vulkan enumeration issues
-    GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -1 || echo "1")
-    if [ "$GPU_COUNT" -gt 1 ] 2>/dev/null; then
-        echo "WARNING: Multi-GPU system detected ($GPU_COUNT GPUs)."
-        echo "  Defaulting to GPU 0. Use --gpu INDEX to select a specific GPU."
-        echo ""
-        export CUDA_VISIBLE_DEVICES="0"
-        GPU_ADAPTER="-graphicsadapter=0"
-
-        NVIDIA_ICD="/usr/share/vulkan/icd.d/nvidia_icd.json"
-        if [ -f "$NVIDIA_ICD" ]; then
-            export VK_ICD_FILENAMES="$NVIDIA_ICD"
-        fi
-    else
-        GPU_ADAPTER=""
-    fi
+    printf '[UnrealCV.Core]\nPort=%s\nWidth=640\nHeight=480\nFOV=90\nEnableInput=True\nEnableRightEye=False\n' "$UNREALCV_PORT" > "$SAVED_INI"
 fi
 
-echo "=== SimWorld Studio ==="
-echo "  Engine:   $UE_EDITOR"
-echo "  Project:  $PROJECT_FILE"
-echo "  MCP Port: $MCP_PORT"
-echo "  GPU:      ${GPU_INDEX:-auto}"
-echo "  Map:      /Game/Maps/Empty"
+mkdir -p "$WORKSPACE/logs"
+
+# ── Rotate logs (keep last run clean) ────────────────────────────────────────
+for f in cirrus ue web; do
+    > "$WORKSPACE/logs/$f.log"
+done
+
+# ── Write mcp.json for coding agent (keep in sync with MCP_PORT) ─────────────
+MCP_SERVER_JS="$WEB_DIR/mcp-server.js"
+cat > "$WORKSPACE/web/mcp.json" <<EOF
+{"mcpServers":{"simworld":{"command":"node","args":["$MCP_SERVER_JS"],"env":{"UNREAL_HOST":"127.0.0.1","UNREAL_PORT":"$MCP_PORT"}}}}
+EOF
+echo "[mcp.json] Written → UNREAL_PORT=$MCP_PORT"
+
+echo ""
+echo "======================================================="
+echo "  SimWorld Studio"
+echo "======================================================="
+echo "  Web UI:   http://localhost:$WEB_PORT"
+echo "  MCP:      $MCP_PORT  |  GPU: $GPU_INDEX"
+echo "  Cirrus:   HTTP:$CIRRUS_HTTP_PORT  WS:$CIRRUS_WS_PORT  SFU:$CIRRUS_SFU_PORT"
+echo "  Map:      $MAP"
+echo "======================================================="
 echo ""
 
-# Launch UE Editor
-exec "$UE_EDITOR" "$PROJECT_FILE" \
-    /Game/Maps/Empty.umap \
+PIDS=()
+
+cleanup() {
+    echo ""
+    echo "[studio] Shutting down..."
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null
+    done
+    wait 2>/dev/null
+    echo "[studio] Done."
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+# ── 1. Cirrus (Pixel Streaming signaling server) ──────────────────────────────
+CIRRUS_CONFIG="$WORKSPACE/cirrus-config.json"
+cat > "$CIRRUS_CONFIG" <<EOF
+{
+  "UseFrontend": true,
+  "UseMatchmaker": false,
+  "HttpPort": $CIRRUS_HTTP_PORT,
+  "StreamerPort": $CIRRUS_WS_PORT,
+  "SFUPort": $CIRRUS_SFU_PORT
+}
+EOF
+
+if [ -f "$CIRRUS_JS" ]; then
+    echo "[cirrus] Starting on HTTP:$CIRRUS_HTTP_PORT WS:$CIRRUS_WS_PORT..."
+    node "$CIRRUS_JS" --configFile="$CIRRUS_CONFIG" \
+        >> "$WORKSPACE/logs/cirrus.log" 2>&1 &
+    CIRRUS_PID=$!
+    PIDS+=($CIRRUS_PID)
+    # Verify cirrus actually bound the HTTP port (up to 8s)
+    CIRRUS_OK=0
+    for i in 1 2 3 4; do
+        sleep 2
+        if nc -z 127.0.0.1 $CIRRUS_HTTP_PORT 2>/dev/null; then
+            CIRRUS_OK=1; break
+        fi
+        if ! kill -0 $CIRRUS_PID 2>/dev/null; then
+            echo "[cirrus] ERROR: cirrus exited. Last log:"
+            tail -20 "$WORKSPACE/logs/cirrus.log"
+            cleanup
+        fi
+    done
+    if [ $CIRRUS_OK -eq 1 ]; then
+        echo "[cirrus] PID $CIRRUS_PID — port $CIRRUS_HTTP_PORT OK"
+    else
+        echo "[cirrus] ERROR: port $CIRRUS_HTTP_PORT not listening after 8s. Last log:"
+        tail -20 "$WORKSPACE/logs/cirrus.log"
+        cleanup
+    fi
+else
+    echo "[cirrus] WARNING: cirrus.js not found — Pixel Streaming viewport unavailable"
+    CIRRUS_PID=""
+fi
+
+# ── 2. UE Editor ──────────────────────────────────────────────────────────────
+echo "[ue] Launching UnrealEditor (headless, GPU $GPU_INDEX)..."
+"$UE_EDITOR" "$PROJECT_FILE" \
+    "$MAP" \
     -MCPPort=$MCP_PORT \
-    -NOSPLASH \
-    -NOSOUND \
-    $RESOLUTION \
-    $FPSMAX \
-    $GPU_ADAPTER \
-    $RENDER_OFFSCREEN \
-    $PIXEL_STREAMING_ARGS \
+    -Unattended -NOSPLASH -NOSOUND -Messaging \
+    -ResX=1280 -ResY=720 -FPSMAX=15 \
+    -graphicsadapter=$GPU_INDEX \
+    -RenderOffScreen \
+    -EditorPixelStreamingRes=1280x720 \
+    -EditorPixelStreamingStartOnLaunch=true \
+    -EditorPixelStreamingUseRemoteSignallingServer=true \
+    -PixelStreamingURL=ws://127.0.0.1:$CIRRUS_WS_PORT \
     -log \
-    "$@"
+    >> "$WORKSPACE/logs/ue.log" 2>&1 &
+UE_PID=$!
+PIDS+=($UE_PID)
+echo "[ue] PID $UE_PID, log: $WORKSPACE/logs/ue.log"
+
+# ── 3. Wait for MCP port ──────────────────────────────────────────────────────
+echo "[ue] Waiting for MCP port $MCP_PORT..."
+WAIT=0
+until nc -z 127.0.0.1 $MCP_PORT 2>/dev/null; do
+    if ! kill -0 $UE_PID 2>/dev/null; then
+        echo "[ue] ERROR: UE exited early. Check $WORKSPACE/logs/ue.log"
+        cleanup
+    fi
+    sleep 3
+    WAIT=$((WAIT+3))
+    if [ $WAIT -ge 120 ]; then
+        echo "[ue] ERROR: MCP port $MCP_PORT not ready after 120s"
+        cleanup
+    fi
+done
+echo "[ue] MCP ready!"
+
+# ── 4. Web UI server ──────────────────────────────────────────────────────────
+if [ -f "$WEB_DIR/index.js" ]; then
+    echo "[web] Starting on port $WEB_PORT..."
+    cd "$WEB_DIR"
+    PORT=$WEB_PORT \
+    UNREAL_HOST=127.0.0.1 \
+    UNREAL_PORT=$MCP_PORT \
+    UCV_PORT=$UNREALCV_PORT \
+    PIXEL_STREAMING_URL=http://127.0.0.1:$CIRRUS_HTTP_PORT \
+    CIRRUS_HTTP_PORT=$CIRRUS_HTTP_PORT \
+    CIRRUS_WS_PORT=$CIRRUS_WS_PORT \
+    node index.js >> "$WORKSPACE/logs/web.log" 2>&1 &
+    WEB_PID=$!
+    PIDS+=($WEB_PID)
+    echo "[web] PID $WEB_PID, log: $WORKSPACE/logs/web.log"
+    cd "$SCRIPT_DIR"
+else
+    echo "[web] WARNING: $WEB_DIR/index.js not found"
+fi
+
+echo ""
+echo "  Open: http://localhost:$WEB_PORT"
+echo "  Press Ctrl+C to stop all services."
+echo ""
+
+# ── Monitor: watch all three processes ───────────────────────────────────────
+while true; do
+    sleep 5
+    if ! kill -0 $UE_PID 2>/dev/null; then
+        echo "[studio] UE exited unexpectedly. Check $WORKSPACE/logs/ue.log"
+        cleanup
+    fi
+    if [ -n "$CIRRUS_PID" ] && ! kill -0 $CIRRUS_PID 2>/dev/null; then
+        echo "[studio] Cirrus exited unexpectedly. Check $WORKSPACE/logs/cirrus.log"
+        cleanup
+    fi
+    if [ -n "$WEB_PID" ] && ! kill -0 $WEB_PID 2>/dev/null; then
+        echo "[studio] Web server exited unexpectedly. Check $WORKSPACE/logs/web.log"
+        cleanup
+    fi
+done

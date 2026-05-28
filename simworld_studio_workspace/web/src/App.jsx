@@ -883,6 +883,62 @@ function ResultsPage() {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
+
+// Display labels for coding-agent CLI choices. Keys match /api/chat's `agent` body field.
+const AGENT_LABELS = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", gemini: "Gemini CLI" };
+const agentLabel = (a) => AGENT_LABELS[a] || a || "Code Agent";
+
+// Fallback backend+model registry used until GET /api/coding-agents resolves (or if it
+// fails). The server's coding-agents.json is the source of truth; keep this roughly in
+// sync as a graceful default. `defaultModel: ""` means "let the CLI/env decide".
+const DEFAULT_CODING_AGENTS = {
+  claude:   { label: "Claude Code", defaultModel: "", models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
+  codex:    { label: "Codex",       defaultModel: "", models: ["gpt-5-codex", "gpt-5", "o3"] },
+  opencode: { label: "OpenCode",    defaultModel: "", models: ["anthropic/claude-opus-4-8", "openai/gpt-5", "openai/gpt-4o", "google/gemini-2.5-pro"] },
+  gemini:   { label: "Gemini CLI",  defaultModel: "", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
+};
+
+// Prominent top-left Agent + Model picker shown in the top nav bar. The Model dropdown
+// repopulates per agent and offers a "Custom…" free-text entry for unlisted models.
+function CodingAgentSelector({ agents, agent, setAgent, model, setModel }) {
+  const cfg    = agents[agent] || {};
+  const models = cfg.models || [];
+  const derivedCustom = !!model && !models.includes(model);
+  const [forceCustom, setForceCustom] = useState(false);
+  // Drop custom mode when switching to an agent whose saved model is a listed one.
+  useEffect(() => { if (!derivedCustom) setForceCustom(false); }, [agent]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showCustom = forceCustom || derivedCustom;
+
+  const selStyle = {
+    fontSize: 12, fontWeight: 600, height: 28, padding: "0 6px",
+    background: "var(--bg-2)", color: "var(--ink-1)",
+    border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer",
+  };
+  const onModelChange = (v) => {
+    if (v === "__custom__") setForceCustom(true);
+    else { setForceCustom(false); setModel(v); }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
+         title="Coding agent backend and model used for scene generation">
+      {ICONS.bot ? <span style={{ display: "inline-flex", color: "var(--ink-3)" }}>{ICONS.bot(14)}</span> : null}
+      <select value={agent} onChange={(e) => setAgent(e.target.value)} style={selStyle} aria-label="Coding agent">
+        {Object.entries(agents).map(([id, a]) => <option key={id} value={id}>{a.label || id}</option>)}
+      </select>
+      <select value={showCustom ? "__custom__" : model} onChange={(e) => onModelChange(e.target.value)}
+              style={{ ...selStyle, maxWidth: 170 }} aria-label="Model">
+        <option value="">Default</option>
+        {models.map((m) => <option key={m} value={m}>{m}</option>)}
+        <option value="__custom__">Custom…</option>
+      </select>
+      {showCustom && (
+        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model id"
+               style={{ ...selStyle, width: 130, fontWeight: 400, cursor: "text" }} aria-label="Custom model id" />
+      )}
+    </div>
+  );
+}
 const EVOLUTION_ARTIFACT_POLL_MS = 5000;
 const EVOLUTION_TOAST_MAX = 2;
 const EVOLUTION_TOAST_TTL_MS = 5200;
@@ -1122,6 +1178,7 @@ async function resetScene() {
 const SCENE_TOOLS = new Set([
   "spawn_blueprint_actor", "spawn_actor", "spawn_agent",
   "delete_actor", "delete_all_spawned", "setup_environment", "set_actor_transform",
+  "execute_python_script",
 ]);
 function turnChangedScene(msg) {
   return (msg?.toolCalls || []).some((tc) => {
@@ -1156,6 +1213,8 @@ async function sendChat(message, sessionId, onEvent, signal, options) {
         skills: options?.skills,
         feedback: options?.feedback,
         skillSelectionMode: options?.skillSelectionMode,
+        agent: options?.agent,
+        model: options?.model,
       }),
       signal: effectiveSignal,
     });
@@ -2244,7 +2303,7 @@ function SkillsPanel({
             }}
           >
             {autoEnabled
-              ? "Auto mode: Claude pre-selects relevant skills before each run."
+              ? "Auto mode: the agent pre-selects relevant skills before each run."
               : "Manual mode: check the exact skills you want active."}
           </div>
           {builtinSkills.length > 0 && (
@@ -2583,7 +2642,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
 
 // ─── ChatMessage ─────────────────────────────────────────────────────────────
 
-const ChatMessage = React.memo(function ChatMessage({ message }) {
+const ChatMessage = React.memo(function ChatMessage({ message, agentLabel: agentLabelText }) {
   const isUser = message.role === "user";
 
   const bubbleContent = isUser ? (
@@ -2593,7 +2652,7 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
       {message.waiting && (
         <div style={{ color:"#64748b", fontSize:12, display:"flex", alignItems:"center", gap:8, padding:"2px 0" }}>
           <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", border:"2px solid var(--blue)", borderTopColor:"transparent", animation:"spin 1s linear infinite" }} />
-          Waiting for Claude...
+          Waiting for {agentLabelText || "agent"}...
         </div>
       )}
       {message.blocks
@@ -2734,10 +2793,12 @@ function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRes
         style={{ ...pill, cursor: "default", color: isActive ? "var(--blue)" : "var(--ink-3)", borderColor: isActive ? "var(--blue)" : "var(--line)" }}>
         📍 Checkpoint{isActive ? " · current" : ""}
       </span>
-      <button style={pill} disabled={restoring} title="Revert the live scene to this checkpoint"
-        onClick={() => onRestore(checkpoint.id)}>
-        {restoring ? "Restoring…" : "↩ Restore scene"}
-      </button>
+      {parent && (
+        <button style={pill} disabled={restoring} title="Revert the live scene to how it was before this message"
+          onClick={() => onRestore(parent)}>
+          {restoring ? "Reverting…" : "↩ Undo this change"}
+        </button>
+      )}
       {hasBranches && (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--ink-3)", fontSize: 11 }}
           title="Parallel branches that diverge from this point">
@@ -2752,7 +2813,7 @@ function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRes
   );
 }
 
-function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
+function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, codingAgent, setCodingAgent, codingModel }) {
   const [messages, setMessages] = useState(() => [buildWelcomeMessage()]);
   const [checkpoints, setCheckpoints] = useState([]);
   const [activeLeafId, setActiveLeafId] = useState(null);
@@ -2853,9 +2914,27 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
   useEffect(() => {
     if (!studioSession) return;
     listCheckpoints(studioSession)
-      .then((cps) => {
-        setCheckpoints(cps);
-        if (cps.length && !activeLeafRef.current) setActiveLeafId(cps[cps.length - 1].id);
+      .then(async (cps) => {
+        if (cps.length === 0) {
+          // Auto-snapshot the initial (empty) world so the user can always revert to the
+          // clean starting map. The base .umap is never modified — new sessions reload it.
+          try {
+            const sid = studioSession;
+            const welcomeId = messagesRef.current?.[0]?.id || null;
+            const rec = await createCheckpoint({
+              sessionId: sid, ownerId: sid, parentCheckpointId: null,
+              messageId: welcomeId, prompt: "Initial scene (empty world)", turnIndex: 0,
+              chatHistory: messagesRef.current,
+              thumbnailPath: screenshotPathFromUrl(latestScreenshotRef.current),
+            });
+            const withUrl = { ...rec, thumbnailUrl: rec.thumbnail ? `${API_BASE}/checkpoints/${sid}/${rec.id}/thumbnail` : null };
+            setCheckpoints([withUrl]);
+            setActiveLeafId(rec.id);
+          } catch { setCheckpoints([]); }
+        } else {
+          setCheckpoints(cps);
+          if (!activeLeafRef.current) setActiveLeafId(cps[cps.length - 1].id);
+        }
       })
       .catch(() => {});
   }, [studioSession]);
@@ -2907,7 +2986,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         id: assistantId,
         role: "assistant",
         content: "",
-        waiting: true,  // Show "Waiting for Claude..." until first event
+        waiting: true,  // Show "Waiting for {agent}..." until first event
         toolCalls: [],
         timestamp: Date.now(),
       };
@@ -3112,6 +3191,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             skills: selectedSkills.length > 0 ? selectedSkills : undefined,
             feedback: feedbackText,
             skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
+            agent: codingAgent,
+            model: codingModel,
           }
         );
         // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
@@ -3153,7 +3234,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         abortRef.current = null;
       }
     },
-    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, onScreenshotUpdate]
+    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, codingAgent, codingModel, onScreenshotUpdate]
   );
 
   const handleStop = () => {
@@ -3302,7 +3383,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               alignItems: "center",
             }}
           >
-            <span>Claude Code CLI</span>
+            <span>{agentLabel(codingAgent)}</span>
             <span>·</span>
             <span style={{ color: mcpStatus.startsWith("✓") ? "#16a34a" : "#dc2626" }}>
               MCP: {mcpStatus}
@@ -3440,7 +3521,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           const ckpt = checkpoints.find((c) => c.messageId === msg.id);
           return (
             <React.Fragment key={msg.id}>
-              <ChatMessage message={msg} />
+              <ChatMessage message={msg} agentLabel={agentLabel(codingAgent)} />
               {ckpt && (
                 <CheckpointBar
                   checkpoint={ckpt}
@@ -3562,6 +3643,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         </div>
         <div style={{ marginTop: 5, fontSize: 12, color: "var(--ink-3)" }}>
           Enter to send · Shift+Enter for new line
+          {/* Agent/model picker moved to the top-left nav bar (see CodingAgentSelector). */}
           <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "var(--blue)" : "var(--ink-3)" }}>
             {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
             {autoSelectingSkills ? " (selecting...)" : ""}
@@ -5466,6 +5548,63 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
   );
 }
 
+// ─── SaveAsButton ────────────────────────────────────────────────────────────
+// Saves the current editor world to /Game/SavedScenes/<name>.umap via the
+// /api/scene/save-as endpoint. Does NOT modify /Game/Main.umap on disk.
+// Hover for a tip explaining where the file lands.
+
+function SaveAsButton() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg]   = useState(null); // {kind:'ok'|'err', text}
+  const onClick = async () => {
+    if (busy) return;
+    const raw = window.prompt("Save current scene as (alphanumeric, _, -):", "");
+    if (raw == null) return;
+    const name = raw.trim();
+    if (!/^[A-Za-z0-9_\-]+$/.test(name)) {
+      setMsg({ kind: "err", text: "name must be [A-Za-z0-9_-]" });
+      setTimeout(() => setMsg(null), 4000);
+      return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/api/scene/save-as", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, revert_to_original: false }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setMsg({ kind: "err", text: (j.error || "save failed").slice(0, 80) });
+      } else {
+        setMsg({ kind: "ok", text: "Saved → " + j.asset_path });
+      }
+    } catch (e) {
+      setMsg({ kind: "err", text: e.message.slice(0, 80) });
+    } finally {
+      setBusy(false);
+      setTimeout(() => setMsg(null), 6000);
+    }
+  };
+  return (
+    <>
+      <button title="Save current scene as a new .umap (does NOT modify /Game/Main)"
+        disabled={busy} onClick={onClick}
+        style={{
+          padding:"2px 7px", fontSize:12, borderRadius:4, cursor:busy?"wait":"pointer",
+          border:"1px solid rgba(34,197,94,.3)", background:"rgba(34,197,94,.1)",
+          color: busy?"#334155":"#86efac",
+        }}>{busy ? "Saving…" : "💾 Save As"}</button>
+      {msg && (
+        <span style={{
+          fontSize:11, marginLeft:4,
+          color: msg.kind === "ok" ? "#86efac" : "#fca5a5",
+        }}>{msg.text}</span>
+      )}
+    </>
+  );
+}
+
 // ─── ViewportPanel ───────────────────────────────────────────────────────────
 
 function ViewportPanel({ latestScreenshot }) {
@@ -5643,6 +5782,7 @@ function ViewportPanel({ latestScreenshot }) {
               border:"1px solid rgba(220,38,38,.3)", background:"rgba(220,38,38,.1)",
               color: cameraMoving?"#334155":"#fca5a5",
             }}>✕ Unlock</button>
+          <SaveAsButton />
         </div>
 
         <div style={{ flex:1 }}/>
@@ -6128,180 +6268,120 @@ function AssetBrowser({ onInsert }) {
 // ─── SceneManager ────────────────────────────────────────────────────────────
 
 function SceneManager({ onLoadScene, currentSessionId }) {
-  const [scenes, setScenes] = useState([]);
-  const [loading, setLoading] = useState(false); // start false — lazy load
+  // Two sub-panels: "Checkpoints" (this session's in-scene snapshots — restore via
+  // manifest replay) and "Saved Maps" (persistent .umap versions from Save As — load
+  // via /api/load-map). Kept separate on purpose so ephemeral undo points and durable
+  // saved scenes don't get confused.
+  const [tab, setTab] = useState("checkpoints");
+  const [studioSid, setStudioSid] = useState(null);
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [maps, setMaps] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [note, setNote] = useState("");
   const containerRef = useRef(null);
-  const loadedRef    = useRef(false);
+  const loadedRef = useRef(false);
 
-  const reload = useCallback(() => {
+  const reload = useCallback(async () => {
     setLoading(true);
-    fetchScenes()
-      .then(setScenes)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    try {
+      const sess = await fetch(`${API_BASE}/session`).then((r) => r.json()).catch(() => null);
+      const sid = sess?.sessionId || null;
+      setStudioSid(sid);
+      if (sid) setCheckpoints(await listCheckpoints(sid).catch(() => []));
+      const m = await fetch(`${API_BASE}/saved-maps`).then((r) => r.json()).then((d) => d.maps || []).catch(() => []);
+      setMaps(m);
+    } finally { setLoading(false); }
   }, []);
 
-  // Lazy: only fetch when component scrolls into view (drawer opened)
+  // Lazy: only fetch when the drawer scrolls into view.
   useEffect(() => {
     if (loadedRef.current) return;
     const el = containerRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !loadedRef.current) {
-        loadedRef.current = true;
-        reload();
-        observer.disconnect();
-      }
+      if (entry.isIntersecting && !loadedRef.current) { loadedRef.current = true; reload(); observer.disconnect(); }
     }, { threshold: 0.1 });
     observer.observe(el);
     return () => observer.disconnect();
   }, [reload]);
 
-  const handleDelete = async (id) => {
-    if (confirm("Delete this scene?")) {
-      await deleteScene(id);
-      reload();
-    }
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(""), 2500); };
+
+  const restoreCkpt = async (id) => {
+    if (!studioSid) return;
+    setBusyId(id);
+    try { await restoreCheckpoint(studioSid, id); flash("Scene restored"); }
+    catch { flash("Restore failed"); }
+    finally { setBusyId(null); }
+  };
+  const loadMapVersion = async (path) => {
+    setBusyId(path);
+    flash("Loading map… (heavy scenes may take ~30s; viewport will re-attach)");
+    try {
+      // Heavy/cold maps block UE briefly and drop the live stream — switching is fine,
+      // we just force the viewport to re-attach afterward (no restart).
+      const r = await fetch(`${API_BASE}/load-map`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+      if (r.ok) {
+        flash("Map loaded — reconnecting viewport…");
+        setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
+      } else { flash("Load failed"); }
+    } catch { flash("Load failed"); }
+    finally { setBusyId(null); }
   };
 
+  const tabBtn = (id, label) => (
+    <button onClick={() => setTab(id)} style={{
+      padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+      border: "none", borderBottom: tab === id ? "2px solid var(--blue)" : "2px solid transparent",
+      background: "transparent", color: tab === id ? "var(--blue)" : "var(--ink-3)",
+    }}>{label}</button>
+  );
+  const card = { marginBottom: 8, borderRadius: 6, overflow: "hidden", border: "1px solid var(--line)", background: "var(--panel)" };
+  const actBtn = (busy) => ({ padding: "2px 8px", fontSize: 12, borderRadius: 3, border: "1px solid var(--blue)", background: "transparent", color: "var(--blue)", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 });
+
   return (
-    <div
-      ref={containerRef}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "var(--bg)",
-      }}
-    >
-      <div
-        style={{
-          padding: "8px 12px",
-          borderBottom: "1px solid var(--line)",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Saved Scenes</span>
-        <button
-          onClick={reload}
-          style={{
-            marginLeft: "auto",
-            padding: "3px 8px",
-            fontSize: 12,
-            background: "var(--panel-2)",
-            border: "1px solid var(--line)",
-            borderRadius: 4,
-            color: "var(--ink-3)",
-            cursor: "pointer",
-          }}
-        >
-          Refresh
-        </button>
+    <div ref={containerRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg)" }}>
+      <div style={{ padding: "6px 12px 0", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 4 }}>
+        {tabBtn("checkpoints", "Checkpoints")}
+        {tabBtn("maps", "Saved Maps")}
+        <button onClick={reload} title="Refresh" style={{ marginLeft: "auto", marginBottom: 4, padding: "3px 8px", fontSize: 12, background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 4, color: "var(--ink-3)", cursor: "pointer" }}>↻</button>
       </div>
+      {note && <div style={{ padding: "4px 12px", fontSize: 11, color: "var(--blue)" }}>{note}</div>}
 
       <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
-        {loading && (
-          <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 12 }}>Loading...</div>
-        )}
-        {!loading && scenes.length === 0 && (
-          <div
-            style={{
-              padding: 20,
-              textAlign: "center",
-              color: "var(--ink-2)",
-              fontSize: 12,
-            }}
-          >
-            No saved scenes yet. Use the save button after generating a scene.
-          </div>
-        )}
-        {scenes.map((scene) => (
-          <div
-            key={scene.id}
-            style={{
-              marginBottom: 8,
-              borderRadius: 6,
-              overflow: "hidden",
-              border: "1px solid var(--line)",
-              background: "var(--panel)",
-            }}
-          >
-            {scene.thumbnail && (
-              <div
-                style={{
-                  height: 100,
-                  overflow: "hidden",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <img
-                  src={scene.thumbnail}
-                  alt={scene.name}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              </div>
-            )}
-            <div style={{ padding: "8px 10px" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)" }}>{scene.name}</div>
-              {scene.prompt && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--ink-3)",
-                    marginTop: 3,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {scene.prompt.length > 80 ? scene.prompt.slice(0, 80) + "..." : scene.prompt}
-                </div>
-              )}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  marginTop: 6,
-                }}
-              >
-                <span style={{ fontSize: 12, color: "var(--ink-2)" }}>
-                  {new Date(scene.updatedAt).toLocaleDateString()}
-                </span>
-                <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-                  <button
-                    onClick={() => onLoadScene(scene)}
-                    style={{
-                      padding: "2px 8px",
-                      fontSize: 12,
-                      borderRadius: 3,
-                      border: "1px solid var(--blue)",
-                      background: "transparent",
-                      color: "var(--blue)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Load
-                  </button>
-                  <button
-                    onClick={() => handleDelete(scene.id)}
-                    style={{
-                      padding: "2px 8px",
-                      fontSize: 12,
-                      borderRadius: 3,
-                      border: "1px solid var(--line)",
-                      background: "transparent",
-                      color: "var(--red)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Del
-                  </button>
+        {loading && <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 12 }}>Loading…</div>}
+
+        {!loading && tab === "checkpoints" && (
+          checkpoints.length === 0
+            ? <div style={{ padding: 20, textAlign: "center", color: "var(--ink-2)", fontSize: 12 }}>No checkpoints yet — they're created automatically as you modify the scene this session.</div>
+            : [...checkpoints].reverse().map((c) => (
+              <div key={c.id} style={card}>
+                {c.thumbnailUrl && <div style={{ height: 100, overflow: "hidden", borderBottom: "1px solid var(--line)" }}><img src={c.thumbnailUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /></div>}
+                <div style={{ padding: "8px 10px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)" }}>{c.prompt ? (c.prompt.length > 70 ? c.prompt.slice(0, 70) + "…" : c.prompt) : `Turn ${c.turnIndex}`}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-2)" }}>{c.actorCount} obj · {new Date(c.createdAt).toLocaleTimeString()}</span>
+                    <button onClick={() => restoreCkpt(c.id)} disabled={busyId === c.id} style={{ marginLeft: "auto", ...actBtn(busyId === c.id) }}>{busyId === c.id ? "Restoring…" : "Restore"}</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        ))}
+            ))
+        )}
+
+        {!loading && tab === "maps" && (
+          maps.length === 0
+            ? <div style={{ padding: 20, textAlign: "center", color: "var(--ink-2)", fontSize: 12 }}>No saved maps. Use “Save As” to persist the current scene as a reusable map.</div>
+            : maps.map((m) => (
+              <div key={m.path} style={{ ...card, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}{/^empty_map$/i.test(m.name) ? "  · base" : ""}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.path}</div>
+                </div>
+                <button onClick={() => loadMapVersion(m.path)} disabled={busyId === m.path} style={{ marginLeft: "auto", flexShrink: 0, ...actBtn(busyId === m.path) }}>{busyId === m.path ? "Loading…" : "Load"}</button>
+              </div>
+            ))
+        )}
       </div>
     </div>
   );
@@ -8152,7 +8232,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               letterSpacing: 0.5,
             }}
           >
-            How Claude Calls This Tool
+            How the Agent Calls This Tool
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
             Use <span style={{ color: "var(--blue)", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
@@ -8965,6 +9045,41 @@ function App() {
   // ── Theme + Studio Mode ───────────────────────────────────────────────────
   const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "dark");
   const [studioMode, setStudioMode] = useState(() => localStorage.getItem("sw_studio_mode") || "scene");
+  // Coding agent + model selection. Lives at the root so the topbar selector, the status
+  // badge, and the chat panel all reflect the choice without duplicate state. The backend
+  // list comes from GET /api/coding-agents (falls back to DEFAULT_CODING_AGENTS). The model
+  // is persisted per-agent under simworld.codingModel.<agent>.
+  const [codingAgents, setCodingAgents] = useState(DEFAULT_CODING_AGENTS);
+  const [codingAgent, setCodingAgentState] = useState(() => {
+    try { return localStorage.getItem("simworld.codingAgent") || "claude"; } catch { return "claude"; }
+  });
+  const modelKeyFor = (a) => `simworld.codingModel.${a}`;
+  const [codingModel, setCodingModelState] = useState(() => {
+    try { return localStorage.getItem(modelKeyFor(localStorage.getItem("simworld.codingAgent") || "claude")) || ""; }
+    catch { return ""; }
+  });
+  const setCodingModel = (v) => {
+    setCodingModelState(v);
+    try { localStorage.setItem(modelKeyFor(codingAgent), v); } catch {}
+  };
+  const setCodingAgent = (v) => {
+    setCodingAgentState(v);
+    try { localStorage.setItem("simworld.codingAgent", v); } catch {}
+    // Load the model previously chosen for this agent, else its default ("" = CLI default).
+    let m = "";
+    try { m = localStorage.getItem(modelKeyFor(v)) || ""; } catch {}
+    if (!m) m = codingAgents[v]?.defaultModel || "";
+    setCodingModelState(m);
+  };
+  // Pull the backend/model registry from the server once on mount.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/coding-agents`)
+      .then((r) => r.json())
+      .then((d) => { if (alive && d && d.agents && Object.keys(d.agents).length) setCodingAgents(d.agents); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const [topSection, setTopSection] = useState("studio"); // "studio" | "library" | "results"
   const [showSettings, setShowSettings] = useState(false);
 
@@ -9389,6 +9504,16 @@ function App() {
           <span className="sw-brand-name" style={{ fontSize:14 }}>SimWorld Studio</span>
         </div>
 
+        {/* Coding agent + model picker — prominent, top-left */}
+        <CodingAgentSelector
+          agents={codingAgents}
+          agent={codingAgent}
+          setAgent={setCodingAgent}
+          model={codingModel}
+          setModel={setCodingModel}
+        />
+        <div style={{ width:1, height:28, background:"var(--line)", flexShrink:0 }} />
+
         {/* Pipeline stepper — primary nav */}
         {topSection === "studio"
           ? <PipelineStepper activeMode={studioMode} onChange={m => { setStudioMode(m); setTopSection("studio"); }} />
@@ -9428,7 +9553,7 @@ function App() {
             <div style={{ display:"flex", alignItems:"center", gap:14, paddingRight:14, borderRight:"1px solid var(--line-2)" }}>
               <StatusDot label="UE Engine"   active={health.ueConnected}  activeColor="#16a34a" inactiveColor="#dc2626" />
               <StatusDot label="MCP Server"  active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label="Claude Code" active={true}                activeColor="#16a34a" inactiveColor="#64748b" />
+              <StatusDot label={agentLabel(codingAgent)} active={true}    activeColor="#16a34a" inactiveColor="#64748b" />
             </div>
           )}
           {!health && <span style={{ fontSize:13, color:"var(--ink-3)" }}>Connecting…</span>}
@@ -9581,6 +9706,9 @@ function App() {
                   onRef={setChatRef}
                   onSessionChange={setCurrentSessionId}
                   onChatDone={() => setContextRefreshKey(k => k + 1)}
+                  codingAgent={codingAgent}
+                  setCodingAgent={setCodingAgent}
+                  codingModel={codingModel}
                 />
               )}
               {leftPanel === "taskgen"    && <TaskGenPanel sessionId={currentSessionId} />}
