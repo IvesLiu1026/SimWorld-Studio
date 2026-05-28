@@ -114,7 +114,9 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
 
   let proc;
   try {
-    proc = spawn(OPENCODE_BIN, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    // OS sandbox: repo read-only so the agent can't modify Studio source (see agent-sandbox.js).
+    const _sb = require("./agent-sandbox").sandboxedSpawn(OPENCODE_BIN, args, cwd);
+    proc = spawn(_sb.cmd, _sb.args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   } catch (e) {
     emit("text", { delta: `\n\n⚠️ Failed to launch OpenCode (\`${OPENCODE_BIN}\`): ${e.message}. Install the opencode CLI and set OPENCODE_BIN if needed.\n` });
     emit("done", { sessionId: STUDIO_SESSION, isError: true, latestScreenshot: null });

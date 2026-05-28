@@ -172,7 +172,9 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
   logToFile("gemini", `User: "${String(message).slice(0, 200)}" sessionId=${sessionId || "new"}`);
   try { fs.writeFileSync(path.join(LOG_DIR, "raw_latest.jsonl"), ""); } catch {}
 
-  const proc = spawn(GEMINI_BIN, args, {
+  // OS sandbox: repo read-only so the agent can't modify Studio source (see agent-sandbox.js).
+  const _sb = require("./agent-sandbox").sandboxedSpawn(GEMINI_BIN, args, geminiCwd);
+  const proc = spawn(_sb.cmd, _sb.args, {
     cwd: geminiCwd,
     env,
     stdio: ["ignore", "pipe", "pipe"],
