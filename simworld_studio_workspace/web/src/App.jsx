@@ -2793,10 +2793,12 @@ function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRes
         style={{ ...pill, cursor: "default", color: isActive ? "var(--blue)" : "var(--ink-3)", borderColor: isActive ? "var(--blue)" : "var(--line)" }}>
         📍 Checkpoint{isActive ? " · current" : ""}
       </span>
-      <button style={pill} disabled={restoring} title="Revert the live scene to this checkpoint"
-        onClick={() => onRestore(checkpoint.id)}>
-        {restoring ? "Restoring…" : "↩ Restore scene"}
-      </button>
+      {parent && (
+        <button style={pill} disabled={restoring} title="Revert the live scene to how it was before this message"
+          onClick={() => onRestore(parent)}>
+          {restoring ? "Reverting…" : "↩ Undo this change"}
+        </button>
+      )}
       {hasBranches && (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--ink-3)", fontSize: 11 }}
           title="Parallel branches that diverge from this point">
@@ -2912,9 +2914,27 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
   useEffect(() => {
     if (!studioSession) return;
     listCheckpoints(studioSession)
-      .then((cps) => {
-        setCheckpoints(cps);
-        if (cps.length && !activeLeafRef.current) setActiveLeafId(cps[cps.length - 1].id);
+      .then(async (cps) => {
+        if (cps.length === 0) {
+          // Auto-snapshot the initial (empty) world so the user can always revert to the
+          // clean starting map. The base .umap is never modified — new sessions reload it.
+          try {
+            const sid = studioSession;
+            const welcomeId = messagesRef.current?.[0]?.id || null;
+            const rec = await createCheckpoint({
+              sessionId: sid, ownerId: sid, parentCheckpointId: null,
+              messageId: welcomeId, prompt: "Initial scene (empty world)", turnIndex: 0,
+              chatHistory: messagesRef.current,
+              thumbnailPath: screenshotPathFromUrl(latestScreenshotRef.current),
+            });
+            const withUrl = { ...rec, thumbnailUrl: rec.thumbnail ? `${API_BASE}/checkpoints/${sid}/${rec.id}/thumbnail` : null };
+            setCheckpoints([withUrl]);
+            setActiveLeafId(rec.id);
+          } catch { setCheckpoints([]); }
+        } else {
+          setCheckpoints(cps);
+          if (!activeLeafRef.current) setActiveLeafId(cps[cps.length - 1].id);
+        }
       })
       .catch(() => {});
   }, [studioSession]);
@@ -6248,180 +6268,120 @@ function AssetBrowser({ onInsert }) {
 // ─── SceneManager ────────────────────────────────────────────────────────────
 
 function SceneManager({ onLoadScene, currentSessionId }) {
-  const [scenes, setScenes] = useState([]);
-  const [loading, setLoading] = useState(false); // start false — lazy load
+  // Two sub-panels: "Checkpoints" (this session's in-scene snapshots — restore via
+  // manifest replay) and "Saved Maps" (persistent .umap versions from Save As — load
+  // via /api/load-map). Kept separate on purpose so ephemeral undo points and durable
+  // saved scenes don't get confused.
+  const [tab, setTab] = useState("checkpoints");
+  const [studioSid, setStudioSid] = useState(null);
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [maps, setMaps] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [note, setNote] = useState("");
   const containerRef = useRef(null);
-  const loadedRef    = useRef(false);
+  const loadedRef = useRef(false);
 
-  const reload = useCallback(() => {
+  const reload = useCallback(async () => {
     setLoading(true);
-    fetchScenes()
-      .then(setScenes)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    try {
+      const sess = await fetch(`${API_BASE}/session`).then((r) => r.json()).catch(() => null);
+      const sid = sess?.sessionId || null;
+      setStudioSid(sid);
+      if (sid) setCheckpoints(await listCheckpoints(sid).catch(() => []));
+      const m = await fetch(`${API_BASE}/saved-maps`).then((r) => r.json()).then((d) => d.maps || []).catch(() => []);
+      setMaps(m);
+    } finally { setLoading(false); }
   }, []);
 
-  // Lazy: only fetch when component scrolls into view (drawer opened)
+  // Lazy: only fetch when the drawer scrolls into view.
   useEffect(() => {
     if (loadedRef.current) return;
     const el = containerRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !loadedRef.current) {
-        loadedRef.current = true;
-        reload();
-        observer.disconnect();
-      }
+      if (entry.isIntersecting && !loadedRef.current) { loadedRef.current = true; reload(); observer.disconnect(); }
     }, { threshold: 0.1 });
     observer.observe(el);
     return () => observer.disconnect();
   }, [reload]);
 
-  const handleDelete = async (id) => {
-    if (confirm("Delete this scene?")) {
-      await deleteScene(id);
-      reload();
-    }
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(""), 2500); };
+
+  const restoreCkpt = async (id) => {
+    if (!studioSid) return;
+    setBusyId(id);
+    try { await restoreCheckpoint(studioSid, id); flash("Scene restored"); }
+    catch { flash("Restore failed"); }
+    finally { setBusyId(null); }
+  };
+  const loadMapVersion = async (path) => {
+    setBusyId(path);
+    flash("Loading map… (heavy scenes may take ~30s; viewport will re-attach)");
+    try {
+      // Heavy/cold maps block UE briefly and drop the live stream — switching is fine,
+      // we just force the viewport to re-attach afterward (no restart).
+      const r = await fetch(`${API_BASE}/load-map`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+      if (r.ok) {
+        flash("Map loaded — reconnecting viewport…");
+        setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
+      } else { flash("Load failed"); }
+    } catch { flash("Load failed"); }
+    finally { setBusyId(null); }
   };
 
+  const tabBtn = (id, label) => (
+    <button onClick={() => setTab(id)} style={{
+      padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+      border: "none", borderBottom: tab === id ? "2px solid var(--blue)" : "2px solid transparent",
+      background: "transparent", color: tab === id ? "var(--blue)" : "var(--ink-3)",
+    }}>{label}</button>
+  );
+  const card = { marginBottom: 8, borderRadius: 6, overflow: "hidden", border: "1px solid var(--line)", background: "var(--panel)" };
+  const actBtn = (busy) => ({ padding: "2px 8px", fontSize: 12, borderRadius: 3, border: "1px solid var(--blue)", background: "transparent", color: "var(--blue)", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 });
+
   return (
-    <div
-      ref={containerRef}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "var(--bg)",
-      }}
-    >
-      <div
-        style={{
-          padding: "8px 12px",
-          borderBottom: "1px solid var(--line)",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Saved Scenes</span>
-        <button
-          onClick={reload}
-          style={{
-            marginLeft: "auto",
-            padding: "3px 8px",
-            fontSize: 12,
-            background: "var(--panel-2)",
-            border: "1px solid var(--line)",
-            borderRadius: 4,
-            color: "var(--ink-3)",
-            cursor: "pointer",
-          }}
-        >
-          Refresh
-        </button>
+    <div ref={containerRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg)" }}>
+      <div style={{ padding: "6px 12px 0", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 4 }}>
+        {tabBtn("checkpoints", "Checkpoints")}
+        {tabBtn("maps", "Saved Maps")}
+        <button onClick={reload} title="Refresh" style={{ marginLeft: "auto", marginBottom: 4, padding: "3px 8px", fontSize: 12, background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 4, color: "var(--ink-3)", cursor: "pointer" }}>↻</button>
       </div>
+      {note && <div style={{ padding: "4px 12px", fontSize: 11, color: "var(--blue)" }}>{note}</div>}
 
       <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
-        {loading && (
-          <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 12 }}>Loading...</div>
-        )}
-        {!loading && scenes.length === 0 && (
-          <div
-            style={{
-              padding: 20,
-              textAlign: "center",
-              color: "var(--ink-2)",
-              fontSize: 12,
-            }}
-          >
-            No saved scenes yet. Use the save button after generating a scene.
-          </div>
-        )}
-        {scenes.map((scene) => (
-          <div
-            key={scene.id}
-            style={{
-              marginBottom: 8,
-              borderRadius: 6,
-              overflow: "hidden",
-              border: "1px solid var(--line)",
-              background: "var(--panel)",
-            }}
-          >
-            {scene.thumbnail && (
-              <div
-                style={{
-                  height: 100,
-                  overflow: "hidden",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <img
-                  src={scene.thumbnail}
-                  alt={scene.name}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              </div>
-            )}
-            <div style={{ padding: "8px 10px" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)" }}>{scene.name}</div>
-              {scene.prompt && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--ink-3)",
-                    marginTop: 3,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {scene.prompt.length > 80 ? scene.prompt.slice(0, 80) + "..." : scene.prompt}
-                </div>
-              )}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  marginTop: 6,
-                }}
-              >
-                <span style={{ fontSize: 12, color: "var(--ink-2)" }}>
-                  {new Date(scene.updatedAt).toLocaleDateString()}
-                </span>
-                <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-                  <button
-                    onClick={() => onLoadScene(scene)}
-                    style={{
-                      padding: "2px 8px",
-                      fontSize: 12,
-                      borderRadius: 3,
-                      border: "1px solid var(--blue)",
-                      background: "transparent",
-                      color: "var(--blue)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Load
-                  </button>
-                  <button
-                    onClick={() => handleDelete(scene.id)}
-                    style={{
-                      padding: "2px 8px",
-                      fontSize: 12,
-                      borderRadius: 3,
-                      border: "1px solid var(--line)",
-                      background: "transparent",
-                      color: "var(--red)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Del
-                  </button>
+        {loading && <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 12 }}>Loading…</div>}
+
+        {!loading && tab === "checkpoints" && (
+          checkpoints.length === 0
+            ? <div style={{ padding: 20, textAlign: "center", color: "var(--ink-2)", fontSize: 12 }}>No checkpoints yet — they're created automatically as you modify the scene this session.</div>
+            : [...checkpoints].reverse().map((c) => (
+              <div key={c.id} style={card}>
+                {c.thumbnailUrl && <div style={{ height: 100, overflow: "hidden", borderBottom: "1px solid var(--line)" }}><img src={c.thumbnailUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /></div>}
+                <div style={{ padding: "8px 10px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)" }}>{c.prompt ? (c.prompt.length > 70 ? c.prompt.slice(0, 70) + "…" : c.prompt) : `Turn ${c.turnIndex}`}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-2)" }}>{c.actorCount} obj · {new Date(c.createdAt).toLocaleTimeString()}</span>
+                    <button onClick={() => restoreCkpt(c.id)} disabled={busyId === c.id} style={{ marginLeft: "auto", ...actBtn(busyId === c.id) }}>{busyId === c.id ? "Restoring…" : "Restore"}</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        ))}
+            ))
+        )}
+
+        {!loading && tab === "maps" && (
+          maps.length === 0
+            ? <div style={{ padding: 20, textAlign: "center", color: "var(--ink-2)", fontSize: 12 }}>No saved maps. Use “Save As” to persist the current scene as a reusable map.</div>
+            : maps.map((m) => (
+              <div key={m.path} style={{ ...card, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}{/^empty_map$/i.test(m.name) ? "  · base" : ""}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.path}</div>
+                </div>
+                <button onClick={() => loadMapVersion(m.path)} disabled={busyId === m.path} style={{ marginLeft: "auto", flexShrink: 0, ...actBtn(busyId === m.path) }}>{busyId === m.path ? "Loading…" : "Load"}</button>
+              </div>
+            ))
+        )}
       </div>
     </div>
   );

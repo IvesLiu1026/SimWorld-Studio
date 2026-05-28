@@ -50,7 +50,16 @@ function ensureOpenCodeWorkspace(mcpConfigPath, unrealPort, logToFile) {
         environment,
       };
     }
-    const config = { $schema: "https://opencode.ai/config.json", mcp: servers };
+    // SECURITY: this is a scene-generation agent, not a coding agent. Hard-deny every
+    // built-in file/shell tool so it can ONLY act through the simworld MCP tools — it must
+    // not read or modify Studio's source. Without this, the model uses bash/read/write as an
+    // escape hatch (e.g. poking at mcp-server.js) instead of the scene tools.
+    const config = {
+      $schema: "https://opencode.ai/config.json",
+      mcp: servers,
+      permission: { bash: "deny", edit: "deny", webfetch: "deny" },
+      tools: { bash: false, edit: false, write: false, read: false, grep: false, glob: false, list: false, patch: false, webfetch: false, todowrite: false, todoread: false },
+    };
     fs.writeFileSync(path.join(cwd, "opencode.json"), JSON.stringify(config, null, 2));
   } catch (e) {
     logToFile && logToFile("opencode", `failed to write opencode.json: ${e.message}`);
@@ -89,7 +98,11 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
 
   const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${message}` : String(message || "");
 
-  const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
+  // --pure = run WITHOUT external plugins/skills. Critical: without it, opencode discovers
+  // the repo's `.agents/skills/simworld-mcp` skill and invokes a generic `skill`→bash path
+  // instead of the real MCP tools (that's why it went poking at source). With --pure it uses
+  // the simworld MCP tools directly (verified: spawn_blueprint_actor actually runs).
+  const args = ["run", "--pure", "--format", "json", "--dangerously-skip-permissions"];
   if (model) args.push("--model", model);
   args.push(fullPrompt);
 

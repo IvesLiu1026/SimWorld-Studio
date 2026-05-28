@@ -52,7 +52,11 @@ function _ensureGeminiSettings(mcpConfigPath, geminiCwd, logToFile) {
     let prev = null;
     try { prev = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
     // Preserve any unrelated keys the user added (themes, telemetry, etc.).
-    const merged = { ...(prev || {}), mcpServers: servers };
+    // SECURITY: scene-gen agent — exclude the built-in shell/file tools so it can ONLY use
+    // the simworld MCP tools (cannot read or modify Studio source).
+    const merged = { ...(prev || {}), mcpServers: servers,
+      excludeTools: ["run_shell_command", "write_file", "replace", "read_file", "read_many_files",
+        "glob", "search_file_content", "list_directory", "web_fetch", "google_web_search", "save_memory"] };
     fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2));
 
     // Trust the workspace itself so MCP servers load. Values: TRUST_FOLDER (this dir),

@@ -108,8 +108,11 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     "exec",
     "--json",
     "--skip-git-repo-check",
-    // Externally sandboxed (this server); let codex run MCP/shell without prompts.
-    "--dangerously-bypass-approvals-and-sandbox",
+    // SECURITY: scene-gen agent. Sandbox writes to the throwaway workspace cwd only, so it
+    // cannot modify Studio's source. (Codex's sandbox can't block reads, so it may still read
+    // files — but it can't write/modify them. It should use the simworld MCP tools.)
+    "-s", "workspace-write",
+    "-c", 'approval_policy="never"',
     "-C", codexCwd,
     ...buildMcpOverrideArgs(MCP_CONFIG, UNREAL_PORT, logToFile),
   ];
