@@ -22,9 +22,10 @@ aws service-quotas get-service-quota \
   --quota-code L-DB2E81BA \
   --region us-east-1 \
   --query 'Quota.Value' --output text
-# 期望: ≥ 48 (g5.12xlarge 用 48 vCPU)
+# 期望: ≥ 16 (g5.4xlarge 用 16 vCPU)
+#   如果想升 g5.12xlarge 后续要 48
 # 如果是 0 或不够 → 走 https://console.aws.amazon.com/servicequotas
-#   申请 "Running On-Demand G and VT instances" 提到 48
+#   申请 "Running On-Demand G and VT instances" 提到 16
 #   通常 1-2 个工作日批准。批准前后面步骤都跑不了。
 
 # 0.3 验证 SSH key 在本地
@@ -36,13 +37,24 @@ ls ~/.ssh/id_ed25519 2>/dev/null || ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -
 ```bash
 export REGION=us-east-1                    # 改成你想要的区，us-west-2 离 UCSD 近
 export AZ=us-east-1a
-export INSTANCE_TYPE=g5.12xlarge           # 4× A10G, 48 vCPU, 192 GB RAM
-export EBS_SIZE=1000                       # GB
+export INSTANCE_TYPE=g5.4xlarge            # 1× A10G, 16 vCPU, 64 GB RAM (3 并发 slot)
+export EBS_SIZE=500                        # GB (够装 UE + Content + 3 slot 运行时)
 export KEY_NAME=simworld-aws
 export SG_NAME=simworld-sg
 export NAME_TAG=simworld-studio
 export DOMAIN=simworld.your-lab.edu        # 改成你的域名；没有就用 EC2 公网 IP
 ```
+
+**机型挑选参考：**
+
+| 机型 | GPU | vCPU | RAM | slot 数 | $/h | 适合 |
+|---|---|---|---|---|---|---|
+| g5.2xlarge | 1× A10G | 8 | 32 GB | 2 | $1.21 | 最省，偶尔排队 |
+| **g5.4xlarge** ⭐ | 1× A10G | 16 | 64 GB | 3 | $1.62 | **推荐：5 人 2-3 并发** |
+| g5.8xlarge | 1× A10G | 32 | 128 GB | 4 | $2.45 | 4 并发，单 GPU |
+| g5.12xlarge | 4× A10G | 48 | 192 GB | 4 | $5.67 | 1 GPU/slot，重负载 |
+
+机型改了之后，记得同步改 `/etc/default/simworld` 的 `UE_POOL_SIZE` (上表"slot 数"列) 和 `UE_GPU_COUNT` (g5.12xlarge 设 4，其他都 1)。
 
 ---
 
@@ -121,7 +133,7 @@ done
 echo "SSH ready: ubuntu@$EC2_IP"
 ```
 
-**成本：g5.12xlarge on-demand ≈ $5.67/h。** 不用时记得 `aws ec2 stop-instances` —— 停机只收 EBS 费（1 TB gp3 ≈ $80/月）。后面 Phase 6 会装定时停机。
+**成本：g5.4xlarge on-demand ≈ $1.62/h ≈ $585/月（12h/天）。** 不用时记得 `aws ec2 stop-instances` —— 停机只收 EBS 费（500 GB gp3 ≈ $40/月）。后面 Phase 7 会装定时停机。
 
 ---
 

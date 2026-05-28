@@ -18,7 +18,8 @@ EnvironmentFile=-/etc/default/simworld
 Environment=NODE_ENV=production
 Environment=PORT=3002
 Environment=UE_POOL_ENABLED=1
-Environment=UE_POOL_SIZE=4
+Environment=UE_POOL_SIZE=3
+Environment=UE_GPU_COUNT=1
 Environment=UE_BASE_MCP_PORT=55559
 Environment=UE_BASE_CIRRUS_HTTP=8585
 Environment=UE_BASE_CIRRUS_WS=8586

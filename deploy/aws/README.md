@@ -29,7 +29,8 @@ HTTPS   │  Nginx + Let's Encrypt + Basic Auth          │  :443
    │    │  /cirrus/{slot}/* → :85xx (Cirrus per slot)  │
    ▼    └──────────┬───────────────────────────────────┘
 ┌─────────────────┴──────────────────────────────────────┐
-│  EC2 g5.12xlarge (4×A10G) or g6.12xlarge (4×L4)         │
+│  EC2 g5.4xlarge (1×A10G, 64GB RAM) — default            │
+│  (scale up to g5.12xlarge if you need 4 isolated GPUs)  │
 │                                                         │
 │  ┌───────────────────────────────────────────────────┐ │
 │  │ simworld-web.service (node web/server/index.js)   │ │
@@ -42,19 +43,19 @@ HTTPS   │  Nginx + Let's Encrypt + Basic Auth          │  :443
 │  │   acquire(slotId) → spawn slot-launcher.sh        │ │
 │  │   release(slotId) → SIGTERM child UE              │ │
 │  └─────────────┬─────────────────────────────────────┘ │
-│       slot 0   │   slot 1       slot 2      slot 3      │
-│       ▼        ▼   ▼            ▼           ▼           │
-│   ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐         │
-│   │ UE     │ │ UE     │ │ UE     │ │ UE     │         │
-│   │ GPU 0  │ │ GPU 1  │ │ GPU 2  │ │ GPU 3  │         │
-│   │ MCP    │ │ MCP    │ │ MCP    │ │ MCP    │         │
-│   │ 55559  │ │ 55561  │ │ 55563  │ │ 55565  │         │
-│   │ Cirrus │ │ Cirrus │ │ Cirrus │ │ Cirrus │         │
-│   │ 8585   │ │ 8587   │ │ 8589   │ │ 8591   │         │
-│   │ UCV    │ │ UCV    │ │ UCV    │ │ UCV    │         │
-│   │ 9017   │ │ 9018   │ │ 9019   │ │ 9020   │         │
-│   └────────┘ └────────┘ └────────┘ └────────┘         │
-│   /var/lib/simworld/slots/{0,1,2,3}/  (per-slot Saved) │
+│       slot 0      slot 1      slot 2                    │
+│       ▼           ▼           ▼                          │
+│   ┌────────┐ ┌────────┐ ┌────────┐                      │
+│   │ UE     │ │ UE     │ │ UE     │   ← all 3 share      │
+│   │ GPU 0  │ │ GPU 0  │ │ GPU 0  │     same A10G        │
+│   │ MCP    │ │ MCP    │ │ MCP    │                      │
+│   │ 55559  │ │ 55561  │ │ 55563  │                      │
+│   │ Cirrus │ │ Cirrus │ │ Cirrus │                      │
+│   │ 8585   │ │ 8587   │ │ 8589   │                      │
+│   │ UCV    │ │ UCV    │ │ UCV    │                      │
+│   │ 9017   │ │ 9018   │ │ 9019   │                      │
+│   └────────┘ └────────┘ └────────┘                      │
+│   /var/lib/simworld/slots/{0,1,2}/  (per-slot Saved)    │
 │                                                         │
 │   Shared read-only:                                     │
 │   /opt/ue-engine/      (58 GB UE 5.3.2)                │
@@ -74,8 +75,25 @@ HTTPS   │  Nginx + Let's Encrypt + Basic Auth          │  :443
 | Cirrus WS | 8586 + 2·slot | 8586 | 8588 | 8590 | 8592 |
 | Cirrus SFU | 8989 + 2·slot | 8989 | 8991 | 8993 | 8995 |
 | UnrealCV | 9017 + slot | 9017 | 9018 | 9019 | 9020 |
+| **GPU index** | **slot % UE_GPU_COUNT** | 0 | 0 | 0 | 0 |
 
 All these listen on `127.0.0.1` only; public access goes through Nginx.
+
+## Instance sizing
+
+Default config is for **g5.4xlarge** (1× A10G, 16 vCPU, 64 GB RAM) — three
+UE slots share one GPU, fine for 2-3 concurrent users on a 15 FPS cap.
+
+| Instance | GPU | vCPU | RAM | UE_POOL_SIZE | UE_GPU_COUNT | $/h | $/mo (12h) |
+|---|---|---|---|---|---|---|---|
+| g5.2xlarge | 1× A10G | 8 | 32 GB | 2 | 1 | $1.21 | ~$440 |
+| **g5.4xlarge** ⭐ | 1× A10G | 16 | 64 GB | **3** | **1** | $1.62 | ~$585 |
+| g5.8xlarge | 1× A10G | 32 | 128 GB | 4 | 1 | $2.45 | ~$885 |
+| g5.12xlarge | 4× A10G | 48 | 192 GB | 4 | 4 | $5.67 | ~$2050 |
+
+To change tier: edit `UE_POOL_SIZE` and `UE_GPU_COUNT` in
+`/etc/default/simworld`, then `systemctl restart simworld-web`. No code
+changes needed.
 
 ## Files
 

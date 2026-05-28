@@ -19,7 +19,8 @@ const fs = require('fs');
 const { EventEmitter } = require('events');
 
 const DEFAULTS = {
-  poolSize:        parseInt(process.env.UE_POOL_SIZE || '4', 10),
+  poolSize:        parseInt(process.env.UE_POOL_SIZE || '3', 10),
+  gpuCount:        parseInt(process.env.UE_GPU_COUNT || '1', 10),
   baseMcp:         parseInt(process.env.UE_BASE_MCP_PORT || '55559', 10),
   baseCirrusHttp:  parseInt(process.env.UE_BASE_CIRRUS_HTTP || '8585', 10),
   baseCirrusWs:    parseInt(process.env.UE_BASE_CIRRUS_WS || '8586', 10),
@@ -132,6 +133,7 @@ class SlotPool extends EventEmitter {
         UE_BASE_CIRRUS_SFU:  String(this.cfg.baseCirrusSfu),
         UE_BASE_UCV:         String(this.cfg.baseUcv),
         UE_PORT_STRIDE:      String(this.cfg.portStride),
+        UE_GPU_COUNT:        String(this.cfg.gpuCount),
         SLOTS_ROOT:          this.cfg.slotsRoot,
       },
       detached: false,

@@ -29,6 +29,11 @@ UE_BASE_CIRRUS_SFU="${UE_BASE_CIRRUS_SFU:-8989}"
 UE_BASE_UCV="${UE_BASE_UCV:-9017}"
 UE_PORT_STRIDE="${UE_PORT_STRIDE:-2}"
 
+# How many physical GPUs to spread slots across. Default 1 (single-GPU
+# instance like g5.4xlarge). Set to 4 for g5.12xlarge to get 1:1 mapping.
+# GPU index for slot N = N % UE_GPU_COUNT.
+UE_GPU_COUNT="${UE_GPU_COUNT:-1}"
+
 MAP="${MAP:-/Game/Main.umap}"
 RES_X="${RES_X:-1280}"
 RES_Y="${RES_Y:-720}"
@@ -50,7 +55,7 @@ Ports for slot N:
   Cirrus SFU = $UE_BASE_CIRRUS_SFU + N * $UE_PORT_STRIDE
   UnrealCV   = $UE_BASE_UCV + N
 
-GPU index = N (one GPU per slot).
+GPU index = N % $UE_GPU_COUNT (override with UE_GPU_COUNT env var).
 
 Slot state is at \$SLOTS_ROOT/N/.
 EOF
@@ -77,7 +82,7 @@ CIRRUS_HTTP=$((UE_BASE_CIRRUS_HTTP + SLOT * UE_PORT_STRIDE))
 CIRRUS_WS=$((UE_BASE_CIRRUS_WS + SLOT * UE_PORT_STRIDE))
 CIRRUS_SFU=$((UE_BASE_CIRRUS_SFU + SLOT * UE_PORT_STRIDE))
 UCV_PORT=$((UE_BASE_UCV + SLOT))
-GPU=$SLOT
+GPU=$((SLOT % UE_GPU_COUNT))
 
 SLOT_DIR="$SLOTS_ROOT/$SLOT"
 PROJECT_FILE_LINK="$SLOT_DIR/SimWorld.uproject"
