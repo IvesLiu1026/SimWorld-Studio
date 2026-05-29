@@ -577,12 +577,38 @@ function StudioLanding({ activeMode, onSelect, artifacts }) {
 // ── Task Generation panels ────────────────────────────────────────────────────
 function TaskGenPanel({ sessionId }) {
   const [taskType, setTaskType] = React.useState("PointNav");
-  const [episodes, setEpisodes] = React.useState("500");
+  const [episodes, setEpisodes] = React.useState("100");
   const [minPath, setMinPath] = React.useState("3");
-  const [maxPath, setMaxPath] = React.useState("20");
+  const [maxPath, setMaxPath] = React.useState("30");
   const [successR, setSuccessR] = React.useState("0.5");
   const [maxSteps, setMaxSteps] = React.useState("500");
   const [generating, setGenerating] = React.useState(false);
+  const [result, setResult] = React.useState(null);   // {ok, msg}
+
+  async function generate() {
+    setGenerating(true); setResult(null);
+    try {
+      const body = {
+        taskType: taskType.toLowerCase(),               // PointNav → pointnav
+        episodes: parseInt(episodes, 10) || 100,
+        minPathCm: (parseFloat(minPath) || 0) * 100,     // metres → cm
+        maxPathCm: (parseFloat(maxPath) || 0) * 100,
+        successRadiusM: parseFloat(successR) || 0.5,
+        maxSteps: parseInt(maxSteps, 10) || 500,
+        sceneId: sessionId || null,
+      };
+      const r = await fetch(`${API_BASE}/tasks/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) { setResult({ ok:false, msg: data.error || `HTTP ${r.status}` }); return; }
+      setResult({ ok:true, msg:`Generated ${data.generated}/${data.requested} episodes on “${data.taskSet.mapName||"current scene"}”` });
+      // Tell the inspector to refresh + select the new set
+      window.dispatchEvent(new CustomEvent("sw-taskset-changed", { detail: { id: data.taskSet.id } }));
+    } catch (e) {
+      setResult({ ok:false, msg: e.message });
+    } finally { setGenerating(false); }
+  }
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
@@ -593,9 +619,11 @@ function TaskGenPanel({ sessionId }) {
           <select className="config-select" value={taskType} onChange={e=>setTaskType(e.target.value)}>
             <option>PointNav</option>
             <option>ObjectNav</option>
-            <option>Exploration</option>
-            <option>Custom</option>
           </select>
+        </div>
+        <div style={{ fontSize:11, color:"var(--ink-3)", padding:"2px 2px 0", lineHeight:1.5 }}>
+          Builds a navmesh on the <b>currently-loaded scene</b> and samples reachable
+          start→goal episodes with ground-truth paths.
         </div>
       </div>
 
@@ -639,103 +667,412 @@ function TaskGenPanel({ sessionId }) {
       </div>
 
       <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
+        {result && (
+          <div style={{ fontSize:11, lineHeight:1.4, padding:"6px 8px", borderRadius:6,
+            border:`1px solid ${result.ok?"var(--green)":"var(--red,#e2484d)"}`,
+            color: result.ok?"var(--green)":"var(--red,#e2484d)", background:"var(--bg-tertiary)" }}>
+            {result.ok ? "✓ " : "⚠ "}{result.msg}
+          </div>
+        )}
         <button className="primary-cta green" style={{ width:"100%", justifyContent:"center" }}
-          onClick={()=>setGenerating(g=>!g)} disabled={generating}>
-          {generating ? "Generating…" : `${ICONS.target(13)} Generate Tasks`}
+          onClick={generate} disabled={generating}>
+          {generating ? "Building navmesh & sampling…" : `${ICONS.target(13)} Generate Tasks`}
         </button>
-        <div style={{ display:"flex", gap:6 }}>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Validate Tasks</Btn>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Preview Gym API</Btn>
-        </div>
       </div>
+    </div>
+  );
+}
+
+// Top-down canvas mini-map of a task set: every episode's gt-path drawn faintly, the
+// selected episode highlighted with start (green) / goal (red) markers + waypoint dots.
+// World (X,Y) is fit to the canvas preserving aspect ratio; +Y points up.
+function TaskMiniMap({ episodes, selIdx }) {
+  const wrapRef   = React.useRef(null);
+  const canvasRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const wrap = wrapRef.current, cv = canvasRef.current;
+    if (!wrap || !cv) return;
+    const draw = () => {
+      const dpr  = window.devicePixelRatio || 1;
+      const cssW = Math.max(160, wrap.clientWidth || 280);
+      const cssH = 210;
+      cv.width  = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+      cv.style.width = cssW + "px"; cv.style.height = cssH + "px";
+      const ctx = cv.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const W = cssW, H = cssH;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = "#0a1018"; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = "rgba(148,163,184,0.15)"; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+
+      const all = episodes || [];
+      const pts = [];
+      all.forEach(e => {
+        (e.gt_path || []).forEach(p => pts.push(p));
+        if (e.start_position) pts.push(e.start_position);
+        if (e.goal_position)  pts.push(e.goal_position);
+      });
+      if (!pts.length) {
+        ctx.fillStyle = "#475569"; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
+        ctx.fillText("No episodes", W / 2, H / 2); return;
+      }
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+      const pad = 16, spanX = (maxX - minX) || 1, spanY = (maxY - minY) || 1;
+      const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+      const offX = (W - spanX * scale) / 2, offY = (H - spanY * scale) / 2;
+      const tx = x => offX + (x - minX) * scale;
+      const ty = y => H - (offY + (y - minY) * scale);   // flip Y so +Y is up
+
+      // faint context: all non-selected paths + endpoints
+      all.forEach((e, i) => {
+        if (i === selIdx) return;
+        const p = e.gt_path || [];
+        if (p.length >= 2) {
+          ctx.beginPath(); ctx.moveTo(tx(p[0][0]), ty(p[0][1]));
+          for (let k = 1; k < p.length; k++) ctx.lineTo(tx(p[k][0]), ty(p[k][1]));
+          ctx.strokeStyle = "rgba(148,163,184,0.16)"; ctx.lineWidth = 1; ctx.stroke();
+        }
+        if (e.start_position) { ctx.fillStyle = "rgba(34,197,94,0.30)"; ctx.beginPath(); ctx.arc(tx(e.start_position[0]), ty(e.start_position[1]), 2, 0, 7); ctx.fill(); }
+        if (e.goal_position)  { ctx.fillStyle = "rgba(239,68,68,0.30)"; ctx.beginPath(); ctx.arc(tx(e.goal_position[0]),  ty(e.goal_position[1]),  2, 0, 7); ctx.fill(); }
+      });
+
+      // highlighted: selected episode
+      const sel = all[selIdx];
+      if (sel) {
+        const DIFFC = { easy: "#22c55e", medium: "#f59e0b", hard: "#ef4444" };
+        const pathColor = DIFFC[sel.difficulty] || "#38bdf8";
+        const p = sel.gt_path || [];
+        if (p.length >= 2) {
+          ctx.beginPath(); ctx.moveTo(tx(p[0][0]), ty(p[0][1]));
+          for (let k = 1; k < p.length; k++) ctx.lineTo(tx(p[k][0]), ty(p[k][1]));
+          ctx.strokeStyle = pathColor; ctx.lineWidth = 2.5; ctx.lineJoin = "round"; ctx.stroke();
+          ctx.fillStyle = "#7dd3fc";
+          for (let k = 1; k < p.length - 1; k++) { ctx.beginPath(); ctx.arc(tx(p[k][0]), ty(p[k][1]), 2.5, 0, 7); ctx.fill(); }
+        }
+        const s = sel.start_position, g = sel.goal_position;
+        if (s) { ctx.fillStyle = "#22c55e"; ctx.beginPath(); ctx.arc(tx(s[0]), ty(s[1]), 5, 0, 7); ctx.fill(); ctx.strokeStyle = "#0a1018"; ctx.lineWidth = 1.5; ctx.stroke(); }
+        if (g) { ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(tx(g[0]), ty(g[1]), 5, 0, 7); ctx.fill(); ctx.strokeStyle = "#0a1018"; ctx.lineWidth = 1.5; ctx.stroke(); }
+      }
+    };
+    draw();
+    const ro = new ResizeObserver(draw); ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [episodes, selIdx]);
+
+  return (
+    <div ref={wrapRef} style={{ width: "100%" }}>
+      <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8 }} />
     </div>
   );
 }
 
 function TaskInspectorPanel() {
+  const [sets, setSets]           = React.useState([]);
+  const [selId, setSelId]         = React.useState(null);
+  const [detail, setDetail]       = React.useState(null);   // full taskset w/ episodes
+  const [epIdx, setEpIdx]         = React.useState(0);
+  const [loading, setLoading]     = React.useState(false);
+
+  const loadList = React.useCallback(async (preferId) => {
+    try {
+      const r = await fetch(`${API_BASE}/tasksets`);
+      const d = await r.json();
+      const list = d.taskSets || [];
+      setSets(list);
+      setSelId(prev => preferId || prev || (list[0] && list[0].id) || null);
+    } catch (_e) {}
+  }, []);
+
+  React.useEffect(() => { loadList(); }, [loadList]);
+
+  // TaskGenPanel fires this after a successful generation
+  React.useEffect(() => {
+    const h = (e) => loadList(e.detail && e.detail.id);
+    window.addEventListener("sw-taskset-changed", h);
+    return () => window.removeEventListener("sw-taskset-changed", h);
+  }, [loadList]);
+
+  // Load full detail (episodes) when the selected set changes
+  React.useEffect(() => {
+    if (!selId) { setDetail(null); return; }
+    let alive = true;
+    setLoading(true); setEpIdx(0);
+    fetch(`${API_BASE}/tasksets/${selId}`).then(r=>r.json()).then(d => {
+      if (alive) { setDetail(d && d.id ? d : null); setLoading(false); }
+    }).catch(()=>{ if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [selId]);
+
+  async function del() {
+    if (!selId) return;
+    await fetch(`${API_BASE}/tasksets/${selId}`, { method:"DELETE" });
+    setSelId(null); loadList();
+  }
+  const fmtM = (cm) => (cm/100).toFixed(1) + " m";
+  const eps = (detail && detail.episodes) || [];
+  const ep  = eps[epIdx] || null;
+  const DIFF_COLOR = { easy: "#22c55e", medium: "#f59e0b", hard: "#ef4444" };
+
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto" }}>
       <div className="config-section">
         <div className="config-section-title">Task Set</div>
-        {[["Type","PointNav"],["Total episodes","500"],["Valid","486"],["Rejected","14"]].map(([l,v])=>(
-          <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
-        ))}
+        {sets.length === 0
+          ? <div style={{ fontSize:12, color:"var(--ink-3)", padding:"4px 2px" }}>No task sets yet — generate one on the left.</div>
+          : <select className="config-select" style={{ width:"100%" }} value={selId||""} onChange={e=>setSelId(e.target.value)}>
+              {sets.map(s => <option key={s.id} value={s.id}>{s.name} · {s.summary?.episodeCount||0} eps</option>)}
+            </select>}
       </div>
-      <div className="config-section">
-        <div className="config-section-title">Validation</div>
-        {[["NavMesh connected","pass"],["Task solvable","pass"],["Goal reachable","pass"],["Collision-free path","pass"]].map(([l,s])=>(
-          <div key={l} className="status-row">
-            <span style={{ fontSize:12, color:"var(--ink-2)" }}>{l}</span>
-            <span className={s==="pass"?"status-pass":"status-fail"}>{s.toUpperCase()}</span>
+
+      {loading && <div style={{ fontSize:12, color:"var(--ink-3)", padding:"8px 14px" }}>Loading…</div>}
+
+      {detail && (
+        <>
+          {/* Top-down mini-map */}
+          <div className="config-section" style={{ paddingTop:4 }}>
+            <TaskMiniMap episodes={eps} selIdx={epIdx} />
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, marginTop:6, fontSize:11, color:"var(--ink-3)" }}>
+              <span style={{ flexShrink:0 }}><span style={{ color:"#22c55e" }}>●</span> start&nbsp;&nbsp;<span style={{ color:"#ef4444" }}>●</span> goal&nbsp;&nbsp;<span style={{ color:"#38bdf8" }}>—</span> path</span>
+              <span style={{ minWidth:0, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }} title={detail.mapName||""}>{detail.taskType} · {detail.mapName||"—"}</span>
+            </div>
+            <div style={{ marginTop:4, fontSize:11, color:"var(--ink-3)" }}>
+              {eps.length} eps · {fmtM(detail.summary?.minDistanceCm||0)}–{fmtM(detail.summary?.maxDistanceCm||0)} (avg {fmtM(detail.summary?.avgDistanceCm||0)})
+            </div>
+            {detail.summary?.difficulty && (
+              <div style={{ marginTop:4, fontSize:11, display:"flex", gap:10 }}>
+                <span style={{ color:DIFF_COLOR.easy }}>● easy {detail.summary.difficulty.easy}</span>
+                <span style={{ color:DIFF_COLOR.medium }}>● medium {detail.summary.difficulty.medium}</span>
+                <span style={{ color:DIFF_COLOR.hard }}>● hard {detail.summary.difficulty.hard}</span>
+              </div>
+            )}
+            {ep && (
+              <div style={{ marginTop:6, fontSize:12, color:"var(--ink-2)", lineHeight:1.5 }}>
+                <b style={{ color:"var(--ink)" }}>{ep.episode_id}</b>
+                {ep.difficulty && <> · <span style={{ color:DIFF_COLOR[ep.difficulty], fontWeight:600 }}>{ep.difficulty}</span></>}
+                {" "}· {fmtM(ep.geodesic_distance_cm)} geodesic · {(ep.gt_path||[]).length} waypoints · tort {ep.tortuosity ?? "—"}
+                {ep.object_category && <> · 🎯 {ep.object_category}</>}
+              </div>
+            )}
           </div>
-        ))}
-      </div>
-      <div className="config-section">
-        <div className="config-section-title">Selected Episode</div>
-        {[["Start","(−420, 130, 200)"],["Goal","(1840, −650, 200)"],["Path length","18.4 m"],["Max steps","500"],["Success radius","0.5 m"]].map(([l,v])=>(
-          <div key={l} className="status-row"><span style={{ fontSize:11, color:"var(--ink-3)" }}>{l}</span><span style={{ fontSize:12, color:"var(--ink)", fontFamily:"monospace" }}>{v}</span></div>
-        ))}
-      </div>
-      <div className="config-section">
-        <div className="config-section-title">Output Artifact</div>
-        <div style={{ padding:"8px 10px", borderRadius:6, border:"1px solid var(--line)", background:"var(--bg-tertiary)", fontSize:12, color:"var(--ink-2)" }}>
-          <div style={{ fontWeight:700, color:"var(--ink)", marginBottom:2 }}>TaskSet_PointNav_500</div>
-          <div style={{ fontSize:11 }}>486 valid episodes · PointNav · Urban Avenue</div>
-        </div>
-        <Btn variant="success" size="sm" style={{ width:"100%", justifyContent:"center", marginTop:8 }}>Export Task Set</Btn>
-      </div>
+
+          {/* Compact episode list */}
+          <div className="config-section" style={{ minHeight:0 }}>
+            <div className="config-section-title">Episodes ({eps.length})</div>
+            <div style={{ maxHeight:150, overflow:"auto", border:"1px solid var(--line)", borderRadius:6 }}>
+              {eps.map((e,i)=>(
+                <div key={e.episode_id} onClick={()=>setEpIdx(i)}
+                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 8px", cursor:"pointer", fontSize:11,
+                    fontFamily:"monospace", color: i===epIdx?"var(--ink)":"var(--ink-2)",
+                    background: i===epIdx?"var(--bg-tertiary)":"transparent",
+                    borderLeft:`3px solid ${DIFF_COLOR[e.difficulty]||"transparent"}`,
+                    borderBottom:"1px solid var(--line)" }}>
+                  <span>{e.episode_id}</span><span>{fmtM(e.geodesic_distance_cm)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="config-section">
+            <div style={{ display:"flex", gap:6 }}>
+              <Btn variant="success" size="sm" style={{ flex:1, justifyContent:"center" }}
+                title="Training-ready JSON (loads via gym_env.batch_runner --episodes-file)"
+                onClick={()=>window.open(`${API_BASE}/tasksets/${detail.id}/download`,"_blank")}>Export (train)</Btn>
+              <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }} onClick={del}>Delete</Btn>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
 // ── Agent Training config panel ───────────────────────────────────────────────
+// Shared live-training store (pub/sub) so the config panel (which owns the SSE connection)
+// and the monitor panel render the same run state.
+const trainingStore = {
+  s: { jobId: null, status: "idle", model: null, episodesTotal: 0, current: null, agg: null, steps: [], lastLog: null },
+  subs: new Set(),
+  _es: null,
+  set(patch) { trainingStore.s = { ...trainingStore.s, ...patch }; trainingStore.subs.forEach(f => f()); },
+  subscribe(f) { trainingStore.subs.add(f); return () => trainingStore.subs.delete(f); },
+  start(jobId, model, episodesTotal) {
+    trainingStore.stop();
+    trainingStore.set({ jobId, model, episodesTotal, status: "starting", current: null, agg: null, steps: [], lastLog: null });
+    const es = new EventSource(`${API_BASE}/training/${jobId}/stream`);
+    trainingStore._es = es;
+    es.onmessage = (e) => { try { trainingStore._ev(JSON.parse(e.data)); } catch (_e) {} };
+    es.onerror = () => {};
+  },
+  stop() { if (trainingStore._es) { try { trainingStore._es.close(); } catch (_e) {} trainingStore._es = null; } },
+  _ev(ev) {
+    if (ev.type === "status") trainingStore.set({ status: ev.status, agg: ev.agg || trainingStore.s.agg });
+    else if (ev.type === "step") trainingStore.set({ status: "running", current: ev, agg: ev.agg, steps: trainingStore.s.steps.concat([ev]).slice(-200) });
+    else if (ev.type === "episode_end") trainingStore.set({ agg: ev.agg || trainingStore.s.agg });
+    else if (ev.type === "done") { trainingStore.set({ status: ev.status || "done", agg: ev.agg || trainingStore.s.agg }); trainingStore.stop(); }
+    else if (ev.type === "log") trainingStore.set({ lastLog: ev.line });
+  },
+};
+function useTraining() {
+  const [, force] = React.useState(0);
+  React.useEffect(() => trainingStore.subscribe(() => force(n => n + 1)), []);
+  return trainingStore.s;
+}
+
 function TrainingConfigPanel({ sessionId }) {
-  const [running, setRunning] = React.useState(false);
-  const [obsMode, setObsMode] = React.useState("RGB-D");
-  const [method, setMethod] = React.useState("PPO");
+  const st = useTraining();
+  const [taskSets, setTaskSets] = React.useState([]);
+  const [taskSetId, setTaskSetId] = React.useState("");
+  const [models, setModels] = React.useState([]);
+  const [model, setModel] = React.useState("gpt-4o");
+  const [maxSteps, setMaxSteps] = React.useState("40");
+  const [memory, setMemory] = React.useState("none");
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+
+  React.useEffect(() => {
+    fetch(`${API_BASE}/tasksets`).then(r => r.json()).then(d => {
+      const l = d.taskSets || []; setTaskSets(l); setTaskSetId(p => p || (l[0] && l[0].id) || "");
+    }).catch(() => {});
+    fetch(`${API_BASE}/training/models`).then(r => r.json()).then(d => {
+      setModels(d.models || []); if (d.models && d.models[0]) setModel(m => m || d.models[0].id);
+    }).catch(() => {});
+  }, []);
+
+  const running = st.status === "running" || st.status === "starting";
+  const agg = st.agg || {};
+
+  async function start() {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API_BASE}/training/start`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskSetId, model, maxSteps: parseInt(maxSteps, 10) || 40, memory }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || `HTTP ${r.status}`); return; }
+      trainingStore.start(d.jobId, d.model, d.episodes);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function cancel() {
+    if (st.jobId) await fetch(`${API_BASE}/training/${st.jobId}/cancel`, { method: "POST" }).catch(() => {});
+    trainingStore.stop(); trainingStore.set({ status: "cancelled" });
+  }
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div className="config-section">
         <div className="config-section-title">Experiment Setup</div>
-        {[["Scene","Urban Avenue v3"],["Task Set","PointNav_500"],["Agent","Qwen2.5-VL-7B"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val" style={{ fontSize:11 }}>{v}</span></div>
-        ))}
+        <div className="config-row">
+          <label>Task set</label>
+          <select className="config-select" value={taskSetId} onChange={e=>setTaskSetId(e.target.value)} disabled={running}>
+            {taskSets.length===0 && <option value="">— generate one first —</option>}
+            {taskSets.map(s=><option key={s.id} value={s.id}>{s.name} · {s.summary?.episodeCount||0} eps</option>)}
+          </select>
+        </div>
+        <div className="config-row">
+          <label>Agent LLM</label>
+          <select className="config-select" value={model} onChange={e=>setModel(e.target.value)} disabled={running}>
+            {models.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+        </div>
       </div>
 
       <div className="config-section" style={{ flex:1, overflow:"auto" }}>
-        <div className="config-section-title">Training Config</div>
-        <div className="config-row">
-          <label>Observation</label>
-          <select className="config-select" value={obsMode} onChange={e=>setObsMode(e.target.value)}>
-            {["RGB","Depth","RGB-D","Pose","Text"].map(o=><option key={o}>{o}</option>)}
+        <div className="config-section-title">Run Config</div>
+        <div className="config-row"><label>Max steps / episode</label>
+          <input className="config-input" value={maxSteps} onChange={e=>setMaxSteps(e.target.value)} disabled={running}/></div>
+        <div className="config-row"><label>Memory</label>
+          <select className="config-select" value={memory} onChange={e=>setMemory(e.target.value)} disabled={running}>
+            {["none","text","hierarchical"].map(o=><option key={o}>{o}</option>)}
           </select>
         </div>
-        <div className="config-row">
-          <label>Method</label>
-          <select className="config-select" value={method} onChange={e=>setMethod(e.target.value)}>
-            {["PPO","DAgger","BC","DDPPO"].map(o=><option key={o}>{o}</option>)}
-          </select>
+        <div style={{ fontSize:11, color:"var(--ink-3)", padding:"2px 2px", lineHeight:1.5 }}>
+          Episodes run one-by-one (easy→hard). The agent enters PIE and is driven live by the selected LLM — watch it in the Agent Monitor →
         </div>
-        {[["Episode budget","10,000"],["Eval split","20%"],["Memory","Enabled"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
-        ))}
 
         <div className="config-section-title" style={{ marginTop:12 }}>Live Metrics</div>
-        {[["Success Rate","64%"],["SPL","0.42"],["SoftSPL","0.58"],["nDTW","0.71"],["Avg Reward","0.37"]].map(([l,v])=>(
+        {[
+          ["Status", st.status],
+          ["Episode", `${agg.episodesDone||0} / ${st.episodesTotal||agg.episodesTotal||0}`],
+          ["Success rate", agg.episodesDone ? `${Math.round((agg.successRate||0)*100)}%` : "—"],
+          ["Collisions", String(agg.collisions ?? 0)],
+          ["Distance travelled", agg.distanceTraveledM != null ? `${agg.distanceTraveledM} m` : "—"],
+        ].map(([l,v])=>(
           <div key={l} className="status-row"><span>{l}</span><span className="status-score">{v}</span></div>
         ))}
+        {st.lastLog && <div style={{ fontSize:10, color:"var(--ink-3)", fontFamily:"monospace", marginTop:8, whiteSpace:"pre-wrap", maxHeight:80, overflow:"auto" }}>{st.lastLog}</div>}
       </div>
 
       <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
-        <button className={`primary-cta ${running?"orange":"violet"}`}
-          style={{ width:"100%", justifyContent:"center" }} onClick={()=>setRunning(r=>!r)}>
-          {running ? `${ICONS.collision(13)} Pause Training` : `${ICONS.activity(13)} Start Training`}
-        </button>
-        <div style={{ display:"flex", gap:6 }}>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Run Evaluation</Btn>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Export</Btn>
+        {err && <div style={{ fontSize:11, color:"var(--red,#e2484d)" }}>⚠ {err}</div>}
+        {!running
+          ? <button className="primary-cta violet" style={{ width:"100%", justifyContent:"center" }} onClick={start} disabled={busy || !taskSetId}>
+              {busy ? "Starting…" : `${ICONS.activity(13)} Start Training`}</button>
+          : <button className="primary-cta orange" style={{ width:"100%", justifyContent:"center" }} onClick={cancel}>
+              {ICONS.collision(13)} Stop</button>}
+      </div>
+    </div>
+  );
+}
+
+// Live agent monitor (right panel during Agent Training): the agent's current camera frame
+// (the exact image given to the LLM), the LLM's reasoning + chosen action, running metrics,
+// and a scrolling per-step log.
+function TrainingMonitorPanel() {
+  const st = useTraining();
+  const cur = st.current, agg = st.agg || {};
+  const logRef = React.useRef(null);
+  React.useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [st.steps.length]);
+
+  if (st.status === "idle" || !st.jobId) {
+    return <div style={{ padding:16, fontSize:12, color:"var(--ink-3)", lineHeight:1.6 }}>
+      No active run. Pick a task set + LLM on the left and <b>Start Training</b> — the agent's camera (what the LLM sees), its reasoning + action, and live metrics appear here, updating every step.
+    </div>;
+  }
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div style={{ padding:"8px 10px" }}>
+        <div style={{ position:"relative", width:"100%", borderRadius:8, overflow:"hidden", background:"#000", aspectRatio:"4/3", display:"flex", alignItems:"center", justifyContent:"center" }}>
+          {cur && cur.frameUrl
+            ? <img src={cur.frameUrl} alt="agent camera" style={{ width:"100%", height:"100%", objectFit:"contain" }}/>
+            : <span style={{ color:"#475569", fontSize:12 }}>waiting for first frame…</span>}
+          {cur && <div style={{ position:"absolute", top:6, left:6, fontSize:10, fontFamily:"monospace", background:"rgba(0,0,0,0.6)", color:"#e2e8f0", padding:"2px 6px", borderRadius:4 }}>
+            ep {cur.episode} · step {cur.step}{cur.collided ? " · 💥" : ""}</div>}
         </div>
+      </div>
+      <div style={{ display:"flex", gap:6, padding:"0 10px 8px", flexWrap:"wrap" }}>
+        {[
+          ["SR", agg.episodesDone ? `${Math.round((agg.successRate||0)*100)}%` : "—"],
+          ["eps", `${agg.episodesDone||0}/${st.episodesTotal||0}`],
+          ["collisions", agg.collisions ?? 0],
+          ["dist", agg.distanceTraveledM != null ? `${agg.distanceTraveledM}m` : "—"],
+          ["d→goal", cur && cur.distanceToGoalCm != null ? `${(cur.distanceToGoalCm/100).toFixed(1)}m` : "—"],
+        ].map(([l,v])=>(
+          <div key={l} style={{ flex:"1 0 auto", minWidth:58, textAlign:"center", padding:"4px 6px", border:"1px solid var(--line)", borderRadius:6 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:"var(--ink)" }}>{v}</div>
+            <div style={{ fontSize:9, color:"var(--ink-3)" }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ padding:"0 10px 6px" }}>
+        <div style={{ fontSize:11, color:"var(--ink-3)", marginBottom:2 }}>LLM → <b style={{ color:"var(--violet,#8b5cf6)" }}>{cur ? cur.action : "—"}</b></div>
+        <div style={{ fontSize:12, color:"var(--ink-2)", lineHeight:1.4, maxHeight:64, overflow:"auto" }}>
+          {cur && cur.reasoning ? cur.reasoning : <span style={{ color:"var(--ink-3)" }}>(model returned no rationale text)</span>}
+        </div>
+      </div>
+      <div className="config-section-title" style={{ padding:"4px 10px" }}>Step log</div>
+      <div ref={logRef} style={{ flex:1, overflow:"auto", padding:"0 10px 10px", fontSize:11, fontFamily:"monospace" }}>
+        {st.steps.map((s,i)=>(
+          <div key={i} style={{ display:"flex", gap:6, padding:"2px 0", borderBottom:"1px solid var(--line)", color: s.collided ? "var(--red,#e2484d)" : "var(--ink-2)" }}>
+            <span style={{ color:"var(--ink-3)", flexShrink:0 }}>e{s.episode}·t{s.step}</span>
+            <span style={{ color:"var(--violet,#8b5cf6)", flexShrink:0, minWidth:84 }}>{s.action}</span>
+            <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.reasoning||""}</span>
+            {s.success && <span style={{ color:"var(--green)", flexShrink:0 }}>✓</span>}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -9927,7 +10264,9 @@ function App() {
             <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
               {rightPanel2 === "sceneinsp"    && <SceneInspectorPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />}
               {rightPanel2 === "taskinsp"     && <TaskInspectorPanel />}
-              {rightPanel2 === "agentmonitor" && <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />}
+              {rightPanel2 === "agentmonitor" && (studioMode === "training"
+                ? <TrainingMonitorPanel />
+                : <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />)}
               {rightPanel2 === "roundinsp"    && <RoundInspectorPanel sessionId={currentSessionId} />}
             </div>
           </div>
