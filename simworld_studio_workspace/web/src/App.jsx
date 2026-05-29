@@ -160,21 +160,6 @@ function PollProvider({ children }) {
     return () => { es.close(); if (reconnectTimer) clearTimeout(reconnectTimer); };
   }, []);
 
-  // Fallback health poll. The SSE (/api/events) already carries `health`, but if that
-  // stream is buffered/blocked (some reverse proxies, SSH tunnels), the topbar would sit
-  // on "Connecting…" forever. A light /api/health poll guarantees the UE/MCP status shows.
-  useEffect(() => {
-    let alive = true;
-    const tick = () => fetch(`${API_BASE}/health`).then(r => r.json()).then(h => {
-      if (!alive || !h) return;
-      setStatus(prev => (prev.health?.ueConnected === !!h.ueConnected && prev.health?.mcpConnected === !!h.mcpConnected)
-        ? prev : { ...prev, health: { ueConnected: !!h.ueConnected, mcpConnected: !!h.mcpConnected } });
-    }).catch(() => {});
-    tick();
-    const id = setInterval(tick, 8000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
-
   // Legacy combined context value — stable object so usePoll() consumers
   // still work but don't get extra re-renders from the ref itself
   const legacyValue = useMemo(() => ({
@@ -9052,10 +9037,21 @@ function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClo
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
-  // Health comes from SSE StatusContext — no separate /api/health fetch needed
-  const statusCtxMain = useStatus();
-  const health      = statusCtxMain.health;
-  const healthError = !statusCtxMain.health && !statusCtxMain.pieActive; // only show error after SSE connects
+  // NOTE: App renders <PollProvider> in its own return, so it sits OUTSIDE that provider
+  // and cannot read its context (useStatus() here returns the default value, health=null →
+  // the topbar would be stuck on "Connecting…" forever). So poll /api/health directly for
+  // the topbar's UE/MCP status instead of relying on the context.
+  const [health, setHealth] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const tick = () => fetch(`${API_BASE}/health`)
+      .then(r => r.json())
+      .then(h => { if (alive && h) setHealth({ ueConnected: !!h.ueConnected, mcpConnected: !!h.mcpConnected }); })
+      .catch(() => {});
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
   // ── Theme + Studio Mode ───────────────────────────────────────────────────
   const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "dark");
