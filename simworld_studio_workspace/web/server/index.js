@@ -924,6 +924,27 @@ app.get("/api/saved-maps", async (req, res) => {
   catch (_e) { res.status(502).json({ error: "parse failed" }); }
 });
 
+// GET /api/saved-maps/:name/download — stream the raw .umap file for download.
+// The .umap lives in the UE project's Content/SavedScenes (outside this repo), so we ask
+// UE for its content dir once and cache it. (The .umap references project assets by /Game
+// path — this downloads the map file itself, not its dependencies.)
+let _ueContentDir = null;
+app.get("/api/saved-maps/:name/download", async (req, res) => {
+  const name = String(req.params.name || "");
+  if (!/^[A-Za-z0-9_\-]+$/.test(name)) return res.status(400).json({ error: "invalid name" });
+  try {
+    if (!_ueContentDir) {
+      const r = await ueExecScript("import unreal, os\nprint('CONTENT_DIR='+os.path.abspath(unreal.Paths.project_content_dir()))", 15000);
+      const m = _ueLogs(r).match(/CONTENT_DIR=(.*)$/m);
+      if (m) _ueContentDir = m[1].trim();
+    }
+    if (!_ueContentDir) return res.status(502).json({ error: "could not resolve UE content dir" });
+    const file = path.join(_ueContentDir, "SavedScenes", name + ".umap");
+    if (!fs.existsSync(file)) return res.status(404).json({ error: "map not found" });
+    res.download(file, name + ".umap");
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 // DELETE /api/checkpoints/:sid/:id — delete one checkpoint
 app.delete("/api/checkpoints/:sid/:id", async (req, res) => {
   const r = await checkpointManager.delete(req.params.sid, req.params.id, req.query.ownerId || null);
