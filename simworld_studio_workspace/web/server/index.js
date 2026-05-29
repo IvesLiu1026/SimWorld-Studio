@@ -1271,23 +1271,19 @@ except Exception as e:
   }
 });
 
-// POST /api/immersive — enter editor Immersive mode (F11) once, so the streamed viewport
-// fills the frame (no editor chrome). Fired by the frontend on first stream-connect (more
-// reliable than at launch — the viewport is active). One-shot per server process: the
-// editor launches non-immersive, so a single ToggleImmersive turns it on; guarding avoids
-// flipping it back off on reconnects.
-let _immersiveToggled=false;
+// POST /api/immersive — put the editor viewport into Game View (clean, game-like: no grid/
+// gizmos/icons) so the streamed frame looks immersive. Fired by the frontend on stream-connect.
+// IMPORTANT: the console commands (ToggleGameView/ToggleImmersive) are NO-OPS in headless
+// -RenderOffScreen (verified: state never changed). The LevelEditorSubsystem Python API DOES
+// apply (verified editor_get_game_view() flips to True). It's an idempotent set, so safe to
+// call on every connect (no toggle-back risk).
 app.post("/api/immersive",async(req,res)=>{
-  if(_immersiveToggled)return res.json({ok:true,already:true});
-  _immersiveToggled=true;
   try{
-    // ToggleGameView (G) hides editor grid/gizmos/icons → clean game-like viewport in the
-    // stream (this is the lever that actually affects the headless stream). ToggleImmersive
-    // (F11) is also sent best-effort (no-op when there's no real editor window).
-    await ueExecScript("import unreal\nfor _c in ['ToggleGameView','ToggleImmersive']:\n    unreal.SystemLibrary.execute_console_command(None, _c)\nprint('VIEWPORT_CLEAN_DONE')",15000);
-    logToFile("immersive","ToggleGameView+ToggleImmersive sent (first stream connect)");
-    res.json({ok:true});
-  }catch(e){_immersiveToggled=false;res.status(502).json({error:e.message});}
+    const r=await ueExecScript("import unreal\nles=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)\nles.editor_set_game_view(True)\nprint('GAMEVIEW_SET='+str(les.editor_get_game_view()))",15000);
+    const ok=_ueLogs(r).includes("GAMEVIEW_SET=True");
+    logToFile("immersive","editor_set_game_view(True) -> "+(ok?"on":"unconfirmed"));
+    res.json({ok:true,gameView:ok});
+  }catch(e){res.status(502).json({error:e.message});}
 });
 
 app.get('/api/assets',(req,res)=>{
