@@ -1281,8 +1281,11 @@ app.post("/api/immersive",async(req,res)=>{
   if(_immersiveToggled)return res.json({ok:true,already:true});
   _immersiveToggled=true;
   try{
-    await ueExecScript("import unreal\nunreal.SystemLibrary.execute_console_command(None, 'ToggleImmersive')\nprint('IMMERSIVE_TOGGLED')",15000);
-    logToFile("immersive","ToggleImmersive sent (first stream connect)");
+    // ToggleGameView (G) hides editor grid/gizmos/icons → clean game-like viewport in the
+    // stream (this is the lever that actually affects the headless stream). ToggleImmersive
+    // (F11) is also sent best-effort (no-op when there's no real editor window).
+    await ueExecScript("import unreal\nfor _c in ['ToggleGameView','ToggleImmersive']:\n    unreal.SystemLibrary.execute_console_command(None, _c)\nprint('VIEWPORT_CLEAN_DONE')",15000);
+    logToFile("immersive","ToggleGameView+ToggleImmersive sent (first stream connect)");
     res.json({ok:true});
   }catch(e){_immersiveToggled=false;res.status(502).json({error:e.message});}
 });
