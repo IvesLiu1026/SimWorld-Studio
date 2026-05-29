@@ -160,6 +160,21 @@ function PollProvider({ children }) {
     return () => { es.close(); if (reconnectTimer) clearTimeout(reconnectTimer); };
   }, []);
 
+  // Fallback health poll. The SSE (/api/events) already carries `health`, but if that
+  // stream is buffered/blocked (some reverse proxies, SSH tunnels), the topbar would sit
+  // on "Connecting…" forever. A light /api/health poll guarantees the UE/MCP status shows.
+  useEffect(() => {
+    let alive = true;
+    const tick = () => fetch(`${API_BASE}/health`).then(r => r.json()).then(h => {
+      if (!alive || !h) return;
+      setStatus(prev => (prev.health?.ueConnected === !!h.ueConnected && prev.health?.mcpConnected === !!h.mcpConnected)
+        ? prev : { ...prev, health: { ueConnected: !!h.ueConnected, mcpConnected: !!h.mcpConnected } });
+    }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 8000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   // Legacy combined context value — stable object so usePoll() consumers
   // still work but don't get extra re-renders from the ref itself
   const legacyValue = useMemo(() => ({
@@ -9540,14 +9555,6 @@ function App() {
         {/* Right side */}
         <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end", marginLeft:"auto" }}>
 
-          {/* Mode-aware primary CTA */}
-          {topSection === "studio" && (
-            <button className={`primary-cta ${activeModeInfo.ctaColor}`}>
-              <span style={{ display:"inline-flex", alignItems:"center" }}>{activeModeInfo.icon(13)}</span>
-              {activeModeInfo.cta}
-            </button>
-          )}
-
           {/* Status dots */}
           {health && (
             <div style={{ display:"flex", alignItems:"center", gap:14, paddingRight:14, borderRight:"1px solid var(--line-2)" }}>
@@ -9601,15 +9608,6 @@ function App() {
             <span style={{ color:"var(--ink-2)" }}>
               {health?.ueConnected ? "Running" : "Standby"}
             </span>
-            {[
-              <svg key="play" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{color:"var(--ink-2)"}}><polygon points="5,3 19,12 5,21"/></svg>,
-              <svg key="pause" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{color:"var(--ink-2)"}}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
-            ].map((icon,i) => (
-              <span key={i} style={{
-                width:26, height:26, borderRadius:"50%", background:"var(--bg-tertiary,#f1f5f9)",
-                display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
-              }}>{icon}</span>
-            ))}
           </div>
 
           {/* SimCoder pill */}
