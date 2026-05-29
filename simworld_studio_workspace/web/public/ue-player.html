@@ -142,12 +142,35 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 <script>
 var _overlay   = null;
 var _hidden    = false;
+var _f11Sent   = false;
+
+// Auto-enter UE editor Immersive mode (F11) for first-time viewers by injecting the F11
+// key through the same path a manual press uses: the pixel-streaming lib forwards keyboard
+// events to UE. Synthetic KeyboardEvents drop keyCode/which, and the Epic lib reads keyCode,
+// so we force them. Dispatch on the video element (bubbles to document where the lib listens).
+function swSendImmersiveKey() {
+  if (_f11Sent) return;
+  _f11Sent = true;
+  setTimeout(function() {
+    try {
+      var target = document.getElementById('streamingVideo') || document.body;
+      ['keydown', 'keyup'].forEach(function(type) {
+        var ev = new KeyboardEvent(type, { key: 'F11', code: 'F11', bubbles: true, cancelable: true });
+        Object.defineProperty(ev, 'keyCode', { get: function() { return 122; } });
+        Object.defineProperty(ev, 'which',   { get: function() { return 122; } });
+        target.dispatchEvent(ev);
+        document.dispatchEvent(ev);
+      });
+    } catch (e) {}
+  }, 1500);  // let the stream become interactive + lib input handlers register
+}
 
 function swHideOverlay() {
   if (_hidden) return;
   _hidden = true;
   if (_overlay) _overlay.classList.add('hidden');
   try { window.parent.postMessage({ type: 'sw-stream-connected' }, '*'); } catch {}
+  swSendImmersiveKey();
 }
 
 // Attach listeners to the video element — hide overlay on first frame

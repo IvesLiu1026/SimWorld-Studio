@@ -53,16 +53,8 @@ export default function PixelStreamPlayer({ playerUrl }) {
     return () => clearTimeout(connectTimer.current);
   }, [status]);
 
-  // Once the stream is live, ask the server to enter UE Immersive mode (F11) so the frame
-  // is just the game view. Fires on first connect (when the viewport is actually active);
-  // the server dedups so reconnects don't toggle it back off.
-  const immersiveFired = useRef(false);
-  useEffect(() => {
-    if (status === "connected" && !immersiveFired.current) {
-      immersiveFired.current = true;
-      fetch("/api/immersive", { method: "POST" }).catch(() => {});
-    }
-  }, [status]);
+  // (Immersive/F11 is now handled inside ue-player.html — it injects the F11 key into the
+  // pixel-streaming input on first connect, which is what actually replicates a manual press.)
 
   // Heartbeat — detect silent drops after 60s silence
   useEffect(() => {
