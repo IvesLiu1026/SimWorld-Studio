@@ -896,11 +896,18 @@ function SavedMapsGallery({ onOpenScene }) {
                   <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }} title={m.path}>
                     {m.name}{isBase ? "  · base" : ""}
                   </div>
-                  <button onClick={async () => { setBusy(m.path); try { await onOpenScene?.(m.path); } finally { setBusy(null); } }}
-                    disabled={busy === m.path}
-                    style={{ marginTop:8, width:"100%", padding:"6px", fontSize:12, fontWeight:600, borderRadius:6, border:"1px solid var(--blue)", background:"transparent", color:"var(--blue)", cursor: busy===m.path ? "default":"pointer", opacity: busy===m.path?0.6:1 }}>
-                    {busy === m.path ? "Opening…" : "Open in Scene Generation"}
-                  </button>
+                  <div style={{ display:"flex", gap:6, marginTop:8 }}>
+                    <button onClick={async () => { setBusy(m.path); try { await onOpenScene?.(m.path); } finally { setBusy(null); } }}
+                      disabled={busy === m.path} title="Open this scene in the live viewport"
+                      style={{ flex:1, padding:"6px", fontSize:12, fontWeight:600, borderRadius:6, border:"1px solid var(--blue)", background:"transparent", color:"var(--blue)", cursor: busy===m.path ? "default":"pointer", opacity: busy===m.path?0.6:1 }}>
+                      {busy === m.path ? "Opening…" : "Open"}
+                    </button>
+                    <a href={`${API_BASE}/saved-maps/${encodeURIComponent(m.name)}/download`} download={`${m.name}.umap`}
+                      title="Download .umap" onClick={(e) => e.stopPropagation()}
+                      style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", padding:"6px 11px", fontSize:13, fontWeight:700, borderRadius:6, border:"1px solid var(--line)", background:"transparent", color:"var(--ink-2)", textDecoration:"none" }}>
+                      ↓
+                    </a>
+                  </div>
                 </div>
               </div>
             );
