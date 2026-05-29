@@ -178,18 +178,13 @@ class CoEvolutionRunner:
             try:
                 probe_mcp = MCPClient(port=mcp_port, timeout=15, name="loop-pie-probe")
                 resp = probe_mcp.execute_python(probe_script, timeout=15)
-<<<<<<< Updated upstream
                 logs_list = _extract_python_logs(resp)
                 logs = "\n".join(logs_list)
-=======
-                logs = "\n".join(_extract_python_logs(resp))
->>>>>>> Stashed changes
                 if "PIE_READY:1" in logs:
                     log.info("start_pie: PIE world ready after %.1fs (attempt %d)",
                              5.0 * attempt, attempt)
                     ready = True
                     break
-<<<<<<< Updated upstream
                 # MCP log-capture race: success=true with empty python_logs
                 # means the script ran but stdout was lost. After grace period
                 # this is overwhelmingly the "PIE actually started" case.
@@ -205,10 +200,6 @@ class CoEvolutionRunner:
                 else:
                     log.info("start_pie: PIE not ready yet (attempt %d, logs=%d)",
                              attempt, len(logs_list))
-=======
-                else:
-                    log.info("start_pie: PIE not ready yet (attempt %d)", attempt)
->>>>>>> Stashed changes
             except Exception as exc:
                 log.info("start_pie: probe %d failed (%s); will retry", attempt, exc)
             # Every 6 attempts (~30s) re-dispatch in case earlier dispatch was lost.
@@ -587,7 +578,6 @@ else:
 
             # Create env and pre-spawn humanoid immediately after PIE start,
             # before spawning scene clutter. This is more stable on heavy maps.
-<<<<<<< Updated upstream
             # Use a unique agent name per epoch so a leftover actor from a
             # previous (failed) PIE session can never collide with the new
             # spawn (UE rejects duplicate names with 'object exsit').
@@ -595,11 +585,6 @@ else:
             env = SimWorldNavEnv(
                 ucv_client=ucv, mcp_client=mcp,
                 agent_name=warmup_agent_name,
-=======
-            env = SimWorldNavEnv(
-                ucv_client=ucv, mcp_client=mcp,
-                agent_name="CoEvolveAgent_0",
->>>>>>> Stashed changes
                 capture_rgb=cfg.capture_rgb,
                 spawn_on_reset=False, ensure_pie=False,
             )
@@ -610,7 +595,6 @@ else:
                 except Exception as exc:
                     log.warning("Agent _spawn_agent attempt %d/10 raised: %s",
                                 attempt, exc)
-<<<<<<< Updated upstream
                     # If UE rejected because actor with same name already
                     # exists in the world (extremely unlikely now that the
                     # name is unique per-epoch, but keep as defensive net),
@@ -630,13 +614,6 @@ else:
                 # Verify the actor actually exists in the PIE world.
                 try:
                     loc = ucv.vget_location(warmup_agent_name)
-=======
-                    time.sleep(5)
-                    continue
-                # Verify the actor actually exists in the PIE world.
-                try:
-                    loc = ucv.vget_location("CoEvolveAgent_0")
->>>>>>> Stashed changes
                     if loc and len(loc) == 3 and all(isinstance(c, float) for c in loc):
                         log.info("Agent pre-spawned at %s for epoch %d (attempt %d)",
                                  loc, epoch, attempt)
@@ -696,7 +673,6 @@ else:
                 round_spec.max_steps = cfg.max_steps
                 round_spec.max_path_cm = min(round_spec.max_path_cm, 5000.0)
                 round_spec.n_episodes = max(round_spec.n_episodes, cfg.episodes_per_gen)
-<<<<<<< Updated upstream
                 # Per-epoch difficulty floor/ceiling (path-based, deterministic).
                 # Coding agent may step path_cm by at most -300 / +800 from the
                 # previous epoch. With min==max==path_cm this directly bounds
@@ -720,18 +696,6 @@ else:
                         )
                     round_spec.min_path_cm = max(500.0, clamped * 0.85)
                     round_spec.max_path_cm = min(5000.0, clamped * 1.15)
-=======
-                if self.gen_results:
-                    prev = self.gen_results[-1]
-                    floor_min = max(500.0, prev.get("min_path_cm", 500.0) - 500.0)
-                    floor_max = max(1000.0, prev.get("max_path_cm", 1000.0) - 500.0)
-                    if round_spec.min_path_cm < floor_min:
-                        round_spec.min_path_cm = floor_min
-                    if round_spec.max_path_cm < floor_max:
-                        round_spec.max_path_cm = floor_max
-                    if round_spec.min_path_cm >= round_spec.max_path_cm:
-                        round_spec.max_path_cm = round_spec.min_path_cm + 500.0
->>>>>>> Stashed changes
 
                 is_new_scene_r = getattr(round_spec, '_is_new_scene', False)
                 is_modify_r = getattr(round_spec, '_is_modify', False)
@@ -985,7 +949,6 @@ else:
             # Destroy the warmup agent before spawning ghost agents — it has
             # default collision config and would block the navmesh / ghosts.
             try:
-<<<<<<< Updated upstream
                 ucv.send(f"vset /object/{warmup_agent_name}/destroy")
                 log.info("Phase 6: destroyed warmup %s prior to ghost wave", warmup_agent_name)
             except Exception as exc:
@@ -1011,13 +974,6 @@ else:
             except Exception as exc:
                 log.warning("Phase 6: forced GC failed (%s); continuing", exc)
             time.sleep(2)
-=======
-                ucv.send("vset /object/CoEvolveAgent_0/destroy")
-                log.info("Phase 6: destroyed warmup CoEvolveAgent_0 prior to ghost wave")
-            except Exception as exc:
-                log.warning("Phase 6: warmup agent destroy failed (%s); continuing", exc)
-            time.sleep(1)
->>>>>>> Stashed changes
 
             epoch_dir = self.output_dir / f"epoch_{epoch:03d}"
             epoch_dir.mkdir(parents=True, exist_ok=True)
