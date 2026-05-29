@@ -218,6 +218,18 @@ function swWatchForVideo() {
   obs.observe(document.body, { childList: true, subtree: true });
 }
 
+// Editor combo keys (Ctrl/Cmd+S save, +Z undo, +Y / +Shift+Z redo) are otherwise eaten by
+// the BROWSER (e.g. "Save page") before pixel streaming can forward them to UE. Suppress the
+// browser's default for those, WITHOUT stopping propagation — so the PS lib still forwards the
+// keys to UE and it saves/undoes. Capture phase so we run before the browser acts.
+window.addEventListener('keydown', function(e) {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  var k = (e.key || '').toLowerCase();
+  if (k === 's' || k === 'z' || k === 'y' || k === 'd' || k === 'c' || k === 'v' || k === 'x') {
+    e.preventDefault();   // stop the browser shortcut; PS lib still forwards to UE
+  }
+}, true);
+
 // Listen for parent frame messages
 window.addEventListener('message', function(e) {
   if (!e.data) return;
