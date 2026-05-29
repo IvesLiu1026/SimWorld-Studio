@@ -197,14 +197,9 @@ until nc -z 127.0.0.1 $MCP_PORT 2>/dev/null; do
     fi
 done
 echo "[ue] MCP ready!"
-
-# ── 3b. Immersive mode (F11) ─────────────────────────────────────────────────
-# Toggle the editor viewport to immersive so the streamed frame is just the game
-# view (no editor panels/chrome). The editor launches non-immersive, so one toggle
-# turns it on. Best-effort — never blocks startup.
-IMMERSIVE_CMD="{\"type\":\"execute_python_script\",\"params\":{\"script\":\"import unreal; unreal.SystemLibrary.execute_console_command(None, 'ToggleImmersive')\"}}"
-printf '%s\n' "$IMMERSIVE_CMD" | nc -w 5 127.0.0.1 $MCP_PORT >/dev/null 2>&1 || true
-echo "[ue] Immersive mode enabled (F11)"
+# Immersive mode (F11) is triggered by the web app on first stream-connect via
+# POST /api/immersive (the viewport is active then, which is more reliable than toggling
+# at launch before any browser attaches).
 
 # ── 4. Web UI server ──────────────────────────────────────────────────────────
 if [ -f "$WEB_DIR/index.js" ]; then

@@ -859,8 +859,60 @@ function LibraryPage({ newlyAddedSkillIds, onMarkSkillSeen, newlyAddedToolIds, o
   );
 }
 
+// Gallery of saved scenes (.umap from "Save As", listed via GET /api/saved-maps).
+// Clicking a card loads that map into the live Scene Generation viewport.
+function SavedMapsGallery({ onOpenScene }) {
+  const [maps, setMaps] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState(null);
+  const reload = React.useCallback(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/saved-maps`).then(r => r.json()).then(d => setMaps(d.maps || []))
+      .catch(() => {}).finally(() => setLoading(false));
+  }, []);
+  React.useEffect(() => { reload(); }, [reload]);
+  return (
+    <div style={{ height:"100%", overflow:"auto", padding:16 }}>
+      <div style={{ display:"flex", alignItems:"center", marginBottom:12 }}>
+        <span style={{ fontSize:13, fontWeight:600, color:"var(--ink-2)" }}>Saved scenes · {maps.length}</span>
+        <button onClick={reload} style={{ marginLeft:"auto", padding:"3px 10px", fontSize:12, borderRadius:6, border:"1px solid var(--line)", background:"var(--panel-2)", color:"var(--ink-3)", cursor:"pointer" }}>↻ Refresh</button>
+      </div>
+      {loading ? (
+        <div style={{ color:"var(--ink-3)", fontSize:13, padding:12 }}>Loading…</div>
+      ) : maps.length === 0 ? (
+        <div style={{ color:"var(--ink-2)", fontSize:13, padding:24, textAlign:"center" }}>
+          No saved scenes yet. In the Scene panel, build a scene and click <b>Save As</b> — it'll show up here.
+        </div>
+      ) : (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))", gap:12 }}>
+          {maps.map(m => {
+            const isBase = /^empty_map$/i.test(m.name);
+            return (
+              <div key={m.path} style={{ border:"1px solid var(--line)", borderRadius:8, overflow:"hidden", background:"var(--panel)" }}>
+                <div style={{ height:104, display:"flex", alignItems:"center", justifyContent:"center", background:"var(--bg-2)", color:"var(--ink-3)", borderBottom:"1px solid var(--line)" }}>
+                  {ICONS.frame ? ICONS.frame(34) : "🗺"}
+                </div>
+                <div style={{ padding:"8px 10px" }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }} title={m.path}>
+                    {m.name}{isBase ? "  · base" : ""}
+                  </div>
+                  <button onClick={async () => { setBusy(m.path); try { await onOpenScene?.(m.path); } finally { setBusy(null); } }}
+                    disabled={busy === m.path}
+                    style={{ marginTop:8, width:"100%", padding:"6px", fontSize:12, fontWeight:600, borderRadius:6, border:"1px solid var(--blue)", background:"transparent", color:"var(--blue)", cursor: busy===m.path ? "default":"pointer", opacity: busy===m.path?0.6:1 }}>
+                    {busy === m.path ? "Opening…" : "Open in Scene Generation"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Results page (Gallery + Leaderboard) ─────────────────────────────────────
-function ResultsPage() {
+function ResultsPage({ onOpenScene }) {
   const [tab, setTab] = React.useState("gallery");
   return (
     <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
@@ -873,7 +925,7 @@ function ResultsPage() {
         ))}
       </div>
       <div style={{ flex:1, overflow:"hidden" }}>
-        {tab==="gallery"     && <GalleryPage />}
+        {tab==="gallery"     && <SavedMapsGallery onOpenScene={onOpenScene} />}
         {tab==="leaderboard" && <LeaderboardPage />}
       </div>
     </div>
@@ -8694,6 +8746,60 @@ function StatusDot({ label, active, activeColor, inactiveColor }) {
   );
 }
 
+// Consolidated connection status — one breathing pill that summarizes UE / MCP / Agent.
+// Green = all connected (Running), Yellow = partial, Red = all down, Grey = still connecting.
+// Click to expand a popover with the per-module detail.
+function StatusPill({ health, codingAgent }) {
+  const [open, setOpen] = useState(false);
+  const connecting = !health;
+  const ue  = !!health?.ueConnected;
+  const mcp = !!health?.mcpConnected;
+  const agentOk = true; // a coding-agent backend is always selected
+  const state = connecting ? "connecting" : (ue && mcp) ? "ok" : (!ue && !mcp) ? "down" : "warn";
+  const COLORS = { ok:"#22c55e", warn:"#f59e0b", down:"#dc2626", connecting:"#94a3b8" };
+  const LABELS = { ok:"Running", warn:"Issues", down:"Offline", connecting:"Connecting…" };
+  const color = COLORS[state];
+  const modules = [
+    { name:"UE Engine",  ok: ue },
+    { name:"MCP Server", ok: mcp },
+    { name: agentLabel(codingAgent), ok: agentOk },
+  ];
+  return (
+    <div style={{ position:"relative" }}>
+      <button onClick={() => setOpen(o => !o)} title="Connection status — click for details"
+        style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 12px",
+          border:"1px solid var(--line)", borderRadius:999, background:"var(--panel)",
+          fontSize:13, fontWeight:600, color:"var(--ink-2)", cursor:"pointer", fontFamily:"inherit" }}>
+        <span style={{ width:9, height:9, borderRadius:"50%", background:color, flexShrink:0,
+          boxShadow:`0 0 0 3px ${color}33`,
+          animation: state==="ok" ? "sw-glow-pulse 2s ease-in-out infinite" : "none" }}/>
+        <span>{LABELS[state]}</span>
+        <span style={{ fontSize:9, opacity:.6 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position:"fixed", inset:0, zIndex:30 }}/>
+          <div style={{ position:"absolute", top:"calc(100% + 6px)", right:0, zIndex:31, minWidth:210,
+            background:"var(--panel)", border:"1px solid var(--line)", borderRadius:8,
+            boxShadow:"var(--shadow-pop)", padding:8, display:"flex", flexDirection:"column", gap:7 }}>
+            {modules.map(m => (
+              <div key={m.name} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12 }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", flexShrink:0,
+                  background: connecting ? COLORS.connecting : (m.ok ? "#16a34a" : "#dc2626") }}/>
+                <span style={{ flex:1, color:"var(--ink-2)" }}>{m.name}</span>
+                <span style={{ fontSize:11, fontWeight:600,
+                  color: connecting ? "var(--ink-3)" : (m.ok ? "var(--green,#16a34a)" : "var(--red,#dc2626)") }}>
+                  {connecting ? "…" : (m.ok ? "Connected" : "Not connected")}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ArtifactToastStack({ items }) {
   if (!Array.isArray(items) || items.length === 0) return null;
 
@@ -9460,6 +9566,17 @@ function App() {
     }));
   }, []);
 
+  // Open a saved scene (.umap) from the Results gallery → switch to Scene Generation and
+  // load it into the live viewport (reuses /api/load-map + the viewport auto-reconnect).
+  const openSavedScene = React.useCallback(async (path) => {
+    setTopSection("studio");
+    setStudioMode("scene");
+    try {
+      await fetch(`${API_BASE}/load-map`, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ path }) });
+      setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
+    } catch {}
+  }, []);
+
   const activeModeInfo = STUDIO_MODES.find(m => m.id === studioMode) || STUDIO_MODES[0];
 
   return (
@@ -9551,16 +9668,6 @@ function App() {
         {/* Right side */}
         <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end", marginLeft:"auto" }}>
 
-          {/* Status dots */}
-          {health && (
-            <div style={{ display:"flex", alignItems:"center", gap:14, paddingRight:14, borderRight:"1px solid var(--line-2)" }}>
-              <StatusDot label="UE Engine"   active={health.ueConnected}  activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label="MCP Server"  active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label={agentLabel(codingAgent)} active={true}    activeColor="#16a34a" inactiveColor="#64748b" />
-            </div>
-          )}
-          {!health && <span style={{ fontSize:13, color:"var(--ink-3)" }}>Connecting…</span>}
-
           {/* Sync error / stale agent warnings */}
           {!syncStatus.sseOk && (
             <div style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:7, background:"var(--error-soft,#fef2f2)", border:"1px solid var(--error-border,#fecaca)", fontSize:13, fontWeight:600, color:"var(--red)" }}>
@@ -9589,22 +9696,8 @@ function App() {
             </div>
           )}
 
-          {/* Running pill */}
-          <div className="sw-running-pill" style={{
-            display:"inline-flex", alignItems:"center", gap:8,
-            padding:"6px 10px 6px 14px",
-            border:"1px solid var(--line)", borderRadius:999,
-            background:"var(--panel)", fontSize:13, fontWeight:600,
-          }}>
-            <span style={{
-              width:9, height:9, borderRadius:"50%", background:"#22c55e",
-              boxShadow:"0 0 0 3px rgba(34,197,94,.18)", flexShrink:0,
-              animation: health?.ueConnected ? "sw-glow-pulse 2s ease-in-out infinite" : "none",
-            }}/>
-            <span style={{ color:"var(--ink-2)" }}>
-              {health?.ueConnected ? "Running" : "Standby"}
-            </span>
-          </div>
+          {/* Consolidated connection status pill (UE / MCP / Agent) */}
+          <StatusPill health={health} codingAgent={codingAgent} />
 
           {/* SimCoder pill */}
           <div className="sw-simcoder-pill" style={{ fontSize:14, padding:"6px 14px 6px 10px" }}>
@@ -9851,7 +9944,7 @@ function App() {
               onMarkToolSeen={markToolArtifactSeen}
             />
           )}
-          {topSection === "results" && <ResultsPage />}
+          {topSection === "results" && <ResultsPage onOpenScene={openSavedScene} />}
         </div>
       )}
 
