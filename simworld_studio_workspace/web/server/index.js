@@ -1271,20 +1271,11 @@ except Exception as e:
   }
 });
 
-// POST /api/immersive — put the editor viewport into Game View (clean, game-like: no grid/
-// gizmos/icons) so the streamed frame looks immersive. Fired by the frontend on stream-connect.
-// IMPORTANT: the console commands (ToggleGameView/ToggleImmersive) are NO-OPS in headless
-// -RenderOffScreen (verified: state never changed). The LevelEditorSubsystem Python API DOES
-// apply (verified editor_get_game_view() flips to True). It's an idempotent set, so safe to
-// call on every connect (no toggle-back risk).
-app.post("/api/immersive",async(req,res)=>{
-  try{
-    const r=await ueExecScript("import unreal\nles=unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)\nles.editor_set_game_view(True)\nprint('GAMEVIEW_SET='+str(les.editor_get_game_view()))",15000);
-    const ok=_ueLogs(r).includes("GAMEVIEW_SET=True");
-    logToFile("immersive","editor_set_game_view(True) -> "+(ok?"on":"unconfirmed"));
-    res.json({ok:true,gameView:ok});
-  }catch(e){res.status(502).json({error:e.message});}
-});
+// POST /api/immersive — no-op kept for backward-compat. Immersive (F11) is triggered
+// CLIENT-side in ue-player.html by injecting the F11 key into the pixel-streaming input —
+// the only approach that replicates a manual F11 in headless mode (console commands and
+// editor_set_game_view do not affect the streamed viewport).
+app.post("/api/immersive",(req,res)=>{ res.json({ok:true}); });
 
 app.get('/api/assets',(req,res)=>{
   let { path:browsePath='/', q='', page=0, limit=30, category='' } = req.query;
