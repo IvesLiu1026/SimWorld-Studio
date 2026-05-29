@@ -66,6 +66,8 @@ Get your key at https://console.anthropic.com
 claude
 ```
 
+> **Other backends?** Studio can also drive Codex, Gemini CLI, or OpenCode — pick the Agent + Model from the top-left of the UI. Install/auth instructions for each are in the main [README → Step 1: Set Up a Coding Agent](README.md#step-1--set-up-a-coding-agent). Model lists live in `simworld_studio_workspace/web/server/coding-agents.json`.
+
 ### 4. Build the Frontend (first time only)
 
 ```bash
