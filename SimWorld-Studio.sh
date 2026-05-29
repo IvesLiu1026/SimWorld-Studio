@@ -14,12 +14,12 @@ WORKSPACE="$SCRIPT_DIR/simworld_studio_workspace"
 CIRRUS_JS="$ENGINE_DIR/Plugins/Media/PixelStreaming/Resources/WebServers/SignallingWebServer/cirrus.js"
 
 # Defaults
-WEB_PORT=3002
-MCP_PORT=55559
+WEB_PORT=3005
+MCP_PORT=55564
 GPU_INDEX=0
-CIRRUS_HTTP_PORT=8585
-CIRRUS_WS_PORT=8586
-CIRRUS_SFU_PORT=8889
+CIRRUS_HTTP_PORT=8589
+CIRRUS_WS_PORT=8590
+CIRRUS_SFU_PORT=8893
 MAP="/Game/Main.umap"
 
 usage() {
@@ -198,6 +198,14 @@ until nc -z 127.0.0.1 $MCP_PORT 2>/dev/null; do
 done
 echo "[ue] MCP ready!"
 
+# ── 3b. Immersive mode (F11) ─────────────────────────────────────────────────
+# Toggle the editor viewport to immersive so the streamed frame is just the game
+# view (no editor panels/chrome). The editor launches non-immersive, so one toggle
+# turns it on. Best-effort — never blocks startup.
+IMMERSIVE_CMD="{\"type\":\"execute_python_script\",\"params\":{\"script\":\"import unreal; unreal.SystemLibrary.execute_console_command(None, 'ToggleImmersive')\"}}"
+printf '%s\n' "$IMMERSIVE_CMD" | nc -w 5 127.0.0.1 $MCP_PORT >/dev/null 2>&1 || true
+echo "[ue] Immersive mode enabled (F11)"
+
 # ── 4. Web UI server ──────────────────────────────────────────────────────────
 if [ -f "$WEB_DIR/index.js" ]; then
     echo "[web] Starting on port $WEB_PORT..."
@@ -209,6 +217,8 @@ if [ -f "$WEB_DIR/index.js" ]; then
     PIXEL_STREAMING_URL=http://127.0.0.1:$CIRRUS_HTTP_PORT \
     CIRRUS_HTTP_PORT=$CIRRUS_HTTP_PORT \
     CIRRUS_WS_PORT=$CIRRUS_WS_PORT \
+    SESSION_TTL_MS=3600000 \
+    SESSION_HARD_MAX_MS=14400000 \
     node index.js >> "$WORKSPACE/logs/web.log" 2>&1 &
     WEB_PID=$!
     PIDS+=($WEB_PID)
