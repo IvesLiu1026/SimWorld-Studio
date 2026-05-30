@@ -1102,6 +1102,14 @@ else:
                 "in_band": bool(in_band),
             }
             self.gen_results.append(gen_record)
+            # Live progress sink: append each generation as one JSON line so external
+            # consumers (e.g. the studio web server's DataHub) can stream progress
+            # without waiting for all_results.json at the end.
+            try:
+                with open(self.output_dir / "generations.jsonl", "a", encoding="utf-8") as _gf:
+                    _gf.write(json.dumps(gen_record, default=str) + "\n")
+            except Exception:
+                pass
             self.ctx.add_generation(gen_record)
 
             self.ckpt.save_epoch_data(epoch, spec.to_dict(), episodes_data,
@@ -1156,7 +1164,11 @@ else:
         from openai import OpenAI
         import httpx as _httpx
         import time as _time
-        _timeout = _httpx.Timeout(connect=5.0, read=90.0, write=30.0, pool=5.0)
+        # read timeout must accommodate slow reasoning models (e.g. Qwen3.x emits
+        # long "thinking" even when enable_thinking=False isn't honored server-side).
+        import os as _os
+        _read_to = float(_os.environ.get("COEVOLVE_LLM_READ_TIMEOUT", "600"))
+        _timeout = _httpx.Timeout(connect=5.0, read=_read_to, write=30.0, pool=5.0)
 
         def call(prompt: str) -> str:
             client = OpenAI(

@@ -11,6 +11,7 @@ packaging/build/
 RELEASE_PLAN.md
 simworld_studio_workspace/tmp/
 simworld_studio_workspace/logs/
+simworld_studio_workspace/tasksets/
 simworld_studio_workspace/arena_data/
 simworld_studio_workspace/experiments/*
 !simworld_studio_workspace/experiments/README.md
@@ -25,6 +26,7 @@ simworld_studio_workspace/experiments/observation_modality_ablation/probes_A/
 simworld_studio_workspace/experiments/observation_modality_ablation/probes_B/
 !simworld_studio_workspace/experiments/diverse50_eval/
 simworld_studio_workspace/runs/
+simworld_studio_workspace/web/.gemini/
 simworld_studio_workspace/gym_env/.venv/
 simworld_studio_workspace/probe_frames/
 simworld_studio_workspace/probe_stdout.txt

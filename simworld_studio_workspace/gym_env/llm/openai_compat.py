@@ -108,7 +108,12 @@ class OpenAICompatClient(LLMClient):
                     tools=oai_tools,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    timeout=120,
+                    timeout=int(__import__('os').environ.get('COEVOLVE_LLM_READ_TIMEOUT','600')),
+                    # Disable thinking for Qwen3 hybrid models in tool-call mode too
+                    # (the text-action fallback already does this) — each step just
+                    # needs an action, and thinking makes every step ~10× slower.
+                    extra_body=({"chat_template_kwargs": {"enable_thinking": False}}
+                                if ("qwen3" in self.model.lower() and "thinking" not in self.model.lower()) else None),
                 )
                 result = self._parse_response(resp)
                 # vLLM without --enable-auto-tool-choice accepts tools
@@ -247,7 +252,7 @@ class OpenAICompatClient(LLMClient):
             messages=patched,
             max_tokens=text_max,
             temperature=temperature,
-            timeout=60,
+            timeout=int(__import__('os').environ.get('COEVOLVE_LLM_READ_TIMEOUT','600')),
             extra_body=extra_body or None,
         )
         return self._parse_text_action(resp, tool_names)
