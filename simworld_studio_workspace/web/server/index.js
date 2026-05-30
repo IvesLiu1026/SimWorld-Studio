@@ -1,7 +1,7 @@
-"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);
+"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",OPENCODE_BIN=process.env.OPENCODE_BIN||"opencode",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);
 // Stable session token — persists across all Claude subprocess spawns
 const STUDIO_SESSION=crypto.randomUUID();
-logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){const res=await ueQueue.send({type:"get_actors_in_level",params:{}},{timeoutMs:5000,priority:5,key:"snapshot:"+sid});if(res)ctxManager.updateFromSnapshot(sid,res);return res}const{TaskSetManager}=require("./tasksets");let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,taskSetManager=new TaskSetManager(),SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
+logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
 `;try{fs.appendFileSync(getLogFilePath(),n)}catch{}console.log(`[${s}] ${e}`)}const ARENA_SYSTEM_PROMPT=`You are the SimWorld Studio scene-generation agent.
 You build city scenes in Unreal Engine 5 using MCP tools. The user sees a live viewport on the right.
 
@@ -52,11 +52,6 @@ When the user asks for "people", "pedestrians", "characters", "agents", or "some
 Example — spawn 2 pedestrians:
   spawn_agent(agent_name="Pedestrian_1", agent_type="pedestrian", location=[0, 500, 110])
   spawn_agent(agent_name="Pedestrian_2", agent_type="pedestrian", location=[0, -500, 110])
-
-## RUNNING PYTHON & DEBUGGING
-- execute_python_script returns its result INLINE: on success {status:"success", python_logs}; on failure {status:"error", error, traceback}. If it fails, READ the traceback and FIX your script — do not retry blindly, and do not try to work around the tool (no raw sockets / external scripts). The traceback tells you the exact line and cause.
-- Only genuinely long builds (>~50s) return {status:"running", job_id}; in that case call get_python_result(job_id) every few seconds until it returns success/error. Never call other UE tools while a python job is still running (UE's command queue is serial).
-- You CAN read the UE project directory, including Saved/ (Saved/Logs, crash logs, unrealcv.ini, etc.). Use your file tools to inspect those logs when debugging a failed script or build. You may read and write within the project dir; the Studio source repo is read-only.
 
 ## IMPORTANT RULES
 - ALWAYS use spawn_blueprint_actor for buildings/trees/props, NOT spawn_actor
@@ -390,50 +385,70 @@ async function _autoDiscoverAgents() {
 // }, 5000);
 
 // Gather current status snapshot (shared by SSE push and legacy poll)
-// ── DataHub: the single extensible data-serving layer (see server/data-hub.js) ─
-// Each renderable domain is a registered provider. Cheap in-memory reads are SYNC;
-// slow UE round-trips (e.g. sceneSummary, registered later beside its query) are
-// ASYNC + cached so the SSE push loop never blocks. The flat payload shape below is
-// preserved exactly so existing frontend consumers keep working unchanged.
-const { DataHub } = require("./data-hub");
-const hub = new DataHub({ pushIntervalMs: 3000, idleMs: 90000, keepaliveMs: 9000, logger: (m) => logToFile("data-hub", m) });
+function _gatherStatus(since=0){
+  const ctx=ctxManager.getState(STUDIO_SESSION);
+  if(ctx)agentCtrl.syncWithContext(ctx);
+  const sessions=agentCtrl.list();
+  const activities={};
+  for(const sess of sessions) activities[sess.agentName]=agentCtrl.getActivity(sess.agentName);
+  const chatLog=agentCtrl.getPublicChat(since);
+  return{
+    context:ctx||{agents:[],objects:[],environment:{ready:false},round:0,updatedAt:null},
+    sessions,activities,chatLog,
+    pieActive:_cachedPie,
+    health:{ueConnected:_cachedUeConn,mcpConnected:_cachedUeConn,pixelStreamingUrl:PIXEL_STREAMING_URL},
+    metrics:metricsHub.snapshot(),
+  };
+}
 
-hub.register("context", {
-  snapshot: () => { const ctx = ctxManager.getState(STUDIO_SESSION); if (ctx) agentCtrl.syncWithContext(ctx); return ctx || { agents: [], objects: [], environment: { ready: false }, round: 0, updatedAt: null }; },
-  changeSig: (c) => `${c?.objects?.length || 0}:${c?.agents?.length || 0}:${c?.round || 0}:${c?.environment?.ready ? 1 : 0}`,
+// SSE endpoint — client opens ONE persistent connection, server pushes every 3s
+const _sseClients=new Map();let _sseSeq=0;const _SSE_IDLE_MS=90000;
+app.get("/api/events",(req,res)=>{
+  res.setHeader("Content-Type","text/event-stream");
+  res.setHeader("Cache-Control","no-cache");
+  res.setHeader("Connection","keep-alive");
+  res.setHeader("X-Accel-Buffering","no");
+  res.flushHeaders();
+  // Send initial snapshot immediately
+  const initial=_gatherStatus(0);
+  res.write(`data: ${JSON.stringify(initial)}\n\n`);
+  const cid="sse-"+(++_sseSeq);
+  _sseClients.set(cid,{res,lastSeen:Date.now()});
+  req.on("close",()=>_sseClients.delete(cid));
 });
-hub.register("sessions", {
-  snapshot: () => agentCtrl.list(),
-  changeSig: (ss) => (ss || []).map((s) => `${s.agentName}:${s.status}:${s.collisionCount}:${s.positionUpdatedAt}`).join("|"),
-});
-hub.register("activities", {
-  snapshot: () => { const a = {}; for (const s of agentCtrl.list()) a[s.agentName] = agentCtrl.getActivity(s.agentName); return a; },
-  changeSig: (a) => Object.entries(a || {}).map(([k, v]) => `${k}:${(v || []).length}:${(v || [])[(v || []).length - 1]?.timestamp || 0}`).join("|"),
-});
-hub.register("chatLog", {
-  snapshot: (ctx) => agentCtrl.getPublicChat(ctx?.since || 0),
-  changeSig: (c) => String((c || []).length),
-});
-hub.register("pieActive", { snapshot: () => _cachedPie, changeSig: (v) => String(v) });
-hub.register("health", {
-  snapshot: () => ({ ueConnected: _cachedUeConn, mcpConnected: _cachedUeConn, pixelStreamingUrl: PIXEL_STREAMING_URL }),
-  changeSig: (h) => String(h.ueConnected),
-});
-hub.register("metrics", { snapshot: () => metricsHub.snapshot(), changeSig: (m) => String(m?.sampledAt || 0) });
+// Push status to all SSE clients every 3s
+let _sseSince=0;
+let _sseLastHash='';
+const _crypto=require('crypto');
+setInterval(()=>{
+  if(_sseClients.size===0)return;
+  const snapshot=_gatherStatus(_sseSince);
+  if(snapshot.chatLog?.length>0) _sseSince=Math.max(...snapshot.chatLog.map(m=>m.timestamp));
 
-// Back-compat shim for the legacy /api/poll fallback.
-function _gatherStatus(since = 0) { return hub.gather({ since }); }
+  // Hash-based conditional push — skip if nothing changed
+  // Include chatLog length so new messages always push
+  const hashInput=JSON.stringify({
+    sessionsSig: snapshot.sessions?.map(s=>`${s.agentName}:${s.status}:${s.collisionCount}:${s.positionUpdatedAt}`).join('|'),
+    objectCount: snapshot.context?.objects?.length,
+    agentCount:  snapshot.context?.agents?.length,
+    pieActive:   snapshot.pieActive,
+    ueConnected: snapshot.health?.ueConnected,
+    chatLen:     snapshot.chatLog?.length,
+    round:       snapshot.context?.round,
+  });
+  const newHash=_crypto.createHash('md5').update(hashInput).digest('hex').slice(0,8);
+  const unchanged=(newHash===_sseLastHash);
+  _sseLastHash=newHash;
 
-// SSE: a new client gets the full chat history (since=0); periodic pushes are
-// incremental on a shared cursor (the frontend dedupes). afterTick advances it.
-let _sseSince = 0;
-hub.attachSSE(app, "/api/events", {
-  connectCtx: () => ({ since: 0 }),
-  tickCtx: () => ({ since: _sseSince }),
-  afterTick: (snap) => { if (snap.chatLog && snap.chatLog.length > 0) _sseSince = Math.max(...snap.chatLog.map((m) => m.timestamp)); },
-});
-// Auto-derived pull routes: GET /api/data (full) + GET /api/data/:domain (one).
-hub.mountPullRoutes(app, "/api/data");
+  // Always push at most every 9s even if unchanged (keepalive); skip intermediate pushes
+  const payload=`data: ${JSON.stringify(snapshot)}\n\n`;
+  const now=Date.now();
+  for(const [id,c] of _sseClients){
+    if(now-c.lastSeen>_SSE_IDLE_MS){_sseClients.delete(id);try{c.res.end()}catch{};continue;}
+    if(unchanged && now-c.lastSeen < 9000) continue; // skip unchanged within 9s window
+    try{c.res.write(payload);c.lastSeen=now;}catch{_sseClients.delete(id);}
+  }
+},3000);
 
 // Legacy poll endpoint — kept as fallback, but clients should use /api/events
 app.get("/api/poll",(s,e)=>{
@@ -641,28 +656,11 @@ data: ${JSON.stringify(r)}
 
 ## USER FEEDBACK ON CURRENT SCENE
 The user is providing feedback on the current scene. Modify the scene based on this feedback. Do NOT start from scratch \u2014 refine what exists.
-Feedback: ${i}`);const _agentId=(s.body&&s.body.agent)||"claude";const _CHAT_RUNNERS={gemini:{mod:"./gemini-runner",fn:"runGeminiChat"},codex:{mod:"./codex-runner",fn:"runCodexChat"},opencode:{mod:"./opencode-runner",fn:"runOpenCodeChat"}};if(_CHAT_RUNNERS[_agentId]){clearInterval(c);try{const _R=_CHAT_RUNNERS[_agentId];require(_R.mod)[_R.fn]({req:s,res:e,body:s.body,systemPrompt:m,ctx:{ctxManager,snapshotScene,STUDIO_SESSION,MCP_CONFIG,ARENA_ROOT,UNREAL_PORT,LOG_DIR,SCREENSHOT_DIR,_chatProcs,logToFile,MOCK_MODE}});}catch(err){logToFile(_agentId,"dispatch error: "+err.message);a("text",{delta:`\n\n⚠️ ${_agentId} runner failed to start: ${err.message}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:null});e.end();}return;}const _=["-p",t,"--output-format","stream-json","--include-partial-messages","--verbose","--dangerously-skip-permissions","--mcp-config",MCP_CONFIG,"--append-system-prompt",m];const CLAUDE_MODEL=((s.body&&s.body.model)||process.env.CLAUDE_MODEL||"");if(CLAUDE_MODEL)_.push("--model",CLAUDE_MODEL);/* scene-gen agent: file/shell tools ENABLED so it can read & write the UE project dir (incl Saved/ logs); the repo source stays read-only via the OS sandbox (agent-sandbox.js). The project dir is whitelisted with --add-dir. --disallowedTools is variadic so it must come last. */if(process.env.UE_PROJECT_PATH)_.push("--add-dir",process.env.UE_PROJECT_PATH);_.push("--disallowedTools","Task","TodoWrite","WebFetch","WebSearch");const h=Object.assign({},process.env);Object.keys(h).forEach(k=>{if(k.startsWith("CLAUDE"))delete h[k]});logToFile("chat",`User: "${t.slice(0,200)}" sessionId=${n||"new"}`);try{fs.writeFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),"")}catch{}const _sbc=require("./agent-sandbox").sandboxedSpawn(CLAUDE_BIN,_,path.resolve(__dirname,".."));const g=spawn(_sbc.cmd,_sbc.args,{cwd:path.resolve(__dirname,".."),env:h,stdio:["ignore","pipe","pipe"]});const _pp=_chatProcs.get(n||"_global");if(_pp&&!_pp.killed){try{_pp.kill("SIGTERM")}catch{}}
+Feedback: ${i}`);const _agentId=(s.body&&s.body.agent)||"claude";const _CHAT_RUNNERS={gemini:{mod:"./gemini-runner",fn:"runGeminiChat"},codex:{mod:"./codex-runner",fn:"runCodexChat"},opencode:{mod:"./opencode-runner",fn:"runOpenCodeChat"}};if(_CHAT_RUNNERS[_agentId]){clearInterval(c);try{const _R=_CHAT_RUNNERS[_agentId];require(_R.mod)[_R.fn]({req:s,res:e,body:s.body,systemPrompt:m,ctx:{ctxManager,snapshotScene,STUDIO_SESSION,MCP_CONFIG,ARENA_ROOT,UNREAL_PORT,LOG_DIR,SCREENSHOT_DIR,_chatProcs,logToFile,MOCK_MODE}});}catch(err){logToFile(_agentId,"dispatch error: "+err.message);a("text",{delta:`\n\n⚠️ ${_agentId} runner failed to start: ${err.message}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:null});e.end();}return;}const _=["-p",t,"--output-format","stream-json","--include-partial-messages","--verbose","--dangerously-skip-permissions","--mcp-config",MCP_CONFIG,"--append-system-prompt",m];const CLAUDE_MODEL=((s.body&&s.body.model)||process.env.CLAUDE_MODEL||"");if(CLAUDE_MODEL)_.push("--model",CLAUDE_MODEL);/* SECURITY: scene-gen agent — block all file/shell/web tools so it can ONLY use the simworld MCP tools (cannot read or modify Studio source). --disallowedTools is variadic so it must come last. */_.push("--disallowedTools","Bash","BashOutput","KillShell","Edit","MultiEdit","Write","NotebookEdit","Read","Glob","Grep","Task","TodoWrite","WebFetch","WebSearch");const h=Object.assign({},process.env);Object.keys(h).forEach(k=>{if(k.startsWith("CLAUDE"))delete h[k]});logToFile("chat",`User: "${t.slice(0,200)}" sessionId=${n||"new"}`);try{fs.writeFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),"")}catch{}const _sbc=require("./agent-sandbox").sandboxedSpawn(CLAUDE_BIN,_,path.resolve(__dirname,".."));const g=spawn(_sbc.cmd,_sbc.args,{cwd:path.resolve(__dirname,".."),env:h,stdio:["ignore","pipe","pipe"]});const _pp=_chatProcs.get(n||"_global");if(_pp&&!_pp.killed){try{_pp.kill("SIGTERM")}catch{}}
 _chatProcs.set(n||"_global",g);
 g.on("exit",()=>_chatProcs.delete(n||"_global"));let f="",w=new Set,v=new Set,S=n||null,b=null;const toolInputs=new Map;function j(d){if(d=d.trim(),!d)return;try{fs.appendFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),d+`
 `)}catch{}let r;try{r=JSON.parse(d)}catch{return}const u=r.type;if(u==="system"&&r.subtype==="init"){r.session_id&&(S=r.session_id);ctxManager.resolveSession(STUDIO_SESSION);ctxManager.beginRound(STUDIO_SESSION);const p=(r.mcp_servers||[]).map(l=>`${l.name}:${l.status}`);a("system",{sessionId:r.session_id,mcpServers:r.mcp_servers||[]}),logToFile("claude",`Session ${r.session_id} | MCP: ${p.join(", ")}`)}else if(u==="stream_event"){const p=r.event||{};if(p.type==="content_block_delta"&&p.delta?.type==="text_delta"&&a("text",{delta:p.delta.text}),p.type==="content_block_delta"&&p.delta?.type==="thinking_delta"&&a("text",{delta:p.delta.thinking}),p.type==="content_block_start"&&p.content_block?.type==="tool_use"){const l=p.content_block;if(!w.has(l.id)){w.add(l.id);const y=l.name.replace(/^mcp__\w+__/,"");a("tool_start",{id:l.id,name:l.name,displayName:y}),logToFile("tool",`Starting: ${l.name}`);if(y==="verify_scene"){v.add(l.id);a("verifier_start",{toolUseId:l.id})}}}p.type==="content_block_delta"&&p.delta?.type==="input_json_delta"&&a("tool_input",{delta:p.delta.partial_json})}else if(u==="assistant"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_use"){const y=l.name.replace(/^mcp__\w+__/,"");a("tool_details",{id:l.id,name:l.name,displayName:y,input:l.input});if(["spawn_blueprint_actor","spawn_actor","spawn_agent","delete_actor","delete_all_spawned","setup_environment"].includes(y)){logToFile("ctx","cached tool_use: "+y+" id="+l.id+" input="+JSON.stringify(l.input).slice(0,200));toolInputs.set(l.id,{name:y,input:l.input})}}else l.type==="text"&&l.text&&a("text",{delta:l.text})}else if(u==="user"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_result"){const y=Array.isArray(l.content)?l.content.map(P=>P.text||"").join(""):String(l.content||""),B=y.match(/([\/][\w\/\-._]+\.png)/);B&&fs.existsSync(B[1])&&(b=B[1],a("screenshot",{toolUseId:l.tool_use_id,filepath:`/api/screenshot/file?path=${encodeURIComponent(b)}`})),a("tool_result",{toolUseId:l.tool_use_id,result:y.slice(0,2e3),isError:l.is_error||!1}),logToFile("tool_result",`${l.tool_use_id?.slice(0,8)} \u2192 ${y.slice(0,300)}`);{const _st=toolInputs.get(l.tool_use_id);if(_st){logToFile("ctx","tool_result for "+_st.name+" toolUseId="+l.tool_use_id+" is_error="+l.is_error+" S="+S);if(!l.is_error&&S){try{const _tr=JSON.parse(y);logToFile("ctx",_st.name+" status="+_tr.status);if(_tr.status==="success"){if(_st.name==="spawn_blueprint_actor"||_st.name==="spawn_actor"||_st.name==="spawn_agent"){const _an=_st.input.actor_name||_st.input.agent_name||_st.input.name;const _cls=_st.input.blueprint_id||_st.input.static_mesh||_st.input.agent_type||"";const _cat=_st.name==="spawn_agent"?"agent":undefined;logToFile("ctx","addActor: "+_an+" cls="+_cls+" cat="+(_cat||"auto"));ctxManager.addActor(STUDIO_SESSION,{name:_an,cls:_cls,category:_cat,location:_st.input.location})}else if(_st.name==="delete_actor")ctxManager.removeActor(STUDIO_SESSION,_st.input.name);else if(_st.name==="delete_all_spawned")ctxManager.clearAllSpawned(STUDIO_SESSION);else if(_st.name==="setup_environment"){logToFile("ctx","setEnvironmentReady");ctxManager.setEnvironmentReady(STUDIO_SESSION)}const _state=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","state after update: agents="+(_state?.agents?.length)+" objects="+(_state?.objects?.length)+" updatedAt="+_state?.updatedAt)}}catch(_e){logToFile("ctx","parse error: "+_e.message)}}toolInputs.delete(l.tool_use_id)}}if(v.has(l.tool_use_id)){let _fb="",_ss="";try{const _ro=JSON.parse(y);_fb=_ro.feedback||"";_ss=_ro.screenshot||""}catch(_e){}a("verifier_result",{toolUseId:l.tool_use_id,feedback:_fb,screenshot:_ss?`/api/screenshot/file?path=${encodeURIComponent(_ss)}`:""})}}}else if(u==="result"){gotResultEvent=true;clearInterval(idleTimer);S=r.session_id;const p=r.is_error||r.subtype==="error_during_turn";r.result&&typeof r.result==="string"&&a("text",{delta:r.result+"\n"}),logToFile("claude",`Result: subtype=${r.subtype} session=${S} cost=$${r.total_cost_usd||"?"}`),logToFile("result",JSON.stringify({subtype:r.subtype,cost:r.total_cost_usd,duration:r.duration_ms}).slice(0,500)),T(),clearInterval(c);const _finish=()=>{const _st=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","DONE: session="+S+" agents="+(_st?.agents?.length)+" objects="+(_st?.objects?.length)+" updatedAt="+_st?.updatedAt);a("done",{sessionId:STUDIO_SESSION,isError:p,costUsd:r.total_cost_usd,latestScreenshot:b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:k()});e.end()};if(!MOCK_MODE){logToFile("ctx","calling snapshotScene for "+S);snapshotScene(STUDIO_SESSION).then(r=>{logToFile("ctx","snapshotScene result: "+(r?"success":"null"));_finish()}).catch(err=>{logToFile("ctx","snapshotScene error: "+err.message);_finish()})}else _finish()}}function T(){let d=null;if(fs.existsSync(SCREENSHOT_DIR))try{const r=fs.readdirSync(SCREENSHOT_DIR).filter(u=>u.endsWith(".png")).map(u=>({fp:path.join(SCREENSHOT_DIR,u),time:fs.statSync(path.join(SCREENSHOT_DIR,u)).mtimeMs})).filter(({time:u})=>Date.now()-u<18e5);for(const u of r)(!d||u.time>d.time)&&(d=u)}catch{}d&&(b=d.fp)}function k(){return T(),b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:null}const CLAUDE_IDLE_TIMEOUT_MS=parseInt(process.env.CLAUDE_IDLE_TIMEOUT_MS||'1800000',10);let lastOutputTime=Date.now();const idleTimer=setInterval(()=>{if(Date.now()-lastOutputTime>CLAUDE_IDLE_TIMEOUT_MS&&!gotResultEvent){logToFile("claude",`Idle timeout (${CLAUDE_IDLE_TIMEOUT_MS/1000}s no output), killing process`);clearInterval(idleTimer);g.kill("SIGTERM")}},10000);g.stdout.on("data",d=>{lastOutputTime=Date.now();f+=d.toString();const r=f.split(`
-`);f=r.pop()??"";for(const u of r)j(u)});let stderrBuf="";g.stderr.on("data",d=>{lastOutputTime=Date.now();const r=d.toString().trim();if(r){stderrBuf+=r+"\n";logToFile("stderr",r.slice(0,300))}});let gotResultEvent=false;g.on("close",d=>{clearInterval(c),clearInterval(idleTimer);/* P0-3: cleaned up via g.on(exit) */f.trim()&&j(f),logToFile("claude",`Process exited with code ${d} gotResult=${gotResultEvent}`);if(gotResultEvent)return;if(!e.writableEnded){const errDetail=stderrBuf.slice(0,400).trim()||(d!==0?`exit code ${d}`:`no output received`);a("text",{delta:`\n\n⚠️ Agent exited unexpectedly: ${errDetail}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:k()});e.end()}}),e.on("close",()=>{if(!e.writableEnded){clearInterval(c);try{e.end()}catch{}logToFile("claude","Browser closed SSE — agent continues in background (use /api/chat-stop to kill)")}})});
-// ── Self-evolution + auto-skill-selection wiring ───────────────────────────────
-// Wired here (after skillRegistry/STUDIO_SESSION exist). Both modules shipped in the
-// tree but were never mounted, so the Scene-Agent toggles were no-ops until now.
-let evoManager=null;
-try{
-  const{EvolutionManager}=require("./evolution");
-  const{LearnedToolStore}=require("./learned-tools-store");
-  evoManager=new EvolutionManager({skillRegistry,learnedToolStore:new LearnedToolStore(),logsDir:LOG_DIR});
-  console.log("[evolution] manager ready, enabled="+evoManager.getConfig().enabled);
-}catch(err){console.error("[evolution] init failed:",err.message);}
-app.get("/api/evolution/config",(s,e)=>{if(!evoManager)return e.json({enabled:false,unavailable:true});try{e.json(evoManager.getConfig())}catch(err){e.status(500).json({error:err.message})}});
-function _evoSetEnabled(s,e){if(!evoManager)return e.status(503).json({error:"evolution unavailable"});const en=!!(s.body&&s.body.enabled);const src=(s.body&&s.body.source)||"api";try{e.json(evoManager.setEnabled(en,src))}catch(err){e.status(500).json({error:err.message})}}
-app.patch("/api/evolution/config",_evoSetEnabled);
-app.post("/api/evolution/config",_evoSetEnabled);
-app.get("/api/evolution/status",(s,e)=>{if(!evoManager)return e.json({enabled:false,unavailable:true});try{e.json(evoManager.getStatus(20))}catch(err){e.status(500).json({error:err.message})}});
-app.post("/api/evolution/ingest",(s,e)=>{if(!evoManager)return e.json({queued:false,unavailable:true});const b=s.body||{};try{const out=evoManager.queueFromChat({sessionId:b.sessionId||STUDIO_SESSION,prompt:b.prompt||"",skills:Array.isArray(b.skills)?b.skills:[],result:b.result||{isError:false,screenshot:null}});e.json(out||{queued:false})}catch(err){e.status(500).json({error:err.message})}});
-app.post("/api/skills/select",async(s,e)=>{const b=s.body||{};const prompt=String(b.prompt||"").trim();if(!prompt)return e.json({selectedSkillIds:[],reasoning:"empty_prompt"});try{const{selectSkillsWithClaude}=require("./skill-selector");const out=await selectSkillsWithClaude({prompt,skillRegistry,model:b.model||process.env.SKILL_SELECT_MODEL||undefined,timeoutMs:60000});e.json({selectedSkillIds:out.selectedSkillIds||[],reasoning:out.reasoning||""})}catch(err){e.status(500).json({error:err.message})}});// Catch-all 404 for unknown /api/ routes — prevents hanging connections
+`);f=r.pop()??"";for(const u of r)j(u)});let stderrBuf="";g.stderr.on("data",d=>{lastOutputTime=Date.now();const r=d.toString().trim();if(r){stderrBuf+=r+"\n";logToFile("stderr",r.slice(0,300))}});let gotResultEvent=false;g.on("close",d=>{clearInterval(c),clearInterval(idleTimer);/* P0-3: cleaned up via g.on(exit) */f.trim()&&j(f),logToFile("claude",`Process exited with code ${d} gotResult=${gotResultEvent}`);if(gotResultEvent)return;if(!e.writableEnded){const errDetail=stderrBuf.slice(0,400).trim()||(d!==0?`exit code ${d}`:`no output received`);a("text",{delta:`\n\n⚠️ Agent exited unexpectedly: ${errDetail}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:k()});e.end()}}),e.on("close",()=>{if(!e.writableEnded){clearInterval(c);try{e.end()}catch{}logToFile("claude","Browser closed SSE — agent continues in background (use /api/chat-stop to kill)")}})});// Catch-all 404 for unknown /api/ routes — prevents hanging connections
 
 // ── Session Routes ──────────────────────────────────────────────────────────
 // ── Scene Checkpoints ────────────────────────────────────────────────────────
@@ -680,15 +678,20 @@ const CKPT_INFRA_PREFIXES = ["Floor","SkySphere","Sky","Light","Atmo","Fog","Pos
   "Landscape","Volume","Note","Camera","Directional","ExponentialHeight"];
 const _PY_INFRA = "(" + CKPT_INFRA_PREFIXES.map(p => JSON.stringify(p)).join(",") + ",)";
 
-// All node→UE MCP traffic is serialized through this one queue (see ue-queue.js):
-// interactive actions jump ahead of background domain refreshes, and duplicate
-// keyed refreshes coalesce. UNREAL_PORT can be a string here; UeQueue parses it.
-const { UeQueue } = require("./ue-queue");
-const ueQueue = new UeQueue({ host: UNREAL_HOST, port: UNREAL_PORT, logger: (m) => logToFile("ue-queue", m) });
-// script, timeoutMs, { priority, key } — opts let callers set background vs interactive priority.
-function ueExecScript(script, timeoutMs = 60000, opts = {}) {
-  return ueQueue.send({ type: "execute_python_script", params: { script } },
-    { timeoutMs, priority: opts.priority, key: opts.key });
+function ueExecScript(script, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    const sock = new (require("net").Socket)();
+    const timer = setTimeout(() => { try { sock.destroy(); } catch (_e) {} resolve(null); }, timeoutMs);
+    let buf = "";
+    sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+      sock.write(JSON.stringify({ type: "execute_python_script", params: { script } }) + "\n");
+    });
+    sock.on("data", (d) => {
+      buf += d.toString();
+      try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch (_e) {}
+    });
+    sock.on("error", () => { clearTimeout(timer); try { sock.destroy(); } catch (_e) {} resolve(null); });
+  });
 }
 function _ueLogs(r) { try { return (r.result.python_logs || []).join("\n"); } catch (_e) { return ""; } }
 
@@ -836,69 +839,8 @@ app.post("/api/checkpoints/:sid/:id/restore", async (req, res) => {
 app.post("/api/scene/reset", async (req, res) => {
   const ok = await ckptClearScene();
   if (!ok) return res.status(502).json({ error: "UE scene reset failed" });
-  // Also drop the in-memory scene context so the Context panel reflects the now-empty world.
-  try { ctxManager.clearAllSpawned(STUDIO_SESSION); } catch {}
-  try { hub.refresh("sceneSummary"); } catch {}
   res.json({ ok: true });
 });
-
-// Live, truthful scene stats read straight from UE:
-//  - sceneName:   the loaded map's name (replaces the old hardcoded "v3")
-//  - actorCount:  number of user-built (non-infra) actors in the level
-//  - navSize:     {x_m, y_m} extent of the NavMesh bounds in metres — the walkable
-//                 area that downstream task/training generation samples over (null
-//                 if no NavMeshBoundsVolume exists yet)
-async function _sceneSummaryFromUE() {
-  const script = [
-    "import unreal, json",
-    "ues=unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem); world=ues.get_editor_world()",
-    "eas=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
-    "INFRA=" + _PY_INFRA,
-    "mn=''",
-    "try: mn=unreal.SystemLibrary.get_object_name(world)",
-    "except Exception: mn=''",
-    "actors=eas.get_all_level_actors()",
-    "n=0",
-    "for a in actors:",
-    "    try:",
-    "        lbl=a.get_actor_label()",
-    "        if (not lbl) or lbl.startswith(INFRA): continue",
-    "        n+=1",
-    "    except Exception:",
-    "        pass",
-    "minx=miny=1e18; maxx=maxy=-1e18; have=False",
-    "for a in actors:",
-    "    try:",
-    "        if isinstance(a, unreal.NavMeshBoundsVolume):",
-    "            o,ext=a.get_actor_bounds(False)",
-    "            minx=min(minx,o.x-ext.x); maxx=max(maxx,o.x+ext.x)",
-    "            miny=min(miny,o.y-ext.y); maxy=max(maxy,o.y+ext.y); have=True",
-    "    except Exception:",
-    "        pass",
-    "nav=None",
-    "if have: nav={'x_m':round((maxx-minx)/100.0,1),'y_m':round((maxy-miny)/100.0,1)}",
-    "print('SCENE_SUMMARY='+json.dumps({'sceneName':mn,'actorCount':n,'totalActors':len(actors),'navSize':nav}))",
-  ].join("\n");
-  // LOW priority + coalesce key: background summary never blocks interactive UE actions,
-  // and overlapping refreshes share one query.
-  const r = await ueExecScript(script, 30000, { priority: UeQueue.LOW, key: "sceneSummary" });
-  const m = _ueLogs(r).match(/SCENE_SUMMARY=(.*)$/m);
-  if (!m) return null;
-  try { return JSON.parse(m[1]); } catch { return null; }
-}
-// Cached DataHub domain. Refresh is event-driven (after scene-changing turns, reset,
-// load-map — via hub.refresh) with a long 60s timer only as a safety net; lazy so it
-// never queries UE with no clients connected.
-hub.register("sceneSummary", { snapshot: _sceneSummaryFromUE, refreshMs: 60000, lazy: true, fallback: null });
-// Back-compat endpoint: serve the cached value (instant); fall back to a live query on a cold cache.
-app.get("/api/scene/summary", async (req, res) => {
-  let v = hub.get("sceneSummary");
-  if (!v) v = await _sceneSummaryFromUE();
-  if (!v) return res.status(502).json({ error: "scene summary unavailable (UE not reachable?)" });
-  res.json(v);
-});
-// Force a re-query (called by the UI after a scene-changing turn). Fire-and-forget.
-app.post("/api/scene/summary/refresh", (req, res) => { try { hub.refresh("sceneSummary"); } catch {} res.json({ ok: true }); });
 
 // POST /api/scene/save-as — save the current editor world to /Game/SavedScenes/<name>.umap
 // (a new on-disk .umap asset). The original /Game/Main.umap on disk is NOT modified.
@@ -1001,63 +943,6 @@ app.get("/api/saved-maps/:name/download", async (req, res) => {
     if (!fs.existsSync(file)) return res.status(404).json({ error: "map not found" });
     res.download(file, name + ".umap");
   } catch (e) { res.status(502).json({ error: e.message }); }
-});
-
-// ── Task Generation (navmesh build + episode sampling) ──────────────────────
-require("./task-gen").registerTaskRoutes(app, { ueExecScript, _ueLogs, taskSetManager });
-
-// ── Agent Training (gym_env experiment engine, live-visualized) ─────────────
-const _training = require("./training").registerTrainingRoutes(app, {
-  taskSetManager,
-  canonicalExport: require("./task-gen").canonicalExport,
-  ueExecScript,
-  UNREAL_PORT,
-  logToFile,
-});
-
-// ── Server-state DataHub domains (cheap in-memory/file reads, pushed live) ─────
-// Panels render these straight off the SSE push (no per-panel polling).
-hub.register("training", {
-  snapshot: () => { try { return { runs: _training.getRuns() }; } catch { return { runs: [] }; } },
-  changeSig: (t) => (t.runs || []).map(r => `${r.id}:${r.status}:${r.agg?.episodesDone || 0}`).join("|"),
-});
-hub.register("taskSets", {
-  snapshot: () => { try { return { taskSets: taskSetManager.list() }; } catch { return { taskSets: [] }; } },
-  changeSig: (t) => (t.taskSets || []).map(s => `${s.id}:${s.episodeCount || (s.episodes && s.episodes.length) || 0}`).join("|"),
-});
-// Co-evolution (adaptive curriculum) — spawns `python -m co_evolve`, streams its
-// per-generation metrics. Cached domain (reads generations.jsonl) refreshed every 2s.
-const _coevolve = require("./coevolve").registerCoevolveRoutes(app, { logToFile });
-hub.register("coevolution", {
-  snapshot: () => { try { return _coevolve.getStatus(); } catch { return { status: "idle", generations: [] }; } },
-  refreshMs: 2000,
-  lazy: true,
-  fallback: { status: "idle", generations: [] },
-  changeSig: (s) => `${s.status}:${(s.generations || []).length}:${s.generations && s.generations.length ? s.generations[s.generations.length - 1].generation : -1}`,
-});
-
-hub.register("evolution", {
-  // Cached (file reads), refreshed every 4s while clients are connected. Includes a
-  // compact `runs` series (oldest→newest) so the Co-evolution panel can chart
-  // skills/tools created per batch over time.
-  snapshot: () => {
-    if (!evoManager) return { enabled: false, unavailable: true };
-    const st = evoManager.getStatus(20);
-    const runs = (evoManager.listRuns(60) || []).map(r => ({
-      ts: r.finishedAt || r.startedAt || null,
-      batchId: r.batchId || null,
-      status: r.status || "",
-      createdSkills: (r.createdSkillIds || []).length,
-      createdTools: (r.createdToolIds || []).length,
-      reusedSkills: (r.reusedSkillIds || []).length,
-    })).reverse(); // listRuns is newest-first → chronological for charts
-    st.runs = runs;
-    return st;
-  },
-  refreshMs: 4000,
-  lazy: true,
-  fallback: { enabled: false, runs: [], pending: [] },
-  changeSig: (e) => `${e.enabled ? 1 : 0}:${e.processing ? 1 : 0}:${e.queueLength || 0}:${e.pendingCount || 0}:${(e.runs || []).length}`,
 });
 
 // DELETE /api/checkpoints/:sid/:id — delete one checkpoint
@@ -1359,15 +1244,27 @@ except Exception as e:
     print("MAP_LOAD_ERR " + str(e))`.trim();
 
   try {
-    // Interactive map switch → HIGH priority so it jumps ahead of background refreshes.
-    // Heavy/cold maps can block the game thread for tens of seconds → long timeout.
-    const raw = await ueExecScript(py, 180_000, { priority: UeQueue.HIGH });
+    const raw = await new Promise((resolve, reject) => {
+      const sock = new (require('net').Socket)();
+      // Heavy / cold maps (first-time shader+asset compile) can block the game thread
+      // for tens of seconds. Allow a long wait rather than failing the switch.
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 180_000);
+      sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+        sock.write(JSON.stringify({ type: 'execute_python_script', params: { script: py } }) + '\n');
+      });
+      let buf = '';
+      sock.on('data', d => {
+        buf += d.toString();
+        try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch {}
+      });
+      sock.on('error', e => { clearTimeout(timer); reject(e); });
+      sock.on('close', () => { clearTimeout(timer); try { resolve(JSON.parse(buf)); } catch { resolve({}); } });
+    });
     const logs = (raw?.result?.python_logs || []).join('\n');
     if (logs.includes('MAP_LOAD_ERR')) {
       const msg = logs.split('MAP_LOAD_ERR ').pop()?.trim() || 'unknown error';
       return res.status(500).json({ error: msg });
     }
-    hub.refresh("sceneSummary"); // the world changed → re-query scene stats
     res.json({ ok: true, path: cleanPath });
   } catch (e) {
     res.status(500).json({ error: e.message });
