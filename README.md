@@ -56,9 +56,7 @@ SimWorld Studio's chat is driven by a **coding-agent CLI** of your choice — **
 
 2. **Log in once, in your terminal** — run the CLI and sign in (`claude`, `codex login`, `gemini`, `opencode auth login`), or export the provider's API key. Do this as the **same user that runs the Studio server**; Studio reuses that login and never asks you for keys.
 
-3. **Pick it in the UI** — choose the **Agent** and **Model** from the dropdowns in the **top-left** of the app. That's it.
-
-> Studio connects each agent to the UE scene tools automatically — no extra MCP setup. You only need one agent to start; switch anytime from the dropdown.
+3. **Pick it in the UI** — choose the **Agent** and **Model** from the dropdowns in the **top-left** of the app.
 
 <sub>Advanced: change the model menus in `simworld_studio_workspace/web/server/coding-agents.json`, or override a CLI path / default model with the `*_BIN` / `*_MODEL` env vars.</sub>
 
