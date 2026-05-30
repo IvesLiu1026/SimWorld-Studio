@@ -265,6 +265,15 @@ function registerTrainingRoutes(app, { taskSetManager, canonicalExport, ueExecSc
     job.clients.clear();
     res.json({ ok: true });
   });
+
+  // Expose a status accessor so the DataHub can push training runs live (same shape
+  // as GET /api/training/runs) without the frontend polling.
+  return {
+    getRuns: () => [...jobs.values()].map(j => ({
+      id: j.id, status: j.status, taskSetId: j.taskSetId, model: j.model,
+      startedAt: j.startedAt, agg: _aggSnapshot(j),
+    })).sort((a, b) => (b.startedAt || "").localeCompare(a.startedAt || "")),
+  };
 }
 
 module.exports = { registerTrainingRoutes, TRAIN_MODELS };

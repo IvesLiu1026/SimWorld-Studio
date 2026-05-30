@@ -3,6 +3,7 @@ import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import PixelStreamPlayer from "./PixelStreamPlayer.jsx";
+import { dataClient, useDomain, apiGet, apiPost, apiPatch, apiDelete } from "./dataClient.js";
 
 // ─── SSE Status Stream — Split Contexts (P2-1 fix) ─────────────────────────
 // Four fine-grained contexts so consumers only re-render when their slice changes.
@@ -39,23 +40,10 @@ function PollProvider({ children }) {
   const legacyRef = useRef({ context: { agents:[], objects:[], environment:{ready:false}, round:0 }, sessions:[], activities:{}, chatLog:[], pieActive:false, health:null });
 
   useEffect(() => {
-    const token = sessionStorage.getItem("sw_session_token") || "";
-    const url   = token ? `${API_BASE}/events?token=${token}` : `${API_BASE}/events`;
-    let es = new EventSource(url);
-    let reconnectTimer = null;
-
-    const reconnect = () => {
-      es.close();
-      reconnectTimer = setTimeout(() => {
-        es = new EventSource(url);
-        es.onmessage = onMessage;
-        es.onerror   = onError;
-      }, 3000);
-    };
-
-    function onMessage(evt) {
+    // The single SSE connection is owned by dataClient; we subscribe to the full
+    // snapshot and run the existing reducer below. dataClient handles reconnect.
+    function onMessage(d) {
       try {
-        const d = JSON.parse(evt.data);
         setSync(prev => prev.sseOk ? prev : { ...prev, sseOk: true, syncError: null });
 
         // Track agent last-seen timestamps
@@ -150,14 +138,8 @@ function PollProvider({ children }) {
       }
     }
 
-    function onError() {
-      setSync(prev => ({ ...prev, sseOk: false, syncError: "SSE connection lost — reconnecting…" }));
-      reconnect();
-    }
-
-    es.onmessage = onMessage;
-    es.onerror   = onError;
-    return () => { es.close(); if (reconnectTimer) clearTimeout(reconnectTimer); };
+    const unsub = dataClient.subscribeRaw(onMessage);
+    return () => unsub();
   }, []);
 
   // Legacy combined context value — stable object so usePoll() consumers
@@ -777,8 +759,7 @@ function TaskInspectorPanel() {
 
   const loadList = React.useCallback(async (preferId) => {
     try {
-      const r = await fetch(`${API_BASE}/tasksets`);
-      const d = await r.json();
+      const d = await apiGet("/tasksets", { ttl: 3000 });
       const list = d.taskSets || [];
       setSets(list);
       setSelId(prev => preferId || prev || (list[0] && list[0].id) || null);
@@ -799,7 +780,7 @@ function TaskInspectorPanel() {
     if (!selId) { setDetail(null); return; }
     let alive = true;
     setLoading(true); setEpIdx(0);
-    fetch(`${API_BASE}/tasksets/${selId}`).then(r=>r.json()).then(d => {
+    apiGet(`/tasksets/${selId}`, { ttl: 3000 }).then(d => {
       if (alive) { setDetail(d && d.id ? d : null); setLoading(false); }
     }).catch(()=>{ if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -807,7 +788,7 @@ function TaskInspectorPanel() {
 
   async function del() {
     if (!selId) return;
-    await fetch(`${API_BASE}/tasksets/${selId}`, { method:"DELETE" });
+    await apiDelete(`/tasksets/${selId}`).catch(() => {});
     setSelId(null); loadList();
   }
   const fmtM = (cm) => (cm/100).toFixed(1) + " m";
@@ -880,6 +861,12 @@ function TaskInspectorPanel() {
               <Btn variant="success" size="sm" style={{ flex:1, justifyContent:"center" }}
                 title="Training-ready JSON (loads via gym_env.batch_runner --episodes-file)"
                 onClick={()=>window.open(`${API_BASE}/tasksets/${detail.id}/download`,"_blank")}>Export (train)</Btn>
+              <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}
+                title="Download episode metrics as CSV"
+                onClick={()=>downloadCsv(`${detail.id||"taskset"}_episodes.csv`,
+                  ["episode_id","difficulty","geodesic_distance_cm","waypoints","tortuosity","object_category"],
+                  eps.map(e=>({ episode_id:e.episode_id, difficulty:e.difficulty||"", geodesic_distance_cm:e.geodesic_distance_cm,
+                    waypoints:(e.gt_path||[]).length, tortuosity:e.tortuosity??"", object_category:e.object_category||"" })))}>CSV</Btn>
               <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }} onClick={del}>Delete</Btn>
             </div>
           </div>
@@ -933,10 +920,10 @@ function TrainingConfigPanel({ sessionId }) {
   const [err, setErr] = React.useState(null);
 
   React.useEffect(() => {
-    fetch(`${API_BASE}/tasksets`).then(r => r.json()).then(d => {
+    apiGet("/tasksets", { ttl: 3000 }).then(d => {
       const l = d.taskSets || []; setTaskSets(l); setTaskSetId(p => p || (l[0] && l[0].id) || "");
     }).catch(() => {});
-    fetch(`${API_BASE}/training/models`).then(r => r.json()).then(d => {
+    apiGet("/training/models", { ttl: 30000 }).then(d => {
       setModels(d.models || []); if (d.models && d.models[0]) setModel(m => m || d.models[0].id);
     }).catch(() => {});
   }, []);
@@ -957,7 +944,7 @@ function TrainingConfigPanel({ sessionId }) {
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   }
   async function cancel() {
-    if (st.jobId) await fetch(`${API_BASE}/training/${st.jobId}/cancel`, { method: "POST" }).catch(() => {});
+    if (st.jobId) await apiPost(`/training/${st.jobId}/cancel`, {}).catch(() => {});
     trainingStore.stop(); trainingStore.set({ status: "cancelled" });
   }
 
@@ -1079,49 +1066,121 @@ function TrainingMonitorPanel() {
 }
 
 // ── Co-evolution curriculum builder ──────────────────────────────────────────
+// Drives the real `co_evolve` experiment: a coding agent designs scenes+tasks at a
+// teacher-chosen difficulty, an embodied nav agent executes episodes in UE, and the
+// teacher (ALP-GMM / ε-greedy) adapts difficulty from the measured success rate.
+// Config + Start/Stop here; live metrics stream into the Round Inspector (right).
 function CurriculumBuilderPanel({ sessionId }) {
-  const [running, setRunning] = React.useState(false);
+  const co = useDomain("coevolution", { status: "idle", generations: [], cfg: null });
+  const running = co.status === "running";
+  const gens = co.generations || [];
+  const last = gens.length ? gens[gens.length - 1] : null;
+
+  const [cfg, setCfg] = React.useState({
+    generations: 30, episodesPerGen: 8, maxSteps: 40, teacher: "alpgmm",
+    codingBaseUrl: "", codingModelId: "", navBaseUrl: "", navModelId: "",
+    ucvPort: "", mcpPort: "",  // blank ⇒ server uses the studio's own UE ports
+    rgb: true,                 // embodied agent sees RGB (the point of vision-nav)
+    waveSize: "",              // ghosts per parallel wave; lower = faster vision steps on a busy VL server
+  });
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const set = (k) => (e) => setCfg((c) => ({ ...c, [k]: e.target.value }));
+
+  const start = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const body = {
+        generations: parseInt(cfg.generations, 10) || 30,
+        episodesPerGen: parseInt(cfg.episodesPerGen, 10) || 8,
+        maxSteps: parseInt(cfg.maxSteps, 10) || 40,
+        teacher: cfg.teacher,
+        ucvPort: parseInt(cfg.ucvPort, 10) || undefined,
+        mcpPort: parseInt(cfg.mcpPort, 10) || undefined,
+        noRgb: !cfg.rgb,                                   // RGB on by default
+        waveSize: parseInt(cfg.waveSize, 10) || undefined,
+      };
+      // Only send LLM overrides if the user filled them in (else server uses env defaults).
+      for (const [k, ek] of [["codingBaseUrl","codingBaseUrl"],["codingModelId","codingModelId"],["navBaseUrl","navBaseUrl"],["navModelId","navModelId"]])
+        if (cfg[k] && cfg[k].trim()) body[ek] = cfg[k].trim();
+      const r = await apiPost("/coevolve/start", body);
+      if (r.error) setErr(r.error);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const stop = async () => { await apiPost("/coevolve/stop", {}).catch(() => {}); };
+
+  const statusColor = running ? "var(--orange)" : co.status === "error" ? "var(--red)" : co.status === "done" ? "var(--green)" : "var(--ink-3)";
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div className="config-section">
-        <div className="config-section-title">Curriculum Status</div>
-        {[["Round","12 / 25"],["Difficulty","Level 4"],["Current SR","64%"],["Next action","Advance to L5"]].map(([l,v])=>(
+        <div className="config-section-title" style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <span>Curriculum Status</span>
+          <span style={{ marginLeft:"auto", fontSize:10, fontWeight:700, color: statusColor }}>{co.status}</span>
+        </div>
+        {[
+          ["Generation", `${last ? last.generation + 1 : gens.length} / ${(co.cfg && co.cfg.generations) || cfg.generations}`],
+          ["Current SR", last && typeof last.sr === "number" ? `${Math.round(last.sr * 100)}%` : "—"],
+          ["SPL", last && typeof last.spl === "number" ? last.spl.toFixed(3) : "—"],
+          ["Difficulty", last && typeof last.difficulty === "number" ? `${last.difficulty.toFixed(1)} / 10` : "—"],
+          ["Teacher target", last && typeof last.teacherTarget === "number" ? last.teacherTarget.toFixed(1) : "—"],
+        ].map(([l,v])=>(
           <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
         ))}
       </div>
 
       <div className="config-section" style={{ flex:1, overflow:"auto" }}>
-        <div className="config-section-title">Difficulty Axes</div>
-        {[["Path length","12–22 m"],["Heading offset","0–90°"],["Obstacle density","0.20"],["Object clutter","medium"],["Distractors","3"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
+        <div className="config-section-title">Run Config</div>
+        {[["Generations","generations"],["Episodes / gen","episodesPerGen"],["Max steps","maxSteps"]].map(([l,k])=>(
+          <div key={k} className="config-row"><label>{l}</label>
+            <input className="config-input" value={cfg[k]} onChange={set(k)} disabled={running} /></div>
         ))}
+        <div className="config-row"><label>Teacher</label>
+          <select className="config-select" value={cfg.teacher} onChange={set("teacher")} disabled={running}>
+            {["alpgmm","epsilon_greedy","fixed"].map(o=><option key={o} value={o}>{o}</option>)}
+          </select></div>
+        <div className="config-row"><label>RGB observation</label>
+          <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:"var(--ink-2)" }}>
+            <input type="checkbox" checked={cfg.rgb} disabled={running}
+              onChange={(e)=>setCfg((c)=>({...c, rgb:e.target.checked}))} />
+            {cfg.rgb ? "on (agent sees camera)" : "off (text-only, faster)"}
+          </label></div>
+        <div className="config-row"><label>Wave size (ghosts)</label>
+          <input className="config-input" value={cfg.waveSize} placeholder="default 10" onChange={set("waveSize")} disabled={running} /></div>
 
-        <div className="config-section-title" style={{ marginTop:12 }}>Curriculum Config</div>
-        {[["Mastery threshold","70%"],["Episodes per round","500"],["Max rounds","25"],["Advance policy","Consecutive"],["Agent update","Online"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
-        ))}
-
-        <div className="config-section-title" style={{ marginTop:12 }}>SimCoder Adaptation</div>
-        <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-          {["Increase obstacle density","Add longer routes","Preserve successful layouts","Oversample sharp-turn failures"].map(s=>(
-            <div key={s} style={{ fontSize:11, color:"var(--ink-3)", padding:"3px 0", display:"flex", alignItems:"center", gap:5 }}>
-              <span style={{ width:4, height:4, borderRadius:"50%", background:"var(--blue)", flexShrink:0 }}/>
-              {s}
-            </div>
-          ))}
+        <div className="config-section-title" style={{ marginTop:12, cursor:"pointer", display:"flex", alignItems:"center" }}
+          onClick={()=>setShowAdvanced(s=>!s)}>
+          <span>Models & Ports</span>
+          <span style={{ marginLeft:"auto", fontSize:11, color:"var(--ink-3)" }}>{showAdvanced ? "▾" : "▸"}</span>
         </div>
+        {showAdvanced && (
+          <>
+            {[["Coding base URL","codingBaseUrl","(env CODING_BASE_URL)"],["Coding model id","codingModelId","(env CODING_MODEL_ID)"],
+              ["Nav base URL","navBaseUrl","(env NAV_BASE_URL)"],["Nav model id","navModelId","(env NAV_MODEL_ID)"],
+              ["UCV port","ucvPort","(studio UE)"],["MCP port","mcpPort","(studio UE)"]].map(([l,k,ph])=>(
+              <div key={k} className="config-row"><label>{l}</label>
+                <input className="config-input" value={cfg[k]} placeholder={ph} onChange={set(k)} disabled={running} /></div>
+            ))}
+            <div style={{ fontSize:10, color:"var(--ink-3)", padding:"4px 2px", lineHeight:1.5 }}>
+              A live run needs reachable coding + nav LLM endpoints and a UE on these ports. Leave model fields blank to use the server's env defaults.
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
-        <button className={`primary-cta ${running?"orange":"orange"}`}
-          style={{ width:"100%", justifyContent:"center" }} onClick={()=>setRunning(r=>!r)}>
-          {running ? `${ICONS.collision(13)} Pause` : `${ICONS.refresh(13)} Run Co-evolution`}
-        </button>
-        <div style={{ display:"flex", gap:6 }}>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Evaluate</Btn>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Export</Btn>
-        </div>
+        {err && <div style={{ fontSize:11, color:"var(--red,#e2484d)" }}>⚠ {err}</div>}
+        {!running
+          ? <button className="primary-cta orange" style={{ width:"100%", justifyContent:"center" }} onClick={start} disabled={busy}>
+              {busy ? "Starting…" : `${ICONS.refresh(13)} Run Co-evolution`}</button>
+          : <button className="primary-cta orange" style={{ width:"100%", justifyContent:"center" }} onClick={stop}>
+              {ICONS.collision(13)} Stop</button>}
+        {co.lastLog && (
+          <div style={{ fontSize:10, color:"var(--ink-3)", fontFamily:"monospace", maxHeight:64, overflow:"auto", whiteSpace:"pre-wrap", background:"var(--bg)", borderRadius:5, padding:"4px 6px", border:"1px solid var(--line)" }}>
+            {co.lastLog.slice(-600)}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1130,14 +1189,42 @@ function CurriculumBuilderPanel({ sessionId }) {
 // ── Scene Inspector (right in scene mode) ─────────────────────────────────────
 function SceneInspectorPanel({ sessionId, latestScreenshot }) {
   const scene = useScene();
-  const actorCount = ((scene.objects || []).length + (scene.agents || []).length) || "—";
+  // Live count from the polled context — instant fallback while the authoritative
+  // UE query is in flight.
+  const liveActorCount = (scene.objects || []).length;
+  // sceneSummary is a DataHub domain: queried from UE on the server, cached, and
+  // pushed over SSE — so this is instant (no per-mount UE round-trip).
+  const summary = useDomain("sceneSummary", null);
+  const summaryErr = false;
+  // Nudge the server to re-query right after a scene-changing turn (new screenshot).
+  const refreshSummary = React.useCallback(() => { dataClient.apiPost("/scene/summary/refresh").catch(() => {}); }, []);
+  React.useEffect(() => { if (latestScreenshot) refreshSummary(); }, [refreshSummary, latestScreenshot]);
+
+  const sceneName = summary?.sceneName || "—";
+  const actorCount = (summary && typeof summary.actorCount === "number")
+    ? summary.actorCount
+    : (liveActorCount || "—");
+  const navSize = summary?.navSize
+    ? `${summary.navSize.x_m} × ${summary.navSize.y_m} m`
+    : (summary ? "no navmesh" : "—");
+
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div className="config-section">
-        <div className="config-section-title">Scene Summary</div>
-        {[["Actors", actorCount], ["Ground size","200 m"], ["Version","v3"]].map(([l,v])=>(
+        <div className="config-section-title" style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <span>Scene Summary</span>
+          <button
+            onClick={refreshSummary}
+            title="Refresh scene stats from UE"
+            style={{ marginLeft:"auto", padding:"1px 7px", fontSize:11, borderRadius:5, border:"1px solid var(--line)", background:"var(--panel-2)", color:"var(--ink-3)", cursor:"pointer" }}
+          >↻</button>
+        </div>
+        {[["Actors", actorCount], ["Navmesh size", navSize], ["Scene", sceneName]].map(([l,v])=>(
           <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
         ))}
+        {summaryErr && !summary && (
+          <div style={{ fontSize:11, color:"var(--ink-3)", padding:"2px 0" }}>UE not reachable — showing cached count.</div>
+        )}
       </div>
 
       {/* Live verifier panel */}
@@ -1151,22 +1238,68 @@ function SceneInspectorPanel({ sessionId, latestScreenshot }) {
 }
 
 // ── Round Inspector (right in co-evolve mode) ─────────────────────────────────
+// Live co-evolution generations from the `coevolution` DataHub domain: success
+// rate / SPL / difficulty over generations (charts) + per-generation log + CSV.
 function RoundInspectorPanel({ sessionId }) {
+  const co = useDomain("coevolution", { status: "idle", generations: [] });
+  const gens = Array.isArray(co.generations) ? co.generations : []; // chronological
+  const srPct = gens.map((g) => Math.round((g.sr || 0) * 100));
+  const diffSeries = { difficulty: gens.map((g) => g.difficulty || 0), target: gens.map((g) => (typeof g.teacherTarget === "number" ? g.teacherTarget : 0)) };
+  const exportCsv = () => downloadCsv("coevolution_generations.csv",
+    ["generation", "sr", "spl", "avgSteps", "difficulty", "teacherTarget", "inBand", "codingReward", "sceneId", "taskType", "minPathCm", "maxPathCm"],
+    gens);
+
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div className="config-section">
-        <div className="config-section-title">Round History</div>
-        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-          {[["R1","L0","82%","Advance"],["R2","L1","76%","Advance"],["R3","L2","58%","Hold"],["R4","L2","71%","Advance"],["R5","L3","49%","Hold"],["R12","L4","64%","Active"]].map(([r,l,sr,action])=>(
-            <div key={r} style={{ display:"grid", gridTemplateColumns:"2.5rem 2.5rem 2.5rem 1fr", gap:4, padding:"4px 6px", borderRadius:5, background:"var(--bg-tertiary)", fontSize:11, fontFamily:"monospace", alignItems:"center" }}>
-              <span style={{ color:"var(--ink-3)" }}>{r}</span>
-              <span style={{ color:"var(--ink-2)" }}>{l}</span>
-              <span style={{ color:"var(--blue)", fontWeight:700 }}>{sr}</span>
-              <span style={{ color: action==="Hold"?"var(--orange)": action==="Active"?"var(--green)":"var(--ink-3)", fontFamily:"inherit", fontSize:11 }}>{action}</span>
+        <div className="config-section-title" style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <span>Co-evolution</span>
+          <span style={{ marginLeft:"auto", fontSize:10, fontWeight:700,
+            color: co.status === "running" ? "var(--orange)" : co.status === "error" ? "var(--red)" : co.status === "done" ? "var(--green)" : "var(--ink-3)" }}>
+            {co.status}
+          </span>
+        </div>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", fontSize:11, color:"var(--ink-3)", marginBottom:8 }}>
+          <span>gens <b style={{ color:"var(--ink-2)" }}>{gens.length}</b></span>
+          {gens.length > 0 && <>
+            <span>SR <b style={{ color:"var(--green)" }}>{srPct[srPct.length-1]}%</b></span>
+            <span>diff <b style={{ color:"var(--orange)" }}>{(gens[gens.length-1].difficulty||0).toFixed(1)}</b></span>
+          </>}
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          <LineChart series={srPct} label="Success rate" unit="%" color="var(--green)" W={300} H={88} />
+          <MultiLineChart seriesMap={diffSeries} label="Difficulty vs teacher target" W={300} H={88} />
+        </div>
+      </div>
+
+      <div className="config-section" style={{ minHeight:0 }}>
+        <div className="config-section-title" style={{ display:"flex", alignItems:"center" }}>
+          <span>Generations ({gens.length})</span>
+          <button onClick={exportCsv} disabled={!gens.length}
+            title="Download per-generation metrics as CSV"
+            style={{ marginLeft:"auto", padding:"1px 8px", fontSize:11, borderRadius:5, border:"1px solid var(--line)",
+              background:"var(--panel-2)", color: gens.length ? "var(--ink-2)" : "var(--ink-3)", cursor: gens.length ? "pointer" : "default" }}>
+            ↓ CSV
+          </button>
+        </div>
+        <div style={{ maxHeight:170, overflow:"auto", border:"1px solid var(--line)", borderRadius:6 }}>
+          {gens.length === 0 && (
+            <div style={{ fontSize:12, color:"var(--ink-3)", padding:8, lineHeight:1.5 }}>
+              No generations yet. Configure + <b>Run Co-evolution</b> on the left — each generation (coding agent designs a scene, embodied agent runs episodes) appears here as it completes.
+            </div>
+          )}
+          {[...gens].reverse().map((g, i) => (
+            <div key={g.generation ?? i} style={{ display:"grid", gridTemplateColumns:"2.4rem 3rem 3rem 1fr", gap:4,
+              padding:"4px 8px", fontSize:11, fontFamily:"monospace", borderBottom:"1px solid var(--line)", alignItems:"center" }}>
+              <span style={{ color:"var(--ink-3)" }}>G{g.generation}</span>
+              <span style={{ color:"var(--green)", fontWeight:700 }}>{Math.round((g.sr||0)*100)}%</span>
+              <span style={{ color:"var(--orange)" }}>d{(g.difficulty||0).toFixed(1)}</span>
+              <span style={{ color:"var(--ink-3)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={g.reasoning||g.sceneId||""}>{g.taskType||""} {g.inBand?"·✓band":""}</span>
             </div>
           ))}
         </div>
       </div>
+
       <div style={{ flex:1, overflow:"auto" }}>
         <AgentAggregatePanelTabs agents={[]} sessionId={sessionId} />
       </div>
@@ -1204,7 +1337,7 @@ function SavedMapsGallery({ onOpenScene }) {
   const [busy, setBusy] = React.useState(null);
   const reload = React.useCallback(() => {
     setLoading(true);
-    fetch(`${API_BASE}/saved-maps`).then(r => r.json()).then(d => setMaps(d.maps || []))
+    apiGet("/saved-maps", { ttl: 3000 }).then(d => setMaps(d.maps || []))
       .catch(() => {}).finally(() => setLoading(false));
   }, []);
   React.useEffect(() => { reload(); }, [reload]);
@@ -1279,6 +1412,43 @@ function ResultsPage({ onOpenScene }) {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
+
+// ── Scene-session persistence ────────────────────────────────────────────────
+// The chat panel's session lives only in React state, so a browser refresh wipes
+// it. We stash the live conversation in localStorage and tag it with the server's
+// stable STUDIO_SESSION (from /api/session). On reload we restore it ONLY if the
+// server reports the same studio session — i.e. UE / the web server has not
+// restarted in the meantime. If the studio session changed, the old chat is stale
+// and we discard it so the user starts fresh. Single-user assumption: one stored
+// session per browser.
+const SESSION_STORE_KEY = "simworld.scene.session.v1";
+
+function loadStoredSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_STORE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredSession(data) {
+  try {
+    localStorage.setItem(SESSION_STORE_KEY, JSON.stringify(data));
+  } catch {
+    /* quota / disabled storage — persistence is best-effort */
+  }
+}
+
+function clearStoredSession() {
+  try {
+    localStorage.removeItem(SESSION_STORE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 // Display labels for coding-agent CLI choices. Keys match /api/chat's `agent` body field.
 const AGENT_LABELS = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", gemini: "Gemini CLI" };
@@ -1496,78 +1666,70 @@ Try:
 
 // ─── API Functions ───────────────────────────────────────────────────────────
 
+// All data access goes through the unified dataClient (apiGet/apiPost/apiPatch/
+// apiDelete): consistent errors, in-flight dedup, and optional TTL caching for
+// list/static endpoints. Streaming (/chat, /arena/run, /agent-chat) and binary
+// (/screenshot/*) endpoints intentionally stay on raw fetch.
 async function fetchHealth() {
-  return (await fetch(`${API_BASE}/health`)).json();
+  return apiGet("/health");
 }
 
 async function fetchSkills() {
-  return (await fetch(`${API_BASE}/skills`)).json();
+  return apiGet("/skills", { ttl: 15000 });
 }
 
 async function fetchSkillDetails(id) {
-  return (await fetch(`${API_BASE}/skills/${id}`)).json();
+  return apiGet(`/skills/${id}`, { ttl: 15000 });
 }
 
 async function createSkill(skill) {
-  return (
-    await fetch(`${API_BASE}/skills`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(skill),
-    })
-  ).json();
+  const out = await apiPost("/skills", skill);
+  dataClient.invalidate("/skills");
+  return out;
 }
 
 async function deleteSkill(id) {
-  await fetch(`${API_BASE}/skills/${id}`, { method: "DELETE" });
+  await apiDelete(`/skills/${id}`);
+  dataClient.invalidate("/skills");
 }
 
 async function fetchScenes() {
-  return (await fetch(`${API_BASE}/scenes`)).json();
+  return apiGet("/scenes", { ttl: 5000 });
 }
 
 async function saveScene(scene) {
-  return (
-    await fetch(`${API_BASE}/scenes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(scene),
-    })
-  ).json();
+  const out = await apiPost("/scenes", scene);
+  dataClient.invalidate("/scenes");
+  return out;
 }
 
 async function deleteScene(id) {
-  await fetch(`${API_BASE}/scenes/${id}`, { method: "DELETE" });
+  await apiDelete(`/scenes/${id}`);
+  dataClient.invalidate("/scenes");
 }
 
 // ── Scene checkpoints ──────────────────────────────────────────────────────
 async function listCheckpoints(sessionId) {
-  const r = await fetch(`${API_BASE}/checkpoints?sessionId=${encodeURIComponent(sessionId)}`);
-  return (await r.json()).checkpoints || [];
+  const d = await apiGet(`/checkpoints?sessionId=${encodeURIComponent(sessionId)}`);
+  return (d && d.checkpoints) || [];
 }
 async function createCheckpoint(body) {
-  const r = await fetch(`${API_BASE}/checkpoints`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error("checkpoint create failed");
-  return r.json();
+  // apiPost throws on non-2xx — preserves the previous "checkpoint create failed" behavior.
+  return apiPost("/checkpoints", body);
 }
 async function restoreCheckpoint(sessionId, id) {
-  const r = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(sessionId)}/${id}/restore`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-  });
-  if (!r.ok) throw new Error("restore failed");
-  return r.json();
+  return apiPost(`/checkpoints/${encodeURIComponent(sessionId)}/${id}/restore`, {});
 }
 async function getCheckpoint(sessionId, id) {
-  const r = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(sessionId)}/${id}`);
-  return r.ok ? r.json() : null;
+  // Preserve "return null when not found" (apiGet rejects on non-2xx).
+  try { return await apiGet(`/checkpoints/${encodeURIComponent(sessionId)}/${id}`); }
+  catch { return null; }
 }
 async function clearCheckpoints(sessionId) {
-  await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch(() => {});
+  await apiDelete(`/checkpoints/${encodeURIComponent(sessionId)}`).catch(() => {});
 }
 async function resetScene() {
-  await fetch(`${API_BASE}/scene/reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+  await apiPost("/scene/reset", {}).catch(() => {});
 }
 
 // Tools whose successful use changes the scene → worth a checkpoint.
@@ -1589,7 +1751,7 @@ function screenshotPathFromUrl(url) {
 }
 
 async function fetchAssets() {
-  return (await fetch(`${API_BASE}/assets`)).json();
+  return apiGet("/assets", { ttl: 60000 });
 }
 
 async function sendChat(message, sessionId, onEvent, signal, options) {
@@ -1684,17 +1846,11 @@ async function sendChat(message, sessionId, onEvent, signal, options) {
 }
 
 async function voteOnBattle(battleId, winner) {
-  return (
-    await fetch(`${API_BASE}/arena/battles/${battleId}/vote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ winner }),
-    })
-  ).json();
+  return apiPost(`/arena/battles/${battleId}/vote`, { winner });
 }
 
 async function fetchLeaderboard() {
-  return (await fetch(`${API_BASE}/arena/leaderboard`)).json();
+  return apiGet("/arena/leaderboard", { ttl: 5000 });
 }
 
 async function fetchGallery(options) {
@@ -1704,32 +1860,22 @@ async function fetchGallery(options) {
   if (options?.sort) params.set("sort", options.sort);
 
   const query = params.toString() ? `?${params}` : "";
-  const result = await (await fetch(`${API_BASE}/arena/gallery${query}`)).json();
+  const result = await apiGet(`/arena/gallery${query}`, { ttl: 5000 });
   return Array.isArray(result) ? result : result.items || [];
 }
 
 async function shareToGallery(item) {
-  return (
-    await fetch(`${API_BASE}/arena/gallery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(item),
-    })
-  ).json();
+  return apiPost("/arena/gallery", item);
 }
 
 async function fetchAgents() {
-  return (await fetch(`${API_BASE}/agents`)).json();
+  return apiGet("/agents", { ttl: 10000 });
 }
 
 async function updateAgent(id, settings) {
-  return (
-    await fetch(`${API_BASE}/agents/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings),
-    })
-  ).json();
+  const out = await apiPatch(`/agents/${id}`, settings);
+  dataClient.invalidate("/agents");
+  return out;
 }
 
 async function runArena(prompt, skills, onEvent, signal) {
@@ -1777,47 +1923,47 @@ async function runArena(prompt, skills, onEvent, signal) {
 }
 
 async function fetchTools() {
-  return (await fetch(`${API_BASE}/tools`)).json();
+  return apiGet("/tools", { ttl: 15000 });
 }
 
 async function fetchEvolutionConfig() {
-  return (await fetch(`${API_BASE}/evolution/config`)).json();
+  return apiGet("/evolution/config");
 }
 
 async function updateEvolutionConfig(enabled) {
-  return (
-    await fetch(`${API_BASE}/evolution/config`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: Boolean(enabled), source: "scene_agent_toggle" }),
-    })
-  ).json();
+  const out = await apiPatch("/evolution/config", { enabled: Boolean(enabled), source: "scene_agent_toggle" });
+  dataClient.invalidate("/evolution/config");
+  return out;
+}
+
+// Ask the server's LLM selector to pick the most relevant skills for this prompt.
+// Returns an array of skill ids (empty on failure — caller proceeds without skills).
+async function selectSkillsForPrompt(prompt, model) {
+  // apiPost throws on non-2xx — preserves the previous "skill select failed" behavior.
+  const d = await apiPost("/skills/select", { prompt, model });
+  return Array.isArray(d.selectedSkillIds) ? d.selectedSkillIds : [];
+}
+
+// Queue a finished session for background self-evolution (summarize → create/update
+// skills). Fire-and-forget; the server no-ops if self-evolution is toggled off.
+function ingestSessionForEvolution(payload) {
+  return apiPost("/evolution/ingest", payload).catch(() => {});
 }
 
 async function updateToolProcedure(id, patch) {
-  return (
-    await fetch(`${API_BASE}/tools/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    })
-  ).json();
+  const out = await apiPatch(`/tools/${id}`, patch);
+  dataClient.invalidate("/tools");
+  return out;
 }
 
 async function deleteToolProcedure(id) {
-  return (
-    await fetch(`${API_BASE}/tools/${id}`, {
-      method: "DELETE",
-    })
-  ).json();
+  const out = await apiDelete(`/tools/${id}`);
+  dataClient.invalidate("/tools");
+  return out;
 }
 
 async function sendCameraCommand(cmd, args = []) {
-  await fetch("/api/camera", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cmd, args }),
-  });
+  await apiPost("/camera", { cmd, args });
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
@@ -3300,13 +3446,49 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
   useEffect(() => { latestScreenshotRef.current = latestScreenshot; }, [latestScreenshot]);
   useEffect(() => { turnCountRef.current = turnCount; }, [turnCount]);
 
-  // Fetch the stable studio session id once, then load its checkpoint tree.
+  // True once we've decided whether to restore a persisted session. We must not
+  // write to localStorage before this, or the initial empty state would clobber
+  // a saved session before we get a chance to read it back.
+  const sessionRestoredRef = useRef(false);
+
+  // Fetch the stable studio session id once, restore any persisted chat that
+  // belongs to it, then load its checkpoint tree.
   useEffect(() => {
-    fetch(`${API_BASE}/session`)
-      .then((r) => r.json())
-      .then((d) => { if (d?.sessionId) { studioSessionRef.current = d.sessionId; setStudioSession(d.sessionId); } })
-      .catch(() => {});
+    apiGet("/session")
+      .then((d) => {
+        if (!d?.sessionId) { sessionRestoredRef.current = true; return; }
+        studioSessionRef.current = d.sessionId;
+        const stored = loadStoredSession();
+        if (stored && stored.studioSession === d.sessionId) {
+          // Same live studio session → UE hasn't restarted. Restore the chat.
+          if (Array.isArray(stored.messages) && stored.messages.length) setMessages(stored.messages);
+          if (stored.sessionId) setSessionId(stored.sessionId);
+          if (typeof stored.turnCount === "number") setTurnCount(stored.turnCount);
+          if (stored.latestScreenshot) {
+            setLatestScreenshot(stored.latestScreenshot);
+            onScreenshotUpdate?.(stored.latestScreenshot);
+          }
+          if (stored.sessionId) onSessionChange?.(stored.sessionId);
+        } else if (stored) {
+          // Studio session changed (server/UE restarted) → old chat is stale.
+          clearStoredSession();
+        }
+        sessionRestoredRef.current = true;
+        setStudioSession(d.sessionId);
+      })
+      .catch(() => { sessionRestoredRef.current = true; });
   }, []);
+
+  // Persist the live conversation so a refresh keeps the session (keyed to the
+  // stable studio session). Skip until restore has run, and skip the pristine
+  // welcome state so we don't store an empty session.
+  useEffect(() => {
+    if (!sessionRestoredRef.current) return;
+    const sid = studioSessionRef.current;
+    if (!sid) return;
+    if (!sessionId && messages.length <= 1) return;
+    saveStoredSession({ studioSession: sid, sessionId, messages, turnCount, latestScreenshot });
+  }, [messages, sessionId, turnCount, latestScreenshot]);
   useEffect(() => {
     if (!studioSession) return;
     listCheckpoints(studioSession)
@@ -3390,6 +3572,26 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setLoading(true);
       setTurnCount((c) => c + 1);
+
+      // Auto-select skills: let the LLM pick relevant skills from the prompt before
+      // launching the agent. The resolved set is passed to /api/chat as `skills` and
+      // becomes part of the agent's system prompt (works for every runner).
+      let resolvedSkills = selectedSkills;
+      if (autoSkillSelectionEnabled) {
+        setAutoSelectingSkills(true);
+        setAutoSelectionError("");
+        try {
+          resolvedSkills = await selectSkillsForPrompt(text, codingModel);
+          setAutoSelectedSkills(resolvedSkills);
+          setSelectedSkills(resolvedSkills);
+        } catch (_e) {
+          resolvedSkills = [];
+          setAutoSelectedSkills([]);
+          setAutoSelectionError("Auto skill selection failed — proceeding without skills.");
+        } finally {
+          setAutoSelectingSkills(false);
+        }
+      }
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -3584,13 +3786,23 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
           },
           controller.signal,
           {
-            skills: selectedSkills.length > 0 ? selectedSkills : undefined,
+            skills: resolvedSkills.length > 0 ? resolvedSkills : undefined,
             feedback: feedbackText,
             skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
             agent: codingAgent,
             model: codingModel,
           }
         );
+        // Self-evolution: queue the completed session for background skill summarization.
+        // Server no-ops if the toggle is off; we gate here too to avoid idle requests.
+        if (selfEvolutionOn) {
+          ingestSessionForEvolution({
+            sessionId: studioSessionRef.current,
+            prompt: text,
+            skills: resolvedSkills,
+            result: { isError: false, screenshot: screenshotPathFromUrl(latestScreenshotRef.current) },
+          });
+        }
         // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
         try {
           const finalMsgs = messagesRef.current;
@@ -3630,14 +3842,14 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
         abortRef.current = null;
       }
     },
-    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, codingAgent, codingModel, onScreenshotUpdate]
+    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, codingAgent, codingModel, selfEvolutionOn, onScreenshotUpdate]
   );
 
   const handleStop = () => {
     // Tell the server to actually kill the Claude subprocess. Without this,
     // aborting the SSE alone just leaves the agent running in background
     // (server-side e.on("close") no longer kills on disconnect).
-    fetch(`${API_BASE}/chat-stop`, { method: "POST" }).catch(() => {});
+    apiPost("/chat-stop", {}).catch(() => {});
     abortRef.current?.abort();
     setLoading(false);
   };
@@ -3650,7 +3862,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
   };
 
   const handleReset = () => {
-    fetch(`${API_BASE}/chat-stop`, { method: "POST" }).catch(() => {});
+    if (!window.confirm("Clear the current session?\n\nThis wipes the chat history and resets the UE scene to empty.")) return;
+    apiPost("/chat-stop", {}).catch(() => {});
     abortRef.current?.abort();
     setInput("");
     setLoading(false);
@@ -3662,6 +3875,9 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
     setAutoSelectionError("");
     setTurnCount(0);
     setLatestScreenshot(null);
+    onScreenshotUpdate?.(null);
+    onSessionChange?.(null);
+    clearStoredSession();  // drop the persisted session so a refresh starts clean too
     resetScene();  // wipe the UE scene so we start from scratch
     if (studioSessionRef.current) clearCheckpoints(studioSessionRef.current);
     setCheckpoints([]);
@@ -3671,7 +3887,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
       {
         id: generateMessageId(),
         role: "assistant",
-        content: "Session reset. Starting a fresh conversation.",
+        content: "Session cleared. Scene reset to empty — start a fresh conversation.",
         timestamp: Date.now(),
       },
     ]);
@@ -3777,17 +3993,10 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
               display: "flex",
               gap: 8,
               alignItems: "center",
+              whiteSpace: "nowrap",
             }}
           >
             <span>{agentLabel(codingAgent)}</span>
-            <span>·</span>
-            <span style={{ color: mcpStatus.startsWith("✓") ? "#16a34a" : "#dc2626" }}>
-              MCP: {mcpStatus}
-            </span>
-            <span>·</span>
-            <span style={{ color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)" }}>
-              Self-evolution: {selfEvolutionReady ? (selfEvolutionOn ? "on" : "off") : "syncing"}
-            </span>
             {sessionId && (
               <>
                 <span>·</span>
@@ -3877,13 +4086,13 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
               Stop
             </button>
           )}
-          {!loading && sessionId && (
+          {!loading && (
             <button
               onClick={handleReset}
-              title="Reset conversation"
+              title="Clear the session and reset the UE scene to empty"
               style={headerButtonStyle("#64748b")}
             >
-              Reset
+              Clear
             </button>
           )}
         </div>
@@ -4598,7 +4807,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
 
   const handleStop = () => {
     abortRef.current?.abort();
-    fetch(`${API_BASE}/agent-stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentName: agent.name }) }).catch(() => {});
+    apiPost("/agent-stop", { agentName: agent.name }).catch(() => {});
     setStatus("idle");
   };
 
@@ -4718,8 +4927,7 @@ function AgentTrajectoryView({ agentName, color, liveState }) {
 
   const loadFull = useCallback(() => {
     setLoadingFull(true);
-    fetch(`${API_BASE}/agent-trajectory/${encodeURIComponent(agentName)}`)
-      .then(r => r.json())
+    apiGet(`/agent-trajectory/${encodeURIComponent(agentName)}`)
       .then(d => { setFullTraj(d.trajectory || []); })
       .catch(()=>{})
       .finally(() => setLoadingFull(false));
@@ -4919,7 +5127,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
   const focusAndShoot = useCallback(async () => {
     setCamLoading(true); setCamError(null);
     try {
-      const d = await fetch(`${API_BASE}/agent-camera/${encodeURIComponent(agent.name)}`).then(r => r.json());
+      const d = await apiGet(`/agent-camera/${encodeURIComponent(agent.name)}`);
       if (d.dataUrl) {
         setCamImg(d.dataUrl);
       } else {
@@ -4949,11 +5157,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
     setInput("");
     setSending(true);
     try {
-      await fetch(`${API_BASE}/agent-broadcast`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, target: agent.name }),
-      });
+      await apiPost("/agent-broadcast", { text, target: agent.name });
     } catch {}
     setSending(false);
   };
@@ -5186,10 +5390,7 @@ function AgentAggregatePanelTabs({ agents, sessionId }) {
   const handleTrack = async () => {
     const name = trackName.trim();
     if (!name) return;
-    await fetch(`${API_BASE}/agent-track`, {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ name }),
-    });
+    await apiPost("/agent-track", { name }).catch(() => {});
     setTrackName("");
     setTrackMsg(`Tracking: ${name}`);
     setTimeout(() => setTrackMsg(""), 3000);
@@ -5336,6 +5537,78 @@ function MultiLineChart({ seriesMap, label, unit = "", W = 440, H = 90 }) {
   );
 }
 
+// ── TrajectoryMiniMap — 2D top-down view of paths (taskgen episodes, agent traj) ──
+// paths: [{ points:[[x,y],...], color?, start?:[x,y], goal?:[x,y], label? }]
+// bounds: optional { minX,minY,maxX,maxY } (UE cm); auto-fits to the data otherwise.
+// Square aspect so distances read true; +Y points up like a map.
+function TrajectoryMiniMap({ paths = [], bounds = null, title = "", W = 240, H = 240, grid = true }) {
+  const allPts = [];
+  for (const p of (paths || [])) {
+    if (Array.isArray(p.points)) for (const pt of p.points) if (pt) allPts.push(pt);
+    if (p.start) allPts.push(p.start);
+    if (p.goal) allPts.push(p.goal);
+  }
+  if (allPts.length === 0) {
+    return (
+      <div style={{ width:W, height:H, display:"flex", alignItems:"center", justifyContent:"center",
+        background:"var(--bg)", borderRadius:6, border:"1px solid var(--line)", color:"var(--ink-3)", fontSize:12 }}>
+        {title || "trajectory"}: no data
+      </div>
+    );
+  }
+  let minX, minY, maxX, maxY;
+  if (bounds && Number.isFinite(bounds.minX)) { ({ minX, minY, maxX, maxY } = bounds); }
+  else {
+    minX = Math.min(...allPts.map(p => p[0])); maxX = Math.max(...allPts.map(p => p[0]));
+    minY = Math.min(...allPts.map(p => p[1])); maxY = Math.max(...allPts.map(p => p[1]));
+  }
+  const pad = 12;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const half = (Math.max(maxX - minX, maxY - minY) || 200) / 2 * 1.1; // square + margin
+  const [x0, x1, y0, y1] = [cx - half, cx + half, cy - half, cy + half];
+  const iW = W - 2 * pad, iH = H - 2 * pad;
+  const toX = (x) => pad + ((x - x0) / (x1 - x0)) * iW;
+  const toY = (y) => pad + iH - ((y - y0) / (y1 - y0)) * iH; // flip → +Y up
+  const gridLines = grid ? [0.25, 0.5, 0.75] : [];
+
+  return (
+    <svg width={W} height={H} style={{ display:"block", background:"var(--bg)", borderRadius:6, border:"1px solid var(--line)" }}>
+      <rect x={pad} y={pad} width={iW} height={iH} fill="none" stroke="var(--line)" strokeWidth={1} />
+      {gridLines.map((g, i) => (
+        <g key={i}>
+          <line x1={pad + g * iW} y1={pad} x2={pad + g * iW} y2={pad + iH} stroke="var(--line)" strokeWidth={0.5} strokeDasharray="2,3" />
+          <line x1={pad} y1={pad + g * iH} x2={pad + iW} y2={pad + g * iH} stroke="var(--line)" strokeWidth={0.5} strokeDasharray="2,3" />
+        </g>
+      ))}
+      {(paths || []).map((p, i) => {
+        const col = p.color || AGENT_COLORS[i % AGENT_COLORS.length];
+        const pts = Array.isArray(p.points) ? p.points.filter(Boolean) : [];
+        const d = pts.map((pt, j) => `${j === 0 ? "M" : "L"}${toX(pt[0]).toFixed(1)},${toY(pt[1]).toFixed(1)}`).join(" ");
+        return (
+          <g key={i}>
+            {d && <path d={d} fill="none" stroke={col} strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" opacity={0.85} />}
+            {p.start && <circle cx={toX(p.start[0])} cy={toY(p.start[1])} r={4} fill="#22c55e" stroke="#fff" strokeWidth={1} />}
+            {p.goal && <circle cx={toX(p.goal[0])} cy={toY(p.goal[1])} r={4} fill="#ef4444" stroke="#fff" strokeWidth={1} />}
+          </g>
+        );
+      })}
+      {title && <text x={pad + 2} y={pad + 11} fontSize={10} fill="var(--ink-3)" fontWeight={600}>{title}</text>}
+    </svg>
+  );
+}
+
+// Download an array of row-objects as a CSV file (centralized data export).
+function downloadCsv(filename, headers, rows) {
+  const esc = (v) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [headers.map(esc).join(",")];
+  for (const r of (rows || [])) lines.push(headers.map((h) => esc(r[h])).join(","));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // ── Agent Overview: aggregate stats + time-series charts from MetricsHub ──────
 function AgentOverviewPanel({ agents }) {
   const pollData = usePoll();
@@ -5412,15 +5685,15 @@ function MultiAgentTestbed({ sessionId }) {
     try {
       // Step 1: ensure PIE is active
       addLog("Starting PIE mode…");
-      const pieStatus = await fetch(`${API_BASE}/pie-status`).then(r=>r.json());
+      const pieStatus = await apiGet("/pie-status");
       if (!pieStatus.active) {
-        await fetch(`${API_BASE}/pie-start`, { method:"POST" });
+        await apiPost("/pie-start", {});
         addLog("PIE start requested — waiting up to 30s…");
         // Poll until PIE is active (don't blindly wait fixed duration)
         let pieReady = false;
         for (let i = 0; i < 30; i++) {
           await new Promise(r => setTimeout(r, 1000));
-          const check = await fetch(`${API_BASE}/pie-status`).then(r=>r.json()).catch(()=>({active:false}));
+          const check = await apiGet("/pie-status").catch(()=>({active:false}));
           if (check.active) { pieReady = true; break; }
         }
         if (!pieReady) { addLog("⚠ PIE did not start — agents may not work correctly"); }
@@ -5448,10 +5721,7 @@ function MultiAgentTestbed({ sessionId }) {
       // Step 3: send goal to each agent
       for (let i = 1; i <= count; i++) {
         addLog(`Sending goal to TestAgent_${i}…`);
-        await fetch(`${API_BASE}/agent-broadcast`, {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ text: goal, target: `TestAgent_${i}` }),
-        });
+        await apiPost("/agent-broadcast", { text: goal, target: `TestAgent_${i}` });
         await new Promise(r => setTimeout(r, 400));
       }
       addLog("✓ All agents received goals. Testbed running.");
@@ -5464,7 +5734,7 @@ function MultiAgentTestbed({ sessionId }) {
 
   const stopAll = async () => {
     setRunning(false);
-    await fetch(`${API_BASE}/agent-stop-all`, { method:"POST" }).catch(()=>{});
+    await apiPost("/agent-stop-all", {}).catch(()=>{});
     addLog("Stopped all agents");
   };
 
@@ -5533,11 +5803,7 @@ function CommHistory({ agents }) {
     const text = input.trim();
     if (!text) return;
     // Use broadcast endpoint — triggers agent turns automatically
-    fetch(`${API_BASE}/agent-broadcast`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, target: target === "all" ? "all" : target }),
-    }).catch(() => {});
+    apiPost("/agent-broadcast", { text, target: target === "all" ? "all" : target }).catch(() => {});
     setMessages(prev => [...prev, { from: "user", to: target, text, timestamp: Date.now() }]);
     setInput("");
   };
@@ -5676,8 +5942,8 @@ function AgentPanel({ sessionId, commHeight = 200, onCommHeightChange, hideComm 
           <div style={{ flex:1 }} />
           <button
             onClick={() => {
-              fetch(`${API_BASE}/context-snapshot`, { method:"POST" }).catch(()=>{});
-              fetch(`${API_BASE}/agent-discover`,   { method:"POST" }).catch(()=>{});
+              apiPost("/context-snapshot", {}).catch(()=>{});
+              apiPost("/agent-discover", {}).catch(()=>{});
             }}
             title="Sync context + auto-discover player agents from UE"
             style={{ fontSize:12, padding:"3px 9px", borderRadius:5, border:"1px solid var(--line)",
@@ -5749,10 +6015,7 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
     try {
       // /api/scene-check runs UE Python AABB overlap + floating detection
       // Works in editor mode (no PIE needed), no UnrealCV vget required
-      const data = await fetch(`${API_BASE}/scene-check`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({}),
-      }).then(r => r.json());
+      const data = await apiPost("/scene-check", {});
       setCollData(data);
     } catch { setCollData(null); }
     finally { setChecking(false); }
@@ -5770,10 +6033,7 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
         reader.readAsDataURL(blob);
       });
       // Send to VLM scoring endpoint
-      const result = await fetch(`${API_BASE}/vlm-score`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ imageDataUrl: base64, sessionId }),
-      }).then(r => r.json());
+      const result = await apiPost("/vlm-score", { imageDataUrl: base64, sessionId });
       setScores(prev => [...prev.slice(-9), {
         ts: Date.now(), score: result.score, feedback: result.feedback,
         screenshot: base64, label: result.label,
@@ -6020,8 +6280,7 @@ function ViewportPanel({ latestScreenshot }) {
 
   const [playerUrl, setPlayerUrl] = useState(null);
   useEffect(() => {
-    fetch("/api/pixel-streaming-url")
-      .then(r => r.json())
+    apiGet("/pixel-streaming-url", { ttl: 60000 })
       .then(d => {
         if (d.url) {
           // Load our custom ue-player.html (not the default Cirrus player.html)
@@ -6411,8 +6670,7 @@ function AssetBrowser({ onInsert }) {
       return next;
     });
 
-    fetch(`${API_BASE}/asset-ls?path=${encodeURIComponent(path)}`)
-      .then(r => r.json())
+    apiGet(`/asset-ls?path=${encodeURIComponent(path)}`, { ttl: 30000 })
       .then(data => setDirCache(p => {
         const m = new Map(p);
         m.set(path, { loading: false, loaded: true,
@@ -6468,12 +6726,7 @@ function AssetBrowser({ onInsert }) {
     if (a.type === 'map') {
       // Tell UE to open the map in-editor
       setLoadingMap(a.fullPath);
-      fetch(`${API_BASE}/load-map`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: a.fullPath }),
-      })
-        .then(r => r.json())
+      apiPost("/load-map", { path: a.fullPath })
         .then(d => { if (d.error) console.warn('load-map:', d.error); })
         .catch(() => {})
         .finally(() => setLoadingMap(null));
@@ -6681,11 +6934,11 @@ function SceneManager({ onLoadScene, currentSessionId }) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const sess = await fetch(`${API_BASE}/session`).then((r) => r.json()).catch(() => null);
+      const sess = await apiGet("/session").catch(() => null);
       const sid = sess?.sessionId || null;
       setStudioSid(sid);
       if (sid) setCheckpoints(await listCheckpoints(sid).catch(() => []));
-      const m = await fetch(`${API_BASE}/saved-maps`).then((r) => r.json()).then((d) => d.maps || []).catch(() => []);
+      const m = await apiGet("/saved-maps", { ttl: 3000 }).then((d) => d.maps || []).catch(() => []);
       setMaps(m);
     } finally { setLoading(false); }
   }, []);
@@ -6717,11 +6970,9 @@ function SceneManager({ onLoadScene, currentSessionId }) {
     try {
       // Heavy/cold maps block UE briefly and drop the live stream — switching is fine,
       // we just force the viewport to re-attach afterward (no restart).
-      const r = await fetch(`${API_BASE}/load-map`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
-      if (r.ok) {
-        flash("Map loaded — reconnecting viewport…");
-        setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
-      } else { flash("Load failed"); }
+      await apiPost("/load-map", { path });
+      flash("Map loaded — reconnecting viewport…");
+      setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
     } catch { flash("Load failed"); }
     finally { setBusyId(null); }
   };
@@ -9370,7 +9621,7 @@ function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClo
     },
   ];
   const layouts = [
-    { id: "scene",    label: "Scene Generation",  desc: "Intent+SimCoder | Viewport | Scene Inspector", left: true,  right: true  },
+    { id: "scene",    label: "Scene Generation",  desc: "SimCoder | Viewport | Scene Inspector", left: true,  right: true  },
     { id: "task",     label: "Task Generation",   desc: "Task Builder | Viewport | Task Inspector",     left: true,  right: true  },
     { id: "training", label: "Agent Training",    desc: "Training Config | Viewport | Agent Monitor",   left: true,  right: true  },
     { id: "coevolve", label: "Co-evolution",      desc: "Curriculum Builder | Viewport | Round Inspector", left: true, right: true },
@@ -9494,8 +9745,7 @@ function App() {
   const [health, setHealth] = useState(null);
   useEffect(() => {
     let alive = true;
-    const tick = () => fetch(`${API_BASE}/health`)
-      .then(r => r.json())
+    const tick = () => apiGet("/health")
       .then(h => { if (alive && h) setHealth({ ueConnected: !!h.ueConnected, mcpConnected: !!h.mcpConnected }); })
       .catch(() => {});
     tick();
@@ -9535,8 +9785,7 @@ function App() {
   // Pull the backend/model registry from the server once on mount.
   useEffect(() => {
     let alive = true;
-    fetch(`${API_BASE}/coding-agents`)
-      .then((r) => r.json())
+    apiGet("/coding-agents", { ttl: 60000 })
       .then((d) => { if (alive && d && d.agents && Object.keys(d.agents).length) setCodingAgents(d.agents); })
       .catch(() => {});
     return () => { alive = false; };
@@ -9632,7 +9881,7 @@ function App() {
 
   // Fetch stable session ID on mount (health now comes from SSE)
   useEffect(() => {
-    fetch(`${API_BASE}/session`).then(r => r.json()).then(d => {
+    apiGet("/session").then(d => {
       if (d.sessionId) setCurrentSessionId(d.sessionId);
     }).catch(() => {});
   }, []);
@@ -9916,7 +10165,7 @@ function App() {
     setTopSection("studio");
     setStudioMode("scene");
     try {
-      await fetch(`${API_BASE}/load-map`, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ path }) });
+      await apiPost("/load-map", { path });
       setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
     } catch {}
   }, []);
@@ -10124,7 +10373,7 @@ function App() {
                   : leftPanel === "trainconfig"? ICONS.activity(11)
                   :                             ICONS.refresh(11)}
                 </span>
-                {leftPanel === "chat"        ? "Intent + SimCoder"
+                {leftPanel === "chat"        ? "SimCoder"
                 : leftPanel === "taskgen"    ? "Task Builder"
                 : leftPanel === "trainconfig"? "Training Config"
                 :                              "Curriculum Builder"}
