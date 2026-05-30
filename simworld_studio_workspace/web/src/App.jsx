@@ -2597,17 +2597,66 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
         </div>
       )}
       {message.blocks
-        ? message.blocks.map((block, idx) =>
-            block.type === "text" ? (
-              block.content ? (
+        ? message.blocks.map((block, idx) => {
+            if (block.type === "text") {
+              return block.content ? (
                 <div className="markdown" key={"t"+idx} style={{ color:"#0f172a", fontSize:13 }}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.content}</ReactMarkdown>
                 </div>
-              ) : null
-            ) : (
-              <ToolCallBlock key={block.toolId} tool={(message.toolCalls||[]).find(tc=>tc.id===block.toolId)} />
-            )
-          )
+              ) : null;
+            }
+            if (block.type === "tool") {
+              return <ToolCallBlock key={block.toolId} tool={(message.toolCalls||[]).find(tc=>tc.id===block.toolId)} />;
+            }
+            if (block.type === "round_header") {
+              return (
+                <div key={"rh"+idx} style={{ display:"flex", alignItems:"center", gap:8, margin:"10px 0 6px", color:"#1e40af", fontSize:12, fontWeight:600 }}>
+                  <span style={{ flex:1, height:1, background:"#dbeafe" }} />
+                  <span style={{ padding:"2px 10px", background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:999 }}>
+                    📍 Round {block.round}/{block.max} · Developer
+                  </span>
+                  <span style={{ flex:1, height:1, background:"#dbeafe" }} />
+                </div>
+              );
+            }
+            if (block.type === "critic") {
+              const colorByStatus = { PASS:"#15803d", NEEDS_IMPROVEMENT:"#c2410c", FAIL:"#b91c1c" };
+              const headerFg = colorByStatus[block.status] || "#c2410c";
+              return (
+                <div key={"cv"+idx} style={{ margin:"8px 0", padding:"10px 12px", background:"#fff7ed", border:"1px solid #fdba74", borderRadius:10, color:"#7c2d12" }}>
+                  <div style={{ fontWeight:700, fontSize:12, color:headerFg, marginBottom:4 }}>
+                    🛠️ Critic · Round {block.round} · {block.status}
+                  </div>
+                  {(block.issues||[]).length > 0 && (
+                    <div style={{ marginTop:6, fontSize:12 }}>
+                      <div style={{ fontWeight:600, color:"#9a3412", marginBottom:2 }}>Issues</div>
+                      <ul style={{ margin:"0 0 0 18px", padding:0 }}>{block.issues.map((it,i)=><li key={"i"+i}>{it}</li>)}</ul>
+                    </div>
+                  )}
+                  {(block.suggestions||[]).length > 0 && (
+                    <div style={{ marginTop:6, fontSize:12 }}>
+                      <div style={{ fontWeight:600, color:"#9a3412", marginBottom:2 }}>Suggestions</div>
+                      <ul style={{ margin:"0 0 0 18px", padding:0 }}>{block.suggestions.map((it,i)=><li key={"s"+i}>{it}</li>)}</ul>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (block.type === "loop_done") {
+              const isPass = block.reason === "pass";
+              const isMax = block.reason === "max_iterations";
+              const emoji = isPass ? "🎉" : isMax ? "⏹️" : "⚠️";
+              const bg = isPass ? "#f0fdf4" : isMax ? "#fffbeb" : "#fef2f2";
+              const border = isPass ? "#86efac" : isMax ? "#fcd34d" : "#fca5a5";
+              const fg = isPass ? "#166534" : isMax ? "#92400e" : "#991b1b";
+              return (
+                <div key={"ld"+idx} style={{ margin:"8px 0 4px", padding:"8px 12px", background:bg, border:`1px solid ${border}`, borderRadius:8, color:fg, fontSize:12, fontWeight:600 }}>
+                  {emoji} Loop done — {block.reason} · {block.rounds} round{block.rounds===1?"":"s"} · final: {block.finalStatus}
+                </div>
+              );
+            }
+            return null;
+          })
         : [
             message.content && (
               <div className="markdown" key="content" style={{ color:"var(--ink,#0f172a)", fontSize:13 }}>
@@ -2968,6 +3017,42 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
               }
 
               switch (event.type) {
+                // ── Scene-loop events (build↔critic orchestration) ──
+                // round_header / critic / loop_done are pushed as DISTINCT BLOCKS so they render
+                // as visually-separated cards inside the assistant bubble (critic = warm-orange card).
+                case "intent_start": break;
+                case "intent_updated": break;
+                case "round_start": {
+                  msg.blocks = [...(msg.blocks || []), { type: "round_header", round: event.data?.round, max: event.data?.max }];
+                  break;
+                }
+                case "builder_done": {
+                  if (event.data?.isError) {
+                    msg.blocks = [...(msg.blocks || []), { type: "text", content: `⚠️ Builder error in round ${event.data?.round}` }];
+                  }
+                  break;
+                }
+                case "critic_verdict": {
+                  const d = event.data || {};
+                  msg.blocks = [...(msg.blocks || []), {
+                    type: "critic",
+                    round: d.round,
+                    status: d.status,
+                    issues: Array.isArray(d.issues) ? d.issues : [],
+                    suggestions: Array.isArray(d.suggestions) ? d.suggestions : [],
+                  }];
+                  break;
+                }
+                case "loop_done": {
+                  const d = event.data || {};
+                  msg.blocks = [...(msg.blocks || []), {
+                    type: "loop_done",
+                    reason: d.reason,
+                    rounds: d.rounds,
+                    finalStatus: d.finalStatus,
+                  }];
+                  break;
+                }
                 case "skill_selection_start": {
                   setAutoSelectionError("");
                   setAutoSelectingSkills(true);
