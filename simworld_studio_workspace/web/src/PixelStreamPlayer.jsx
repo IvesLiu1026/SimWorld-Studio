@@ -53,6 +53,9 @@ export default function PixelStreamPlayer({ playerUrl }) {
     return () => clearTimeout(connectTimer.current);
   }, [status]);
 
+  // (Immersive/F11 is now handled inside ue-player.html — it injects the F11 key into the
+  // pixel-streaming input on first connect, which is what actually replicates a manual press.)
+
   // Heartbeat — detect silent drops after 60s silence
   useEffect(() => {
     if (status !== "connected") return;
@@ -86,6 +89,15 @@ export default function PixelStreamPlayer({ playerUrl }) {
     const sep = url.includes("?") ? "&" : "?";
     iframeRef.current.src = url + sep + "_t=" + Date.now();
   }, [effectiveUrl]);
+
+  // Proactive reconnect: a map switch (Saved Maps → Load) drops the stream while UE
+  // reloads the world. Rather than wait for the 60s silence heartbeat, re-attach the
+  // iframe as soon as the switch finishes (the player waits for the streamer to return).
+  useEffect(() => {
+    const h = () => { if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; } doReconnect(); };
+    window.addEventListener("sw-reconnect-stream", h);
+    return () => window.removeEventListener("sw-reconnect-stream", h);
+  }, [doReconnect]);
 
   const url = effectiveUrl();
 

@@ -47,17 +47,10 @@ better idea.
 ## SCENE EDITING PHASE
 {edit_phase_directive}
 
-<<<<<<< Updated upstream
 ## ENVIRONMENT FEEDBACK (last build only — no historical residue)
 {build_feedback}
 
 Last epoch only (do NOT consult older history; rely on rolling stats):
-=======
-## ENVIRONMENT FEEDBACK (last build)
-{build_feedback}
-
-Per-epoch history (for trend only; act on the rolling stats above):
->>>>>>> Stashed changes
 {performance_history}
 
 Learned strategies:
