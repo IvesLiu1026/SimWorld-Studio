@@ -114,10 +114,6 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     "-s", "workspace-write",
     "-c", 'approval_policy="never"',
     "-C", codexCwd,
-    // Allow writes to the UE project dir (incl Saved/) on top of the throwaway cwd, so the
-    // agent can read & write the project's logs/assets. Repo source is unaffected (not a
-    // writable root) and stays protected by the OS sandbox (agent-sandbox.js).
-    ...(process.env.UE_PROJECT_PATH ? ["-c", `sandbox_workspace_write.writable_roots=["${process.env.UE_PROJECT_PATH}"]`] : []),
     ...buildMcpOverrideArgs(MCP_CONFIG, UNREAL_PORT, logToFile),
   ];
   if (model) args.push("-m", model);
