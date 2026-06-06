@@ -215,6 +215,88 @@ export async function trackAgent(name) {
   });
 }
 
+export async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
+  const response = await fetch(`${API_BASE}/agent-chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentName, message, sessionId }),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    const error = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(error.error || `Server error: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let lastDataTime = Date.now();
+  const idleTimeoutMs = 210000;
+
+  for (;;) {
+    const readPromise = reader.read();
+    const timeoutPromise = new Promise((_, reject) => {
+      const check = setInterval(() => {
+        if (Date.now() - lastDataTime > idleTimeoutMs) {
+          clearInterval(check);
+          reader.cancel();
+          reject(new Error("Agent response timeout"));
+        }
+      }, 5000);
+      readPromise.then(() => clearInterval(check)).catch(() => clearInterval(check));
+    });
+
+    let result;
+    try {
+      result = await Promise.race([readPromise, timeoutPromise]);
+    } catch {
+      onEvent({ type: "done", data: { isError: true, text: "Agent timed out." } });
+      break;
+    }
+
+    const { done, value } = result;
+    if (done) break;
+
+    lastDataTime = Date.now();
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() ?? "";
+
+    for (const chunk of chunks) {
+      const lines = chunk.split("\n");
+      let eventType = "message";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+        if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (data) {
+        try {
+          onEvent({ type: eventType, data: JSON.parse(data) });
+        } catch {}
+      }
+    }
+  }
+}
+
+export async function stopAgent(agentName) {
+  return fetch(`${API_BASE}/agent-stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentName }),
+  }).catch(() => {});
+}
+
+export async function fetchAgentTrajectory(agentName) {
+  return fetch(`${API_BASE}/agent-trajectory/${encodeURIComponent(agentName)}`)
+    .then((response) => response.json())
+    .then((data) => data.trajectory || []);
+}
+
+export async function fetchAgentCamera(agentName) {
+  return fetch(`${API_BASE}/agent-camera/${encodeURIComponent(agentName)}`).then((response) => response.json());
+}
+
 export async function fetchPieStatus() {
   return fetch(`${API_BASE}/pie-status`).then((response) => response.json());
 }

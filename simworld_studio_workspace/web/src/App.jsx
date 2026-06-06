@@ -5,12 +5,15 @@ import remarkGfm from "remark-gfm";
 import { useQuery } from "@tanstack/react-query";
 import { API_BASE } from "./api/client.js";
 import {
+  broadcastAgentMessage,
   clearCheckpoints,
   createCheckpoint,
   createSkill,
   deleteSkill,
   deleteToolProcedure,
   fetchAgents,
+  fetchAgentCamera,
+  fetchAgentTrajectory,
   fetchEvolutionConfig,
   fetchGallery,
   fetchLeaderboard,
@@ -23,8 +26,10 @@ import {
   restoreCheckpoint,
   runArena,
   saveScene,
+  sendAgentChat,
   sendChat,
   shareToGallery,
+  stopAgent,
   updateAgent,
   updateEvolutionConfig,
   updateToolProcedure,
@@ -2640,67 +2645,6 @@ function PixelStreamView({ playerUrl }) {
 
 const AGENT_COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#f778ba", "#bc8cff", "#ea580c", "#2563eb", "#56d364"];
 
-async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
-  const response = await fetch(`${API_BASE}/agent-chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentName, message, sessionId }),
-    signal,
-  });
-  if (!response.ok || !response.body) {
-    const err = await response.json().catch(() => ({ error: response.statusText }));
-    console.error("[sendAgentChat] ERROR response", err);
-    throw new Error(err.error || `Server error: ${response.status}`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let lastDataTime = Date.now();
-  const IDLE_TIMEOUT = 210000; // 3.5 min — allow time for long MCP tool calls
-
-  for (;;) {
-    const readPromise = reader.read();
-    const timeoutPromise = new Promise((_, reject) => {
-      const check = setInterval(() => {
-        if (Date.now() - lastDataTime > IDLE_TIMEOUT) {
-          clearInterval(check);
-          reader.cancel();
-          reject(new Error("Agent response timeout"));
-        }
-      }, 5000);
-      readPromise.then(() => clearInterval(check)).catch(() => clearInterval(check));
-    });
-
-    let result;
-    try {
-      result = await Promise.race([readPromise, timeoutPromise]);
-    } catch {
-      onEvent({ type: "done", data: { isError: true, text: "Agent timed out." } });
-      break;
-    }
-
-    const { done, value } = result;
-    if (done) break;
-
-    lastDataTime = Date.now();
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() ?? "";
-    for (const chunk of chunks) {
-      const lines = chunk.split("\n");
-      let eventType = "message";
-      let data = "";
-      for (const line of lines) {
-        if (line.startsWith("event: ")) eventType = line.slice(7).trim();
-        if (line.startsWith("data: ")) data = line.slice(6);
-      }
-      if (data) {
-        try { onEvent({ type: eventType, data: JSON.parse(data) }); } catch {}
-      }
-    }
-  }
-}
-
 function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
   const [status, setStatus] = useState("idle");
   const [thought, setThought] = useState(""); // Current reasoning text
@@ -2754,7 +2698,7 @@ function AgentCard({ agent, sessionId, pieActive, colorIdx, onExpand }) {
 
   const handleStop = () => {
     abortRef.current?.abort();
-    fetch(`${API_BASE}/agent-stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agentName: agent.name }) }).catch(() => {});
+    stopAgent(agent.name);
     setStatus("idle");
   };
 
@@ -2874,9 +2818,8 @@ function AgentTrajectoryView({ agentName, color, liveState }) {
 
   const loadFull = useCallback(() => {
     setLoadingFull(true);
-    fetch(`${API_BASE}/agent-trajectory/${encodeURIComponent(agentName)}`)
-      .then(r => r.json())
-      .then(d => { setFullTraj(d.trajectory || []); })
+    fetchAgentTrajectory(agentName)
+      .then(setFullTraj)
       .catch(()=>{})
       .finally(() => setLoadingFull(false));
   }, [agentName]);
@@ -3075,7 +3018,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
   const focusAndShoot = useCallback(async () => {
     setCamLoading(true); setCamError(null);
     try {
-      const d = await fetch(`${API_BASE}/agent-camera/${encodeURIComponent(agent.name)}`).then(r => r.json());
+      const d = await fetchAgentCamera(agent.name);
       if (d.dataUrl) {
         setCamImg(d.dataUrl);
       } else {
@@ -3105,11 +3048,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
     setInput("");
     setSending(true);
     try {
-      await fetch(`${API_BASE}/agent-broadcast`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, target: agent.name }),
-      });
+      await broadcastAgentMessage(text, agent.name);
     } catch {}
     setSending(false);
   };
