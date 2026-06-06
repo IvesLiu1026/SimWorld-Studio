@@ -21,9 +21,16 @@ import {
   ToggleBtn,
   inputSx,
 } from "./components/ui/primitives.jsx";
-import CodingAgentSelector from "./features/agents/CodingAgentSelector.jsx";
 import { DEFAULT_CODING_AGENTS, agentLabel } from "./features/agents/codingAgents.js";
+import CurriculumBuilderPanel from "./features/coevolution/CurriculumBuilderPanel.jsx";
+import ArtifactToastStack from "./features/studio/ArtifactToastStack.jsx";
+import SessionGateModals from "./features/studio/SessionGateModals.jsx";
+import StudioTopbar from "./features/studio/StudioTopbar.jsx";
+import { ArtifactChain } from "./features/studio/pipeline.jsx";
+import TaskGenPanel from "./features/tasks/TaskGenPanel.jsx";
 import TaskInspectorPanel from "./features/tasks/TaskInspectorPanel.jsx";
+import TrainingConfigPanel from "./features/training/TrainingConfigPanel.jsx";
+import TrainingMonitorPanel from "./features/training/TrainingMonitorPanel.jsx";
 import { useStudioStore } from "./state/studioStore.js";
 import {
   PollProvider,
@@ -34,6 +41,7 @@ import {
   useStatus,
   useSync,
 } from "./state/pollContext.jsx";
+import { clearSessionToken, useSession } from "./state/useSession.js";
 
 // ─── Inline SVG Icons (flat colorful cartoon style) ─────────────────────────
 
@@ -127,444 +135,6 @@ function TagChip({ tag }) {
     <span style={tagChipSx(tag)}>
       {tag}
     </span>
-  );
-}
-
-// ─── Pipeline + Artifact UI ──────────────────────────────────────────────────
-
-const STUDIO_MODES = [
-  { id:"scene",    num:1, label:"Scene Generation", sub:"Create & verify UE5 environments from text/image/edit",     cta:"Generate Scene",   ctaColor:"blue",   icon: s=>ICONS.chat(s)     },
-  { id:"task",     num:2, label:"Task Generation",  sub:"Generate PointNav / ObjectNav tasks from verified scenes",  cta:"Generate Tasks",   ctaColor:"green",  icon: s=>ICONS.target(s)  },
-  { id:"training", num:3, label:"Agent Training",   sub:"Run embodied agent experiments and collect trajectories",   cta:"Start Training",   ctaColor:"violet", icon: s=>ICONS.robot(s)   },
-  { id:"coevolve", num:4, label:"Co-evolution",     sub:"Adaptive curriculum driven by agent-environment feedback",  cta:"Run Co-evolution", ctaColor:"orange", icon: s=>ICONS.refresh(s) },
-];
-
-function PipelineStepper({ activeMode, onChange }) {
-  return (
-    <div className="pipeline-stepper">
-      {STUDIO_MODES.map((m, i) => (
-        <React.Fragment key={m.id}>
-          <button className={`pipeline-tab${activeMode === m.id ? " active" : ""}`}
-            onClick={() => onChange(m.id)} title={m.sub}>
-            <span className="pipeline-tab-num">{m.num}</span>
-            {m.label}
-          </button>
-          {i < STUDIO_MODES.length - 1 && (
-            <svg className="pipeline-arrow" viewBox="0 0 16 16" width="14" height="14" fill="none">
-              <polyline points="5,3 11,8 5,13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          )}
-        </React.Fragment>
-      ))}
-    </div>
-  );
-}
-
-function ArtifactChain({ artifacts, activeMode, onSelect }) {
-  const stages = [
-    { id:"scene",    label:"Scene",    placeholder:"No scene yet",    icon: s=>ICONS.cube(s)    },
-    { id:"task",     label:"Task Set", placeholder:"No tasks yet",    icon: s=>ICONS.target(s)  },
-    { id:"training", label:"Training", placeholder:"No run yet",      icon: s=>ICONS.activity(s)},
-    { id:"coevolve", label:"Curriculum",placeholder:"No curriculum",  icon: s=>ICONS.refresh(s) },
-  ];
-  return (
-    <div className="artifact-chain">
-      <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:"var(--ink-3)", flexShrink:0 }}>Pipeline</span>
-      {stages.map((s, i) => {
-        const art = artifacts[s.id];
-        const isActive = activeMode === s.id;
-        return (
-          <React.Fragment key={s.id}>
-            {i > 0 && <span className="artifact-sep">→</span>}
-            <button
-              className={`artifact-chip${!art ? " empty" : art ? " ready" : ""}${isActive ? " active" : ""}`}
-              onClick={() => art && onSelect(s.id)}
-              title={art ? art.name : s.placeholder}
-            >
-              <span style={{ display:"inline-flex", alignItems:"center" }}>{s.icon(11)}</span>
-              {art ? art.name : s.placeholder}
-            </button>
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Studio mode landing cards ─────────────────────────────────────────────────
-function StudioLanding({ activeMode, onSelect, artifacts }) {
-  return (
-    <div style={{ flex:1, overflow:"auto", background:"var(--bg)" }}>
-      <div style={{ padding:"28px 28px 12px", borderBottom:"1px solid var(--line)" }}>
-        <div style={{ fontSize:16, fontWeight:700, color:"var(--ink)", marginBottom:4 }}>SimWorld Studio</div>
-        <div style={{ fontSize:12, color:"var(--ink-3)" }}>Select a pipeline stage to begin or continue your work.</div>
-      </div>
-      <div className="mode-landing">
-        {STUDIO_MODES.map(m => {
-          const art = artifacts[m.id];
-          return (
-            <div key={m.id} className={`mode-card${activeMode === m.id ? " current" : ""}`}
-              onClick={() => onSelect(m.id)}>
-              <div className="mode-card-num">{m.num}</div>
-              <div>
-                <div className="mode-card-title">{m.label}</div>
-                <div className="mode-card-sub">{m.sub}</div>
-              </div>
-              <div className={`mode-card-status${art ? " has-data" : ""}`}>
-                {art ? `${ICONS.check(11) } ${art.name}` : "No output yet"}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Task Generation panels ────────────────────────────────────────────────────
-function TaskGenPanel({ sessionId }) {
-  const [taskType, setTaskType] = React.useState("PointNav");
-  const [episodes, setEpisodes] = React.useState("100");
-  const [minPath, setMinPath] = React.useState("3");
-  const [maxPath, setMaxPath] = React.useState("30");
-  const [successR, setSuccessR] = React.useState("0.5");
-  const [maxSteps, setMaxSteps] = React.useState("500");
-  const [generating, setGenerating] = React.useState(false);
-  const [result, setResult] = React.useState(null);   // {ok, msg}
-
-  async function generate() {
-    setGenerating(true); setResult(null);
-    try {
-      const body = {
-        taskType: taskType.toLowerCase(),               // PointNav → pointnav
-        episodes: parseInt(episodes, 10) || 100,
-        minPathCm: (parseFloat(minPath) || 0) * 100,     // metres → cm
-        maxPathCm: (parseFloat(maxPath) || 0) * 100,
-        successRadiusM: parseFloat(successR) || 0.5,
-        maxSteps: parseInt(maxSteps, 10) || 500,
-        sceneId: sessionId || null,
-      };
-      const r = await fetch(`${API_BASE}/tasks/generate`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      const data = await r.json();
-      if (!r.ok) { setResult({ ok:false, msg: data.error || `HTTP ${r.status}` }); return; }
-      setResult({ ok:true, msg:`Generated ${data.generated}/${data.requested} episodes on “${data.taskSet.mapName||"current scene"}”` });
-      // Tell the inspector to refresh + select the new set
-      window.dispatchEvent(new CustomEvent("sw-taskset-changed", { detail: { id: data.taskSet.id } }));
-    } catch (e) {
-      setResult({ ok:false, msg: e.message });
-    } finally { setGenerating(false); }
-  }
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div className="config-section">
-        <div className="config-section-title">Task Builder</div>
-        <div className="config-row">
-          <label>Task type</label>
-          <select className="config-select" value={taskType} onChange={e=>setTaskType(e.target.value)}>
-            <option>PointNav</option>
-            <option>ObjectNav</option>
-          </select>
-        </div>
-        <div style={{ fontSize:11, color:"var(--ink-3)", padding:"2px 2px 0", lineHeight:1.5 }}>
-          Builds a navmesh on the <b>currently-loaded scene</b> and samples reachable
-          start→goal episodes with ground-truth paths.
-        </div>
-      </div>
-
-      <div className="config-section" style={{ flex:1, overflow:"auto" }}>
-        <div className="config-section-title">Sampling Parameters</div>
-        {[
-          ["Episodes", episodes, setEpisodes],
-          ["Min path (m)", minPath, setMinPath],
-          ["Max path (m)", maxPath, setMaxPath],
-          ["Success radius (m)", successR, setSuccessR],
-          ["Max episode steps", maxSteps, setMaxSteps],
-        ].map(([label, val, set]) => (
-          <div key={label} className="config-row">
-            <label>{label}</label>
-            <input className="config-input" value={val} onChange={e=>set(e.target.value)} />
-          </div>
-        ))}
-
-        {taskType === "PointNav" && (
-          <>
-            <div className="config-section-title" style={{ marginTop:12 }}>PointNav Options</div>
-            {[["Require NavMesh", true],["Filter by path length", true],["Sample reachable pairs", true]].map(([l,v])=>(
-              <div key={l} className="config-row">
-                <label>{l}</label>
-                <span style={{ fontSize:12, color: v?"var(--green)":"var(--ink-3)", fontWeight:600 }}>{v?"On":"Off"}</span>
-              </div>
-            ))}
-          </>
-        )}
-        {taskType === "ObjectNav" && (
-          <>
-            <div className="config-section-title" style={{ marginTop:12 }}>ObjectNav Options</div>
-            {[["Target category","Any"],["Require reachable","Yes"],["Visible from path","Yes"]].map(([l,v])=>(
-              <div key={l} className="config-row">
-                <label>{l}</label>
-                <span className="config-val">{v}</span>
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-
-      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
-        {result && (
-          <div style={{ fontSize:11, lineHeight:1.4, padding:"6px 8px", borderRadius:6,
-            border:`1px solid ${result.ok?"var(--green)":"var(--red,#e2484d)"}`,
-            color: result.ok?"var(--green)":"var(--red,#e2484d)", background:"var(--bg-tertiary)" }}>
-            {result.ok ? "✓ " : "⚠ "}{result.msg}
-          </div>
-        )}
-        <button className="primary-cta green" style={{ width:"100%", justifyContent:"center" }}
-          onClick={generate} disabled={generating}>
-          {generating ? "Building navmesh & sampling…" : `${ICONS.target(13)} Generate Tasks`}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Agent Training config panel ───────────────────────────────────────────────
-// Shared live-training store (pub/sub) so the config panel (which owns the SSE connection)
-// and the monitor panel render the same run state.
-const trainingStore = {
-  s: { jobId: null, status: "idle", model: null, episodesTotal: 0, current: null, agg: null, steps: [], lastLog: null },
-  subs: new Set(),
-  _es: null,
-  set(patch) { trainingStore.s = { ...trainingStore.s, ...patch }; trainingStore.subs.forEach(f => f()); },
-  subscribe(f) { trainingStore.subs.add(f); return () => trainingStore.subs.delete(f); },
-  start(jobId, model, episodesTotal) {
-    trainingStore.stop();
-    trainingStore.set({ jobId, model, episodesTotal, status: "starting", current: null, agg: null, steps: [], lastLog: null });
-    const es = new EventSource(`${API_BASE}/training/${jobId}/stream`);
-    trainingStore._es = es;
-    es.onmessage = (e) => { try { trainingStore._ev(JSON.parse(e.data)); } catch (_e) {} };
-    es.onerror = () => {};
-  },
-  stop() { if (trainingStore._es) { try { trainingStore._es.close(); } catch (_e) {} trainingStore._es = null; } },
-  _ev(ev) {
-    if (ev.type === "status") trainingStore.set({ status: ev.status, agg: ev.agg || trainingStore.s.agg });
-    else if (ev.type === "step") trainingStore.set({ status: "running", current: ev, agg: ev.agg, steps: trainingStore.s.steps.concat([ev]).slice(-200) });
-    else if (ev.type === "episode_end") trainingStore.set({ agg: ev.agg || trainingStore.s.agg });
-    else if (ev.type === "done") { trainingStore.set({ status: ev.status || "done", agg: ev.agg || trainingStore.s.agg }); trainingStore.stop(); }
-    else if (ev.type === "log") trainingStore.set({ lastLog: ev.line });
-  },
-};
-function useTraining() {
-  const [, force] = React.useState(0);
-  React.useEffect(() => trainingStore.subscribe(() => force(n => n + 1)), []);
-  return trainingStore.s;
-}
-
-function TrainingConfigPanel({ sessionId }) {
-  const st = useTraining();
-  const [taskSets, setTaskSets] = React.useState([]);
-  const [taskSetId, setTaskSetId] = React.useState("");
-  const [models, setModels] = React.useState([]);
-  const [model, setModel] = React.useState("gpt-4o");
-  const [maxSteps, setMaxSteps] = React.useState("40");
-  const [memory, setMemory] = React.useState("none");
-  const [busy, setBusy] = React.useState(false);
-  const [err, setErr] = React.useState(null);
-
-  React.useEffect(() => {
-    fetch(`${API_BASE}/tasksets`).then(r => r.json()).then(d => {
-      const l = d.taskSets || []; setTaskSets(l); setTaskSetId(p => p || (l[0] && l[0].id) || "");
-    }).catch(() => {});
-    fetch(`${API_BASE}/training/models`).then(r => r.json()).then(d => {
-      setModels(d.models || []); if (d.models && d.models[0]) setModel(m => m || d.models[0].id);
-    }).catch(() => {});
-  }, []);
-
-  const running = st.status === "running" || st.status === "starting";
-  const agg = st.agg || {};
-
-  async function start() {
-    setBusy(true); setErr(null);
-    try {
-      const r = await fetch(`${API_BASE}/training/start`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskSetId, model, maxSteps: parseInt(maxSteps, 10) || 40, memory }),
-      });
-      const d = await r.json();
-      if (!r.ok) { setErr(d.error || `HTTP ${r.status}`); return; }
-      trainingStore.start(d.jobId, d.model, d.episodes);
-    } catch (e) { setErr(e.message); } finally { setBusy(false); }
-  }
-  async function cancel() {
-    if (st.jobId) await fetch(`${API_BASE}/training/${st.jobId}/cancel`, { method: "POST" }).catch(() => {});
-    trainingStore.stop(); trainingStore.set({ status: "cancelled" });
-  }
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div className="config-section">
-        <div className="config-section-title">Experiment Setup</div>
-        <div className="config-row">
-          <label>Task set</label>
-          <select className="config-select" value={taskSetId} onChange={e=>setTaskSetId(e.target.value)} disabled={running}>
-            {taskSets.length===0 && <option value="">— generate one first —</option>}
-            {taskSets.map(s=><option key={s.id} value={s.id}>{s.name} · {s.summary?.episodeCount||0} eps</option>)}
-          </select>
-        </div>
-        <div className="config-row">
-          <label>Agent LLM</label>
-          <select className="config-select" value={model} onChange={e=>setModel(e.target.value)} disabled={running}>
-            {models.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div className="config-section" style={{ flex:1, overflow:"auto" }}>
-        <div className="config-section-title">Run Config</div>
-        <div className="config-row"><label>Max steps / episode</label>
-          <input className="config-input" value={maxSteps} onChange={e=>setMaxSteps(e.target.value)} disabled={running}/></div>
-        <div className="config-row"><label>Memory</label>
-          <select className="config-select" value={memory} onChange={e=>setMemory(e.target.value)} disabled={running}>
-            {["none","text","hierarchical"].map(o=><option key={o}>{o}</option>)}
-          </select>
-        </div>
-        <div style={{ fontSize:11, color:"var(--ink-3)", padding:"2px 2px", lineHeight:1.5 }}>
-          Episodes run one-by-one (easy→hard). The agent enters PIE and is driven live by the selected LLM — watch it in the Agent Monitor →
-        </div>
-
-        <div className="config-section-title" style={{ marginTop:12 }}>Live Metrics</div>
-        {[
-          ["Status", st.status],
-          ["Episode", `${agg.episodesDone||0} / ${st.episodesTotal||agg.episodesTotal||0}`],
-          ["Success rate", agg.episodesDone ? `${Math.round((agg.successRate||0)*100)}%` : "—"],
-          ["Collisions", String(agg.collisions ?? 0)],
-          ["Distance travelled", agg.distanceTraveledM != null ? `${agg.distanceTraveledM} m` : "—"],
-        ].map(([l,v])=>(
-          <div key={l} className="status-row"><span>{l}</span><span className="status-score">{v}</span></div>
-        ))}
-        {st.lastLog && <div style={{ fontSize:10, color:"var(--ink-3)", fontFamily:"monospace", marginTop:8, whiteSpace:"pre-wrap", maxHeight:80, overflow:"auto" }}>{st.lastLog}</div>}
-      </div>
-
-      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
-        {err && <div style={{ fontSize:11, color:"var(--red,#e2484d)" }}>⚠ {err}</div>}
-        {!running
-          ? <button className="primary-cta violet" style={{ width:"100%", justifyContent:"center" }} onClick={start} disabled={busy || !taskSetId}>
-              {busy ? "Starting…" : `${ICONS.activity(13)} Start Training`}</button>
-          : <button className="primary-cta orange" style={{ width:"100%", justifyContent:"center" }} onClick={cancel}>
-              {ICONS.collision(13)} Stop</button>}
-      </div>
-    </div>
-  );
-}
-
-// Live agent monitor (right panel during Agent Training): the agent's current camera frame
-// (the exact image given to the LLM), the LLM's reasoning + chosen action, running metrics,
-// and a scrolling per-step log.
-function TrainingMonitorPanel() {
-  const st = useTraining();
-  const cur = st.current, agg = st.agg || {};
-  const logRef = React.useRef(null);
-  React.useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [st.steps.length]);
-
-  if (st.status === "idle" || !st.jobId) {
-    return <div style={{ padding:16, fontSize:12, color:"var(--ink-3)", lineHeight:1.6 }}>
-      No active run. Pick a task set + LLM on the left and <b>Start Training</b> — the agent's camera (what the LLM sees), its reasoning + action, and live metrics appear here, updating every step.
-    </div>;
-  }
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div style={{ padding:"8px 10px" }}>
-        <div style={{ position:"relative", width:"100%", borderRadius:8, overflow:"hidden", background:"#000", aspectRatio:"4/3", display:"flex", alignItems:"center", justifyContent:"center" }}>
-          {cur && cur.frameUrl
-            ? <img src={cur.frameUrl} alt="agent camera" style={{ width:"100%", height:"100%", objectFit:"contain" }}/>
-            : <span style={{ color:"var(--ink-3)", fontSize:12 }}>waiting for first frame…</span>}
-          {cur && <div style={{ position:"absolute", top:6, left:6, fontSize:10, fontFamily:"monospace", background:"rgba(0,0,0,0.6)", color:"var(--ink)", padding:"2px 6px", borderRadius:4 }}>
-            ep {cur.episode} · step {cur.step}{cur.collided ? " · collision" : ""}</div>}
-        </div>
-      </div>
-      <div style={{ display:"flex", gap:6, padding:"0 10px 8px", flexWrap:"wrap" }}>
-        {[
-          ["SR", agg.episodesDone ? `${Math.round((agg.successRate||0)*100)}%` : "—"],
-          ["eps", `${agg.episodesDone||0}/${st.episodesTotal||0}`],
-          ["collisions", agg.collisions ?? 0],
-          ["dist", agg.distanceTraveledM != null ? `${agg.distanceTraveledM}m` : "—"],
-          ["d→goal", cur && cur.distanceToGoalCm != null ? `${(cur.distanceToGoalCm/100).toFixed(1)}m` : "—"],
-        ].map(([l,v])=>(
-          <div key={l} style={{ flex:"1 0 auto", minWidth:58, textAlign:"center", padding:"4px 6px", border:"1px solid var(--line)", borderRadius:6 }}>
-            <div style={{ fontSize:14, fontWeight:700, color:"var(--ink)" }}>{v}</div>
-            <div style={{ fontSize:9, color:"var(--ink-3)" }}>{l}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ padding:"0 10px 6px" }}>
-        <div style={{ fontSize:11, color:"var(--ink-3)", marginBottom:2 }}>LLM → <b style={{ color:"var(--violet,#8b5cf6)" }}>{cur ? cur.action : "—"}</b></div>
-        <div style={{ fontSize:12, color:"var(--ink-2)", lineHeight:1.4, maxHeight:64, overflow:"auto" }}>
-          {cur && cur.reasoning ? cur.reasoning : <span style={{ color:"var(--ink-3)" }}>(model returned no rationale text)</span>}
-        </div>
-      </div>
-      <div className="config-section-title" style={{ padding:"4px 10px" }}>Step log</div>
-      <div ref={logRef} style={{ flex:1, overflow:"auto", padding:"0 10px 10px", fontSize:11, fontFamily:"monospace" }}>
-        {st.steps.map((s,i)=>(
-          <div key={i} style={{ display:"flex", gap:6, padding:"2px 0", borderBottom:"1px solid var(--line)", color: s.collided ? "var(--red,#e2484d)" : "var(--ink-2)" }}>
-            <span style={{ color:"var(--ink-3)", flexShrink:0 }}>e{s.episode}·t{s.step}</span>
-            <span style={{ color:"var(--violet,#8b5cf6)", flexShrink:0, minWidth:84 }}>{s.action}</span>
-            <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.reasoning||""}</span>
-            {s.success && <span style={{ color:"var(--green)", flexShrink:0 }}>✓</span>}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Co-evolution curriculum builder ──────────────────────────────────────────
-function CurriculumBuilderPanel({ sessionId }) {
-  const [running, setRunning] = React.useState(false);
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div className="config-section">
-        <div className="config-section-title">Curriculum Status</div>
-        {[["Round","12 / 25"],["Difficulty","Level 4"],["Current SR","64%"],["Next action","Advance to L5"]].map(([l,v])=>(
-          <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
-        ))}
-      </div>
-
-      <div className="config-section" style={{ flex:1, overflow:"auto" }}>
-        <div className="config-section-title">Difficulty Axes</div>
-        {[["Path length","12–22 m"],["Heading offset","0–90°"],["Obstacle density","0.20"],["Object clutter","medium"],["Distractors","3"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
-        ))}
-
-        <div className="config-section-title" style={{ marginTop:12 }}>Curriculum Config</div>
-        {[["Mastery threshold","70%"],["Episodes per round","500"],["Max rounds","25"],["Advance policy","Consecutive"],["Agent update","Online"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
-        ))}
-
-        <div className="config-section-title" style={{ marginTop:12 }}>SimCoder Adaptation</div>
-        <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-          {["Increase obstacle density","Add longer routes","Preserve successful layouts","Oversample sharp-turn failures"].map(s=>(
-            <div key={s} style={{ fontSize:11, color:"var(--ink-3)", padding:"3px 0", display:"flex", alignItems:"center", gap:5 }}>
-              <span style={{ width:4, height:4, borderRadius:"50%", background:"var(--blue)", flexShrink:0 }}/>
-              {s}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
-        <button className={`primary-cta ${running?"orange":"orange"}`}
-          style={{ width:"100%", justifyContent:"center" }} onClick={()=>setRunning(r=>!r)}>
-          {running ? `${ICONS.collision(13)} Pause` : `${ICONS.refresh(13)} Run Co-evolution`}
-        </button>
-        <div style={{ display:"flex", gap:6 }}>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Evaluate</Btn>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Export</Btn>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -8332,272 +7902,6 @@ function StatusDot({ label, active, activeColor, inactiveColor }) {
   );
 }
 
-// Consolidated connection status — one breathing pill that summarizes UE / MCP / Agent.
-// Green = all connected (Running), Yellow = partial, Red = all down, Grey = still connecting.
-// Click to expand a popover with the per-module detail.
-function StatusPill({ health, codingAgent }) {
-  const [open, setOpen] = useState(false);
-  const connecting = !health;
-  const ue  = !!health?.ueConnected;
-  const mcp = !!health?.mcpConnected;
-  const agentOk = true; // a coding-agent backend is always selected
-  const state = connecting ? "connecting" : (ue && mcp) ? "ok" : (!ue && !mcp) ? "down" : "warn";
-  const COLORS = { ok:"#22c55e", warn:"#f59e0b", down:"#dc2626", connecting:"#94a3b8" };
-  const LABELS = { ok:"Running", warn:"Issues", down:"Offline", connecting:"Connecting…" };
-  const color = COLORS[state];
-  const modules = [
-    { name:"UE Engine",  ok: ue },
-    { name:"MCP Server", ok: mcp },
-    { name: agentLabel(codingAgent), ok: agentOk },
-  ];
-  return (
-    <div style={{ position:"relative" }}>
-      <button onClick={() => setOpen(o => !o)} title="Connection status — click for details"
-        style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 12px",
-          border:"1px solid var(--line)", borderRadius:999, background:"var(--panel)",
-          fontSize:13, fontWeight:600, color:"var(--ink-2)", cursor:"pointer", fontFamily:"inherit" }}>
-        <span style={{ width:9, height:9, borderRadius:"50%", background:color, flexShrink:0,
-          boxShadow:`0 0 0 3px ${color}33`,
-          animation: state==="ok" ? "sw-glow-pulse 2s ease-in-out infinite" : "none" }}/>
-        <span>{LABELS[state]}</span>
-        <span style={{ fontSize:9, opacity:.6 }}>▾</span>
-      </button>
-      {open && (
-        <>
-          <div onClick={() => setOpen(false)} style={{ position:"fixed", inset:0, zIndex:30 }}/>
-          <div style={{ position:"absolute", top:"calc(100% + 6px)", right:0, zIndex:31, minWidth:210,
-            background:"var(--panel)", border:"1px solid var(--line)", borderRadius:8,
-            boxShadow:"var(--shadow-pop)", padding:8, display:"flex", flexDirection:"column", gap:7 }}>
-            {modules.map(m => (
-              <div key={m.name} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12 }}>
-                <span style={{ width:8, height:8, borderRadius:"50%", flexShrink:0,
-                  background: connecting ? COLORS.connecting : (m.ok ? "#16a34a" : "#dc2626") }}/>
-                <span style={{ flex:1, color:"var(--ink-2)" }}>{m.name}</span>
-                <span style={{ fontSize:11, fontWeight:600,
-                  color: connecting ? "var(--ink-3)" : (m.ok ? "var(--green,#16a34a)" : "var(--red,#dc2626)") }}>
-                  {connecting ? "…" : (m.ok ? "Connected" : "Not connected")}
-                </span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function ArtifactToastStack({ items }) {
-  if (!Array.isArray(items) || items.length === 0) return null;
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: 20,
-        right: 20,
-        zIndex: 2000,
-        width: 300,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        pointerEvents: "none",
-      }}
-    >
-      {items.map((item) => {
-        const isTool = item.kind === "tool";
-        const accent = isTool ? "#dc2626" : "#16a34a";
-        const title = isTool ? "New Tool Learned" : "New Skill Learned";
-        return (
-          <div
-            key={item.id}
-            style={{
-              minHeight: 40,
-              borderRadius: 6,
-              border: `1px solid ${accent}44`,
-              borderLeft: `4px solid ${accent}`,
-              background: "linear-gradient(90deg, var(--panel) 0%, var(--bg) 100%)",
-              padding: "6px 10px",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: 12,
-                  letterSpacing: 0.2,
-                  textTransform: "uppercase",
-                  color: accent,
-                  lineHeight: 1.2,
-                  fontWeight: 700,
-                }}
-              >
-                {title}
-              </div>
-              <div
-                style={{
-                  marginTop: 2,
-                  fontSize: 12,
-                  color: "var(--ink)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  lineHeight: 1.2,
-                }}
-                title={item.name}
-              >
-                {item.name}
-              </div>
-            </div>
-            {item.extraCount > 0 && (
-              <div
-                style={{
-                  flexShrink: 0,
-                  fontSize: 12,
-                  color: "var(--ink-3)",
-                  background: "var(--panel-2)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 999,
-                  padding: "2px 8px",
-                }}
-              >
-                +{item.extraCount}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── useSession — slot acquire, 60s heartbeat, 30-min countdown ──────────────
-// Design rules:
-//  - "dev" mode: server returns {dev:true} → no countdown, no modals, full access
-//  - "managed" mode: server returns real token+TTL → countdown + expiry modal
-//  - Pool full: server returns {error,code:"POOL_FULL"} → waiting room modal
-//  - Never store _dev tokens in sessionStorage (they don't survive server restart)
-
-const STORAGE_KEY   = "sw_session_token";
-const HEARTBEAT_MS  = 60_000;
-const WARN_SECS     = 5 * 60;   // warn when < 5 min left
-
-function useSession() {
-  const [session,  setSession]  = useState(null);   // null=loading, {dev,token,...}=ready
-  const [poolFull, setPoolFull] = useState(null);   // {message, queueLength} | null
-  const [secsLeft, setSecsLeft] = useState(null);
-  const [expired,  setExpired]  = useState(false);
-  const acquiredAt = useRef(null);
-  const ttlMsRef   = useRef(0);
-
-  // ── Acquire on mount ───────────────────────────────────────────────────────
-  useEffect(() => {
-    let cancelled = false;
-
-    async function init() {
-      // Try to reuse a real saved token (never reuse "_dev")
-      const saved = sessionStorage.getItem(STORAGE_KEY);
-      if (saved && saved !== "_dev") {
-        try {
-          const r = await fetch(`${API_BASE}/session/heartbeat`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-session-token": saved },
-            body: "{}",
-          });
-          const d = await r.json();
-          if (d.ok && !cancelled) {
-            acquiredAt.current = Date.now() - (d.idleMs || 0);
-            setSession({ token: saved, dev: false });
-            return; // reuse succeeded
-          }
-        } catch {}
-        // Saved token invalid — clear and acquire fresh
-        sessionStorage.removeItem(STORAGE_KEY);
-      }
-
-      // Acquire a new slot
-      try {
-        const r = await fetch(`${API_BASE}/session/acquire`, { method: "POST" });
-        const d = await r.json();
-        if (cancelled) return;
-
-        if (d.code === "POOL_FULL" || (d.error && !d.token)) {
-          setPoolFull({ message: d.error || "Server at capacity", queueLength: d.queueLength });
-          return;
-        }
-
-        if (d.dev) {
-          // Server is in single-user dev mode — no session management
-          setSession({ token: "_dev", dev: true });
-          return;
-        }
-
-        // Real managed session
-        sessionStorage.setItem(STORAGE_KEY, d.token);
-        acquiredAt.current = Date.now();
-        ttlMsRef.current   = d.sessionTtlMs || 30 * 60 * 1000;
-        setSession(d);
-      } catch {
-        // Server not reachable — run in offline/dev mode, no modals
-        if (!cancelled) setSession({ token: "_dev", dev: true });
-      }
-    }
-
-    init();
-    return () => { cancelled = true; };
-  }, []);
-
-  // ── Heartbeat (managed sessions only) ─────────────────────────────────────
-  useEffect(() => {
-    if (!session || session.dev) return;
-    const iv = setInterval(async () => {
-      try {
-        const r = await fetch(`${API_BASE}/session/heartbeat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-session-token": session.token },
-          body: "{}",
-        });
-        const d = await r.json();
-        if (!d.ok) setExpired(true);
-      } catch {}
-    }, HEARTBEAT_MS);
-    return () => clearInterval(iv);
-  }, [session]);
-
-  // ── Countdown (managed sessions only) ─────────────────────────────────────
-  useEffect(() => {
-    if (!session || session.dev || !acquiredAt.current || !ttlMsRef.current) return;
-    const iv = setInterval(() => {
-      const left = Math.max(0, ttlMsRef.current - (Date.now() - acquiredAt.current));
-      setSecsLeft(Math.floor(left / 1000));
-      if (left === 0) { setExpired(true); clearInterval(iv); }
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [session]);
-
-  // ── Release on unload (managed sessions only) ──────────────────────────────
-  useEffect(() => {
-    if (!session || session.dev) return;
-    const handler = () => {
-      navigator.sendBeacon?.(`${API_BASE}/session/release`, JSON.stringify({ token: session.token }));
-      sessionStorage.removeItem(STORAGE_KEY);
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [session]);
-
-  return {
-    session,
-    poolFull,
-    secsLeft,
-    expired,
-    isLoading:   session === null && !poolFull,
-    warningSoon: secsLeft !== null && secsLeft < WARN_SECS,
-  };
-}
-
 // ─── Settings Modal ──────────────────────────────────────────────────────────
 
 function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClose }) {
@@ -8832,7 +8136,7 @@ function App() {
   const drawerResizing   = useRef(false);
   const drawerResizeStart = useRef({ y:0, h:200 });
   const layoutRef        = useRef(null);
-  const { session, poolFull, secsLeft, expired, isLoading, warningSoon } = useSession();
+  const { session, poolFull, secsLeft, expired, warningSoon } = useSession();
   const syncStatus = useSync();
   const [artifactUnread, setArtifactUnread] = useState({ skills: false, tools: false });
   const [artifactNewIds, setArtifactNewIds] = useState({ skills: [], tools: [] });
@@ -9137,159 +8441,40 @@ function App() {
     } catch {}
   }, []);
 
-  const activeModeInfo = STUDIO_MODES.find(m => m.id === studioMode) || STUDIO_MODES[0];
-
   return (
     <PollProvider>
     <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:"var(--bg)", overflow:"hidden", padding:"8px", gap:8, position:"relative" }}>
 
-      {/* ══ POOL FULL — waiting room (only shows when all UE slots are occupied) ══ */}
-      {poolFull && (
-        <div style={{ position:"fixed", inset:0, background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
-          <div style={{ background:"var(--panel)", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:420, boxShadow:"var(--shadow-pop)" }}>
-            <div style={{ width:56, height:56, marginBottom:16, marginLeft:"auto", marginRight:"auto", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--ink-3)" }}>{ICONS.clock(48)}</div>
-            <div style={{ fontSize:20, fontWeight:800, color:"var(--ink)", marginBottom:8 }}>Server at capacity</div>
-            <div style={{ fontSize:13, color:"var(--ink-3)", lineHeight:1.6, marginBottom:24 }}>
-              All simulation slots are currently in use.<br/>
-              {poolFull.queueLength > 0 && <>Queue length: <strong style={{color:"var(--blue)"}}>{poolFull.queueLength}</strong><br/></>}
-              {poolFull.message}
-            </div>
-            <button onClick={() => window.location.reload()} className="sw-btn-blue" style={{ width:"100%" }}>
-              Try again
-            </button>
-          </div>
-        </div>
-      )}
+      <SessionGateModals
+        expired={expired}
+        icons={ICONS}
+        onRetry={() => window.location.reload()}
+        onStartNewSession={() => {
+          clearSessionToken();
+          window.location.reload();
+        }}
+        poolFull={poolFull}
+      />
 
-      {/* ══ SESSION EXPIRED modal ══ */}
-      {expired && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, backdropFilter:"blur(4px)" }}>
-          <div style={{ background:"var(--panel)", border:"1px solid var(--line)", borderRadius:16, padding:"40px 48px", textAlign:"center", maxWidth:380, boxShadow:"var(--shadow-pop)" }}>
-            <div style={{ width:56, height:56, marginBottom:16, marginLeft:"auto", marginRight:"auto", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--ink-3)" }}>{ICONS.lock(48)}</div>
-            <div style={{ fontSize:20, fontWeight:800, color:"var(--ink)", marginBottom:8 }}>Session ended</div>
-            <div style={{ fontSize:13, color:"var(--ink-3)", lineHeight:1.6, marginBottom:24 }}>
-              Your 30-minute session has expired.<br/>Refresh to start a new session.
-            </div>
-            <button onClick={() => { sessionStorage.removeItem("sw_session_token"); window.location.reload(); }} className="sw-btn-blue" style={{ width:"100%" }}>
-              Start new session
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ══ TOP NAV BAR ══ */}
-      <header className="sw-topbar">
-        {/* Brand */}
-        <div className="sw-brand" style={{ paddingRight:12 }}>
-          <div style={{ width:34, height:34, borderRadius:"50%", overflow:"hidden", flexShrink:0, boxShadow:"0 0 0 1px #4b5563, 0 4px 12px rgba(0,0,0,0.3)" }}>
-            <img src="/simworld-studio-logo.png" style={{ width:"100%", height:"100%", objectFit:"cover" }} alt="SimWorld" />
-          </div>
-          <span className="sw-brand-name" style={{ fontSize:14 }}>SimWorld Studio</span>
-        </div>
-
-        {/* Coding agent + model picker — prominent, top-left */}
-        <CodingAgentSelector
-          agents={codingAgents}
-          agent={codingAgent}
-          setAgent={handleCodingAgentChange}
-          model={codingModel}
-          setModel={setCodingModel}
-          icon={ICONS.bot ? ICONS.bot(14) : null}
-        />
-        <div className="sw-topbar-divider" />
-
-        {/* Pipeline stepper — primary nav */}
-        {topSection === "studio"
-          ? <PipelineStepper activeMode={studioMode} onChange={m => { setStudioMode(m); setTopSection("studio"); }} />
-          : <div style={{ flex:1, fontSize:13, fontWeight:700, color:"var(--ink-2)" }}>
-              {topSection === "library" ? "Library" : "Results"}
-            </div>
-        }
-
-        {/* Secondary nav */}
-        <div className="sw-secondary-nav">
-          <button className={`sec-nav-btn${topSection==="studio"?" active":""}`}
-            onClick={()=>setTopSection("studio")}>{ICONS.layout(13)} Studio</button>
-          <button className={`sec-nav-btn${topSection==="library"?" active":""}`}
-            onClick={()=>setTopSection("library")}>
-            {ICONS.book(13)} Library
-            {(artifactUnread.skills || artifactUnread.tools) && <span className="sw-nav-dot" />}
-          </button>
-          <button className={`sec-nav-btn${topSection==="results"?" active":""}`}
-            onClick={()=>setTopSection("results")}>{ICONS.frame(13)} Results</button>
-        </div>
-
-        <div className="sw-topbar-divider" />
-
-        {/* Right side */}
-        <div className="sw-topbar-right">
-
-          {/* Sync error / stale agent warnings */}
-          {!syncStatus.sseOk && (
-            <div style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:7, background:"var(--error-soft,#fef2f2)", border:"1px solid var(--error-border,#fecaca)", fontSize:13, fontWeight:600, color:"var(--red)" }}>
-              {ICONS.warning(14)} {syncStatus.syncError || "SSE disconnected"}
-            </div>
-          )}
-          {syncStatus.staleAgents?.size > 0 && (
-            <div title={`Stale: ${[...syncStatus.staleAgents].join(", ")}`}
-              style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:7, background:"var(--orange-soft)", border:"1px solid var(--amber)", fontSize:13, fontWeight:600, color:"var(--orange)" }}>
-              {ICONS.ghost(14)} {syncStatus.staleAgents.size} stale
-            </div>
-          )}
-
-          {/* Session countdown — shown when < 5 min remaining */}
-          {secsLeft !== null && !session?.dev && (
-            <div style={{
-              display:"inline-flex", alignItems:"center", gap:6,
-              padding:"5px 12px", borderRadius:8,
-              background: warningSoon ? "var(--orange-soft,#fff1e6)" : "var(--green-soft,#ecfdf5)",
-              border: `1px solid ${warningSoon ? "var(--amber,#f59e0b)" : "var(--green,#16a34a)"}`,
-              fontSize:13, fontWeight:700,
-              color: warningSoon ? "var(--orange,#ea580c)" : "var(--green,#16a34a)",
-            }}>
-              {ICONS.clock(14)}
-              {Math.floor(secsLeft/60)}:{String(secsLeft%60).padStart(2,"0")}
-            </div>
-          )}
-
-          {/* Consolidated connection status pill (UE / MCP / Agent) */}
-          <StatusPill health={health} codingAgent={codingAgent} />
-
-          {/* SimCoder pill */}
-          <div className="sw-simcoder-pill" style={{ fontSize:14, padding:"6px 14px 6px 10px" }}>
-            <img src="/SimCoder.png" style={{ width:24, height:24, objectFit:"contain", borderRadius:5 }} alt="SimCoder" />
-            <span>SimCoder</span>
-          </div>
-
-          {/* Avatar */}
-          <div style={{
-            width:36, height:36, borderRadius:"50%",
-            background:"linear-gradient(135deg,#e0e7ff,#c7d2fe)",
-            display:"flex", alignItems:"center", justifyContent:"center",
-            boxShadow:"0 0 0 2px var(--panel), 0 0 0 3px var(--line)",
-            cursor:"pointer", flexShrink:0,
-          }}>
-            <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
-              <circle cx="12" cy="8" r="4" fill="#6366f1"/>
-              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" fill="#6366f1"/>
-            </svg>
-          </div>
-
-          {/* Settings icon */}
-          <button onClick={() => setShowSettings(true)} style={{
-            width:36, height:36, borderRadius:8, border:"none", background:"transparent",
-            display:"flex", alignItems:"center", justifyContent:"center",
-            color:"var(--ink-2)", cursor:"pointer", flexShrink:0,
-          }}
-            onMouseEnter={e=>e.currentTarget.style.background="var(--bg-hover,#f1f5f9)"}
-            onMouseLeave={e=>e.currentTarget.style.background="transparent"}
-            title="Settings"
-          >
-            {ICONS.gear(22)}
-          </button>
-
-        </div>
-      </header>
+      <StudioTopbar
+        artifactUnread={artifactUnread}
+        codingAgent={codingAgent}
+        codingAgents={codingAgents}
+        codingModel={codingModel}
+        health={health}
+        icons={ICONS}
+        onCodingAgentChange={handleCodingAgentChange}
+        onCodingModelChange={setCodingModel}
+        onSettingsOpen={() => setShowSettings(true)}
+        onStudioModeChange={setStudioMode}
+        onTopSectionChange={setTopSection}
+        secsLeft={secsLeft}
+        session={session}
+        studioMode={studioMode}
+        syncStatus={syncStatus}
+        topSection={topSection}
+        warningSoon={warningSoon}
+      />
 
       {/* Settings modal */}
       {showSettings && (
@@ -9310,6 +8495,7 @@ function App() {
           artifacts={artifacts}
           activeMode={studioMode}
           onSelect={m => setStudioMode(m)}
+          icons={ICONS}
         />
       )}
 
@@ -9354,9 +8540,9 @@ function App() {
                   codingModel={codingModel}
                 />
               )}
-              {leftPanel === "taskgen"    && <TaskGenPanel sessionId={currentSessionId} />}
-              {leftPanel === "trainconfig"&& <TrainingConfigPanel sessionId={currentSessionId} />}
-              {leftPanel === "curriculum" && <CurriculumBuilderPanel sessionId={currentSessionId} />}
+              {leftPanel === "taskgen"    && <TaskGenPanel icons={ICONS} sessionId={currentSessionId} />}
+              {leftPanel === "trainconfig"&& <TrainingConfigPanel icons={ICONS} sessionId={currentSessionId} />}
+              {leftPanel === "curriculum" && <CurriculumBuilderPanel icons={ICONS} sessionId={currentSessionId} />}
             </div>
           </div>
         </div>}
