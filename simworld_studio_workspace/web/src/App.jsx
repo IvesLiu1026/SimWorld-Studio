@@ -3,7 +3,6 @@ import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useQuery } from "@tanstack/react-query";
-import PixelStreamPlayer from "./PixelStreamPlayer.jsx";
 import { API_BASE } from "./api/client.js";
 import { fetchCodingAgents, fetchHealth, fetchSession, studioQueryKeys } from "./api/studioApi.js";
 import SceneAgentHeader from "./components/chat/SceneAgentHeader.jsx";
@@ -36,6 +35,7 @@ import TaskGenPanel from "./features/tasks/TaskGenPanel.jsx";
 import TaskInspectorPanel from "./features/tasks/TaskInspectorPanel.jsx";
 import TrainingConfigPanel from "./features/training/TrainingConfigPanel.jsx";
 import TrainingMonitorPanel from "./features/training/TrainingMonitorPanel.jsx";
+import ViewportPanel from "./features/viewport/ViewportPanel.jsx";
 import { useStudioStore } from "./state/studioStore.js";
 import {
   PollProvider,
@@ -209,13 +209,6 @@ const CATEGORY_COLORS = {
   roads: "100 116 139",
   static_meshes: "148 163 184",
 };
-
-const CAMERA_PRESETS = [
-  { label: "⬆ Top", title: "Bird's-eye view", args: [0, 0, 5000, -90, 0, 0] },
-  { label: "◎ Iso", title: "Isometric overview", args: [3000, -3000, 3000, -35, 45, 0] },
-  { label: "▶ Front", title: "Front view (Y-axis)", args: [0, -4000, 1000, 0, 0, 0] },
-  { label: "▷ Side", title: "Side view (X-axis)", args: [-4000, 0, 1000, 0, 90, 0] },
-];
 
 const QUICK_SUGGESTIONS = [
   "Add more trees",
@@ -616,14 +609,6 @@ async function deleteToolProcedure(id) {
       method: "DELETE",
     })
   ).json();
-}
-
-async function sendCameraCommand(cmd, args = []) {
-  await fetch("/api/camera", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cmd, args }),
-  });
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
@@ -2927,91 +2912,6 @@ function PixelStreamView({ playerUrl }) {
   );
 }
 
-// ─── ScreenshotView ──────────────────────────────────────────────────────────
-
-function ScreenshotView({ src, imgKey, onRefresh }) {
-  const [loaded, setLoaded] = useState(false);
-  const [errored, setErrored] = useState(false);
-
-  // Reset load state when src or key changes
-  useEffect(() => { setLoaded(false); setErrored(false); }, [src, imgKey]);
-
-  if (src) {
-    return (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: "#000",
-          overflow: "hidden",
-        }}
-      >
-        <img
-          key={imgKey}
-          src={src}
-          alt="UE viewport"
-          style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: loaded ? "block" : "none" }}
-          onLoad={() => setLoaded(true)}
-          onError={() => { setErrored(true); setTimeout(() => onRefresh?.(), 1000); }}
-        />
-        {!loaded && !errored && (
-          <span style={{ color: "var(--ink-3)", fontSize: 13 }}>Loading screenshot...</span>
-        )}
-        {errored && (
-          <span style={{ color: "var(--ink-3)", fontSize: 13 }}>Retrying screenshot...</span>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 14,
-        color: "var(--ink-3)",
-      }}
-    >
-      <div style={{ fontSize: 44 }}>{ICONS.camera(44)}</div>
-      <div style={{ fontSize: 13 }}>No screenshot yet</div>
-      <div
-        style={{
-          fontSize: 12,
-          color: "var(--ink-2)",
-          textAlign: "center",
-          maxWidth: 280,
-        }}
-      >
-        Ask the agent to take a screenshot or make changes to the scene.
-        <br />
-        Screenshots auto-appear after agent actions.
-      </div>
-      <button
-        onClick={onRefresh}
-        style={{
-          padding: "6px 18px",
-          fontSize: 13,
-          background: "var(--panel-2)",
-          border: "1px solid var(--line)",
-          borderRadius: 6,
-          color: "var(--ink)",
-          cursor: "pointer",
-        }}
-      >
-        Fetch Latest
-      </button>
-    </div>
-  );
-}
-
 // ─── ContextPanel ────────────────────────────────────────────────────────────
 
 const EntityRow = React.memo(function EntityRow({ entity }) {
@@ -4603,281 +4503,6 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
             ))}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-// ─── SaveAsButton ────────────────────────────────────────────────────────────
-// Saves the current editor world to /Game/SavedScenes/<name>.umap via the
-// /api/scene/save-as endpoint. Does NOT modify /Game/Main.umap on disk.
-// Hover for a tip explaining where the file lands.
-
-function SaveAsButton() {
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg]   = useState(null); // {kind:'ok'|'err', text}
-  const onClick = async () => {
-    if (busy) return;
-    const raw = window.prompt("Save current scene as (alphanumeric, _, -):", "");
-    if (raw == null) return;
-    const name = raw.trim();
-    if (!/^[A-Za-z0-9_\-]+$/.test(name)) {
-      setMsg({ kind: "err", text: "name must be [A-Za-z0-9_-]" });
-      setTimeout(() => setMsg(null), 4000);
-      return;
-    }
-    setBusy(true); setMsg(null);
-    try {
-      const r = await fetch("/api/scene/save-as", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, revert_to_original: false }),
-      });
-      const j = await r.json();
-      if (!r.ok || !j.ok) {
-        setMsg({ kind: "err", text: (j.error || "save failed").slice(0, 80) });
-      } else {
-        setMsg({ kind: "ok", text: "Saved → " + j.asset_path });
-      }
-    } catch (e) {
-      setMsg({ kind: "err", text: e.message.slice(0, 80) });
-    } finally {
-      setBusy(false);
-      setTimeout(() => setMsg(null), 6000);
-    }
-  };
-  return (
-    <>
-      <button title="Save current scene as a new .umap (does NOT modify /Game/Main)"
-        disabled={busy} onClick={onClick}
-        style={{
-          padding:"2px 7px", fontSize:12, borderRadius:4, cursor:busy?"wait":"pointer",
-          border:"1px solid rgba(34,197,94,.3)", background:"rgba(34,197,94,.1)",
-          color: busy?"#334155":"#86efac",
-        }}>{busy ? "Saving…" : <>{ICONS.document(12)} Save As</>}</button>
-      {msg && (
-        <span style={{
-          fontSize:11, marginLeft:4,
-          color: msg.kind === "ok" ? "#86efac" : "#fca5a5",
-        }}>{msg.text}</span>
-      )}
-    </>
-  );
-}
-
-// ─── ViewportPanel ───────────────────────────────────────────────────────────
-
-function ViewportPanel({ latestScreenshot }) {
-  const [mode, setMode]           = useState("pixelstream"); // default to live stream
-  const [imgKey, setImgKey]       = useState(0);
-  const [screenshotUrl, setScreenshotUrl] = useState(null);
-  const [autoRefresh, setAutoRefresh]     = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState(5);
-  const [cameraMoving, setCameraMoving]   = useState(false);
-  const intervalRef = useRef(null);
-
-  const handleCameraPreset = useCallback(async (args) => {
-    setCameraMoving(true);
-    try { await sendCameraCommand("set_camera", args); }
-    finally { setCameraMoving(false); }
-  }, []);
-
-  const [playerUrl, setPlayerUrl] = useState(null);
-  useEffect(() => {
-    fetch("/api/pixel-streaming-url")
-      .then(r => r.json())
-      .then(d => {
-        if (d.url) {
-          // Load our custom ue-player.html (not the default Cirrus player.html)
-          // Pass the Cirrus port as a query param so ue-player.html can connect
-          const cirrusPort = d.detectedPort || (() => {
-            try { return new URL(d.url).port || 8685; } catch { return 8685; }
-          })();
-          // All PS settings passed as URL params — player.js reads them via useUrlParams:true
-          const ps = new URLSearchParams({
-            cirrus:           String(cirrusPort),
-            StreamerId:             'Editor',   // subscribe directly, skip streamer-select UI
-            StreamerAutoJoinInterval: '3',      // retry every 3s when no streamer yet
-            MaxReconnectAttempts:     '0',      // unlimited retries
-            AutoConnect:      'true',
-            AutoPlayVideo:    'true',
-            StartVideoMuted:  'true',
-            WaitForStreamer:  'true',
-            HoveringMouse:    'true',
-            KeyboardInput:    'true',
-            MouseInput:       'true',
-            GamepadInput:     'true',
-            TouchInput:       'true',
-            ControlsQuality:  'true',
-            MatchViewportRes: 'true',
-            TimeoutIfIdle:    'false',
-            WebRTCFPS:        '60',
-          });
-          setPlayerUrl(`/ue-player.html?${ps.toString()}`);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Update from prop — fetch as blob for reliable display
-  useEffect(() => {
-    if (!latestScreenshot) return;
-    setMode("screenshot");
-    let cancelled = false;
-    const sep = latestScreenshot.includes("?") ? "&" : "?";
-    const url = latestScreenshot + `${sep}t=${Date.now()}`;
-    fetch(url)
-      .then((r) => (r.ok ? r.blob() : Promise.reject()))
-      .then((blob) => {
-        if (!cancelled) {
-          setScreenshotUrl(URL.createObjectURL(blob));
-          setImgKey((k) => k + 1);
-        }
-      })
-      .catch(() => {
-        // Fallback to direct URL if blob fetch fails
-        if (!cancelled) {
-          setScreenshotUrl(url);
-          setImgKey((k) => k + 1);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [latestScreenshot]);
-
-  // Initial fetch
-  useEffect(() => {
-    fetchLatestScreenshot();
-  }, []);
-
-  // Auto-refresh — only run when tab is visible AND mode=screenshot
-  // Uses visibilitychange to pause when user switches away (reduces background load)
-  useEffect(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (!autoRefresh || mode !== "screenshot") return;
-
-    const tick = () => {
-      if (document.visibilityState === "visible") fetchLatestScreenshot();
-    };
-    intervalRef.current = setInterval(tick, refreshInterval * 1000);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      document.removeEventListener("visibilitychange", tick);
-    };
-  }, [autoRefresh, mode, refreshInterval]);
-
-  const fetchLatestScreenshot = async () => {
-    try {
-      const resp = await fetch(`/api/screenshot/latest?t=${Date.now()}`);
-      if (resp.ok) {
-        const blob = await resp.blob();
-        setScreenshotUrl(URL.createObjectURL(blob));
-        setImgKey((k) => k + 1);
-      }
-    } catch {}
-  };
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"#0b1220" }}>
-
-      {/* Dark toolbar */}
-      <div style={{
-        padding:"7px 12px",
-        borderBottom:"1px solid rgba(255,255,255,.07)",
-        display:"flex", alignItems:"center", gap:6,
-        flexShrink:0, background:"#0d1526", userSelect:"none",
-      }}>
-        {/* Mode toggle */}
-        <div style={{ display:"flex", gap:3 }}>
-          {[
-            { id:"pixelstream", label:"Live" },
-            { id:"screenshot",  label:"Shot" },
-          ].map(m => (
-            <button key={m.id} onClick={() => setMode(m.id)} style={{
-              padding:"3px 10px", fontSize:12, borderRadius:6, cursor:"pointer",
-              border: `1px solid ${mode===m.id?"var(--blue)":"rgba(255,255,255,.1)"}`,
-              background: mode===m.id?"rgba(37,99,235,.25)":"transparent",
-              color: mode===m.id?"#93c5fd":"#94a3b8",
-              fontWeight: mode===m.id?700:400,
-            }}>{m.label}</button>
-          ))}
-        </div>
-
-        {/* Screenshot controls */}
-        {mode === "screenshot" && (
-          <>
-            <button onClick={fetchLatestScreenshot} style={{
-              padding:"3px 8px", fontSize:12, borderRadius:5, cursor:"pointer",
-              border:"1px solid rgba(255,255,255,.15)", background:"rgba(255,255,255,.08)",
-              color:"#e2e8f0",
-            }}>↻ Refresh</button>
-            <label style={{ display:"flex", alignItems:"center", gap:3, fontSize:12, color:"#64748b", cursor:"pointer" }}>
-              <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} style={{ accentColor:"var(--blue)" }}/>
-              Auto
-            </label>
-            <select value={refreshInterval} onChange={e => setRefreshInterval(Number(e.target.value))} style={{
-              padding:"2px 5px", fontSize:12, background:"rgba(255,255,255,.08)",
-              border:"1px solid rgba(255,255,255,.1)", borderRadius:4, color:"#94a3b8",
-            }}>
-              {[2,3,5,10].map(s => <option key={s} value={s}>{s}s</option>)}
-            </select>
-          </>
-        )}
-
-        {/* Camera presets */}
-        <div style={{ display:"flex", gap:2, alignItems:"center", marginLeft:4 }}>
-          <span style={{ fontSize:12, color:"#475569", letterSpacing:".06em" }}>CAM</span>
-          {CAMERA_PRESETS.map(p => (
-            <button key={p.label} title={p.title} disabled={cameraMoving}
-              onClick={() => handleCameraPreset(p.args)} style={{
-                padding:"2px 7px", fontSize:12, borderRadius:4, cursor:cameraMoving?"wait":"pointer",
-                border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.06)",
-                color: cameraMoving?"#334155":"#94a3b8",
-              }}>{p.label}</button>
-          ))}
-          <button title="Unlock camera from agent" disabled={cameraMoving}
-            onClick={() => { setCameraMoving(true); sendCameraCommand("unpilot_camera").finally(()=>setCameraMoving(false)); }}
-            style={{
-              padding:"2px 7px", fontSize:12, borderRadius:4, cursor:cameraMoving?"wait":"pointer",
-              border:"1px solid rgba(220,38,38,.3)", background:"rgba(220,38,38,.1)",
-              color: cameraMoving?"#334155":"#fca5a5",
-            }}>✕ Unlock</button>
-          <SaveAsButton />
-        </div>
-
-        <div style={{ flex:1 }}/>
-
-        {/* Open in tab */}
-        {playerUrl && (
-          <a href={playerUrl} target="_blank" rel="noreferrer" style={{
-            padding:"3px 8px", fontSize:12, borderRadius:5,
-            border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.06)",
-            color:"#64748b", textDecoration:"none", display:"inline-block",
-          }}>⧉ Pop out</a>
-        )}
-      </div>
-
-      {/* Viewport — live stream always mounted, screenshot overlays */}
-      <div style={{ flex:1, position:"relative", overflow:"hidden" }}>
-        {/* PixelStreamPlayer — always mounted (preserves WebRTC) */}
-        <div style={{ width:"100%", height:"100%", display: mode==="pixelstream"?"block":"none" }}>
-          <PixelStreamPlayer playerUrl={playerUrl} />
-        </div>
-        {mode === "screenshot" && (
-          <ScreenshotView src={screenshotUrl} imgKey={imgKey} onRefresh={fetchLatestScreenshot} />
-        )}
-      </div>
-
-      {/* Micro status bar */}
-      <div style={{
-        padding:"2px 12px", background:"#0d1526",
-        borderTop:"1px solid rgba(255,255,255,.05)",
-        display:"flex", alignItems:"center", gap:14,
-        fontSize:12, color:"#334155", flexShrink:0,
-      }}>
-        <span>UE 5.3.2 · SimWorld Studio</span>
-        {playerUrl && <span>{playerUrl.match(/cirrus=(\d+)/)?.[1] ? `Cirrus :${playerUrl.match(/cirrus=(\d+)/)[1]}` : playerUrl}</span>}
-        {mode==="screenshot" && screenshotUrl && <span style={{ color:"var(--green)", marginLeft:"auto", display:"inline-flex", alignItems:"center", gap:4 }}>{ICONS.check(12)} Screenshot ready</span>}
       </div>
     </div>
   );
@@ -8283,12 +7908,8 @@ function App() {
         <div style={{ flex:1, minWidth:320, display:"flex", flexDirection:"column", gap:8, overflow:"visible", padding:"0 3px", margin:"0 -3px" }}>
 
           {/* UE Viewport card */}
-          <div className="sw-panel-card" style={{
-            flex:1, minHeight:120,
-            borderRadius:12, border:"1px solid #1e293b",
-            overflow:"hidden", background:"#0b1220",
-          }}>
-            <ViewportPanel latestScreenshot={latestScreenshot} />
+          <div className="sw-panel-card viewport-card-shell">
+            <ViewportPanel icons={ICONS} latestScreenshot={latestScreenshot} />
           </div>
 
           {/* Drawer: Assets / Scenes / Context / Tools */}
