@@ -207,6 +207,42 @@ export async function updateAgent(id, settings) {
   ).json();
 }
 
+export async function trackAgent(name) {
+  return fetch(`${API_BASE}/agent-track`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function fetchPieStatus() {
+  return fetch(`${API_BASE}/pie-status`).then((response) => response.json());
+}
+
+export async function startPie() {
+  return fetch(`${API_BASE}/pie-start`, { method: "POST" });
+}
+
+export async function postChatCommand(message, sessionId) {
+  return fetch(`${API_BASE}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, sessionId }),
+  });
+}
+
+export async function broadcastAgentMessage(text, target = "all") {
+  return fetch(`${API_BASE}/agent-broadcast`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, target }),
+  });
+}
+
+export async function stopAllAgents() {
+  return fetch(`${API_BASE}/agent-stop-all`, { method: "POST" }).catch(() => {});
+}
+
 export async function runArena(prompt, skills, onEvent, signal) {
   const response = await fetch(`${API_BASE}/arena/run`, {
     method: "POST",
