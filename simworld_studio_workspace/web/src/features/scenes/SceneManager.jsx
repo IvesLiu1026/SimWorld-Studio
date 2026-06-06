@@ -1,20 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../../api/client.js";
-
-async function listCheckpoints(sessionId) {
-  const response = await fetch(`${API_BASE}/checkpoints?sessionId=${encodeURIComponent(sessionId)}`);
-  return (await response.json()).checkpoints || [];
-}
-
-async function restoreCheckpoint(sessionId, id) {
-  const response = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(sessionId)}/${id}/restore`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  if (!response.ok) throw new Error("restore failed");
-  return response.json();
-}
+import { listCheckpoints, restoreCheckpoint } from "../../api/appApi.js";
 
 export default function SceneManager({ currentSessionId }) {
   const [tab, setTab] = useState("checkpoints");
