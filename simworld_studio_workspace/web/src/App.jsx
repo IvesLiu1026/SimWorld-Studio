@@ -49,6 +49,7 @@ import {
 import { DEFAULT_CODING_AGENTS, agentLabel } from "./features/agents/codingAgents.js";
 import AssetBrowser from "./features/assets/AssetBrowser.jsx";
 import CurriculumBuilderPanel from "./features/coevolution/CurriculumBuilderPanel.jsx";
+import ContextPanel from "./features/context/ContextPanel.jsx";
 import RoundInspectorPanel from "./features/coevolution/RoundInspectorPanel.jsx";
 import LibraryPage from "./features/library/LibraryPage.jsx";
 import ResultsPage from "./features/results/ResultsPage.jsx";
@@ -70,7 +71,6 @@ import {
   useAgents,
   useMetrics,
   usePoll,
-  useScene,
   useStatus,
   useSync,
 } from "./state/pollContext.jsx";
@@ -2631,138 +2631,6 @@ function PixelStreamView({ playerUrl }) {
           Deactivate
         </button>
       )}
-    </div>
-  );
-}
-
-// ─── ContextPanel ────────────────────────────────────────────────────────────
-
-const EntityRow = React.memo(function EntityRow({ entity }) {
-  const iconFn = CATEGORY_ICONS[entity.category] || ICONS.box;
-  const loc = Array.isArray(entity.location) && entity.location.length >= 3
-    ? entity.location.map((v) => Math.round(v)).join(", ")
-    : null;
-  return (
-    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "5px 0", borderBottom: "1px solid var(--line)" }}>
-      <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1, display: "inline-flex", alignItems: "center" }}>{iconFn(14)}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ color: "var(--ink)", fontSize: 12, fontWeight: 500 }}>{entity.name}</span>
-          {entity.cls && (
-            <span style={{ fontSize: 12, color: "var(--blue)", background: "#eff4ff", borderRadius: 3, padding: "1px 5px" }}>
-              {entity.cls}
-            </span>
-          )}
-        </div>
-        {loc && <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>@ ({loc})</div>}
-      </div>
-    </div>
-  );
-}); // React.memo(EntityRow)
-
-function ContextPanel({ sessionId, refreshKey }) {
-  // Use fine-grained scene context to avoid re-render on every SSE agent/chatlog push
-  const scene = useScene();
-  const state  = scene.objects?.length > 0 || scene.environment?.ready ? scene : null;
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const MAX_DISPLAY = 150; // cap to avoid long lists causing layout thrash
-
-  useEffect(() => { setLastUpdated(new Date()); }, [scene.round]);
-
-  const containerStyle = {
-    height: "100%", display: "flex", flexDirection: "column",
-    background: "var(--bg)", color: "var(--ink)", overflow: "hidden",
-  };
-  const headerStyle = {
-    padding: "10px 14px", borderBottom: "1px solid var(--line)",
-    display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
-  };
-  const sectionStyle = { padding: "10px 14px 0" };
-  const sectionTitleStyle = {
-    fontSize: 12, fontWeight: 600, color: "var(--ink-3)",
-    textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6,
-  };
-
-  if (!state) {
-    return (
-      <div style={containerStyle}>
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <span style={{ color: "var(--ink-3)", fontSize: 13 }}>
-            {sessionId ? "No scene data yet — complete a round to populate." : "Start a chat session to see scene context."}
-          </span>
-        </div>
-      </div>
-    );
-  }
-
-  // Group objects by category, but cap per-category to avoid rendering 30k items
-  const byCategory = {};
-  let shown = 0;
-  for (const o of scene.objects || []) {
-    if (shown >= MAX_DISPLAY) break;
-    (byCategory[o.category] = byCategory[o.category] || []).push(o);
-    shown++;
-  }
-  const totalObjects = (scene.objects || []).length;
-  const truncated = totalObjects > MAX_DISPLAY;
-
-  return (
-    <div style={containerStyle}>
-      {/* Header */}
-      <div style={headerStyle}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Scene Context</span>
-          <span style={{ fontSize: 12, background: state.environment?.ready ? "#1a3a2a" : "#fff7ed",
-            color: state.environment?.ready ? "#16a34a" : "#f59e0b",
-            borderRadius: 3, padding: "1px 6px" }}>
-            {state.environment?.ready ? "env ready" : "env not initialized"}
-          </span>
-          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>round {state.round ?? 0}</span>
-        </div>
-        {lastUpdated && (
-          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
-            updated {lastUpdated.toLocaleTimeString()}
-          </span>
-        )}
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 0 16px" }}>
-        {/* Agents section */}
-        <div style={sectionStyle}>
-          <div style={sectionTitleStyle}>
-            {ICONS.robot(13)} Agents &nbsp;<span style={{ color: "var(--blue)" }}>{(scene.agents || []).length}</span>
-          </div>
-          {(scene.agents || []).length === 0
-            ? <div style={{ fontSize: 12, color: "var(--ink-3)", paddingBottom: 8 }}>No agents in scene</div>
-            : (scene.agents || []).map((a) => <EntityRow key={a.name} entity={a} />)
-          }
-        </div>
-
-        {/* Objects section, grouped by category (capped at MAX_DISPLAY for performance) */}
-        <div style={{ ...sectionStyle, marginTop: 12 }}>
-          <div style={sectionTitleStyle}>
-            {ICONS.box(13)} Objects &nbsp;
-            <span style={{ color: "var(--blue)" }}>{totalObjects}</span>
-            {truncated && <span style={{ color: "#f59e0b", fontSize: 12, marginLeft: 4 }}>(showing {MAX_DISPLAY})</span>}
-          </div>
-          {totalObjects === 0
-            ? <div style={{ fontSize: 12, color: "var(--ink-3)" }}>No objects in scene</div>
-            : Object.entries(byCategory).map(([cat, items]) => (
-                <div key={cat} style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 4 }}>
-                    {(CATEGORY_ICONS[cat] || ICONS.box)(11)} {cat}s ({items.length})
-                  </div>
-                  {items.map((o) => <EntityRow key={o.name} entity={o} />)}
-                </div>
-              ))
-          }
-          {truncated && (
-            <div style={{ fontSize: 12, color: "#f59e0b", padding: "6px 0", borderTop: "1px solid var(--line)", marginTop: 4 }}>
-              ⚠ {totalObjects - MAX_DISPLAY} more objects not shown — use the coding agent to query specific actors.
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
@@ -7132,7 +7000,12 @@ function App() {
                   <SceneManager currentSessionId={currentSessionId} />
                 )}
                 {drawerTab === "context" && (
-                  <ContextPanel sessionId={currentSessionId} refreshKey={contextRefreshKey} />
+                  <ContextPanel
+                    categoryIcons={CATEGORY_ICONS}
+                    icons={ICONS}
+                    sessionId={currentSessionId}
+                    refreshKey={contextRefreshKey}
+                  />
                 )}
               </div>
             )}

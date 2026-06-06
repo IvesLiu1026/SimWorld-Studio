@@ -2149,6 +2149,173 @@ input, textarea, select { cursor: text; }
   flex: 1;
 }
 
+/* ── Context drawer ── */
+.context-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--ink);
+  overflow: hidden;
+}
+.context-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  color: var(--ink-3);
+  font-size: 13px;
+  text-align: center;
+}
+.context-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.context-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.context-title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.context-env-badge {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.context-env-badge.ready {
+  background: var(--green-soft);
+  color: var(--green);
+}
+.context-env-badge.warn {
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+.context-round,
+.context-updated {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.context-updated {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.context-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 16px;
+}
+.context-section {
+  padding: 10px 14px 0;
+}
+.context-section-spaced {
+  margin-top: 12px;
+}
+.context-section-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.context-count {
+  color: var(--blue);
+}
+.context-muted {
+  padding-bottom: 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.context-category {
+  margin-bottom: 10px;
+}
+.context-category-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.context-entity-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.context-entity-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.context-entity-main {
+  flex: 1;
+  min-width: 0;
+}
+.context-entity-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.context-entity-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+.context-class-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 12px;
+}
+.context-entity-loc {
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.context-truncated-label {
+  margin-left: 4px;
+  color: var(--orange);
+  font-size: 12px;
+  text-transform: none;
+}
+.context-truncated {
+  margin-top: 4px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+  color: var(--orange);
+  font-size: 12px;
+}
+
 /* ── Drawer ── */
 .sw-drawer {
   flex-shrink: 0;
