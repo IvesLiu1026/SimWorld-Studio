@@ -173,7 +173,12 @@ body {
 }
 
 button, input, textarea { font: inherit; }
-button { cursor: pointer; }
+button {
+  cursor: pointer;
+  min-width: 0;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
 input, textarea, select { cursor: text; }
 
 /* Scrollbar */
@@ -309,7 +314,7 @@ input, textarea, select { cursor: text; }
 }
 
 /* ── Navigation ── */
-.sw-nav { display: flex; gap: 4px; flex: 1; }
+.sw-nav { display: flex; gap: 4px; flex: 1; min-width: 0; }
 .sw-nav-item {
   display: inline-flex;
   align-items: center;
@@ -326,6 +331,10 @@ input, textarea, select { cursor: text; }
   font-family: inherit;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
   white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sw-nav-item:hover { border-color: var(--blue); }
 .sw-nav-item.active {
@@ -352,6 +361,7 @@ input, textarea, select { cursor: text; }
   font-size: 15px;
   font-weight: 700;
   height: 40px;
+  min-width: 0;
 }
 .sw-brand-mark {
   width: 30px; height: 30px;
@@ -368,6 +378,8 @@ input, textarea, select { cursor: text; }
   letter-spacing: 0;
   color: var(--ink);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Mode Guide Strip ── */
@@ -389,6 +401,10 @@ input, textarea, select { cursor: text; }
   font-size: 13px;
   font-weight: 700;
   line-height: 1.1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sw-mode-guide-desc {
   display: block;
@@ -426,6 +442,7 @@ input, textarea, select { cursor: text; }
   overflow: hidden;
   text-overflow: ellipsis;
   gap: 6px;
+  min-width: 0;
 }
 .sw-mode-step.feedback {
   border-color: rgba(165,110,255,0.5);
@@ -448,6 +465,10 @@ input, textarea, select { cursor: text; }
   font-family: inherit;
   transition: border-color 0.12s, color 0.12s;
   white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sw-tab-btn:hover { border-color: var(--blue); color: var(--ink); }
 .sw-tab-btn.active {
@@ -473,6 +494,11 @@ input, textarea, select { cursor: text; }
   font-weight: 700; font-size: 12px;
   cursor: pointer; font-family: inherit;
   transition: opacity 0.15s;
+  min-width: 0; max-width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sw-btn-blue:hover { opacity: 0.88; }
 
@@ -484,6 +510,11 @@ input, textarea, select { cursor: text; }
   font-weight: 700; font-size: 12px;
   cursor: pointer; font-family: inherit;
   transition: opacity 0.15s;
+  min-width: 0; max-width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sw-btn-green:hover { opacity: 0.88; }
 
@@ -495,6 +526,11 @@ input, textarea, select { cursor: text; }
   font-weight: 700; font-size: 12px;
   cursor: pointer; font-family: inherit;
   transition: opacity 0.15s;
+  min-width: 0; max-width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sw-btn-orange:hover { opacity: 0.88; }
 
@@ -506,6 +542,11 @@ input, textarea, select { cursor: text; }
   font-weight: 600; font-size: 12px;
   cursor: pointer; font-family: inherit;
   transition: border-color 0.12s, color 0.12s;
+  min-width: 0; max-width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sw-btn-ghost:hover { border-color: var(--blue); color: var(--ink); }
 
@@ -594,6 +635,10 @@ input, textarea, select { cursor: text; }
   cursor: pointer;
   white-space: nowrap;
   transition: border-color 0.12s, color 0.12s;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sw-suggestion-pill:hover { border-color: var(--blue); color: var(--blue-2); }
 
@@ -610,6 +655,10 @@ input, textarea, select { cursor: text; }
   font-size: 12px;
   color: var(--orange);
   white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Running pill ── */
@@ -625,6 +674,10 @@ input, textarea, select { cursor: text; }
   font-weight: 800;
   font-size: 12px;
   white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 [data-theme="light"] .sw-running-pill { background: var(--panel); }
 
@@ -816,6 +869,10 @@ input, textarea, select { cursor: text; }
   padding: 2px 8px; border-radius: 6px;
   font-size: 11px; font-weight: 700; white-space: nowrap;
   border: 1px solid;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .lbl-blue    { background: var(--blue-soft);         color: var(--blue);   border-color: rgba(76,141,255,0.3); }
 .lbl-green   { background: var(--green-soft);         color: var(--green);  border-color: rgba(53,208,127,0.3); }
@@ -831,6 +888,11 @@ input, textarea, select { cursor: text; }
   border-radius: 6px; border: 1px solid;
   cursor: pointer; font-family: inherit;
   transition: opacity 0.12s;
+  min-width: 0;
+  max-width: 100%;
+  justify-content: center;
+  line-height: 1.2;
+  text-align: center;
 }
 .act-btn:disabled { opacity: 0.45; cursor: wait; }
 .act-btn:hover:not(:disabled) { opacity: 0.82; }
@@ -849,6 +911,11 @@ input, textarea, select { cursor: text; }
   border: 1px solid var(--line);
   background: transparent; color: var(--ink-3);
   text-transform: capitalize; transition: all 0.12s;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .filter-pill:hover:not(.active) { border-color: var(--blue); color: var(--ink); }
 .filter-pill.active { background: var(--blue-soft); color: var(--blue); border-color: rgba(76,141,255,0.5); }
@@ -956,6 +1023,10 @@ input, textarea, select { cursor: text; }
   white-space: nowrap;
   transition: border-color 0.12s, background 0.12s, color 0.12s;
   flex-shrink: 0;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .pipeline-tab:hover { border-color: var(--blue); color: var(--ink); }
 .pipeline-tab.active {
@@ -983,6 +1054,11 @@ input, textarea, select { cursor: text; }
   color: var(--ink-3); font-size: 11px; font-weight: 600;
   cursor: pointer; font-family: inherit;
   transition: all 0.12s;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sec-nav-btn:hover { border-color: var(--blue); color: var(--ink); }
 .sec-nav-btn.active { background: var(--blue-soft); color: var(--blue); border-color: rgba(76,141,255,0.5); }
@@ -1010,6 +1086,10 @@ input, textarea, select { cursor: text; }
   font-size: 11px; font-weight: 700;
   cursor: pointer; white-space: nowrap;
   transition: all 0.12s;
+  min-width: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .artifact-chip:hover:not(.empty) { border-color: var(--blue); color: var(--blue); }
 .artifact-chip.ready { color: var(--ink-2); background: var(--bg-tertiary); }
@@ -1035,6 +1115,7 @@ input, textarea, select { cursor: text; }
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s;
   display: flex; flex-direction: column; gap: 10px;
+  min-width: 0;
 }
 .mode-card:hover { border-color: var(--blue); box-shadow: 0 2px 16px rgba(76,141,255,0.1); }
 .mode-card.current { border-color: rgba(76,141,255,0.5); background: var(--blue-soft); }
@@ -1045,9 +1126,9 @@ input, textarea, select { cursor: text; }
   font-size: 13px; font-weight: 900; color: var(--ink-3);
 }
 .mode-card.current .mode-card-num { background: var(--blue); color: #fff; border-color: var(--blue); }
-.mode-card-title { font-size: 13px; font-weight: 700; color: var(--ink); }
-.mode-card-sub   { font-size: 11px; color: var(--ink-3); line-height: 1.45; }
-.mode-card-status { font-size: 11px; color: var(--ink-3); padding-top: 8px; border-top: 1px solid var(--line); }
+.mode-card-title { font-size: 13px; font-weight: 700; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mode-card-sub   { font-size: 11px; color: var(--ink-3); line-height: 1.45; min-width: 0; overflow-wrap: anywhere; }
+.mode-card-status { font-size: 11px; color: var(--ink-3); padding-top: 8px; border-top: 1px solid var(--line); min-width: 0; overflow-wrap: anywhere; }
 .mode-card-status.has-data { color: var(--green); }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1067,9 +1148,10 @@ input, textarea, select { cursor: text; }
   display: flex; align-items: center; gap: 8px;
   padding: 5px 0;
   font-size: 12px; color: var(--ink-2);
+  min-width: 0;
 }
-.config-row label { flex: 1; font-size: 11px; color: var(--ink-3); }
-.config-val { color: var(--ink); font-weight: 600; font-size: 12px; }
+.config-row label { flex: 1 1 auto; min-width: 0; font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-val { color: var(--ink); font-weight: 600; font-size: 12px; min-width: 0; overflow-wrap: anywhere; text-align: right; }
 .config-input {
   width: 80px; padding: 3px 7px; border-radius: 4px;
   border: 1px solid var(--line); background: var(--bg-tertiary);
@@ -1080,14 +1162,22 @@ input, textarea, select { cursor: text; }
   flex: 1; padding: 4px 8px; border-radius: 5px;
   border: 1px solid var(--line); background: var(--bg-tertiary);
   color: var(--ink); font-size: 12px; font-family: inherit;
+  min-width: 0;
 }
 .status-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 5px 0; font-size: 12px; color: var(--ink-2);
+  gap: 8px;
+  min-width: 0;
 }
 .status-pass  { color: var(--green); font-weight: 700; font-size: 11px; }
 .status-fail  { color: var(--red);   font-weight: 700; font-size: 11px; }
 .status-warn  { color: var(--orange);font-weight: 700; font-size: 11px; }
+.status-pass, .status-fail, .status-warn, .status-score {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
 .status-score { color: var(--blue);  font-weight: 700; font-size: 12px; }
 
 /* Primary action button (mode-aware, in navbar) */
@@ -1096,8 +1186,15 @@ input, textarea, select { cursor: text; }
   padding: 0 16px; height: 34px; border-radius: 6px;
   font-size: 12px; font-weight: 700;
   cursor: pointer; font-family: inherit;
-  border: none; white-space: nowrap; flex-shrink: 0;
+  border: none; white-space: nowrap; flex-shrink: 1;
   transition: opacity 0.15s;
+  min-width: 0;
+  max-width: 220px;
+  justify-content: center;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.15;
 }
 .primary-cta:hover { opacity: 0.85; }
 .primary-cta.blue   { background: var(--blue);   color: #fff; }

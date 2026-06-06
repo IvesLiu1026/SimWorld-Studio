@@ -577,12 +577,38 @@ function StudioLanding({ activeMode, onSelect, artifacts }) {
 // ── Task Generation panels ────────────────────────────────────────────────────
 function TaskGenPanel({ sessionId }) {
   const [taskType, setTaskType] = React.useState("PointNav");
-  const [episodes, setEpisodes] = React.useState("500");
+  const [episodes, setEpisodes] = React.useState("100");
   const [minPath, setMinPath] = React.useState("3");
-  const [maxPath, setMaxPath] = React.useState("20");
+  const [maxPath, setMaxPath] = React.useState("30");
   const [successR, setSuccessR] = React.useState("0.5");
   const [maxSteps, setMaxSteps] = React.useState("500");
   const [generating, setGenerating] = React.useState(false);
+  const [result, setResult] = React.useState(null);   // {ok, msg}
+
+  async function generate() {
+    setGenerating(true); setResult(null);
+    try {
+      const body = {
+        taskType: taskType.toLowerCase(),               // PointNav → pointnav
+        episodes: parseInt(episodes, 10) || 100,
+        minPathCm: (parseFloat(minPath) || 0) * 100,     // metres → cm
+        maxPathCm: (parseFloat(maxPath) || 0) * 100,
+        successRadiusM: parseFloat(successR) || 0.5,
+        maxSteps: parseInt(maxSteps, 10) || 500,
+        sceneId: sessionId || null,
+      };
+      const r = await fetch(`${API_BASE}/tasks/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) { setResult({ ok:false, msg: data.error || `HTTP ${r.status}` }); return; }
+      setResult({ ok:true, msg:`Generated ${data.generated}/${data.requested} episodes on “${data.taskSet.mapName||"current scene"}”` });
+      // Tell the inspector to refresh + select the new set
+      window.dispatchEvent(new CustomEvent("sw-taskset-changed", { detail: { id: data.taskSet.id } }));
+    } catch (e) {
+      setResult({ ok:false, msg: e.message });
+    } finally { setGenerating(false); }
+  }
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
@@ -593,9 +619,11 @@ function TaskGenPanel({ sessionId }) {
           <select className="config-select" value={taskType} onChange={e=>setTaskType(e.target.value)}>
             <option>PointNav</option>
             <option>ObjectNav</option>
-            <option>Exploration</option>
-            <option>Custom</option>
           </select>
+        </div>
+        <div style={{ fontSize:11, color:"var(--ink-3)", padding:"2px 2px 0", lineHeight:1.5 }}>
+          Builds a navmesh on the <b>currently-loaded scene</b> and samples reachable
+          start→goal episodes with ground-truth paths.
         </div>
       </div>
 
@@ -639,103 +667,420 @@ function TaskGenPanel({ sessionId }) {
       </div>
 
       <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
+        {result && (
+          <div style={{ fontSize:11, lineHeight:1.4, padding:"6px 8px", borderRadius:6,
+            border:`1px solid ${result.ok?"var(--green)":"var(--red,#e2484d)"}`,
+            color: result.ok?"var(--green)":"var(--red,#e2484d)", background:"var(--bg-tertiary)" }}>
+            {result.ok ? "✓ " : "⚠ "}{result.msg}
+          </div>
+        )}
         <button className="primary-cta green" style={{ width:"100%", justifyContent:"center" }}
-          onClick={()=>setGenerating(g=>!g)} disabled={generating}>
-          {generating ? "Generating…" : `${ICONS.target(13)} Generate Tasks`}
+          onClick={generate} disabled={generating}>
+          {generating ? "Building navmesh & sampling…" : `${ICONS.target(13)} Generate Tasks`}
         </button>
-        <div style={{ display:"flex", gap:6 }}>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Validate Tasks</Btn>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Preview Gym API</Btn>
-        </div>
       </div>
+    </div>
+  );
+}
+
+// Top-down canvas mini-map of a task set: every episode's gt-path drawn faintly, the
+// selected episode highlighted with start (green) / goal (red) markers + waypoint dots.
+// World (X,Y) is fit to the canvas preserving aspect ratio; +Y points up.
+function TaskMiniMap({ episodes, selIdx }) {
+  const wrapRef   = React.useRef(null);
+  const canvasRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const wrap = wrapRef.current, cv = canvasRef.current;
+    if (!wrap || !cv) return;
+    const draw = () => {
+      const dpr  = window.devicePixelRatio || 1;
+      const cssW = Math.max(160, wrap.clientWidth || 280);
+      const cssH = 210;
+      cv.width  = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
+      cv.style.width = cssW + "px"; cv.style.height = cssH + "px";
+      const ctx = cv.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const W = cssW, H = cssH;
+      const rootStyle = getComputedStyle(document.documentElement);
+      const cssVar = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
+      const viewportColor = cssVar("--viewport", "#0b1220");
+      const mutedColor = cssVar("--ink-3", "gray");
+      const easyColor = cssVar("--green", "green");
+      const mediumColor = cssVar("--orange", "orange");
+      const hardColor = cssVar("--red", "red");
+      const pathDefaultColor = cssVar("--blue-2", "skyblue");
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = viewportColor; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = "rgba(148,163,184,0.15)"; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+
+      const all = episodes || [];
+      const pts = [];
+      all.forEach(e => {
+        (e.gt_path || []).forEach(p => pts.push(p));
+        if (e.start_position) pts.push(e.start_position);
+        if (e.goal_position)  pts.push(e.goal_position);
+      });
+      if (!pts.length) {
+        ctx.fillStyle = mutedColor; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
+        ctx.fillText("No episodes", W / 2, H / 2); return;
+      }
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+      const pad = 16, spanX = (maxX - minX) || 1, spanY = (maxY - minY) || 1;
+      const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+      const offX = (W - spanX * scale) / 2, offY = (H - spanY * scale) / 2;
+      const tx = x => offX + (x - minX) * scale;
+      const ty = y => H - (offY + (y - minY) * scale);   // flip Y so +Y is up
+
+      // faint context: all non-selected paths + endpoints
+      all.forEach((e, i) => {
+        if (i === selIdx) return;
+        const p = e.gt_path || [];
+        if (p.length >= 2) {
+          ctx.beginPath(); ctx.moveTo(tx(p[0][0]), ty(p[0][1]));
+          for (let k = 1; k < p.length; k++) ctx.lineTo(tx(p[k][0]), ty(p[k][1]));
+          ctx.strokeStyle = "rgba(148,163,184,0.16)"; ctx.lineWidth = 1; ctx.stroke();
+        }
+        if (e.start_position) { ctx.fillStyle = "rgba(34,197,94,0.30)"; ctx.beginPath(); ctx.arc(tx(e.start_position[0]), ty(e.start_position[1]), 2, 0, 7); ctx.fill(); }
+        if (e.goal_position)  { ctx.fillStyle = "rgba(239,68,68,0.30)"; ctx.beginPath(); ctx.arc(tx(e.goal_position[0]),  ty(e.goal_position[1]),  2, 0, 7); ctx.fill(); }
+      });
+
+      // highlighted: selected episode
+      const sel = all[selIdx];
+      if (sel) {
+        const DIFFC = { easy: easyColor, medium: mediumColor, hard: hardColor };
+        const pathColor = DIFFC[sel.difficulty] || pathDefaultColor;
+        const p = sel.gt_path || [];
+        if (p.length >= 2) {
+          ctx.beginPath(); ctx.moveTo(tx(p[0][0]), ty(p[0][1]));
+          for (let k = 1; k < p.length; k++) ctx.lineTo(tx(p[k][0]), ty(p[k][1]));
+          ctx.strokeStyle = pathColor; ctx.lineWidth = 2.5; ctx.lineJoin = "round"; ctx.stroke();
+          ctx.fillStyle = pathDefaultColor;
+          for (let k = 1; k < p.length - 1; k++) { ctx.beginPath(); ctx.arc(tx(p[k][0]), ty(p[k][1]), 2.5, 0, 7); ctx.fill(); }
+        }
+        const s = sel.start_position, g = sel.goal_position;
+        if (s) { ctx.fillStyle = easyColor; ctx.beginPath(); ctx.arc(tx(s[0]), ty(s[1]), 5, 0, 7); ctx.fill(); ctx.strokeStyle = viewportColor; ctx.lineWidth = 1.5; ctx.stroke(); }
+        if (g) { ctx.fillStyle = hardColor; ctx.beginPath(); ctx.arc(tx(g[0]), ty(g[1]), 5, 0, 7); ctx.fill(); ctx.strokeStyle = viewportColor; ctx.lineWidth = 1.5; ctx.stroke(); }
+      }
+    };
+    draw();
+    const ro = new ResizeObserver(draw); ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [episodes, selIdx]);
+
+  return (
+    <div ref={wrapRef} style={{ width: "100%" }}>
+      <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8 }} />
     </div>
   );
 }
 
 function TaskInspectorPanel() {
+  const [sets, setSets]           = React.useState([]);
+  const [selId, setSelId]         = React.useState(null);
+  const [detail, setDetail]       = React.useState(null);   // full taskset w/ episodes
+  const [epIdx, setEpIdx]         = React.useState(0);
+  const [loading, setLoading]     = React.useState(false);
+
+  const loadList = React.useCallback(async (preferId) => {
+    try {
+      const r = await fetch(`${API_BASE}/tasksets`);
+      const d = await r.json();
+      const list = d.taskSets || [];
+      setSets(list);
+      setSelId(prev => preferId || prev || (list[0] && list[0].id) || null);
+    } catch (_e) {}
+  }, []);
+
+  React.useEffect(() => { loadList(); }, [loadList]);
+
+  // TaskGenPanel fires this after a successful generation
+  React.useEffect(() => {
+    const h = (e) => loadList(e.detail && e.detail.id);
+    window.addEventListener("sw-taskset-changed", h);
+    return () => window.removeEventListener("sw-taskset-changed", h);
+  }, [loadList]);
+
+  // Load full detail (episodes) when the selected set changes
+  React.useEffect(() => {
+    if (!selId) { setDetail(null); return; }
+    let alive = true;
+    setLoading(true); setEpIdx(0);
+    fetch(`${API_BASE}/tasksets/${selId}`).then(r=>r.json()).then(d => {
+      if (alive) { setDetail(d && d.id ? d : null); setLoading(false); }
+    }).catch(()=>{ if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [selId]);
+
+  async function del() {
+    if (!selId) return;
+    await fetch(`${API_BASE}/tasksets/${selId}`, { method:"DELETE" });
+    setSelId(null); loadList();
+  }
+  const fmtM = (cm) => (cm/100).toFixed(1) + " m";
+  const eps = (detail && detail.episodes) || [];
+  const ep  = eps[epIdx] || null;
+  const DIFF_COLOR = { easy: "var(--green)", medium: "var(--orange)", hard: "var(--red)" };
+
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto" }}>
       <div className="config-section">
         <div className="config-section-title">Task Set</div>
-        {[["Type","PointNav"],["Total episodes","500"],["Valid","486"],["Rejected","14"]].map(([l,v])=>(
-          <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
-        ))}
+        {sets.length === 0
+          ? <div style={{ fontSize:12, color:"var(--ink-3)", padding:"4px 2px" }}>No task sets yet — generate one on the left.</div>
+          : <select className="config-select" style={{ width:"100%" }} value={selId||""} onChange={e=>setSelId(e.target.value)}>
+              {sets.map(s => <option key={s.id} value={s.id}>{s.name} · {s.summary?.episodeCount||0} eps</option>)}
+            </select>}
       </div>
-      <div className="config-section">
-        <div className="config-section-title">Validation</div>
-        {[["NavMesh connected","pass"],["Task solvable","pass"],["Goal reachable","pass"],["Collision-free path","pass"]].map(([l,s])=>(
-          <div key={l} className="status-row">
-            <span style={{ fontSize:12, color:"var(--ink-2)" }}>{l}</span>
-            <span className={s==="pass"?"status-pass":"status-fail"}>{s.toUpperCase()}</span>
+
+      {loading && <div style={{ fontSize:12, color:"var(--ink-3)", padding:"8px 14px" }}>Loading…</div>}
+
+      {detail && (
+        <>
+          {/* Top-down mini-map */}
+          <div className="config-section" style={{ paddingTop:4 }}>
+            <TaskMiniMap episodes={eps} selIdx={epIdx} />
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, marginTop:6, fontSize:11, color:"var(--ink-3)" }}>
+              <span style={{ flexShrink:0 }}><span style={{ color:"var(--green)" }}>●</span> start&nbsp;&nbsp;<span style={{ color:"var(--red)" }}>●</span> goal&nbsp;&nbsp;<span style={{ color:"var(--blue-2)" }}>—</span> path</span>
+              <span style={{ minWidth:0, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }} title={detail.mapName||""}>{detail.taskType} · {detail.mapName||"—"}</span>
+            </div>
+            <div style={{ marginTop:4, fontSize:11, color:"var(--ink-3)" }}>
+              {eps.length} eps · {fmtM(detail.summary?.minDistanceCm||0)}–{fmtM(detail.summary?.maxDistanceCm||0)} (avg {fmtM(detail.summary?.avgDistanceCm||0)})
+            </div>
+            {detail.summary?.difficulty && (
+              <div style={{ marginTop:4, fontSize:11, display:"flex", gap:10 }}>
+                <span style={{ color:DIFF_COLOR.easy }}>● easy {detail.summary.difficulty.easy}</span>
+                <span style={{ color:DIFF_COLOR.medium }}>● medium {detail.summary.difficulty.medium}</span>
+                <span style={{ color:DIFF_COLOR.hard }}>● hard {detail.summary.difficulty.hard}</span>
+              </div>
+            )}
+            {ep && (
+              <div style={{ marginTop:6, fontSize:12, color:"var(--ink-2)", lineHeight:1.5 }}>
+                <b style={{ color:"var(--ink)" }}>{ep.episode_id}</b>
+                {ep.difficulty && <> · <span style={{ color:DIFF_COLOR[ep.difficulty], fontWeight:600 }}>{ep.difficulty}</span></>}
+                {" "}· {fmtM(ep.geodesic_distance_cm)} geodesic · {(ep.gt_path||[]).length} waypoints · tort {ep.tortuosity ?? "—"}
+                {ep.object_category && <> · target {ep.object_category}</>}
+              </div>
+            )}
           </div>
-        ))}
-      </div>
-      <div className="config-section">
-        <div className="config-section-title">Selected Episode</div>
-        {[["Start","(−420, 130, 200)"],["Goal","(1840, −650, 200)"],["Path length","18.4 m"],["Max steps","500"],["Success radius","0.5 m"]].map(([l,v])=>(
-          <div key={l} className="status-row"><span style={{ fontSize:11, color:"var(--ink-3)" }}>{l}</span><span style={{ fontSize:12, color:"var(--ink)", fontFamily:"monospace" }}>{v}</span></div>
-        ))}
-      </div>
-      <div className="config-section">
-        <div className="config-section-title">Output Artifact</div>
-        <div style={{ padding:"8px 10px", borderRadius:6, border:"1px solid var(--line)", background:"var(--bg-tertiary)", fontSize:12, color:"var(--ink-2)" }}>
-          <div style={{ fontWeight:700, color:"var(--ink)", marginBottom:2 }}>TaskSet_PointNav_500</div>
-          <div style={{ fontSize:11 }}>486 valid episodes · PointNav · Urban Avenue</div>
-        </div>
-        <Btn variant="success" size="sm" style={{ width:"100%", justifyContent:"center", marginTop:8 }}>Export Task Set</Btn>
-      </div>
+
+          {/* Compact episode list */}
+          <div className="config-section" style={{ minHeight:0 }}>
+            <div className="config-section-title">Episodes ({eps.length})</div>
+            <div style={{ maxHeight:150, overflow:"auto", border:"1px solid var(--line)", borderRadius:6 }}>
+              {eps.map((e,i)=>(
+                <div key={e.episode_id} onClick={()=>setEpIdx(i)}
+                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 8px", cursor:"pointer", fontSize:11,
+                    fontFamily:"monospace", color: i===epIdx?"var(--ink)":"var(--ink-2)",
+                    background: i===epIdx?"var(--bg-tertiary)":"transparent",
+                    borderLeft:`3px solid ${DIFF_COLOR[e.difficulty]||"transparent"}`,
+                    borderBottom:"1px solid var(--line)" }}>
+                  <span>{e.episode_id}</span><span>{fmtM(e.geodesic_distance_cm)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="config-section">
+            <div style={{ display:"flex", gap:6 }}>
+              <Btn variant="success" size="sm" style={{ flex:1, justifyContent:"center" }}
+                title="Training-ready JSON (loads via gym_env.batch_runner --episodes-file)"
+                onClick={()=>window.open(`${API_BASE}/tasksets/${detail.id}/download`,"_blank")}>Export (train)</Btn>
+              <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }} onClick={del}>Delete</Btn>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
 // ── Agent Training config panel ───────────────────────────────────────────────
+// Shared live-training store (pub/sub) so the config panel (which owns the SSE connection)
+// and the monitor panel render the same run state.
+const trainingStore = {
+  s: { jobId: null, status: "idle", model: null, episodesTotal: 0, current: null, agg: null, steps: [], lastLog: null },
+  subs: new Set(),
+  _es: null,
+  set(patch) { trainingStore.s = { ...trainingStore.s, ...patch }; trainingStore.subs.forEach(f => f()); },
+  subscribe(f) { trainingStore.subs.add(f); return () => trainingStore.subs.delete(f); },
+  start(jobId, model, episodesTotal) {
+    trainingStore.stop();
+    trainingStore.set({ jobId, model, episodesTotal, status: "starting", current: null, agg: null, steps: [], lastLog: null });
+    const es = new EventSource(`${API_BASE}/training/${jobId}/stream`);
+    trainingStore._es = es;
+    es.onmessage = (e) => { try { trainingStore._ev(JSON.parse(e.data)); } catch (_e) {} };
+    es.onerror = () => {};
+  },
+  stop() { if (trainingStore._es) { try { trainingStore._es.close(); } catch (_e) {} trainingStore._es = null; } },
+  _ev(ev) {
+    if (ev.type === "status") trainingStore.set({ status: ev.status, agg: ev.agg || trainingStore.s.agg });
+    else if (ev.type === "step") trainingStore.set({ status: "running", current: ev, agg: ev.agg, steps: trainingStore.s.steps.concat([ev]).slice(-200) });
+    else if (ev.type === "episode_end") trainingStore.set({ agg: ev.agg || trainingStore.s.agg });
+    else if (ev.type === "done") { trainingStore.set({ status: ev.status || "done", agg: ev.agg || trainingStore.s.agg }); trainingStore.stop(); }
+    else if (ev.type === "log") trainingStore.set({ lastLog: ev.line });
+  },
+};
+function useTraining() {
+  const [, force] = React.useState(0);
+  React.useEffect(() => trainingStore.subscribe(() => force(n => n + 1)), []);
+  return trainingStore.s;
+}
+
 function TrainingConfigPanel({ sessionId }) {
-  const [running, setRunning] = React.useState(false);
-  const [obsMode, setObsMode] = React.useState("RGB-D");
-  const [method, setMethod] = React.useState("PPO");
+  const st = useTraining();
+  const [taskSets, setTaskSets] = React.useState([]);
+  const [taskSetId, setTaskSetId] = React.useState("");
+  const [models, setModels] = React.useState([]);
+  const [model, setModel] = React.useState("gpt-4o");
+  const [maxSteps, setMaxSteps] = React.useState("40");
+  const [memory, setMemory] = React.useState("none");
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+
+  React.useEffect(() => {
+    fetch(`${API_BASE}/tasksets`).then(r => r.json()).then(d => {
+      const l = d.taskSets || []; setTaskSets(l); setTaskSetId(p => p || (l[0] && l[0].id) || "");
+    }).catch(() => {});
+    fetch(`${API_BASE}/training/models`).then(r => r.json()).then(d => {
+      setModels(d.models || []); if (d.models && d.models[0]) setModel(m => m || d.models[0].id);
+    }).catch(() => {});
+  }, []);
+
+  const running = st.status === "running" || st.status === "starting";
+  const agg = st.agg || {};
+
+  async function start() {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API_BASE}/training/start`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskSetId, model, maxSteps: parseInt(maxSteps, 10) || 40, memory }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || `HTTP ${r.status}`); return; }
+      trainingStore.start(d.jobId, d.model, d.episodes);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function cancel() {
+    if (st.jobId) await fetch(`${API_BASE}/training/${st.jobId}/cancel`, { method: "POST" }).catch(() => {});
+    trainingStore.stop(); trainingStore.set({ status: "cancelled" });
+  }
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
       <div className="config-section">
         <div className="config-section-title">Experiment Setup</div>
-        {[["Scene","Urban Avenue v3"],["Task Set","PointNav_500"],["Agent","Qwen2.5-VL-7B"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val" style={{ fontSize:11 }}>{v}</span></div>
-        ))}
+        <div className="config-row">
+          <label>Task set</label>
+          <select className="config-select" value={taskSetId} onChange={e=>setTaskSetId(e.target.value)} disabled={running}>
+            {taskSets.length===0 && <option value="">— generate one first —</option>}
+            {taskSets.map(s=><option key={s.id} value={s.id}>{s.name} · {s.summary?.episodeCount||0} eps</option>)}
+          </select>
+        </div>
+        <div className="config-row">
+          <label>Agent LLM</label>
+          <select className="config-select" value={model} onChange={e=>setModel(e.target.value)} disabled={running}>
+            {models.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+        </div>
       </div>
 
       <div className="config-section" style={{ flex:1, overflow:"auto" }}>
-        <div className="config-section-title">Training Config</div>
-        <div className="config-row">
-          <label>Observation</label>
-          <select className="config-select" value={obsMode} onChange={e=>setObsMode(e.target.value)}>
-            {["RGB","Depth","RGB-D","Pose","Text"].map(o=><option key={o}>{o}</option>)}
+        <div className="config-section-title">Run Config</div>
+        <div className="config-row"><label>Max steps / episode</label>
+          <input className="config-input" value={maxSteps} onChange={e=>setMaxSteps(e.target.value)} disabled={running}/></div>
+        <div className="config-row"><label>Memory</label>
+          <select className="config-select" value={memory} onChange={e=>setMemory(e.target.value)} disabled={running}>
+            {["none","text","hierarchical"].map(o=><option key={o}>{o}</option>)}
           </select>
         </div>
-        <div className="config-row">
-          <label>Method</label>
-          <select className="config-select" value={method} onChange={e=>setMethod(e.target.value)}>
-            {["PPO","DAgger","BC","DDPPO"].map(o=><option key={o}>{o}</option>)}
-          </select>
+        <div style={{ fontSize:11, color:"var(--ink-3)", padding:"2px 2px", lineHeight:1.5 }}>
+          Episodes run one-by-one (easy→hard). The agent enters PIE and is driven live by the selected LLM — watch it in the Agent Monitor →
         </div>
-        {[["Episode budget","10,000"],["Eval split","20%"],["Memory","Enabled"]].map(([l,v])=>(
-          <div key={l} className="config-row"><label>{l}</label><span className="config-val">{v}</span></div>
-        ))}
 
         <div className="config-section-title" style={{ marginTop:12 }}>Live Metrics</div>
-        {[["Success Rate","64%"],["SPL","0.42"],["SoftSPL","0.58"],["nDTW","0.71"],["Avg Reward","0.37"]].map(([l,v])=>(
+        {[
+          ["Status", st.status],
+          ["Episode", `${agg.episodesDone||0} / ${st.episodesTotal||agg.episodesTotal||0}`],
+          ["Success rate", agg.episodesDone ? `${Math.round((agg.successRate||0)*100)}%` : "—"],
+          ["Collisions", String(agg.collisions ?? 0)],
+          ["Distance travelled", agg.distanceTraveledM != null ? `${agg.distanceTraveledM} m` : "—"],
+        ].map(([l,v])=>(
           <div key={l} className="status-row"><span>{l}</span><span className="status-score">{v}</span></div>
         ))}
+        {st.lastLog && <div style={{ fontSize:10, color:"var(--ink-3)", fontFamily:"monospace", marginTop:8, whiteSpace:"pre-wrap", maxHeight:80, overflow:"auto" }}>{st.lastLog}</div>}
       </div>
 
       <div style={{ padding:"10px 14px", borderTop:"1px solid var(--line)", display:"flex", flexDirection:"column", gap:6 }}>
-        <button className={`primary-cta ${running?"orange":"violet"}`}
-          style={{ width:"100%", justifyContent:"center" }} onClick={()=>setRunning(r=>!r)}>
-          {running ? `${ICONS.collision(13)} Pause Training` : `${ICONS.activity(13)} Start Training`}
-        </button>
-        <div style={{ display:"flex", gap:6 }}>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Run Evaluation</Btn>
-          <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }}>Export</Btn>
+        {err && <div style={{ fontSize:11, color:"var(--red,#e2484d)" }}>⚠ {err}</div>}
+        {!running
+          ? <button className="primary-cta violet" style={{ width:"100%", justifyContent:"center" }} onClick={start} disabled={busy || !taskSetId}>
+              {busy ? "Starting…" : `${ICONS.activity(13)} Start Training`}</button>
+          : <button className="primary-cta orange" style={{ width:"100%", justifyContent:"center" }} onClick={cancel}>
+              {ICONS.collision(13)} Stop</button>}
+      </div>
+    </div>
+  );
+}
+
+// Live agent monitor (right panel during Agent Training): the agent's current camera frame
+// (the exact image given to the LLM), the LLM's reasoning + chosen action, running metrics,
+// and a scrolling per-step log.
+function TrainingMonitorPanel() {
+  const st = useTraining();
+  const cur = st.current, agg = st.agg || {};
+  const logRef = React.useRef(null);
+  React.useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [st.steps.length]);
+
+  if (st.status === "idle" || !st.jobId) {
+    return <div style={{ padding:16, fontSize:12, color:"var(--ink-3)", lineHeight:1.6 }}>
+      No active run. Pick a task set + LLM on the left and <b>Start Training</b> — the agent's camera (what the LLM sees), its reasoning + action, and live metrics appear here, updating every step.
+    </div>;
+  }
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
+      <div style={{ padding:"8px 10px" }}>
+        <div style={{ position:"relative", width:"100%", borderRadius:8, overflow:"hidden", background:"#000", aspectRatio:"4/3", display:"flex", alignItems:"center", justifyContent:"center" }}>
+          {cur && cur.frameUrl
+            ? <img src={cur.frameUrl} alt="agent camera" style={{ width:"100%", height:"100%", objectFit:"contain" }}/>
+            : <span style={{ color:"var(--ink-3)", fontSize:12 }}>waiting for first frame…</span>}
+          {cur && <div style={{ position:"absolute", top:6, left:6, fontSize:10, fontFamily:"monospace", background:"rgba(0,0,0,0.6)", color:"var(--ink)", padding:"2px 6px", borderRadius:4 }}>
+            ep {cur.episode} · step {cur.step}{cur.collided ? " · collision" : ""}</div>}
         </div>
+      </div>
+      <div style={{ display:"flex", gap:6, padding:"0 10px 8px", flexWrap:"wrap" }}>
+        {[
+          ["SR", agg.episodesDone ? `${Math.round((agg.successRate||0)*100)}%` : "—"],
+          ["eps", `${agg.episodesDone||0}/${st.episodesTotal||0}`],
+          ["collisions", agg.collisions ?? 0],
+          ["dist", agg.distanceTraveledM != null ? `${agg.distanceTraveledM}m` : "—"],
+          ["d→goal", cur && cur.distanceToGoalCm != null ? `${(cur.distanceToGoalCm/100).toFixed(1)}m` : "—"],
+        ].map(([l,v])=>(
+          <div key={l} style={{ flex:"1 0 auto", minWidth:58, textAlign:"center", padding:"4px 6px", border:"1px solid var(--line)", borderRadius:6 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:"var(--ink)" }}>{v}</div>
+            <div style={{ fontSize:9, color:"var(--ink-3)" }}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ padding:"0 10px 6px" }}>
+        <div style={{ fontSize:11, color:"var(--ink-3)", marginBottom:2 }}>LLM → <b style={{ color:"var(--violet,#8b5cf6)" }}>{cur ? cur.action : "—"}</b></div>
+        <div style={{ fontSize:12, color:"var(--ink-2)", lineHeight:1.4, maxHeight:64, overflow:"auto" }}>
+          {cur && cur.reasoning ? cur.reasoning : <span style={{ color:"var(--ink-3)" }}>(model returned no rationale text)</span>}
+        </div>
+      </div>
+      <div className="config-section-title" style={{ padding:"4px 10px" }}>Step log</div>
+      <div ref={logRef} style={{ flex:1, overflow:"auto", padding:"0 10px 10px", fontSize:11, fontFamily:"monospace" }}>
+        {st.steps.map((s,i)=>(
+          <div key={i} style={{ display:"flex", gap:6, padding:"2px 0", borderBottom:"1px solid var(--line)", color: s.collided ? "var(--red,#e2484d)" : "var(--ink-2)" }}>
+            <span style={{ color:"var(--ink-3)", flexShrink:0 }}>e{s.episode}·t{s.step}</span>
+            <span style={{ color:"var(--violet,#8b5cf6)", flexShrink:0, minWidth:84 }}>{s.action}</span>
+            <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.reasoning||""}</span>
+            {s.success && <span style={{ color:"var(--green)", flexShrink:0 }}>✓</span>}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -859,8 +1204,67 @@ function LibraryPage({ newlyAddedSkillIds, onMarkSkillSeen, newlyAddedToolIds, o
   );
 }
 
+// Gallery of saved scenes (.umap from "Save As", listed via GET /api/saved-maps).
+// Clicking a card loads that map into the live Scene Generation viewport.
+function SavedMapsGallery({ onOpenScene }) {
+  const [maps, setMaps] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState(null);
+  const reload = React.useCallback(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/saved-maps`).then(r => r.json()).then(d => setMaps(d.maps || []))
+      .catch(() => {}).finally(() => setLoading(false));
+  }, []);
+  React.useEffect(() => { reload(); }, [reload]);
+  return (
+    <div style={{ height:"100%", overflow:"auto", padding:16 }}>
+      <div style={{ display:"flex", alignItems:"center", marginBottom:12 }}>
+        <span style={{ fontSize:13, fontWeight:600, color:"var(--ink-2)" }}>Saved scenes · {maps.length}</span>
+        <button onClick={reload} style={{ marginLeft:"auto", padding:"3px 10px", fontSize:12, borderRadius:6, border:"1px solid var(--line)", background:"var(--panel-2)", color:"var(--ink-3)", cursor:"pointer" }}>↻ Refresh</button>
+      </div>
+      {loading ? (
+        <div style={{ color:"var(--ink-3)", fontSize:13, padding:12 }}>Loading…</div>
+      ) : maps.length === 0 ? (
+        <div style={{ color:"var(--ink-2)", fontSize:13, padding:24, textAlign:"center" }}>
+          No saved scenes yet. In the Scene panel, build a scene and click <b>Save As</b> — it'll show up here.
+        </div>
+      ) : (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))", gap:12 }}>
+          {maps.map(m => {
+            const isBase = /^empty_map$/i.test(m.name);
+            return (
+              <div key={m.path} style={{ border:"1px solid var(--line)", borderRadius:8, overflow:"hidden", background:"var(--panel)" }}>
+                <div style={{ height:104, display:"flex", alignItems:"center", justifyContent:"center", background:"var(--bg-2)", color:"var(--ink-3)", borderBottom:"1px solid var(--line)" }}>
+                  {ICONS.frame ? ICONS.frame(34) : ICONS.map(34)}
+                </div>
+                <div style={{ padding:"8px 10px" }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }} title={m.path}>
+                    {m.name}{isBase ? "  · base" : ""}
+                  </div>
+                  <div style={{ display:"flex", gap:6, marginTop:8 }}>
+                    <button onClick={async () => { setBusy(m.path); try { await onOpenScene?.(m.path); } finally { setBusy(null); } }}
+                      disabled={busy === m.path} title="Open this scene in the live viewport"
+                      style={{ flex:1, padding:"6px", fontSize:12, fontWeight:600, borderRadius:6, border:"1px solid var(--blue)", background:"transparent", color:"var(--blue)", cursor: busy===m.path ? "default":"pointer", opacity: busy===m.path?0.6:1 }}>
+                      {busy === m.path ? "Opening…" : "Open"}
+                    </button>
+                    <a href={`${API_BASE}/saved-maps/${encodeURIComponent(m.name)}/download`} download={`${m.name}.umap`}
+                      title="Download .umap" onClick={(e) => e.stopPropagation()}
+                      style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", padding:"6px 11px", fontSize:13, fontWeight:700, borderRadius:6, border:"1px solid var(--line)", background:"transparent", color:"var(--ink-2)", textDecoration:"none" }}>
+                      ↓
+                    </a>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Results page (Gallery + Leaderboard) ─────────────────────────────────────
-function ResultsPage() {
+function ResultsPage({ onOpenScene }) {
   const [tab, setTab] = React.useState("gallery");
   return (
     <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
@@ -873,7 +1277,7 @@ function ResultsPage() {
         ))}
       </div>
       <div style={{ flex:1, overflow:"hidden" }}>
-        {tab==="gallery"     && <GalleryPage />}
+        {tab==="gallery"     && <SavedMapsGallery onOpenScene={onOpenScene} />}
         {tab==="leaderboard" && <LeaderboardPage />}
       </div>
     </div>
@@ -883,6 +1287,63 @@ function ResultsPage() {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
+
+// Display labels for coding-agent CLI choices. Keys match /api/chat's `agent` body field.
+const AGENT_LABELS = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", gemini: "Gemini CLI", cursor: "Cursor" };
+const agentLabel = (a) => AGENT_LABELS[a] || a || "Code Agent";
+
+// Fallback backend+model registry used until GET /api/coding-agents resolves (or if it
+// fails). The server's coding-agents.json is the source of truth; keep this roughly in
+// sync as a graceful default. `defaultModel: ""` means "let the CLI/env decide".
+const DEFAULT_CODING_AGENTS = {
+  claude:   { label: "Claude Code", defaultModel: "", models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
+  codex:    { label: "Codex",       defaultModel: "", models: ["gpt-5-codex", "gpt-5", "o3"] },
+  opencode: { label: "OpenCode",    defaultModel: "", models: ["anthropic/claude-opus-4-8", "openai/gpt-5", "openai/gpt-4o", "google/gemini-2.5-pro"] },
+  gemini:   { label: "Gemini CLI",  defaultModel: "", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
+  cursor:   { label: "Cursor",      defaultModel: "composer-2.5", models: ["composer-2.5", "composer-2.5-fast", "claude-opus-4-8-thinking-high", "gpt-5.5-high"] },
+};
+
+// Prominent top-left Agent + Model picker shown in the top nav bar. The Model dropdown
+// repopulates per agent and offers a "Custom…" free-text entry for unlisted models.
+function CodingAgentSelector({ agents, agent, setAgent, model, setModel }) {
+  const cfg    = agents[agent] || {};
+  const models = cfg.models || [];
+  const derivedCustom = !!model && !models.includes(model);
+  const [forceCustom, setForceCustom] = useState(false);
+  // Drop custom mode when switching to an agent whose saved model is a listed one.
+  useEffect(() => { if (!derivedCustom) setForceCustom(false); }, [agent]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showCustom = forceCustom || derivedCustom;
+
+  const selStyle = {
+    fontSize: 12, fontWeight: 600, height: 28, padding: "0 6px",
+    background: "var(--bg-2)", color: "var(--ink-1)",
+    border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer",
+  };
+  const onModelChange = (v) => {
+    if (v === "__custom__") setForceCustom(true);
+    else { setForceCustom(false); setModel(v); }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
+         title="Coding agent backend and model used for scene generation">
+      {ICONS.bot ? <span style={{ display: "inline-flex", color: "var(--ink-3)" }}>{ICONS.bot(14)}</span> : null}
+      <select value={agent} onChange={(e) => setAgent(e.target.value)} style={selStyle} aria-label="Coding agent">
+        {Object.entries(agents).map(([id, a]) => <option key={id} value={id}>{a.label || id}</option>)}
+      </select>
+      <select value={showCustom ? "__custom__" : model} onChange={(e) => onModelChange(e.target.value)}
+              style={{ ...selStyle, maxWidth: 170 }} aria-label="Model">
+        <option value="">Default</option>
+        {models.map((m) => <option key={m} value={m}>{m}</option>)}
+        <option value="__custom__">Custom…</option>
+      </select>
+      {showCustom && (
+        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model id"
+               style={{ ...selStyle, width: 130, fontWeight: 400, cursor: "text" }} aria-label="Custom model id" />
+      )}
+    </div>
+  );
+}
 const EVOLUTION_ARTIFACT_POLL_MS = 5000;
 const EVOLUTION_TOAST_MAX = 2;
 const EVOLUTION_TOAST_TTL_MS = 5200;
@@ -1122,6 +1583,7 @@ async function resetScene() {
 const SCENE_TOOLS = new Set([
   "spawn_blueprint_actor", "spawn_actor", "spawn_agent",
   "delete_actor", "delete_all_spawned", "setup_environment", "set_actor_transform",
+  "execute_python_script",
 ]);
 function turnChangedScene(msg) {
   return (msg?.toolCalls || []).some((tc) => {
@@ -1156,6 +1618,8 @@ async function sendChat(message, sessionId, onEvent, signal, options) {
         skills: options?.skills,
         feedback: options?.feedback,
         skillSelectionMode: options?.skillSelectionMode,
+        agent: options?.agent,
+        model: options?.model,
       }),
       signal: effectiveSignal,
     });
@@ -1384,6 +1848,7 @@ function headerButtonStyle(color) {
   return {
     padding: "3px 11px",
     fontSize: 12,
+    lineHeight: 1.2,
     background: "var(--panel)",
     border: `1px solid ${color}55`,
     borderRadius: 8,
@@ -1392,6 +1857,8 @@ function headerButtonStyle(color) {
     fontWeight: 600,
     fontFamily: "inherit",
     boxShadow: "0 1px 2px rgba(15,23,42,.04)",
+    whiteSpace: "nowrap",
+    minWidth: 0,
   };
 }
 
@@ -2244,7 +2711,7 @@ function SkillsPanel({
             }}
           >
             {autoEnabled
-              ? "Auto mode: Claude pre-selects relevant skills before each run."
+              ? "Auto mode: the agent pre-selects relevant skills before each run."
               : "Manual mode: check the exact skills you want active."}
           </div>
           {builtinSkills.length > 0 && (
@@ -2583,7 +3050,7 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
 
 // ─── ChatMessage ─────────────────────────────────────────────────────────────
 
-const ChatMessage = React.memo(function ChatMessage({ message }) {
+const ChatMessage = React.memo(function ChatMessage({ message, agentLabel: agentLabelText }) {
   const isUser = message.role === "user";
 
   const bubbleContent = isUser ? (
@@ -2593,7 +3060,7 @@ const ChatMessage = React.memo(function ChatMessage({ message }) {
       {message.waiting && (
         <div style={{ color:"#64748b", fontSize:12, display:"flex", alignItems:"center", gap:8, padding:"2px 0" }}>
           <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", border:"2px solid var(--blue)", borderTopColor:"transparent", animation:"spin 1s linear infinite" }} />
-          Waiting for Claude...
+          Waiting for {agentLabelText || "agent"}...
         </div>
       )}
       {message.blocks
@@ -2732,12 +3199,14 @@ function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRes
     <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "-4px 0 2px 38px", flexWrap: "wrap" }}>
       <span title={`Scene checkpoint · turn ${checkpoint.turnIndex} · ${checkpoint.actorCount} object(s)`}
         style={{ ...pill, cursor: "default", color: isActive ? "var(--blue)" : "var(--ink-3)", borderColor: isActive ? "var(--blue)" : "var(--line)" }}>
-        📍 Checkpoint{isActive ? " · current" : ""}
+        {ICONS.map(11)} Checkpoint{isActive ? " · current" : ""}
       </span>
-      <button style={pill} disabled={restoring} title="Revert the live scene to this checkpoint"
-        onClick={() => onRestore(checkpoint.id)}>
-        {restoring ? "Restoring…" : "↩ Restore scene"}
-      </button>
+      {parent && (
+        <button style={pill} disabled={restoring} title="Revert the live scene to how it was before this message"
+          onClick={() => onRestore(parent)}>
+          {restoring ? "Reverting…" : "↩ Undo this change"}
+        </button>
+      )}
       {hasBranches && (
         <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "var(--ink-3)", fontSize: 11 }}
           title="Parallel branches that diverge from this point">
@@ -2752,7 +3221,167 @@ function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRes
   );
 }
 
-function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
+function SceneAgentHeader({
+  codingAgent,
+  mcpStatus,
+  selfEvolutionReady,
+  selfEvolutionOn,
+  sessionId,
+  turnCount,
+  latestScreenshot,
+  loading,
+  onToggleSelfEvolution,
+  onAnnotate,
+  onSave,
+  onShare,
+  onStop,
+  onReset,
+}) {
+  return (
+    <div
+      style={{
+        padding: "10px 14px",
+        borderBottom: "1px solid var(--line)",
+        background: "var(--panel)",
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        flexWrap: "wrap",
+        flexShrink: 0,
+        boxShadow: "0 1px 2px rgba(15,23,42,.04)",
+      }}
+    >
+      <div style={{ flex: "1 1 180px", minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>Scene Agent</div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--ink-3)",
+            display: "flex",
+            gap: "4px 8px",
+            alignItems: "center",
+            flexWrap: "wrap",
+            minWidth: 0,
+            lineHeight: 1.35,
+          }}
+        >
+          <span style={{ whiteSpace: "nowrap" }}>{agentLabel(codingAgent)}</span>
+          <span>·</span>
+          <span style={{ color: mcpStatus.startsWith("✓") ? "#16a34a" : "#dc2626", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+            MCP: {mcpStatus}
+          </span>
+          <span>·</span>
+          <span style={{ color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)", whiteSpace: "nowrap" }}>
+            Self-evolution: {selfEvolutionReady ? (selfEvolutionOn ? "on" : "off") : "syncing"}
+          </span>
+          {sessionId && (
+            <>
+              <span>·</span>
+              <span style={{ color: "var(--ink-3)", whiteSpace: "nowrap" }}>session: {sessionId.slice(0, 8)}</span>
+              <span>·</span>
+              <span style={{ color: "var(--ink-2)", whiteSpace: "nowrap" }}>turn {turnCount}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 4, flex: "0 1 auto", minWidth: 0, maxWidth: "100%", flexWrap: "wrap", justifyContent: "flex-end" }}>
+        <button
+          onClick={onToggleSelfEvolution}
+          title="Enable or disable self-evolution ingestion"
+          style={{
+            height: 24,
+            padding: "0 10px",
+            borderRadius: 7,
+            border: selfEvolutionOn ? "1px solid rgba(255,157,66,0.4)" : "1px solid var(--line)",
+            background: selfEvolutionOn ? "#fff7ed" : "#f8fafc",
+            color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)",
+            cursor: selfEvolutionReady ? "pointer" : "not-allowed",
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            fontSize: 12,
+            fontWeight: selfEvolutionOn ? 600 : 500,
+            opacity: selfEvolutionReady ? 1 : 0.7,
+            boxShadow: selfEvolutionOn ? "0 0 12px rgba(240,136,62,0.35)" : "none",
+            transition: "all 0.18s ease",
+            minWidth: 0,
+            maxWidth: "100%",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+          }}
+        >
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: selfEvolutionOn ? "var(--orange)" : "var(--line)",
+              boxShadow: selfEvolutionOn ? "0 0 8px rgba(255,157,66,0.4)" : "none",
+              animation: selfEvolutionOn ? "selfEvoPulse 1.3s ease-in-out infinite" : "none",
+              flexShrink: 0,
+            }}
+          />
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>Self-Evolution</span>
+          <span
+            style={{
+              color: selfEvolutionOn ? "#ea580c" : "#94a3b8",
+              flexShrink: 0,
+              letterSpacing: 0.2,
+            }}
+          >
+            {selfEvolutionReady ? (selfEvolutionOn ? "ON" : "OFF") : "..."}
+          </span>
+        </button>
+        <style>
+          {"@keyframes selfEvoPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }"}
+        </style>
+        {latestScreenshot && !loading && (
+          <button
+            onClick={onAnnotate}
+            style={headerButtonStyle("#ea580c")}
+            title="Annotate screenshot to give feedback"
+          >
+            Annotate
+          </button>
+        )}
+        {!loading && sessionId && (
+          <button
+            onClick={onSave}
+            style={headerButtonStyle("#16a34a")}
+            title="Save current scene"
+          >
+            Save
+          </button>
+        )}
+        {!loading && sessionId && latestScreenshot && (
+          <button
+            onClick={onShare}
+            style={headerButtonStyle("#3b82f6")}
+            title="Share to community gallery"
+          >
+            Share
+          </button>
+        )}
+        {loading && (
+          <button onClick={onStop} style={headerButtonStyle("#dc2626")}>
+            Stop
+          </button>
+        )}
+        {!loading && sessionId && (
+          <button
+            onClick={onReset}
+            title="Reset conversation"
+            style={headerButtonStyle("#64748b")}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, codingAgent, setCodingAgent, codingModel }) {
   const [messages, setMessages] = useState(() => [buildWelcomeMessage()]);
   const [checkpoints, setCheckpoints] = useState([]);
   const [activeLeafId, setActiveLeafId] = useState(null);
@@ -2853,9 +3482,27 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
   useEffect(() => {
     if (!studioSession) return;
     listCheckpoints(studioSession)
-      .then((cps) => {
-        setCheckpoints(cps);
-        if (cps.length && !activeLeafRef.current) setActiveLeafId(cps[cps.length - 1].id);
+      .then(async (cps) => {
+        if (cps.length === 0) {
+          // Auto-snapshot the initial (empty) world so the user can always revert to the
+          // clean starting map. The base .umap is never modified — new sessions reload it.
+          try {
+            const sid = studioSession;
+            const welcomeId = messagesRef.current?.[0]?.id || null;
+            const rec = await createCheckpoint({
+              sessionId: sid, ownerId: sid, parentCheckpointId: null,
+              messageId: welcomeId, prompt: "Initial scene (empty world)", turnIndex: 0,
+              chatHistory: messagesRef.current,
+              thumbnailPath: screenshotPathFromUrl(latestScreenshotRef.current),
+            });
+            const withUrl = { ...rec, thumbnailUrl: rec.thumbnail ? `${API_BASE}/checkpoints/${sid}/${rec.id}/thumbnail` : null };
+            setCheckpoints([withUrl]);
+            setActiveLeafId(rec.id);
+          } catch { setCheckpoints([]); }
+        } else {
+          setCheckpoints(cps);
+          if (!activeLeafRef.current) setActiveLeafId(cps[cps.length - 1].id);
+        }
       })
       .catch(() => {});
   }, [studioSession]);
@@ -2907,7 +3554,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         id: assistantId,
         role: "assistant",
         content: "",
-        waiting: true,  // Show "Waiting for Claude..." until first event
+        waiting: true,  // Show "Waiting for {agent}..." until first event
         toolCalls: [],
         timestamp: Date.now(),
       };
@@ -2926,7 +3573,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
       let _rafPending = false;
       const _flushTextBuf = (msgId) => {
         if (!_textBuf) return;
-        const delta = _textBuf;
+        let delta = _textBuf;
         _textBuf = "";
         _rafPending = false;
         setMessages((prev) => {
@@ -2934,6 +3581,13 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           const idx = updated.findIndex((m) => m.id === msgId);
           if (idx === -1) return prev;
           const msg = { ...updated[idx] };
+          const existingContent = msg.content || "";
+          if (existingContent && delta.startsWith(existingContent)) {
+            delta = delta.slice(existingContent.length);
+          } else if (existingContent && existingContent.endsWith(delta)) {
+            return prev;
+          }
+          if (!delta) return prev;
           const blocks = msg.blocks || [];
           const last = blocks[blocks.length - 1];
           if (last?.type === "text") {
@@ -3112,6 +3766,8 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
             skills: selectedSkills.length > 0 ? selectedSkills : undefined,
             feedback: feedbackText,
             skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
+            agent: codingAgent,
+            model: codingModel,
           }
         );
         // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
@@ -3153,7 +3809,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         abortRef.current = null;
       }
     },
-    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, onScreenshotUpdate]
+    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, codingAgent, codingModel, onScreenshotUpdate]
   );
 
   const handleStop = () => {
@@ -3278,139 +3934,22 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         />
       )}
 
-      {/* Header */}
-      <div
-        style={{
-          padding: "10px 14px",
-          borderBottom: "1px solid var(--line)",
-          background: "var(--panel)",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          flexShrink: 0,
-          boxShadow: "0 1px 2px rgba(15,23,42,.04)",
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>Scene Agent</div>
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--ink-3)",
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-            }}
-          >
-            <span>Claude Code CLI</span>
-            <span>·</span>
-            <span style={{ color: mcpStatus.startsWith("✓") ? "#16a34a" : "#dc2626" }}>
-              MCP: {mcpStatus}
-            </span>
-            <span>·</span>
-            <span style={{ color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)" }}>
-              Self-evolution: {selfEvolutionReady ? (selfEvolutionOn ? "on" : "off") : "syncing"}
-            </span>
-            {sessionId && (
-              <>
-                <span>·</span>
-                <span style={{ color: "var(--ink-3)" }}>session: {sessionId.slice(0, 8)}</span>
-                <span>·</span>
-                <span style={{ color: "var(--ink-2)" }}>turn {turnCount}</span>
-              </>
-            )}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button
-            onClick={handleSelfEvolutionToggle}
-            title="Enable or disable self-evolution ingestion"
-            style={{
-              height: 24,
-              padding: "0 10px",
-              borderRadius: 7,
-              border: selfEvolutionOn ? "1px solid rgba(255,157,66,0.4)" : "1px solid var(--line)",
-              background: selfEvolutionOn ? "#fff7ed" : "#f8fafc",
-              color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)",
-              cursor: selfEvolutionReady ? "pointer" : "not-allowed",
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              fontSize: 12,
-              fontWeight: selfEvolutionOn ? 600 : 500,
-              opacity: selfEvolutionReady ? 1 : 0.7,
-              boxShadow: selfEvolutionOn ? "0 0 12px rgba(240,136,62,0.35)" : "none",
-              transition: "all 0.18s ease",
-            }}
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: selfEvolutionOn ? "var(--orange)" : "var(--line)",
-                boxShadow: selfEvolutionOn ? "0 0 8px rgba(255,157,66,0.4)" : "none",
-                animation: selfEvolutionOn ? "selfEvoPulse 1.3s ease-in-out infinite" : "none",
-                flexShrink: 0,
-              }}
-            />
-            <span>Self-Evolution</span>
-            <span
-              style={{
-                color: selfEvolutionOn ? "#ea580c" : "#94a3b8",
-                flexShrink: 0,
-                letterSpacing: 0.2,
-              }}
-            >
-              {selfEvolutionReady ? (selfEvolutionOn ? "ON" : "OFF") : "..."}
-            </span>
-          </button>
-          <style>
-            {"@keyframes selfEvoPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }"}
-          </style>
-          {latestScreenshot && !loading && (
-            <button
-              onClick={() => setAnnotating(true)}
-              style={headerButtonStyle("#ea580c")}
-              title="Annotate screenshot to give feedback"
-            >
-              Annotate
-            </button>
-          )}
-          {!loading && sessionId && (
-            <button
-              onClick={handleSave}
-              style={headerButtonStyle("#16a34a")}
-              title="Save current scene"
-            >
-              Save
-            </button>
-          )}
-          {!loading && sessionId && latestScreenshot && (
-            <button
-              onClick={handleShare}
-              style={headerButtonStyle("#3b82f6")}
-              title="Share to community gallery"
-            >
-              Share
-            </button>
-          )}
-          {loading && (
-            <button onClick={handleStop} style={headerButtonStyle("#dc2626")}>
-              Stop
-            </button>
-          )}
-          {!loading && sessionId && (
-            <button
-              onClick={handleReset}
-              title="Reset conversation"
-              style={headerButtonStyle("#64748b")}
-            >
-              Reset
-            </button>
-          )}
-        </div>
-      </div>
+      <SceneAgentHeader
+        codingAgent={codingAgent}
+        mcpStatus={mcpStatus}
+        selfEvolutionReady={selfEvolutionReady}
+        selfEvolutionOn={selfEvolutionOn}
+        sessionId={sessionId}
+        turnCount={turnCount}
+        latestScreenshot={latestScreenshot}
+        loading={loading}
+        onToggleSelfEvolution={handleSelfEvolutionToggle}
+        onAnnotate={() => setAnnotating(true)}
+        onSave={handleSave}
+        onShare={handleShare}
+        onStop={handleStop}
+        onReset={handleReset}
+      />
 
       {/* Skills panel */}
       <SkillsPanel
@@ -3440,7 +3979,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
           const ckpt = checkpoints.find((c) => c.messageId === msg.id);
           return (
             <React.Fragment key={msg.id}>
-              <ChatMessage message={msg} />
+              <ChatMessage message={msg} agentLabel={agentLabel(codingAgent)} />
               {ckpt && (
                 <CheckpointBar
                   checkpoint={ckpt}
@@ -3562,6 +4101,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone }) {
         </div>
         <div style={{ marginTop: 5, fontSize: 12, color: "var(--ink-3)" }}>
           Enter to send · Shift+Enter for new line
+          {/* Agent/model picker moved to the top-left nav bar (see CodingAgentSelector). */}
           <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "var(--blue)" : "var(--ink-3)" }}>
             {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
             {autoSelectingSkills ? " (selecting...)" : ""}
@@ -4537,19 +5077,19 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
         <span style={{ color: liveState?.collisionCount > 0 ? "#dc2626" : "var(--ink-3)" }}>
           <span style={{ display:"inline-flex", alignItems:"center", gap:3 }}>{ICONS.collision(11)} {liveState?.collisionCount||0} collisions</span>
         </span>
-        <span>🔄 {liveState?.totalTurns||0} turns</span>
+        <span style={{ display:"inline-flex", alignItems:"center", gap:3 }}>{ICONS.refresh(11)} {liveState?.totalTurns||0} turns</span>
         {liveState?.totalCostUsd > 0 && (
-          <span>💰 ${(liveState.totalCostUsd||0).toFixed(3)}</span>
+          <span>${(liveState.totalCostUsd||0).toFixed(3)}</span>
         )}
       </div>
 
       {/* ── Tab bar ── */}
       <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--line)", flexShrink: 0, background: "var(--panel)" }}>
         {[
-          { id: "camera",     label: "📷 Camera"     },
+          { id: "camera",     label: "Camera"     },
           { id: "trajectory", label: "Trajectory" },
-          { id: "activity",   label: "📋 Activity"   },
-          { id: "chat",       label: "💬 Chat"       },
+          { id: "activity",   label: "Activity"   },
+          { id: "chat",       label: "Chat"       },
         ].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
             flex: 1, padding: "7px 2px", border: "none",
@@ -4588,7 +5128,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
               }}/>
             ) : camError ? (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 8 }}>
-                <div style={{ fontSize: 28, opacity: 0.4 }}>📷</div>
+                <div style={{ color: "var(--ink-3)", opacity: 0.65 }}>{ICONS.camera(28)}</div>
                 <div style={{ color: "var(--red)", fontSize: 12 }}>{camError}</div>
                 <button onClick={focusAndShoot} style={{ padding: "5px 14px", borderRadius: 6, border: "1px solid var(--blue)", background: "rgba(37,99,235,.15)", color: "#93c5fd", cursor: "pointer", fontSize: 12 }}>Retry</button>
               </div>
@@ -4601,7 +5141,7 @@ function AgentDetailPanel({ agent, sessionId, pieActive, colorIdx, onClose }) {
                   </>
                 ) : (
                   <>
-                    <div style={{ fontSize: 28, opacity: 0.3 }}>📷</div>
+                    <div style={{ color: "var(--ink-3)", opacity: 0.55 }}>{ICONS.camera(28)}</div>
                     <div style={{ color: "var(--ink-2)", fontSize: 12 }}>Click "Capture" to take a screenshot</div>
                   </>
                 )}
@@ -4719,8 +5259,8 @@ function AgentAggregatePanelTabs({ agents, sessionId }) {
 
   const tabs = [
     { id:"overview", label:"Overview" },
-    { id:"testbed",  label:"🧪 Testbed"  },
-    { id:"chat",     label:"💬 Comm"     },
+    { id:"testbed",  label:"Testbed"  },
+    { id:"chat",     label:"Comm"     },
   ];
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100%", background:"var(--bg)" }}>
@@ -5466,6 +6006,63 @@ function CodingVerifierPanel({ sessionId, latestScreenshot }) {
   );
 }
 
+// ─── SaveAsButton ────────────────────────────────────────────────────────────
+// Saves the current editor world to /Game/SavedScenes/<name>.umap via the
+// /api/scene/save-as endpoint. Does NOT modify /Game/Main.umap on disk.
+// Hover for a tip explaining where the file lands.
+
+function SaveAsButton() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg]   = useState(null); // {kind:'ok'|'err', text}
+  const onClick = async () => {
+    if (busy) return;
+    const raw = window.prompt("Save current scene as (alphanumeric, _, -):", "");
+    if (raw == null) return;
+    const name = raw.trim();
+    if (!/^[A-Za-z0-9_\-]+$/.test(name)) {
+      setMsg({ kind: "err", text: "name must be [A-Za-z0-9_-]" });
+      setTimeout(() => setMsg(null), 4000);
+      return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch("/api/scene/save-as", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, revert_to_original: false }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setMsg({ kind: "err", text: (j.error || "save failed").slice(0, 80) });
+      } else {
+        setMsg({ kind: "ok", text: "Saved → " + j.asset_path });
+      }
+    } catch (e) {
+      setMsg({ kind: "err", text: e.message.slice(0, 80) });
+    } finally {
+      setBusy(false);
+      setTimeout(() => setMsg(null), 6000);
+    }
+  };
+  return (
+    <>
+      <button title="Save current scene as a new .umap (does NOT modify /Game/Main)"
+        disabled={busy} onClick={onClick}
+        style={{
+          padding:"2px 7px", fontSize:12, borderRadius:4, cursor:busy?"wait":"pointer",
+          border:"1px solid rgba(34,197,94,.3)", background:"rgba(34,197,94,.1)",
+          color: busy?"#334155":"#86efac",
+        }}>{busy ? "Saving…" : <>{ICONS.document(12)} Save As</>}</button>
+      {msg && (
+        <span style={{
+          fontSize:11, marginLeft:4,
+          color: msg.kind === "ok" ? "#86efac" : "#fca5a5",
+        }}>{msg.text}</span>
+      )}
+    </>
+  );
+}
+
 // ─── ViewportPanel ───────────────────────────────────────────────────────────
 
 function ViewportPanel({ latestScreenshot }) {
@@ -5592,7 +6189,7 @@ function ViewportPanel({ latestScreenshot }) {
         <div style={{ display:"flex", gap:3 }}>
           {[
             { id:"pixelstream", label:"Live" },
-            { id:"screenshot",  label:"📷 Shot" },
+            { id:"screenshot",  label:"Shot" },
           ].map(m => (
             <button key={m.id} onClick={() => setMode(m.id)} style={{
               padding:"3px 10px", fontSize:12, borderRadius:6, cursor:"pointer",
@@ -5643,6 +6240,7 @@ function ViewportPanel({ latestScreenshot }) {
               border:"1px solid rgba(220,38,38,.3)", background:"rgba(220,38,38,.1)",
               color: cameraMoving?"#334155":"#fca5a5",
             }}>✕ Unlock</button>
+          <SaveAsButton />
         </div>
 
         <div style={{ flex:1 }}/>
@@ -6049,7 +6647,7 @@ function AssetBrowser({ onInsert }) {
                   border:"1px solid var(--line)", borderRadius:7, background:"var(--panel)",
                   cursor:"pointer", fontSize:"var(--fs-body)", color:"var(--ink-2)",
                   fontFamily:"inherit", fontWeight:500 }}>
-                📁 {d.name}
+                {ICONS.folder(13)} {d.name}
               </button>
             ))}
           </div>
@@ -6128,180 +6726,120 @@ function AssetBrowser({ onInsert }) {
 // ─── SceneManager ────────────────────────────────────────────────────────────
 
 function SceneManager({ onLoadScene, currentSessionId }) {
-  const [scenes, setScenes] = useState([]);
-  const [loading, setLoading] = useState(false); // start false — lazy load
+  // Two sub-panels: "Checkpoints" (this session's in-scene snapshots — restore via
+  // manifest replay) and "Saved Maps" (persistent .umap versions from Save As — load
+  // via /api/load-map). Kept separate on purpose so ephemeral undo points and durable
+  // saved scenes don't get confused.
+  const [tab, setTab] = useState("checkpoints");
+  const [studioSid, setStudioSid] = useState(null);
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [maps, setMaps] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [note, setNote] = useState("");
   const containerRef = useRef(null);
-  const loadedRef    = useRef(false);
+  const loadedRef = useRef(false);
 
-  const reload = useCallback(() => {
+  const reload = useCallback(async () => {
     setLoading(true);
-    fetchScenes()
-      .then(setScenes)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    try {
+      const sess = await fetch(`${API_BASE}/session`).then((r) => r.json()).catch(() => null);
+      const sid = sess?.sessionId || null;
+      setStudioSid(sid);
+      if (sid) setCheckpoints(await listCheckpoints(sid).catch(() => []));
+      const m = await fetch(`${API_BASE}/saved-maps`).then((r) => r.json()).then((d) => d.maps || []).catch(() => []);
+      setMaps(m);
+    } finally { setLoading(false); }
   }, []);
 
-  // Lazy: only fetch when component scrolls into view (drawer opened)
+  // Lazy: only fetch when the drawer scrolls into view.
   useEffect(() => {
     if (loadedRef.current) return;
     const el = containerRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !loadedRef.current) {
-        loadedRef.current = true;
-        reload();
-        observer.disconnect();
-      }
+      if (entry.isIntersecting && !loadedRef.current) { loadedRef.current = true; reload(); observer.disconnect(); }
     }, { threshold: 0.1 });
     observer.observe(el);
     return () => observer.disconnect();
   }, [reload]);
 
-  const handleDelete = async (id) => {
-    if (confirm("Delete this scene?")) {
-      await deleteScene(id);
-      reload();
-    }
+  const flash = (m) => { setNote(m); setTimeout(() => setNote(""), 2500); };
+
+  const restoreCkpt = async (id) => {
+    if (!studioSid) return;
+    setBusyId(id);
+    try { await restoreCheckpoint(studioSid, id); flash("Scene restored"); }
+    catch { flash("Restore failed"); }
+    finally { setBusyId(null); }
+  };
+  const loadMapVersion = async (path) => {
+    setBusyId(path);
+    flash("Loading map… (heavy scenes may take ~30s; viewport will re-attach)");
+    try {
+      // Heavy/cold maps block UE briefly and drop the live stream — switching is fine,
+      // we just force the viewport to re-attach afterward (no restart).
+      const r = await fetch(`${API_BASE}/load-map`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+      if (r.ok) {
+        flash("Map loaded — reconnecting viewport…");
+        setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
+      } else { flash("Load failed"); }
+    } catch { flash("Load failed"); }
+    finally { setBusyId(null); }
   };
 
+  const tabBtn = (id, label) => (
+    <button onClick={() => setTab(id)} style={{
+      padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+      border: "none", borderBottom: tab === id ? "2px solid var(--blue)" : "2px solid transparent",
+      background: "transparent", color: tab === id ? "var(--blue)" : "var(--ink-3)",
+    }}>{label}</button>
+  );
+  const card = { marginBottom: 8, borderRadius: 6, overflow: "hidden", border: "1px solid var(--line)", background: "var(--panel)" };
+  const actBtn = (busy) => ({ padding: "2px 8px", fontSize: 12, borderRadius: 3, border: "1px solid var(--blue)", background: "transparent", color: "var(--blue)", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 });
+
   return (
-    <div
-      ref={containerRef}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "var(--bg)",
-      }}
-    >
-      <div
-        style={{
-          padding: "8px 12px",
-          borderBottom: "1px solid var(--line)",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Saved Scenes</span>
-        <button
-          onClick={reload}
-          style={{
-            marginLeft: "auto",
-            padding: "3px 8px",
-            fontSize: 12,
-            background: "var(--panel-2)",
-            border: "1px solid var(--line)",
-            borderRadius: 4,
-            color: "var(--ink-3)",
-            cursor: "pointer",
-          }}
-        >
-          Refresh
-        </button>
+    <div ref={containerRef} style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg)" }}>
+      <div style={{ padding: "6px 12px 0", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 4 }}>
+        {tabBtn("checkpoints", "Checkpoints")}
+        {tabBtn("maps", "Saved Maps")}
+        <button onClick={reload} title="Refresh" style={{ marginLeft: "auto", marginBottom: 4, padding: "3px 8px", fontSize: 12, background: "var(--panel-2)", border: "1px solid var(--line)", borderRadius: 4, color: "var(--ink-3)", cursor: "pointer" }}>↻</button>
       </div>
+      {note && <div style={{ padding: "4px 12px", fontSize: 11, color: "var(--blue)" }}>{note}</div>}
 
       <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
-        {loading && (
-          <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 12 }}>Loading...</div>
-        )}
-        {!loading && scenes.length === 0 && (
-          <div
-            style={{
-              padding: 20,
-              textAlign: "center",
-              color: "var(--ink-2)",
-              fontSize: 12,
-            }}
-          >
-            No saved scenes yet. Use the save button after generating a scene.
-          </div>
-        )}
-        {scenes.map((scene) => (
-          <div
-            key={scene.id}
-            style={{
-              marginBottom: 8,
-              borderRadius: 6,
-              overflow: "hidden",
-              border: "1px solid var(--line)",
-              background: "var(--panel)",
-            }}
-          >
-            {scene.thumbnail && (
-              <div
-                style={{
-                  height: 100,
-                  overflow: "hidden",
-                  borderBottom: "1px solid var(--line)",
-                }}
-              >
-                <img
-                  src={scene.thumbnail}
-                  alt={scene.name}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              </div>
-            )}
-            <div style={{ padding: "8px 10px" }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)" }}>{scene.name}</div>
-              {scene.prompt && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--ink-3)",
-                    marginTop: 3,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  {scene.prompt.length > 80 ? scene.prompt.slice(0, 80) + "..." : scene.prompt}
-                </div>
-              )}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  marginTop: 6,
-                }}
-              >
-                <span style={{ fontSize: 12, color: "var(--ink-2)" }}>
-                  {new Date(scene.updatedAt).toLocaleDateString()}
-                </span>
-                <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-                  <button
-                    onClick={() => onLoadScene(scene)}
-                    style={{
-                      padding: "2px 8px",
-                      fontSize: 12,
-                      borderRadius: 3,
-                      border: "1px solid var(--blue)",
-                      background: "transparent",
-                      color: "var(--blue)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Load
-                  </button>
-                  <button
-                    onClick={() => handleDelete(scene.id)}
-                    style={{
-                      padding: "2px 8px",
-                      fontSize: 12,
-                      borderRadius: 3,
-                      border: "1px solid var(--line)",
-                      background: "transparent",
-                      color: "var(--red)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Del
-                  </button>
+        {loading && <div style={{ padding: 12, color: "var(--ink-3)", fontSize: 12 }}>Loading…</div>}
+
+        {!loading && tab === "checkpoints" && (
+          checkpoints.length === 0
+            ? <div style={{ padding: 20, textAlign: "center", color: "var(--ink-2)", fontSize: 12 }}>No checkpoints yet — they're created automatically as you modify the scene this session.</div>
+            : [...checkpoints].reverse().map((c) => (
+              <div key={c.id} style={card}>
+                {c.thumbnailUrl && <div style={{ height: 100, overflow: "hidden", borderBottom: "1px solid var(--line)" }}><img src={c.thumbnailUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /></div>}
+                <div style={{ padding: "8px 10px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)" }}>{c.prompt ? (c.prompt.length > 70 ? c.prompt.slice(0, 70) + "…" : c.prompt) : `Turn ${c.turnIndex}`}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-2)" }}>{c.actorCount} obj · {new Date(c.createdAt).toLocaleTimeString()}</span>
+                    <button onClick={() => restoreCkpt(c.id)} disabled={busyId === c.id} style={{ marginLeft: "auto", ...actBtn(busyId === c.id) }}>{busyId === c.id ? "Restoring…" : "Restore"}</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        ))}
+            ))
+        )}
+
+        {!loading && tab === "maps" && (
+          maps.length === 0
+            ? <div style={{ padding: 20, textAlign: "center", color: "var(--ink-2)", fontSize: 12 }}>No saved maps. Use “Save As” to persist the current scene as a reusable map.</div>
+            : maps.map((m) => (
+              <div key={m.path} style={{ ...card, padding: "8px 10px", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}{/^empty_map$/i.test(m.name) ? "  · base" : ""}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.path}</div>
+                </div>
+                <button onClick={() => loadMapVersion(m.path)} disabled={busyId === m.path} style={{ marginLeft: "auto", flexShrink: 0, ...actBtn(busyId === m.path) }}>{busyId === m.path ? "Loading…" : "Load"}</button>
+              </div>
+            ))
+        )}
       </div>
     </div>
   );
@@ -8152,7 +8690,7 @@ function ToolDetailModal({ tool, relatedSkills, busy, onClose, onToggleEnabled, 
               letterSpacing: 0.5,
             }}
           >
-            How Claude Calls This Tool
+            How the Agent Calls This Tool
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
             Use <span style={{ color: "var(--blue)", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.
@@ -8614,6 +9152,60 @@ function StatusDot({ label, active, activeColor, inactiveColor }) {
   );
 }
 
+// Consolidated connection status — one breathing pill that summarizes UE / MCP / Agent.
+// Green = all connected (Running), Yellow = partial, Red = all down, Grey = still connecting.
+// Click to expand a popover with the per-module detail.
+function StatusPill({ health, codingAgent }) {
+  const [open, setOpen] = useState(false);
+  const connecting = !health;
+  const ue  = !!health?.ueConnected;
+  const mcp = !!health?.mcpConnected;
+  const agentOk = true; // a coding-agent backend is always selected
+  const state = connecting ? "connecting" : (ue && mcp) ? "ok" : (!ue && !mcp) ? "down" : "warn";
+  const COLORS = { ok:"#22c55e", warn:"#f59e0b", down:"#dc2626", connecting:"#94a3b8" };
+  const LABELS = { ok:"Running", warn:"Issues", down:"Offline", connecting:"Connecting…" };
+  const color = COLORS[state];
+  const modules = [
+    { name:"UE Engine",  ok: ue },
+    { name:"MCP Server", ok: mcp },
+    { name: agentLabel(codingAgent), ok: agentOk },
+  ];
+  return (
+    <div style={{ position:"relative" }}>
+      <button onClick={() => setOpen(o => !o)} title="Connection status — click for details"
+        style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"6px 12px",
+          border:"1px solid var(--line)", borderRadius:999, background:"var(--panel)",
+          fontSize:13, fontWeight:600, color:"var(--ink-2)", cursor:"pointer", fontFamily:"inherit" }}>
+        <span style={{ width:9, height:9, borderRadius:"50%", background:color, flexShrink:0,
+          boxShadow:`0 0 0 3px ${color}33`,
+          animation: state==="ok" ? "sw-glow-pulse 2s ease-in-out infinite" : "none" }}/>
+        <span>{LABELS[state]}</span>
+        <span style={{ fontSize:9, opacity:.6 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position:"fixed", inset:0, zIndex:30 }}/>
+          <div style={{ position:"absolute", top:"calc(100% + 6px)", right:0, zIndex:31, minWidth:210,
+            background:"var(--panel)", border:"1px solid var(--line)", borderRadius:8,
+            boxShadow:"var(--shadow-pop)", padding:8, display:"flex", flexDirection:"column", gap:7 }}>
+            {modules.map(m => (
+              <div key={m.name} style={{ display:"flex", alignItems:"center", gap:8, fontSize:12 }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", flexShrink:0,
+                  background: connecting ? COLORS.connecting : (m.ok ? "#16a34a" : "#dc2626") }}/>
+                <span style={{ flex:1, color:"var(--ink-2)" }}>{m.name}</span>
+                <span style={{ fontSize:11, fontWeight:600,
+                  color: connecting ? "var(--ink-3)" : (m.ok ? "var(--green,#16a34a)" : "var(--red,#dc2626)") }}>
+                  {connecting ? "…" : (m.ok ? "Connected" : "Not connected")}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ArtifactToastStack({ items }) {
   if (!Array.isArray(items) || items.length === 0) return null;
 
@@ -8957,14 +9549,60 @@ function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClo
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
-  // Health comes from SSE StatusContext — no separate /api/health fetch needed
-  const statusCtxMain = useStatus();
-  const health      = statusCtxMain.health;
-  const healthError = !statusCtxMain.health && !statusCtxMain.pieActive; // only show error after SSE connects
+  // NOTE: App renders <PollProvider> in its own return, so it sits OUTSIDE that provider
+  // and cannot read its context (useStatus() here returns the default value, health=null →
+  // the topbar would be stuck on "Connecting…" forever). So poll /api/health directly for
+  // the topbar's UE/MCP status instead of relying on the context.
+  const [health, setHealth] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const tick = () => fetch(`${API_BASE}/health`)
+      .then(r => r.json())
+      .then(h => { if (alive && h) setHealth({ ueConnected: !!h.ueConnected, mcpConnected: !!h.mcpConnected }); })
+      .catch(() => {});
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
   // ── Theme + Studio Mode ───────────────────────────────────────────────────
   const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "dark");
   const [studioMode, setStudioMode] = useState(() => localStorage.getItem("sw_studio_mode") || "scene");
+  // Coding agent + model selection. Lives at the root so the topbar selector, the status
+  // badge, and the chat panel all reflect the choice without duplicate state. The backend
+  // list comes from GET /api/coding-agents (falls back to DEFAULT_CODING_AGENTS). The model
+  // is persisted per-agent under simworld.codingModel.<agent>.
+  const [codingAgents, setCodingAgents] = useState(DEFAULT_CODING_AGENTS);
+  const [codingAgent, setCodingAgentState] = useState(() => {
+    try { return localStorage.getItem("simworld.codingAgent") || "claude"; } catch { return "claude"; }
+  });
+  const modelKeyFor = (a) => `simworld.codingModel.${a}`;
+  const [codingModel, setCodingModelState] = useState(() => {
+    try { return localStorage.getItem(modelKeyFor(localStorage.getItem("simworld.codingAgent") || "claude")) || ""; }
+    catch { return ""; }
+  });
+  const setCodingModel = (v) => {
+    setCodingModelState(v);
+    try { localStorage.setItem(modelKeyFor(codingAgent), v); } catch {}
+  };
+  const setCodingAgent = (v) => {
+    setCodingAgentState(v);
+    try { localStorage.setItem("simworld.codingAgent", v); } catch {}
+    // Load the model previously chosen for this agent, else its default ("" = CLI default).
+    let m = "";
+    try { m = localStorage.getItem(modelKeyFor(v)) || ""; } catch {}
+    if (!m) m = codingAgents[v]?.defaultModel || "";
+    setCodingModelState(m);
+  };
+  // Pull the backend/model registry from the server once on mount.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/coding-agents`)
+      .then((r) => r.json())
+      .then((d) => { if (alive && d && d.agents && Object.keys(d.agents).length) setCodingAgents(d.agents); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const [topSection, setTopSection] = useState("studio"); // "studio" | "library" | "results"
   const [showSettings, setShowSettings] = useState(false);
 
@@ -9334,6 +9972,17 @@ function App() {
     }));
   }, []);
 
+  // Open a saved scene (.umap) from the Results gallery → switch to Scene Generation and
+  // load it into the live viewport (reuses /api/load-map + the viewport auto-reconnect).
+  const openSavedScene = React.useCallback(async (path) => {
+    setTopSection("studio");
+    setStudioMode("scene");
+    try {
+      await fetch(`${API_BASE}/load-map`, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ path }) });
+      setTimeout(() => window.dispatchEvent(new Event("sw-reconnect-stream")), 1500);
+    } catch {}
+  }, []);
+
   const activeModeInfo = STUDIO_MODES.find(m => m.id === studioMode) || STUDIO_MODES[0];
 
   return (
@@ -9389,6 +10038,16 @@ function App() {
           <span className="sw-brand-name" style={{ fontSize:14 }}>SimWorld Studio</span>
         </div>
 
+        {/* Coding agent + model picker — prominent, top-left */}
+        <CodingAgentSelector
+          agents={codingAgents}
+          agent={codingAgent}
+          setAgent={setCodingAgent}
+          model={codingModel}
+          setModel={setCodingModel}
+        />
+        <div style={{ width:1, height:28, background:"var(--line)", flexShrink:0 }} />
+
         {/* Pipeline stepper — primary nav */}
         {topSection === "studio"
           ? <PipelineStepper activeMode={studioMode} onChange={m => { setStudioMode(m); setTopSection("studio"); }} />
@@ -9414,24 +10073,6 @@ function App() {
 
         {/* Right side */}
         <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end", marginLeft:"auto" }}>
-
-          {/* Mode-aware primary CTA */}
-          {topSection === "studio" && (
-            <button className={`primary-cta ${activeModeInfo.ctaColor}`}>
-              <span style={{ display:"inline-flex", alignItems:"center" }}>{activeModeInfo.icon(13)}</span>
-              {activeModeInfo.cta}
-            </button>
-          )}
-
-          {/* Status dots */}
-          {health && (
-            <div style={{ display:"flex", alignItems:"center", gap:14, paddingRight:14, borderRight:"1px solid var(--line-2)" }}>
-              <StatusDot label="UE Engine"   active={health.ueConnected}  activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label="MCP Server"  active={health.mcpConnected} activeColor="#16a34a" inactiveColor="#dc2626" />
-              <StatusDot label="Claude Code" active={true}                activeColor="#16a34a" inactiveColor="#64748b" />
-            </div>
-          )}
-          {!health && <span style={{ fontSize:13, color:"var(--ink-3)" }}>Connecting…</span>}
 
           {/* Sync error / stale agent warnings */}
           {!syncStatus.sseOk && (
@@ -9461,31 +10102,8 @@ function App() {
             </div>
           )}
 
-          {/* Running pill */}
-          <div className="sw-running-pill" style={{
-            display:"inline-flex", alignItems:"center", gap:8,
-            padding:"6px 10px 6px 14px",
-            border:"1px solid var(--line)", borderRadius:999,
-            background:"var(--panel)", fontSize:13, fontWeight:600,
-          }}>
-            <span style={{
-              width:9, height:9, borderRadius:"50%", background:"#22c55e",
-              boxShadow:"0 0 0 3px rgba(34,197,94,.18)", flexShrink:0,
-              animation: health?.ueConnected ? "sw-glow-pulse 2s ease-in-out infinite" : "none",
-            }}/>
-            <span style={{ color:"var(--ink-2)" }}>
-              {health?.ueConnected ? "Running" : "Standby"}
-            </span>
-            {[
-              <svg key="play" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{color:"var(--ink-2)"}}><polygon points="5,3 19,12 5,21"/></svg>,
-              <svg key="pause" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style={{color:"var(--ink-2)"}}><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
-            ].map((icon,i) => (
-              <span key={i} style={{
-                width:26, height:26, borderRadius:"50%", background:"var(--bg-tertiary,#f1f5f9)",
-                display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
-              }}>{icon}</span>
-            ))}
-          </div>
+          {/* Consolidated connection status pill (UE / MCP / Agent) */}
+          <StatusPill health={health} codingAgent={codingAgent} />
 
           {/* SimCoder pill */}
           <div className="sw-simcoder-pill" style={{ fontSize:14, padding:"6px 14px 6px 10px" }}>
@@ -9581,6 +10199,9 @@ function App() {
                   onRef={setChatRef}
                   onSessionChange={setCurrentSessionId}
                   onChatDone={() => setContextRefreshKey(k => k + 1)}
+                  codingAgent={codingAgent}
+                  setCodingAgent={setCodingAgent}
+                  codingModel={codingModel}
                 />
               )}
               {leftPanel === "taskgen"    && <TaskGenPanel sessionId={currentSessionId} />}
@@ -9705,7 +10326,9 @@ function App() {
             <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
               {rightPanel2 === "sceneinsp"    && <SceneInspectorPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />}
               {rightPanel2 === "taskinsp"     && <TaskInspectorPanel />}
-              {rightPanel2 === "agentmonitor" && <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />}
+              {rightPanel2 === "agentmonitor" && (studioMode === "training"
+                ? <TrainingMonitorPanel />
+                : <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />)}
               {rightPanel2 === "roundinsp"    && <RoundInspectorPanel sessionId={currentSessionId} />}
             </div>
           </div>
@@ -9729,7 +10352,7 @@ function App() {
               onMarkToolSeen={markToolArtifactSeen}
             />
           )}
-          {topSection === "results" && <ResultsPage />}
+          {topSection === "results" && <ResultsPage onOpenScene={openSavedScene} />}
         </div>
       )}
 

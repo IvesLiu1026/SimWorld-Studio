@@ -1,7 +1,7 @@
 "use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);
 // Stable session token — persists across all Claude subprocess spawns
 const STUDIO_SESSION=crypto.randomUUID();
-logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
+logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}const{TaskSetManager}=require("./tasksets"),{selectSkillsWithClaude}=require("./skill-selector");let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,taskSetManager=new TaskSetManager(),SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
 `;try{fs.appendFileSync(getLogFilePath(),n)}catch{}console.log(`[${s}] ${e}`)}const ARENA_SYSTEM_PROMPT=`You are the SimWorld Studio scene-generation agent.
 You build city scenes in Unreal Engine 5 using MCP tools. The user sees a live viewport on the right.
 
@@ -32,6 +32,12 @@ Full path: /Game/CityDatabase/blueprints/BP_Building_XX.BP_Building_XX_C
 2. setup_environment() -- scene is BLACK without this
 3. Spawn with varied blueprint_ids, add trees/props
 4. take_screenshot()
+
+## PYTHON SCRIPT BATCHING
+- Prefer normal MCP tools for simple spawning and transforms.
+- If you must use execute_python_script for bulk UE edits, split the work into focused batches of roughly 20-40 actors/operations per script.
+- After each batch, wait for the log to end with [DONE] or [ERROR], inspect the result, then continue with the next batch.
+- Never generate one giant Python script for an entire large scene.
 
 ## EXAMPLE: city block
 1. delete_all_spawned()
@@ -69,8 +75,18 @@ Example — spawn 2 pedestrians:
 <style>
 body{margin:0;width:100vw;height:100vh;background:#000;overflow:hidden}
 /* Fill viewport with no black bars */
-#videoElementParent{background:#000}
-#streamingVideo{object-fit:contain;width:100%!important;height:100%!important}
+#playerUI,#videoElementParent{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  min-width:0!important;
+  min-height:0!important;
+  overflow:hidden!important;
+  contain:size layout paint;
+  background:#000!important;
+}
+#streamingVideo{position:absolute!important;inset:0!important;object-fit:contain;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important}
 /* Compact controls menu — top-right corner */
 #controls{
   position:absolute!important;
@@ -122,7 +138,7 @@ loc = unreal.Vector(${n[0]}, ${n[1]}, ${n[2]})
 rot = unreal.Rotator(pitch=${n[3]}, yaw=${n[4]}, roll=${n[5]})
 subsys.set_level_viewport_camera_info(loc, rot)
 `},a.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{a.write(JSON.stringify({type:"execute_python_script",params:m})+`
-`)});else return clearTimeout(c),e.json({ok:!0,result:"no-op"});let _="";a.on("data",h=>{_+=h.toString();try{const g=JSON.parse(_);clearTimeout(c),a.destroy(),e.json({ok:!0,result:g})}catch{}}),a.on("error",h=>{clearTimeout(c),e.status(500).json({error:h.message})})}),app.get("/api/skills",(s,e)=>{e.json(skillRegistry.list())}),app.get("/api/skills/:id",(s,e)=>{const t=skillRegistry.get(s.params.id);if(!t)return e.status(404).json({error:"Skill not found"});e.json(t)}),app.get("/api/skills/search/:query",(s,e)=>{e.json(skillRegistry.search(s.params.query))}),app.post("/api/skills/reload",(s,e)=>{skillRegistry.reload(),e.json({ok:!0,count:skillRegistry.list().length})}),app.post("/api/skills",(s,e)=>{const{id:t,name:n,description:o,tags:i,dependencies:a,content:c}=s.body;if(!t||!n||!c)return e.status(400).json({error:"id, name, and content are required"});const m=["---",`id: ${t}`,`name: ${n}`,"version: 1.0.0","author: custom",`tags: [${(i||[]).join(", ")}]`,`dependencies: [${(a||[]).join(", ")}]`,`description: ${o||n}`,"---","",c].join(`
+`)});else return clearTimeout(c),e.json({ok:!0,result:"no-op"});let _="";a.on("data",h=>{_+=h.toString();try{const g=JSON.parse(_);clearTimeout(c),a.destroy(),e.json({ok:!0,result:g})}catch{}}),a.on("error",h=>{clearTimeout(c),e.status(500).json({error:h.message})})}),app.get("/api/skills",(s,e)=>{e.json(skillRegistry.list())}),app.post("/api/skills/select",async(s,e)=>{try{const r=await selectSkillsWithClaude({prompt:s.body&&s.body.prompt,model:s.body&&s.body.model,claudeBin:CLAUDE_BIN,skillRegistry});e.json(r)}catch(err){e.status(500).json({error:err.message,selectedSkillIds:[]})}}),app.get("/api/skills/:id",(s,e)=>{const t=skillRegistry.get(s.params.id);if(!t)return e.status(404).json({error:"Skill not found"});e.json(t)}),app.get("/api/skills/search/:query",(s,e)=>{e.json(skillRegistry.search(s.params.query))}),app.post("/api/skills/reload",(s,e)=>{skillRegistry.reload(),e.json({ok:!0,count:skillRegistry.list().length})}),app.post("/api/skills",(s,e)=>{const{id:t,name:n,description:o,tags:i,dependencies:a,content:c}=s.body;if(!t||!n||!c)return e.status(400).json({error:"id, name, and content are required"});const m=["---",`id: ${t}`,`name: ${n}`,"version: 1.0.0","author: custom",`tags: [${(i||[]).join(", ")}]`,`dependencies: [${(a||[]).join(", ")}]`,`description: ${o||n}`,"---","",c].join(`
 `),_=path.resolve(__dirname,"../../skills"),h=require("fs");h.mkdirSync(_,{recursive:!0});const g=path.join(_,`${t}.md`);h.writeFileSync(g,m,"utf-8"),skillRegistry.reload();const f=skillRegistry.get(t);e.json(f||{id:t,name:n,description:o,tags:i,source:"custom"})}),app.delete("/api/skills/:id",(s,e)=>{const t=skillRegistry.get(s.params.id);if(!t)return e.status(404).json({error:"Skill not found"});if(t.source!=="custom")return e.status(400).json({error:"Cannot delete builtin skills"});const n=require("fs");n.existsSync(t.filePath)&&n.unlinkSync(t.filePath),skillRegistry.reload(),e.json({ok:!0})}),app.get("/api/scenes",(s,e)=>{e.json(sceneManager.list())}),app.get("/api/scenes/:id",(s,e)=>{const t=sceneManager.load(s.params.id);if(!t)return e.status(404).json({error:"Scene not found"});e.json(t)}),app.post("/api/scenes",async(s,e)=>{try{const t=await sceneManager.save(s.body);e.status(201).json(t)}catch(err){e.status(500).json({error:err.message})}}),app.delete("/api/scenes/:id",async(s,e)=>{const own=s.query.ownerId||null;try{const t=await sceneManager.delete(s.params.id,own);if(t==="forbidden")return e.status(403).json({error:"Forbidden"});e.json({ok:t})}catch(err){e.status(500).json({error:err.message})}}),app.get("/api/scenes/:id/thumbnail",(s,e)=>{const t=sceneManager.getThumbnailPath(s.params.id);if(!t)return e.status(404).json({error:"No thumbnail"});e.sendFile(t)}),app.post("/api/arena/battles",(s,e)=>{const{prompt:t,skills:n}=s.body,o=arenaManager.createBattle(t,n);e.json(o)}),app.get("/api/arena/battles",(s,e)=>{const{status:t,limit:n,offset:o}=s.query;e.json(arenaManager.listBattles({status:t,limit:Number(n)||50,offset:Number(o)||0}))}),app.get("/api/arena/battles/:id",(s,e)=>{const t=arenaManager.getBattle(s.params.id);if(!t)return e.status(404).json({error:"Battle not found"});e.json(t)}),app.post("/api/arena/battles/:id/submit",(s,e)=>{const{side:t,sceneData:n}=s.body,o=arenaManager.submitSceneForBattle(s.params.id,t,n);if(!o)return e.status(404).json({error:"Battle not found"});e.json(o)}),app.post("/api/arena/battles/:id/vote",(s,e)=>{const{winner:t}=s.body,n=arenaManager.vote(s.params.id,t);if(!n)return e.status(404).json({error:"Battle not found"});e.json(n)}),app.get("/api/arena/leaderboard",(s,e)=>{e.json(arenaManager.getLeaderboard())}),app.get("/api/arena/gallery",(s,e)=>{const{limit:t,offset:n,sort:o}=s.query;e.json(arenaManager.listGallery({limit:Number(t)||50,offset:Number(n)||0,sort:o}))}),app.post("/api/arena/gallery",(s,e)=>{const t=arenaManager.addToGallery(s.body);e.json(t)}),app.get("/api/arena/gallery/:id",(s,e)=>{const t=arenaManager.getGalleryScene(s.params.id);if(!t)return e.status(404).json({error:"Scene not found"});e.json(t)}),// ── Learned Tools API ────────────────────────────────────────────────────
 app.get("/api/tools",(s,e)=>{e.json(toolStore.list())});
 app.get("/api/tools/:id",(s,e)=>{const t=toolStore.get(s.params.id);if(!t)return e.status(404).json({error:"Tool not found"});e.json(t)});
@@ -373,16 +389,16 @@ async function _autoDiscoverAgents() {
   } catch { /* silent — UCV not connected */ }
 }
 
-// Run every 5s in PIE; also immediately when PIE first becomes active
-let _prevPie = false;
-setInterval(async () => {
-  if (_cachedPie && !_prevPie) {
-    // PIE just started — run discovery immediately
-    setTimeout(_autoDiscoverAgents, 1000);
-  }
-  _prevPie = _cachedPie;
-  if (_cachedPie) await _autoDiscoverAgents();
-}, 5000);
+// DISABLED: polls UCV `vget /objects` every 5s. In editor-only mode (no PIE),
+// UnrealCV's FAliasHandler::VExecWithOutput hits a null GetGameViewport() at
+// AliasHandler.cpp:107 and segfaults UE. _cachedPie just mirrors UE-connected,
+// not actual PIE. Manual discovery is still available via POST /api/agent-discover.
+// let _prevPie = false;
+// setInterval(async () => {
+//   if (_cachedPie && !_prevPie) setTimeout(_autoDiscoverAgents, 1000);
+//   _prevPie = _cachedPie;
+//   if (_cachedPie) await _autoDiscoverAgents();
+// }, 5000);
 
 // Gather current status snapshot (shared by SSE push and legacy poll)
 function _gatherStatus(since=0){
@@ -643,23 +659,24 @@ data: ${JSON.stringify(i)}
 `)}try{const o=await agentManager.runBattle(t.prompt,t.skills,ARENA_SYSTEM_PROMPT,(a,c)=>n("progress",{phase:a,...c}));arenaManager.submitSceneForBattle(t.id,"a",o.side_a),arenaManager.submitSceneForBattle(t.id,"b",o.side_b);const i=arenaManager.getBattle(t.id);n("complete",i)}catch(o){n("error",{message:o.message})}e.end()}),app.post("/api/arena/run",async(s,e)=>{const{prompt:t,skills:n}=s.body;if(!t)return e.status(400).json({error:"prompt required"});const o=arenaManager.createBattle(t,n||[]);e.setHeader("Content-Type","text/event-stream"),e.setHeader("Cache-Control","no-cache"),e.setHeader("Connection","keep-alive"),e.flushHeaders();function i(a,c){e.writableEnded||e.write(`event: ${a}
 data: ${JSON.stringify(c)}
 
-`)}i("battle_created",{battleId:o.id,prompt:t});try{const a=await agentManager.runBattle(t,n||[],ARENA_SYSTEM_PROMPT,(m,_)=>i("progress",{phase:m,..._}));arenaManager.submitSceneForBattle(o.id,"a",a.side_a),arenaManager.submitSceneForBattle(o.id,"b",a.side_b);const c=arenaManager.getBattle(o.id);i("complete",c)}catch(a){i("error",{message:a.message})}e.end()}),app.get("/api/assets",(s,e)=>{try{const t=JSON.parse(fs.readFileSync(path.join(__dirname,"assets.json"),"utf-8")),n={};for(const[o,i]of Object.entries(t)){const a={description:i.description||"",items:[]};o==="buildings"&&i.ids?(a.items=i.ids.map(c=>{const _=`BP_Building_${String(c).padStart(2,"0")}`;return{id:_,path:`/Game/CityDatabase/blueprints/${_}.${_}_C`}}),i.notes&&(a.description+=" "+i.notes)):i.items&&(a.items=i.items.map(c=>{if(typeof c=="string"){const m=c.split("/");return{id:m[m.length-1].split(".")[0],path:c}}return c})),n[o]=a}e.json(n)}catch(t){e.status(500).json({error:t.message})}}),app.get("/api/mock/next-input",(s,e)=>{if(!MOCK_MODE||!mockReplay)return e.json({input:null,hasMore:false});e.json({input:mockReplay.peekNextInput(),hasMore:mockReplay.hasMore(),index:mockReplay.currentIndex})});app.post("/api/chat",(s,e)=>{const{message:t,sessionId:n,skills:o,feedback:i}=s.body;if(!t)return e.status(400).json({error:"message required"});e.setHeader("Content-Type","text/event-stream"),e.setHeader("Cache-Control","no-cache"),e.setHeader("Connection","keep-alive"),e.setHeader("X-Accel-Buffering","no"),e.flushHeaders();if(MOCK_MODE&&mockReplay){const m=mockReplay.getNextMessage();if(!m)return e.status(500).json({error:"No more mock messages"});logToFile("chat",`[MOCK] User: "${t.slice(0,200)}"`);function s(d,r){e.writableEnded||e.write(`event: ${d}\ndata: ${JSON.stringify(r)}\n\n`)}s("system",{sessionId:n||"mock-session",mcpServers:[{name:"simworld",status:"connected"}]});(async()=>{await new Promise(r=>setTimeout(r,300));let _tidx=0;for(const _step of(m.steps||[])){if(_step.type==="thinking"){for(const _c of _step.text){s("text",{delta:_c});await new Promise(_p=>setTimeout(_p,12))}s("text",{delta:"\n"})}else if(_step.type==="tool"){await new Promise(_p=>setTimeout(_p,600));const _tid=`mock-${_tidx++}-${Date.now()}`;const _dn=_step.name.replace(/^mcp__[a-zA-Z0-9_]+__/,"");s("tool_start",{id:_tid,name:_step.name,displayName:_dn});_step.input&&s("tool_input",{id:_tid,delta:typeof _step.input=="string"?_step.input:JSON.stringify(_step.input)});let _rr;try{_rr=await mockExecutor.execute(_step.name,_step.input)}catch(_e){_rr=null}if(!_rr||_rr.status==="error"){_rr=_step.result||{}}s("tool_result",{toolUseId:_tid,result:typeof _rr=="string"?_rr:JSON.stringify(_rr),isError:!1});if(_dn==="verify_scene"){let _mfb="",_mss="";try{const _mro=typeof _step.result=="string"?JSON.parse(_step.result):(_step.result||{});_mfb=_mro.feedback||""}catch(_me){}try{await mockExecutor.execute("take_screenshot",{});if(fs.existsSync(SCREENSHOT_DIR)){const _fs=fs.readdirSync(SCREENSHOT_DIR).filter(f=>f.endsWith(".png")).map(f=>({fp:path.join(SCREENSHOT_DIR,f),t:fs.statSync(path.join(SCREENSHOT_DIR,f)).mtimeMs})).sort((a,b)=>b.t-a.t);if(_fs.length)_mss=`/api/screenshot/file?path=${encodeURIComponent(_fs[0].fp)}`}}catch(_e){}s("verifier_start",{toolUseId:_tid,screenshot:_mss});await new Promise(_p=>setTimeout(_p,1800));s("verifier_result",{toolUseId:_tid,feedback:_mfb,screenshot:_mss})}await new Promise(_p=>setTimeout(_p,250))}else if(_step.type==="text"){for(const _c of _step.content){s("text",{delta:_c});await new Promise(_p=>setTimeout(_p,18))}s("text",{delta:"\n"})}}s("done",{sessionId:n||"mock-session",isError:!1,costUsd:0,latestScreenshot:null});e.end()})().catch(err=>{console.error("[mock] error:",err.message);e.writableEnded||e.end()});return}function a(d,r){e.writableEnded||e.write(`event: ${d}
+`)}i("battle_created",{battleId:o.id,prompt:t});try{const a=await agentManager.runBattle(t,n||[],ARENA_SYSTEM_PROMPT,(m,_)=>i("progress",{phase:m,..._}));arenaManager.submitSceneForBattle(o.id,"a",a.side_a),arenaManager.submitSceneForBattle(o.id,"b",a.side_b);const c=arenaManager.getBattle(o.id);i("complete",c)}catch(a){i("error",{message:a.message})}e.end()}),app.get("/api/assets",(s,e)=>{try{const t=JSON.parse(fs.readFileSync(path.join(__dirname,"assets.json"),"utf-8")),n={};for(const[o,i]of Object.entries(t)){const a={description:i.description||"",items:[]};o==="buildings"&&i.ids?(a.items=i.ids.map(c=>{const _=`BP_Building_${String(c).padStart(2,"0")}`;return{id:_,path:`/Game/CityDatabase/blueprints/${_}.${_}_C`}}),i.notes&&(a.description+=" "+i.notes)):i.items&&(a.items=i.items.map(c=>{if(typeof c=="string"){const m=c.split("/");return{id:m[m.length-1].split(".")[0],path:c}}return c})),n[o]=a}e.json(n)}catch(t){e.status(500).json({error:t.message})}}),app.get("/api/mock/next-input",(s,e)=>{if(!MOCK_MODE||!mockReplay)return e.json({input:null,hasMore:false});e.json({input:mockReplay.peekNextInput(),hasMore:mockReplay.hasMore(),index:mockReplay.currentIndex})});app.get("/api/coding-agents",(s,e)=>{try{const reg=JSON.parse(fs.readFileSync(path.join(__dirname,"coding-agents.json"),"utf-8")),agents=reg.agents||{},out={};for(const[id,a]of Object.entries(agents))out[id]={label:a.label||id,defaultModel:a.defaultModel||"",models:Array.isArray(a.models)?a.models:[]};e.set("Cache-Control","no-store");e.json({default:reg.default||"claude",agents:out})}catch(err){e.status(500).json({error:err.message})}});
+app.post("/api/chat",(s,e)=>{const{message:t,sessionId:n,skills:o,feedback:i}=s.body;if(!t)return e.status(400).json({error:"message required"});e.setHeader("Content-Type","text/event-stream"),e.setHeader("Cache-Control","no-cache"),e.setHeader("Connection","keep-alive"),e.setHeader("X-Accel-Buffering","no"),e.flushHeaders();if(MOCK_MODE&&mockReplay){const m=mockReplay.getNextMessage();if(!m)return e.status(500).json({error:"No more mock messages"});logToFile("chat",`[MOCK] User: "${t.slice(0,200)}"`);function s(d,r){e.writableEnded||e.write(`event: ${d}\ndata: ${JSON.stringify(r)}\n\n`)}s("system",{sessionId:n||"mock-session",mcpServers:[{name:"simworld",status:"connected"}]});(async()=>{await new Promise(r=>setTimeout(r,300));let _tidx=0;for(const _step of(m.steps||[])){if(_step.type==="thinking"){for(const _c of _step.text){s("text",{delta:_c});await new Promise(_p=>setTimeout(_p,12))}s("text",{delta:"\n"})}else if(_step.type==="tool"){await new Promise(_p=>setTimeout(_p,600));const _tid=`mock-${_tidx++}-${Date.now()}`;const _dn=_step.name.replace(/^mcp__[a-zA-Z0-9_]+__/,"");s("tool_start",{id:_tid,name:_step.name,displayName:_dn});_step.input&&s("tool_input",{id:_tid,delta:typeof _step.input=="string"?_step.input:JSON.stringify(_step.input)});let _rr;try{_rr=await mockExecutor.execute(_step.name,_step.input)}catch(_e){_rr=null}if(!_rr||_rr.status==="error"){_rr=_step.result||{}}s("tool_result",{toolUseId:_tid,result:typeof _rr=="string"?_rr:JSON.stringify(_rr),isError:!1});if(_dn==="verify_scene"){let _mfb="",_mss="";try{const _mro=typeof _step.result=="string"?JSON.parse(_step.result):(_step.result||{});_mfb=_mro.feedback||""}catch(_me){}try{await mockExecutor.execute("take_screenshot",{});if(fs.existsSync(SCREENSHOT_DIR)){const _fs=fs.readdirSync(SCREENSHOT_DIR).filter(f=>f.endsWith(".png")).map(f=>({fp:path.join(SCREENSHOT_DIR,f),t:fs.statSync(path.join(SCREENSHOT_DIR,f)).mtimeMs})).sort((a,b)=>b.t-a.t);if(_fs.length)_mss=`/api/screenshot/file?path=${encodeURIComponent(_fs[0].fp)}`}}catch(_e){}s("verifier_start",{toolUseId:_tid,screenshot:_mss});await new Promise(_p=>setTimeout(_p,1800));s("verifier_result",{toolUseId:_tid,feedback:_mfb,screenshot:_mss})}await new Promise(_p=>setTimeout(_p,250))}else if(_step.type==="text"){for(const _c of _step.content){s("text",{delta:_c});await new Promise(_p=>setTimeout(_p,18))}s("text",{delta:"\n"})}}s("done",{sessionId:n||"mock-session",isError:!1,costUsd:0,latestScreenshot:null});e.end()})().catch(err=>{console.error("[mock] error:",err.message);e.writableEnded||e.end()});return}function a(d,r){e.writableEnded||e.write(`event: ${d}
 data: ${JSON.stringify(r)}
 
 `)}const c=setInterval(()=>{e.writableEnded||e.write(`: ping
 
-`)},5e3);let m=ARENA_SYSTEM_PROMPT;if(o&&o.length>0){const d=skillRegistry.compose(o);d&&(m+=`
+`)},5e3);let _sk=o;const _proceed=()=>{let m=ARENA_SYSTEM_PROMPT;if(_sk&&_sk.length>0){const d=skillRegistry.compose(_sk);d&&(m+=`
 
 ## ACTIVE SKILLS (reference documentation)
 `+d)}{const _ctx=ctxManager.renderForPrompt(STUDIO_SESSION);if(_ctx)m+="\n\n"+_ctx;}i&&(m+=`
 
 ## USER FEEDBACK ON CURRENT SCENE
 The user is providing feedback on the current scene. Modify the scene based on this feedback. Do NOT start from scratch \u2014 refine what exists.
-Feedback: ${i}`);const _=["-p",t,"--output-format","stream-json","--include-partial-messages","--verbose","--dangerously-skip-permissions","--mcp-config",MCP_CONFIG,"--append-system-prompt",m];const CLAUDE_MODEL=process.env.CLAUDE_MODEL||"";if(CLAUDE_MODEL)_.push("--model",CLAUDE_MODEL);const h=Object.assign({},process.env);Object.keys(h).forEach(k=>{if(k.startsWith("CLAUDE"))delete h[k]});logToFile("chat",`User: "${t.slice(0,200)}" sessionId=${n||"new"}`);try{fs.writeFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),"")}catch{}const g=spawn(CLAUDE_BIN,_,{cwd:path.resolve(__dirname,".."),env:h,stdio:["ignore","pipe","pipe"]});const _pp=_chatProcs.get(n||"_global");if(_pp&&!_pp.killed){try{_pp.kill("SIGTERM")}catch{}}
+Feedback: ${i}`);const _agentId=(s.body&&s.body.agent)||"claude";const _CHAT_RUNNERS={gemini:{mod:"./gemini-runner",fn:"runGeminiChat"},codex:{mod:"./codex-runner",fn:"runCodexChat"},opencode:{mod:"./opencode-runner",fn:"runOpenCodeChat"},cursor:{mod:"./cursor-runner",fn:"runCursorChat"},grok:{mod:"./grok-runner",fn:"runGrokChat"}};if(_CHAT_RUNNERS[_agentId]){clearInterval(c);try{const _R=_CHAT_RUNNERS[_agentId];require(_R.mod)[_R.fn]({req:s,res:e,body:s.body,systemPrompt:m,ctx:{ctxManager,snapshotScene,STUDIO_SESSION,MCP_CONFIG,ARENA_ROOT,UNREAL_PORT,LOG_DIR,SCREENSHOT_DIR,_chatProcs,logToFile,MOCK_MODE}});}catch(err){logToFile(_agentId,"dispatch error: "+err.message);a("text",{delta:`\n\n⚠️ ${_agentId} runner failed to start: ${err.message}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:null});e.end();}return;}const _=["-p",t,"--output-format","stream-json","--include-partial-messages","--verbose","--dangerously-skip-permissions","--mcp-config",MCP_CONFIG,"--append-system-prompt",m];const CLAUDE_MODEL=((s.body&&s.body.model)||process.env.CLAUDE_MODEL||"");if(CLAUDE_MODEL)_.push("--model",CLAUDE_MODEL);/* SECURITY: scene-gen agent — block all file/shell/web tools so it can ONLY use the simworld MCP tools (cannot read or modify Studio source). --disallowedTools is variadic so it must come last. */_.push("--disallowedTools","Bash","BashOutput","KillShell","Edit","MultiEdit","Write","NotebookEdit","Read","Glob","Grep","Task","TodoWrite","WebFetch","WebSearch");const h=Object.assign({},process.env);Object.keys(h).forEach(k=>{if(k.startsWith("CLAUDE"))delete h[k]});logToFile("chat",`User: "${t.slice(0,200)}" sessionId=${n||"new"}`);try{fs.writeFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),"")}catch{}const _sbc=require("./agent-sandbox").sandboxedSpawn(CLAUDE_BIN,_,path.resolve(__dirname,".."));const g=spawn(_sbc.cmd,_sbc.args,{cwd:path.resolve(__dirname,".."),env:h,stdio:["ignore","pipe","pipe"]});const _pp=_chatProcs.get(n||"_global");if(_pp&&!_pp.killed){try{_pp.kill("SIGTERM")}catch{}}
 _chatProcs.set(n||"_global",g);
-g.on("exit",()=>_chatProcs.delete(n||"_global"));let f="",w=new Set,v=new Set,S=n||null,b=null;const toolInputs=new Map;function j(d){if(d=d.trim(),!d)return;try{fs.appendFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),d+`
-`)}catch{}let r;try{r=JSON.parse(d)}catch{return}const u=r.type;if(u==="system"&&r.subtype==="init"){r.session_id&&(S=r.session_id);ctxManager.resolveSession(STUDIO_SESSION);ctxManager.beginRound(STUDIO_SESSION);const p=(r.mcp_servers||[]).map(l=>`${l.name}:${l.status}`);a("system",{sessionId:r.session_id,mcpServers:r.mcp_servers||[]}),logToFile("claude",`Session ${r.session_id} | MCP: ${p.join(", ")}`)}else if(u==="stream_event"){const p=r.event||{};if(p.type==="content_block_delta"&&p.delta?.type==="text_delta"&&a("text",{delta:p.delta.text}),p.type==="content_block_delta"&&p.delta?.type==="thinking_delta"&&a("text",{delta:p.delta.thinking}),p.type==="content_block_start"&&p.content_block?.type==="tool_use"){const l=p.content_block;if(!w.has(l.id)){w.add(l.id);const y=l.name.replace(/^mcp__\w+__/,"");a("tool_start",{id:l.id,name:l.name,displayName:y}),logToFile("tool",`Starting: ${l.name}`);if(y==="verify_scene"){v.add(l.id);a("verifier_start",{toolUseId:l.id})}}}p.type==="content_block_delta"&&p.delta?.type==="input_json_delta"&&a("tool_input",{delta:p.delta.partial_json})}else if(u==="assistant"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_use"){const y=l.name.replace(/^mcp__\w+__/,"");a("tool_details",{id:l.id,name:l.name,displayName:y,input:l.input});if(["spawn_blueprint_actor","spawn_actor","spawn_agent","delete_actor","delete_all_spawned","setup_environment"].includes(y)){logToFile("ctx","cached tool_use: "+y+" id="+l.id+" input="+JSON.stringify(l.input).slice(0,200));toolInputs.set(l.id,{name:y,input:l.input})}}else l.type==="text"&&l.text&&a("text",{delta:l.text})}else if(u==="user"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_result"){const y=Array.isArray(l.content)?l.content.map(P=>P.text||"").join(""):String(l.content||""),B=y.match(/([\/][\w\/\-._]+\.png)/);B&&fs.existsSync(B[1])&&(b=B[1],a("screenshot",{toolUseId:l.tool_use_id,filepath:`/api/screenshot/file?path=${encodeURIComponent(b)}`})),a("tool_result",{toolUseId:l.tool_use_id,result:y.slice(0,2e3),isError:l.is_error||!1}),logToFile("tool_result",`${l.tool_use_id?.slice(0,8)} \u2192 ${y.slice(0,300)}`);{const _st=toolInputs.get(l.tool_use_id);if(_st){logToFile("ctx","tool_result for "+_st.name+" toolUseId="+l.tool_use_id+" is_error="+l.is_error+" S="+S);if(!l.is_error&&S){try{const _tr=JSON.parse(y);logToFile("ctx",_st.name+" status="+_tr.status);if(_tr.status==="success"){if(_st.name==="spawn_blueprint_actor"||_st.name==="spawn_actor"||_st.name==="spawn_agent"){const _an=_st.input.actor_name||_st.input.agent_name||_st.input.name;const _cls=_st.input.blueprint_id||_st.input.static_mesh||_st.input.agent_type||"";const _cat=_st.name==="spawn_agent"?"agent":undefined;logToFile("ctx","addActor: "+_an+" cls="+_cls+" cat="+(_cat||"auto"));ctxManager.addActor(STUDIO_SESSION,{name:_an,cls:_cls,category:_cat,location:_st.input.location})}else if(_st.name==="delete_actor")ctxManager.removeActor(STUDIO_SESSION,_st.input.name);else if(_st.name==="delete_all_spawned")ctxManager.clearAllSpawned(STUDIO_SESSION);else if(_st.name==="setup_environment"){logToFile("ctx","setEnvironmentReady");ctxManager.setEnvironmentReady(STUDIO_SESSION)}const _state=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","state after update: agents="+(_state?.agents?.length)+" objects="+(_state?.objects?.length)+" updatedAt="+_state?.updatedAt)}}catch(_e){logToFile("ctx","parse error: "+_e.message)}}toolInputs.delete(l.tool_use_id)}}if(v.has(l.tool_use_id)){let _fb="",_ss="";try{const _ro=JSON.parse(y);_fb=_ro.feedback||"";_ss=_ro.screenshot||""}catch(_e){}a("verifier_result",{toolUseId:l.tool_use_id,feedback:_fb,screenshot:_ss?`/api/screenshot/file?path=${encodeURIComponent(_ss)}`:""})}}}else if(u==="result"){gotResultEvent=true;clearInterval(idleTimer);S=r.session_id;const p=r.is_error||r.subtype==="error_during_turn";r.result&&typeof r.result==="string"&&a("text",{delta:r.result+"\n"}),logToFile("claude",`Result: subtype=${r.subtype} session=${S} cost=$${r.total_cost_usd||"?"}`),logToFile("result",JSON.stringify({subtype:r.subtype,cost:r.total_cost_usd,duration:r.duration_ms}).slice(0,500)),T(),clearInterval(c);const _finish=()=>{const _st=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","DONE: session="+S+" agents="+(_st?.agents?.length)+" objects="+(_st?.objects?.length)+" updatedAt="+_st?.updatedAt);a("done",{sessionId:STUDIO_SESSION,isError:p,costUsd:r.total_cost_usd,latestScreenshot:b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:k()});e.end()};if(!MOCK_MODE){logToFile("ctx","calling snapshotScene for "+S);snapshotScene(STUDIO_SESSION).then(r=>{logToFile("ctx","snapshotScene result: "+(r?"success":"null"));_finish()}).catch(err=>{logToFile("ctx","snapshotScene error: "+err.message);_finish()})}else _finish()}}function T(){let d=null;if(fs.existsSync(SCREENSHOT_DIR))try{const r=fs.readdirSync(SCREENSHOT_DIR).filter(u=>u.endsWith(".png")).map(u=>({fp:path.join(SCREENSHOT_DIR,u),time:fs.statSync(path.join(SCREENSHOT_DIR,u)).mtimeMs})).filter(({time:u})=>Date.now()-u<18e5);for(const u of r)(!d||u.time>d.time)&&(d=u)}catch{}d&&(b=d.fp)}function k(){return T(),b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:null}let lastOutputTime=Date.now();const idleTimer=setInterval(()=>{if(Date.now()-lastOutputTime>300000&&!gotResultEvent){logToFile("claude","Idle timeout (300s no output), killing process");clearInterval(idleTimer);g.kill("SIGTERM")}},10000);g.stdout.on("data",d=>{lastOutputTime=Date.now();f+=d.toString();const r=f.split(`
-`);f=r.pop()??"";for(const u of r)j(u)});let stderrBuf="";g.stderr.on("data",d=>{lastOutputTime=Date.now();const r=d.toString().trim();if(r){stderrBuf+=r+"\n";logToFile("stderr",r.slice(0,300))}});let gotResultEvent=false;g.on("close",d=>{clearInterval(c),clearInterval(idleTimer);/* P0-3: cleaned up via g.on(exit) */f.trim()&&j(f),logToFile("claude",`Process exited with code ${d} gotResult=${gotResultEvent}`);if(gotResultEvent)return;if(!e.writableEnded){const errDetail=stderrBuf.slice(0,400).trim()||(d!==0?`exit code ${d}`:`no output received`);a("text",{delta:`\n\n⚠️ Agent exited unexpectedly: ${errDetail}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:k()});e.end()}}),e.on("close",()=>{if(!e.writableEnded){clearInterval(c);try{e.end()}catch{}logToFile("claude","Browser closed SSE — agent continues in background (use /api/chat-stop to kill)")}})});// Catch-all 404 for unknown /api/ routes — prevents hanging connections
+g.on("exit",()=>_chatProcs.delete(n||"_global"));let f="",w=new Set,v=new Set,S=n||null,b=null,emittedText="";const toolInputs=new Map;function emitTextDelta(delta,full=false){if(typeof delta!=="string"||!delta)return;if(full){if(emittedText&&delta.startsWith(emittedText)){const rest=delta.slice(emittedText.length);if(rest){emittedText+=rest,a("text",{delta:rest})}return}if(emittedText&&emittedText.includes(delta))return}emittedText+=delta,a("text",{delta})}function j(d){if(d=d.trim(),!d)return;try{fs.appendFileSync(path.join(LOG_DIR,"raw_latest.jsonl"),d+`
+`)}catch{}let r;try{r=JSON.parse(d)}catch{return}const u=r.type;if(u==="system"&&r.subtype==="init"){r.session_id&&(S=r.session_id);ctxManager.resolveSession(STUDIO_SESSION);ctxManager.beginRound(STUDIO_SESSION);const p=(r.mcp_servers||[]).map(l=>`${l.name}:${l.status}`);a("system",{sessionId:r.session_id,mcpServers:r.mcp_servers||[]}),logToFile("claude",`Session ${r.session_id} | MCP: ${p.join(", ")}`)}else if(u==="stream_event"){const p=r.event||{};if(p.type==="content_block_delta"&&p.delta?.type==="text_delta"&&emitTextDelta(p.delta.text),p.type==="content_block_delta"&&p.delta?.type==="thinking_delta"&&a("text",{delta:p.delta.thinking}),p.type==="content_block_start"&&p.content_block?.type==="tool_use"){const l=p.content_block;if(!w.has(l.id)){w.add(l.id);const y=l.name.replace(/^mcp__\w+__/,"");a("tool_start",{id:l.id,name:l.name,displayName:y}),logToFile("tool",`Starting: ${l.name}`);if(y==="verify_scene"){v.add(l.id);a("verifier_start",{toolUseId:l.id})}}}p.type==="content_block_delta"&&p.delta?.type==="input_json_delta"&&a("tool_input",{delta:p.delta.partial_json})}else if(u==="assistant"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_use"){const y=l.name.replace(/^mcp__\w+__/,"");a("tool_details",{id:l.id,name:l.name,displayName:y,input:l.input});if(["spawn_blueprint_actor","spawn_actor","spawn_agent","delete_actor","delete_all_spawned","setup_environment"].includes(y)){logToFile("ctx","cached tool_use: "+y+" id="+l.id+" input="+JSON.stringify(l.input).slice(0,200));toolInputs.set(l.id,{name:y,input:l.input})}}else l.type==="text"&&l.text&&emitTextDelta(l.text,true)}else if(u==="user"){const p=r.message?.content||[];for(const l of p)if(l.type==="tool_result"){const y=Array.isArray(l.content)?l.content.map(P=>P.text||"").join(""):String(l.content||""),B=y.match(/([\/][\w\/\-._]+\.png)/);B&&fs.existsSync(B[1])&&(b=B[1],a("screenshot",{toolUseId:l.tool_use_id,filepath:`/api/screenshot/file?path=${encodeURIComponent(b)}`})),a("tool_result",{toolUseId:l.tool_use_id,result:y.slice(0,2e3),isError:l.is_error||!1}),logToFile("tool_result",`${l.tool_use_id?.slice(0,8)} \u2192 ${y.slice(0,300)}`);{const _st=toolInputs.get(l.tool_use_id);if(_st){logToFile("ctx","tool_result for "+_st.name+" toolUseId="+l.tool_use_id+" is_error="+l.is_error+" S="+S);if(!l.is_error&&S){try{const _tr=JSON.parse(y);logToFile("ctx",_st.name+" status="+_tr.status);if(_tr.status==="success"){if(_st.name==="spawn_blueprint_actor"||_st.name==="spawn_actor"||_st.name==="spawn_agent"){const _an=_st.input.actor_name||_st.input.agent_name||_st.input.name;const _cls=_st.input.blueprint_id||_st.input.static_mesh||_st.input.agent_type||"";const _cat=_st.name==="spawn_agent"?"agent":undefined;logToFile("ctx","addActor: "+_an+" cls="+_cls+" cat="+(_cat||"auto"));ctxManager.addActor(STUDIO_SESSION,{name:_an,cls:_cls,category:_cat,location:_st.input.location})}else if(_st.name==="delete_actor")ctxManager.removeActor(STUDIO_SESSION,_st.input.name);else if(_st.name==="delete_all_spawned")ctxManager.clearAllSpawned(STUDIO_SESSION);else if(_st.name==="setup_environment"){logToFile("ctx","setEnvironmentReady");ctxManager.setEnvironmentReady(STUDIO_SESSION)}const _state=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","state after update: agents="+(_state?.agents?.length)+" objects="+(_state?.objects?.length)+" updatedAt="+_state?.updatedAt)}}catch(_e){logToFile("ctx","parse error: "+_e.message)}}toolInputs.delete(l.tool_use_id)}}if(v.has(l.tool_use_id)){let _fb="",_ss="";try{const _ro=JSON.parse(y);_fb=_ro.feedback||"";_ss=_ro.screenshot||""}catch(_e){}a("verifier_result",{toolUseId:l.tool_use_id,feedback:_fb,screenshot:_ss?`/api/screenshot/file?path=${encodeURIComponent(_ss)}`:""})}}}else if(u==="result"){gotResultEvent=true;clearInterval(idleTimer);S=r.session_id;const p=r.is_error||r.subtype==="error_during_turn";r.result&&typeof r.result==="string"&&emitTextDelta(r.result+"\n",true),logToFile("claude",`Result: subtype=${r.subtype} session=${S} cost=$${r.total_cost_usd||"?"}`),logToFile("result",JSON.stringify({subtype:r.subtype,cost:r.total_cost_usd,duration:r.duration_ms}).slice(0,500)),T(),clearInterval(c);const _finish=()=>{const _st=ctxManager.getState(STUDIO_SESSION);logToFile("ctx","DONE: session="+S+" agents="+(_st?.agents?.length)+" objects="+(_st?.objects?.length)+" updatedAt="+_st?.updatedAt);a("done",{sessionId:STUDIO_SESSION,isError:p,costUsd:r.total_cost_usd,latestScreenshot:b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:k()});e.end()};if(!MOCK_MODE){logToFile("ctx","calling snapshotScene for "+S);snapshotScene(STUDIO_SESSION).then(r=>{logToFile("ctx","snapshotScene result: "+(r?"success":"null"));_finish()}).catch(err=>{logToFile("ctx","snapshotScene error: "+err.message);_finish()})}else _finish()}}function T(){let d=null;if(fs.existsSync(SCREENSHOT_DIR))try{const r=fs.readdirSync(SCREENSHOT_DIR).filter(u=>u.endsWith(".png")).map(u=>({fp:path.join(SCREENSHOT_DIR,u),time:fs.statSync(path.join(SCREENSHOT_DIR,u)).mtimeMs})).filter(({time:u})=>Date.now()-u<18e5);for(const u of r)(!d||u.time>d.time)&&(d=u)}catch{}d&&(b=d.fp)}function k(){return T(),b?`/api/screenshot/file?path=${encodeURIComponent(b)}`:null}const CLAUDE_IDLE_TIMEOUT_MS=parseInt(process.env.CLAUDE_IDLE_TIMEOUT_MS||'1800000',10);let lastOutputTime=Date.now();const idleTimer=setInterval(()=>{if(Date.now()-lastOutputTime>CLAUDE_IDLE_TIMEOUT_MS&&!gotResultEvent){logToFile("claude",`Idle timeout (${CLAUDE_IDLE_TIMEOUT_MS/1000}s no output), killing process`);clearInterval(idleTimer);g.kill("SIGTERM")}},10000);g.stdout.on("data",d=>{lastOutputTime=Date.now();f+=d.toString();const r=f.split(`
+`);f=r.pop()??"";for(const u of r)j(u)});let stderrBuf="";g.stderr.on("data",d=>{lastOutputTime=Date.now();const r=d.toString().trim();if(r){stderrBuf+=r+"\n";logToFile("stderr",r.slice(0,300))}});let gotResultEvent=false;g.on("close",d=>{clearInterval(c),clearInterval(idleTimer);/* P0-3: cleaned up via g.on(exit) */f.trim()&&j(f),logToFile("claude",`Process exited with code ${d} gotResult=${gotResultEvent}`);if(gotResultEvent)return;if(!e.writableEnded){const errDetail=stderrBuf.slice(0,400).trim()||(d!==0?`exit code ${d}`:`no output received`);a("text",{delta:`\n\n⚠️ Agent exited unexpectedly: ${errDetail}\n`});a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:k()});e.end()}})};const _ssMode=(s.body&&s.body.skillSelectionMode)||null;if(_ssMode==="auto"){a("skill_selection_start",{});selectSkillsWithClaude({prompt:t,model:(s.body&&s.body.model),claudeBin:CLAUDE_BIN,skillRegistry}).then(_r=>{_sk=Array.isArray(_r.selectedSkillIds)?_r.selectedSkillIds:[];a("skill_selection_done",{mode:"auto",selectedSkills:_sk,reasoning:_r.reasoning||""})}).catch(_er=>{a("skill_selection_error",{message:String((_er&&_er.message)||_er)})}).finally(()=>{try{_proceed()}catch(_pe){try{a("done",{sessionId:STUDIO_SESSION,isError:true,latestScreenshot:null}),e.end()}catch(_x){}}})}else{if(_ssMode==="manual")a("skill_selection_done",{mode:"manual",selectedSkills:_sk||[]});_proceed()}e.on("close",()=>{if(!e.writableEnded){clearInterval(c);try{e.end()}catch{}logToFile("claude","Browser closed SSE — agent continues in background (use /api/chat-stop to kill)")}})});// Catch-all 404 for unknown /api/ routes — prevents hanging connections
 
 // ── Session Routes ──────────────────────────────────────────────────────────
 // ── Scene Checkpoints ────────────────────────────────────────────────────────
@@ -839,6 +856,121 @@ app.post("/api/scene/reset", async (req, res) => {
   const ok = await ckptClearScene();
   if (!ok) return res.status(502).json({ error: "UE scene reset failed" });
   res.json({ ok: true });
+});
+
+// POST /api/scene/save-as — save the current editor world to /Game/SavedScenes/<name>.umap
+// (a new on-disk .umap asset). The original /Game/Main.umap on disk is NOT modified.
+// By default the editor stays on the new map after save; pass revert_to_original=true to
+// reload /Game/Main back into the editor afterwards.
+app.post("/api/scene/save-as", async (req, res) => {
+  const name = (req.body && req.body.name || "").trim();
+  const revert = !!(req.body && req.body.revert_to_original);
+  if (!/^[A-Za-z0-9_\-]+$/.test(name)) {
+    return res.status(400).json({ error: "name must be non-empty [A-Za-z0-9_-]" });
+  }
+  const newPkg = "/Game/SavedScenes/" + name;
+  const revertBlock = revert
+    ? "    try:\n        unreal.EditorLevelLibrary.load_level('/Game/Main')\n        print('[scene-save-as] reverted editor to /Game/Main')\n    except Exception as _e:\n        print('[scene-save-as] revert failed: ' + str(_e))\n"
+    : "";
+  const py =
+    "import unreal\n" +
+    "new_pkg = '" + newPkg + "'\n" +
+    "W = unreal.EditorLevelLibrary.get_editor_world()\n" +
+    "if W is None:\n" +
+    "    print('[ERROR] No editor world available')\n" +
+    "else:\n" +
+    "    ok = unreal.EditorLoadingAndSavingUtils.save_map(W, new_pkg)\n" +
+    "    if ok:\n" +
+    "        actors = unreal.EditorLevelLibrary.get_all_level_actors()\n" +
+    "        print('[scene-save-as] OK saved ' + str(len(actors)) + ' actors to ' + new_pkg + '.umap')\n" +
+    revertBlock +
+    "    else:\n" +
+    "        print('[ERROR] save_map returned False for ' + new_pkg)\n";
+  try {
+    const raw = await new Promise((resolve, reject) => {
+      const sock = new (require("net").Socket)();
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error("UE MCP timeout (180s)")); }, 180000);
+      sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
+        sock.write(JSON.stringify({ type: "execute_python_script", params: { script: py } }) + "\n");
+      });
+      let buf = "";
+      sock.on("data", d => {
+        buf += d.toString();
+        try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch {}
+      });
+      sock.on("error", e => { clearTimeout(timer); reject(e); });
+      sock.on("close", () => { clearTimeout(timer); try { resolve(JSON.parse(buf)); } catch {} });
+    });
+    const logs = ((raw && raw.result && raw.result.python_logs) || []).join("\n");
+    if (!raw || raw.status !== "success" || logs.includes("[ERROR]")) {
+      return res.status(502).json({ error: "save_map failed", details: logs || JSON.stringify(raw).slice(0, 400) });
+    }
+    res.json({
+      ok: true,
+      asset_path: newPkg,
+      file_hint: newPkg + ".umap",
+      reverted_to_main: revert,
+      logs,
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// GET /api/saved-maps — list persistent .umap scene versions under /Game/SavedScenes
+// (these are what `Save As` writes; they survive restarts, unlike per-session checkpoints).
+// Listed via UE AssetRegistry so we don't need the project's on-disk content path.
+app.get("/api/saved-maps", async (req, res) => {
+  const py = [
+    "import unreal, json",
+    "ar=unreal.AssetRegistryHelpers.get_asset_registry()",
+    "ar.scan_paths_synchronous(['/Game/SavedScenes'], True)",  // ensure freshly-saved maps are indexed
+    "out=[]",
+    "for a in ar.get_assets_by_path('/Game/SavedScenes', recursive=False):",
+    "    try: cls=str(a.asset_class_path.asset_name)",
+    "    except Exception: cls=str(getattr(a,'asset_class',''))",
+    "    if cls=='World':",
+    "        out.append({'name':str(a.asset_name),'path':str(a.package_name)})",
+    "print('SAVED_MAPS='+json.dumps(sorted(out, key=lambda m: m['name'])))",
+  ].join("\n");
+  const r = await ueExecScript(py, 30000);
+  const m = _ueLogs(r).match(/SAVED_MAPS=(.*)$/m);
+  if (!m) return res.status(502).json({ error: "UE saved-map listing failed" });
+  try { res.json({ maps: JSON.parse(m[1]) }); }
+  catch (_e) { res.status(502).json({ error: "parse failed" }); }
+});
+
+// GET /api/saved-maps/:name/download — stream the raw .umap file for download.
+// The .umap lives in the UE project's Content/SavedScenes (outside this repo), so we ask
+// UE for its content dir once and cache it. (The .umap references project assets by /Game
+// path — this downloads the map file itself, not its dependencies.)
+let _ueContentDir = null;
+app.get("/api/saved-maps/:name/download", async (req, res) => {
+  const name = String(req.params.name || "");
+  if (!/^[A-Za-z0-9_\-]+$/.test(name)) return res.status(400).json({ error: "invalid name" });
+  try {
+    if (!_ueContentDir) {
+      const r = await ueExecScript("import unreal, os\nprint('CONTENT_DIR='+os.path.abspath(unreal.Paths.project_content_dir()))", 15000);
+      const m = _ueLogs(r).match(/CONTENT_DIR=(.*)$/m);
+      if (m) _ueContentDir = m[1].trim();
+    }
+    if (!_ueContentDir) return res.status(502).json({ error: "could not resolve UE content dir" });
+    const file = path.join(_ueContentDir, "SavedScenes", name + ".umap");
+    if (!fs.existsSync(file)) return res.status(404).json({ error: "map not found" });
+    res.download(file, name + ".umap");
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// ── Task Generation (navmesh build + episode sampling) ──────────────────────
+require("./task-gen").registerTaskRoutes(app, { ueExecScript, _ueLogs, taskSetManager });
+
+// ── Agent Training (gym_env experiment engine, live-visualized) ─────────────
+require("./training").registerTrainingRoutes(app, {
+  taskSetManager,
+  canonicalExport: require("./task-gen").canonicalExport,
+  ueExecScript,
+  UNREAL_PORT,
+  logToFile,
 });
 
 // DELETE /api/checkpoints/:sid/:id — delete one checkpoint
@@ -1122,18 +1254,29 @@ app.post('/api/load-map', async (req, res) => {
   // Strip asset reference suffix: /Game/Pack/Maps/Level.Level → /Game/Pack/Maps/Level
   const cleanPath = path.includes('.') ? path.split('.')[0] : path;
 
+  // Guard: reloading the CURRENTLY-open map duplicates the UWorld and fatals the
+  // pixel-streaming editor. Switching to a DIFFERENT map is safe (verified). So skip
+  // the load when the target is already loaded.
   const py = `import unreal
 try:
     ls = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-    ls.load_level(${JSON.stringify(cleanPath)})
-    print("MAP_LOADED_OK")
+    ues = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+    cur = ues.get_editor_world().get_name()
+    target = ${JSON.stringify(cleanPath)}
+    if cur == target.split('/')[-1]:
+        print("MAP_ALREADY_LOADED")
+    else:
+        ls.load_level(target)
+        print("MAP_LOADED_OK")
 except Exception as e:
     print("MAP_LOAD_ERR " + str(e))`.trim();
 
   try {
     const raw = await new Promise((resolve, reject) => {
       const sock = new (require('net').Socket)();
-      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 15_000);
+      // Heavy / cold maps (first-time shader+asset compile) can block the game thread
+      // for tens of seconds. Allow a long wait rather than failing the switch.
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error('timeout')); }, 180_000);
       sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => {
         sock.write(JSON.stringify({ type: 'execute_python_script', params: { script: py } }) + '\n');
       });
@@ -1155,6 +1298,12 @@ except Exception as e:
     res.status(500).json({ error: e.message });
   }
 });
+
+// POST /api/immersive — no-op kept for backward-compat. Immersive (F11) is triggered
+// CLIENT-side in ue-player.html by injecting the F11 key into the pixel-streaming input —
+// the only approach that replicates a manual F11 in headless mode (console commands and
+// editor_set_game_view do not affect the streamed viewport).
+app.post("/api/immersive",(req,res)=>{ res.json({ok:true}); });
 
 app.get('/api/assets',(req,res)=>{
   let { path:browsePath='/', q='', page=0, limit=30, category='' } = req.query;

@@ -53,6 +53,9 @@ export default function PixelStreamPlayer({ playerUrl }) {
     return () => clearTimeout(connectTimer.current);
   }, [status]);
 
+  // (Immersive/F11 is now handled inside ue-player.html — it injects the F11 key into the
+  // pixel-streaming input on first connect, which is what actually replicates a manual press.)
+
   // Heartbeat — detect silent drops after 60s silence
   useEffect(() => {
     if (status !== "connected") return;
@@ -87,11 +90,29 @@ export default function PixelStreamPlayer({ playerUrl }) {
     iframeRef.current.src = url + sep + "_t=" + Date.now();
   }, [effectiveUrl]);
 
+  // Proactive reconnect: a map switch (Saved Maps → Load) drops the stream while UE
+  // reloads the world. Rather than wait for the 60s silence heartbeat, re-attach the
+  // iframe as soon as the switch finishes (the player waits for the streamer to return).
+  useEffect(() => {
+    const h = () => { if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; } doReconnect(); };
+    window.addEventListener("sw-reconnect-stream", h);
+    return () => window.removeEventListener("sw-reconnect-stream", h);
+  }, [doReconnect]);
+
   const url = effectiveUrl();
 
   return (
     <div
-      style={{ width: "100%", height: "100%", position: "relative", background: "#0b1220" }}
+      style={{
+        width: "100%",
+        height: "100%",
+        minWidth: 0,
+        minHeight: 0,
+        position: "relative",
+        overflow: "hidden",
+        contain: "size layout paint",
+        background: "var(--viewport, #0b1220)",
+      }}
       onClick={() => iframeRef.current?.focus()}
       onMouseEnter={() => iframeRef.current?.focus()}
     >
@@ -102,7 +123,7 @@ export default function PixelStreamPlayer({ playerUrl }) {
           onLoad={() => {
             if (status === "idle" || status === "disconnected") setStatus("connecting");
           }}
-          style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none", display: "block" }}
           allow="pointer-lock *; fullscreen *; autoplay *; clipboard-read *; clipboard-write *"
           allowFullScreen
           tabIndex={0}
@@ -115,10 +136,10 @@ export default function PixelStreamPlayer({ playerUrl }) {
         <div style={{
           position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          background: "rgba(11,18,32,0.85)", gap: 10,
+          background: "var(--viewport, #0b1220)", gap: 10,
         }}>
-          <div style={{ fontSize: 28, opacity: 0.3 }}>📡</div>
-          <div style={{ color: "#64748b", fontSize: 12 }}>No stream URL — is Cirrus running?</div>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 0, opacity: 0.45 }}>SIGNAL</div>
+          <div style={{ color: "var(--ink-3)", fontSize: 12 }}>No stream URL — is Cirrus running?</div>
         </div>
       )}
     </div>

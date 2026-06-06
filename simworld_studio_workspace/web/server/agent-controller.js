@@ -170,6 +170,7 @@ class AgentSession {
       `- Always use agent_name="${this.agentName}"`,
       '- Only control YOUR agent.',
       '- Think step by step: observe → think → act → verify.',
+      '- If Python/editor automation is required, split it into small focused batches and verify each batch before continuing; never generate one giant script for a full scene.',
       '- Be concise.',
     );
 
@@ -263,7 +264,7 @@ class AgentSession {
       this.envFeedback.push({ ts: Date.now(), nearby, loc: obs.location });
       if (this.envFeedback.length > 20) this.envFeedback.shift();
     }
-    log.agent('debug', `${this.agentName} obs loc=${obs.location} overlaps=${overlaps.length} nearby=${nearby.length}`);
+    log.agent('debug', `${this.agentName} obs loc=${obs.location} hits=${hits.length} nearby=${nearby.length}`);
 
     const systemPrompt = this._systemPrompt();
 

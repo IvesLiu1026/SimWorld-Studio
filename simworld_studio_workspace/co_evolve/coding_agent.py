@@ -39,6 +39,9 @@ better idea.
    accepted but logged.
 2. Base scene-content decisions (which objects to add/remove) on the
    ROLLING SR + failure patterns shown below.
+3. If a downstream tool needs Unreal Python/editor automation, generate
+   small focused batches and verify each batch before continuing. Never
+   produce one giant Python script for an entire scene update.
 {retry_feedback}
 
 ## EMBODIED AGENT STATUS
@@ -47,17 +50,10 @@ better idea.
 ## SCENE EDITING PHASE
 {edit_phase_directive}
 
-<<<<<<< Updated upstream
 ## ENVIRONMENT FEEDBACK (last build only — no historical residue)
 {build_feedback}
 
 Last epoch only (do NOT consult older history; rely on rolling stats):
-=======
-## ENVIRONMENT FEEDBACK (last build)
-{build_feedback}
-
-Per-epoch history (for trend only; act on the rolling stats above):
->>>>>>> Stashed changes
 {performance_history}
 
 Learned strategies:
