@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { API_BASE } from "../../api/client.js";
+import LeaderboardPage from "./LeaderboardPage.jsx";
 
 function SavedMapsGallery({ icons, onOpenScene }) {
   const [maps, setMaps] = useState([]);
@@ -81,7 +82,7 @@ function SavedMapsGallery({ icons, onOpenScene }) {
   );
 }
 
-export default function ResultsPage({ icons, LeaderboardPage, onOpenScene }) {
+export default function ResultsPage({ icons, onOpenScene }) {
   const [tab, setTab] = useState("gallery");
   const tabs = [
     ["gallery", "Scenes", icons.frame],
@@ -102,7 +103,7 @@ export default function ResultsPage({ icons, LeaderboardPage, onOpenScene }) {
       </div>
       <div className="studio-page-body">
         {tab === "gallery" && <SavedMapsGallery icons={icons} onOpenScene={onOpenScene} />}
-        {tab === "leaderboard" && <LeaderboardPage />}
+        {tab === "leaderboard" && <LeaderboardPage icons={icons} />}
       </div>
     </div>
   );
