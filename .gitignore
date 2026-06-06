@@ -36,6 +36,8 @@ simworld_studio_workspace/probe_stdout.txt
 simworld_studio_workspace/agent_memory.json
 simworld_studio_workspace/strategy_memory*.json
 simworld_studio_workspace/tasks/
+simworld_studio_workspace/web/test-results/
+simworld_studio_workspace/web/playwright-report/
 .venv/
 tmp/
 

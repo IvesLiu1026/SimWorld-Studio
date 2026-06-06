@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const log = require('./logger');
 const { getBroker } = require('./unreal-bridge');
+const { buildPanelAgentRuleLines } = require('./agent-runtime-policy');
 
 const MCP_CONFIG = path.resolve(__dirname, '../mcp.json');
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
@@ -166,12 +167,7 @@ class AgentSession {
       '## Communication',
       'To message another agent, include @AgentName in your response.',
       '',
-      '## Rules',
-      `- Always use agent_name="${this.agentName}"`,
-      '- Only control YOUR agent.',
-      '- Think step by step: observe → think → act → verify.',
-      '- If Python/editor automation is required, split it into small focused batches and verify each batch before continuing; never generate one giant script for a full scene.',
-      '- Be concise.',
+      ...buildPanelAgentRuleLines({ agentName: this.agentName, type }),
     );
 
     // Inject agent-relevant skills (movement, navigation, facing, etc.)

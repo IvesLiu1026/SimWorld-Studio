@@ -2,205 +2,38 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import ReactDOM from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useQuery } from "@tanstack/react-query";
 import PixelStreamPlayer from "./PixelStreamPlayer.jsx";
-
-// ─── SSE Status Stream — Split Contexts (P2-1 fix) ─────────────────────────
-// Four fine-grained contexts so consumers only re-render when their slice changes.
-// Old single PollContext caused ALL consumers to re-render on every 3s SSE push.
-
-const AgentsContext  = React.createContext({ agents: [], sessions: [], activities: {} });
-const SceneContext   = React.createContext({ objects: [], environment: { ready: false }, round: 0 });
-const ChatLogContext = React.createContext([]);
-const StatusContext  = React.createContext({ pieActive: false, health: null });
-const MetricsContext = React.createContext({ series: {}, sceneCollisions: [], sampledAt: 0, intervalMs: 5000 });
-
-// Stale agent context — agents last seen + any sync errors
-const SyncContext = React.createContext({ staleAgents: new Set(), syncError: null, sseOk: true });
-
-// Legacy combined context kept for usePoll() callers that haven't migrated yet
-const PollContext = React.createContext({
-  context: { agents: [], objects: [], environment: { ready: false }, round: 0 },
-  sessions: [], activities: {}, chatLog: [], pieActive: false, health: null,
-});
-
-// Threshold: agent not seen in UE for > 20s is "stale"
-const STALE_AGENT_MS = 20_000;
-
-function PollProvider({ children }) {
-  const [agents,   setAgents]   = useState({ agents: [], sessions: [], activities: {} });
-  const [scene,    setScene]    = useState({ objects: [], environment: { ready: false }, round: 0 });
-  const [chatLog,  setChatLog]  = useState([]);
-  const [status,   setStatus]   = useState({ pieActive: false, health: null });
-  const [sync,     setSync]     = useState({ staleAgents: new Set(), syncError: null, sseOk: true });
-  const [metrics,  setMetrics]  = useState({ series: {}, sceneCollisions: [], sampledAt: 0, intervalMs: 5000 });
-
-  const agentLastSeen  = useRef(new Map()); // agentName → timestamp
-  const agentMissCnt   = useRef(new Map()); // agentName → consecutive miss count
-  const legacyRef = useRef({ context: { agents:[], objects:[], environment:{ready:false}, round:0 }, sessions:[], activities:{}, chatLog:[], pieActive:false, health:null });
-
-  useEffect(() => {
-    const token = sessionStorage.getItem("sw_session_token") || "";
-    const url   = token ? `${API_BASE}/events?token=${token}` : `${API_BASE}/events`;
-    let es = new EventSource(url);
-    let reconnectTimer = null;
-
-    const reconnect = () => {
-      es.close();
-      reconnectTimer = setTimeout(() => {
-        es = new EventSource(url);
-        es.onmessage = onMessage;
-        es.onerror   = onError;
-      }, 3000);
-    };
-
-    function onMessage(evt) {
-      try {
-        const d = JSON.parse(evt.data);
-        setSync(prev => prev.sseOk ? prev : { ...prev, sseOk: true, syncError: null });
-
-        // Track agent last-seen timestamps
-        const now = Date.now();
-        const liveNames = new Set();
-        (d.sessions || d.context?.agents || []).forEach(a => {
-          const name = a.agentName || a.name;
-          if (name) {
-            agentLastSeen.current.set(name, now);
-            agentMissCnt.current.delete(name); // reset on seen
-            liveNames.add(name);
-          }
-        });
-
-        // Stale detection: require 3+ consecutive missed pushes (not just 1)
-        // to avoid false positives from SSE network jitter
-        const stale = new Set();
-        for (const [name, ts] of agentLastSeen.current) {
-          if (!liveNames.has(name)) {
-            const misses = (agentMissCnt.current.get(name) || 0) + 1;
-            agentMissCnt.current.set(name, misses);
-            if (misses >= 3 && now - ts > STALE_AGENT_MS) stale.add(name);
-            if (now - ts > 300_000) {
-              agentLastSeen.current.delete(name);
-              agentMissCnt.current.delete(name);
-            }
-          }
-        }
-        setSync(prev => {
-          const same = prev.staleAgents.size === stale.size && [...stale].every(n => prev.staleAgents.has(n));
-          return same ? prev : { ...prev, staleAgents: stale };
-        });
-
-        // Agents slice — lightweight comparison (names + count, avoid full stringify)
-        const nextSessions = d.sessions || [];
-        const nextAgentList = d.context?.agents || [];
-        const nextActivities = d.activities || {};
-        setAgents(prev => {
-          const prevSess = prev.sessions || [];
-          const sameCount = prevSess.length === nextSessions.length;
-          // Check key agent state fields to detect actual changes
-          const sessKey = s => `${s.agentName}:${s.status}:${s.collisionCount}:${Math.round((s.location?.[0]||0)/10)}:${s.currentAction||''}`;
-          const sameKey  = sameCount && nextSessions.every((s,i) => sessKey(s) === sessKey(prevSess[i]));
-          // Compare activity content (not just key names) to detect new turns
-          const actKey = acts => Object.entries(acts||{}).map(([k,v])=>`${k}:${(v||[]).length}:${(v||[])[v?.length-1]?.timestamp||0}`).join('|');
-          const sameActs = actKey(nextActivities) === actKey(prev.activities);
-          if (sameKey && sameActs && (prev.agents||[]).length === nextAgentList.length) return prev;
-          return { agents: nextAgentList, sessions: nextSessions, activities: nextActivities };
-        });
-
-        // Scene slice — only track count + env.ready (objects list can be 30k items)
-        const nextEnv   = d.context?.environment || { ready: false };
-        const nextObjs  = d.context?.objects     || [];
-        const nextRound = d.context?.round       || 0;
-        setScene(prev => {
-          if (prev.objects.length === nextObjs.length &&
-              prev.environment?.ready === nextEnv.ready &&
-              prev.round === nextRound) return prev;
-          return { objects: nextObjs, environment: nextEnv, round: nextRound };
-        });
-
-        // ChatLog — append new only; stable dedup key includes content slice
-        if (Array.isArray(d.chatLog) && d.chatLog.length > 0) {
-          setChatLog(prev => {
-            const msgKey = m => `${m.from}|${m.timestamp}|${(m.text||'').slice(0,20)}`;
-            const existing = new Set(prev.map(msgKey));
-            const news = d.chatLog.filter(m => !existing.has(msgKey(m)));
-            return news.length > 0 ? [...prev, ...news].slice(-200) : prev;
-          });
-        }
-
-        // Status — only compare the fields we care about
-        const nextHealth = d.health || null;
-        const nextPie    = !!d.pieActive;
-        setStatus(prev => {
-          if (prev.pieActive === nextPie &&
-              prev.health?.ueConnected  === nextHealth?.ueConnected &&
-              prev.health?.mcpConnected === nextHealth?.mcpConnected) return prev;
-          return { pieActive: nextPie, health: nextHealth };
-        });
-
-        // Metrics time-series (from MetricsHub, sampled every 5s)
-        if (d.metrics && d.metrics.sampledAt !== undefined) {
-          setMetrics(prev =>
-            prev.sampledAt === d.metrics.sampledAt ? prev : d.metrics
-          );
-        }
-
-        legacyRef.current = d;
-      } catch (e) {
-        setSync(prev => ({ ...prev, syncError: "SSE parse error: " + e.message }));
-      }
-    }
-
-    function onError() {
-      setSync(prev => ({ ...prev, sseOk: false, syncError: "SSE connection lost — reconnecting…" }));
-      reconnect();
-    }
-
-    es.onmessage = onMessage;
-    es.onerror   = onError;
-    return () => { es.close(); if (reconnectTimer) clearTimeout(reconnectTimer); };
-  }, []);
-
-  // Legacy combined context value — stable object so usePoll() consumers
-  // still work but don't get extra re-renders from the ref itself
-  const legacyValue = useMemo(() => ({
-    get context()    { return legacyRef.current.context    || {}; },
-    get sessions()   { return legacyRef.current.sessions   || []; },
-    get activities() { return legacyRef.current.activities || {}; },
-    get chatLog()    { return legacyRef.current.chatLog    || []; },
-    get pieActive()  { return legacyRef.current.pieActive  || false; },
-    get health()     { return legacyRef.current.health     || null; },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), []); // intentionally stable — consumers that need reactivity should use fine-grained contexts
-
-  return (
-    <AgentsContext.Provider  value={agents}>
-    <SceneContext.Provider   value={scene}>
-    <ChatLogContext.Provider value={chatLog}>
-    <StatusContext.Provider  value={status}>
-    <MetricsContext.Provider value={metrics}>
-    <SyncContext.Provider    value={sync}>
-    <PollContext.Provider    value={legacyValue}>
-      {children}
-    </PollContext.Provider>
-    </SyncContext.Provider>
-    </MetricsContext.Provider>
-    </StatusContext.Provider>
-    </ChatLogContext.Provider>
-    </SceneContext.Provider>
-    </AgentsContext.Provider>
-  );
-}
-
-// Fine-grained hooks — prefer these over usePoll() for new code
-function useAgents()  { return React.useContext(AgentsContext); }
-function useScene()   { return React.useContext(SceneContext); }
-function useChatLog() { return React.useContext(ChatLogContext); }
-function useStatus()  { return React.useContext(StatusContext); }
-function useSync()    { return React.useContext(SyncContext); }
-function useMetrics() { return React.useContext(MetricsContext); }
-
-// Legacy hook — works but causes full re-render on every SSE push
-function usePoll() { return React.useContext(PollContext); }
+import { API_BASE } from "./api/client.js";
+import { fetchCodingAgents, fetchHealth, fetchSession, studioQueryKeys } from "./api/studioApi.js";
+import SceneAgentHeader from "./components/chat/SceneAgentHeader.jsx";
+import {
+  Badge,
+  Btn,
+  Eyebrow,
+  Field,
+  ModalFooter,
+  ModalHeader,
+  ModalOverlay,
+  PageHeader,
+  SourceBadge,
+  StatusBadge,
+  ToggleBtn,
+  inputSx,
+} from "./components/ui/primitives.jsx";
+import CodingAgentSelector from "./features/agents/CodingAgentSelector.jsx";
+import { DEFAULT_CODING_AGENTS, agentLabel } from "./features/agents/codingAgents.js";
+import TaskInspectorPanel from "./features/tasks/TaskInspectorPanel.jsx";
+import { useStudioStore } from "./state/studioStore.js";
+import {
+  PollProvider,
+  useAgents,
+  useMetrics,
+  usePoll,
+  useScene,
+  useStatus,
+  useSync,
+} from "./state/pollContext.jsx";
 
 // ─── Inline SVG Icons (flat colorful cartoon style) ─────────────────────────
 
@@ -275,213 +108,27 @@ const ICONS = {
   users:    (s) => <SvgIcon size={s}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" fill="none"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/></SvgIcon>,
 };
 
-// ─── Shared UI Primitives ─────────────────────────────────────────────────────
-// All themed, no hardcoded colors. Use these instead of inline styles.
-
-// Badge / label chip
-const BADGE_VARIANTS = {
-  blue:   { background: "var(--blue-soft)",        color: "var(--blue)",   border: "1px solid rgba(76,141,255,0.3)" },
-  green:  { background: "var(--green-soft)",        color: "var(--green)",  border: "1px solid rgba(53,208,127,0.3)" },
-  orange: { background: "var(--orange-soft)",       color: "var(--orange)", border: "1px solid rgba(255,157,66,0.3)"  },
-  red:    { background: "rgba(255,95,99,0.12)",     color: "var(--red)",    border: "1px solid rgba(255,95,99,0.3)"   },
-  muted:  { background: "var(--panel-2)",           color: "var(--ink-3)",  border: "1px solid var(--line)"           },
-  violet: { background: "var(--violet-soft)",       color: "var(--violet)", border: "1px solid rgba(165,110,255,0.3)"},
-};
-
-function Badge({ variant = "muted", children, style, dot }) {
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", gap: 4,
-      padding: "2px 8px", borderRadius: 6,
-      fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
-      ...BADGE_VARIANTS[variant], ...style,
-    }}>
-      {dot && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor", flexShrink: 0 }} />}
-      {children}
-    </span>
-  );
-}
-
-// Maps skill.source or tool status to the right Badge variant
-function SourceBadge({ source, style }) {
-  const map = {
-    builtin: ["muted",  "builtin"],
-    custom:  ["blue",   "custom"],
-    learned: ["blue",   "learned"],
+function tagChipSx(tag, overrides = {}) {
+  const color = TAG_COLORS[tag];
+  return {
+    fontSize: 11,
+    padding: "2px 6px",
+    borderRadius: 4,
+    background: color ? `rgb(${color} / 0.18)` : "var(--panel-2)",
+    color: color ? `rgb(${color})` : "var(--ink-3)",
+    border: `1px solid ${color ? `rgb(${color} / 0.28)` : "var(--line)"}`,
+    ...overrides,
   };
-  const [v, label] = map[source] || ["muted", source];
-  return <Badge variant={v} style={style}>{label}</Badge>;
-}
-
-function StatusBadge({ enabled, readOnly, style }) {
-  if (readOnly) return <Badge variant="muted" style={style}>Static MCP</Badge>;
-  return <Badge variant={enabled ? "green" : "muted"} style={style}>{enabled ? "Enabled" : "Disabled"}</Badge>;
-}
-
-// Action button with consistent variants
-const BTN_VARIANTS = {
-  primary: { background: "var(--blue)",             color: "#fff",           border: "1px solid var(--blue)"              },
-  success: { background: "var(--green)",            color: "#fff",           border: "1px solid var(--green)"             },
-  danger:  { background: "rgba(255,95,99,0.1)",     color: "var(--red)",     border: "1px solid rgba(255,95,99,0.3)"     },
-  enable:  { background: "var(--blue-soft)",        color: "var(--blue)",    border: "1px solid rgba(76,141,255,0.4)"    },
-  disable: { background: "var(--panel-2)",          color: "var(--ink-2)",   border: "1px solid var(--line)"             },
-  cancel:  { background: "var(--panel-2)",          color: "var(--ink-2)",   border: "1px solid var(--line)"             },
-  ghost:   { background: "transparent",             color: "var(--ink-2)",   border: "1px solid var(--line)"             },
-};
-const BTN_SIZES = {
-  xs: { padding: "3px 8px",  fontSize: 11 },
-  sm: { padding: "5px 12px", fontSize: 12 },
-  md: { padding: "7px 16px", fontSize: 13 },
-};
-
-function Btn({ variant = "ghost", size = "sm", onClick, disabled, children, style, ...rest }) {
-  return (
-    <button onClick={onClick} disabled={disabled} style={{
-      display: "inline-flex", alignItems: "center", gap: 5,
-      borderRadius: 6, fontFamily: "inherit", fontWeight: 600,
-      cursor: disabled ? "wait" : "pointer",
-      opacity: disabled ? 0.45 : 1,
-      transition: "opacity 0.12s",
-      ...BTN_SIZES[size], ...BTN_VARIANTS[variant], ...style,
-    }} {...rest}>
-      {children}
-    </button>
-  );
-}
-
-// Toggle enable/disable button — picks variant based on current state
-function ToggleBtn({ enabled, busy, onClick, style }) {
-  return (
-    <Btn variant={enabled ? "disable" : "enable"} disabled={busy} onClick={onClick} style={style}>
-      {busy ? "Working…" : enabled ? "Disable" : "Enable"}
-    </Btn>
-  );
 }
 
 // Colored tag chip based on TAG_COLORS
 function TagChip({ tag }) {
-  const color = TAG_COLORS[tag];
   return (
-    <span style={{
-      fontSize: 11, padding: "2px 6px", borderRadius: 4,
-      background: color ? color + "33" : "var(--panel-2)",
-      color: color || "var(--ink-3)",
-      border: `1px solid ${color ? color + "44" : "var(--line)"}`,
-    }}>
+    <span style={tagChipSx(tag)}>
       {tag}
     </span>
   );
 }
-
-// Modal overlay + panel
-function ModalOverlay({ onClose, children, maxWidth = 750, maxHeight = "85vh" }) {
-  return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      zIndex: 9999, backdropFilter: "blur(3px)",
-    }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{
-        width: "90%", maxWidth, maxHeight,
-        background: "var(--panel)", border: "1px solid var(--line)",
-        borderRadius: 10, display: "flex", flexDirection: "column",
-        overflow: "hidden", boxShadow: "var(--shadow-pop)",
-      }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function ModalHeader({ title, subtitle, onClose, children }) {
-  return (
-    <div style={{
-      padding: "14px 20px", borderBottom: "1px solid var(--line)",
-      display: "flex", alignItems: "center", gap: 10,
-      background: "var(--panel-3)", flexShrink: 0,
-    }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {title && <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>}
-        {subtitle && <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 3 }}>{subtitle}</div>}
-      </div>
-      {children}
-      {onClose && (
-        <button onClick={onClose} style={{
-          width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
-          borderRadius: 6, border: "none", background: "transparent",
-          color: "var(--ink-3)", cursor: "pointer", flexShrink: 0,
-        }}
-          onMouseEnter={e => e.currentTarget.style.background = "var(--bg-hover)"}
-          onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-        >
-          {ICONS.close(14)}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function ModalFooter({ children }) {
-  return (
-    <div style={{
-      padding: "12px 20px", borderTop: "1px solid var(--line)",
-      display: "flex", gap: 8, justifyContent: "flex-end",
-      background: "var(--panel-3)", flexShrink: 0,
-    }}>
-      {children}
-    </div>
-  );
-}
-
-// Page-level header bar (Gallery, Skills, Tools, Leaderboard)
-function PageHeader({ icon, title, subtitle, action }) {
-  return (
-    <div style={{
-      padding: "14px 24px", borderBottom: "1px solid var(--line)",
-      display: "flex", alignItems: "center", gap: 12, flexShrink: 0,
-      background: "var(--panel)",
-    }}>
-      {icon && (
-        <span style={{ display: "inline-flex", alignItems: "center", color: "var(--ink-2)", flexShrink: 0 }}>
-          {icon}
-        </span>
-      )}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)" }}>{title}</div>
-        {subtitle && <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 2 }}>{subtitle}</div>}
-      </div>
-      {action}
-    </div>
-  );
-}
-
-// Section eyebrow heading
-function Eyebrow({ children, style }) {
-  return (
-    <div style={{
-      fontSize: 11, fontWeight: 700, letterSpacing: "0.07em",
-      textTransform: "uppercase", color: "var(--ink-2)", ...style,
-    }}>
-      {children}
-    </div>
-  );
-}
-
-// Themed form input/textarea wrapper
-function Field({ label, children }) {
-  return (
-    <div>
-      {label && <label style={{ fontSize: 12, color: "var(--ink-3)", display: "block", marginBottom: 4 }}>{label}</label>}
-      {children}
-    </div>
-  );
-}
-const inputSx = {
-  width: "100%", padding: "7px 12px", fontSize: 13, fontFamily: "inherit",
-  background: "var(--bg-tertiary)", border: "1px solid var(--line)",
-  borderRadius: 6, color: "var(--ink)", outline: "none",
-  cursor: "text", boxSizing: "border-box",
-};
 
 // ─── Pipeline + Artifact UI ──────────────────────────────────────────────────
 
@@ -679,220 +326,6 @@ function TaskGenPanel({ sessionId }) {
           {generating ? "Building navmesh & sampling…" : `${ICONS.target(13)} Generate Tasks`}
         </button>
       </div>
-    </div>
-  );
-}
-
-// Top-down canvas mini-map of a task set: every episode's gt-path drawn faintly, the
-// selected episode highlighted with start (green) / goal (red) markers + waypoint dots.
-// World (X,Y) is fit to the canvas preserving aspect ratio; +Y points up.
-function TaskMiniMap({ episodes, selIdx }) {
-  const wrapRef   = React.useRef(null);
-  const canvasRef = React.useRef(null);
-
-  React.useEffect(() => {
-    const wrap = wrapRef.current, cv = canvasRef.current;
-    if (!wrap || !cv) return;
-    const draw = () => {
-      const dpr  = window.devicePixelRatio || 1;
-      const cssW = Math.max(160, wrap.clientWidth || 280);
-      const cssH = 210;
-      cv.width  = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr);
-      cv.style.width = cssW + "px"; cv.style.height = cssH + "px";
-      const ctx = cv.getContext("2d");
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const W = cssW, H = cssH;
-      const rootStyle = getComputedStyle(document.documentElement);
-      const cssVar = (name, fallback) => rootStyle.getPropertyValue(name).trim() || fallback;
-      const viewportColor = cssVar("--viewport", "#0b1220");
-      const mutedColor = cssVar("--ink-3", "gray");
-      const easyColor = cssVar("--green", "green");
-      const mediumColor = cssVar("--orange", "orange");
-      const hardColor = cssVar("--red", "red");
-      const pathDefaultColor = cssVar("--blue-2", "skyblue");
-      ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = viewportColor; ctx.fillRect(0, 0, W, H);
-      ctx.strokeStyle = "rgba(148,163,184,0.15)"; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
-
-      const all = episodes || [];
-      const pts = [];
-      all.forEach(e => {
-        (e.gt_path || []).forEach(p => pts.push(p));
-        if (e.start_position) pts.push(e.start_position);
-        if (e.goal_position)  pts.push(e.goal_position);
-      });
-      if (!pts.length) {
-        ctx.fillStyle = mutedColor; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
-        ctx.fillText("No episodes", W / 2, H / 2); return;
-      }
-      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-      const pad = 16, spanX = (maxX - minX) || 1, spanY = (maxY - minY) || 1;
-      const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
-      const offX = (W - spanX * scale) / 2, offY = (H - spanY * scale) / 2;
-      const tx = x => offX + (x - minX) * scale;
-      const ty = y => H - (offY + (y - minY) * scale);   // flip Y so +Y is up
-
-      // faint context: all non-selected paths + endpoints
-      all.forEach((e, i) => {
-        if (i === selIdx) return;
-        const p = e.gt_path || [];
-        if (p.length >= 2) {
-          ctx.beginPath(); ctx.moveTo(tx(p[0][0]), ty(p[0][1]));
-          for (let k = 1; k < p.length; k++) ctx.lineTo(tx(p[k][0]), ty(p[k][1]));
-          ctx.strokeStyle = "rgba(148,163,184,0.16)"; ctx.lineWidth = 1; ctx.stroke();
-        }
-        if (e.start_position) { ctx.fillStyle = "rgba(34,197,94,0.30)"; ctx.beginPath(); ctx.arc(tx(e.start_position[0]), ty(e.start_position[1]), 2, 0, 7); ctx.fill(); }
-        if (e.goal_position)  { ctx.fillStyle = "rgba(239,68,68,0.30)"; ctx.beginPath(); ctx.arc(tx(e.goal_position[0]),  ty(e.goal_position[1]),  2, 0, 7); ctx.fill(); }
-      });
-
-      // highlighted: selected episode
-      const sel = all[selIdx];
-      if (sel) {
-        const DIFFC = { easy: easyColor, medium: mediumColor, hard: hardColor };
-        const pathColor = DIFFC[sel.difficulty] || pathDefaultColor;
-        const p = sel.gt_path || [];
-        if (p.length >= 2) {
-          ctx.beginPath(); ctx.moveTo(tx(p[0][0]), ty(p[0][1]));
-          for (let k = 1; k < p.length; k++) ctx.lineTo(tx(p[k][0]), ty(p[k][1]));
-          ctx.strokeStyle = pathColor; ctx.lineWidth = 2.5; ctx.lineJoin = "round"; ctx.stroke();
-          ctx.fillStyle = pathDefaultColor;
-          for (let k = 1; k < p.length - 1; k++) { ctx.beginPath(); ctx.arc(tx(p[k][0]), ty(p[k][1]), 2.5, 0, 7); ctx.fill(); }
-        }
-        const s = sel.start_position, g = sel.goal_position;
-        if (s) { ctx.fillStyle = easyColor; ctx.beginPath(); ctx.arc(tx(s[0]), ty(s[1]), 5, 0, 7); ctx.fill(); ctx.strokeStyle = viewportColor; ctx.lineWidth = 1.5; ctx.stroke(); }
-        if (g) { ctx.fillStyle = hardColor; ctx.beginPath(); ctx.arc(tx(g[0]), ty(g[1]), 5, 0, 7); ctx.fill(); ctx.strokeStyle = viewportColor; ctx.lineWidth = 1.5; ctx.stroke(); }
-      }
-    };
-    draw();
-    const ro = new ResizeObserver(draw); ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [episodes, selIdx]);
-
-  return (
-    <div ref={wrapRef} style={{ width: "100%" }}>
-      <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8 }} />
-    </div>
-  );
-}
-
-function TaskInspectorPanel() {
-  const [sets, setSets]           = React.useState([]);
-  const [selId, setSelId]         = React.useState(null);
-  const [detail, setDetail]       = React.useState(null);   // full taskset w/ episodes
-  const [epIdx, setEpIdx]         = React.useState(0);
-  const [loading, setLoading]     = React.useState(false);
-
-  const loadList = React.useCallback(async (preferId) => {
-    try {
-      const r = await fetch(`${API_BASE}/tasksets`);
-      const d = await r.json();
-      const list = d.taskSets || [];
-      setSets(list);
-      setSelId(prev => preferId || prev || (list[0] && list[0].id) || null);
-    } catch (_e) {}
-  }, []);
-
-  React.useEffect(() => { loadList(); }, [loadList]);
-
-  // TaskGenPanel fires this after a successful generation
-  React.useEffect(() => {
-    const h = (e) => loadList(e.detail && e.detail.id);
-    window.addEventListener("sw-taskset-changed", h);
-    return () => window.removeEventListener("sw-taskset-changed", h);
-  }, [loadList]);
-
-  // Load full detail (episodes) when the selected set changes
-  React.useEffect(() => {
-    if (!selId) { setDetail(null); return; }
-    let alive = true;
-    setLoading(true); setEpIdx(0);
-    fetch(`${API_BASE}/tasksets/${selId}`).then(r=>r.json()).then(d => {
-      if (alive) { setDetail(d && d.id ? d : null); setLoading(false); }
-    }).catch(()=>{ if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [selId]);
-
-  async function del() {
-    if (!selId) return;
-    await fetch(`${API_BASE}/tasksets/${selId}`, { method:"DELETE" });
-    setSelId(null); loadList();
-  }
-  const fmtM = (cm) => (cm/100).toFixed(1) + " m";
-  const eps = (detail && detail.episodes) || [];
-  const ep  = eps[epIdx] || null;
-  const DIFF_COLOR = { easy: "var(--green)", medium: "var(--orange)", hard: "var(--red)" };
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"auto" }}>
-      <div className="config-section">
-        <div className="config-section-title">Task Set</div>
-        {sets.length === 0
-          ? <div style={{ fontSize:12, color:"var(--ink-3)", padding:"4px 2px" }}>No task sets yet — generate one on the left.</div>
-          : <select className="config-select" style={{ width:"100%" }} value={selId||""} onChange={e=>setSelId(e.target.value)}>
-              {sets.map(s => <option key={s.id} value={s.id}>{s.name} · {s.summary?.episodeCount||0} eps</option>)}
-            </select>}
-      </div>
-
-      {loading && <div style={{ fontSize:12, color:"var(--ink-3)", padding:"8px 14px" }}>Loading…</div>}
-
-      {detail && (
-        <>
-          {/* Top-down mini-map */}
-          <div className="config-section" style={{ paddingTop:4 }}>
-            <TaskMiniMap episodes={eps} selIdx={epIdx} />
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, marginTop:6, fontSize:11, color:"var(--ink-3)" }}>
-              <span style={{ flexShrink:0 }}><span style={{ color:"var(--green)" }}>●</span> start&nbsp;&nbsp;<span style={{ color:"var(--red)" }}>●</span> goal&nbsp;&nbsp;<span style={{ color:"var(--blue-2)" }}>—</span> path</span>
-              <span style={{ minWidth:0, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }} title={detail.mapName||""}>{detail.taskType} · {detail.mapName||"—"}</span>
-            </div>
-            <div style={{ marginTop:4, fontSize:11, color:"var(--ink-3)" }}>
-              {eps.length} eps · {fmtM(detail.summary?.minDistanceCm||0)}–{fmtM(detail.summary?.maxDistanceCm||0)} (avg {fmtM(detail.summary?.avgDistanceCm||0)})
-            </div>
-            {detail.summary?.difficulty && (
-              <div style={{ marginTop:4, fontSize:11, display:"flex", gap:10 }}>
-                <span style={{ color:DIFF_COLOR.easy }}>● easy {detail.summary.difficulty.easy}</span>
-                <span style={{ color:DIFF_COLOR.medium }}>● medium {detail.summary.difficulty.medium}</span>
-                <span style={{ color:DIFF_COLOR.hard }}>● hard {detail.summary.difficulty.hard}</span>
-              </div>
-            )}
-            {ep && (
-              <div style={{ marginTop:6, fontSize:12, color:"var(--ink-2)", lineHeight:1.5 }}>
-                <b style={{ color:"var(--ink)" }}>{ep.episode_id}</b>
-                {ep.difficulty && <> · <span style={{ color:DIFF_COLOR[ep.difficulty], fontWeight:600 }}>{ep.difficulty}</span></>}
-                {" "}· {fmtM(ep.geodesic_distance_cm)} geodesic · {(ep.gt_path||[]).length} waypoints · tort {ep.tortuosity ?? "—"}
-                {ep.object_category && <> · target {ep.object_category}</>}
-              </div>
-            )}
-          </div>
-
-          {/* Compact episode list */}
-          <div className="config-section" style={{ minHeight:0 }}>
-            <div className="config-section-title">Episodes ({eps.length})</div>
-            <div style={{ maxHeight:150, overflow:"auto", border:"1px solid var(--line)", borderRadius:6 }}>
-              {eps.map((e,i)=>(
-                <div key={e.episode_id} onClick={()=>setEpIdx(i)}
-                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 8px", cursor:"pointer", fontSize:11,
-                    fontFamily:"monospace", color: i===epIdx?"var(--ink)":"var(--ink-2)",
-                    background: i===epIdx?"var(--bg-tertiary)":"transparent",
-                    borderLeft:`3px solid ${DIFF_COLOR[e.difficulty]||"transparent"}`,
-                    borderBottom:"1px solid var(--line)" }}>
-                  <span>{e.episode_id}</span><span>{fmtM(e.geodesic_distance_cm)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="config-section">
-            <div style={{ display:"flex", gap:6 }}>
-              <Btn variant="success" size="sm" style={{ flex:1, justifyContent:"center" }}
-                title="Training-ready JSON (loads via gym_env.batch_runner --episodes-file)"
-                onClick={()=>window.open(`${API_BASE}/tasksets/${detail.id}/download`,"_blank")}>Export (train)</Btn>
-              <Btn variant="ghost" size="sm" style={{ flex:1, justifyContent:"center" }} onClick={del}>Delete</Btn>
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -1286,64 +719,6 @@ function ResultsPage({ onOpenScene }) {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const API_BASE = "/api";
-
-// Display labels for coding-agent CLI choices. Keys match /api/chat's `agent` body field.
-const AGENT_LABELS = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", gemini: "Gemini CLI", cursor: "Cursor" };
-const agentLabel = (a) => AGENT_LABELS[a] || a || "Code Agent";
-
-// Fallback backend+model registry used until GET /api/coding-agents resolves (or if it
-// fails). The server's coding-agents.json is the source of truth; keep this roughly in
-// sync as a graceful default. `defaultModel: ""` means "let the CLI/env decide".
-const DEFAULT_CODING_AGENTS = {
-  claude:   { label: "Claude Code", defaultModel: "", models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
-  codex:    { label: "Codex",       defaultModel: "", models: ["gpt-5-codex", "gpt-5", "o3"] },
-  opencode: { label: "OpenCode",    defaultModel: "", models: ["anthropic/claude-opus-4-8", "openai/gpt-5", "openai/gpt-4o", "google/gemini-2.5-pro"] },
-  gemini:   { label: "Gemini CLI",  defaultModel: "", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
-  cursor:   { label: "Cursor",      defaultModel: "composer-2.5", models: ["composer-2.5", "composer-2.5-fast", "claude-opus-4-8-thinking-high", "gpt-5.5-high"] },
-};
-
-// Prominent top-left Agent + Model picker shown in the top nav bar. The Model dropdown
-// repopulates per agent and offers a "Custom…" free-text entry for unlisted models.
-function CodingAgentSelector({ agents, agent, setAgent, model, setModel }) {
-  const cfg    = agents[agent] || {};
-  const models = cfg.models || [];
-  const derivedCustom = !!model && !models.includes(model);
-  const [forceCustom, setForceCustom] = useState(false);
-  // Drop custom mode when switching to an agent whose saved model is a listed one.
-  useEffect(() => { if (!derivedCustom) setForceCustom(false); }, [agent]); // eslint-disable-line react-hooks/exhaustive-deps
-  const showCustom = forceCustom || derivedCustom;
-
-  const selStyle = {
-    fontSize: 12, fontWeight: 600, height: 28, padding: "0 6px",
-    background: "var(--bg-2)", color: "var(--ink-1)",
-    border: "1px solid var(--line)", borderRadius: 6, cursor: "pointer",
-  };
-  const onModelChange = (v) => {
-    if (v === "__custom__") setForceCustom(true);
-    else { setForceCustom(false); setModel(v); }
-  };
-
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}
-         title="Coding agent backend and model used for scene generation">
-      {ICONS.bot ? <span style={{ display: "inline-flex", color: "var(--ink-3)" }}>{ICONS.bot(14)}</span> : null}
-      <select value={agent} onChange={(e) => setAgent(e.target.value)} style={selStyle} aria-label="Coding agent">
-        {Object.entries(agents).map(([id, a]) => <option key={id} value={id}>{a.label || id}</option>)}
-      </select>
-      <select value={showCustom ? "__custom__" : model} onChange={(e) => onModelChange(e.target.value)}
-              style={{ ...selStyle, maxWidth: 170 }} aria-label="Model">
-        <option value="">Default</option>
-        {models.map((m) => <option key={m} value={m}>{m}</option>)}
-        <option value="__custom__">Custom…</option>
-      </select>
-      {showCustom && (
-        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model id"
-               style={{ ...selStyle, width: 130, fontWeight: 400, cursor: "text" }} aria-label="Custom model id" />
-      )}
-    </div>
-  );
-}
 const EVOLUTION_ARTIFACT_POLL_MS = 5000;
 const EVOLUTION_TOAST_MAX = 2;
 const EVOLUTION_TOAST_TTL_MS = 5200;
@@ -1368,27 +743,27 @@ const TOOL_ICONS = {
 };
 
 const TAG_COLORS = {
-  city: "#3b82f6",
-  buildings: "#b91c1c",
-  props: "#64748b",
-  weather: "#ea580c",
-  camera: "#7c3aed",
-  layout: "#16a34a",
-  planning: "#3b82f6",
-  spacing: "#f59e0b",
-  trees: "#16a34a",
-  vehicles: "#ea580c",
-  lighting: "#f59e0b",
-  atmosphere: "#7c3aed",
-  screenshot: "#7c3aed",
-  decoration: "#64748b",
-  furniture: "#64748b",
-  architecture: "#b91c1c",
-  environment: "#16a34a",
-  viewpoint: "#7c3aed",
-  placement: "#f59e0b",
-  roads: "#64748b",
-  capture: "#7c3aed",
+  city: "59 130 246",
+  buildings: "185 28 28",
+  props: "100 116 139",
+  weather: "234 88 12",
+  camera: "124 58 237",
+  layout: "22 163 74",
+  planning: "59 130 246",
+  spacing: "245 158 11",
+  trees: "22 163 74",
+  vehicles: "234 88 12",
+  lighting: "245 158 11",
+  atmosphere: "124 58 237",
+  screenshot: "124 58 237",
+  decoration: "100 116 139",
+  furniture: "100 116 139",
+  architecture: "185 28 28",
+  environment: "22 163 74",
+  viewpoint: "124 58 237",
+  placement: "245 158 11",
+  roads: "100 116 139",
+  capture: "124 58 237",
 };
 
 const CATEGORY_ICONS = {
@@ -1401,12 +776,12 @@ const CATEGORY_ICONS = {
 };
 
 const CATEGORY_COLORS = {
-  buildings: "#3b82f6",
-  trees: "#16a34a",
-  vehicles: "#ea580c",
-  street_furniture: "#64748b",
-  roads: "#64748b",
-  static_meshes: "#94a3b8",
+  buildings: "59 130 246",
+  trees: "22 163 74",
+  vehicles: "234 88 12",
+  street_furniture: "100 116 139",
+  roads: "100 116 139",
+  static_meshes: "148 163 184",
 };
 
 const CAMERA_PRESETS = [
@@ -1504,10 +879,6 @@ Try:
 }
 
 // ─── API Functions ───────────────────────────────────────────────────────────
-
-async function fetchHealth() {
-  return (await fetch(`${API_BASE}/health`)).json();
-}
 
 async function fetchSkills() {
   return (await fetch(`${API_BASE}/skills`)).json();
@@ -1844,24 +1215,6 @@ function isLearnedSkillMeta(skill) {
   return source === "custom" && tags.includes("learned");
 }
 
-function headerButtonStyle(color) {
-  return {
-    padding: "3px 11px",
-    fontSize: 12,
-    lineHeight: 1.2,
-    background: "var(--panel)",
-    border: `1px solid ${color}55`,
-    borderRadius: 8,
-    color,
-    cursor: "pointer",
-    fontWeight: 600,
-    fontFamily: "inherit",
-    boxShadow: "0 1px 2px rgba(15,23,42,.04)",
-    whiteSpace: "nowrap",
-    minWidth: 0,
-  };
-}
-
 // ─── ToolCallBlock ───────────────────────────────────────────────────────────
 
 const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
@@ -2142,14 +1495,7 @@ function SkillItem({ skill, active, onToggle, onPreview, disabled }) {
           {skill.tags.map((tag) => (
             <span
               key={tag}
-              style={{
-                fontSize: 12,
-                padding: "1px 5px",
-                borderRadius: 4,
-                background: (TAG_COLORS[tag] || "var(--line)") + "33",
-                color: TAG_COLORS[tag] || "#64748b",
-                border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
-              }}
+              style={tagChipSx(tag, { fontSize: 12, padding: "1px 5px" })}
             >
               {tag}
             </span>
@@ -2281,14 +1627,7 @@ function SkillPreviewModal({ skill, onClose, onDelete }) {
               {skill.tags.map((tag) => (
                 <span
                   key={tag}
-                  style={{
-                    fontSize: 12,
-                    padding: "2px 7px",
-                    borderRadius: 4,
-                    background: (TAG_COLORS[tag] || "var(--line)") + "33",
-                    color: TAG_COLORS[tag] || "#64748b",
-                    border: `1px solid ${TAG_COLORS[tag] || "var(--line)"}44`,
-                  }}
+                  style={tagChipSx(tag, { fontSize: 12, padding: "2px 7px" })}
                 >
                   {tag}
                 </span>
@@ -3221,166 +2560,6 @@ function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRes
   );
 }
 
-function SceneAgentHeader({
-  codingAgent,
-  mcpStatus,
-  selfEvolutionReady,
-  selfEvolutionOn,
-  sessionId,
-  turnCount,
-  latestScreenshot,
-  loading,
-  onToggleSelfEvolution,
-  onAnnotate,
-  onSave,
-  onShare,
-  onStop,
-  onReset,
-}) {
-  return (
-    <div
-      style={{
-        padding: "10px 14px",
-        borderBottom: "1px solid var(--line)",
-        background: "var(--panel)",
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 10,
-        flexWrap: "wrap",
-        flexShrink: 0,
-        boxShadow: "0 1px 2px rgba(15,23,42,.04)",
-      }}
-    >
-      <div style={{ flex: "1 1 180px", minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>Scene Agent</div>
-        <div
-          style={{
-            fontSize: 12,
-            color: "var(--ink-3)",
-            display: "flex",
-            gap: "4px 8px",
-            alignItems: "center",
-            flexWrap: "wrap",
-            minWidth: 0,
-            lineHeight: 1.35,
-          }}
-        >
-          <span style={{ whiteSpace: "nowrap" }}>{agentLabel(codingAgent)}</span>
-          <span>·</span>
-          <span style={{ color: mcpStatus.startsWith("✓") ? "#16a34a" : "#dc2626", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
-            MCP: {mcpStatus}
-          </span>
-          <span>·</span>
-          <span style={{ color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)", whiteSpace: "nowrap" }}>
-            Self-evolution: {selfEvolutionReady ? (selfEvolutionOn ? "on" : "off") : "syncing"}
-          </span>
-          {sessionId && (
-            <>
-              <span>·</span>
-              <span style={{ color: "var(--ink-3)", whiteSpace: "nowrap" }}>session: {sessionId.slice(0, 8)}</span>
-              <span>·</span>
-              <span style={{ color: "var(--ink-2)", whiteSpace: "nowrap" }}>turn {turnCount}</span>
-            </>
-          )}
-        </div>
-      </div>
-      <div style={{ display: "flex", gap: 4, flex: "0 1 auto", minWidth: 0, maxWidth: "100%", flexWrap: "wrap", justifyContent: "flex-end" }}>
-        <button
-          onClick={onToggleSelfEvolution}
-          title="Enable or disable self-evolution ingestion"
-          style={{
-            height: 24,
-            padding: "0 10px",
-            borderRadius: 7,
-            border: selfEvolutionOn ? "1px solid rgba(255,157,66,0.4)" : "1px solid var(--line)",
-            background: selfEvolutionOn ? "#fff7ed" : "#f8fafc",
-            color: selfEvolutionOn ? "var(--orange)" : "var(--ink-3)",
-            cursor: selfEvolutionReady ? "pointer" : "not-allowed",
-            display: "flex",
-            alignItems: "center",
-            gap: 7,
-            fontSize: 12,
-            fontWeight: selfEvolutionOn ? 600 : 500,
-            opacity: selfEvolutionReady ? 1 : 0.7,
-            boxShadow: selfEvolutionOn ? "0 0 12px rgba(240,136,62,0.35)" : "none",
-            transition: "all 0.18s ease",
-            minWidth: 0,
-            maxWidth: "100%",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-          }}
-        >
-          <span
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: selfEvolutionOn ? "var(--orange)" : "var(--line)",
-              boxShadow: selfEvolutionOn ? "0 0 8px rgba(255,157,66,0.4)" : "none",
-              animation: selfEvolutionOn ? "selfEvoPulse 1.3s ease-in-out infinite" : "none",
-              flexShrink: 0,
-            }}
-          />
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>Self-Evolution</span>
-          <span
-            style={{
-              color: selfEvolutionOn ? "#ea580c" : "#94a3b8",
-              flexShrink: 0,
-              letterSpacing: 0.2,
-            }}
-          >
-            {selfEvolutionReady ? (selfEvolutionOn ? "ON" : "OFF") : "..."}
-          </span>
-        </button>
-        <style>
-          {"@keyframes selfEvoPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }"}
-        </style>
-        {latestScreenshot && !loading && (
-          <button
-            onClick={onAnnotate}
-            style={headerButtonStyle("#ea580c")}
-            title="Annotate screenshot to give feedback"
-          >
-            Annotate
-          </button>
-        )}
-        {!loading && sessionId && (
-          <button
-            onClick={onSave}
-            style={headerButtonStyle("#16a34a")}
-            title="Save current scene"
-          >
-            Save
-          </button>
-        )}
-        {!loading && sessionId && latestScreenshot && (
-          <button
-            onClick={onShare}
-            style={headerButtonStyle("#3b82f6")}
-            title="Share to community gallery"
-          >
-            Share
-          </button>
-        )}
-        {loading && (
-          <button onClick={onStop} style={headerButtonStyle("#dc2626")}>
-            Stop
-          </button>
-        )}
-        {!loading && sessionId && (
-          <button
-            onClick={onReset}
-            title="Reset conversation"
-            style={headerButtonStyle("#64748b")}
-          >
-            Reset
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, codingAgent, setCodingAgent, codingModel }) {
   const [messages, setMessages] = useState(() => [buildWelcomeMessage()]);
   const [checkpoints, setCheckpoints] = useState([]);
@@ -3652,7 +2831,6 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
                     .filter((s) => s.status === "connected")
                     .map((s) => s.name);
                   setMcpStatus(connected.length ? `✓ ${connected.join(", ")}` : "✗ none");
-                  console.log("[CTX-DEBUG] system event, sessionId:", event.data.sessionId);
                   if (event.data.sessionId) {
                     setSessionId(event.data.sessionId);
                     onSessionChange?.(event.data.sessionId);
@@ -3935,7 +3113,7 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
       )}
 
       <SceneAgentHeader
-        codingAgent={codingAgent}
+        agentLabelText={agentLabel(codingAgent)}
         mcpStatus={mcpStatus}
         selfEvolutionReady={selfEvolutionReady}
         selfEvolutionOn={selfEvolutionOn}
@@ -4545,14 +3723,12 @@ function ContextPanel({ sessionId, refreshKey }) {
 const AGENT_COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#f778ba", "#bc8cff", "#ea580c", "#2563eb", "#56d364"];
 
 async function sendAgentChat(agentName, message, sessionId, onEvent, signal) {
-  console.log("[sendAgentChat] START", { agentName, message, sessionId });
   const response = await fetch(`${API_BASE}/agent-chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agentName, message, sessionId }),
     signal,
   });
-  console.log("[sendAgentChat] fetch response", { status: response.status, ok: response.ok, hasBody: !!response.body });
   if (!response.ok || !response.body) {
     const err = await response.json().catch(() => ({ error: response.statusText }));
     console.error("[sendAgentChat] ERROR response", err);
@@ -6284,7 +5460,8 @@ function ViewportPanel({ latestScreenshot }) {
 // ─── AssetPlaceholder ────────────────────────────────────────────────────────
 
 function AssetPlaceholder({ id, category }) {
-  const color = CATEGORY_COLORS[category] || "var(--line)";
+  const color = CATEGORY_COLORS[category];
+  const colorValue = color ? `rgb(${color})` : "var(--line)";
   const numMatch = id.match(/(\d+)/);
   if (numMatch) parseInt(numMatch[1]);
 
@@ -6297,7 +5474,9 @@ function AssetPlaceholder({ id, category }) {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        background: `linear-gradient(135deg, ${color}22 0%, ${color}11 100%)`,
+        background: color
+          ? `linear-gradient(135deg, rgb(${color} / 0.13) 0%, rgb(${color} / 0.07) 100%)`
+          : "var(--panel-2)",
         gap: 4,
       }}
     >
@@ -6305,7 +5484,7 @@ function AssetPlaceholder({ id, category }) {
       <span
         style={{
           fontSize: 12,
-          color,
+          color: colorValue,
           opacity: 0.8,
           fontWeight: 600,
           maxWidth: "90%",
@@ -8144,6 +7323,7 @@ function SkillPageDetailModal({ skill, onClose, onDelete }) {
         title={skill.name}
         subtitle={<>v{skill.version} by {skill.author} <SourceBadge source={skill.source} style={{ marginLeft: 6 }} /></>}
         onClose={onClose}
+        closeIcon={ICONS.close(14)}
       >
         {onDelete && <Btn variant="danger" onClick={onDelete}>Delete</Btn>}
       </ModalHeader>
@@ -8206,7 +7386,7 @@ function SkillPageCreateModal({ onClose, onCreated }) {
 
   return (
     <ModalOverlay onClose={onClose} maxWidth={650}>
-      <ModalHeader title="Create Custom Skill" onClose={onClose} />
+      <ModalHeader title="Create Custom Skill" onClose={onClose} closeIcon={ICONS.close(14)} />
 
       <div style={{ flex: 1, overflow: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
         <Field label="Skill ID (lowercase, no spaces)">
@@ -9549,62 +8729,39 @@ function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClo
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
-  // NOTE: App renders <PollProvider> in its own return, so it sits OUTSIDE that provider
-  // and cannot read its context (useStatus() here returns the default value, health=null →
-  // the topbar would be stuck on "Connecting…" forever). So poll /api/health directly for
-  // the topbar's UE/MCP status instead of relying on the context.
-  const [health, setHealth] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    const tick = () => fetch(`${API_BASE}/health`)
-      .then(r => r.json())
-      .then(h => { if (alive && h) setHealth({ ueConnected: !!h.ueConnected, mcpConnected: !!h.mcpConnected }); })
-      .catch(() => {});
-    tick();
-    const id = setInterval(tick, 5000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
+  const uiTheme = useStudioStore((state) => state.uiTheme);
+  const setUiTheme = useStudioStore((state) => state.setUiTheme);
+  const studioMode = useStudioStore((state) => state.studioMode);
+  const setStudioMode = useStudioStore((state) => state.setStudioMode);
+  const topSection = useStudioStore((state) => state.topSection);
+  const setTopSection = useStudioStore((state) => state.setTopSection);
+  const showSettings = useStudioStore((state) => state.showSettings);
+  const setShowSettings = useStudioStore((state) => state.setShowSettings);
+  const codingAgent = useStudioStore((state) => state.codingAgent);
+  const setCodingAgent = useStudioStore((state) => state.setCodingAgent);
+  const codingModel = useStudioStore((state) => state.codingModel);
+  const setCodingModel = useStudioStore((state) => state.setCodingModel);
 
-  // ── Theme + Studio Mode ───────────────────────────────────────────────────
-  const [uiTheme,    setUiTheme]    = useState(() => localStorage.getItem("sw_ui_theme")    || "dark");
-  const [studioMode, setStudioMode] = useState(() => localStorage.getItem("sw_studio_mode") || "scene");
-  // Coding agent + model selection. Lives at the root so the topbar selector, the status
-  // badge, and the chat panel all reflect the choice without duplicate state. The backend
-  // list comes from GET /api/coding-agents (falls back to DEFAULT_CODING_AGENTS). The model
-  // is persisted per-agent under simworld.codingModel.<agent>.
-  const [codingAgents, setCodingAgents] = useState(DEFAULT_CODING_AGENTS);
-  const [codingAgent, setCodingAgentState] = useState(() => {
-    try { return localStorage.getItem("simworld.codingAgent") || "claude"; } catch { return "claude"; }
+  const healthQuery = useQuery({
+    queryKey: studioQueryKeys.health,
+    queryFn: fetchHealth,
+    refetchInterval: 5000,
   });
-  const modelKeyFor = (a) => `simworld.codingModel.${a}`;
-  const [codingModel, setCodingModelState] = useState(() => {
-    try { return localStorage.getItem(modelKeyFor(localStorage.getItem("simworld.codingAgent") || "claude")) || ""; }
-    catch { return ""; }
+  const health = healthQuery.data || null;
+
+  const codingAgentsQuery = useQuery({
+    queryKey: studioQueryKeys.codingAgents,
+    queryFn: fetchCodingAgents,
+    staleTime: 60_000,
   });
-  const setCodingModel = (v) => {
-    setCodingModelState(v);
-    try { localStorage.setItem(modelKeyFor(codingAgent), v); } catch {}
-  };
-  const setCodingAgent = (v) => {
-    setCodingAgentState(v);
-    try { localStorage.setItem("simworld.codingAgent", v); } catch {}
-    // Load the model previously chosen for this agent, else its default ("" = CLI default).
-    let m = "";
-    try { m = localStorage.getItem(modelKeyFor(v)) || ""; } catch {}
-    if (!m) m = codingAgents[v]?.defaultModel || "";
-    setCodingModelState(m);
-  };
-  // Pull the backend/model registry from the server once on mount.
-  useEffect(() => {
-    let alive = true;
-    fetch(`${API_BASE}/coding-agents`)
-      .then((r) => r.json())
-      .then((d) => { if (alive && d && d.agents && Object.keys(d.agents).length) setCodingAgents(d.agents); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
-  const [topSection, setTopSection] = useState("studio"); // "studio" | "library" | "results"
-  const [showSettings, setShowSettings] = useState(false);
+  const codingAgents =
+    codingAgentsQuery.data?.agents && Object.keys(codingAgentsQuery.data.agents).length
+      ? codingAgentsQuery.data.agents
+      : DEFAULT_CODING_AGENTS;
+  const handleCodingAgentChange = useCallback(
+    (agentId) => setCodingAgent(agentId, codingAgents),
+    [codingAgents, setCodingAgent]
+  );
 
   // Artifact chain — tracks what's been produced
   const [artifacts, setArtifacts] = useState({
@@ -9614,12 +8771,7 @@ function App() {
   useEffect(() => {
     const themeMap = { dark: "", light: "light" };
     document.documentElement.setAttribute("data-theme", themeMap[uiTheme] ?? "");
-    localStorage.setItem("sw_ui_theme", uiTheme);
   }, [uiTheme]);
-
-  useEffect(() => {
-    localStorage.setItem("sw_studio_mode", studioMode);
-  }, [studioMode]);
 
   // Column visibility
   const showLeft  = topSection === "studio";
@@ -9691,13 +8843,15 @@ function App() {
   const artifactBootstrapRef = useRef(false);
   const artifactToastSeqRef = useRef(0);
   const artifactToastTimersRef = useRef(new Map());
+  const sessionQuery = useQuery({
+    queryKey: studioQueryKeys.session,
+    queryFn: fetchSession,
+    staleTime: 60_000,
+  });
 
-  // Fetch stable session ID on mount (health now comes from SSE)
   useEffect(() => {
-    fetch(`${API_BASE}/session`).then(r => r.json()).then(d => {
-      if (d.sessionId) setCurrentSessionId(d.sessionId);
-    }).catch(() => {});
-  }, []);
+    if (sessionQuery.data?.sessionId) setCurrentSessionId(sessionQuery.data.sessionId);
+  }, [sessionQuery.data?.sessionId]);
 
   const dismissArtifactToast = useCallback((id) => {
     if (!id) return;
@@ -10024,12 +9178,7 @@ function App() {
       )}
 
       {/* ══ TOP NAV BAR ══ */}
-      <header style={{
-        height: 56, background: "var(--topbar,var(--panel))",
-        borderRadius: "var(--radius,8px)", border: "1px solid var(--line)",
-        boxShadow: "var(--shadow-pop)", display: "flex", alignItems: "center",
-        padding: "0 12px", gap: 10, flexShrink: 0, userSelect: "none", zIndex: 20, marginBottom: 8,
-      }}>
+      <header className="sw-topbar">
         {/* Brand */}
         <div className="sw-brand" style={{ paddingRight:12 }}>
           <div style={{ width:34, height:34, borderRadius:"50%", overflow:"hidden", flexShrink:0, boxShadow:"0 0 0 1px #4b5563, 0 4px 12px rgba(0,0,0,0.3)" }}>
@@ -10042,11 +9191,12 @@ function App() {
         <CodingAgentSelector
           agents={codingAgents}
           agent={codingAgent}
-          setAgent={setCodingAgent}
+          setAgent={handleCodingAgentChange}
           model={codingModel}
           setModel={setCodingModel}
+          icon={ICONS.bot ? ICONS.bot(14) : null}
         />
-        <div style={{ width:1, height:28, background:"var(--line)", flexShrink:0 }} />
+        <div className="sw-topbar-divider" />
 
         {/* Pipeline stepper — primary nav */}
         {topSection === "studio"
@@ -10057,22 +9207,22 @@ function App() {
         }
 
         {/* Secondary nav */}
-        <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0 }}>
-          <button className={`sec-nav-btn${topSection==="studio"?"active":""}`}
+        <div className="sw-secondary-nav">
+          <button className={`sec-nav-btn${topSection==="studio"?" active":""}`}
             onClick={()=>setTopSection("studio")}>{ICONS.layout(13)} Studio</button>
-          <button className={`sec-nav-btn${topSection==="library"?"active":""}`}
+          <button className={`sec-nav-btn${topSection==="library"?" active":""}`}
             onClick={()=>setTopSection("library")}>
             {ICONS.book(13)} Library
             {(artifactUnread.skills || artifactUnread.tools) && <span className="sw-nav-dot" />}
           </button>
-          <button className={`sec-nav-btn${topSection==="results"?"active":""}`}
+          <button className={`sec-nav-btn${topSection==="results"?" active":""}`}
             onClick={()=>setTopSection("results")}>{ICONS.frame(13)} Results</button>
         </div>
 
-        <div style={{ width:1, height:28, background:"var(--line)", flexShrink:0 }} />
+        <div className="sw-topbar-divider" />
 
         {/* Right side */}
-        <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end", marginLeft:"auto" }}>
+        <div className="sw-topbar-right">
 
           {/* Sync error / stale agent warnings */}
           {!syncStatus.sseOk && (
@@ -10200,7 +9350,7 @@ function App() {
                   onSessionChange={setCurrentSessionId}
                   onChatDone={() => setContextRefreshKey(k => k + 1)}
                   codingAgent={codingAgent}
-                  setCodingAgent={setCodingAgent}
+                  setCodingAgent={handleCodingAgentChange}
                   codingModel={codingModel}
                 />
               )}

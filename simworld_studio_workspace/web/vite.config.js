@@ -5,6 +5,15 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "dist",
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          markdown: ["react-markdown", "remark-gfm"],
+          state: ["zustand", "@tanstack/react-query"],
+        },
+      },
+    },
   },
   server: {
     proxy: {

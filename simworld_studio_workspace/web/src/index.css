@@ -36,6 +36,8 @@
   --violet-soft:  rgba(165, 110, 255, 0.12);
   --red:          #ff5f63;
   --amber:        #ffd0a6;
+  --accent-ink:   #ffffff;
+  --modal-backdrop: rgba(0,0,0,0.72);
 
   /* ── Semantic ── */
   --accent:      #4c8dff;
@@ -112,6 +114,8 @@
   --violet-soft: #f3efff;
   --red:         #dc2626;
   --amber:       #f59e0b;
+  --accent-ink:  #ffffff;
+  --modal-backdrop: rgba(0,0,0,0.55);
 
   --accent:      #2563eb;
   --accent-dim:  #3b82f6;
@@ -380,6 +384,44 @@ input, textarea, select { cursor: text; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ── Studio top bar ── */
+.sw-topbar {
+  min-height: 56px;
+  background: var(--topbar, var(--panel));
+  border-radius: var(--radius, 8px);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 10px;
+  flex-shrink: 0;
+  user-select: none;
+  z-index: 20;
+  margin-bottom: 8px;
+  overflow: visible;
+}
+.sw-topbar-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+.sw-secondary-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sw-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: 0;
 }
 
 /* ── Mode Guide Strip ── */
@@ -1201,3 +1243,105 @@ input, textarea, select { cursor: text; }
 .primary-cta.green  { background: var(--green);  color: #fff; }
 .primary-cta.orange { background: var(--orange); color: #fff; }
 .primary-cta.violet { background: var(--violet); color: #fff; }
+
+@media (max-width: 1100px) {
+  .sw-topbar {
+    min-height: 56px;
+    height: auto;
+    flex-wrap: wrap;
+    align-items: center;
+    padding: 8px;
+    gap: 8px;
+  }
+  .sw-topbar .sw-brand {
+    flex: 1 1 170px;
+    height: 36px;
+    padding-right: 0 !important;
+    border-right: 0;
+  }
+  .coding-agent-selector {
+    flex: 1 1 260px !important;
+    min-width: 0;
+  }
+  .coding-agent-selector select,
+  .coding-agent-selector input {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none !important;
+  }
+  .sw-topbar-divider {
+    display: none !important;
+  }
+  .sw-topbar .pipeline-stepper {
+    order: 3;
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+  .sw-secondary-nav {
+    order: 4;
+    flex: 1 1 100%;
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .sw-secondary-nav::-webkit-scrollbar {
+    display: none;
+  }
+  .sw-topbar-right {
+    order: 5;
+    flex: 1 1 100%;
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 1px;
+  }
+  .sw-topbar-right::-webkit-scrollbar {
+    display: none;
+  }
+  .sw-topbar-right > * {
+    flex-shrink: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .sw-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(280px, 0.75fr) minmax(360px, 1fr) minmax(280px, 0.75fr);
+    overflow-y: auto;
+    overflow-x: hidden;
+    gap: 8px;
+  }
+  .sw-resize-col {
+    display: none;
+  }
+  .sw-col-left,
+  .sw-col-center,
+  .sw-col-right {
+    min-height: 0;
+    min-width: 0;
+  }
+  .sw-panel-card {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .sw-topbar .sw-brand,
+  .coding-agent-selector {
+    flex-basis: 100% !important;
+    width: 100%;
+  }
+  .sw-brand-name {
+    max-width: 180px;
+  }
+  .pipeline-tab {
+    max-width: 150px;
+  }
+  .sec-nav-btn {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+}
