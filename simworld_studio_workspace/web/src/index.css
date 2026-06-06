@@ -2376,6 +2376,396 @@ input, textarea, select { cursor: text; }
   line-height: 1.5;
 }
 
+/* ── Arena page ── */
+.arena-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+.arena-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line);
+}
+.arena-title-icon,
+.arena-generating-icon,
+.arena-winner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.arena-heading {
+  min-width: 0;
+}
+.arena-heading h2,
+.arena-prompt-panel h3,
+.arena-generating h3 {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;
+}
+.arena-heading h2 {
+  font-size: 18px;
+}
+.arena-heading p,
+.arena-prompt-panel p,
+.arena-generating p,
+.arena-count,
+.arena-result-agents,
+.arena-hidden-label {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.arena-header-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.arena-agent-toggle {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.arena-agent-toggle.active {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.arena-agent-list {
+  flex-shrink: 0;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.arena-section-label {
+  margin-bottom: 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 600;
+}
+.arena-agent-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.arena-agent-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+}
+.arena-agent-card.enabled {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+.arena-agent-card input {
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: var(--green);
+}
+.arena-agent-card span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.arena-agent-card strong,
+.arena-agent-card small,
+.arena-agent-card em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.arena-agent-card strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.arena-agent-card small {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.arena-agent-card em {
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-style: normal;
+}
+.arena-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+.arena-prompt-panel {
+  max-width: 600px;
+  margin: 60px auto;
+  text-align: center;
+}
+.arena-prompt-panel h3 {
+  margin-bottom: 8px;
+  font-size: 28px;
+}
+.arena-prompt-panel p {
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+.arena-prompt-panel textarea {
+  width: 100%;
+  height: 100px;
+  resize: vertical;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  outline: none;
+  cursor: text;
+}
+.arena-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+.arena-actions.centered {
+  justify-content: center;
+}
+.arena-primary-btn,
+.arena-secondary-btn,
+.arena-success-btn,
+.arena-vote-btn {
+  border-radius: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.arena-primary-btn,
+.arena-success-btn,
+.arena-vote-btn {
+  color: var(--accent-ink);
+}
+.arena-primary-btn {
+  padding: 8px 20px;
+  border: 1px solid var(--blue);
+  background: var(--blue);
+  font-size: 13px;
+}
+.arena-prompt-panel .arena-primary-btn {
+  padding: 10px 28px;
+  font-size: 14px;
+}
+.arena-primary-btn:disabled {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: var(--ink-3);
+  cursor: default;
+}
+.arena-secondary-btn {
+  padding: 8px 20px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.arena-success-btn,
+.arena-vote-btn {
+  border: 1px solid var(--green);
+  background: var(--green);
+}
+.arena-success-btn {
+  padding: 8px 20px;
+  font-size: 13px;
+}
+.arena-success-btn:disabled {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: var(--ink-3);
+  cursor: default;
+}
+.arena-vote-btn {
+  width: 100%;
+  padding: 8px 24px;
+  font-size: 13px;
+}
+.arena-count {
+  margin-top: 12px;
+  color: var(--ink-2);
+}
+.arena-generating {
+  padding: 80px 16px;
+  text-align: center;
+}
+.arena-generating-icon {
+  margin-bottom: 16px;
+}
+.arena-generating h3 {
+  font-size: 16px;
+}
+.arena-generating p {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.arena-progress-text {
+  margin-top: 20px;
+  color: var(--green);
+  font-size: 12px;
+}
+.arena-progress-bar {
+  width: 200px;
+  height: 4px;
+  margin: 24px auto 0;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--panel-2);
+}
+.arena-progress-bar span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--blue);
+  transition: width 0.5s;
+}
+.arena-progress-bar span.wide {
+  width: 80%;
+}
+.arena-generating .arena-secondary-btn {
+  margin-top: 24px;
+  padding: 6px 16px;
+}
+.arena-prompt-summary {
+  margin-bottom: 20px;
+  text-align: center;
+}
+.arena-prompt-summary span {
+  display: block;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.arena-prompt-summary strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 500;
+}
+.arena-battle-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+.arena-battle-side {
+  overflow: hidden;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  transition: border-color 0.2s, opacity 0.2s;
+}
+.arena-battle-side.winner {
+  border-color: var(--green);
+}
+.arena-battle-side.loser {
+  opacity: 0.6;
+}
+.arena-battle-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.arena-battle-header > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+.arena-winner-icon {
+  margin-left: 4px;
+  color: var(--green);
+}
+.arena-agent-name {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.arena-hidden-label {
+  flex-shrink: 0;
+  color: var(--ink-2);
+}
+.arena-battle-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 250px;
+  background: var(--bg);
+}
+.arena-battle-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.arena-battle-image div {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.arena-vote-wrap {
+  padding: 12px;
+  text-align: center;
+}
+.arena-result {
+  margin-top: 24px;
+  text-align: center;
+}
+.arena-result-vote {
+  margin-bottom: 12px;
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 600;
+}
+@media (max-width: 820px) {
+  .arena-header {
+    align-items: flex-start;
+  }
+  .arena-battle-grid {
+    grid-template-columns: 1fr;
+  }
+  .arena-actions.centered {
+    flex-wrap: wrap;
+  }
+}
+
 /* ── Context drawer ── */
 .context-panel {
   height: 100%;

@@ -34,7 +34,7 @@ export default function LibraryPage({
           <SkillsPage newlyAddedSkillIds={newlyAddedSkillIds} onMarkSkillSeen={onMarkSkillSeen} />
         )}
         {tab === "tools" && <ToolsPage newlyAddedToolIds={newlyAddedToolIds} onMarkToolSeen={onMarkToolSeen} />}
-        {tab === "arena" && <ArenaPage />}
+        {tab === "arena" && <ArenaPage icons={icons} />}
       </div>
     </div>
   );
