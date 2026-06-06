@@ -108,11 +108,17 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     "exec",
     "--json",
     "--skip-git-repo-check",
-    // SECURITY: scene-gen agent. Sandbox writes to the throwaway workspace cwd only, so it
-    // cannot modify Studio's source. (Codex's sandbox can't block reads, so it may still read
-    // files — but it can't write/modify them. It should use the simworld MCP tools.)
-    "-s", "workspace-write",
-    "-c", 'approval_policy="never"',
+    // Bypass codex's internal sandbox + approval flow entirely. REQUIRED for MCP: codex 0.133
+    // raises an approval *elicitation* for every MCP tool call (ToolCallMcpElicitation feature),
+    // and in headless `exec` mode there is no responder, so codex auto-cancels it with
+    // "user cancelled MCP tool call" — before the server ever runs. `approval_policy="never"`
+    // does NOT suppress this (it only governs shell-command sandbox escalation), and the
+    // `features.*` toggles are ignored. Only this flag makes codex auto-approve MCP calls.
+    //
+    // SECURITY: safe because we're "externally sandboxed" exactly as the flag intends —
+    // agent-sandbox.js wraps this process in bwrap (repo READ-ONLY, UE project + /tmp writable),
+    // so the agent still cannot modify Studio's source. The OS sandbox is the real guardrail.
+    "--dangerously-bypass-approvals-and-sandbox",
     "-C", codexCwd,
     ...buildMcpOverrideArgs(MCP_CONFIG, UNREAL_PORT, logToFile),
   ];

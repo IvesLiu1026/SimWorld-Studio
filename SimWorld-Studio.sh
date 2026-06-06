@@ -32,6 +32,7 @@ usage() {
     echo "  --cirrus-http-port PORT   Cirrus HTTP port (default: 8585)"
     echo "  --cirrus-ws-port PORT     Cirrus WebSocket port (default: 8586)"
     echo "  --cirrus-sfu-port PORT    Cirrus SFU port (default: 8889)"
+    echo "  --ucv-port PORT           UnrealCV port (default: 9017; must be free)"
     echo "  --map MAP                 UE map path (default: /Game/Main.umap)"
     echo "  --help                    Show this help"
     echo ""
@@ -48,6 +49,7 @@ while [[ $# -gt 0 ]]; do
         --cirrus-http-port) CIRRUS_HTTP_PORT="$2";    shift 2 ;;
         --cirrus-ws-port)   CIRRUS_WS_PORT="$2";      shift 2 ;;
         --cirrus-sfu-port)  CIRRUS_SFU_PORT="$2";     shift 2 ;;
+        --ucv-port)         UNREALCV_PORT="$2";       shift 2 ;;
         --map)              MAP="$2";                 shift 2 ;;
         --help|-h)          usage; exit 0 ;;
         *) echo "Unknown option: $1 (use --help)"; exit 1 ;;
@@ -209,6 +211,7 @@ if [ -f "$WEB_DIR/index.js" ]; then
     UNREAL_HOST=127.0.0.1 \
     UNREAL_PORT=$MCP_PORT \
     UCV_PORT=$UNREALCV_PORT \
+    UE_PROJECT_PATH=$PROJECT_DIR \
     PIXEL_STREAMING_URL=http://127.0.0.1:$CIRRUS_HTTP_PORT \
     CIRRUS_HTTP_PORT=$CIRRUS_HTTP_PORT \
     CIRRUS_WS_PORT=$CIRRUS_WS_PORT \

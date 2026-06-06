@@ -52,11 +52,12 @@ function _ensureGeminiSettings(mcpConfigPath, geminiCwd, logToFile) {
     let prev = null;
     try { prev = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
     // Preserve any unrelated keys the user added (themes, telemetry, etc.).
-    // SECURITY: scene-gen agent — exclude the built-in shell/file tools so it can ONLY use
-    // the simworld MCP tools (cannot read or modify Studio source).
+    // File/shell tools are ALLOWED so the agent can read & write the UE project dir
+    // (incl Saved/ logs) — that dir is added to the workspace via --include-directories.
+    // The repo source stays read-only via the OS sandbox (agent-sandbox.js). We still
+    // exclude web/search/memory (not needed for scene gen, and avoids data exfil).
     const merged = { ...(prev || {}), mcpServers: servers,
-      excludeTools: ["run_shell_command", "write_file", "replace", "read_file", "read_many_files",
-        "glob", "search_file_content", "list_directory", "web_fetch", "google_web_search", "save_memory"] };
+      excludeTools: ["web_fetch", "google_web_search", "save_memory"] };
     fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2));
 
     // Trust the workspace itself so MCP servers load. Values: TRUST_FOLDER (this dir),
@@ -161,6 +162,9 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
     // The flag is misnamed: it actually means "trust this workspace for this session".
     "--skip-trust",
   ];
+  // Add the UE project dir (incl Saved/ logs) to the workspace so file tools can
+  // read/write there without "Path not in workspace" errors.
+  if (process.env.UE_PROJECT_PATH) args.push("--include-directories", process.env.UE_PROJECT_PATH);
   if (model) args.push("--model", model);
 
   const env = { ...process.env };

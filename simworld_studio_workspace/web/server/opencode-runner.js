@@ -50,15 +50,14 @@ function ensureOpenCodeWorkspace(mcpConfigPath, unrealPort, logToFile) {
         environment,
       };
     }
-    // SECURITY: this is a scene-generation agent, not a coding agent. Hard-deny every
-    // built-in file/shell tool so it can ONLY act through the simworld MCP tools — it must
-    // not read or modify Studio's source. Without this, the model uses bash/read/write as an
-    // escape hatch (e.g. poking at mcp-server.js) instead of the scene tools.
+    // File/shell tools ENABLED so the agent can read & write the UE project dir (incl
+    // Saved/ logs). The repo source stays read-only via the OS sandbox (agent-sandbox.js),
+    // so enabling these can't modify Studio's source. webfetch stays denied (not needed).
     const config = {
       $schema: "https://opencode.ai/config.json",
       mcp: servers,
-      permission: { bash: "deny", edit: "deny", webfetch: "deny" },
-      tools: { bash: false, edit: false, write: false, read: false, grep: false, glob: false, list: false, patch: false, webfetch: false, todowrite: false, todoread: false },
+      permission: { bash: "allow", edit: "allow", webfetch: "deny" },
+      tools: { bash: true, edit: true, write: true, read: true, grep: true, glob: true, list: true, patch: true, webfetch: false, todowrite: false, todoread: false },
     };
     fs.writeFileSync(path.join(cwd, "opencode.json"), JSON.stringify(config, null, 2));
   } catch (e) {
