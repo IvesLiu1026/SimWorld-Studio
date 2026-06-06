@@ -325,6 +325,18 @@ export async function stopAllAgents() {
   return fetch(`${API_BASE}/agent-stop-all`, { method: "POST" }).catch(() => {});
 }
 
+export async function captureContextSnapshot() {
+  return fetch(`${API_BASE}/context-snapshot`, { method: "POST" }).catch(() => {});
+}
+
+export async function discoverAgents() {
+  return fetch(`${API_BASE}/agent-discover`, { method: "POST" }).catch(() => {});
+}
+
+export async function refreshAgentContext() {
+  return Promise.allSettled([captureContextSnapshot(), discoverAgents()]);
+}
+
 export async function runArena(prompt, skills, onEvent, signal) {
   const response = await fetch(`${API_BASE}/arena/run`, {
     method: "POST",
