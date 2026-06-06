@@ -337,6 +337,42 @@ export async function refreshAgentContext() {
   return Promise.allSettled([captureContextSnapshot(), discoverAgents()]);
 }
 
+export async function runSceneCheck() {
+  const response = await fetch(`${API_BASE}/scene-check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  return response.json();
+}
+
+export async function fetchLatestScreenshotDataUrl() {
+  const response = await fetch(`${API_BASE}/screenshot/latest?t=${Date.now()}`);
+  if (!response.ok) throw new Error("No screenshot");
+  const blob = await response.blob();
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function scoreSceneWithVlm(imageDataUrl, sessionId) {
+  return (
+    await fetch(`${API_BASE}/vlm-score`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageDataUrl, sessionId }),
+    })
+  ).json();
+}
+
+export async function scoreLatestScreenshot(sessionId) {
+  const imageDataUrl = await fetchLatestScreenshotDataUrl();
+  const result = await scoreSceneWithVlm(imageDataUrl, sessionId);
+  return { ...result, imageDataUrl };
+}
+
 export async function runArena(prompt, skills, onEvent, signal) {
   const response = await fetch(`${API_BASE}/arena/run`, {
     method: "POST",

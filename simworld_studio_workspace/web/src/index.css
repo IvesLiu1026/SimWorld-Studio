@@ -2149,6 +2149,233 @@ input, textarea, select { cursor: text; }
   flex: 1;
 }
 
+/* ── Charts ── */
+.line-chart,
+.line-chart-empty {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.line-chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+/* ── Scene verifier ── */
+.scene-verifier {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+.scene-verifier-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.scene-verifier-tabs {
+  flex: 1;
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+.scene-verifier-tabs button,
+.scene-verifier-action {
+  min-width: 0;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: var(--fs-body);
+  white-space: nowrap;
+}
+.scene-verifier-tabs button {
+  overflow: hidden;
+  padding: 5px 12px;
+  border: none;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+.scene-verifier-tabs button.active {
+  background: var(--orange);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.scene-verifier-action {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+}
+.scene-verifier-action:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.scene-verifier-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+.scene-verifier-stats {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.scene-verifier-stat {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  text-align: center;
+}
+.scene-verifier-stat > div {
+  color: var(--ink-2);
+  font-size: 24px;
+  font-weight: 900;
+  line-height: 1;
+}
+.scene-verifier-stat > div.green,
+.scene-verifier-score.green,
+.scene-verifier-pass {
+  color: var(--green);
+}
+.scene-verifier-stat > div.orange,
+.scene-verifier-score.orange {
+  color: var(--orange);
+}
+.scene-verifier-stat > div.red,
+.scene-verifier-score.red,
+.scene-verifier-error {
+  color: var(--red);
+}
+.scene-verifier-stat > div.muted {
+  color: var(--ink-2);
+}
+.scene-verifier-stat span {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.scene-verifier-chart {
+  margin-bottom: 10px;
+}
+.scene-verifier-issue {
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+  line-height: 1.4;
+}
+.scene-verifier-issue.red {
+  border-left: 3px solid var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+.scene-verifier-issue.orange {
+  border-left: 3px solid var(--orange);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+}
+.scene-verifier-issue span {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.scene-verifier-pass,
+.scene-verifier-note,
+.scene-verifier-empty {
+  text-align: center;
+  font-size: var(--fs-body);
+}
+.scene-verifier-pass {
+  padding: 8px 0 4px;
+  font-weight: 600;
+}
+.scene-verifier-note {
+  padding-bottom: 8px;
+  color: var(--ink-3);
+}
+.scene-verifier-empty {
+  padding: 16px;
+  color: var(--ink-3);
+}
+.scene-verifier-section {
+  margin-top: 8px;
+}
+.scene-verifier-section-title {
+  margin-bottom: 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.scene-verifier-error {
+  margin-bottom: 6px;
+  font-size: var(--fs-body);
+}
+.scene-verifier-score-card {
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.scene-verifier-score-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+.scene-verifier-score {
+  flex-shrink: 0;
+  font-size: 20px;
+  font-weight: 800;
+}
+.scene-verifier-score small {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 500;
+}
+.scene-verifier-label {
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scene-verifier-score-row time {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.scene-verifier-score-card p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+
 /* ── Context drawer ── */
 .context-panel {
   height: 100%;
