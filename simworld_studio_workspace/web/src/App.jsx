@@ -23,8 +23,13 @@ import {
 } from "./components/ui/primitives.jsx";
 import { DEFAULT_CODING_AGENTS, agentLabel } from "./features/agents/codingAgents.js";
 import CurriculumBuilderPanel from "./features/coevolution/CurriculumBuilderPanel.jsx";
+import RoundInspectorPanel from "./features/coevolution/RoundInspectorPanel.jsx";
+import LibraryPage from "./features/library/LibraryPage.jsx";
+import ResultsPage from "./features/results/ResultsPage.jsx";
+import SceneInspectorPanel from "./features/scene/SceneInspectorPanel.jsx";
 import ArtifactToastStack from "./features/studio/ArtifactToastStack.jsx";
 import SessionGateModals from "./features/studio/SessionGateModals.jsx";
+import SettingsModal from "./features/studio/SettingsModal.jsx";
 import StudioTopbar from "./features/studio/StudioTopbar.jsx";
 import { ArtifactChain } from "./features/studio/pipeline.jsx";
 import TaskGenPanel from "./features/tasks/TaskGenPanel.jsx";
@@ -135,155 +140,6 @@ function TagChip({ tag }) {
     <span style={tagChipSx(tag)}>
       {tag}
     </span>
-  );
-}
-
-// ── Scene Inspector (right in scene mode) ─────────────────────────────────────
-function SceneInspectorPanel({ sessionId, latestScreenshot }) {
-  const scene = useScene();
-  const actorCount = ((scene.objects || []).length + (scene.agents || []).length) || "—";
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div className="config-section">
-        <div className="config-section-title">Scene Summary</div>
-        {[["Actors", actorCount], ["Ground size","200 m"], ["Version","v3"]].map(([l,v])=>(
-          <div key={l} className="status-row"><span>{l}</span><span className="config-val">{v}</span></div>
-        ))}
-      </div>
-
-      {/* Live verifier panel */}
-      <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column" }}>
-        <div style={{ flex:1, overflow:"hidden" }}>
-          <CodingVerifierPanel sessionId={sessionId} latestScreenshot={latestScreenshot} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Round Inspector (right in co-evolve mode) ─────────────────────────────────
-function RoundInspectorPanel({ sessionId }) {
-  return (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }}>
-      <div className="config-section">
-        <div className="config-section-title">Round History</div>
-        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-          {[["R1","L0","82%","Advance"],["R2","L1","76%","Advance"],["R3","L2","58%","Hold"],["R4","L2","71%","Advance"],["R5","L3","49%","Hold"],["R12","L4","64%","Active"]].map(([r,l,sr,action])=>(
-            <div key={r} style={{ display:"grid", gridTemplateColumns:"2.5rem 2.5rem 2.5rem 1fr", gap:4, padding:"4px 6px", borderRadius:5, background:"var(--bg-tertiary)", fontSize:11, fontFamily:"monospace", alignItems:"center" }}>
-              <span style={{ color:"var(--ink-3)" }}>{r}</span>
-              <span style={{ color:"var(--ink-2)" }}>{l}</span>
-              <span style={{ color:"var(--blue)", fontWeight:700 }}>{sr}</span>
-              <span style={{ color: action==="Hold"?"var(--orange)": action==="Active"?"var(--green)":"var(--ink-3)", fontFamily:"inherit", fontSize:11 }}>{action}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div style={{ flex:1, overflow:"auto" }}>
-        <AgentAggregatePanelTabs agents={[]} sessionId={sessionId} />
-      </div>
-    </div>
-  );
-}
-
-// ── Library page (Skills + Tools + Assets) ───────────────────────────────────
-function LibraryPage({ newlyAddedSkillIds, onMarkSkillSeen, newlyAddedToolIds, onMarkToolSeen }) {
-  const [tab, setTab] = React.useState("skills");
-  return (
-    <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
-      <div style={{ padding:"10px 20px", borderBottom:"1px solid var(--line)", display:"flex", alignItems:"center", gap:8, background:"var(--panel)" }}>
-        <span style={{ fontSize:14, fontWeight:700, color:"var(--ink)", marginRight:8 }}>Library</span>
-        {[["skills","Skills",ICONS.book],["tools","Tools",ICONS.wrench],["arena","Arena",ICONS.swords]].map(([id,label,icon])=>(
-          <button key={id} className={`sw-tab-btn${tab===id?" active":""}`} onClick={()=>setTab(id)}>
-            <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>{icon(13)} {label}</span>
-          </button>
-        ))}
-      </div>
-      <div style={{ flex:1, overflow:"hidden" }}>
-        {tab==="skills" && <SkillsPage newlyAddedSkillIds={newlyAddedSkillIds} onMarkSkillSeen={onMarkSkillSeen} />}
-        {tab==="tools"  && <ToolsPage  newlyAddedToolIds={newlyAddedToolIds}   onMarkToolSeen={onMarkToolSeen}  />}
-        {tab==="arena"  && <ArenaPage />}
-      </div>
-    </div>
-  );
-}
-
-// Gallery of saved scenes (.umap from "Save As", listed via GET /api/saved-maps).
-// Clicking a card loads that map into the live Scene Generation viewport.
-function SavedMapsGallery({ onOpenScene }) {
-  const [maps, setMaps] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
-  const [busy, setBusy] = React.useState(null);
-  const reload = React.useCallback(() => {
-    setLoading(true);
-    fetch(`${API_BASE}/saved-maps`).then(r => r.json()).then(d => setMaps(d.maps || []))
-      .catch(() => {}).finally(() => setLoading(false));
-  }, []);
-  React.useEffect(() => { reload(); }, [reload]);
-  return (
-    <div style={{ height:"100%", overflow:"auto", padding:16 }}>
-      <div style={{ display:"flex", alignItems:"center", marginBottom:12 }}>
-        <span style={{ fontSize:13, fontWeight:600, color:"var(--ink-2)" }}>Saved scenes · {maps.length}</span>
-        <button onClick={reload} style={{ marginLeft:"auto", padding:"3px 10px", fontSize:12, borderRadius:6, border:"1px solid var(--line)", background:"var(--panel-2)", color:"var(--ink-3)", cursor:"pointer" }}>↻ Refresh</button>
-      </div>
-      {loading ? (
-        <div style={{ color:"var(--ink-3)", fontSize:13, padding:12 }}>Loading…</div>
-      ) : maps.length === 0 ? (
-        <div style={{ color:"var(--ink-2)", fontSize:13, padding:24, textAlign:"center" }}>
-          No saved scenes yet. In the Scene panel, build a scene and click <b>Save As</b> — it'll show up here.
-        </div>
-      ) : (
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))", gap:12 }}>
-          {maps.map(m => {
-            const isBase = /^empty_map$/i.test(m.name);
-            return (
-              <div key={m.path} style={{ border:"1px solid var(--line)", borderRadius:8, overflow:"hidden", background:"var(--panel)" }}>
-                <div style={{ height:104, display:"flex", alignItems:"center", justifyContent:"center", background:"var(--bg-2)", color:"var(--ink-3)", borderBottom:"1px solid var(--line)" }}>
-                  {ICONS.frame ? ICONS.frame(34) : ICONS.map(34)}
-                </div>
-                <div style={{ padding:"8px 10px" }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }} title={m.path}>
-                    {m.name}{isBase ? "  · base" : ""}
-                  </div>
-                  <div style={{ display:"flex", gap:6, marginTop:8 }}>
-                    <button onClick={async () => { setBusy(m.path); try { await onOpenScene?.(m.path); } finally { setBusy(null); } }}
-                      disabled={busy === m.path} title="Open this scene in the live viewport"
-                      style={{ flex:1, padding:"6px", fontSize:12, fontWeight:600, borderRadius:6, border:"1px solid var(--blue)", background:"transparent", color:"var(--blue)", cursor: busy===m.path ? "default":"pointer", opacity: busy===m.path?0.6:1 }}>
-                      {busy === m.path ? "Opening…" : "Open"}
-                    </button>
-                    <a href={`${API_BASE}/saved-maps/${encodeURIComponent(m.name)}/download`} download={`${m.name}.umap`}
-                      title="Download .umap" onClick={(e) => e.stopPropagation()}
-                      style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", padding:"6px 11px", fontSize:13, fontWeight:700, borderRadius:6, border:"1px solid var(--line)", background:"transparent", color:"var(--ink-2)", textDecoration:"none" }}>
-                      ↓
-                    </a>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Results page (Gallery + Leaderboard) ─────────────────────────────────────
-function ResultsPage({ onOpenScene }) {
-  const [tab, setTab] = React.useState("gallery");
-  return (
-    <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
-      <div style={{ padding:"10px 20px", borderBottom:"1px solid var(--line)", display:"flex", alignItems:"center", gap:8, background:"var(--panel)" }}>
-        <span style={{ fontSize:14, fontWeight:700, color:"var(--ink)", marginRight:8 }}>Results</span>
-        {[["gallery","Scenes",ICONS.frame],["leaderboard","Leaderboard",ICONS.trophy]].map(([id,label,icon])=>(
-          <button key={id} className={`sw-tab-btn${tab===id?" active":""}`} onClick={()=>setTab(id)}>
-            <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>{icon(13)} {label}</span>
-          </button>
-        ))}
-      </div>
-      <div style={{ flex:1, overflow:"hidden" }}>
-        {tab==="gallery"     && <SavedMapsGallery onOpenScene={onOpenScene} />}
-        {tab==="leaderboard" && <LeaderboardPage />}
-      </div>
-    </div>
   );
 }
 
@@ -7902,134 +7758,6 @@ function StatusDot({ label, active, activeColor, inactiveColor }) {
   );
 }
 
-// ─── Settings Modal ──────────────────────────────────────────────────────────
-
-function SettingsModal({ uiTheme, onThemeChange, layoutMode, onLayoutMode, onClose }) {
-  const themes = [
-    {
-      id: "dark", label: "Dark", desc: "Paper UI — default",
-      preview: { nav: "#171b21", bg: "#111418", left: "#1b2028", center: "#090b10", right: "#1b2028", border: "#323946", radius: 8 },
-    },
-    {
-      id: "light", label: "Light", desc: "Clean & bright",
-      preview: { nav: "#fff", bg: "#f4f6fa", left: "#fff", center: "#0b1220", right: "#fff", border: "#e6e9ef", radius: 8 },
-    },
-  ];
-  const layouts = [
-    { id: "scene",    label: "Scene Generation",  desc: "Intent+SimCoder | Viewport | Scene Inspector", left: true,  right: true  },
-    { id: "task",     label: "Task Generation",   desc: "Task Builder | Viewport | Task Inspector",     left: true,  right: true  },
-    { id: "training", label: "Agent Training",    desc: "Training Config | Viewport | Agent Monitor",   left: true,  right: true  },
-    { id: "coevolve", label: "Co-evolution",      desc: "Curriculum Builder | Viewport | Round Inspector", left: true, right: true },
-  ];
-
-  return (
-    <div
-      style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
-        display:"flex", alignItems:"center", justifyContent:"center",
-        zIndex:9800, backdropFilter:"blur(4px)" }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div style={{ background:"var(--panel)", border:"1px solid var(--line)",
-        borderRadius:12, padding:"28px 32px", width:560, maxWidth:"92vw",
-        boxShadow:"var(--shadow-pop)", maxHeight:"90vh", overflowY:"auto" }}>
-
-        {/* Header */}
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>
-          <span style={{ fontSize:18, fontWeight:700, color:"var(--ink)", letterSpacing:"-0.01em" }}>Settings</span>
-          <button onClick={onClose} style={{ width:30, height:30, borderRadius:6, border:"none",
-            background:"transparent", cursor:"pointer", color:"var(--ink-3)",
-            display:"flex", alignItems:"center", justifyContent:"center" }}
-            onMouseEnter={e=>e.currentTarget.style.background="var(--bg-hover)"}
-            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-            {ICONS.close(16)}
-          </button>
-        </div>
-
-        {/* ── Appearance ── */}
-        <div style={{ marginBottom:28 }}>
-          <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.07em",
-            color:"var(--ink-3)", textTransform:"uppercase", marginBottom:14 }}>
-            Appearance
-          </div>
-          <div style={{ display:"flex", gap:10 }}>
-            {themes.map(t => {
-              const p = t.preview;
-              const active = uiTheme === t.id;
-              return (
-                <button key={t.id} onClick={() => onThemeChange(t.id)} style={{
-                  flex:1, padding:"10px 10px 12px", borderRadius:8, cursor:"pointer",
-                  border: active ? "2px solid var(--blue)" : "1px solid var(--line)",
-                  background: active ? "var(--blue-soft)" : "var(--bg)",
-                  textAlign:"center", fontFamily:"inherit", transition:"all 0.12s",
-                }}>
-                  {/* Mini layout preview */}
-                  <div style={{ width:"100%", height:44, borderRadius:p.radius+2, marginBottom:10,
-                    overflow:"hidden", border:`1px solid ${p.border}`, background:p.bg,
-                    display:"flex", flexDirection:"column" }}>
-                    {/* Navbar strip */}
-                    <div style={{ height:10, background:p.nav, borderBottom:`1px solid ${p.border}`, flexShrink:0 }}/>
-                    {/* 3-col content */}
-                    <div style={{ flex:1, display:"flex", gap:1 }}>
-                      <div style={{ width:"28%", background:p.left, borderRadius:p.radius, margin:2 }}/>
-                      <div style={{ flex:1, background:p.center, borderRadius:p.radius, margin:"2px 0" }}/>
-                      <div style={{ width:"28%", background:p.right, borderRadius:p.radius, margin:2 }}/>
-                    </div>
-                  </div>
-                  <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)" }}>{t.label}</div>
-                  <div style={{ fontSize:11, color:"var(--ink-3)", marginTop:2 }}>{t.desc}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* ── Layout Mode ── */}
-        <div>
-          <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.07em",
-            color:"var(--ink-3)", textTransform:"uppercase", marginBottom:14 }}>
-            Layout Mode
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {layouts.map(l => {
-              const active = layoutMode === l.id;
-              return (
-                <button key={l.id} onClick={() => onLayoutMode(l.id)} style={{
-                  display:"flex", alignItems:"center", gap:14,
-                  padding:"11px 14px", borderRadius:8, cursor:"pointer",
-                  border: active ? "2px solid var(--blue)" : "1px solid var(--line)",
-                  background: active ? "var(--blue-soft)" : "transparent",
-                  textAlign:"left", fontFamily:"inherit", transition:"all 0.12s",
-                }}>
-                  {/* Mini panel diagram */}
-                  <div style={{ display:"flex", gap:3, flexShrink:0 }}>
-                    <div style={{ width:14, height:22, borderRadius:3,
-                      background: l.left ? "var(--blue)" : "var(--line)",
-                      opacity: l.left ? 1 : 0.35,
-                    }}/>
-                    <div style={{ width:20, height:22, borderRadius:3, background:"var(--blue)" }}/>
-                    <div style={{ width:14, height:22, borderRadius:3,
-                      background: l.right ? "var(--blue)" : "var(--line)",
-                      opacity: l.right ? 1 : 0.35,
-                    }}/>
-                  </div>
-                  <div>
-                    <div style={{ fontSize:13, fontWeight:600, color:"var(--ink)" }}>{l.label}</div>
-                    <div style={{ fontSize:11, color:"var(--ink-3)", marginTop:1 }}>{l.desc}</div>
-                  </div>
-                  {active && (
-                    <div style={{ marginLeft:"auto", color:"var(--blue)" }}>{ICONS.check(16)}</div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-      </div>
-    </div>
-  );
-}
-
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -8479,6 +8207,7 @@ function App() {
       {/* Settings modal */}
       {showSettings && (
         <SettingsModal
+          icons={ICONS}
           uiTheme={uiTheme}
           onThemeChange={setUiTheme}
           layoutMode={studioMode}
@@ -8660,12 +8389,20 @@ function App() {
               </span>
             </div>
             <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
-              {rightPanel2 === "sceneinsp"    && <SceneInspectorPanel sessionId={currentSessionId} latestScreenshot={latestScreenshot} />}
+              {rightPanel2 === "sceneinsp"    && (
+                <SceneInspectorPanel
+                  VerifierPanel={CodingVerifierPanel}
+                  sessionId={currentSessionId}
+                  latestScreenshot={latestScreenshot}
+                />
+              )}
               {rightPanel2 === "taskinsp"     && <TaskInspectorPanel />}
               {rightPanel2 === "agentmonitor" && (studioMode === "training"
                 ? <TrainingMonitorPanel />
                 : <AgentPanel sessionId={currentSessionId} commHeight={0} onCommHeightChange={() => {}} hideComm />)}
-              {rightPanel2 === "roundinsp"    && <RoundInspectorPanel sessionId={currentSessionId} />}
+              {rightPanel2 === "roundinsp"    && (
+                <RoundInspectorPanel AggregatePanel={AgentAggregatePanelTabs} sessionId={currentSessionId} />
+              )}
             </div>
           </div>
         </div>}
@@ -8682,13 +8419,19 @@ function App() {
         }}>
           {topSection === "library" && (
             <LibraryPage
+              ArenaPage={ArenaPage}
+              icons={ICONS}
               newlyAddedSkillIds={artifactNewIds.skills}
               onMarkSkillSeen={markSkillArtifactSeen}
               newlyAddedToolIds={artifactNewIds.tools}
               onMarkToolSeen={markToolArtifactSeen}
+              SkillsPage={SkillsPage}
+              ToolsPage={ToolsPage}
             />
           )}
-          {topSection === "results" && <ResultsPage onOpenScene={openSavedScene} />}
+          {topSection === "results" && (
+            <ResultsPage icons={ICONS} LeaderboardPage={LeaderboardPage} onOpenScene={openSavedScene} />
+          )}
         </div>
       )}
 
