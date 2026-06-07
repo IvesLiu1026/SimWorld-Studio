@@ -102,6 +102,12 @@ spawn_actor(
 
 **Allow-list (17 pack roots):** see `list_assets(category="allow_ai_packs")`. Any asset under these roots is fair game.
 
+## Python Batching Rule
+
+Discovery scripts should only enumerate assets or perform one small map operation. Do not combine asset discovery, full scene construction, validation, and save-as into one Python script.
+
+When modifying a loaded template with `execute_python_script`, use the `python_batching` skill rules: roughly 6-12 actors or operations per script, explicit `[DONE]` / `[ERROR]` print markers, then read `log_path` before issuing the next UE command.
+
 ## Hard Rules
 
 1. **Never** use anything under `/Game/80_no_ai_maps/` — folder name indicates NOT allow-AI.

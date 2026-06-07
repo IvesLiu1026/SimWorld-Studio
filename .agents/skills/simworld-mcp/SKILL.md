@@ -27,7 +27,7 @@ simworld_studio_workspace/web/server/
 
 1. **Never let the frontend call UE tools directly** — all tool calls go through `/api/` → server → MCP
 2. **Dangerous tools require explicit approval** (user must confirm before execution):
-   - `execute_python_script` — arbitrary Python in UE context
+   - `execute_python_script` — arbitrary Python in UE context; keep scripts focused, use roughly 6-12 actors/operations per batch, wait for `[DONE]` or `[ERROR]` in `log_path`, and never build an entire large scene in one script
    - `delete_all_spawned` — clears entire scene
    - Any filesystem write beyond the `simworld_studio_workspace/` directory
    - Any external network call beyond the configured UE host
@@ -57,7 +57,7 @@ agent_stop                — stop agent
 ## Restricted tools (require approval):
 
 ```
-execute_python_script     — RESTRICTED: explicit approval + audit log required
+execute_python_script     — RESTRICTED: explicit approval + audit log required; use small verifiable batches
 delete_all_spawned        — RESTRICTED: explicit approval required
 ```
 

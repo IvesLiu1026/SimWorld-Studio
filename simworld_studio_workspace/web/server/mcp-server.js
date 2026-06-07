@@ -236,7 +236,7 @@ async function toolExecutePython({script:e}){
   }).catch(err=>{
     try{fs.appendFileSync(logPath,`\n[ERROR] ${new Date().toISOString()}\nmessage: ${err?.message||String(err)}\n`,"utf-8")}catch(_){}
   });
-  return{status:"started",job_id:jobId,log_path:logPath,hint:"Python script is running in background. Read the file at log_path with your Read tool to see output. It ends with '[DONE]' on success or '[ERROR]' on failure — poll every few seconds until you see one of those markers. Do NOT call other UE tools (spawn_*, take_screenshot, etc.) before the job finishes; UE's command queue is serial and they will queue behind this script and may exceed the MCP timeout. For large scene edits, split work into focused batches of roughly 20-40 actors/operations instead of one giant script."};
+  return{status:"started",job_id:jobId,log_path:logPath,hint:"Python script is running in background. Read the file at log_path with your Read tool to see output. It ends with '[DONE]' on success or '[ERROR]' on failure - poll every few seconds until you see one of those markers. Do NOT call other UE tools (spawn_*, take_screenshot, etc.) before the job finishes; UE's command queue is serial and they will queue behind this script and may exceed the MCP timeout. For large scene edits, split work into focused batches of roughly 6-12 actors/operations instead of one giant script. Build in phases such as clear/setup, layout, buildings, props, vegetation/vehicles/agents, then validation/save."};
 }function toolListAssets({category:e}){if(e&&ASSETS[e])return{category:e,assets:ASSETS[e]};const t={};for(const[s,n]of Object.entries(ASSETS))n.items?t[s]={count:n.items.length,description:n.description,items:n.items}:n.ids?t[s]={count:n.ids.length,description:n.description,example:n.example,notes:n.notes}:t[s]={description:n.description};return t}async function toolSetupEnvironment({ground_size:e,time_of_day:t}){const s=e||200,n=t||"afternoon",o={morning:{pitch:-25,yaw:-120},noon:{pitch:-75,yaw:-30},afternoon:{pitch:-45,yaw:30},sunset:{pitch:-10,yaw:60},night:{pitch:10,yaw:0}},r=o[n]||o.afternoon;const script=`
 import unreal
 subsys = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -661,5 +661,5 @@ TOOL_HANDLERS.save_scene_as = toolSaveSceneAs;
 
 const pythonToolDef = TOOL_DEFS.find(t => t.name === "execute_python_script");
 if (pythonToolDef && !pythonToolDef.description.includes("focused batches")) {
-  pythonToolDef.description += " For large scene edits, submit focused batches of roughly 20-40 actors/operations per script and verify each batch before continuing; do not send one giant script.";
+  pythonToolDef.description += " Use this only for UE API work that normal tools cannot express or for carefully scoped bulk edits. For large scene edits, submit focused batches of roughly 6-12 actors/operations per script, end each script with a [DONE] or [ERROR] print marker, and verify each batch before continuing; do not send one giant script.";
 }

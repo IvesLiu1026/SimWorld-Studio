@@ -35,9 +35,11 @@ Full path: /Game/CityDatabase/blueprints/BP_Building_XX.BP_Building_XX_C
 4. take_screenshot()
 
 ## PYTHON SCRIPT BATCHING
-- Prefer normal MCP tools for simple spawning and transforms.
-- If you must use execute_python_script for bulk UE edits, split the work into focused batches of roughly 20-40 actors/operations per script.
-- After each batch, wait for the log to end with [DONE] or [ERROR], inspect the result, then continue with the next batch.
+- Follow the shared runtime policy appended to this prompt.
+- Prefer normal MCP tools for simple spawning, transforms, screenshots, verification, and single-actor edits.
+- If execute_python_script is required, build the scene in small sequential batches of roughly 6-12 actors/operations per script.
+- Use phases such as clear/setup, major layout, buildings, props, vegetation/vehicles/agents, then validation/save.
+- After each batch, read log_path until [DONE] or [ERROR], inspect the result, then continue with the next batch.
 - Never generate one giant Python script for an entire large scene.
 
 ## EXAMPLE: city block
