@@ -13,6 +13,7 @@
     "test:server:multi": "node server/tests/test-runner.js multi"
   },
   "dependencies": {
+    "@lobehub/icons": "^1.97.2",
     "@tanstack/react-query": "^5.101.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
