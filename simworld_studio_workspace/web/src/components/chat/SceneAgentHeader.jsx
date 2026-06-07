@@ -43,7 +43,9 @@ export default function SceneAgentHeader({
   onStop,
   onReset,
 }) {
-  const mcpHealthy = String(mcpStatus || "").startsWith("✓");
+  const normalizedMcpStatus = String(mcpStatus || "").toLowerCase();
+  const mcpHealthy =
+    normalizedMcpStatus.startsWith("connected") || normalizedMcpStatus.startsWith("ok");
 
   return (
     <div
