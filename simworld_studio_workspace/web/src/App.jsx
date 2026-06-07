@@ -21,6 +21,12 @@ import SessionGateModals from "./features/studio/SessionGateModals.jsx";
 import SettingsModal from "./features/studio/SettingsModal.jsx";
 import StudioTopbar from "./features/studio/StudioTopbar.jsx";
 import { ArtifactChain } from "./features/studio/pipeline.jsx";
+import {
+  getDrawerTabs,
+  getLeftPanelMeta,
+  getRightPanelMeta,
+  getStudioPanels,
+} from "./features/studio/studioModeConfig.js";
 import { useArtifactNotifications } from "./features/studio/useArtifactNotifications.js";
 import { useResizableStudioLayout } from "./features/studio/useResizableStudioLayout.js";
 import TaskGenPanel from "./features/tasks/TaskGenPanel.jsx";
@@ -87,15 +93,10 @@ function App() {
   const showLeft  = topSection === "studio";
   const showRight = topSection === "studio";
 
-  // One panel per side per mode (clean 1:1 mapping from the plan)
-  // Scene     → L: Intent+SimCoder (ChatPanel)     R: Scene Inspector (SceneInspectorPanel)
-  // Task      → L: Task Builder (TaskGenPanel)      R: Task Inspector  (TaskInspectorPanel)
-  // Training  → L: Training Config (TrainingConfig) R: Agent Monitor   (AgentPanel)
-  // Co-evolve → L: Curriculum Builder              R: Round Inspector (RoundInspector)
-  const LEFT_PANEL  = { scene:"chat",     task:"taskgen",   training:"trainconfig", coevolve:"curriculum" };
-  const RIGHT_PANEL = { scene:"sceneinsp",task:"taskinsp",  training:"agentmonitor",coevolve:"roundinsp"  };
-  const leftPanel  = LEFT_PANEL[studioMode]  || "chat";
-  const rightPanel2= RIGHT_PANEL[studioMode] || "sceneinsp";
+  const { leftPanel, rightPanel: rightPanel2 } = getStudioPanels(studioMode);
+  const leftPanelMeta = getLeftPanelMeta(leftPanel);
+  const rightPanelMeta = getRightPanelMeta(rightPanel2);
+  const drawerTabs = getDrawerTabs(studioMode);
 
   const [latestScreenshot, setLatestScreenshot] = useState(null);
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -226,15 +227,9 @@ function App() {
             <div className="sw-panel-header">
               <span className="sw-section-title">
                 <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>
-                  {leftPanel === "chat"       ? ICONS.chat(11)
-                  : leftPanel === "taskgen"   ? ICONS.target(11)
-                  : leftPanel === "trainconfig"? ICONS.activity(11)
-                  :                             ICONS.refresh(11)}
+                  {ICONS[leftPanelMeta.icon]?.(11)}
                 </span>
-                {leftPanel === "chat"        ? "Intent + SimCoder"
-                : leftPanel === "taskgen"    ? "Task Builder"
-                : leftPanel === "trainconfig"? "Training Config"
-                :                              "Curriculum Builder"}
+                {leftPanelMeta.title}
               </span>
             </div>
             <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
@@ -295,14 +290,7 @@ function App() {
               <div style={{ flex:1 }} />
               {drawerOpen && (
                 <div style={{ display:"flex", gap:2 }}>
-                  {(studioMode === "scene"
-                    ? [{ id:"assets",  label:"Assets" },{ id:"scenes",  label:"Scene Versions" },{ id:"context", label:"Tool Calls" }]
-                    : studioMode === "task"
-                    ? [{ id:"assets",  label:"Task Sets" },{ id:"scenes",  label:"Episodes" },{ id:"context", label:"Validation" }]
-                    : studioMode === "training"
-                    ? [{ id:"assets",  label:"Episodes" },{ id:"scenes",  label:"Trajectories" },{ id:"context", label:"Metrics" }]
-                    : [{ id:"assets",  label:"Rounds" },{ id:"scenes",  label:"Difficulty" },{ id:"context", label:"Rules" }]
-                  ).map(t => (
+                  {drawerTabs.map(t => (
                     <button key={t.id}
                       className={`sw-tab-btn${drawerTab===t.id?" active":""}`}
                       onClick={e => { e.stopPropagation(); setDrawerTab(t.id); }}
@@ -358,15 +346,9 @@ function App() {
             <div className="sw-panel-header">
               <span className="sw-section-title">
                 <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>
-                  {rightPanel2 === "sceneinsp"    ? ICONS.scan(11)
-                  : rightPanel2 === "taskinsp"    ? ICONS.check(11)
-                  : rightPanel2 === "agentmonitor"? ICONS.robot(11)
-                  :                                 ICONS.chartBar(11)}
+                  {ICONS[rightPanelMeta.icon]?.(11)}
                 </span>
-                {rightPanel2 === "sceneinsp"    ? "Scene Inspector"
-                : rightPanel2 === "taskinsp"    ? "Task Inspector"
-                : rightPanel2 === "agentmonitor"? "Agent Monitor"
-                :                                 "Round Inspector"}
+                {rightPanelMeta.title}
               </span>
             </div>
             <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
