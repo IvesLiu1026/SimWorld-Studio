@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { API_BASE } from "./api/client.js";
 import { fetchCodingAgents, fetchHealth, fetchSession, studioQueryKeys } from "./api/studioApi.js";
@@ -22,6 +22,7 @@ import SettingsModal from "./features/studio/SettingsModal.jsx";
 import StudioTopbar from "./features/studio/StudioTopbar.jsx";
 import { ArtifactChain } from "./features/studio/pipeline.jsx";
 import { useArtifactNotifications } from "./features/studio/useArtifactNotifications.js";
+import { useResizableStudioLayout } from "./features/studio/useResizableStudioLayout.js";
 import TaskGenPanel from "./features/tasks/TaskGenPanel.jsx";
 import TaskInspectorPanel from "./features/tasks/TaskInspectorPanel.jsx";
 import TrainingConfigPanel from "./features/training/TrainingConfigPanel.jsx";
@@ -97,51 +98,26 @@ function App() {
   const rightPanel2= RIGHT_PANEL[studioMode] || "sceneinsp";
 
   const [latestScreenshot, setLatestScreenshot] = useState(null);
-  const [splitPct, setSplitPct] = useState(38);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [contextRefreshKey, setContextRefreshKey] = useState(0);
-  const [dragging, setDragging] = useState(false);
-  const [rightPanel, setRightPanel] = useState("viewport");
   // activePage kept for compatibility with drawer/panel refs; main nav uses topSection+studioMode
   const activePage = topSection === "studio" ? "generate" : topSection;
   const [chatRef, setChatRef] = useState(null);
-  const [leftTab,    setLeftTab]    = useState("chat");
-  const [rightTab,   setRightTab]   = useState("agent");
-  const [colLeft,    setColLeft]    = useState(Math.round(window.innerWidth * 0.28));  // ~3/10
-  const [colRight,   setColRight]   = useState(Math.round(window.innerWidth * 0.28)); // ~3/10
-  const [commHeight,      setCommHeight]      = useState(200); // left bottom (Verifier)
-  const [rightBottomH,   setRightBottomH]    = useState(200); // right bottom (Statistics)
-
-  const leftColRef  = useRef(null);
-  const rightColRef = useRef(null);
-
-  // Row-resize: snapshot current panel height at mousedown, compute absolute on move
-  // Pattern: startPanelH + (startY - currentY) tracks the mouse 1:1
-  const makeRowResize = useCallback((currentH, setH) => (e) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startPanelH = currentH; // snapshot — does NOT change during drag
-    const onMove = (ev) => {
-      const newH = startPanelH + (startY - ev.clientY); // up = bigger bottom
-      setH(Math.max(80, Math.min(600, newH)));
-    };
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }, []);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab,  setDrawerTab]  = useState("assets");
-  const [drawerH,    setDrawerH]    = useState(200);   // px when open
-  const colResizingLeft  = useRef(false);
-  const colResizingRight = useRef(false);
-  const colResizeStart   = useRef({ x:0, colLeft:390, colRight:360 });
-  const drawerResizing   = useRef(false);
-  const drawerResizeStart = useRef({ y:0, h:200 });
-  const layoutRef        = useRef(null);
-  const containerRef     = useRef(null);
+  const {
+    colLeft,
+    colRight,
+    drawerH,
+    drawerOpen,
+    drawerTab,
+    layoutRef,
+    leftColRef,
+    rightColRef,
+    setDrawerH,
+    setDrawerOpen,
+    setDrawerTab,
+    startColResize,
+    startDrawerResize,
+  } = useResizableStudioLayout();
   const { session, poolFull, secsLeft, expired, warningSoon } = useSession();
   const syncStatus = useSync();
   const {
@@ -162,98 +138,9 @@ function App() {
     if (sessionQuery.data?.sessionId) setCurrentSessionId(sessionQuery.data.sessionId);
   }, [sessionQuery.data?.sessionId]);
 
-
-  // Drag handler for split pane
-  const handleMouseDown = (e) => {
-    e.preventDefault();
-    setDragging(true);
-  };
-
-  useEffect(() => {
-    if (!dragging) return;
-    const onMove = (e) => {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const pct = ((e.clientX - rect.left) / rect.width) * 100;
-      setSplitPct(Math.max(25, Math.min(75, pct)));
-    };
-    const onUp = () => setDragging(false);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [dragging]);
-
-  // ── Column resize drag handlers ────────────────────────────────────────────
-  const startColResize = useCallback((side) => (e) => {
-    e.preventDefault();
-    if (side === "left") {
-      colResizingLeft.current = true;
-      colResizeStart.current = { x: e.clientX, colLeft, colRight };
-    } else {
-      colResizingRight.current = true;
-      colResizeStart.current = { x: e.clientX, colLeft, colRight };
-    }
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    const onMove = (ev) => {
-      const dx = ev.clientX - colResizeStart.current.x;
-      if (colResizingLeft.current) {
-        setColLeft(Math.max(280, Math.min(600, colResizeStart.current.colLeft + dx)));
-      } else if (colResizingRight.current) {
-        setColRight(Math.max(260, Math.min(560, colResizeStart.current.colRight - dx)));
-      }
-    };
-    const onUp = () => {
-      colResizingLeft.current  = false;
-      colResizingRight.current = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup",   onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup",   onUp);
-  }, [colLeft, colRight]);
-
-  // ── Drawer resize (drag top edge up/down) ──────────────────────────────────
-  const startDrawerResize = useCallback((e) => {
-    e.preventDefault();
-    drawerResizing.current = true;
-    drawerResizeStart.current = { y: e.clientY, h: drawerH };
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-    // Track pending height in a ref — only commit to state on mouseup
-    // This prevents iframe resize (and UE data-channel "cannot send yet" logs) on every mousemove
-    const pendingH = { value: drawerH };
-    const onMove = (ev) => {
-      if (!drawerResizing.current) return;
-      const delta = drawerResizeStart.current.y - ev.clientY;
-      pendingH.value = Math.max(80, Math.min(600, drawerResizeStart.current.h + delta));
-      // Update only the drag-handle visual, not the full React state
-      const handle = document.querySelector('.sw-drawer .sw-drawer-handle-preview');
-      if (handle) handle.style.transform = `translateY(${-delta}px)`;
-    };
-    const onUp = () => {
-      drawerResizing.current = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      // Commit size only on mouseup — avoids continuous React re-renders + iframe resize
-      setDrawerH(pendingH.value);
-      if (pendingH.value > 50) setDrawerOpen(true);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }, [drawerH, drawerOpen]);
-
   // Open a saved scene (.umap) from the Results gallery → switch to Scene Generation and
   // load it into the live viewport (reuses /api/load-map + the viewport auto-reconnect).
-  const openSavedScene = React.useCallback(async (path) => {
+  const openSavedScene = useCallback(async (path) => {
     setTopSection("studio");
     setStudioMode("scene");
     try {
