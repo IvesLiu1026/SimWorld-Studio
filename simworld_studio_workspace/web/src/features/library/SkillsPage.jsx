@@ -150,7 +150,7 @@ export function SkillPageDetailModal({ icons, onClose, onDelete, skill }) {
   );
 }
 
-function SkillPageCreateModal({ icons, onClose, onCreated }) {
+export function SkillPageCreateModal({ icons, onClose, onCreated }) {
   const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
