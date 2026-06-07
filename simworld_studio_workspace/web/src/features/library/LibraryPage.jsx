@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import SkillsPage from "./SkillsPage.jsx";
+import ToolsPage from "./ToolsPage.jsx";
 
 export default function LibraryPage({
   ArenaPage,
@@ -8,7 +9,6 @@ export default function LibraryPage({
   newlyAddedToolIds,
   onMarkSkillSeen,
   onMarkToolSeen,
-  ToolsPage,
 }) {
   const [tab, setTab] = useState("skills");
   const tabs = [
@@ -33,7 +33,7 @@ export default function LibraryPage({
         {tab === "skills" && (
           <SkillsPage icons={icons} newlyAddedSkillIds={newlyAddedSkillIds} onMarkSkillSeen={onMarkSkillSeen} />
         )}
-        {tab === "tools" && <ToolsPage newlyAddedToolIds={newlyAddedToolIds} onMarkToolSeen={onMarkToolSeen} />}
+        {tab === "tools" && <ToolsPage icons={icons} newlyAddedToolIds={newlyAddedToolIds} onMarkToolSeen={onMarkToolSeen} />}
         {tab === "arena" && <ArenaPage icons={icons} />}
       </div>
     </div>
