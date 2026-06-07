@@ -205,16 +205,19 @@ async function multiViewScreenshot({ round, destDir }) {
   const used = new Set();
   for (let i = 0; i < VIEW_CONFIGS.length; i++) {
     const v = VIEW_CONFIGS[i];
-    const before = Date.now() - 500;
-    const script = buildShotScript(v.name, v.bearing_deg, v.pitch_deg, v.kind);
-    await ueCommand("execute_python_script", { script }, 30000);
-    // Small delay so HighResShot has time to flush before we start polling
-    await new Promise((r) => setTimeout(r, 800));
-    const newest = await waitForNewScreenshot(before, 25000, used);
-    if (!newest) continue;
-    used.add(newest);
+    let got = null;
+    // Retry once if the shot doesn't land in time (UE can be busy/slow → HighResShot misses the window).
+    for (let attempt = 0; attempt < 2 && !got; attempt++) {
+      const before = Date.now() - 500;
+      const script = buildShotScript(v.name, v.bearing_deg, v.pitch_deg, v.kind);
+      await ueCommand("execute_python_script", { script }, 60000);
+      await new Promise((r) => setTimeout(r, 1500)); // let HighResShot flush
+      got = await waitForNewScreenshot(before, 45000, used);
+    }
+    if (!got) continue;
+    used.add(got);
     const dest = path.join(destDir, `round${round}_${v.name}.png`);
-    try { fs.copyFileSync(newest, dest); out.push({ name: v.name, path: dest }); } catch (_e) {}
+    try { fs.copyFileSync(got, dest); out.push({ name: v.name, path: dest }); } catch (_e) {}
   }
   return out;
 }
@@ -468,7 +471,7 @@ async function runVisualSceneLoop({
 async function handleVisualSceneLoop(req, res, deps) {
   const { updateIntentSummary } = require("./intent-summarizer");
   const http = require("http");
-  const { message, sessionId, skills, feedback: userFeedback, runner: outerRunner } = req.body || {};
+  const { message, sessionId, skills, feedback: userFeedback, runner: outerRunner, assetMode } = req.body || {};
   if (!message) { res.status(400).json({ error: "message required" }); return; }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -514,6 +517,7 @@ async function handleVisualSceneLoop(req, res, deps) {
         feedback: combinedFeedback,
         useLoop: false, // route to the existing single-turn path
         ...(outerRunner ? { runner: outerRunner } : {}),
+        ...(assetMode ? { assetMode } : {}),  // forward A/B palette mode into each builder round
       });
       const opts = {
         host: "127.0.0.1", port, path: "/api/chat", method: "POST",

@@ -225,7 +225,7 @@ print(f"Camera: loc=({cam_loc.x:.0f},{cam_loc.y:.0f},{cam_loc.z:.0f}) rot=({cam_
 // behind it — the hint below tells the agent to wait before issuing them.
 async function toolExecutePython({script:e}){
   const jobId=`py_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
-  const logPath=path.resolve(__dirname,"../../tmp/jobs",`${jobId}.log`);
+  const logPath=path.resolve("/tmp/simworld_jobs",`${jobId}.log`);  // /tmp is read-write inside the coder's bwrap sandbox (repo is ro-bound) — avoids EROFS
   try{fs.mkdirSync(path.dirname(logPath),{recursive:!0})}catch(_){}
   fs.writeFileSync(logPath,`[STARTED] ${new Date().toISOString()}\n[OUTPUT]\n`,"utf-8");
   ueCommand("execute_python_script",{script:e},300000).then(r=>{
