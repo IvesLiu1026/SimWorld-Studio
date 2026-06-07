@@ -88,6 +88,47 @@ export function StatusBadge({ enabled, readOnly, style }) {
   );
 }
 
+const TAG_COLORS = {
+  city: "59 130 246",
+  buildings: "185 28 28",
+  props: "100 116 139",
+  weather: "234 88 12",
+  camera: "124 58 237",
+  layout: "22 163 74",
+  planning: "59 130 246",
+  spacing: "245 158 11",
+  trees: "22 163 74",
+  vehicles: "234 88 12",
+  lighting: "245 158 11",
+  atmosphere: "124 58 237",
+  screenshot: "124 58 237",
+  decoration: "100 116 139",
+  furniture: "100 116 139",
+  architecture: "185 28 28",
+  environment: "22 163 74",
+  viewpoint: "124 58 237",
+  placement: "245 158 11",
+  roads: "100 116 139",
+  capture: "124 58 237",
+};
+
+export function tagChipSx(tag, overrides = {}) {
+  const color = TAG_COLORS[tag];
+  return {
+    fontSize: 11,
+    padding: "2px 6px",
+    borderRadius: 4,
+    background: color ? `rgb(${color} / 0.18)` : "var(--panel-2)",
+    color: color ? `rgb(${color})` : "var(--ink-3)",
+    border: `1px solid ${color ? `rgb(${color} / 0.28)` : "var(--line)"}`,
+    ...overrides,
+  };
+}
+
+export function TagChip({ tag }) {
+  return <span style={tagChipSx(tag)}>{tag}</span>;
+}
+
 const BTN_VARIANTS = {
   primary: { background: "var(--blue)", color: "var(--accent-ink)", border: "1px solid var(--blue)" },
   success: { background: "var(--green)", color: "var(--accent-ink)", border: "1px solid var(--green)" },

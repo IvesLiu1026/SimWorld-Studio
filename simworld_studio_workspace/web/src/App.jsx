@@ -28,16 +28,9 @@ import SceneAgentHeader from "./components/chat/SceneAgentHeader.jsx";
 import {
   Badge,
   Btn,
-  Eyebrow,
-  Field,
-  ModalFooter,
-  ModalHeader,
-  ModalOverlay,
-  PageHeader,
-  SourceBadge,
   StatusBadge,
   ToggleBtn,
-  inputSx,
+  tagChipSx,
 } from "./components/ui/primitives.jsx";
 import { DEFAULT_CODING_AGENTS, agentLabel } from "./features/agents/codingAgents.js";
 import ArenaPage from "./features/arena/ArenaPage.jsx";
@@ -55,6 +48,8 @@ import CurriculumBuilderPanel from "./features/coevolution/CurriculumBuilderPane
 import ContextPanel from "./features/context/ContextPanel.jsx";
 import RoundInspectorPanel from "./features/coevolution/RoundInspectorPanel.jsx";
 import LibraryPage from "./features/library/LibraryPage.jsx";
+import ConfirmDeleteModal from "./features/library/ConfirmDeleteModal.jsx";
+import { SkillPageDetailModal } from "./features/library/SkillsPage.jsx";
 import ResultsPage from "./features/results/ResultsPage.jsx";
 import CodingVerifierPanel from "./features/scene/CodingVerifierPanel.jsx";
 import SceneInspectorPanel from "./features/scene/SceneInspectorPanel.jsx";
@@ -149,28 +144,6 @@ const ICONS = {
   users:    (s) => <SvgIcon size={s}><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/><circle cx="9" cy="7" r="4" stroke="currentColor" strokeWidth="2" fill="none"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none"/></SvgIcon>,
 };
 
-function tagChipSx(tag, overrides = {}) {
-  const color = TAG_COLORS[tag];
-  return {
-    fontSize: 11,
-    padding: "2px 6px",
-    borderRadius: 4,
-    background: color ? `rgb(${color} / 0.18)` : "var(--panel-2)",
-    color: color ? `rgb(${color})` : "var(--ink-3)",
-    border: `1px solid ${color ? `rgb(${color} / 0.28)` : "var(--line)"}`,
-    ...overrides,
-  };
-}
-
-// Colored tag chip based on TAG_COLORS
-function TagChip({ tag }) {
-  return (
-    <span style={tagChipSx(tag)}>
-      {tag}
-    </span>
-  );
-}
-
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const EVOLUTION_ARTIFACT_POLL_MS = 5000;
@@ -194,30 +167,6 @@ const TOOL_ICONS = {
   initialize: ICONS.plug,
   observe_scene: ICONS.eye,
   get_scene_overview: ICONS.map,
-};
-
-const TAG_COLORS = {
-  city: "59 130 246",
-  buildings: "185 28 28",
-  props: "100 116 139",
-  weather: "234 88 12",
-  camera: "124 58 237",
-  layout: "22 163 74",
-  planning: "59 130 246",
-  spacing: "245 158 11",
-  trees: "22 163 74",
-  vehicles: "234 88 12",
-  lighting: "245 158 11",
-  atmosphere: "124 58 237",
-  screenshot: "124 58 237",
-  decoration: "100 116 139",
-  furniture: "100 116 139",
-  architecture: "185 28 28",
-  environment: "22 163 74",
-  viewpoint: "124 58 237",
-  placement: "245 158 11",
-  roads: "100 116 139",
-  capture: "124 58 237",
 };
 
 const CATEGORY_ICONS = {
@@ -2315,371 +2264,6 @@ function PixelStreamView({ playerUrl }) {
     </div>
   );
 }
-
-// ─── SkillsPage (full page) ──────────────────────────────────────────────────
-
-function SkillPageCard({ skill, onClick, isNew = false }) {
-  const desc = skill.description.length > 120
-    ? skill.description.slice(0, 120) + "…" : skill.description;
-  return (
-    <div onClick={onClick} style={{
-        padding: "14px 16px", borderRadius: 10, border: "1px solid var(--line)",
-        background: "var(--panel)", cursor: "pointer",
-        transition: "border-color 0.15s, box-shadow 0.15s",
-        display: "flex", flexDirection: "column", gap: 8,
-      }}
-      onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--blue)"; e.currentTarget.style.boxShadow = "0 2px 12px rgba(76,141,255,0.1)"; }}
-      onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--line)";  e.currentTarget.style.boxShadow = "none"; }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {skill.name}
-        </span>
-        {isNew && <Badge variant="red" dot>NEW</Badge>}
-        <SourceBadge source={skill.source} />
-      </div>
-      <div style={{ fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>{desc}</div>
-      {skill.tags.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-          {skill.tags.map(tag => <TagChip key={tag} tag={tag} />)}
-        </div>
-      )}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8, marginTop: "auto",
-        paddingTop: 4, borderTop: "1px solid var(--line)", fontSize: 11, color: "var(--ink-3)",
-      }}>
-        <span>v{skill.version}</span>
-        <span style={{ marginLeft: "auto" }}>{skill.author}</span>
-      </div>
-    </div>
-  );
-}
-
-function SkillPageDetailModal({ skill, onClose, onDelete }) {
-  return (
-    <ModalOverlay onClose={onClose}>
-      <ModalHeader
-        title={skill.name}
-        subtitle={<>v{skill.version} by {skill.author} <SourceBadge source={skill.source} style={{ marginLeft: 6 }} /></>}
-        onClose={onClose}
-        closeIcon={ICONS.close(14)}
-      >
-        {onDelete && <Btn variant="danger" onClick={onDelete}>Delete</Btn>}
-      </ModalHeader>
-
-      <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--line)" }}>
-        <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.6 }}>{skill.description}</div>
-        {skill.tags.length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 10 }}>
-            {skill.tags.map(tag => <TagChip key={tag} tag={tag} />)}
-          </div>
-        )}
-        {skill.dependencies.length > 0 && (
-          <div style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 10 }}>
-            <span style={{ fontWeight: 600 }}>Dependencies: </span>
-            {skill.dependencies.map((dep, i) => (
-              <span key={dep}>
-                <span style={{ color: "var(--blue)" }}>{dep}</span>
-                {i < skill.dependencies.length - 1 ? ", " : ""}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div style={{ flex: 1, overflow: "auto", padding: "14px 20px" }}>
-        <Eyebrow style={{ marginBottom: 8 }}>Skill Content</Eyebrow>
-        <pre style={{
-          fontSize: 12, color: "var(--ink-2)", lineHeight: 1.6,
-          whiteSpace: "pre-wrap", wordBreak: "break-word",
-          fontFamily: "ui-monospace, 'Cascadia Code', Menlo, monospace",
-          margin: 0, background: "var(--bg-tertiary)",
-          border: "1px solid var(--line)", borderRadius: 8, padding: 16,
-        }}>
-          {skill.content}
-        </pre>
-      </div>
-    </ModalOverlay>
-  );
-}
-
-function SkillPageCreateModal({ onClose, onCreated }) {
-  const [id, setId] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [tags, setTags] = useState("");
-  const [content, setContent] = useState("# My Custom Skill\n\n## Overview\nDescribe what this skill does.\n\n## Instructions\nProvide detailed instructions for the AI agent.\n");
-  const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    if (!id.trim() || !name.trim() || !content.trim()) { setError("ID, name, and content are required"); return; }
-    if (!/^[a-z0-9_]+$/.test(id)) { setError("ID must be lowercase letters, numbers, and underscores only"); return; }
-    setSaving(true);
-    try {
-      await createSkill({ id: id.trim(), name: name.trim(), description: description.trim(),
-        tags: tags.split(",").map(t => t.trim()).filter(Boolean), content: content.trim() });
-      onCreated();
-    } catch { setError("Failed to save skill"); } finally { setSaving(false); }
-  };
-
-  return (
-    <ModalOverlay onClose={onClose} maxWidth={650}>
-      <ModalHeader title="Create Custom Skill" onClose={onClose} closeIcon={ICONS.close(14)} />
-
-      <div style={{ flex: 1, overflow: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="Skill ID (lowercase, no spaces)">
-          <input value={id} onChange={e => setId(e.target.value)} placeholder="my_custom_skill" style={inputSx} />
-        </Field>
-        <Field label="Name">
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="My Custom Skill" style={inputSx} />
-        </Field>
-        <Field label="Description (short summary)">
-          <input value={description} onChange={e => setDescription(e.target.value)} placeholder="What this skill teaches the agent to do" style={inputSx} />
-        </Field>
-        <Field label="Tags (comma-separated)">
-          <input value={tags} onChange={e => setTags(e.target.value)} placeholder="buildings, layout, custom" style={inputSx} />
-        </Field>
-        <Field label="Content (Markdown — instructions for the AI agent)" style={{ flex: 1 }}>
-          <textarea value={content} onChange={e => setContent(e.target.value)}
-            style={{ ...inputSx, height: 200, resize: "vertical", fontFamily: "ui-monospace, Menlo, monospace", lineHeight: 1.5 }} />
-        </Field>
-        {error && <div style={{ fontSize: 12, color: "var(--red)" }}>{error}</div>}
-      </div>
-
-      <ModalFooter>
-        <Btn variant="cancel" onClick={onClose}>Cancel</Btn>
-        <Btn variant="success" disabled={saving} onClick={handleSave}>{saving ? "Saving…" : "Create Skill"}</Btn>
-      </ModalFooter>
-    </ModalOverlay>
-  );
-}
-
-function ConfirmDeleteModal({ message, onConfirm, onCancel }) {
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.8)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 10000,
-      }}
-      onClick={onCancel}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 400,
-          background: "var(--bg)",
-          border: "1px solid var(--line)",
-          borderRadius: 12,
-          padding: 24,
-        }}
-      >
-        <div style={{ fontSize: 14, color: "var(--ink)", fontWeight: 600, marginBottom: 8 }}>
-          Confirm Delete
-        </div>
-        <div style={{ fontSize: 13, color: "var(--ink-3)", lineHeight: 1.5, marginBottom: 20 }}>
-          {message}
-        </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button
-            onClick={onCancel}
-            style={{
-              padding: "6px 14px",
-              fontSize: 12,
-              background: "var(--panel-2)",
-              border: "1px solid var(--line)",
-              borderRadius: 6,
-              color: "var(--ink)",
-              cursor: "pointer",
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            style={{
-              padding: "6px 14px",
-              fontSize: 12,
-              background: "var(--red)",
-              border: "1px solid rgba(255,95,99,0.3)",
-              borderRadius: 6,
-              color: "#fff",
-              cursor: "pointer",
-              fontWeight: 600,
-            }}
-          >
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SkillsPage({ newlyAddedSkillIds = [], onMarkSkillSeen }) {
-  const [skills, setSkills] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
-  const [previewSkill, setPreviewSkill] = useState(null);
-  const [showCreate, setShowCreate] = useState(false);
-  const [deleteId, setDeleteId] = useState(null);
-
-  const reload = () => {
-    setLoading(true);
-    fetchSkills()
-      .then(setSkills)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(reload, []);
-
-  const handlePreview = async (id) => {
-    const normalizedId = String(id || "").trim();
-    if (normalizedId && typeof onMarkSkillSeen === "function") {
-      onMarkSkillSeen(normalizedId);
-    }
-    try {
-      const detail = await fetchSkillDetails(id);
-      setPreviewSkill(detail);
-    } catch {}
-  };
-
-  const handleDelete = async (id) => {
-    await deleteSkill(id);
-    setPreviewSkill(null);
-    setDeleteId(null);
-    reload();
-  };
-
-  const filtered = skills.filter((s) => {
-    if (filter !== "all" && s.source !== filter) return false;
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (
-      s.name.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q) ||
-      s.tags.some((t) => t.toLowerCase().includes(q))
-    );
-  });
-
-  const newlyAddedSkillIdSet = useMemo(
-    () =>
-      new Set(
-        (Array.isArray(newlyAddedSkillIds) ? newlyAddedSkillIds : [])
-          .map((id) => String(id || "").trim())
-          .filter(Boolean)
-      ),
-    [newlyAddedSkillIds]
-  );
-
-  return (
-    <div
-      style={{
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--bg)",
-      }}
-    >
-      <PageHeader
-        icon={ICONS.book(22)}
-        title="Skills"
-        subtitle="Browse, create, and manage skills that teach the AI agent new capabilities"
-        action={<Btn variant="success" size="md" onClick={() => setShowCreate(true)}>+ Create Skill</Btn>}
-      />
-
-      <div
-        style={{
-          padding: "10px 24px",
-          borderBottom: "1px solid var(--line)",
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-        }}
-      >
-        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search skills…" style={{ ...inputSx, flex: 1 }} />
-        <div style={{ display: "flex", gap: 4 }}>
-          {["all", "builtin", "custom"].map(f => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`filter-pill${filter === f ? " active" : ""}`}>
-              {f}
-            </button>
-          ))}
-        </div>
-        <span style={{ fontSize: 12, color: "var(--ink-2)", whiteSpace: "nowrap" }}>
-          {filtered.length} skill{filtered.length !== 1 ? "s" : ""}
-        </span>
-      </div>
-
-      <div style={{ flex: 1, overflow: "auto", padding: 20 }}>
-        {loading ? (
-          <div style={{ textAlign: "center", padding: 60, color: "var(--ink-3)" }}>Loading...</div>
-        ) : filtered.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>{ICONS.book(40)}</div>
-            <div style={{ fontSize: 16, color: "var(--ink)", fontWeight: 600, marginBottom: 8 }}>
-              No skills found
-            </div>
-            <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
-              {search ? "Try a different search term." : "Create a custom skill to get started."}
-            </div>
-          </div>
-        ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-              gap: 16,
-            }}
-          >
-            {filtered.map((s) => (
-              <SkillPageCard
-                key={s.id}
-                skill={s}
-                isNew={newlyAddedSkillIdSet.has(String(s?.id || "").trim())}
-                onClick={() => handlePreview(s.id)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {previewSkill && (
-        <SkillPageDetailModal
-          skill={previewSkill}
-          onClose={() => setPreviewSkill(null)}
-          onDelete={previewSkill.source === "custom" ? () => setDeleteId(previewSkill.id) : undefined}
-        />
-      )}
-      {deleteId && (
-        <ConfirmDeleteModal
-          message="Are you sure you want to delete this skill? This cannot be undone."
-          onConfirm={() => handleDelete(deleteId)}
-          onCancel={() => setDeleteId(null)}
-        />
-      )}
-      {showCreate && (
-        <SkillPageCreateModal
-          onClose={() => setShowCreate(false)}
-          onCreated={() => {
-            setShowCreate(false);
-            reload();
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-
 function ToolPageCard({ tool, onClick, busy, onToggleEnabled, onDelete, isNew = false }) {
   const successRate = tool.metrics?.usageCount > 0
     ? Math.round((tool.metrics.successCount / tool.metrics.usageCount) * 100) : null;
@@ -4039,7 +3623,6 @@ function App() {
               onMarkSkillSeen={markSkillArtifactSeen}
               newlyAddedToolIds={artifactNewIds.tools}
               onMarkToolSeen={markToolArtifactSeen}
-              SkillsPage={SkillsPage}
               ToolsPage={ToolsPage}
             />
           )}
