@@ -1,6 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useQuery } from "@tanstack/react-query";
 import { API_BASE } from "./api/client.js";
 import {
@@ -45,6 +43,15 @@ import {
 import { DEFAULT_CODING_AGENTS, agentLabel } from "./features/agents/codingAgents.js";
 import ArenaPage from "./features/arena/ArenaPage.jsx";
 import AssetBrowser from "./features/assets/AssetBrowser.jsx";
+import ChatMessage, { TypingIndicator } from "./features/chat/ChatMessage.jsx";
+import {
+  appendTextDeltaToMessage,
+  buildWelcomeMessage,
+  generateMessageId,
+  getUniqueTextAppend,
+  screenshotPathFromUrl,
+  turnChangedScene,
+} from "./features/chat/chatRuntime.js";
 import CurriculumBuilderPanel from "./features/coevolution/CurriculumBuilderPanel.jsx";
 import ContextPanel from "./features/context/ContextPanel.jsx";
 import RoundInspectorPanel from "./features/coevolution/RoundInspectorPanel.jsx";
@@ -294,47 +301,7 @@ const STATIC_MCP_TOOL_DEFS = [
   { id: "verify_scene", name: "verify_scene", mcpName: "verify_scene", enabled: true, description: "Call a verifier AI (Claude) to analyze the current scene. Takes a screenshot, gets all actors, then asks Claude to evaluate if placement is correct and matches the original request. Returns structured feedback with status (PASS/NEEDS_IMPROVEMENT/FAIL), issues found, and actionable suggestions. Use this after placing objects to check quality before finishing.", paramsSchema: { type: "object", properties: { original_request: { type: "string", description: "The original scene generation request to verify against (e.g. 'a suburban street with 3 houses and 2 trees')" }, focus_areas: { type: "string", description: "Optional: specific aspects to focus on (e.g. 'check building spacing', 'verify tree placement')" } }, required: [] } },
 ].sort((a, b) => a.id.localeCompare(b.id));
 
-function buildWelcomeMessage() {
-  return {
-    id: generateMessageId(),
-    role: "assistant",
-    content: `Welcome to **SimWorld Studio**! I'm your scene generation agent.
-
-I can build city scenes in Unreal Engine using SimWorld's assets.
-
-Try:
-- *"Build a small residential neighborhood with 6 houses and tree-lined streets"*
-- *"Create a busy downtown intersection with tall buildings"*
-- *"Place a park with trees and benches, set the weather to sunset"*`,
-    timestamp: Date.now(),
-  };
-}
-
-// Tools whose successful use changes the scene → worth a checkpoint.
-const SCENE_TOOLS = new Set([
-  "spawn_blueprint_actor", "spawn_actor", "spawn_agent",
-  "delete_actor", "delete_all_spawned", "setup_environment", "set_actor_transform",
-  "execute_python_script",
-]);
-function turnChangedScene(msg) {
-  return (msg?.toolCalls || []).some((tc) => {
-    const name = tc.displayName || (tc.name || "").replace(/^mcp__\w+__/, "");
-    return SCENE_TOOLS.has(name) && tc.status !== "error";
-  });
-}
-// latestScreenshot is "/api/screenshot/file?path=<abs>" → pull the absolute path for the thumbnail.
-function screenshotPathFromUrl(url) {
-  if (!url || typeof url !== "string") return null;
-  try { return new URLSearchParams(url.split("?")[1] || "").get("path"); } catch { return null; }
-}
-
 // ─── Utility ─────────────────────────────────────────────────────────────────
-
-let messageCounter = 0;
-
-function generateMessageId() {
-  return `msg-${++messageCounter}-${Date.now()}`;
-}
 
 function isLearnedSkillMeta(skill) {
   if (!skill || typeof skill !== "object") return false;
@@ -342,179 +309,6 @@ function isLearnedSkillMeta(skill) {
   const tags = Array.isArray(skill.tags) ? skill.tags : [];
   return source === "custom" && tags.includes("learned");
 }
-
-// ─── ToolCallBlock ───────────────────────────────────────────────────────────
-
-const ToolCallBlock = React.memo(function ToolCallBlock({ tool }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const iconFn = TOOL_ICONS[tool.displayName] || ICONS.hammer;
-  const statusColor = {
-    starting: "#64748b",
-    running: "#f59e0b",
-    done: "#16a34a",
-    error: "#dc2626",
-  }[tool.status];
-  const displayName = tool.displayName || tool.name.replace(/^mcp__\w+__/, "");
-
-  let paramSummary = "";
-  try {
-    const input = tool.input || (tool.inputBuffer ? JSON.parse(tool.inputBuffer) : null);
-    if (input) {
-      paramSummary = Object.keys(input)
-        .slice(0, 2)
-        .map((key) => {
-          const val = input[key];
-          const str = Array.isArray(val) ? `[${val.join(",")}]` : String(val);
-          return `${key}: ${str.slice(0, 30)}`;
-        })
-        .join(", ");
-    }
-  } catch {}
-
-  return (
-    <div
-      style={{
-        margin: "4px 0",
-        border: "1px solid var(--line)",
-        borderRadius: 8,
-        overflow: "hidden",
-        background: "var(--panel-2)",
-      }}
-    >
-      <button
-        onClick={() => setExpanded((prev) => !prev)}
-        style={{
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "5px 10px",
-          background: "none",
-          border: "none",
-          color: "var(--ink-3)",
-          cursor: "pointer",
-          textAlign: "left",
-          fontSize: 12,
-        }}
-      >
-        <span
-          style={{
-            display: "inline-block",
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            background: statusColor,
-            flexShrink: 0,
-            ...(tool.status === "running"
-              ? { animation: "pulse 1s ease-in-out infinite" }
-              : {}),
-          }}
-        />
-        <span style={{ fontSize: 13, display: "inline-flex", alignItems: "center" }}>{iconFn(13)}</span>
-        <span style={{ fontFamily: "monospace", color: "var(--blue)", fontWeight: 600 }}>
-          {displayName}
-        </span>
-        {paramSummary && (
-          <span
-            style={{
-              color: "var(--ink-2)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              flex: 1,
-              fontSize: 12,
-            }}
-          >
-            ({paramSummary})
-          </span>
-        )}
-        {tool.status === "running" && !tool.input && (
-          <span style={{ color: "#f59e0b", fontSize: 12, marginLeft: "auto" }}>
-            running…
-          </span>
-        )}
-        <span style={{ marginLeft: "auto", fontSize: 12, flexShrink: 0 }}>
-          {expanded ? "▲" : "▼"}
-        </span>
-      </button>
-
-      {expanded && (
-        <div style={{ padding: "8px 10px", borderTop: "1px solid var(--line)" }}>
-          {(tool.input || tool.inputBuffer) && (
-            <div style={{ marginBottom: 6 }}>
-              <div
-                style={{
-                  color: "var(--ink-2)",
-                  fontSize: 12,
-                  marginBottom: 3,
-                  textTransform: "uppercase",
-                  letterSpacing: 1,
-                }}
-              >
-                Input
-              </div>
-              <pre
-                style={{
-                  margin: 0,
-                  fontSize: 12,
-                  color: "var(--ink-2)",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}
-              >
-                {tool.input ? JSON.stringify(tool.input, null, 2) : tool.inputBuffer}
-              </pre>
-            </div>
-          )}
-          {tool.result && (
-            <div>
-              <div
-                style={{
-                  color: "var(--ink-3)",
-                  fontSize: 12,
-                  marginBottom: 3,
-                  textTransform: "uppercase",
-                  letterSpacing: 1,
-                }}
-              >
-                Result
-              </div>
-              <pre
-                style={{
-                  margin: 0,
-                  fontSize: 12,
-                  color: tool.isError ? "#dc2626" : "#16a34a",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  maxHeight: 200,
-                  overflow: "auto",
-                }}
-              >
-                {tool.result}
-              </pre>
-            </div>
-          )}
-          {tool.screenshot && (
-            <div style={{ marginTop: 8 }}>
-              <img
-                src={tool.screenshot + `?t=${Date.now()}`}
-                alt="UE screenshot"
-                style={{
-                  maxWidth: "100%",
-                  borderRadius: 4,
-                  border: "1px solid var(--line)",
-                }}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} } @keyframes spin { to{transform:rotate(360deg)} }`}</style>
-    </div>
-  );
-}); // end React.memo(ToolCallBlock)
 
 // ─── SkillItem ───────────────────────────────────────────────────────────────
 
@@ -1515,125 +1309,6 @@ function AnnotateOverlay({ src, onSubmitFeedback, onCancel }) {
   );
 }
 
-// ─── ChatMessage ─────────────────────────────────────────────────────────────
-
-const ChatMessage = React.memo(function ChatMessage({ message, agentLabel: agentLabelText }) {
-  const isUser = message.role === "user";
-
-  const bubbleContent = isUser ? (
-    <div style={{ color:"var(--ink)", fontSize:13, whiteSpace:"pre-wrap" }}>{message.content}</div>
-  ) : (
-    <>
-      {message.waiting && (
-        <div style={{ color:"#64748b", fontSize:12, display:"flex", alignItems:"center", gap:8, padding:"2px 0" }}>
-          <span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", border:"2px solid var(--blue)", borderTopColor:"transparent", animation:"spin 1s linear infinite" }} />
-          Waiting for {agentLabelText || "agent"}...
-        </div>
-      )}
-      {message.blocks
-        ? message.blocks.map((block, idx) =>
-            block.type === "text" ? (
-              block.content ? (
-                <div className="markdown" key={"t"+idx} style={{ color:"#0f172a", fontSize:13 }}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.content}</ReactMarkdown>
-                </div>
-              ) : null
-            ) : (
-              <ToolCallBlock key={block.toolId} tool={(message.toolCalls||[]).find(tc=>tc.id===block.toolId)} />
-            )
-          )
-        : [
-            message.content && (
-              <div className="markdown" key="content" style={{ color:"var(--ink,#0f172a)", fontSize:13 }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-              </div>
-            ),
-            (message.toolCalls||[]).map(tc=><ToolCallBlock key={tc.id} tool={tc}/>),
-          ]}
-    </>
-  );
-
-  const bubble = (
-    <div className={isUser ? "sw-bubble-user" : "sw-bubble-assistant"} style={{
-      padding:"9px 12px",
-      borderRadius: isUser ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
-      background: isUser ? "var(--user-bubble,#eff4ff)" : "var(--assistant-bubble,#ffffff)",
-      border:`1px solid ${isUser?"var(--blue-soft,#dbe6ff)":"var(--line,#e6e9ef)"}`,
-      boxShadow:"0 1px 2px rgba(15,23,42,.04)",
-    }}>
-      {bubbleContent}
-    </div>
-  );
-
-  if (isUser) {
-    return (
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:3, marginBottom:2 }}>
-        <div style={{ display:"flex", alignItems:"flex-end", gap:7, maxWidth:"86%" }}>
-          <div style={{ flex:1, minWidth:0 }}>{bubble}</div>
-          <div style={{
-            width:26, height:26, borderRadius:"50%", flexShrink:0,
-            background:"linear-gradient(135deg,#e0e7ff,#c7d2fe)",
-            display:"flex", alignItems:"center", justifyContent:"center",
-          }}>
-            <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-              <circle cx="12" cy="8" r="4" fill="#6366f1"/>
-              <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" fill="#6366f1"/>
-            </svg>
-          </div>
-        </div>
-        <div style={{ fontSize:12, color:"#64748b", paddingRight:33 }}>
-          You · {new Date(message.timestamp).toLocaleTimeString()}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", gap:3, marginBottom:2 }}>
-      <div style={{ display:"flex", alignItems:"flex-end", gap:7, maxWidth:"86%" }}>
-        <div style={{
-          width:26, height:26, borderRadius:"50%", flexShrink:0, overflow:"hidden",
-          background:"linear-gradient(140deg,#fef3e7,#f5e3cf)",
-          border:"1px solid #f3dfc4",
-          boxShadow:"0 1px 4px rgba(234,88,12,.15)",
-        }}>
-          <img src="/SimCoder.png" alt="SimCoder" style={{ width:"100%", height:"100%", objectFit:"contain", padding:2, display:"block" }}/>
-        </div>
-        <div style={{ flex:1, minWidth:0 }}>{bubble}</div>
-      </div>
-      <div style={{ fontSize:12, color:"#64748b", paddingLeft:33 }}>
-        SimCoder · {new Date(message.timestamp).toLocaleTimeString()}
-      </div>
-    </div>
-  );
-}); // end React.memo(ChatMessage)
-
-// ─── TypingIndicator ─────────────────────────────────────────────────────────
-
-function TypingIndicator() {
-  return (
-    <div style={{ display: "flex", gap: 4, alignItems: "center", padding: "4px 0" }}>
-      {[0, 1, 2].map((i) => (
-        <div
-          key={i}
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: "50%",
-            background: "#64748b",
-            animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
-          }}
-        />
-      ))}
-      <style>
-        {
-          "@keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }"
-        }
-      </style>
-    </div>
-  );
-}
-
 // ─── ChatPanel ───────────────────────────────────────────────────────────────
 
 function CheckpointBar({ checkpoint, checkpoints, activeLeafId, restoring, onRestore }) {
@@ -1878,32 +1553,32 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
       // a React setState per character during fast streaming.
       let _textBuf = "";
       let _rafPending = false;
+      const _scheduleTextFlush = (callback) => {
+        if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+          window.requestAnimationFrame(callback);
+        } else {
+          setTimeout(callback, 0);
+        }
+      };
       const _flushTextBuf = (msgId) => {
         if (!_textBuf) return;
-        let delta = _textBuf;
+        const delta = _textBuf;
         _textBuf = "";
         _rafPending = false;
         setMessages((prev) => {
           const updated = [...prev];
           const idx = updated.findIndex((m) => m.id === msgId);
           if (idx === -1) return prev;
-          const msg = { ...updated[idx] };
-          const existingContent = msg.content || "";
-          if (existingContent && delta.startsWith(existingContent)) {
-            delta = delta.slice(existingContent.length);
-          } else if (existingContent && existingContent.endsWith(delta)) {
+          const msg = { ...updated[idx], waiting: false };
+          const result = appendTextDeltaToMessage(msg, delta);
+          if (!result.changed) {
+            if (updated[idx].waiting) {
+              updated[idx] = msg;
+              return updated;
+            }
             return prev;
           }
-          if (!delta) return prev;
-          const blocks = msg.blocks || [];
-          const last = blocks[blocks.length - 1];
-          if (last?.type === "text") {
-            msg.blocks = [...blocks.slice(0, -1), { ...last, content: last.content + delta }];
-          } else {
-            msg.blocks = [...blocks, { type: "text", content: delta }];
-          }
-          msg.content = (msg.content || "") + delta;
-          updated[idx] = msg;
+          updated[idx] = result.message;
           return updated;
         });
       };
@@ -1922,7 +1597,13 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
               const updated = [...prev];
               const idx = updated.findIndex((m) => m.id === assistantId);
               if (idx === -1) return prev;
-              const msg = { ...updated[idx] };
+              let msg = { ...updated[idx] };
+              if (event.type !== "text" && _textBuf) {
+                const result = appendTextDeltaToMessage(msg, _textBuf);
+                _textBuf = "";
+                _rafPending = false;
+                if (result.changed) msg = result.message;
+              }
               // Clear waiting flag on first real event
               if (msg.waiting && (event.type === "text" || event.type === "tool_start" || event.type === "system")) {
                 msg.waiting = false;
@@ -1967,10 +1648,12 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
                 }
                 case "text": {
                   // P2-2: buffer into _textBuf, flush via rAF — avoids setState per character
-                  _textBuf += event.data.delta || "";
+                  const appendText = getUniqueTextAppend(`${msg.content || ""}${_textBuf}`, event.data.delta || "");
+                  if (!appendText) return prev;
+                  _textBuf += appendText;
                   if (!_rafPending) {
                     _rafPending = true;
-                    requestAnimationFrame(() => _flushTextBuf(assistantId));
+                    _scheduleTextFlush(() => _flushTextBuf(assistantId));
                   }
                   // Don't update msg here — the rAF flush handles it separately
                   return prev; // bail out of setMessages for text events
@@ -2285,7 +1968,12 @@ function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, cod
           const ckpt = checkpoints.find((c) => c.messageId === msg.id);
           return (
             <React.Fragment key={msg.id}>
-              <ChatMessage message={msg} agentLabel={agentLabel(codingAgent)} />
+              <ChatMessage
+                message={msg}
+                agentLabel={agentLabel(codingAgent)}
+                toolIcons={TOOL_ICONS}
+                fallbackToolIcon={ICONS.hammer}
+              />
               {ckpt && (
                 <CheckpointBar
                   checkpoint={ckpt}
