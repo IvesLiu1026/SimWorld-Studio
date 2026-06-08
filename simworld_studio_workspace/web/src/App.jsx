@@ -92,6 +92,9 @@ function App() {
   // Column visibility
   const showLeft  = topSection === "studio";
   const showRight = topSection === "studio";
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState(false);
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
+  const [pipelineVisible, setPipelineVisible] = useState(true);
 
   const { leftPanel, rightPanel: rightPanel2 } = getStudioPanels(studioMode);
   const leftPanelMeta = getLeftPanelMeta(leftPanel);
@@ -152,7 +155,7 @@ function App() {
 
   return (
     <PollProvider>
-    <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:"var(--bg)", overflow:"hidden", padding:"8px", gap:8, position:"relative" }}>
+    <div className="simworld-app-shell">
 
       <SessionGateModals
         expired={expired}
@@ -201,21 +204,43 @@ function App() {
 
       {/* ══ ARTIFACT CHAIN ══ */}
       {topSection === "studio" && (
-        <ArtifactChain
-          artifacts={artifacts}
-          activeMode={studioMode}
-          onSelect={m => setStudioMode(m)}
-          icons={ICONS}
-        />
+        <div className={`artifact-chain-shell${pipelineVisible ? "" : " collapsed"}`}>
+          {pipelineVisible && (
+            <ArtifactChain
+              artifacts={artifacts}
+              activeMode={studioMode}
+              onSelect={m => setStudioMode(m)}
+              icons={ICONS}
+            />
+          )}
+          <button
+            className="artifact-chain-toggle"
+            onClick={() => setPipelineVisible((value) => !value)}
+            title={pipelineVisible ? "Hide pipeline artifacts" : "Show pipeline artifacts"}
+            type="button"
+          >
+            {pipelineVisible ? ICONS.close(11) : ICONS.folder(12)}
+            <span>{pipelineVisible ? "Hide" : "Pipeline"}</span>
+          </button>
+        </div>
       )}
 
       {/* ══ 3-COLUMN RESIZABLE STUDIO LAYOUT ══ */}
       {topSection === "studio" && (
-      <div ref={layoutRef} style={{
-        flex: 1, display:"flex", overflow:"hidden", minHeight:0, gap:5, padding:"4px 0",
-      }}>
+      <div ref={layoutRef} className="studio-workspace">
         {/* ── LEFT PANEL ── */}
-        {showLeft && <div ref={leftColRef} style={{
+        {showLeft && leftPanelCollapsed && (
+          <button
+            className="sw-panel-rail left"
+            onClick={() => setLeftPanelCollapsed(false)}
+            title={`Open ${leftPanelMeta.title}`}
+            type="button"
+          >
+            <span className="sw-panel-rail-icon">{ICONS[leftPanelMeta.icon]?.(14)}</span>
+            <span>{leftPanelMeta.title}</span>
+          </button>
+        )}
+        {showLeft && !leftPanelCollapsed && <div ref={leftColRef} style={{
           width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
@@ -231,6 +256,14 @@ function App() {
                 </span>
                 {leftPanelMeta.title}
               </span>
+              <button
+                className="sw-panel-collapse-btn"
+                onClick={() => setLeftPanelCollapsed(true)}
+                title="Collapse left panel"
+                type="button"
+              >
+                {ICONS.panelLeft(13)}
+              </button>
             </div>
             <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
               {leftPanel === "chat" && (
@@ -252,14 +285,14 @@ function App() {
         </div>}
 
         {/* ── Resize handle left ── */}
-        {showLeft && <div className="sw-resize-col" onMouseDown={startColResize("left")} />}
+        {showLeft && !leftPanelCollapsed && <div className="sw-resize-col" onMouseDown={startColResize("left")} />}
 
         {/* ── CENTER: Viewport + drawer ── */}
-        <div style={{ flex:1, minWidth:320, display:"flex", flexDirection:"column", gap:8, overflow:"visible", padding:"0 3px", margin:"0 -3px" }}>
+        <div className="studio-center-column">
 
           {/* UE Viewport card */}
           <div className="sw-panel-card viewport-card-shell">
-            <ViewportPanel icons={ICONS} latestScreenshot={latestScreenshot} />
+            <ViewportPanel icons={ICONS} latestScreenshot={latestScreenshot} health={health} />
           </div>
 
           {/* Drawer: Assets / Scenes / Context / Tools */}
@@ -285,7 +318,7 @@ function App() {
                 {drawerOpen ? ICONS.chevronDown?.(10) : ICONS.folder(10)}
               </span>
               <span style={{ fontSize:12, fontWeight:700, color:"var(--ink-2)" }}>
-                {drawerOpen ? drawerTab.charAt(0).toUpperCase()+drawerTab.slice(1) : "Build Timeline — Assets / Scenes / Context"}
+                {drawerOpen ? drawerTab.charAt(0).toUpperCase()+drawerTab.slice(1) : "Workspace drawer"}
               </span>
               <div style={{ flex:1 }} />
               {drawerOpen && (
@@ -332,10 +365,10 @@ function App() {
         </div>
 
         {/* ── Resize handle right ── */}
-        {showRight && <div className="sw-resize-col" onMouseDown={startColResize("right")} />}
+        {showRight && !rightPanelCollapsed && <div className="sw-resize-col" onMouseDown={startColResize("right")} />}
 
         {/* ── RIGHT PANEL — driven by studioMode ── */}
-        {showRight && <div ref={rightColRef} style={{
+        {showRight && !rightPanelCollapsed && <div ref={rightColRef} style={{
           width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
           display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
         }}>
@@ -350,6 +383,14 @@ function App() {
                 </span>
                 {rightPanelMeta.title}
               </span>
+              <button
+                className="sw-panel-collapse-btn"
+                onClick={() => setRightPanelCollapsed(true)}
+                title="Collapse right panel"
+                type="button"
+              >
+                {ICONS.panelRight(13)}
+              </button>
             </div>
             <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
               {rightPanel2 === "sceneinsp"    && (
@@ -369,6 +410,17 @@ function App() {
             </div>
           </div>
         </div>}
+        {showRight && rightPanelCollapsed && (
+          <button
+            className="sw-panel-rail right"
+            onClick={() => setRightPanelCollapsed(false)}
+            title={`Open ${rightPanelMeta.title}`}
+            type="button"
+          >
+            <span className="sw-panel-rail-icon">{ICONS[rightPanelMeta.icon]?.(14)}</span>
+            <span>{rightPanelMeta.title}</span>
+          </button>
+        )}
 
       </div>
       )}

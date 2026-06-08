@@ -37,6 +37,98 @@ const QUICK_SUGGESTIONS = [
   "Add street furniture",
 ];
 
+const CHAT_CONVERSATIONS_KEY = "simworld.chat.conversations.v1";
+const CHAT_ACTIVE_KEY = "simworld.chat.activeConversation.v1";
+
+function readJsonStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonStorage(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+function makeConversation(overrides = {}) {
+  const now = Date.now();
+  return {
+    id: overrides.id || `chat_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    title: overrides.title || "New conversation",
+    createdAt: overrides.createdAt || now,
+    updatedAt: overrides.updatedAt || now,
+    state: {
+      messages: overrides.state?.messages || [buildWelcomeMessage()],
+      input: overrides.state?.input || "",
+      sessionId: overrides.state?.sessionId || null,
+      mcpStatus: overrides.state?.mcpStatus || "-",
+      selectedSkills: overrides.state?.selectedSkills || [],
+      autoSkillSelectionEnabled: overrides.state?.autoSkillSelectionEnabled ?? true,
+      autoSelectedSkills: overrides.state?.autoSelectedSkills || [],
+      autoSelectionError: overrides.state?.autoSelectionError || "",
+      latestScreenshot: overrides.state?.latestScreenshot || null,
+      turnCount: overrides.state?.turnCount || 0,
+    },
+  };
+}
+
+function titleFromMessages(messages) {
+  const firstUser = messages.find((message) => message.role === "user" && message.content?.trim());
+  if (!firstUser) return "New conversation";
+  const compact = firstUser.content.replace(/\s+/g, " ").trim();
+  return compact.length > 42 ? `${compact.slice(0, 42)}...` : compact;
+}
+
+function normalizeConversation(conversation) {
+  const normalized = makeConversation(conversation || {});
+  return {
+    ...normalized,
+    title: conversation?.title || titleFromMessages(normalized.state.messages),
+  };
+}
+
+function loadChatConversations() {
+  const saved = readJsonStorage(CHAT_CONVERSATIONS_KEY, []);
+  const conversations = Array.isArray(saved) && saved.length > 0
+    ? saved.map(normalizeConversation)
+    : [makeConversation()];
+  const savedActiveId = (() => {
+    try {
+      return localStorage.getItem(CHAT_ACTIVE_KEY);
+    } catch {
+      return null;
+    }
+  })();
+  const activeConversationId = conversations.some((conversation) => conversation.id === savedActiveId)
+    ? savedActiveId
+    : conversations[0].id;
+  return { conversations, activeConversationId };
+}
+
+function persistActiveConversation(conversations, activeConversationId, state) {
+  const updatedAt = Date.now();
+  const updated = conversations.map((conversation) =>
+    conversation.id === activeConversationId
+      ? {
+          ...conversation,
+          title: titleFromMessages(state.messages),
+          updatedAt,
+          state,
+        }
+      : conversation
+  );
+  writeJsonStorage(CHAT_CONVERSATIONS_KEY, updated);
+  try {
+    localStorage.setItem(CHAT_ACTIVE_KEY, activeConversationId);
+  } catch {}
+  return updated;
+}
+
 function buildToolIcons(icons = {}) {
   return {
     get_actors_in_level: icons.clipboard,
@@ -59,23 +151,33 @@ function buildToolIcons(icons = {}) {
 }
 
 export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, codingAgent, codingModel, icons = {} }) {
-  const [messages, setMessages] = useState(() => [buildWelcomeMessage()]);
+  const initialChatStateRef = useRef(null);
+  if (!initialChatStateRef.current) initialChatStateRef.current = loadChatConversations();
+  const initialConversation = initialChatStateRef.current.conversations.find(
+    (conversation) => conversation.id === initialChatStateRef.current.activeConversationId
+  ) || initialChatStateRef.current.conversations[0];
+  const initialState = initialConversation.state;
+
+  const [conversations, setConversations] = useState(initialChatStateRef.current.conversations);
+  const [activeConversationId, setActiveConversationId] = useState(initialChatStateRef.current.activeConversationId);
+  const [messages, setMessages] = useState(() => initialState.messages || [buildWelcomeMessage()]);
   const [checkpoints, setCheckpoints] = useState([]);
   const [activeLeafId, setActiveLeafId] = useState(null);
   const [restoringId, setRestoringId] = useState(null);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialState.input || "");
   const [loading, setLoading] = useState(false);
-  const [sessionId, setSessionId] = useState(null);
-  const [mcpStatus, setMcpStatus] = useState("-");
-  const [selectedSkills, setSelectedSkills] = useState([]);
-  const [autoSkillSelectionEnabled, setAutoSkillSelectionEnabled] = useState(true);
-  const [autoSelectedSkills, setAutoSelectedSkills] = useState([]);
+  const [sessionId, setSessionId] = useState(initialState.sessionId || null);
+  const [mcpStatus, setMcpStatus] = useState(initialState.mcpStatus || "-");
+  const [selectedSkills, setSelectedSkills] = useState(initialState.selectedSkills || []);
+  const [autoSkillSelectionEnabled, setAutoSkillSelectionEnabled] = useState(initialState.autoSkillSelectionEnabled ?? true);
+  const [autoSelectedSkills, setAutoSelectedSkills] = useState(initialState.autoSelectedSkills || []);
   const [autoSelectingSkills, setAutoSelectingSkills] = useState(false);
-  const [autoSelectionError, setAutoSelectionError] = useState("");
+  const [autoSelectionError, setAutoSelectionError] = useState(initialState.autoSelectionError || "");
   const [selfEvolutionEnabled, setSelfEvolutionEnabled] = useState(null);
-  const [latestScreenshot, setLatestScreenshot] = useState(null);
+  const [latestScreenshot, setLatestScreenshot] = useState(initialState.latestScreenshot || null);
   const [annotating, setAnnotating] = useState(false);
-  const [turnCount, setTurnCount] = useState(0);
+  const [turnCount, setTurnCount] = useState(initialState.turnCount || 0);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
   const textareaRef = useRef(null);
@@ -149,6 +251,98 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   useEffect(() => { activeLeafRef.current = activeLeafId; }, [activeLeafId]);
   useEffect(() => { latestScreenshotRef.current = latestScreenshot; }, [latestScreenshot]);
   useEffect(() => { turnCountRef.current = turnCount; }, [turnCount]);
+
+  useEffect(() => {
+    const state = {
+      messages,
+      input,
+      sessionId,
+      mcpStatus,
+      selectedSkills,
+      autoSkillSelectionEnabled,
+      autoSelectedSkills,
+      autoSelectionError,
+      latestScreenshot,
+      turnCount,
+    };
+    setConversations((prev) => persistActiveConversation(prev, activeConversationId, state));
+  }, [
+    activeConversationId,
+    messages,
+    input,
+    sessionId,
+    mcpStatus,
+    selectedSkills,
+    autoSkillSelectionEnabled,
+    autoSelectedSkills,
+    autoSelectionError,
+    latestScreenshot,
+    turnCount,
+  ]);
+
+  const loadConversationState = useCallback((conversation) => {
+    const state = conversation.state || makeConversation().state;
+    setMessages(Array.isArray(state.messages) && state.messages.length ? state.messages : [buildWelcomeMessage()]);
+    setInput(state.input || "");
+    setSessionId(state.sessionId || null);
+    setMcpStatus(state.mcpStatus || "-");
+    setSelectedSkills(Array.isArray(state.selectedSkills) ? state.selectedSkills : []);
+    setAutoSkillSelectionEnabled(state.autoSkillSelectionEnabled ?? true);
+    setAutoSelectedSkills(Array.isArray(state.autoSelectedSkills) ? state.autoSelectedSkills : []);
+    setAutoSelectingSkills(false);
+    setAutoSelectionError(state.autoSelectionError || "");
+    setLatestScreenshot(state.latestScreenshot || null);
+    setTurnCount(state.turnCount || 0);
+    onSessionChange?.(state.sessionId || null);
+  }, [onSessionChange]);
+
+  const handleSelectConversation = useCallback((id) => {
+    if (loading || id === activeConversationId) return;
+    const conversation = conversations.find((item) => item.id === id);
+    if (!conversation) return;
+    setActiveConversationId(id);
+    try {
+      localStorage.setItem(CHAT_ACTIVE_KEY, id);
+    } catch {}
+    loadConversationState(conversation);
+    setSessionsOpen(false);
+  }, [activeConversationId, conversations, loadConversationState, loading]);
+
+  const handleNewConversation = useCallback(() => {
+    if (loading) return;
+    const conversation = makeConversation();
+    setConversations((prev) => {
+      const next = [conversation, ...prev];
+      writeJsonStorage(CHAT_CONVERSATIONS_KEY, next);
+      return next;
+    });
+    setActiveConversationId(conversation.id);
+    try {
+      localStorage.setItem(CHAT_ACTIVE_KEY, conversation.id);
+    } catch {}
+    setCheckpoints([]);
+    setActiveLeafId(null);
+    loadConversationState(conversation);
+    setSessionsOpen(false);
+  }, [loadConversationState, loading]);
+
+  const handleDeleteConversation = useCallback((id) => {
+    if (loading) return;
+    const remaining = conversations.filter((conversation) => conversation.id !== id);
+    const next = remaining.length ? remaining : [makeConversation()];
+    writeJsonStorage(CHAT_CONVERSATIONS_KEY, next);
+    setConversations(next);
+    if (id === activeConversationId) {
+      const replacement = next[0];
+      setActiveConversationId(replacement.id);
+      try {
+        localStorage.setItem(CHAT_ACTIVE_KEY, replacement.id);
+      } catch {}
+      setCheckpoints([]);
+      setActiveLeafId(null);
+      loadConversationState(replacement);
+    }
+  }, [activeConversationId, conversations, loadConversationState, loading]);
 
   // Fetch the stable studio session id once, then load its checkpoint tree.
   useEffect(() => {
@@ -599,6 +793,10 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   };
 
   const lastMessage = messages[messages.length - 1];
+  const sortedConversations = useMemo(
+    () => [...conversations].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+    [conversations]
+  );
 
   return (
     <div
@@ -619,8 +817,12 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
         />
       )}
 
+      <div className="chat-panel-layout">
+        <div className="chat-main-column">
+
       <SceneAgentHeader
         agentLabelText={agentLabel(codingAgent)}
+        icons={icons}
         mcpStatus={mcpStatus}
         selfEvolutionReady={selfEvolutionReady}
         selfEvolutionOn={selfEvolutionOn}
@@ -634,6 +836,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
         onShare={handleShare}
         onStop={handleStop}
         onReset={handleReset}
+        onOpenSessions={() => setSessionsOpen(true)}
+        onNewConversation={handleNewConversation}
       />
 
       {/* Skills panel */}
@@ -807,6 +1011,74 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
             <span style={{ color: "var(--red)", marginLeft: 8 }}>{autoSelectionError}</span>
           )}
         </div>
+        </div>
+        </div>
+
+        {sessionsOpen && (
+          <>
+            <button
+              className="chat-session-scrim"
+              aria-label="Close chat sessions"
+              onClick={() => setSessionsOpen(false)}
+              type="button"
+            />
+            <aside className="chat-session-drawer" aria-label="Chat sessions">
+              <div className="chat-session-drawer-head">
+                <div>
+                  <span>Chats</span>
+                  <small>{sortedConversations.length} saved</small>
+                </div>
+                <button
+                  className="chat-session-new"
+                  onClick={handleNewConversation}
+                  disabled={loading}
+                  title="New conversation"
+                  type="button"
+                >
+                  {icons.plus?.(13)}
+                </button>
+                <button
+                  className="chat-session-close"
+                  onClick={() => setSessionsOpen(false)}
+                  title="Close chat sessions"
+                  type="button"
+                >
+                  {icons.close?.(12)}
+                </button>
+              </div>
+              <div className="chat-session-list">
+                {sortedConversations.map((conversation) => (
+                  <div
+                    key={conversation.id}
+                    className={`chat-session-item${conversation.id === activeConversationId ? " active" : ""}`}
+                  >
+                    <button
+                      className="chat-session-select"
+                      onClick={() => handleSelectConversation(conversation.id)}
+                      disabled={loading}
+                      title={conversation.title}
+                      type="button"
+                    >
+                      <span className="chat-session-title">{conversation.title}</span>
+                      <span className="chat-session-meta">
+                        {conversation.state?.turnCount || 0} turns
+                      </span>
+                    </button>
+                    <button
+                      className="chat-session-delete"
+                      onClick={() => handleDeleteConversation(conversation.id)}
+                      disabled={loading}
+                      title="Delete conversation"
+                      type="button"
+                    >
+                      {icons.trash?.(12)}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </aside>
+          </>
+        )}
       </div>
     </div>
   );

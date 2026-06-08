@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../../api/client.js";
 
 const PAGE_SIZE = 40;
+const PREVIEW_BATCH_SIZE = 1;
 
 export default function AssetBrowser({ icons, onInsert }) {
   const [browsePath, setBrowsePath] = useState("/Game/");
@@ -9,11 +10,15 @@ export default function AssetBrowser({ icons, onInsert }) {
   const [page, setPage] = useState(0);
   const [dirCache, setDirCache] = useState(() => new Map());
   const [loadingMap, setLoadingMap] = useState(null);
+  const [previewMap, setPreviewMap] = useState(() => new Map());
   const containerRef = useRef(null);
   const dirCacheRef = useRef(new Map());
   const pendingRef = useRef(new Set());
+  const previewMapRef = useRef(new Map());
+  const pendingPreviewRef = useRef(new Set());
 
   dirCacheRef.current = dirCache;
+  previewMapRef.current = previewMap;
 
   const fetchDir = useCallback((path) => {
     const entry = dirCacheRef.current.get(path);
@@ -135,6 +140,101 @@ export default function AssetBrowser({ icons, onInsert }) {
   const pageAssets = filteredAssets.slice(0, (page + 1) * PAGE_SIZE);
   const hasMore = pageAssets.length < filteredAssets.length;
   const breadcrumbs = browsePath.replace(/\/$/, "").split("/").filter(Boolean);
+  const previewRequestKey = pageAssets.map((asset) => `${asset.fullPath}:${asset.previewUrl || ""}`).join("|");
+  const previewStateKey = pageAssets
+    .map((asset) => {
+      const preview = previewMap.get(asset.fullPath);
+      return `${asset.fullPath}:${preview?.status || ""}:${preview?.previewUrl || ""}`;
+    })
+    .join("|");
+
+  useEffect(() => {
+    if (loading || source === "unavailable" || source === "error") return undefined;
+
+    const visiblePaths = new Set(pageAssets.map((asset) => asset.fullPath).filter(Boolean));
+    for (const path of pendingPreviewRef.current) {
+      if (visiblePaths.has(path)) return undefined;
+    }
+
+    const candidates = pageAssets
+      .filter((asset) => {
+        if (!asset.fullPath || asset.type === "map") return false;
+        if (asset.previewSupported === false) return false;
+        const cached = previewMapRef.current.get(asset.fullPath);
+        if (asset.previewUrl || cached?.previewUrl) return false;
+        if (cached?.status === "error" || cached?.status === "missing" || cached?.status === "unsupported") return false;
+        return !pendingPreviewRef.current.has(asset.fullPath);
+      })
+      .slice(0, PREVIEW_BATCH_SIZE);
+
+    if (!candidates.length) return undefined;
+
+    const clearPending = () => {
+      candidates.forEach((asset) => pendingPreviewRef.current.delete(asset.fullPath));
+    };
+
+    candidates.forEach((asset) => pendingPreviewRef.current.add(asset.fullPath));
+    setPreviewMap((prev) => {
+      const next = new Map(prev);
+      candidates.forEach((asset) => {
+        next.set(asset.fullPath, { ...(next.get(asset.fullPath) || {}), status: "loading" });
+      });
+      return next;
+    });
+
+    fetch(`${API_BASE}/asset-previews`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit: PREVIEW_BATCH_SIZE,
+        assets: candidates.map((asset) => ({
+          name: asset.name,
+          fullPath: asset.fullPath,
+          type: asset.type,
+          category: asset.category,
+        })),
+      }),
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || `Preview request failed: ${response.status}`);
+        return payload;
+      })
+      .then((payload) => {
+        clearPending();
+        setPreviewMap((prev) => {
+          const next = new Map(prev);
+          const seen = new Set();
+          for (const item of payload.results || []) {
+            if (!item.fullPath) continue;
+            seen.add(item.fullPath);
+            next.set(item.fullPath, {
+              previewUrl: item.previewUrl || null,
+              status: item.status || item.previewStatus || "missing",
+              error: item.error || null,
+            });
+          }
+          candidates.forEach((asset) => {
+            if (!seen.has(asset.fullPath)) {
+              next.set(asset.fullPath, { status: "error", previewUrl: null, error: payload.error || "Preview unavailable" });
+            }
+          });
+          return next;
+        });
+      })
+      .catch(() => {
+        clearPending();
+        setPreviewMap((prev) => {
+          const next = new Map(prev);
+          candidates.forEach((asset) => {
+            next.set(asset.fullPath, { status: "error", previewUrl: null });
+          });
+          return next;
+        });
+      });
+
+    return undefined;
+  }, [loading, previewRequestKey, previewStateKey, source]);
 
   if (!loaded && !loading) {
     return <AssetBrowserState ref={containerRef} icon={icons.cube(24)} label="Assets" />;
@@ -210,6 +310,10 @@ export default function AssetBrowser({ icons, onInsert }) {
             {pageAssets.map((asset, index) => {
               const isActionable = asset.type === "map" || asset.type === "blueprint" || asset.type === "static_mesh";
               const isLoading = loadingMap === asset.fullPath;
+              const preview = previewMap.get(asset.fullPath) || {};
+              const previewUrl = preview.previewUrl || asset.previewUrl || null;
+              const previewStatus = preview.status || asset.previewStatus || "missing";
+              const previewLoading = previewStatus === "loading";
               return (
                 <button
                   key={`${asset.fullPath}-${index}`}
@@ -224,14 +328,20 @@ export default function AssetBrowser({ icons, onInsert }) {
                   }
                   onDoubleClick={() => handleDoubleClick(asset)}
                 >
-                  <span className="asset-tile-icon">
-                    {isLoading
-                      ? icons.refresh(22)
-                      : asset.type === "blueprint"
-                        ? icons.building(22)
-                        : asset.type === "map"
-                          ? icons.map(22)
-                          : icons.cube(22)}
+                  <span className={`asset-tile-preview${previewUrl ? " has-image" : ""}${previewLoading ? " loading" : ""}`}>
+                    {previewUrl ? (
+                      <img src={previewUrl} alt="" loading="lazy" draggable={false} />
+                    ) : (
+                      <span className="asset-tile-preview-fallback">
+                        {isLoading || previewLoading
+                          ? icons.refresh(22)
+                          : asset.type === "blueprint"
+                            ? icons.building(22)
+                            : asset.type === "map"
+                              ? icons.map(22)
+                              : icons.cube(22)}
+                      </span>
+                    )}
                   </span>
                   <span className="asset-tile-name">
                     {asset.name.replace(/^BP_/, "").replace(/_/g, " ")}

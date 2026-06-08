@@ -1,8 +1,10 @@
-"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);
+"use strict";const{spawn}=require("child_process"),express=require("express"),cors=require("cors"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");function normalizeUnrealVersion(v){const s=String(v||"").trim();if(!s)return null;const m=s.match(/(?:UE\s*)?(\d+(?:\.\d+){1,2})/i);return m?m[1]:s}function versionFromPath(v){const s=String(v||"");const m=s.match(/(?:UE|Unreal(?:[_-]?Engine)?|Linux[_-]?Unreal[_-]?Engine)[_-]?(\d+(?:\.\d+){1,2})/i)||s.match(/(\d+\.\d+(?:\.\d+)?)/);return m?m[1]:null}function versionFromLog(){try{const p=path.join(LOG_DIR,"ue.log");if(!fs.existsSync(p))return null;const text=fs.readFileSync(p,"utf8").slice(-250000);const m=text.match(/Engine Version:\s*(\d+(?:\.\d+){1,2})/i)||text.match(/engineversion="(\d+(?:\.\d+){1,2})/i);return m?m[1]:null}catch{return null}}function getUnrealEngineVersion(){return normalizeUnrealVersion(process.env.UE_VERSION||process.env.UNREAL_VERSION||process.env.UNREAL_ENGINE_VERSION)||versionFromPath(process.env.UE_ROOT)||versionFromPath(process.env.UNREAL_ENGINE_ROOT)||versionFromPath(process.env.UE_EDITOR)||versionFromPath(process.env.UNREAL_EDITOR)||versionFromLog()}function getUnrealEngineHealthMeta(){const engineVersion=getUnrealEngineVersion();return{engineVersion,engineLabel:engineVersion?`UE ${engineVersion}`:"Unreal Engine"}}let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker}=require("./unreal-bridge");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);
 // Stable session token — persists across all Claude subprocess spawns
 const{buildSceneAgentRuntimeAppendix}=require("./agent-runtime-policy");
+const demoVideos=require("./demo-videos");
+const ASSET_PREVIEW_DIR=path.join(ARENA_ROOT,"tmp","asset-previews");
 const STUDIO_SESSION=crypto.randomUUID();
-logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}const{TaskSetManager}=require("./tasksets"),{selectSkillsWithClaude}=require("./skill-selector");let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,taskSetManager=new TaskSetManager(),SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
+logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}const{TaskSetManager}=require("./tasksets"),{selectSkillsWithClaude}=require("./skill-selector");let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,taskSetManager=new TaskSetManager(),SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0}),fs.mkdirSync(ASSET_PREVIEW_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
 `;try{fs.appendFileSync(getLogFilePath(),n)}catch{}console.log(`[${s}] ${e}`)}const ARENA_SYSTEM_PROMPT=`You are the SimWorld Studio scene-generation agent.
 You build city scenes in Unreal Engine 5 using MCP tools. The user sees a live viewport on the right.
 
@@ -72,7 +74,7 @@ Example — spawn 2 pedestrians:
 - Keep it simple: spawn objects, screenshot. Don't overthink it.
 - To load a map use LevelEditorSubsystem (NOT deprecated EditorLevelLibrary):
   subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-  subsystem.load_level("/Game/PackName/Maps/MapName")`+"\n\n"+buildSceneAgentRuntimeAppendix(),app=express();app.use(cors()),app.use(express.json({limit:"10mb"})),app.use((req,res,next)=>{if(req.method==="POST")logToFile("http",`${req.method} ${req.path} body=${JSON.stringify(req.body||{}).slice(0,200)}`);res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
+  subsystem.load_level("/Game/PackName/Maps/MapName")`+"\n\n"+buildSceneAgentRuntimeAppendix(),app=express();app.use(cors()),app.use(express.json({limit:"10mb"})),app.use((req,res,next)=>{if(req.method==="POST")logToFile("http",`${req.method} ${req.path} body=${JSON.stringify(req.body||{}).slice(0,200)}`);res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.use("/asset-previews",express.static(ASSET_PREVIEW_DIR,{maxAge:"7d",immutable:true})),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
 <html style="width:100%;height:100%;margin:0;background:#000">
 <head><meta charset="utf-8"><title>UE Pixel Stream</title>
 <style>
@@ -134,7 +136,7 @@ if(p.get('ss')!==target){p.set('ss',target);
 location.replace(location.pathname+'?'+p.toString());}})();
 </script>
 <script defer src="/ue-assets/player.js"></script>
-</head><body style="width:100vw;height:100vh"></body></html>`)}),app.get("/api/pixel-streaming-url",async(s,e)=>{  const host=s.headers.host?.split(":")[0]||"127.0.0.1";  const candidates=[CIRRUS_HTTP_PORT,8685,8585,8785,8885,8485].filter((v,i,a)=>a.indexOf(v)===i);  const net=require("net");  const probe=p=>new Promise(r=>{    const sock=new net.Socket();    sock.setTimeout(800);    sock.connect(p,"127.0.0.1",()=>{sock.destroy();r(p)});    sock.on("error",()=>r(null));    sock.on("timeout",()=>{sock.destroy();r(null)});  });  for(const port of candidates){    const found=await probe(port);    if(found)return e.json({url:"http://"+host+":"+found,detectedPort:found});  }  e.json({url:"http://"+host+":"+CIRRUS_HTTP_PORT,detectedPort:null});}),app.get("/api/health",(s,e)=>{const t=require("net");let n=!1;const o=new t.Socket,i=setTimeout(()=>{o.destroy(),a()},2e3);o.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{n=!0,o.destroy(),clearTimeout(i),a()}),o.on("error",()=>{clearTimeout(i),a()});function a(){e.json({status:"ok",ueConnected:n,mcpConnected:n,pixelStreamingUrl:PIXEL_STREAMING_URL})}}),app.get("/api/screenshot/latest",(s,e)=>{let t=null;for(const n of SCREENSHOT_SEARCH_DIRS)if(fs.existsSync(n))try{const o=fs.readdirSync(n).filter(i=>i.endsWith(".png")).map(i=>({filepath:path.join(n,i),time:fs.statSync(path.join(n,i)).mtimeMs})).filter(({time:i})=>Date.now()-i<18e5);for(const i of o)(!t||i.time>t.time)&&(t=i)}catch{}if(!t)return e.status(404).json({error:"No screenshots found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t.filepath)}),app.get("/api/screenshot/file",(s,e)=>{const t=s.query.path;if(!t||!fs.existsSync(t))return e.status(404).json({error:"Not found"});e.setHeader("Cache-Control","no-store"),e.sendFile(path.resolve(t))}),app.post("/api/camera",(s,e)=>{const{cmd:t,args:n=[]}=s.body;if(!["set_camera","get_camera"].includes(t))return e.status(400).json({error:"Unknown camera command"});const i=require("net"),a=new i.Socket,c=setTimeout(()=>{a.destroy(),e.status(504).json({error:"Timeout"})},1e4);let m={};if(t==="set_camera"&&n.length>=6)m={script:`
+</head><body style="width:100vw;height:100vh"></body></html>`)}),app.get("/api/pixel-streaming-url",async(s,e)=>{  const host=s.headers.host?.split(":")[0]||"127.0.0.1";  const candidates=[CIRRUS_HTTP_PORT,8685,8585,8785,8885,8485].filter((v,i,a)=>a.indexOf(v)===i);  const net=require("net");  const probe=p=>new Promise(r=>{    const sock=new net.Socket();    sock.setTimeout(800);    sock.connect(p,"127.0.0.1",()=>{sock.destroy();r(p)});    sock.on("error",()=>r(null));    sock.on("timeout",()=>{sock.destroy();r(null)});  });  for(const port of candidates){    const found=await probe(port);    if(found)return e.json({url:"http://"+host+":"+found,detectedPort:found});  }  e.json({url:"http://"+host+":"+CIRRUS_HTTP_PORT,detectedPort:null});}),app.get("/api/health",(s,e)=>{const t=require("net");let n=!1;const o=new t.Socket,i=setTimeout(()=>{o.destroy(),a()},2e3);o.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{n=!0,o.destroy(),clearTimeout(i),a()}),o.on("error",()=>{clearTimeout(i),a()});function a(){e.json({status:"ok",ueConnected:n,mcpConnected:n,pixelStreamingUrl:PIXEL_STREAMING_URL,...getUnrealEngineHealthMeta()})}}),app.get("/api/screenshot/latest",(s,e)=>{let t=null;for(const n of SCREENSHOT_SEARCH_DIRS)if(fs.existsSync(n))try{const o=fs.readdirSync(n).filter(i=>i.endsWith(".png")).map(i=>({filepath:path.join(n,i),time:fs.statSync(path.join(n,i)).mtimeMs})).filter(({time:i})=>Date.now()-i<18e5);for(const i of o)(!t||i.time>t.time)&&(t=i)}catch{}if(!t)return e.status(404).json({error:"No screenshots found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t.filepath)}),app.get("/api/screenshot/file",(s,e)=>{const t=s.query.path;if(!t||!fs.existsSync(t))return e.status(404).json({error:"Not found"});e.setHeader("Cache-Control","no-store"),e.sendFile(path.resolve(t))}),app.post("/api/camera",(s,e)=>{const{cmd:t,args:n=[]}=s.body;if(!["set_camera","get_camera"].includes(t))return e.status(400).json({error:"Unknown camera command"});const i=require("net"),a=new i.Socket,c=setTimeout(()=>{a.destroy(),e.status(504).json({error:"Timeout"})},1e4);let m={};if(t==="set_camera"&&n.length>=6)m={script:`
 import unreal
 subsys = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 loc = unreal.Vector(${n[0]}, ${n[1]}, ${n[2]})
@@ -341,8 +343,8 @@ print('SWASSET_BEGIN' + __import__('json').dumps(result) + 'SWASSET_END')
         const isMesh = p.includes('/meshes/') || p.includes('/Meshes/') || name.startsWith('SM_');
         const type = isBP ? 'blueprint' : isMesh ? 'static_mesh' : 'asset';
         const spawnTool = isBP ? 'spawn_blueprint_actor' : isMesh ? 'spawn_actor' : null;
-        dirNode.assets.push({ name, fullPath:p, type, spawnTool,
-          icon: isBP ? '🏗️' : isMesh ? '📦' : '🔷' });
+        dirNode.assets.push(_withAssetPreviewMeta({ name, fullPath:p, type, spawnTool,
+          icon: isBP ? '🏗️' : isMesh ? '📦' : '🔷' }));
       }
     }
 
@@ -415,7 +417,7 @@ function _gatherStatus(since=0){
     context:ctx||{agents:[],objects:[],environment:{ready:false},round:0,updatedAt:null},
     sessions,activities,chatLog,
     pieActive:_cachedPie,
-    health:{ueConnected:_cachedUeConn,mcpConnected:_cachedUeConn,pixelStreamingUrl:PIXEL_STREAMING_URL},
+    health:{ueConnected:_cachedUeConn,mcpConnected:_cachedUeConn,pixelStreamingUrl:PIXEL_STREAMING_URL,...getUnrealEngineHealthMeta()},
     metrics:metricsHub.snapshot(),
   };
 }
@@ -714,6 +716,23 @@ function ueExecScript(script, timeoutMs = 60000) {
 }
 function _ueLogs(r) { try { return (r.result.python_logs || []).join("\n"); } catch (_e) { return ""; } }
 
+let _ueProjectSavedDir = null;
+let _ueProjectSavedDirCheckedAt = 0;
+async function getDemoVideoRoots() {
+  const roots = [path.join(ARENA_ROOT, "results", "demo_videos")];
+  try {
+    if (!_ueProjectSavedDir && Date.now() - _ueProjectSavedDirCheckedAt > 30000) {
+      _ueProjectSavedDirCheckedAt = Date.now();
+      const r = await ueExecScript("import unreal, os\nprint('PROJECT_SAVED_DIR='+os.path.abspath(unreal.SystemLibrary.get_project_saved_directory()))", 3000);
+      const m = _ueLogs(r).match(/PROJECT_SAVED_DIR=(.*)$/m);
+      if (m) _ueProjectSavedDir = m[1].trim();
+    }
+    if (_ueProjectSavedDir) roots.push(path.join(_ueProjectSavedDir, "SimWorldDemos"));
+  } catch (_e) {}
+  return roots;
+}
+demoVideos.registerDemoVideoRoutes(app, { getRoots: getDemoVideoRoots });
+
 // Capture the current scene's user-built actors (read-only — never loads or saves a map).
 async function ckptCaptureManifest() {
   const script = [
@@ -939,7 +958,11 @@ app.get("/api/saved-maps", async (req, res) => {
   const r = await ueExecScript(py, 30000);
   const m = _ueLogs(r).match(/SAVED_MAPS=(.*)$/m);
   if (!m) return res.status(502).json({ error: "UE saved-map listing failed" });
-  try { res.json({ maps: JSON.parse(m[1]) }); }
+  try {
+    const maps = JSON.parse(m[1]);
+    const roots = await getDemoVideoRoots();
+    res.json({ maps: demoVideos.attachDemoVideosToMaps(maps, roots) });
+  }
   catch (_e) { res.status(502).json({ error: "parse failed" }); }
 });
 
@@ -1083,6 +1106,144 @@ function _flattenAssets(catalog) {
 
 const _allAssets = _flattenAssets(ASSETS_FULL);
 
+const ASSET_PREVIEW_VERSION="editor-thumbnail-v2";
+const _assetPreviewJobs=new Map();
+
+function _assetPreviewId(assetPath){
+  return crypto.createHash("sha1").update(`${ASSET_PREVIEW_VERSION}:${String(assetPath||"")}`).digest("hex").slice(0,20);
+}
+
+function _assetPreviewFile(assetPath){
+  return path.join(ASSET_PREVIEW_DIR,`${_assetPreviewId(assetPath)}.png`);
+}
+
+function _assetPreviewUrl(assetPath){
+  return `/asset-previews/${_assetPreviewId(assetPath)}.png`;
+}
+
+function _assetPreviewSupported(asset){
+  const type=String(asset?.type||"").toLowerCase();
+  const fullPath=String(asset?.fullPath||asset?.path||"");
+  if(!fullPath.startsWith("/Game/")&&!fullPath.startsWith("/Engine/"))return false;
+  return ["blueprint","static_mesh","agent","asset"].includes(type);
+}
+
+function _assetPreviewMeta(asset){
+  const fullPath=asset?.fullPath||asset?.path;
+  const supported=_assetPreviewSupported(asset);
+  const filePath=fullPath?_assetPreviewFile(fullPath):null;
+  const ready=!!(supported&&filePath&&fs.existsSync(filePath));
+  return {
+    previewSupported:supported,
+    previewStatus:ready?"ready":supported?"missing":"unsupported",
+    previewUrl:ready?_assetPreviewUrl(fullPath):null,
+    method:ready?"editor_thumbnail":undefined,
+  };
+}
+
+function _withAssetPreviewMeta(asset){
+  return {...asset,..._assetPreviewMeta(asset)};
+}
+
+function _ueToolCommand(type,params={},timeoutMs=60000){
+  return new Promise((resolve,reject)=>{
+    const sock=new(require("net").Socket)();
+    let done=false,buf="";
+    const finish=(err,value)=>{
+      if(done)return;
+      done=true;
+      clearTimeout(timer);
+      try{sock.destroy()}catch(_e){}
+      err?reject(err):resolve(value);
+    };
+    const timer=setTimeout(()=>finish(new Error("timeout")),timeoutMs);
+    sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{
+      sock.write(JSON.stringify({type,params})+"\n");
+    });
+    sock.on("data",d=>{
+      buf+=d.toString();
+      try{finish(null,JSON.parse(buf.trim()))}catch(_e){}
+    });
+    sock.on("error",err=>finish(err));
+    sock.on("close",()=>{if(!done){try{finish(null,JSON.parse(buf.trim()))}catch{finish(new Error("empty UE response"))}}});
+  });
+}
+
+function _waitForFile(filePath,timeoutMs=15000){
+  const start=Date.now();
+  return new Promise(resolve=>{
+    const tick=()=>{
+      try{if(fs.existsSync(filePath)&&fs.statSync(filePath).size>0)return resolve(true)}catch(_e){}
+      if(Date.now()-start>=timeoutMs)return resolve(false);
+      setTimeout(tick,250);
+    };
+    tick();
+  });
+}
+
+async function _generateAssetPreview(asset,{force=false}={}){
+  const fullPath=String(asset?.fullPath||asset?.path||"");
+  if(!_assetPreviewSupported({...asset,fullPath})){
+    return {..._assetPreviewMeta({...asset,fullPath}),fullPath,status:"unsupported"};
+  }
+  const filePath=_assetPreviewFile(fullPath);
+  if(force&&fs.existsSync(filePath))try{fs.unlinkSync(filePath)}catch(_e){}
+  if(fs.existsSync(filePath)){
+    return {..._assetPreviewMeta({...asset,fullPath}),fullPath,status:"ready",cached:true,method:"editor_thumbnail"};
+  }
+  if(_assetPreviewJobs.has(fullPath))return _assetPreviewJobs.get(fullPath);
+  const job=(async()=>{
+    try{
+      const raw=await _ueToolCommand("export_asset_thumbnail",{
+        asset_path:fullPath,
+        output_path:filePath,
+        width:512,
+        height:512,
+      },90000);
+      if(raw?.status==="error"||raw?.error)throw new Error(raw.error||raw.message||"asset thumbnail export failed");
+      const status=String(raw?.status||raw?.result?.status||"").toLowerCase();
+      if(status&&status!=="ready"&&status!=="success"&&status!=="ok")throw new Error(raw?.message||raw?.result?.message||`asset thumbnail export returned ${status}`);
+      const ok=await _waitForFile(filePath,15000);
+      if(!ok)throw new Error("asset thumbnail file was not written");
+      return {..._assetPreviewMeta({...asset,fullPath}),fullPath,status:"ready",cached:false,method:"editor_thumbnail"};
+    }finally{
+      _assetPreviewJobs.delete(fullPath);
+    }
+  })().catch(err=>{
+    _assetPreviewJobs.delete(fullPath);
+    log.system("warn",`asset preview ${fullPath}: ${err.message}`);
+    return {..._assetPreviewMeta({...asset,fullPath}),fullPath,status:"error",error:err.message};
+  });
+  _assetPreviewJobs.set(fullPath,job);
+  return job;
+}
+
+app.post("/api/asset-previews",async(req,res)=>{
+  if(!_cachedUeConn)return res.status(503).json({error:"UE not connected"});
+  const assets=Array.isArray(req.body?.assets)?req.body.assets:[];
+  const force=!!req.body?.force;
+  const limit=Math.max(1,Math.min(parseInt(req.body?.limit||"4",10)||4,8));
+  const results=[];
+  let generated=0;
+  for(const raw of assets.slice(0,80)){
+    const fullPath=String(raw?.fullPath||raw?.path||"");
+    const asset={...raw,fullPath};
+    if(!fullPath){results.push({status:"error",error:"fullPath required"});continue}
+    const meta=_assetPreviewMeta(asset);
+    if((!force&&meta.previewStatus==="ready")||meta.previewStatus==="unsupported"){
+      results.push({fullPath,status:meta.previewStatus,...meta});
+      continue;
+    }
+    if(generated>=limit){
+      results.push({fullPath,status:"missing",...meta});
+      continue;
+    }
+    generated++;
+    results.push(await _generateAssetPreview(asset,{force}));
+  }
+  res.json({results,generated,cacheDir:ASSET_PREVIEW_DIR});
+});
+
 // Build complete nested tree once at startup — clients load once and navigate locally
 const _assetTree = (() => {
   // Build nested dir structure: { name, path, children: [], assets: [] }
@@ -1108,11 +1269,11 @@ const _assetTree = (() => {
 
   for (const asset of _allAssets) {
     const dir = getOrCreateDir(asset.dir);
-    dir.assets.push({
+    dir.assets.push(_withAssetPreviewMeta({
       name: asset.name, fullPath: asset.fullPath, type: asset.type,
       category: asset.category, spawnTool: asset.spawnTool, icon: asset.icon || '📦',
       agentType: asset.agentType, description: asset.description, biome: asset.biome,
-    });
+    }));
   }
 
   // Sort children alphabetically
@@ -1162,7 +1323,7 @@ app.get('/api/asset-ls', async (req, res) => {
 
   const cached = _dirListCache.get(browsePath);
   if (cached && Date.now() - cached.cachedAt < DIR_CACHE_TTL_MS) {
-    return res.json({ source: 'ue-python', dirs: cached.dirs, assets: cached.assets });
+    return res.json({ source: 'ue-python', dirs: cached.dirs, assets: cached.assets.map(_withAssetPreviewMeta) });
   }
 
   // Root: scan /Game/ non-recursively to discover what actually exists in this project.
@@ -1234,7 +1395,7 @@ print('SWASSET_BEGIN' + json.dumps(items) + 'SWASSET_END')`.trim();
         const isMesh = /\/[Mm]eshes?\//.test(p) || name.startsWith('SM_');
         const isMapAsset = /\/(Maps|Levels|Map)\//i.test(p);
         const type = isBP ? 'blueprint' : isMesh ? 'static_mesh' : isMapAsset ? 'map' : 'asset';
-        assets.push({ name, fullPath: p, type });
+        assets.push(_withAssetPreviewMeta({ name, fullPath: p, type }));
       }
     }
 

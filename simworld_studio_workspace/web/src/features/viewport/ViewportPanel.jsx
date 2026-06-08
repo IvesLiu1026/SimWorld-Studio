@@ -105,16 +105,18 @@ function SaveAsButton({ icons }) {
   );
 }
 
-export default function ViewportPanel({ icons, latestScreenshot }) {
+export default function ViewportPanel({ health, icons, latestScreenshot }) {
   const [mode, setMode] = useState("pixelstream");
   const [imgKey, setImgKey] = useState(0);
   const [screenshotUrl, setScreenshotUrl] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(5);
   const [cameraMoving, setCameraMoving] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(true);
   const [playerUrl, setPlayerUrl] = useState(null);
   const intervalRef = useRef(null);
   const screenshotObjectUrlRef = useRef(null);
+  const engineLabel = health?.engineLabel || (health?.engineVersion ? `UE ${health.engineVersion}` : "Unreal Engine");
 
   const clearScreenshotObjectUrl = useCallback(() => {
     if (!screenshotObjectUrlRef.current) return;
@@ -237,7 +239,15 @@ export default function ViewportPanel({ icons, latestScreenshot }) {
 
   return (
     <div className="viewport-panel">
-      <div className="viewport-toolbar">
+      <div className={`viewport-toolbar${controlsOpen ? "" : " compact"}`}>
+        <button
+          className="viewport-tool-btn viewport-controls-toggle"
+          onClick={() => setControlsOpen((value) => !value)}
+          title={controlsOpen ? "Hide viewport controls" : "Show viewport controls"}
+          type="button"
+        >
+          {controlsOpen ? "Hide" : "Controls"}
+        </button>
         <div className="viewport-mode-tabs">
           {[
             { id: "pixelstream", label: "Live" },
@@ -253,7 +263,7 @@ export default function ViewportPanel({ icons, latestScreenshot }) {
           ))}
         </div>
 
-        {mode === "screenshot" && (
+        {controlsOpen && mode === "screenshot" && (
           <div className="viewport-screenshot-controls">
             <button className="viewport-tool-btn" onClick={fetchLatestScreenshot}>
               Refresh
@@ -276,36 +286,42 @@ export default function ViewportPanel({ icons, latestScreenshot }) {
           </div>
         )}
 
-        <div className="viewport-camera-controls">
-          <span className="viewport-camera-label">CAM</span>
-          {CAMERA_PRESETS.map((preset) => (
+        {controlsOpen ? (
+          <div className="viewport-camera-controls">
+            <span className="viewport-camera-label">CAM</span>
+            {CAMERA_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                className="viewport-camera-btn"
+                title={preset.title}
+                disabled={cameraMoving}
+                onClick={() => handleCameraPreset(preset.args)}
+              >
+                {preset.label}
+              </button>
+            ))}
             <button
-              key={preset.label}
-              className="viewport-camera-btn"
-              title={preset.title}
+              className="viewport-unlock-btn"
+              title="Unlock camera from agent"
               disabled={cameraMoving}
-              onClick={() => handleCameraPreset(preset.args)}
+              onClick={() => {
+                setCameraMoving(true);
+                sendCameraCommand("unpilot_camera").finally(() => setCameraMoving(false));
+              }}
             >
-              {preset.label}
+              Unlock
             </button>
-          ))}
-          <button
-            className="viewport-unlock-btn"
-            title="Unlock camera from agent"
-            disabled={cameraMoving}
-            onClick={() => {
-              setCameraMoving(true);
-              sendCameraCommand("unpilot_camera").finally(() => setCameraMoving(false));
-            }}
-          >
-            Unlock
-          </button>
-          <SaveAsButton icons={icons} />
-        </div>
+            <SaveAsButton icons={icons} />
+          </div>
+        ) : (
+          <div className="viewport-compact-label">
+            {mode === "pixelstream" ? "Live stream controls hidden" : "Screenshot controls hidden"}
+          </div>
+        )}
 
         <div className="viewport-toolbar-spacer" />
 
-        {playerUrl && (
+        {controlsOpen && playerUrl && (
           <a className="viewport-popout" href={playerUrl} target="_blank" rel="noreferrer">
             Pop out
           </a>
@@ -322,7 +338,7 @@ export default function ViewportPanel({ icons, latestScreenshot }) {
       </div>
 
       <div className="viewport-statusbar">
-        <span>UE 5.3.2 / SimWorld Studio</span>
+        <span>{engineLabel} / SimWorld Studio</span>
         {playerUrl && (
           <span>
             {playerUrl.match(/cirrus=(\d+)/)?.[1]

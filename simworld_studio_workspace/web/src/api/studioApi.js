@@ -5,6 +5,8 @@ export function fetchHealth() {
     ueConnected: !!health?.ueConnected,
     mcpConnected: !!health?.mcpConnected,
     pixelStreamingUrl: health?.pixelStreamingUrl || null,
+    engineVersion: health?.engineVersion || null,
+    engineLabel: health?.engineLabel || null,
   }));
 }
 

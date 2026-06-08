@@ -133,7 +133,9 @@ export function PollProvider({ children }) {
           if (
             prev.pieActive === nextPie &&
             prev.health?.ueConnected === nextHealth?.ueConnected &&
-            prev.health?.mcpConnected === nextHealth?.mcpConnected
+            prev.health?.mcpConnected === nextHealth?.mcpConnected &&
+            prev.health?.engineVersion === nextHealth?.engineVersion &&
+            prev.health?.engineLabel === nextHealth?.engineLabel
           ) {
             return prev;
           }

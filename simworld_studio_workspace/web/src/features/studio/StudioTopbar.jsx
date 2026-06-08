@@ -155,19 +155,6 @@ export default function StudioTopbar({
         )}
 
         <StatusPill health={health} codingAgent={codingAgent} />
-
-        <div className="sw-simcoder-pill" style={{ fontSize: 14, padding: "6px 14px 6px 10px" }}>
-          <img src="/SimCoder.png" alt="SimCoder" />
-          <span>SimCoder</span>
-        </div>
-
-        <div className="sw-avatar-btn">
-          <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
-            <circle cx="12" cy="8" r="4" fill="currentColor" />
-            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" fill="currentColor" />
-          </svg>
-        </div>
-
         <button className="sw-settings-btn" onClick={onSettingsOpen} title="Settings">
           {icons.gear(22)}
         </button>
