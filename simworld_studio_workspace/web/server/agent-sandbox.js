@@ -20,11 +20,20 @@
 // the system still runs (relying on the per-CLI restrictions) — a warning is logged.
 
 const path = require("path");
+const fs = require("fs");
 const { execSync } = require("child_process");
 
 // web/server -> repo root (the SimWorld-Studio[-Internal]/devrun dir). Resolves correctly
 // per deployment (boss vs dev copy).
 const REPO_ROOT = path.resolve(__dirname, "../../..");
+
+// Runtime scratch dir (python job logs via mcp-server's execute_python_script, screenshots,
+// etc.). It lives UNDER REPO_ROOT, so the read-only repo bind below would otherwise make it
+// unwritable inside the sandbox — execute_python_script then fails with ENOENT before the
+// script ever reaches UE. We re-bind it read-write on top of the ro-bind (see sandboxedSpawn).
+// bwrap requires the bind source to exist, so ensure tmp/jobs is present.
+const RUNTIME_TMP = path.resolve(__dirname, "../../tmp");
+try { fs.mkdirSync(path.join(RUNTIME_TMP, "jobs"), { recursive: true }); } catch (_) {}
 
 const HAS_BWRAP = (() => {
   try { execSync("command -v bwrap", { stdio: "ignore" }); return true; }
@@ -42,6 +51,7 @@ function sandboxedSpawn(bin, args, cwd) {
   const bw = [
     "--dev-bind", "/", "/",            // share the host read-write (incl. /dev, network)
     "--ro-bind", REPO_ROOT, REPO_ROOT, // ...except the repo: read-only (no source writes)
+    "--bind", RUNTIME_TMP, RUNTIME_TMP,// ...but keep runtime tmp writable (python job logs, screenshots)
     "--die-with-parent",               // sandbox dies if the web server kills us
     ...(cwd ? ["--chdir", cwd] : []),
     "--", bin, ...args,

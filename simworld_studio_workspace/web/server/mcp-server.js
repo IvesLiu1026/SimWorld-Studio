@@ -224,6 +224,13 @@ print(f"Camera: loc=({cam_loc.x:.0f},{cam_loc.y:.0f},{cam_loc.z:.0f}) rot=({cam_
 // with its own Read tool. Other UE tools called during this window will queue
 // behind it — the hint below tells the agent to wait before issuing them.
 async function toolExecutePython({script:e}){
+  // Map-load mask: the coding agent may NOT load pre-generated "product" maps (other models'
+  // finished scenes saved under /Game/SavedScenes/ or /Game/_Runs/). It must build from the
+  // base template (e.g. /Game/desert_ruins/maps/Showcase). Saving results to those folders is
+  // still allowed — only LOAD/OPEN calls targeting them are blocked.
+  if(/(?:load_level|load_map|open_level|LoadMap)\s*\(\s*[^)]*?["']\/Game\/(?:SavedScenes|_Runs)\//i.test(e)){
+    return{status:"error",message:"Blocked: loading pre-generated maps under /Game/SavedScenes/ or /Game/_Runs/ is not allowed for the coding agent. Load the base template '/Game/desert_ruins/maps/Showcase' and build the scene yourself (you may still SAVE your result to those folders)."};
+  }
   const jobId=`py_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
   const logPath=path.resolve(__dirname,"../../tmp/jobs",`${jobId}.log`);
   try{fs.mkdirSync(path.dirname(logPath),{recursive:!0})}catch(_){}
