@@ -122,7 +122,7 @@ async function handleSceneLoop(req, res, deps) {
   const { updateIntentSummary } = require("./intent-summarizer");
   const http = require("http");
   const NL = String.fromCharCode(10);
-  const { message, sessionId, skills, feedback: userFeedback, runner: outerRunner } = req.body || {};
+  const { message, sessionId, skills, feedback: userFeedback, runner: outerRunner, assetMode, assetRetrievalMode } = req.body || {};
   if (!message) { res.status(400).json({ error: "message required" }); return; }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -171,6 +171,8 @@ async function handleSceneLoop(req, res, deps) {
         feedback: combinedFeedback,
         useLoop: false, // force the inner call to take the existing single-turn path
         ...(outerRunner ? { runner: outerRunner } : {}),
+        ...(assetMode ? { assetMode } : {}),
+        ...(assetRetrievalMode ? { assetRetrievalMode } : {}),
       });
       const opts = {
         host: "127.0.0.1", port, path: "/api/chat", method: "POST",

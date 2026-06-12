@@ -1,0 +1,138 @@
+SimWorld Asset Retrieval / Indexing - Technical Notes
+
+Asset indexing scale
+- Target UE 5.8 retrieval library: 16,800 spawnable asset candidates.
+- Candidate asset types:
+  - 15,609 StaticMesh assets
+  - 1,191 Blueprint assets
+- These candidates come from the UE 5.8 content root:
+  /data/koe/simworld-content-store/current/Content
+- Current live checkpoint during indexing:
+  - 7,357 catalog JSONs generated
+  - 7,350 rows synced to Postgres
+  - 7,350 points synced to Qdrant
+  - 46.5% run progress at the checked point
+
+Indexing model
+- Metadata generation model: Qwen3.6-35B-A3B.
+- Hosted internally at: http://137.110.161.132:8005/v1
+- Thinking mode disabled for indexing.
+- Temperature: 0.0
+- Max output tokens: 1200
+- We chose Qwen because it is much faster and cheaper than Codex/GPT subprocess generation while the QA samples showed usable metadata quality.
+
+Rendering setup
+- UE 5.8 backend renders every accepted asset before metadata generation.
+- Rendering is parallelized with 6 UE instances on GPU 3.
+- Each asset targets 8 screenshots/views.
+- Minimum accepted valid views: 4.
+- Screenshot resolution: 1024 x 1024.
+- The model sees rendered asset views plus asset identity/path context.
+
+Generated per-asset metadata
+- display_name
+- category and subcategory
+- short_description and full description
+- tags
+- style
+- materials
+- color_palette
+- mood
+- typical_placement
+- function
+- affordances
+- scene_types
+- setting
+- condition
+- is_symmetric
+- dimensions
+- technical spawn information, including Unreal asset path and asset type
+
+Storage and retrieval infrastructure
+- File catalog:
+  - One JSON file per indexed asset.
+  - Stored as catalog/<category>/<asset_id>.json.
+  - Used as the runtime compact cache and prompt-formatting source.
+- Postgres:
+  - Canonical structured metadata store.
+  - Stores raw JSON plus searchable fields such as category, setting, tags, scene_types, dimensions, and asset type.
+  - Includes full-text search support for fallback retrieval.
+- Qdrant:
+  - Semantic retrieval index.
+  - Collection: assets_ue58_qwen.
+  - Dense vector: text_dense, size 1024, cosine distance.
+  - Sparse vector: text_sparse.
+  - Payload filters include asset_id, category, setting, tags, scene_types, dimensions, asset_type, and triangle_count.
+
+Runtime retrieval flow
+- User scene query enters the SimWorld chat/server route.
+- Asset retrieval mode is resolved:
+  - db: normal Qdrant/Postgres retrieval.
+  - file: file-catalog-only LLM retrieval.
+  - baseline_full: exposes full asset list for A/B comparison.
+  - off: no retrieval.
+- Stage 1: LLM category router selects relevant asset categories and produces a retrieval plan.
+- Stage 2: For every selected category, retrieval runs in parallel:
+  - Query is embedded.
+  - Qdrant performs hybrid dense+sparse search with category filtering and setting exclusions.
+  - If Qdrant fails or returns no candidates, Postgres bounded fallback uses full-text search and metadata ranking.
+  - The per-category LLM selector chooses fitting assets from the prefiltered candidates.
+- Stage 3: Final LLM curator merges, deduplicates, removes off-theme assets, and orders the final palette.
+- The final palette is injected into the scene-generation prompt with exact Unreal paths and spawn tools.
+
+Robustness and logging
+- The run is resumable.
+- Catalog JSONs are written incrementally.
+- Postgres and Qdrant are synced periodically.
+- Pending DB sync asset IDs are tracked.
+- Failed/skipped assets are logged separately.
+- Per-asset timing and token usage are logged.
+- Raw Qwen outputs are stored for later audit.
+- Quality snapshots and final run summaries are generated.
+
+How we filter non-useful assets
+- The main goal is to index real, independently spawnable scene objects, not every UE asset file.
+- The manifest builder first queries Unreal's AssetRegistry and only considers spawnable classes:
+  - StaticMesh
+  - Blueprint
+- It then rejects assets that are unlikely to be useful standalone retrieval candidates.
+- Main reject categories:
+  - Noise paths: textures, materials, maps, built data, editor/test/demo/render/thumbnail assets.
+  - Modular/surface shells: floors, roads, walls, ceilings, roofs, trims, decals, planes, terrain pieces, etc., unless the name also contains a positive object term.
+  - Helper/system assets: controllers, managers, generators, customizers, templates, proxies, helpers, parents, spawners.
+  - Character/body/animation assets: NPCs, skeletons, heads, hair, clothing, crowds, animation-only assets.
+  - SkeletalMesh assets are excluded separately for this object retrieval pass.
+- Positive object terms protect real objects from being filtered out, for example:
+  barrel, bench, bin, bottle, box, car, cart, chair, crate, fence, fountain, hydrant, lamp, plant, pot, rack, rock, shelf, sign, sofa, statue, table, trash, tree, vehicle.
+
+Filtering numbers
+- UE AssetRegistry spawnable-class assets before filtering: 24,494.
+- Rejected before indexing:
+  - 4,696 modular/surface shell assets
+  - 2,146 character/body/animation assets
+  - 470 helper/system assets
+  - 294 noise-path assets
+  - 88 skeletal meshes
+- Final manifest selected for indexing: 16,800 assets.
+
+Runtime skip/failure handling
+- Some helper/non-spawnable assets are additionally skipped through a configured skip list.
+- Current configured skip list size: 328 unique asset IDs.
+- Examples:
+  - agent_bp_agentbase
+  - bazaar_meshingun_bp_camerashake
+  - chemicalplantenv_sm_cloudmesh
+  - chemicalplantenv_bp_splinedecal
+  - asiantemple_sm_oceanwater
+  - modularscifi_sm_signdecal_*
+- Current failures are mostly asset-validity failures, not model failures.
+- At the checked point:
+  - 452 unique failed asset IDs
+  - 280 nonpositive-dimension assets
+  - 170 spawn/measure failed assets
+  - 2 schema validation issues from model output
+- Nonpositive dimensions means UE spawned/measured the asset and found zero or invalid bounds. These are usually invisible, flat, helper-like, decals/effects, or otherwise not useful standalone objects.
+- Such assets are not sent to the model and are not written to Postgres/Qdrant.
+
+One-line summary
+- We convert the UE 5.8 object library into a structured semantic asset database by rendering each valid spawnable asset, generating Qwen metadata from screenshots, storing canonical metadata in Postgres, indexing semantic vectors in Qdrant, and filtering out non-object/helper/surface assets so retrieval focuses on useful scene-building objects.

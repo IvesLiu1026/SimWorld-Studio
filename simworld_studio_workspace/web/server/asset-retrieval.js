@@ -16,6 +16,15 @@ const path = require("path");
 const { oneshotJSON } = require("./llm-oneshot");
 
 const ASSET_DB_DIR = process.env.ASSET_DB_DIR || "/data/siddhant/asset_db";
+const PREFILTER_TOP_K = parseInt(process.env.PREFILTER_TOP_K || "150", 10);
+const FULL_FALLBACK_MAX = parseInt(process.env.ASSET_FULL_FALLBACK_MAX || "0", 10);
+
+const SETTING_VALUES = new Set([
+  "modern_urban", "industrial", "suburban_residential", "commercial_retail",
+  "nature_rural", "coastal_harbor", "medieval", "fantasy_gothic",
+  "ancient_temple", "middle_eastern", "east_asian", "winter", "sci_fi",
+  "indoor", "generic",
+]);
 
 // Decide which MCP tool spawns this asset: Blueprints -> spawn_blueprint_actor, static meshes -> spawn_actor.
 // asset_type is authoritative (set by the indexer from the real UE object class), so trust it first.
@@ -33,6 +42,82 @@ function _spawnTool(rec) {
 
 let _cache = null;
 const _retrievalCache = new Map();  // scene-text -> result; so loop rounds reuse one retrieval per scene
+
+function _truthy(v) {
+  return /^(1|true|yes|on)$/i.test(String(v || ""));
+}
+
+function _legacyPrefilterDefault() {
+  return _truthy(process.env.ASSET_PREFILTER);
+}
+
+function _normalizeAssetModeValue(v) {
+  const s = String(v || "").trim().toLowerCase();
+  if (!s) return null;
+  if (["off", "none", "no", "false", "0", "disabled"].includes(s)) return "off";
+  if (["db", "qdrant", "prefilter", "vector", "hybrid"].includes(s)) return "db";
+  if (["file", "catalog", "retrieval_file", "llm"].includes(s)) return "file";
+  if (["baseline_full", "full", "all", "full_list"].includes(s)) return "baseline_full";
+  if (s === "retrieval") return _legacyPrefilterDefault() ? "db" : "file";
+  return null;
+}
+
+function resolveAssetMode(bodyOrMode) {
+  if (typeof bodyOrMode === "string") {
+    return _normalizeAssetModeValue(bodyOrMode) || "off";
+  }
+  const body = bodyOrMode || {};
+  const explicit = _normalizeAssetModeValue(body.assetRetrievalMode) || _normalizeAssetModeValue(body.assetMode);
+  if (explicit) return explicit;
+  const envMode = _normalizeAssetModeValue(process.env.ASSET_RETRIEVAL_MODE);
+  if (envMode) return envMode;
+  return "db";
+}
+
+function _usePrefilter(opts) {
+  if (opts && typeof opts.usePrefilter === "boolean") return opts.usePrefilter;
+  return _legacyPrefilterDefault();
+}
+
+function _cleanSettings(values) {
+  const out = [];
+  for (const v of Array.isArray(values) ? values : []) {
+    const s = String(v || "").trim();
+    if (SETTING_VALUES.has(s) && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+function _cleanTerms(values, max) {
+  return (Array.isArray(values) ? values : [])
+    .map(v => String(v || "").trim())
+    .filter(Boolean)
+    .slice(0, max || 8);
+}
+
+function _normalizePlan(raw, scene) {
+  const p = raw && raw.plan ? raw.plan : (raw || {});
+  return {
+    semantic_query: String(p.semantic_query || scene || "").trim(),
+    primary_settings: _cleanSettings(p.primary_settings),
+    hard_exclude_settings: _cleanSettings(p.hard_exclude_settings),
+    must_terms: _cleanTerms(p.must_terms, 8),
+    avoid_terms: _cleanTerms(p.avoid_terms, 6),
+  };
+}
+
+function _retrievalCacheKey(scene, opts) {
+  const usePrefilter = _usePrefilter(opts);
+  return JSON.stringify({
+    scene: String(scene || ""),
+    model: String((opts && opts.model) || ""),
+    prefilter: usePrefilter,
+    topK: PREFILTER_TOP_K,
+    collection: process.env.QDRANT_COLLECTION || "assets",
+    embedVersion: process.env.EMBED_VERSION || "bge-large-en-v1.5-bm25-v1",
+  });
+}
+
 function loadDB() {
   if (_cache) return _cache;
   const idx = JSON.parse(fs.readFileSync(path.join(ASSET_DB_DIR, "category_index.json"), "utf-8"));
@@ -74,22 +159,32 @@ function loadDB() {
 // ── stage 1: category routing ────────────────────────────────────────────────
 async function routeCategories(scene, db, opts) {
   const cats = db.categories.map(c => `- ${c.id} (${c.count}): ${c.description}`).join("\n");
+  const settings = [...SETTING_VALUES].join(", ");
   const prompt = [
     "You are the CATEGORY ROUTER for a 3D scene asset retriever spanning many settings (modern urban, industrial, suburban, retail, rural/nature, harbor, medieval, fantasy/gothic, temple, middle-eastern, east-asian, winter, sci-fi, indoor).",
     "Given a scene description and a list of asset categories, choose EVERY category that could plausibly contribute assets to this scene. Be inclusive about plausibly-relevant categories, but skip categories clearly irrelevant to this scene.",
     "Do NOT limit the number of categories — pick as many as genuinely fit.",
     "",
+    "Also produce a retrieval plan for DB/vector prefiltering:",
+    "- semantic_query: concise search-optimized description with key nouns, adjectives, style and genre words.",
+    "- primary_settings: 1-3 setting enum values that best match the scene.",
+    "- hard_exclude_settings: setting enum values that are clearly wrong for the scene.",
+    "- must_terms: 3-8 key object/concept terms that good assets should match.",
+    "- avoid_terms: 2-6 wrong-genre terms to avoid.",
+    `Setting enum values: ${settings}`,
+    "",
     "SCENE:", scene, "",
     "CATEGORIES  (id (asset_count): description):", cats, "",
-    'Output ONLY JSON, no prose: {"categories":[{"id":"<category id>","emphasis":"primary|secondary","reason":"<short>"}]}',
+    'Output ONLY JSON, no prose: {"categories":[{"id":"<category id>","emphasis":"primary|secondary","reason":"<short>"}],"semantic_query":"<search query>","primary_settings":["<setting>"],"hard_exclude_settings":["<setting>"],"must_terms":["<term>"],"avoid_terms":["<term>"]}',
   ].join("\n");
   const out = await oneshotJSON(prompt, opts);
   const valid = new Set(db.categories.map(c => c.id));
   const seen = new Set(), uniq = [];
-  for (const c of (out.categories || [])) {
+  const rawCats = Array.isArray(out) ? out : (Array.isArray(out.categories) ? out.categories : []);
+  for (const c of rawCats) {
     if (c && valid.has(c.id) && !seen.has(c.id)) { seen.add(c.id); uniq.push(c); }
   }
-  return uniq;
+  return { categories: uniq, plan: _normalizePlan(out, scene) };
 }
 
 // ── stage 2: per-category selection (one call per category, run in parallel) ──
@@ -142,21 +237,53 @@ async function aggregate(scene, picked, db, opts) {
 async function retrieve(scene, opts) {
   const o = opts || {};
   const log = o.log || (() => {});
-  if (_retrievalCache.has(scene)) { log("retrieval cache HIT (reusing this scene's prior result)"); return _retrievalCache.get(scene); }
+  const usePrefilter = _usePrefilter(o);
+  const cacheKey = _retrievalCacheKey(scene, o);
+  if (_retrievalCache.has(cacheKey)) { log("retrieval cache HIT (reusing this scene's prior result)"); return _retrievalCache.get(cacheKey); }
   const db = loadDB();
-  const trace = { routed: [], perCategory: {} };
+  const trace = { routed: [], plan: {}, perCategory: {}, prefilter: {} };
 
-  const routed = await routeCategories(scene, db, o);
+  const routeResult = await routeCategories(scene, db, o);
+  const routed = Array.isArray(routeResult) ? routeResult : (routeResult.categories || []);
+  const plan = _normalizePlan(routeResult, scene);
   trace.routed = routed;
+  trace.plan = plan;
   log("routed: " + routed.map(r => `${r.id}(${r.emphasis})`).join(", "));
+  if (usePrefilter) log(`prefilter enabled: topK=${PREFILTER_TOP_K}`);
 
   const results = await Promise.all(routed.map(async r => {
     const cat = db.byCat.get(r.id);
     if (!cat) return [];
+    let candidates = cat;
+    if (usePrefilter) {
+      try {
+        const { prefilterCategory } = require("./asset-retrieval-db");
+        const pref = await prefilterCategory(r.id, plan, { ...o, topK: PREFILTER_TOP_K, log });
+        const seenIds = new Set();
+        const compact = [];
+        for (const p of pref) {
+          if (!p || !p.id || seenIds.has(p.id)) continue;
+          const a = db.assets.get(p.id);
+          if (a) { seenIds.add(p.id); compact.push(a); }
+        }
+        if (!compact.length) throw new Error(`prefilter returned no in-memory assets for ${r.id}`);
+        candidates = { ...cat, count: compact.length, assets: compact };
+        trace.prefilter[r.id] = compact.map(a => a.id);
+        log(`prefilter ${r.id}: ${compact.length} candidates (from ${cat.count})`);
+      } catch (e) {
+        if (FULL_FALLBACK_MAX > 0 && cat.count <= FULL_FALLBACK_MAX) {
+          trace.prefilter[r.id] = { fallback: "full_category", error: e.message };
+          log(`prefilter ${r.id} FAILED (${e.message}); using bounded full-list fallback ${cat.count}/${FULL_FALLBACK_MAX}`);
+          candidates = cat;
+        } else {
+          throw e;
+        }
+      }
+    }
     try {
-      const sel = await selectInCategory(scene, cat, r.emphasis, o);
+      const sel = await selectInCategory(scene, candidates, r.emphasis, o);
       trace.perCategory[r.id] = sel.map(s => s.id);
-      log(`select ${r.id}: ${sel.length}/${cat.count} -> ${sel.map(s => s.id).join(",")}`);
+      log(`select ${r.id}: ${sel.length}/${candidates.assets.length} candidates (category total ${cat.count}) -> ${sel.map(s => s.id).join(",")}`);
       return sel.map(s => ({ ...s, category: r.id }));
     } catch (e) { log(`select ${r.id} FAILED: ${e.message}`); return []; }
   }));
@@ -179,7 +306,7 @@ async function retrieve(scene, opts) {
   log(`final: ${final.length} -> ${final.map(f => f.id).join(",")}`);
   const assets = final.map(f => ({ ...db.assets.get(f.id), role: f.role }));
   const result = { final, rationale, trace, assets };
-  _retrievalCache.set(scene, result);
+  _retrievalCache.set(cacheKey, result);
   return result;
 }
 
@@ -208,13 +335,17 @@ const _HOWTO = 'These are the ONLY assets to use for this scene. IGNORE the gene
 
 // Public entry used by /api/chat. Returns a system-prompt block (string), or "" if nothing.
 async function buildPromptBlock(scene, mode, opts) {
+  const resolvedMode = resolveAssetMode(mode);
+  if (resolvedMode === "off") return "";
   const db = loadDB();
-  if (mode === "baseline_full") {
+  if (resolvedMode === "baseline_full") {
     const body = formatAssetsForPrompt([...db.assets.values()]);
     return ["## AVAILABLE ASSET PALETTE (build the scene using these curated assets)", _HOWTO, "", body].join("\n");
   }
-  const r = await retrieve(scene, opts);
-  if (!r.assets.length) return "";
+  const r = await retrieve(scene, { ...(opts || {}), usePrefilter: resolvedMode === "db" });
+  if (!r.assets.length) {
+    throw new Error("asset retrieval produced an empty palette");
+  }
   const body = formatAssetsForPrompt(r.assets);
   return [
     "## RETRIEVED ASSETS FOR THIS SCENE (curated specifically for your prompt)",
@@ -223,4 +354,4 @@ async function buildPromptBlock(scene, mode, opts) {
   ].filter(Boolean).join("\n");
 }
 
-module.exports = { loadDB, retrieve, buildPromptBlock, formatAssetsForPrompt };
+module.exports = { loadDB, retrieve, buildPromptBlock, formatAssetsForPrompt, resolveAssetMode };

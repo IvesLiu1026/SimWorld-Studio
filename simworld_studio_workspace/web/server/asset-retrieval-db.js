@@ -1,0 +1,298 @@
+"use strict";
+
+const TOP_K = Math.max(1, parseInt(process.env.PREFILTER_TOP_K || "150", 10));
+const COLLECTION = process.env.QDRANT_COLLECTION || "assets";
+const QDRANT_URL = process.env.QDRANT_URL || "http://127.0.0.1:6333";
+const EMBED_SERVICE_URL = process.env.EMBED_SERVICE_URL || "http://127.0.0.1:7777";
+
+const VALID_SETTINGS = new Set([
+  "modern_urban", "industrial", "suburban_residential", "commercial_retail",
+  "nature_rural", "coastal_harbor", "medieval", "fantasy_gothic",
+  "ancient_temple", "middle_eastern", "east_asian", "winter", "sci_fi",
+  "indoor", "generic",
+]);
+
+const SETTING_COMPAT = {
+  medieval: {
+    boost: ["medieval", "fantasy_gothic", "nature_rural", "generic"],
+    allow: ["ancient_temple", "middle_eastern", "east_asian", "winter", "coastal_harbor"],
+    exclude: ["sci_fi", "modern_urban", "industrial", "suburban_residential", "commercial_retail"],
+  },
+  fantasy_gothic: {
+    boost: ["fantasy_gothic", "medieval", "generic"],
+    allow: ["ancient_temple", "winter", "nature_rural", "middle_eastern"],
+    exclude: ["sci_fi", "modern_urban", "industrial", "suburban_residential", "commercial_retail"],
+  },
+  ancient_temple: {
+    boost: ["ancient_temple", "middle_eastern", "east_asian", "generic"],
+    allow: ["medieval", "fantasy_gothic", "nature_rural", "coastal_harbor"],
+    exclude: ["sci_fi", "modern_urban", "industrial", "winter"],
+  },
+  middle_eastern: {
+    boost: ["middle_eastern", "ancient_temple", "generic"],
+    allow: ["medieval", "east_asian", "nature_rural", "coastal_harbor", "commercial_retail"],
+    exclude: ["sci_fi", "modern_urban", "industrial", "winter"],
+  },
+  east_asian: {
+    boost: ["east_asian", "middle_eastern", "ancient_temple", "generic"],
+    allow: ["medieval", "nature_rural", "coastal_harbor"],
+    exclude: ["sci_fi", "modern_urban", "industrial"],
+  },
+  modern_urban: {
+    boost: ["modern_urban", "industrial", "commercial_retail", "suburban_residential", "generic"],
+    allow: ["coastal_harbor", "indoor"],
+    exclude: ["medieval", "fantasy_gothic", "ancient_temple", "middle_eastern", "east_asian", "sci_fi", "winter"],
+  },
+  industrial: {
+    boost: ["industrial", "modern_urban", "generic"],
+    allow: ["coastal_harbor", "suburban_residential"],
+    exclude: ["medieval", "fantasy_gothic", "ancient_temple", "middle_eastern", "east_asian", "sci_fi"],
+  },
+  suburban_residential: {
+    boost: ["suburban_residential", "modern_urban", "commercial_retail", "generic"],
+    allow: ["nature_rural", "indoor"],
+    exclude: ["medieval", "fantasy_gothic", "sci_fi", "ancient_temple"],
+  },
+  commercial_retail: {
+    boost: ["commercial_retail", "modern_urban", "suburban_residential", "generic"],
+    allow: ["coastal_harbor", "indoor"],
+    exclude: ["medieval", "fantasy_gothic", "sci_fi", "ancient_temple"],
+  },
+  coastal_harbor: {
+    boost: ["coastal_harbor", "industrial", "modern_urban", "generic"],
+    allow: ["nature_rural", "medieval", "commercial_retail"],
+    exclude: ["sci_fi", "fantasy_gothic", "ancient_temple", "east_asian"],
+  },
+  nature_rural: {
+    boost: ["nature_rural", "generic"],
+    allow: ["medieval", "coastal_harbor", "suburban_residential", "winter"],
+    exclude: ["sci_fi", "modern_urban", "industrial", "fantasy_gothic"],
+  },
+  winter: {
+    boost: ["winter", "nature_rural", "generic"],
+    allow: ["medieval", "fantasy_gothic", "suburban_residential"],
+    exclude: ["sci_fi", "modern_urban", "industrial"],
+  },
+  sci_fi: {
+    boost: ["sci_fi", "generic"],
+    allow: ["industrial", "modern_urban", "indoor"],
+    exclude: ["medieval", "fantasy_gothic", "ancient_temple", "middle_eastern", "east_asian", "nature_rural"],
+  },
+  indoor: {
+    boost: ["indoor", "generic"],
+    allow: ["modern_urban", "commercial_retail", "suburban_residential", "sci_fi"],
+    exclude: [],
+  },
+  generic: { boost: ["generic"], allow: ["*"], exclude: [] },
+};
+
+class RetrievalPrefilterError extends Error {
+  constructor(message, details) {
+    super(message);
+    this.name = "RetrievalPrefilterError";
+    this.details = details || {};
+  }
+}
+
+let _qdrant = null;
+let _pool = null;
+
+function cleanSettings(values) {
+  const out = [];
+  for (const v of Array.isArray(values) ? values : []) {
+    const s = String(v || "").trim();
+    if (VALID_SETTINGS.has(s) && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+function cleanTerms(values) {
+  return (Array.isArray(values) ? values : [])
+    .map(v => String(v || "").trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function preferredSettings(plan) {
+  const primary = cleanSettings(plan && plan.primary_settings);
+  const compat = SETTING_COMPAT[primary[0]] || {};
+  return cleanSettings([...primary, ...(compat.boost || [])]);
+}
+
+function excludedSettings(plan) {
+  const primary = cleanSettings(plan && plan.primary_settings);
+  const compat = SETTING_COMPAT[primary[0]] || {};
+  const excluded = cleanSettings([...(compat.exclude || []), ...cleanSettings(plan && plan.hard_exclude_settings)]);
+  return excluded.filter(s => !primary.includes(s));
+}
+
+function qdrant() {
+  if (!_qdrant) {
+    const { QdrantClient } = require("@qdrant/js-client-rest");
+    _qdrant = new QdrantClient({ url: QDRANT_URL, checkCompatibility: false });
+  }
+  return _qdrant;
+}
+
+function pgPool() {
+  if (!_pool) {
+    if (!process.env.POSTGRES_URL) throw new Error("POSTGRES_URL is not set");
+    const { Pool } = require("pg");
+    _pool = new Pool({ connectionString: process.env.POSTGRES_URL });
+  }
+  return _pool;
+}
+
+async function embedQuery(text) {
+  const resp = await fetch(`${EMBED_SERVICE_URL}/embed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texts: [String(text || "").trim() || "asset"] }),
+  });
+  if (!resp.ok) throw new Error(`embed service error ${resp.status}`);
+  const data = await resp.json();
+  if (!Array.isArray(data.dense) || !data.dense[0]) throw new Error("embed service returned no dense vector");
+  return { dense: data.dense[0], sparse: data.sparse && data.sparse[0] };
+}
+
+function buildQdrantFilter(category, plan) {
+  const exclude = excludedSettings(plan);
+  const filter = {
+    must: [{ key: "category", match: { value: category } }],
+  };
+  if (exclude.length) {
+    filter.must_not = [{ key: "setting", match: { any: exclude } }];
+  }
+  return filter;
+}
+
+function queryTextForPlan(plan) {
+  return [
+    plan && plan.semantic_query,
+    ...cleanTerms(plan && plan.must_terms),
+    ...preferredSettings(plan),
+  ].filter(Boolean).join(" ");
+}
+
+function resultPoints(result) {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result && result.points)) return result.points;
+  if (Array.isArray(result && result.result)) return result.result;
+  return [];
+}
+
+function compactFromPayload(payload, score) {
+  const p = payload || {};
+  return {
+    id: p.asset_id,
+    name: p.name,
+    category: p.category,
+    subcategory: p.subcategory || "",
+    desc: p.short_description || "",
+    tags: (p.tags || []).slice(0, 8),
+    sceneTypes: (p.scene_types || []).slice(0, 5),
+    setting: p.setting || "generic",
+    dims: p.width_m != null ? { width: p.width_m, depth: p.depth_m, height: p.height_m } : null,
+    path: p.unreal_asset_path || "",
+    assetType: p.asset_type || "",
+    spawnTool: p.asset_type === "Blueprint" ? "spawn_blueprint_actor" : "spawn_actor",
+    _score: score,
+  };
+}
+
+async function qdrantPrefilterCategory(category, plan, opts) {
+  const topK = Math.max(1, parseInt((opts && opts.topK) || TOP_K, 10));
+  const { dense, sparse } = await embedQuery(queryTextForPlan(plan));
+  const filter = buildQdrantFilter(category, plan);
+  const prefetch = [
+    { query: dense, using: "text_dense", filter, limit: topK },
+  ];
+  if (sparse && Array.isArray(sparse.indices) && sparse.indices.length) {
+    prefetch.push({ query: sparse, using: "text_sparse", filter, limit: topK });
+  }
+  const result = await qdrant().query(COLLECTION, {
+    prefetch,
+    query: { fusion: "rrf" },
+    limit: topK,
+    with_payload: true,
+  });
+  return resultPoints(result).map(r => compactFromPayload(r.payload, r.score)).filter(a => a.id);
+}
+
+async function postgresFallbackCategory(category, plan, opts) {
+  const topK = Math.max(1, parseInt((opts && opts.topK) || TOP_K, 10));
+  const queryText = queryTextForPlan(plan) || category;
+  const preferred = preferredSettings(plan);
+  const excluded = excludedSettings(plan);
+  const terms = cleanTerms([...(plan && plan.must_terms || []), ...(plan && plan.semantic_query || "").split(/\s+/)]);
+  const sql = `
+    WITH q AS (SELECT websearch_to_tsquery('english', $2) AS query)
+    SELECT
+      asset_id, name, category, subcategory, short_description, tags, scene_types,
+      setting, width_m, depth_m, height_m, unreal_asset_path, asset_type,
+      ts_rank_cd(search_tsv, q.query) AS text_rank,
+      CASE WHEN setting = ANY($4::text[]) THEN 1 ELSE 0 END AS setting_rank,
+      CASE WHEN scene_types && $5::text[] THEN 1 ELSE 0 END AS scene_rank,
+      CASE WHEN tags && $5::text[] THEN 1 ELSE 0 END AS tag_rank
+    FROM assets, q
+    WHERE category = $1
+      AND NOT (setting = ANY($3::text[]))
+    ORDER BY
+      text_rank DESC,
+      setting_rank DESC,
+      scene_rank DESC,
+      tag_rank DESC,
+      name ASC
+    LIMIT $6
+  `;
+  const res = await pgPool().query(sql, [category, queryText, excluded, preferred, terms, topK]);
+  return res.rows.map(row => compactFromPayload({
+    asset_id: row.asset_id,
+    name: row.name,
+    category: row.category,
+    subcategory: row.subcategory,
+    short_description: row.short_description,
+    tags: row.tags,
+    scene_types: row.scene_types,
+    setting: row.setting,
+    width_m: row.width_m,
+    depth_m: row.depth_m,
+    height_m: row.height_m,
+    unreal_asset_path: row.unreal_asset_path,
+    asset_type: row.asset_type,
+  }, Number(row.text_rank || 0) + Number(row.setting_rank || 0)));
+}
+
+async function prefilterCategory(category, plan, opts) {
+  const log = opts && opts.log || (() => {});
+  try {
+    const qdrantResults = await qdrantPrefilterCategory(category, plan, opts);
+    if (qdrantResults.length) return qdrantResults;
+    log(`prefilter ${category}: qdrant returned 0 candidates; trying postgres fallback`);
+  } catch (e) {
+    log(`prefilter ${category}: qdrant failed (${e.message}); trying postgres fallback`);
+  }
+
+  try {
+    const pgResults = await postgresFallbackCategory(category, plan, opts);
+    if (pgResults.length) return pgResults;
+    throw new Error("postgres fallback returned 0 candidates");
+  } catch (e) {
+    throw new RetrievalPrefilterError(
+      `asset prefilter failed for category "${category}": ${e.message}`,
+      { category, cause: e.message }
+    );
+  }
+}
+
+module.exports = {
+  SETTING_COMPAT,
+  VALID_SETTINGS,
+  RetrievalPrefilterError,
+  buildQdrantFilter,
+  excludedSettings,
+  postgresFallbackCategory,
+  preferredSettings,
+  prefilterCategory,
+  qdrantPrefilterCategory,
+};

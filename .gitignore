@@ -50,5 +50,12 @@ static_scene_eval_code.zip
 .codex/
 simworld_studio_workspace/.mcp.json
 
+# asset retrieval generated data/cache (do not commit)
+fastembed_cache/
+asset_db*/
+indexing_bkp_siddhant/
+*.snapshot
+*.dump
+
 !simworld_studio_workspace/web/public/SimCoder.png
 !simworld_studio_workspace/web/public/simworld-studio-logo.png

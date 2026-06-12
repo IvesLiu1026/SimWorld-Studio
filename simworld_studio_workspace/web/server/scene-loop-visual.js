@@ -471,7 +471,7 @@ async function runVisualSceneLoop({
 async function handleVisualSceneLoop(req, res, deps) {
   const { updateIntentSummary } = require("./intent-summarizer");
   const http = require("http");
-  const { message, sessionId, skills, feedback: userFeedback, runner: outerRunner, assetMode } = req.body || {};
+  const { message, sessionId, skills, feedback: userFeedback, runner: outerRunner, assetMode, assetRetrievalMode } = req.body || {};
   if (!message) { res.status(400).json({ error: "message required" }); return; }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -518,6 +518,7 @@ async function handleVisualSceneLoop(req, res, deps) {
         useLoop: false, // route to the existing single-turn path
         ...(outerRunner ? { runner: outerRunner } : {}),
         ...(assetMode ? { assetMode } : {}),  // forward A/B palette mode into each builder round
+        ...(assetRetrievalMode ? { assetRetrievalMode } : {}),
       });
       const opts = {
         host: "127.0.0.1", port, path: "/api/chat", method: "POST",

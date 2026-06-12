@@ -38,6 +38,8 @@ function buildPrompt(deps, body, options) {
   if (body.feedback) {
     systemPrompt += `\n\n## USER FEEDBACK ON CURRENT SCENE\nThe user is providing feedback on the current scene. Modify the scene based on this feedback. Do NOT start from scratch — refine what exists.\nFeedback: ${body.feedback}`;
   }
+  const assetPromptBlock = (options.assetPromptBlock || "").trim();
+  if (assetPromptBlock) systemPrompt += "\n\n" + assetPromptBlock;
   return `${systemPrompt}\n\n## TASK\n${body.message}`;
 }
 
@@ -325,15 +327,43 @@ async function handleCodexChat(req, res, deps) {
     } catch (_e) {}
   }
 
+  let assetPromptBlock = "";
+  try {
+    const assetRetrieval = require("./asset-retrieval");
+    const mode = assetRetrieval.resolveAssetMode(body);
+    if (!deps.MOCK_MODE && mode !== "off") {
+      emit("retrieval", { phase: "start", mode });
+      const model = require("./model-config").resolveModel(body);
+      assetPromptBlock = await assetRetrieval.buildPromptBlock(message, mode, {
+        model,
+        log: (x) => deps.logToFile && deps.logToFile("retrieval", x),
+      });
+      const chars = assetPromptBlock ? assetPromptBlock.length : 0;
+      if (deps.logToFile) deps.logToFile("retrieval", `mode=${mode} injected=${chars}chars runner=codex`);
+      emit("retrieval", { phase: "done", mode, chars });
+    }
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    if (deps.logToFile) deps.logToFile("retrieval", "ERR " + msg);
+    emit("retrieval", { phase: "error", message: msg });
+    emit("text", { delta: "\n\nAsset retrieval failed: " + msg + "\n" });
+    emit("done", { sessionId: deps.studioSession, isError: true, runner: "codex", latestScreenshot: null });
+    clearInterval(ping);
+    res.end();
+    return;
+  }
+
   const options = {
     arenaSystemPrompt: arenaPrompt,
     sceneContext,
+    assetPromptBlock,
     studioSession: deps.studioSession,
     logToFile: deps.logToFile,
     mcpServerJs: deps.mcpServerJs || path.resolve(__dirname, "mcp-server.js"),
     uePort: process.env.UNREAL_PORT || "55561",
     ueHost: process.env.UNREAL_HOST || "127.0.0.1",
     assetLibraryPath: process.env.ASSET_LIBRARY_PATH || "",
+    screenshotDir: deps.screenshotDir,
   };
 
   spawnCodexAgent(deps, body, options, emit, ({ isError, latestScreenshot, finalText, returnCode, error }) => {
