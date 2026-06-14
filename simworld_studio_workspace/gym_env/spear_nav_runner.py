@@ -102,7 +102,7 @@ from .logger import EpisodeLogger  # noqa: E402
 log = logging.getLogger("spear_nav_runner")
 
 # Movement geometry knobs (demo maps are cm-scale).
-_FORWARD_TICKS = 6        # server frames per MoveForward step (~one "stride")
+_FORWARD_TICKS = 2        # server frames per MoveForward step (~one "stride")
 _ROTATE_DEG = 30.0        # degrees per TURN action
 _ACTIONS = ("MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP")
 # Blueprint class of the replicated agent proxy on the render client. SPEAR's
@@ -306,6 +306,21 @@ def run_episode(ctrl, cam_inst, ep, *, max_steps, policy, root, run_name, cam_w,
         pass
     # Let the freshly-spawned actor BeginPlay so its UFunctions are live.
     _advance(ctrl, 10)
+    # Route the render client's net view to the agent. The client possesses no
+    # pawn, so without this its relevancy stays at spawn and the agent stops
+    # replicating (and the agent-bound camera goes stale) once it walks past
+    # NetCullDistance. Matches simworld.recording.
+    if actor is not None:
+        try:
+            with ctrl.begin_frame():
+                pc_cls = us.get_static_class(uclass="APlayerController")
+                pcs = us.find_actors_by_class(uclass=pc_cls, with_sp_funcs=True) or []
+                for pc in pcs:
+                    pc.SetViewTargetWithBlend(NewViewTarget=actor, BlendTime=0.0)
+            with ctrl.end_frame():
+                pass
+        except Exception as exc:
+            log.warning("view-target routing failed: %s", exc)
     if actor is None:
         log.error("episode %s: spawn failed", ep_id)
         return {"SR": 0.0, "SPL": 0.0, "steps": 0, "ended_reason": "spawn_error", "episode_id": ep_id}
