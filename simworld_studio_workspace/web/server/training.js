@@ -218,10 +218,16 @@ function registerTrainingRoutes(app, { taskSetManager, canonicalExport, ueExecSc
     const epFile = path.join(RUNS_DIR, `${job.id}.episodes.json`);
     fs.writeFileSync(epFile, canonicalExport(job.rec));   // ALL episodes, one file
     const off = (_spearPortSeq++ % 20) * 4;
+    // Resolve the task set's map to a UE path (Main lives at /Game/Main, demo maps
+    // under /Game/Maps) so the cluster loads the same map the episodes target.
+    const mapName = (job.rec && job.rec.mapName) || "demo_2";
+    const mapPath = mapName.includes("/") ? mapName
+      : (mapName === "Main" ? "/Game/Main" : `/Game/Maps/${mapName}`);
     const args = [
       "-m", "gym_env.spear_nav_runner",
       "--episodes-file", epFile, "--max-steps", String(maxSteps),
       "--model-id", modelDef.id, "--root", RUNS_DIR, "--run-prefix", job.id,
+      "--map", `${mapPath}?game=/Script/Engine.GameMode`,
       "--ue-port", String(7840 + off), "--spear-port", String(30060 + off),
       "--client-spear-port", String(31060 + off), "--beacon-port", String(17980 + off),
     ];
