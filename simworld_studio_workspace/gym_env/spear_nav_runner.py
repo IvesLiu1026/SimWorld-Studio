@@ -50,6 +50,53 @@ import spear  # noqa: E402
 import spear_ext  # noqa: F401,E402  (registers SPEAR ext types)
 from cluster_launcher.cluster_launcher import Cluster, ClusterSpec  # noqa: E402
 
+
+# --- SPEAR helpers, inlined from simworld.client -----------------------------
+# (NOT imported: the Studio's nav_task registers its own `simworld` SDK package,
+#  which shadows SimWorld-SPEAR's `simworld` python package — so `from
+#  simworld.client import ...` fails inside gym_env. These three are small.)
+def _complete(value):
+    """Resolve a SPEAR async future (``.get()``); pass dicts through unchanged."""
+    get = getattr(value, "get", None)
+    if callable(get) and not isinstance(value, dict):
+        try:
+            return get()
+        except TypeError:
+            return value
+    return value
+
+
+def _loc_xyz(value):
+    if isinstance(value, dict):
+        return (float(value.get("X", value.get("x", 0.0))),
+                float(value.get("Y", value.get("y", 0.0))),
+                float(value.get("Z", value.get("z", 0.0))))
+    return (float(getattr(value, "X", getattr(value, "x", 0.0))),
+            float(getattr(value, "Y", getattr(value, "y", 0.0))),
+            float(getattr(value, "Z", getattr(value, "z", 0.0))))
+
+
+def _camera_bundle_to_rgb(bundle):
+    """SPEAR SceneCapture read_pixels bundle -> contiguous RGB (BGRA->RGB)."""
+    if isinstance(bundle, dict) and isinstance(bundle.get("arrays"), dict):
+        arr = np.asarray(bundle["arrays"].get("data"), dtype=np.uint8)
+        if arr.ndim == 3 and arr.shape[2] >= 3:
+            return np.ascontiguousarray(arr[:, :, :3][:, :, ::-1])
+        raise RuntimeError(f"unexpected camera data shape: {arr.shape}")
+    if isinstance(bundle, dict):
+        width = int(bundle.get("Width", bundle.get("width", 0)) or 0)
+        height = int(bundle.get("Height", bundle.get("height", 0)) or 0)
+        raw = bundle.get("Image", bundle.get("image", b""))
+        if width <= 0 or height <= 0:
+            raise RuntimeError(f"camera bundle missing dimensions: {list(bundle)}")
+        arr = np.frombuffer(raw, dtype=np.uint8) if isinstance(raw, bytes) else np.asarray(raw, dtype=np.uint8)
+        ch = arr.size // max(1, width * height)
+        if ch < 3:
+            raise RuntimeError(f"camera bundle has too few channels: {ch}")
+        arr = arr[: width * height * ch].reshape((height, width, ch))
+        return np.ascontiguousarray(arr[:, :, :3][:, :, ::-1])
+    raise RuntimeError(f"unsupported camera bundle type: {type(bundle).__name__}")
+
 from .logger import EpisodeLogger  # noqa: E402
 
 log = logging.getLogger("spear_nav_runner")
@@ -58,6 +105,10 @@ log = logging.getLogger("spear_nav_runner")
 _FORWARD_TICKS = 6        # server frames per MoveForward step (~one "stride")
 _ROTATE_DEG = 30.0        # degrees per TURN action
 _ACTIONS = ("MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "STOP")
+# Blueprint class of the replicated agent proxy on the render client. SPEAR's
+# find_actors_by_class does NOT match BP subclasses through a C++ base, so the
+# client proxy must be located by this exact BP class (matches simworld.recording).
+PEDESTRIAN_BP = "/Game/Agent/Pedestrian/Core/BP_PedestrianAgentBase.BP_PedestrianAgentBase_C"
 
 _NAV_SYSTEM_PROMPT = (
     "You are an embodied navigation agent in a 3D city scene. You see a "
@@ -171,35 +222,28 @@ def _unpack_xyz(v) -> tuple[float, float, float]:
     return float(v[0]), float(v[1]), float(v[2])
 
 
-def _capture(cam_inst, cam, w: int, h: int) -> np.ndarray | None:
-    """Read one RGB frame from the render client's bound SceneCapture.
+def _capture(cam_inst, comp, w: int, h: int) -> np.ndarray | None:
+    """One RGB frame from the agent's recording camera on the render client.
 
-    ``read_pixels`` must run inside the client's ``end_frame`` (SPEAR receive phase).
+    ``read_pixels`` runs inside the client's ``end_frame`` (SPEAR receive phase);
+    the bundle is an async future, so ``_complete`` it before decoding — exactly
+    as ``simworld.recording.engine.RemoteClientCamera.capture`` does.
     """
-    if cam is None:
+    if comp is None:
         return None
     try:
+        raw: dict[str, Any] = {}
         with cam_inst.begin_frame():
             pass
         with cam_inst.end_frame():
-            return _read_camera_rgb(cam, w, h)
+            raw["bundle"] = comp.read_pixels()
+        bundle = _complete(raw.get("bundle"))
+        if bundle is None:
+            return None
+        return _camera_bundle_to_rgb(bundle)
     except Exception as exc:
         log.warning("camera capture failed: %s", exc)
         return None
-
-
-def _read_camera_rgb(cam, w: int, h: int) -> np.ndarray | None:
-    try:
-        bundle = cam.read_pixels()
-        arr = np.asarray(bundle["arrays"]["data"], dtype=np.uint8)
-        if arr.ndim == 3 and arr.shape[2] >= 3:
-            return np.ascontiguousarray(arr[:, :, :3])
-        if arr.size >= w * h * 3:
-            c = arr.size // (w * h)
-            return np.ascontiguousarray(arr[: w * h * c].reshape((h, w, c))[:, :, :3])
-    except Exception as exc:
-        log.warning("camera read failed: %s", exc)
-    return None
 
 
 def _connect(port: int, timeout_s: float = 180.0):
@@ -242,24 +286,33 @@ def run_episode(ctrl, cam_inst, ep, *, max_steps, policy, root, run_name, cam_w,
     us = ctrl._unreal_service
     with ctrl.begin_frame():
         us.initialize()
-        uclass = us.get_static_class(uclass="ASpHumanoidAgent")
         us.set_world(world=ctrl._get_game_world())
+        # Spawn the BP agent (not the C++ class) so the client proxy replicates as
+        # BP_PedestrianAgentBase_C — matchable by the camera proxy search and
+        # carrying the authored SpringArm + recording camera (matches simworld.recording).
+        uclass = us.load_class(uclass="AActor", name=PEDESTRIAN_BP)
         actor = us.spawn_actor(
             uclass=uclass, location={"X": sx, "Y": sy, "Z": sz},
             rotation={"Pitch": 0.0, "Yaw": 0.0, "Roll": 0.0},
             spawn_parameters={"SpawnCollisionHandlingOverride": "AlwaysSpawn"},
             with_sp_funcs=True)
         if actor is not None:
-            actor.ConfigureCamera(InWidth=cam_w, InHeight=cam_h, InFovDegrees=90.0)
-            actor.InitializeCamera()
+            # BP-class actors expose the C++ Agent_* UFunctions only after their
+            # sp-func wrappers are (re)initialized (same as the camera component).
+            if getattr(actor, "_initialized_sp_funcs", False):
+                actor._initialized_sp_funcs = False
+            actor.initialize_sp_funcs()
     with ctrl.end_frame():
         pass
+    # Let the freshly-spawned actor BeginPlay so its UFunctions are live.
+    _advance(ctrl, 10)
     if actor is None:
         log.error("episode %s: spawn failed", ep_id)
         return {"SR": 0.0, "SPL": 0.0, "steps": 0, "ended_reason": "spawn_error", "episode_id": ep_id}
 
-    # Bind the replicated agent's camera on the render client (match by class).
-    cam = _bind_client_camera(cam_inst, cam_w, cam_h)
+    # Bind the agent's OWN recording camera on the render client (ConfigureCamera /
+    # InitializeCamera / GetRecordingCamera are driven on the replicated proxy).
+    cam = _bind_client_camera(cam_inst, (sx, sy), cam_w, cam_h)
 
     logger = EpisodeLogger(run_name, root=root, save_frames=True, timestamp_dir=False,
                            meta={"episode_id": ep_id, "backend": "spear_5_8"})
@@ -275,7 +328,7 @@ def run_episode(ctrl, cam_inst, ep, *, max_steps, policy, root, run_name, cam_w,
         with ctrl.begin_frame():
             pass
         with ctrl.end_frame():
-            x, y, _z = _unpack_xyz(actor.Agent_GetLocation())
+            x, y, _z = _loc_xyz(_complete(actor.K2_GetActorLocation()))
         rgb = _capture(cam_inst, cam, cam_w, cam_h)
         path_len += math.hypot(x - prev[0], y - prev[1])
         prev = (x, y)
@@ -306,32 +359,30 @@ def run_episode(ctrl, cam_inst, ep, *, max_steps, policy, root, run_name, cam_w,
             ended_reason = "stopped"
             break
 
-        # Apply the chosen action over a few frames (sustained-input semantics).
-        n_ticks = _FORWARD_TICKS if action == "MOVE_FORWARD" else 2
-        with ctrl.begin_frame():
-            if action == "MOVE_FORWARD":
-                actor.Agent_MoveForward()  # no-arg: sustained walk (matches e2e)
-            elif action == "TURN_LEFT":
-                actor.Agent_Rotate(AngleDeg=_ROTATE_DEG, Direction="left")
-            elif action == "TURN_RIGHT":
-                actor.Agent_Rotate(AngleDeg=_ROTATE_DEG, Direction="right")
-        with ctrl.end_frame():
-            pass
-        for _ in range(n_ticks - 1):
+        # Apply the action. ASpPedestrianAgentBase control surface (no Agent_ prefix):
+        #   MoveForward(Scale) is AddMovementInput-style — HELD every tick;
+        #   Rotate(DeltaYawDegrees) is a one-shot yaw delta (left = negative).
+        if action == "MOVE_FORWARD":
+            for _ in range(_FORWARD_TICKS):
+                with ctrl.begin_frame():
+                    actor.MoveForward(Scale=1.0)
+                with ctrl.end_frame():
+                    pass
+        else:
+            delta = -_ROTATE_DEG if action == "TURN_LEFT" else _ROTATE_DEG
             with ctrl.begin_frame():
-                pass
+                actor.Rotate(DeltaYawDegrees=float(delta))
             with ctrl.end_frame():
                 pass
-        if action == "MOVE_FORWARD":  # halt sustained walk before next observation
             with ctrl.begin_frame():
-                actor.Agent_StopAgent()
+                pass
             with ctrl.end_frame():
                 pass
 
     # Tear down the agent so the next episode starts clean.
     try:
         with ctrl.begin_frame():
-            actor.Agent_StopAgent()
+            actor.StopAgent()
             us.destroy_actor(actor=actor)
         with ctrl.end_frame():
             pass
@@ -356,52 +407,72 @@ def _advance(inst, n=1):
             pass
 
 
-def _bind_client_camera(cam_inst, w, h, *, settle_frames=12, retries=8):
-    """Find the replicated SpHumanoidAgent on the render client + bind its SceneCapture.
+def _bind_client_camera(cam_inst, spawn_xy, w, h, *, retries=30):
+    """Bind the agent's OWN recording camera on the render client.
 
-    The agent is spawned server-side and takes a few client frames to replicate,
-    so we let the client settle, then poll find_actors_by_class with retries
-    (mirrors cluster_launcher/test_e2e_multiagent.py).
+    The agent (SpHumanoidAgent) authors its own SpringArm + SpSceneCaptureComponent2D
+    in C++; we drive it through the documented UFUNCTIONs (ConfigureCamera /
+    InitializeCamera / GetRecordingCamera) on the *client* replicated proxy — no
+    manual component enumeration. Mirrors simworld.recording.session exactly:
+      1. locate the replicated proxy by its exact BP class, nearest to spawn,
+      2. ConfigureCamera + InitializeCamera on the proxy,
+      3. GetRecordingCamera -> re-wrap with_sp_funcs=True to expose read_pixels.
+    Best-effort: any failure returns None and the episode runs on blank frames.
     """
-
-    us = cam_inst._unreal_service
     try:
+        cli = cam_inst._unreal_service
         with cam_inst.begin_frame():
-            us.initialize()
-            us.set_world(world=cam_inst._get_game_world())
+            cli.initialize()
+            cli.set_world(world=cam_inst._get_game_world())
+            proxy_cls = cli.load_class(uclass="AActor", name=PEDESTRIAN_BP)
         with cam_inst.end_frame():
             pass
-    except Exception as exc:
-        log.warning("client unreal_service init failed: %s", exc)
-        return None
-    _advance(cam_inst, settle_frames)
 
-    for attempt in range(retries):
-        comp = None
-        try:
+        proxy = None
+        for attempt in range(retries):
+            candidates, locs = [], []
             with cam_inst.begin_frame():
-                actors = us.find_actors_by_class(uclass="ASpHumanoidAgent", with_sp_funcs=True) or []
-                actor = actors[0] if actors else None
-                if actor is not None:
-                    comp = us.get_component_by_class(
-                        actor=actor, uclass="USpSceneCaptureComponent2D", with_sp_funcs=True)
-                    if comp is not None:
-                        try:
-                            comp.Width, comp.Height = w, h
-                        except Exception:
-                            pass
-                        comp.Initialize()
-                        comp.initialize_sp_funcs()
+                candidates = cli.find_actors_by_class(uclass=proxy_cls, with_sp_funcs=True) or []
             with cam_inst.end_frame():
-                pass
-            if comp is not None:
-                log.info("client camera bound (attempt %d)", attempt + 1)
-                return comp
-        except Exception as exc:
-            log.warning("camera bind attempt %d: %s", attempt + 1, exc)
-        _advance(cam_inst, 4)
-    log.warning("client camera bind failed after %d retries; proceeding without RGB", retries)
-    return None
+                for cand in candidates:
+                    locs.append(cand.K2_GetActorLocation())
+            best = None
+            for cand, raw in zip(candidates, locs):
+                x, y, _z = _loc_xyz(_complete(raw))
+                d2 = (x - spawn_xy[0]) ** 2 + (y - spawn_xy[1]) ** 2
+                if best is None or d2 < best[0]:
+                    best = (d2, cand)
+            if best is not None and best[0] < 500.0 ** 2:
+                proxy = best[1]
+                log.info("client proxy matched %.0fcm from spawn (%d candidates)",
+                         best[0] ** 0.5, len(candidates))
+                break
+            _advance(cam_inst, 5)
+            time.sleep(0.5)
+        if proxy is None:
+            log.warning("replicated proxy not found on client; proceeding without RGB")
+            return None
+
+        comp = None
+        with cam_inst.begin_frame():
+            proxy.ConfigureCamera(InWidth=w, InHeight=h, InFovDegrees=90.0)
+            proxy.InitializeCamera()
+            raw = proxy.GetRecordingCamera()
+            handle = spear.to_handle(obj=raw)
+            comp = cli.to_handle_or_unreal_object(obj=handle, as_unreal_object=True, with_sp_funcs=True)
+            if getattr(comp, "_initialized_sp_funcs", False):
+                comp._initialized_sp_funcs = False
+            comp.initialize_sp_funcs()
+        with cam_inst.end_frame():
+            pass
+        if not getattr(comp, "_sp_func_names", None):
+            log.warning("RecordingCamera has no read_pixels (build older than agent camera?)")
+            return None
+        log.info("agent recording camera bound (%dx%d)", w, h)
+        return comp
+    except Exception as exc:
+        log.warning("client camera bind aborted (%s); proceeding without RGB", exc)
+        return None
 
 
 # --------------------------------------------------------------------------- #
