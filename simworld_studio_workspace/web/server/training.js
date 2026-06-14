@@ -33,6 +33,15 @@ const PY        = process.env.TRAIN_PYTHON || "python3";
 const UCV_PORT  = process.env.UCV_PORT || process.env.UNREALCV_PORT || process.env.TRAIN_UCV_PORT || "9017";
 const COLLISION_MIN_MOVE_CM = 10;
 
+// Backend: "spear" routes training to the UE 5.8 / SPEAR runner (gym_env.spear_nav_runner,
+// own server+render-client cluster) instead of the legacy 5.3 / UnrealCV batch_runner.
+const BACKEND   = process.env.TRAIN_BACKEND || "unrealcv";
+const SPEAR_REPO = process.env.SIMWORLD_SPEAR_REPO || "/data/koe/SimWorld_SPEAR_dev";
+const SPEAR_PY   = process.env.SIMWORLD_SPEAR_PYTHON || "/data/koe/spear-sim-spear/python";
+const SPEAR_EXT  = process.env.SIMWORLD_SPEAR_EXT || "/data/koe/spear-sim-spear/python_ext/python";
+const SPEAR_LD_PRELOAD = process.env.SPEAR_LD_PRELOAD || "/usr/lib/x86_64-linux-gnu/libstdc++.so.6";
+let _spearPortSeq = 0;
+
 const TRAIN_MODELS = [
   { id: "gpt-4o",      provider: "gpt", label: "GPT-4o (vision)" },
   { id: "gpt-4o-mini", provider: "gpt", label: "GPT-4o mini (vision)" },
@@ -121,9 +130,15 @@ function _pollEpisode(job, epName, runDir, epIndex) {
 function _poll(job) {
   const runDir = job.currentRunDir;
   if (!runDir || !fs.existsSync(runDir)) return;
+  // spear runner writes one dir per episode named `${jobId}_e${i}`; the legacy
+  // batch_runner writes `ep_*` subdirs under one batch dir.
+  const prefix = job.spear ? (job.id + "_e") : "ep_";
   let eps;
-  try { eps = fs.readdirSync(runDir).filter(n => n.startsWith("ep_")).sort(); } catch (_e) { return; }
-  for (const ep of eps) { try { _pollEpisode(job, ep, runDir, job.epIndex); } catch (_e) {} }
+  try { eps = fs.readdirSync(runDir).filter(n => n.startsWith(prefix) && !n.endsWith(".json")).sort(); } catch (_e) { return; }
+  for (const ep of eps) {
+    const idx = job.spear ? (parseInt(ep.slice(prefix.length), 10) || 0) : job.epIndex;
+    try { _pollEpisode(job, ep, runDir, idx); } catch (_e) {}
+  }
 }
 
 async function _endPIE(ueExecScript) {
@@ -193,6 +208,51 @@ function registerTrainingRoutes(app, { taskSetManager, canonicalExport, ueExecSc
     });
   }
 
+  // UE 5.8 / SPEAR backend: ONE spawn drives the whole task set in one cluster
+  // (server computes physics, render client serves the agent's own camera). The
+  // runner writes Studio-format output per episode + prints `batch output dir:`.
+  function _runSpearBackend(job, modelDef, maxSteps) {
+    if (job.status === "cancelled") return;
+    job.spear = true;
+    fs.mkdirSync(RUNS_DIR, { recursive: true });
+    const epFile = path.join(RUNS_DIR, `${job.id}.episodes.json`);
+    fs.writeFileSync(epFile, canonicalExport(job.rec));   // ALL episodes, one file
+    const off = (_spearPortSeq++ % 20) * 4;
+    const args = [
+      "-m", "gym_env.spear_nav_runner",
+      "--episodes-file", epFile, "--max-steps", String(maxSteps),
+      "--model-id", modelDef.id, "--root", RUNS_DIR, "--run-prefix", job.id,
+      "--ue-port", String(7840 + off), "--spear-port", String(30060 + off),
+      "--client-spear-port", String(31060 + off), "--beacon-port", String(17980 + off),
+    ];
+    const env = Object.assign({}, process.env, {
+      LD_PRELOAD: SPEAR_LD_PRELOAD,
+      PYTHONPATH: [SPEAR_PY, SPEAR_EXT, path.join(SPEAR_REPO, "utils"), WORKSPACE,
+                   process.env.PYTHONPATH || ""].filter(Boolean).join(":"),
+    });
+    job.currentRunDir = RUNS_DIR;
+    log(`start ${job.id}: SPEAR backend, ${job.episodes.length} eps, ports ${7840 + off}/${30060 + off}/${31060 + off}`);
+    const child = spawn(PY, args, { cwd: WORKSPACE, env, stdio: ["ignore", "pipe", "pipe"] });
+    job.currentChild = child;
+    const onData = (buf) => {
+      const s = buf.toString();
+      job.log = (job.log + s).slice(-20000);
+      if (job.status === "starting" && /cluster up|=== episode /i.test(s)) {
+        job.status = "running";
+        _send(job, { type: "status", status: "running", agg: _aggSnapshot(job) });
+      }
+      if (/Traceback|RuntimeError|Error:|episode .* failed:/i.test(s)) _send(job, { type: "log", line: s.trim().slice(0, 400) });
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.on("error", (e) => { _send(job, { type: "log", line: "spawn error: " + e.message }); _finishAll(job, "failed"); });
+    child.on("close", () => {
+      try { fs.unlinkSync(epFile); } catch (_e) {}
+      _poll(job);
+      _finishAll(job, job.status === "cancelled" ? "cancelled" : "done");
+    });
+  }
+
   app.get("/api/training/models", (req, res) => res.json({ models: TRAIN_MODELS }));
 
   app.get("/api/training/runs", (req, res) => {
@@ -223,8 +283,9 @@ function registerTrainingRoutes(app, { taskSetManager, canonicalExport, ueExecSc
     jobs.set(id, job);
     log(`start ${id}: model=${modelDef.id} taskSet=${rec.id} eps=${rec.episodes.length} maxSteps=${maxSteps}`);
     job.poller = setInterval(() => _poll(job), 600);
-    _runNextEpisode(job, modelDef, maxSteps, memory);
-    res.status(201).json({ jobId: id, model: modelDef.id, episodes: rec.episodes.length, maxSteps });
+    if (BACKEND === "spear") _runSpearBackend(job, modelDef, maxSteps);
+    else _runNextEpisode(job, modelDef, maxSteps, memory);
+    res.status(201).json({ jobId: id, model: modelDef.id, episodes: rec.episodes.length, maxSteps, backend: BACKEND });
   });
 
   app.get("/api/training/:jobId/stream", (req, res) => {
@@ -244,7 +305,9 @@ function registerTrainingRoutes(app, { taskSetManager, canonicalExport, ueExecSc
     if (!job) return res.status(404).end();
     const ep = String(req.query.ep || "");
     const step = parseInt(req.query.step, 10);
-    if (!/^ep_[A-Za-z0-9_\-]+$/.test(ep) || !Number.isInteger(step)) return res.status(400).end();
+    // Accept legacy `ep_*` and spear `${jobId}_e*` dir names; no dots/slashes so
+    // path traversal is impossible (further guarded by the startsWith check below).
+    if (!/^[A-Za-z0-9_\-]+$/.test(ep) || !Number.isInteger(step)) return res.status(400).end();
     const runDir = job.epRunDir[ep] || job.currentRunDir;
     if (!runDir) return res.status(404).end();
     const file = path.join(runDir, ep, "frames", "step_" + String(step).padStart(4, "0") + ".png");
