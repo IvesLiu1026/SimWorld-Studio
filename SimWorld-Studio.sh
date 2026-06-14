@@ -14,12 +14,12 @@ WORKSPACE="$SCRIPT_DIR/simworld_studio_workspace"
 CIRRUS_JS="$ENGINE_DIR/Plugins/Media/PixelStreaming/Resources/WebServers/SignallingWebServer/cirrus.js"
 
 # Defaults
-WEB_PORT=3002
-MCP_PORT=55559
+WEB_PORT=3005
+MCP_PORT=55564
 GPU_INDEX=0
-CIRRUS_HTTP_PORT=8585
-CIRRUS_WS_PORT=8586
-CIRRUS_SFU_PORT=8889
+CIRRUS_HTTP_PORT=8589
+CIRRUS_WS_PORT=8590
+CIRRUS_SFU_PORT=8893
 MAP="/Game/Main.umap"
 
 usage() {
@@ -32,6 +32,7 @@ usage() {
     echo "  --cirrus-http-port PORT   Cirrus HTTP port (default: 8585)"
     echo "  --cirrus-ws-port PORT     Cirrus WebSocket port (default: 8586)"
     echo "  --cirrus-sfu-port PORT    Cirrus SFU port (default: 8889)"
+    echo "  --ucv-port PORT           UnrealCV port (default: 9017; must be free)"
     echo "  --map MAP                 UE map path (default: /Game/Main.umap)"
     echo "  --help                    Show this help"
     echo ""
@@ -48,6 +49,7 @@ while [[ $# -gt 0 ]]; do
         --cirrus-http-port) CIRRUS_HTTP_PORT="$2";    shift 2 ;;
         --cirrus-ws-port)   CIRRUS_WS_PORT="$2";      shift 2 ;;
         --cirrus-sfu-port)  CIRRUS_SFU_PORT="$2";     shift 2 ;;
+        --ucv-port)         UNREALCV_PORT="$2";       shift 2 ;;
         --map)              MAP="$2";                 shift 2 ;;
         --help|-h)          usage; exit 0 ;;
         *) echo "Unknown option: $1 (use --help)"; exit 1 ;;
@@ -197,6 +199,9 @@ until nc -z 127.0.0.1 $MCP_PORT 2>/dev/null; do
     fi
 done
 echo "[ue] MCP ready!"
+# Immersive mode (F11) is triggered by the web app on first stream-connect via
+# POST /api/immersive (the viewport is active then, which is more reliable than toggling
+# at launch before any browser attaches).
 
 # ── 4. Web UI server ──────────────────────────────────────────────────────────
 if [ -f "$WEB_DIR/index.js" ]; then
@@ -206,9 +211,12 @@ if [ -f "$WEB_DIR/index.js" ]; then
     UNREAL_HOST=127.0.0.1 \
     UNREAL_PORT=$MCP_PORT \
     UCV_PORT=$UNREALCV_PORT \
+    UE_PROJECT_PATH=$PROJECT_DIR \
     PIXEL_STREAMING_URL=http://127.0.0.1:$CIRRUS_HTTP_PORT \
     CIRRUS_HTTP_PORT=$CIRRUS_HTTP_PORT \
     CIRRUS_WS_PORT=$CIRRUS_WS_PORT \
+    SESSION_TTL_MS=3600000 \
+    SESSION_HARD_MAX_MS=14400000 \
     node index.js >> "$WORKSPACE/logs/web.log" 2>&1 &
     WEB_PID=$!
     PIDS+=($WEB_PID)
