@@ -1,6 +1,96 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { API_BASE } from "../../api/client.js";
 import PixelStreamPlayer from "../../PixelStreamPlayer.jsx";
+import { useLatestRun } from "../training/datahub.js";
+
+// Live agent-camera view: the real RGB frame from the SPEAR cluster's render client
+// (the UE instance currently running the agent), polled straight from the datahub so it is
+// ALWAYS connected to the latest running UE — independent of how many instances exist or of
+// any SSE store. This is the viewport "接入" the running agent camera.
+function AgentCameraView() {
+  const data = useLatestRun(1200);   // run status + per-step metadata
+  const [cirrusPort, setCirrusPort] = useState(null);
+  useEffect(() => {
+    let on = true;
+    fetch(`${API_BASE}/pixel-streaming-url`).then((r) => r.json())
+      .then((j) => { if (on && j && j.detectedPort) setCirrusPort(j.detectedPort); }).catch(() => {});
+    return () => { on = false; };
+  }, []);
+  const run = data && data.run;
+  const status = (data && data.status) || "idle";
+  const live = status === "running" || status === "starting";
+  const eps = (run && run.episodes) || [];
+  let ep = eps.find((e) => !e.done) || eps[eps.length - 1];
+  const steps = (ep && ep.steps) || [];
+  const st = steps[steps.length - 1];
+
+  // Auto-connect fix: the iframe mounts as soon as the run is `live`, but the cluster's render
+  // client (and thus the "DefaultStreamer") only registers ~3 min later once it finishes booting.
+  // The first connect attempt finds no streamer and gives up — which is why a MANUAL reconnect
+  // worked but auto-connect didn't. So we REMOUNT the player (bump `streamNonce` → new React key)
+  // the moment the stream becomes available (first captured frame = render client up = streamer
+  // registered), plus a couple of safety retries. Each remount is a fresh connect, exactly like the
+  // manual reconnect the user did by hand.
+  const hasFrame = !!st;
+  const [streamNonce, setStreamNonce] = useState(0);
+  const sawFrame = useRef(false);
+  useEffect(() => {
+    if (!live) { sawFrame.current = false; return; }
+    if (hasFrame && !sawFrame.current) {
+      sawFrame.current = true;
+      setStreamNonce((n) => n + 1);
+      const t1 = setTimeout(() => setStreamNonce((n) => n + 1), 6000);
+      const t2 = setTimeout(() => setStreamNonce((n) => n + 1), 16000);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+  }, [live, hasFrame]);
+
+  if (!run) {
+    return <div className="viewport-screenshot-empty"><span>No training run yet. Start one — the agent's live video shows here.</span></div>;
+  }
+  const epName = ep && (ep.runName || `${run.runId}_e${ep.idx}`);
+  const stepUrl = st ? `${API_BASE}/training/${run.runId}/frame?ep=${encodeURIComponent(epName)}&step=${st.step}` : null;
+  // Live = real WebRTC PixelStream of the agent (continuous video → smooth walking). NOTE: this UE
+  // build ignores -PixelStreamingStreamerId and ALWAYS registers the render client as
+  // "DefaultStreamer" (confirmed in client log: "PixelStreaming streamer ID: DefaultStreamer"), so
+  // the viewport selects DefaultStreamer on the training cirrus. Falls back to the last captured
+  // frame when finished.
+  const agentPlayerUrl = cirrusPort ? `/ue-player.html?cirrus=${cirrusPort}&StreamerId=DefaultStreamer` : null;
+  // Only mount the WebRTC player once the stream is actually READY (first captured frame = render
+  // client booted = DefaultStreamer registered on cirrus). Before that, mounting it just spins for
+  // the whole ~3 min cluster boot with no streamer to connect to — which read as "一直转圈连不上".
+  // While booting we show a clear status instead; the player appears (and connects) the moment the
+  // stream exists, then streamNonce remounts it twice more as a safety net.
+  const streamReady = live && hasFrame && agentPlayerUrl;
+  return (
+    <div className="viewport-screenshot-frame" style={{ position: "relative" }}>
+      {streamReady
+        ? <PixelStreamPlayer key={`ps-${run.runId}-${streamNonce}`} playerUrl={agentPlayerUrl} />
+        : (stepUrl
+            ? <img src={stepUrl} alt="agent camera" className="loaded"
+                style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                onError={(e) => { e.currentTarget.style.opacity = 0.2; }} />
+            : <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {live && <span style={{ width: 12, height: 12, borderRadius: 12,
+                  border: "2px solid var(--ink-3)", borderTopColor: "transparent", display: "inline-block",
+                  animation: "spin 0.8s linear infinite" }} />}
+                {live ? "SPEAR cluster booting (~3 min) — auto-connects to the agent camera when ready…" : "run finished"}
+              </span>)}
+      <div style={{ position: "absolute", left: 8, top: 8, padding: "2px 8px", borderRadius: 6,
+        background: live ? "rgba(61,220,132,0.85)" : "rgba(0,0,0,0.6)", color: live ? "#000" : "#fff",
+        fontSize: 11, fontWeight: 700 }}>
+        {live ? "● LIVE" : status} · {run.runId}
+      </div>
+      {st && (
+        <div style={{ position: "absolute", left: 8, bottom: 8, padding: "3px 8px", borderRadius: 6,
+          background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 12, fontFamily: "monospace" }}>
+          ep {ep.idx} · step {st.step} · {st.action}
+          {st.distanceCm != null && ` · ${(st.distanceCm / 100).toFixed(1)}m to goal`}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const CAMERA_PRESETS = [
   { label: "Top", title: "Bird's-eye view", args: [0, 0, 5000, -90, 0, 0] },
@@ -117,6 +207,25 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
   const intervalRef = useRef(null);
   const screenshotObjectUrlRef = useRef(null);
   const engineLabel = health?.engineLabel || (health?.engineVersion ? `UE ${health.engineVersion}` : "Unreal Engine");
+
+  // Auto-connect the agent camera to the LATEST RUNNING UE: poll the datahub and, while a run
+  // is live, KEEP the viewport on the Agent view (re-assert every tick — not just on the
+  // transition — so opening the page mid-run still lands on the agent stream, not the editor's
+  // empty scene). This is why the viewport showed "Editor" before: it was never switched.
+  useEffect(() => {
+    let on = true;
+    const tick = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/training/datahub/latest`);
+        const j = await r.json();
+        const live = j && (j.status === "running" || j.status === "starting");
+        if (on && live) setMode("agent");
+      } catch (_e) {}
+    };
+    tick();
+    const t = setInterval(tick, 2500);
+    return () => { on = false; clearInterval(t); };
+  }, []);
 
   const clearScreenshotObjectUrl = useCallback(() => {
     if (!screenshotObjectUrlRef.current) return;
@@ -251,6 +360,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
         <div className="viewport-mode-tabs">
           {[
             { id: "pixelstream", label: "Live" },
+            { id: "agent", label: "Agent" },
             { id: "screenshot", label: "Shot" },
           ].map((tab) => (
             <button
@@ -335,6 +445,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
         {mode === "screenshot" && (
           <ScreenshotView src={screenshotUrl} imgKey={imgKey} onRefresh={fetchLatestScreenshot} />
         )}
+        {mode === "agent" && <AgentCameraView />}
       </div>
 
       <div className="viewport-statusbar">
