@@ -189,6 +189,7 @@ async function routeCategories(scene, db, opts) {
 
 // ── stage 2: per-category selection (one call per category, run in parallel) ──
 async function selectInCategory(scene, cat, emphasis, opts) {
+  const perCatCap = Math.max(1, Number(process.env.ASSET_SELECT_PER_CAT_CAP || 15));
   const items = cat.assets.map(a =>
     `- ${a.id} | ${a.name} | ${a.subcategory} | ${a.setting} | ${a.desc} | tags: ${a.tags.join(",")}`
   ).join("\n");
@@ -196,7 +197,7 @@ async function selectInCategory(scene, cat, emphasis, opts) {
     `You are selecting assets from ONE category ("${cat.id}") for a 3D scene.`,
     `This category was flagged as ${emphasis || "relevant"} for the scene.`,
     "Pick the assets that genuinely fit this scene's setting, era, mood and function. EXCLUDE assets that belong to a different setting/genre (e.g. sci-fi consoles in a medieval market, ornate temple decor in an industrial yard, or snow props in a desert bazaar). Use the per-asset 'setting' tag as a strong signal, but trust the description/tags when a 'generic' prop genuinely fits.",
-    "Do NOT limit the count — include EVERY asset that fits and exclude every asset that does not. If none fit, return an empty list.",
+    `Select the BEST-FITTING, DISTINCT assets only — avoid near-duplicates (do NOT pick 20 near-identical trash cans / lamps / fences; pick the few best of each kind). Aim for roughly the ${perCatCap} most relevant or fewer. If none fit, return an empty list.`,
     "",
     "SCENE:", scene, "",
     `CATEGORY "${cat.id}" — ${cat.description}`,
@@ -206,11 +207,12 @@ async function selectInCategory(scene, cat, emphasis, opts) {
   ].join("\n");
   const out = await oneshotJSON(prompt, opts);
   const valid = new Set(cat.assets.map(a => a.id));
-  return (out.selected || []).filter(s => s && valid.has(s.id));
+  return (out.selected || []).filter(s => s && valid.has(s.id)).slice(0, perCatCap);
 }
 
 // ── stage 3: aggregation / final curation ────────────────────────────────────
 async function aggregate(scene, picked, db, opts) {
+  const finalCap = Math.max(5, Number(process.env.ASSET_FINAL_CAP || 70));
   const lines = picked.map(p => {
     const a = db.assets.get(p.id);
     return `- ${a.id} | ${a.category} | ${a.name} | ${a.desc}`;
@@ -220,8 +222,9 @@ async function aggregate(scene, picked, db, opts) {
     "From the candidate assets below (already pre-filtered per category), produce the FINAL palette:",
     "- Drop anything off-theme or stylistically inconsistent with the rest of the set.",
     "- Keep the set coherent (consistent era / mood / setting).",
-    "- Order by importance: primary structures & backdrop first, then mid-ground, then small accents / clutter.",
-    "Do NOT impose a fixed size — keep exactly as many distinct assets as the scene genuinely needs (a rich, lively scene needs many types; a sparse scene needs few).",
+    "- ALWAYS keep at least one large ground/floor/paving/grass/snow surface (category ground_and_road) as the base ground — NEVER drop every ground asset, or the scene has no floor to stand on.",
+    "- Order by importance: ground/base surface and primary structures & backdrop first, then mid-ground, then small accents / clutter.",
+    `Keep a FOCUSED, coherent palette of DISTINCT assets — drop near-duplicates. Aim for roughly ${finalCap} or fewer (a rich, lively scene needs more variety; a sparse scene fewer), ordered by importance.`,
     "",
     "SCENE:", scene, "",
     "CANDIDATES  (id | category | name | description):", lines, "",
@@ -229,13 +232,20 @@ async function aggregate(scene, picked, db, opts) {
   ].join("\n");
   const out = await oneshotJSON(prompt, { ...opts, timeoutMs: Math.max(Number(opts.timeoutMs) || 0, 300000) });
   const valid = new Set(picked.map(p => p.id));
-  const ids = (out.final || []).map(f => (typeof f === "string" ? f : (f && f.id))).filter(id => valid.has(id));
+  let ids = (out.final || []).map(f => (typeof f === "string" ? f : (f && f.id))).filter(id => valid.has(id)).slice(0, finalCap);
+  // ground guarantee: if the curator dropped every ground/floor asset, re-inject the
+  // best 1-2 ground candidates so the scene always has a base surface to lay.
+  const isGround = id => { const a = db.assets.get(id); return a && a.category === "ground_and_road"; };
+  if (!ids.some(isGround)) {
+    const groundCandidates = picked.filter(p => isGround(p.id)).map(p => p.id);
+    if (groundCandidates.length) ids = [...groundCandidates.slice(0, 2), ...ids.filter(id => !groundCandidates.includes(id))].slice(0, finalCap);
+  }
   return { rationale: out.scene_rationale || "", final: ids.map(id => ({ id })) };
 }
 
 // ── orchestrator ─────────────────────────────────────────────────────────────
 async function retrieve(scene, opts) {
-  const o = opts || {};
+  const o = Object.assign({ reasoningEffort: process.env.ASSET_RETRIEVAL_REASONING_EFFORT || "medium", telemetryComponent: "retrieval" }, opts || {});
   const log = o.log || (() => {});
   const usePrefilter = _usePrefilter(o);
   const cacheKey = _retrievalCacheKey(scene, o);
@@ -246,6 +256,22 @@ async function retrieve(scene, opts) {
   const routeResult = await routeCategories(scene, db, o);
   const routed = Array.isArray(routeResult) ? routeResult : (routeResult.categories || []);
   const plan = _normalizePlan(routeResult, scene);
+  // ── ground guarantee ────────────────────────────────────────────────────────
+  // Always route a ground/surface category so the palette has a base floor to lay.
+  // Without this, db-mode scenes can end up with no ground asset and render on the
+  // bare default grey plane (the off arm always finds a ground by browsing live UE).
+  {
+    const force = ["ground_and_road"];
+    const wantsWinter = /\b(snow|snowy|winter|ice|icy|frost|frozen)\b/i.test(scene) ||
+      (plan.primary_settings || []).includes("winter");
+    if (wantsWinter && db.byCat.get("winter_snow_props")) force.push("winter_snow_props");
+    for (const id of force) {
+      if (!db.byCat.get(id)) continue;
+      const existing = routed.find(x => x.id === id);
+      if (existing) existing.emphasis = "primary";        // bump so selection is generous
+      else routed.push({ id, emphasis: "primary", reason: "ground-guarantee (forced)" });
+    }
+  }
   trace.routed = routed;
   trace.plan = plan;
   log("routed: " + routed.map(r => `${r.id}(${r.emphasis})`).join(", "));
@@ -276,7 +302,13 @@ async function retrieve(scene, opts) {
           log(`prefilter ${r.id} FAILED (${e.message}); using bounded full-list fallback ${cat.count}/${FULL_FALLBACK_MAX}`);
           candidates = cat;
         } else {
-          throw e;
+          // Non-fatal: one off-theme/empty category (e.g. router pulled in winter_snow_props
+          // for a non-winter scene, then excluded the winter setting → 0 candidates) must NOT
+          // abort the whole retrieval. Skip just this category. A true infra outage fails every
+          // category → empty palette → buildPromptBlock throws, so real failures still surface.
+          trace.prefilter[r.id] = { skipped: true, error: e.message };
+          log(`prefilter ${r.id} FAILED (${e.message}); skipping this category`);
+          return [];
         }
       }
     }
@@ -331,7 +363,31 @@ function formatAssetsForPrompt(assets) {
   return lines.join("\n");
 }
 
-const _HOWTO = 'These are the ONLY assets to use for this scene. IGNORE the generic CityDatabase / BP_Building_* lists and list_assets discovery mentioned earlier in this prompt — build the scene exclusively from the palette below. Spawn each asset by its EXACT full path shown: use spawn_blueprint_actor for Blueprints and spawn_actor for static meshes (as labelled per item). Do NOT spawn any asset whose path is not in this list. You MAY place multiple instances of an asset for a fuller scene. Dimensions are width×depth×height in metres (UE uses cm: 1 m = 100 units) — use them for spacing and to avoid overlaps.';
+// Curated, verified ground-surface MATERIALS (object paths confirmed to load in this
+// UE project). Used as a fallback to carpet large areas when no full-coverage ground
+// MESH fits the setting (e.g. a snow field or sand lot). Applied to a tiled grid of
+// flat planes. Meshes (with baked UVs) are preferred; materials are the safety net.
+const _GROUND_MATERIALS = [
+  { surface: "grass / lawn", path: "/Game/SuburbNeighborhoodHousePack/Materials/MI_Floor_Grass.MI_Floor_Grass" },
+  { surface: "grass lawn (large-scale)", path: "/Game/midmanhattan/Materials/KB3D_MIM_GrassLawn.KB3D_MIM_GrassLawn" },
+  { surface: "snow", path: "/Game/Village/Materials/MI_Snow01.MI_Snow01" },
+  { surface: "sand", path: "/Game/Downtown_West/Materials/Ground_Shared/MI_Sand_Ground_A.MI_Sand_Ground_A" },
+  { surface: "dirt / gravel", path: "/Game/ModularBuildingSet/materials/Ground_Rubble/ground_gravel_dirt.ground_gravel_dirt" },
+  { surface: "gravel path", path: "/Game/EnglishCollege/Materials/Pathways/M_Gravel.M_Gravel" },
+  { surface: "cobblestone", path: "/Game/UrbanDistrict/Environment/Cobble_01/mi_Cobble_01_01.mi_Cobble_01_01" },
+  { surface: "asphalt", path: "/Game/CityDatabase/materials/M_Asphalt_Master_Inst.M_Asphalt_Master_Inst" },
+  { surface: "concrete", path: "/Game/UrbanDistrict/Environment/GroundConcrete_01/mi_GroundConcrete_01_01.mi_GroundConcrete_01_01" },
+];
+
+function _groundMaterialsBlock() {
+  const lines = _GROUND_MATERIALS.map(m => `- ${m.surface}: ${m.path}`);
+  return [
+    "### GROUND SURFACE MATERIALS (fallback floor — use if no ground/floor MESH in the palette fits the setting)",
+    ...lines,
+  ].join("\n");
+}
+
+const _HOWTO = 'This is a CURATED PALETTE of assets selected for this scene — build the scene from it. Spawn each by its EXACT full path shown: spawn_blueprint_actor for Blueprints, spawn_actor for static meshes (as labelled). Dimensions are width×depth×height in metres (UE: 1 m = 100 units) — use them for spacing/overlaps.\n\nGROUND FIRST (do this before any props): carpet the WHOLE ~100 m × 100 m floor with a base ground matched to the scene, so nothing sits on the bare default grey plane. PREFER tiling the ground/floor MESHES in the palette (category ground_and_road — grass tiles, park-walkway slabs, snowy-road tiles, plaza/stone-floor pieces have baked UVs and tile cleanly): repeat them edge-to-edge across the full 100 m at z≈0. If no palette ground MESH fits the setting, instead spawn a grid of flat base planes (/Engine/BasicShapes/Plane, scaled ~4–8 m each, tiled to cover 100×100 m at z≈0) and apply the best-matching GROUND SURFACE MATERIAL listed below via StaticMeshComponent.set_material(0, material) so the texture tiles instead of stretching. NEVER use ocean/sea/water as the floor (water only as a separate edge feature). Then place EVERY object ON the ground, upright.\n\nNow build a FULL ~100 m × 100 m (≈10000×10000 UE units, X/Y roughly -5000..+5000), DENSE, lived-in scene: LEAD with the large/structural assets in the palette (whole buildings, houses, stalls, walls, big trees, large set-pieces like fountains/cranes/gates) as the backbone and REUSE them in rows and clusters DISTRIBUTED across the WHOLE 100×100 m (something roughly every 8–12 m, aim ~80–150+ assets total, NOT clustered in one corner); add smaller props only as light dressing, never the bulk. Use execute_python_script to place many instances efficiently. Aim for a busy, instantly-recognizable ~100 m place — dense and organized around a clear focal point with natural variation, NOT a sparse handful and NOT a random pile.';
 
 // Public entry used by /api/chat. Returns a system-prompt block (string), or "" if nothing.
 async function buildPromptBlock(scene, mode, opts) {
@@ -340,7 +396,7 @@ async function buildPromptBlock(scene, mode, opts) {
   const db = loadDB();
   if (resolvedMode === "baseline_full") {
     const body = formatAssetsForPrompt([...db.assets.values()]);
-    return ["## AVAILABLE ASSET PALETTE (build the scene using these curated assets)", _HOWTO, "", body].join("\n");
+    return ["## AVAILABLE ASSET PALETTE (build the scene using these curated assets)", _HOWTO, "", body, "", _groundMaterialsBlock()].join("\n");
   }
   const r = await retrieve(scene, { ...(opts || {}), usePrefilter: resolvedMode === "db" });
   if (!r.assets.length) {
@@ -350,7 +406,7 @@ async function buildPromptBlock(scene, mode, opts) {
   return [
     "## RETRIEVED ASSETS FOR THIS SCENE (curated specifically for your prompt)",
     r.rationale ? ("Scene rationale: " + r.rationale) : "",
-    _HOWTO, "", body,
+    _HOWTO, "", body, "", _groundMaterialsBlock(),
   ].filter(Boolean).join("\n");
 }
 

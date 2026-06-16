@@ -213,6 +213,12 @@ class ContextManager {
     state.updatedAt = new Date().toISOString();
   }
 
+  /** Reset tracked scene state completely. Used by isolated evaluation runs. */
+  resetSession(sessionId) {
+    const key = String(sessionId || '__new__');
+    this._sessions.set(key, new SceneState());
+  }
+
   /** Mark the environment as initialized (called when setup_environment runs). */
   setEnvironmentReady(sessionId) {
     const state = this._state(sessionId);

@@ -3,7 +3,7 @@
 
 Usage:
   ASSET_DB_DIR=/data/siddhant/asset_db \
-  POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db \
+  POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db \
   python3 tools/migrate_to_postgres.py
 """
 import argparse

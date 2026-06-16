@@ -73,14 +73,20 @@ function spawnCodexAgent(deps, body, options, emit, onDone) {
     "--dangerously-bypass-approvals-and-sandbox",
     "-C", CODEX_SANDBOX,
     "-m", CODEX_MODEL,
+    "-c", `model_reasoning_effort=${process.env.CODEX_BUILDER_REASONING_EFFORT || "high"}`,
     ...buildCodexMcpArgs({
       mcpServerJs: options.mcpServerJs,
       uePort: options.uePort,
       ueHost: options.ueHost,
       assetLibraryPath: options.assetLibraryPath,
     }),
-    "-",
   ];
+  const feedbackImages = (Array.isArray(body.visualFeedbackImages) ? body.visualFeedbackImages : [])
+    .map(p => String(p || ""))
+    .filter(p => p && fs.existsSync(p))
+    .slice(0, 8);
+  for (const p of feedbackImages) args.push("-i", p);
+  args.push("-");
 
   try { fs.mkdirSync(CODEX_SANDBOX, { recursive: true }); } catch (_e) {}
   const env = Object.assign({}, process.env, { NO_COLOR: "1" });
@@ -88,7 +94,7 @@ function spawnCodexAgent(deps, body, options, emit, onDone) {
   Object.keys(env).forEach((k) => { if (k.startsWith("CLAUDE")) delete env[k]; });
 
   const log = options.logToFile || (() => {});
-  log("codex", `[builder] model=${CODEX_MODEL} sessionId=${sessionId} prompt_chars=${fullPrompt.length}`);
+  log("codex", `[builder] model=${CODEX_MODEL} sessionId=${sessionId} prompt_chars=${fullPrompt.length} images=${feedbackImages.length}`);
 
   const proc = spawn(CODEX_BIN, args, {
     cwd: options.cwd || CODEX_SANDBOX,
@@ -109,6 +115,8 @@ function spawnCodexAgent(deps, body, options, emit, onDone) {
   let isError = false;
   let latestScreenshot = null;
   let finalText = "";
+  let _usage = null;
+  const _t0 = Date.now();
   const toolInputs = new Map();      // tool_use_id -> { name, input }  for ctxManager hooks
   const startedTools = new Set();
   const ctx = deps && deps.ctxManager;
@@ -271,7 +279,7 @@ function spawnCodexAgent(deps, body, options, emit, onDone) {
     }
 
     // ── Turn completed → emit done after process exits, not here ──
-    if (typ === "turn.completed") return;
+    if (typ === "turn.completed") { try { _usage = payload.usage || (payload.payload && payload.payload.usage) || _usage; } catch (_e) {} return; }
   }
 
   proc.on("close", (code) => {
@@ -279,6 +287,7 @@ function spawnCodexAgent(deps, body, options, emit, onDone) {
     if (stdoutBuf.trim()) handleCodexLine(stdoutBuf);
     const exitErr = code !== 0;
     if (exitErr) isError = true;
+    try { require("./telemetry").record({ component: "builder", model: CODEX_MODEL, reasoning: process.env.CODEX_BUILDER_REASONING_EFFORT || "high", durationMs: Date.now() - _t0, usage: require("./telemetry").normUsage(_usage) }); } catch (_e) {}
     log("codex", `[builder] exited code=${code} isError=${isError} stderr_tail=${stderrBuf.slice(-200)}`);
     onDone({ isError, latestScreenshot, finalText, returnCode: code });
   });
@@ -336,6 +345,8 @@ async function handleCodexChat(req, res, deps) {
       const model = require("./model-config").resolveModel(body);
       assetPromptBlock = await assetRetrieval.buildPromptBlock(message, mode, {
         model,
+        provider: "codex",
+        runner: "codex",
         log: (x) => deps.logToFile && deps.logToFile("retrieval", x),
       });
       const chars = assetPromptBlock ? assetPromptBlock.length : 0;

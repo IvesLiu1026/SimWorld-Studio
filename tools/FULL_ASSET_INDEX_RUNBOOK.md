@@ -61,7 +61,7 @@ UE must also be running with the MCP socket reachable on `MCP_PORT`, default
 
 ```bash
 UE_PROJECT=/data/siddhant/simworld_studio_projects
-POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db
+POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db
 QDRANT_URL=http://127.0.0.1:6333
 ```
 
@@ -107,7 +107,7 @@ Before the long run, confirm FastEmbed can load the dense+sparse models and Qdra
 mutated. If the model files are not cached, this step needs network access:
 
 ```bash
-POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db \
+POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db \
 QDRANT_URL=http://127.0.0.1:6333 \
   python3 tools/build_qdrant_index.py \
   --asset-ids broo_kb3d_brk_bldglg_a \

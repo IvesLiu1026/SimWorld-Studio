@@ -26,6 +26,7 @@ async function runSceneLoop({
   maxRounds = 5,
   criticModel,
   criticTimeoutMs = 120000,
+  criticProvider,
   builderRunner,
   emit,
 }) {
@@ -72,6 +73,7 @@ async function runSceneLoop({
       critic = await critique({
         originalPrompt: intentSummary || prompt,
         model: criticModel,
+        provider: criticProvider,
         timeoutMs: criticTimeoutMs,
       });
     } catch (e) {
@@ -142,9 +144,14 @@ async function handleSceneLoop(req, res, deps) {
   const prior = (deps.intentStore && deps.intentStore.get(STUDIO_SESSION)) || "";
   let intentSummary = prior;
   try {
+    const summarizerProvider = outerRunner || process.env.LLM_PROVIDER || "";
+    const summarizerModel = String(summarizerProvider).toLowerCase() === "codex"
+      ? (req.body.model || process.env.CODEX_MODEL || "gpt-5.5")
+      : (process.env.SUMMARIZER_MODEL || "claude-sonnet-4-6");
     intentSummary = await updateIntentSummary({
       priorSummary: prior, newPrompt: message,
-      model: process.env.SUMMARIZER_MODEL || "claude-sonnet-4-6",
+      model: summarizerModel,
+      provider: summarizerProvider,
       timeoutMs: parseInt(process.env.SUMMARIZER_TIMEOUT_MS || "60000", 10),
     });
     if (deps.intentStore) deps.intentStore.set(STUDIO_SESSION, intentSummary);
@@ -170,6 +177,8 @@ async function handleSceneLoop(req, res, deps) {
         skills: skills || [],
         feedback: combinedFeedback,
         useLoop: false, // force the inner call to take the existing single-turn path
+        dynamicSkills: false,
+        ...(req.body.model ? { model: req.body.model } : {}),
         ...(outerRunner ? { runner: outerRunner } : {}),
         ...(assetMode ? { assetMode } : {}),
         ...(assetRetrievalMode ? { assetRetrievalMode } : {}),
@@ -210,7 +219,10 @@ async function handleSceneLoop(req, res, deps) {
   const result = await runSceneLoop({
     prompt: message, intentSummary, sessionId: STUDIO_SESSION,
     maxRounds: parseInt(process.env.SCENE_LOOP_MAX_ROUNDS || "5", 10),
-    criticModel: process.env.CRITIC_MODEL || "claude-sonnet-4-6",
+    criticModel: String(outerRunner || process.env.LLM_PROVIDER || "").toLowerCase() === "codex"
+      ? (req.body.model || process.env.CODEX_MODEL || "gpt-5.5")
+      : (process.env.CRITIC_MODEL || "claude-sonnet-4-6"),
+    criticProvider: outerRunner || process.env.LLM_PROVIDER || "",
     criticTimeoutMs: parseInt(process.env.CRITIC_TIMEOUT_MS || "120000", 10),
     builderRunner, emit,
   });

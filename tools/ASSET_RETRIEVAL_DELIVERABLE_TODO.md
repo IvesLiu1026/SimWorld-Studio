@@ -156,7 +156,7 @@ Remaining integration tasks:
 
 - [ ] Point runtime env vars to the UE 5.8/Qwen full library:
   - `ASSET_DB_DIR=/data/siddhant/asset_db_ue58_qwen`
-  - `POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db_ue58_qwen`
+  - `POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db_ue58_qwen`
   - `QDRANT_URL=http://127.0.0.1:6333`
   - `QDRANT_COLLECTION=assets_ue58_qwen`
   - `EMBED_SERVICE_URL=http://127.0.0.1:7777`

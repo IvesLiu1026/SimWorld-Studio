@@ -7,6 +7,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const net = require("net");
+const { codexModel, extractJSON, normalizeProvider, parseCodexJsonl } = require("./llm-oneshot");
 
 const NL = String.fromCharCode(10);
 const UNREAL_HOST = process.env.UNREAL_HOST || "127.0.0.1";
@@ -91,10 +92,99 @@ function parseCriticFeedback(text) {
   return { status, issues: toBullets(sectionBody("Issues")), suggestions: toBullets(sectionBody("Suggestions")) };
 }
 
-// Spawn the Claude vision critic with the screenshot + text. Returns parsed verdict.
-async function runCritic({ originalPrompt, focus, screenshot, actors, model, timeoutMs = 120000 }) {
+function criticSchemaPath() {
+  const fp = path.join("/tmp", "simworld_scene_critic_schema.json");
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      status: { type: "string", enum: ["PASS", "NEEDS_IMPROVEMENT", "FAIL"] },
+      issues: { type: "array", items: { type: "string" } },
+      suggestions: { type: "array", items: { type: "string" } },
+      raw_notes: { type: "string" },
+    },
+    required: ["status", "issues", "suggestions", "raw_notes"],
+  };
+  try { fs.writeFileSync(fp, JSON.stringify(schema, null, 2), "utf-8"); } catch (_e) {}
+  return fp;
+}
+
+function normalizeCriticJson(out) {
+  const status = ["PASS", "NEEDS_IMPROVEMENT", "FAIL"].includes(String(out && out.status || "").toUpperCase())
+    ? String(out.status).toUpperCase()
+    : "NEEDS_IMPROVEMENT";
+  return {
+    status,
+    issues: Array.isArray(out && out.issues) ? out.issues.map(String).filter(Boolean) : [],
+    suggestions: Array.isArray(out && out.suggestions) ? out.suggestions.map(String).filter(Boolean) : [],
+    raw: out && out.raw_notes ? String(out.raw_notes) : JSON.stringify(out || {}),
+  };
+}
+
+function runCriticCodex({ originalPrompt, focus, screenshot, actors, model, timeoutMs = 120000 }) {
+  const schema = criticSchemaPath();
+  const tmpOut = path.join("/tmp", `simworld_scene_critic_${process.pid}_${Date.now()}.json`);
+  try { fs.rmSync(tmpOut, { force: true }); } catch (_e) {}
+  const prompt = [
+    CRITIC_SYSTEM_PROMPT,
+    "",
+    "Evaluate the attached screenshot and actor list for this SimWorld Studio scene.",
+    originalPrompt ? `Original scene request: "${originalPrompt}"` : "",
+    focus ? `Focus on: ${focus}` : "",
+    "",
+    "Current actors in the scene:",
+    JSON.stringify(actors, null, 2),
+    "",
+    "Return ONLY the JSON object matching the schema. Keep issues/suggestions concise and actionable.",
+  ].filter(Boolean).join("\n");
+  const args = [
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-m", codexModel(model),
+    "-c", `model_reasoning_effort=${process.env.CRITIC_REASONING_EFFORT || "high"}`,
+    "--output-schema", schema,
+    "-o", tmpOut,
+    "-C", "/tmp",
+    "-i", screenshot,
+    "-",
+  ];
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, NO_COLOR: "1" };
+    Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
+    const p = spawn(process.env.CODEX_BIN || "codex", args, { stdio: ["pipe", "pipe", "pipe"], cwd: "/tmp", env });
+    const timer = setTimeout(() => { try { p.kill("SIGTERM"); } catch (_e) {} reject(new Error("codex critic timed out")); }, timeoutMs);
+    let stdout = "", stderr = "";
+    try { p.stdin.write(prompt); p.stdin.end(); } catch (e) { clearTimeout(timer); reject(e); return; }
+    p.stdout.on("data", d => { stdout += d.toString(); });
+    p.stderr.on("data", d => { stderr += d.toString(); });
+    p.on("error", e => { clearTimeout(timer); reject(e); });
+    p.on("close", code => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(`codex critic exited ${code}: ${stderr.slice(0, 400)}`));
+      let out = null;
+      if (fs.existsSync(tmpOut)) {
+        try { out = JSON.parse(fs.readFileSync(tmpOut, "utf-8")); } catch (_e) {}
+      }
+      if (!out) {
+        const trace = parseCodexJsonl(stdout);
+        try { out = extractJSON(trace.last_agent_text || ""); } catch (_e) {}
+      }
+      if (!out) return reject(new Error(`codex critic produced no JSON: ${stderr.slice(0, 400)}`));
+      const actorsCount = (actors && actors.result && actors.result.actors && actors.result.actors.length) || 0;
+      resolve({ ...normalizeCriticJson(out), screenshot, actorsCount });
+    });
+  });
+}
+
+// Spawn the configured vision critic with the screenshot + text. Returns parsed verdict.
+async function runCritic({ originalPrompt, focus, screenshot, actors, model, timeoutMs = 120000, provider, runner }) {
   if (!screenshot || !fs.existsSync(screenshot)) {
     return { status: "FAIL", issues: ["No screenshot available — UE may be wedged"], suggestions: [], raw: "", screenshot: null, actorsCount: 0 };
+  }
+  if (normalizeProvider(provider || runner || process.env.LLM_PROVIDER) === "codex") {
+    return runCriticCodex({ originalPrompt, focus, screenshot, actors, model, timeoutMs });
   }
   const imgData = fs.readFileSync(screenshot);
   const isJpeg = imgData[0] === 0xff && imgData[1] === 0xd8;
@@ -158,9 +248,9 @@ async function runCritic({ originalPrompt, focus, screenshot, actors, model, tim
 }
 
 // Convenience: capture fresh screenshot + actors, then critique.
-async function critique({ originalPrompt, focus, model, timeoutMs }) {
+async function critique({ originalPrompt, focus, model, timeoutMs, provider, runner }) {
   const [screenshot, actors] = await Promise.all([takeScreenshot(), getActors()]);
-  return runCritic({ originalPrompt, focus, screenshot, actors, model, timeoutMs });
+  return runCritic({ originalPrompt, focus, screenshot, actors, model, timeoutMs, provider, runner });
 }
 
 module.exports = {

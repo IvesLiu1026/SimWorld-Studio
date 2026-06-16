@@ -7,7 +7,7 @@
 // Usage:
 //   ASSET_PREFILTER=false \
 //   ASSET_DB_DIR=/data/siddhant/asset_db \
-//   POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db \
+//   POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db \
 //   QDRANT_URL=http://127.0.0.1:6333 \
 //   EMBED_SERVICE_URL=http://127.0.0.1:7777 \
 //   node tools/shadow_test.js

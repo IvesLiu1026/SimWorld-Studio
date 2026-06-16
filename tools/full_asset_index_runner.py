@@ -38,7 +38,7 @@ from typing import Any
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_ASSET_DB_DIR = pathlib.Path("/data/siddhant/asset_db")
-DEFAULT_POSTGRES_URL = "postgresql://simworld:simworld@127.0.0.1:55432/asset_db"
+DEFAULT_POSTGRES_URL = "postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 DEFAULT_COLLECTION = "assets"
 DEFAULT_QWEN_BASE_URL = "http://137.110.161.132:8005/v1"
@@ -2177,7 +2177,11 @@ def run_index(args: argparse.Namespace) -> int:
                 )
                 write_json(state_path, state)
                 print(f"   FAILED: {e}", flush=True)
-                if phase.endswith("_vlm") and phase_failures[phase] >= args.max_consecutive_vlm_failures:
+                if (
+                    args.max_consecutive_vlm_failures > 0
+                    and phase.endswith("_vlm")
+                    and phase_failures[phase] >= args.max_consecutive_vlm_failures
+                ):
                     append_jsonl(run_dir / "events.ndjson", {
                         "ts": utc_now(),
                         "event": "abort_repeated_vlm_failures",
@@ -2194,10 +2198,13 @@ def run_index(args: argparse.Namespace) -> int:
                         reason=f"repeated VLM failures: {e}",
                         code=5,
                     )
-                if consecutive_failures >= args.max_consecutive_failures:
+                if args.max_consecutive_failures > 0 and consecutive_failures >= args.max_consecutive_failures:
                     try:
                         check_ue(args.mcp_port)
-                        if phase_failures.get(phase, 0) >= args.max_consecutive_phase_failures:
+                        if (
+                            args.max_consecutive_phase_failures > 0
+                            and phase_failures.get(phase, 0) >= args.max_consecutive_phase_failures
+                        ):
                             append_jsonl(run_dir / "events.ndjson", {
                                 "ts": utc_now(),
                                 "event": "abort_repeated_phase_failures",

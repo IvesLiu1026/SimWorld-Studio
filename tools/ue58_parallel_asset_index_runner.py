@@ -29,7 +29,7 @@ import ue_multi_instance_smoke as smoke
 DEFAULT_ASSET_DB_DIR = pathlib.Path("/data/siddhant/asset_db_ue58_qwen")
 DEFAULT_MANIFEST = pathlib.Path("/data/siddhant/asset_db/ue58_object_manifest.json")
 DEFAULT_RUN_ROOT = DEFAULT_ASSET_DB_DIR / "runs"
-DEFAULT_POSTGRES_URL = "postgresql://simworld:simworld@127.0.0.1:55432/asset_db_ue58_qwen"
+DEFAULT_POSTGRES_URL = "postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db_ue58_qwen"
 DEFAULT_QDRANT_COLLECTION = "assets_ue58_qwen"
 DEFAULT_MIN_INOTIFY_WATCHES = 524288
 
@@ -646,14 +646,21 @@ def run_parallel(args: argparse.Namespace) -> int:
                     write_failure(args, run_dir, state, idx, len(assets), asset, phase, started, e, trace, worker_idx)
                     runner.write_json(state_path, state)
                     print(f"[{idx}/{len(assets)}] FAILED {asset['asset_id']} worker={worker_idx}: {e}", flush=True)
-                    if phase.endswith("_vlm") and phase_failures[phase] >= args.max_consecutive_vlm_failures:
+                    if (
+                        args.max_consecutive_vlm_failures > 0
+                        and phase.endswith("_vlm")
+                        and phase_failures[phase] >= args.max_consecutive_vlm_failures
+                    ):
                         return runner.finish_aborted_run(run_dir=run_dir, state=state, args=args, pending_ids=pending_ids, reason=f"repeated VLM failures: {e}", code=5)
-                    if consecutive_failures >= args.max_consecutive_failures:
+                    if args.max_consecutive_failures > 0 and consecutive_failures >= args.max_consecutive_failures:
                         try:
                             runner.check_ue(int(worker["mcp_port"]))
                         except Exception as ue_err:
                             return runner.finish_aborted_run(run_dir=run_dir, state=state, args=args, pending_ids=pending_ids, reason=f"worker {worker_idx} UE unresponsive: {ue_err}", code=3)
-                        if phase_failures.get(phase, 0) >= args.max_consecutive_phase_failures:
+                        if (
+                            args.max_consecutive_phase_failures > 0
+                            and phase_failures.get(phase, 0) >= args.max_consecutive_phase_failures
+                        ):
                             return runner.finish_aborted_run(run_dir=run_dir, state=state, args=args, pending_ids=pending_ids, reason=f"repeated {phase} failures: {e}", code=6)
                         consecutive_failures = 0
                 submit_next(worker)

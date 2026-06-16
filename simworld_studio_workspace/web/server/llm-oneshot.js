@@ -1,16 +1,53 @@
 "use strict";
-// Lightweight one-shot LLM call via the claude CLI (no MCP, no tools) — reuses the box's
-// OAuth login and honors --model, so retrieval follows the same model as the coder.
-// Mirrors the known-good spawn/stream-json parsing pattern in skill-maker.js.
+// Lightweight one-shot LLM calls for retrieval/routing helpers.
+// Default stays Claude for normal Studio use, but experiment runs can force Codex/GPT by
+// passing { provider: "codex" } or setting LLM_PROVIDER=codex.
 const { spawn } = require("child_process");
 const path = require("path");
+const telemetry = require("./telemetry");
 const NL = String.fromCharCode(10);
 
-function oneshotText(prompt, opts) {
+function normalizeProvider(v) {
+  const s = String(v || "").trim().toLowerCase();
+  if (!s) return null;
+  if (["codex", "gpt", "gpt-5.5", "gpt5.5", "openai"].includes(s)) return "codex";
+  if (["claude", "anthropic"].includes(s)) return "claude";
+  return null;
+}
+
+function providerFromOpts(o) {
+  return normalizeProvider(o.provider || o.runner || process.env.LLM_ONESHOT_PROVIDER || process.env.LLM_PROVIDER) || "claude";
+}
+
+function parseCodexJsonl(stdout) {
+  const trace = { thread_id: null, usage: null, last_agent_text: "", raw_event_count: 0 };
+  for (const line of String(stdout || "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    trace.raw_event_count += 1;
+    if (event.type === "thread.started") {
+      trace.thread_id = event.thread_id || (event.payload && event.payload.thread_id) || null;
+    } else if (event.type === "turn.completed") {
+      trace.usage = event.usage || (event.payload && event.payload.usage) || null;
+    } else if (event.type === "item.completed") {
+      const item = event.item || event.payload || {};
+      if (item.type === "agent_message" || item.type === "message") {
+        const text = item.text || (Array.isArray(item.content)
+          ? item.content.filter(c => c && (c.type === "output_text" || c.type === "text")).map(c => c.text || "").join("")
+          : "");
+        if (text) trace.last_agent_text = text;
+      }
+    }
+  }
+  return trace;
+}
+
+function oneshotTextClaude(prompt, opts) {
   const o = opts || {};
   const claudeBin = String(o.claudeBin || process.env.CLAUDE_BIN || "claude");
   const model = o.model == null || o.model === "" ? null : String(o.model);
-  const timeoutMs = Math.max(10000, Number(o.timeoutMs || 120000));
+  const timeoutMs = Math.max(10000, Number(o.timeoutMs || process.env.LLM_ONESHOT_TIMEOUT_MS || 120000));
   const args = ["-p", String(prompt || ""), "--output-format", "stream-json",
     "--include-partial-messages", "--verbose", "--dangerously-skip-permissions"];
   if (model) args.push("--model", model);
@@ -45,6 +82,64 @@ function oneshotText(prompt, opts) {
   });
 }
 
+function codexModel(model) {
+  const m = String(model || "").trim();
+  if (m && !/^claude-/i.test(m)) return m;
+  return String(process.env.CODEX_MODEL || "gpt-5.5");
+}
+
+function oneshotTextCodex(prompt, opts) {
+  const o = opts || {};
+  const codexBin = String(o.codexBin || process.env.CODEX_BIN || "codex");
+  const model = codexModel(o.model);
+  const timeoutMs = Math.max(10000, Number(o.timeoutMs || process.env.LLM_ONESHOT_TIMEOUT_MS || 120000));
+  const cwd = o.cwd || process.env.CODEX_ONESHOT_CWD || "/tmp";
+  const t0 = Date.now();
+  const args = [
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C", cwd,
+    "-m", model,
+    ...(o.reasoningEffort ? ["-c", `model_reasoning_effort=${o.reasoningEffort}`] : []),
+    "-",
+  ];
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, NO_COLOR: "1" };
+    Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
+    const proc = spawn(codexBin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    const timer = setTimeout(() => { try { proc.kill("SIGTERM"); } catch {} reject(new Error("codex oneshot timed out")); }, timeoutMs);
+    try {
+      proc.stdin.write(String(prompt || ""));
+      proc.stdin.end();
+    } catch (e) {
+      clearTimeout(timer);
+      reject(e);
+      return;
+    }
+    proc.stdout.on("data", c => { stdout += c.toString(); });
+    proc.stderr.on("data", c => { stderr += c.toString(); });
+    proc.on("error", err => { clearTimeout(timer); reject(err); });
+    proc.on("close", code => {
+      clearTimeout(timer);
+      const trace = parseCodexJsonl(stdout);
+      try { telemetry.record({ component: o.telemetryComponent || "oneshot", model, reasoning: o.reasoningEffort || null, durationMs: Date.now() - t0, usage: telemetry.normUsage(trace.usage) }); } catch (_e) {}
+      const raw = String(trace.last_agent_text || "").trim();
+      if (code !== 0) return reject(new Error(`codex oneshot exited ${code}: ${stderr.slice(0, 500)}`));
+      if (!raw) return reject(new Error(`codex oneshot returned empty output: ${stderr.slice(0, 500)}`));
+      resolve(raw);
+    });
+  });
+}
+
+function oneshotText(prompt, opts) {
+  const o = opts || {};
+  if (providerFromOpts(o) === "codex") return oneshotTextCodex(prompt, o);
+  return oneshotTextClaude(prompt, o);
+}
+
 // Extract a JSON value from model text (tolerates prose / ``` fences / leading commentary).
 function extractJSON(raw) {
   const t = String(raw || "").trim();
@@ -62,4 +157,12 @@ async function oneshotJSON(prompt, opts) {
   return extractJSON(await oneshotText(prompt, opts));
 }
 
-module.exports = { oneshotText, oneshotJSON, extractJSON };
+module.exports = {
+  oneshotText,
+  oneshotJSON,
+  extractJSON,
+  normalizeProvider,
+  providerFromOpts,
+  parseCodexJsonl,
+  codexModel,
+};

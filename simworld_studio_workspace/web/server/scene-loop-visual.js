@@ -11,6 +11,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const net = require("net");
+const { normalizeProvider, parseCodexJsonl, codexModel, extractJSON } = require("./llm-oneshot");
 
 const NL = String.fromCharCode(10);
 const UNREAL_HOST = process.env.UNREAL_HOST || "127.0.0.1";
@@ -63,11 +64,14 @@ const VIEW_CONFIGS = [
   { name: "top",   bearing_deg: 45.0,  pitch_deg: -75.0, kind: "overhead" }, // near top-down with slight tilt
 ];
 
-function buildShotScript(viewName, bearing_deg, pitch_deg, kind) {
+function buildShotScript(viewName, bearing_deg, pitch_deg, kind, filePath) {
   // Same lighting/ground-plane prep as exp_runner so visual_loop shots look like the report shots.
   // Then position camera per the view config.
   return `
-import unreal, math
+import unreal, math, os
+fp = ${JSON.stringify(filePath || "")}
+if fp:
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
 eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 INFRA = ('Floor','Sky','Light','Atmo','Fog','Post','Sphere','World','Brush','Default','Player','GameMode','Nav','LevelBounds','Landscape','Volume','Note','Camera','Directional','Exponential','ExpRunnerGroundPlane','ExpRunnerSun','ExpRunnerSkyAtmo')
 xs, ys = [], []
@@ -172,8 +176,12 @@ if xs:
     print("VLOOP_CAM view=${viewName} cam=(%.0f,%.0f,%.0f) pitch=%.1f yaw=%.1f extent=%.0f"%(cam_x,cam_y,cam_z,pitch,yaw,extent))
 else:
     print("VLOOP_NO_ACTORS view=${viewName}")
-unreal.SystemLibrary.execute_console_command(None, "HighResShot 1920x1080")
-print("shot_requested view=${viewName}")
+if fp:
+    unreal.AutomationLibrary.take_high_res_screenshot(1920, 1080, fp)
+    print("VLOOP_SCREENSHOT_SAVED view=${viewName} " + fp)
+else:
+    unreal.SystemLibrary.execute_console_command(None, "HighResShot 1920x1080")
+    print("shot_requested view=${viewName}")
 `;
 }
 
@@ -197,27 +205,49 @@ async function waitForNewScreenshot(sinceMs, timeoutMs = 30000, exclude = new Se
   return null;
 }
 
+async function waitForFileStable(file, timeoutMs = 45000) {
+  const start = Date.now();
+  let last = -1;
+  let same = 0;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const st = fs.statSync(file);
+      if (st.size > 0) {
+        if (st.size === last) same += 1;
+        else { last = st.size; same = 0; }
+        if (same >= 2) return true;
+      }
+    } catch (_e) {}
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
+
 async function multiViewScreenshot({ round, destDir }) {
   try { fs.mkdirSync(destDir, { recursive: true }); } catch (_e) {}
+  const tmpDir = process.env.SIMWORLD_UE_SCREENSHOT_DIR || "/tmp/simworld_screens";
+  try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (_e) {}
   const out = [];
-  // Track files already consumed in this round so the second shot doesn't race-grab the first
-  // (HighResShot is async — the new file may not be on disk yet when waitForNewScreenshot polls).
-  const used = new Set();
   for (let i = 0; i < VIEW_CONFIGS.length; i++) {
     const v = VIEW_CONFIGS[i];
-    let got = null;
+    let saved = null;
     // Retry once if the shot doesn't land in time (UE can be busy/slow → HighResShot misses the window).
-    for (let attempt = 0; attempt < 2 && !got; attempt++) {
-      const before = Date.now() - 500;
-      const script = buildShotScript(v.name, v.bearing_deg, v.pitch_deg, v.kind);
+    for (let attempt = 0; attempt < 2 && !saved; attempt++) {
+      const tmp = path.join(tmpDir, `vloop_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_round${round}_${v.name}.png`);
+      try { fs.rmSync(tmp, { force: true }); } catch (_e) {}
+      const script = buildShotScript(v.name, v.bearing_deg, v.pitch_deg, v.kind, tmp);
       await ueCommand("execute_python_script", { script }, 60000);
-      await new Promise((r) => setTimeout(r, 1500)); // let HighResShot flush
-      got = await waitForNewScreenshot(before, 45000, used);
+      const ok = await waitForFileStable(tmp, 45000);
+      if (!ok) continue;
+      const dest = path.join(destDir, `round${round}_${v.name}.png`);
+      try {
+        fs.copyFileSync(tmp, dest);
+        saved = dest;
+      } catch (_e) {
+        saved = null;
+      }
     }
-    if (!got) continue;
-    used.add(got);
-    const dest = path.join(destDir, `round${round}_${v.name}.png`);
-    try { fs.copyFileSync(got, dest); out.push({ name: v.name, path: dest }); } catch (_e) {}
+    if (saved) out.push({ name: v.name, path: saved });
   }
   return out;
 }
@@ -252,12 +282,106 @@ function parseCriticFeedback(text) {
   return { status, issues: toBullets(sectionBody("Issues")), suggestions: toBullets(sectionBody("Suggestions")) };
 }
 
+function visualCriticSchemaPath() {
+  const fp = path.join("/tmp", "simworld_visual_critic_schema.json");
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      status: { type: "string", enum: ["PASS", "NEEDS_IMPROVEMENT", "FAIL"] },
+      issues: { type: "array", items: { type: "string" } },
+      suggestions: { type: "array", items: { type: "string" } },
+      raw_notes: { type: "string" },
+    },
+    required: ["status", "issues", "suggestions", "raw_notes"],
+  };
+  try { fs.writeFileSync(fp, JSON.stringify(schema, null, 2), "utf-8"); } catch (_e) {}
+  return fp;
+}
+
+async function visualCritiqueCodex({ originalPrompt, screenshots, model, timeoutMs = 180000 }) {
+  const validScreens = (screenshots || []).filter(s => s && s.path && fs.existsSync(s.path));
+  if (!validScreens.length) {
+    return { status: "FAIL", issues: ["No screenshots captured"], suggestions: [], raw: "", screenshots: [], actorsCount: 0 };
+  }
+  const actors = await getActorsSnapshot();
+  const schema = visualCriticSchemaPath();
+  const tmpOut = path.join("/tmp", `simworld_visual_critic_${process.pid}_${Date.now()}.json`);
+  try { fs.rmSync(tmpOut, { force: true }); } catch (_e) {}
+  const prompt = [
+    CRITIC_SYSTEM_PROMPT_MULTI,
+    "",
+    `You are attached ${validScreens.length} screenshots of the SAME current Unreal scene.`,
+    "Evaluate only what is visible in those images plus the actor list below.",
+    originalPrompt ? `Original scene request: "${originalPrompt}"` : "",
+    "",
+    "Current actors in the scene:",
+    JSON.stringify(actors, null, 2),
+    "",
+    "Return ONLY the JSON object matching the schema. Keep issues/suggestions concise and actionable.",
+  ].filter(Boolean).join("\n");
+  const args = [
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-m", codexModel(model),
+    "-c", `model_reasoning_effort=${process.env.CRITIC_REASONING_EFFORT || "high"}`,
+    "--output-schema", schema,
+    "-o", tmpOut,
+    "-C", "/tmp",
+  ];
+  for (const s of validScreens) args.push("-i", s.path);
+  args.push("-");
+
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, NO_COLOR: "1" };
+    Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
+    const p = spawn(process.env.CODEX_BIN || "codex", args, { stdio: ["pipe", "pipe", "pipe"], cwd: "/tmp", env });
+    const timer = setTimeout(() => { try { p.kill("SIGTERM"); } catch (_e) {} reject(new Error("codex visual critic timed out")); }, timeoutMs);
+    let stdout = "", stderr = "";
+    try { p.stdin.write(prompt); p.stdin.end(); } catch (e) { clearTimeout(timer); reject(e); return; }
+    p.stdout.on("data", d => { stdout += d.toString(); });
+    p.stderr.on("data", d => { stderr += d.toString(); });
+    p.on("error", e => { clearTimeout(timer); reject(e); });
+    p.on("close", code => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(`codex visual critic exited ${code}: ${stderr.slice(0, 400)}`));
+      let out = null;
+      if (fs.existsSync(tmpOut)) {
+        try { out = JSON.parse(fs.readFileSync(tmpOut, "utf-8")); } catch (_e) {}
+      }
+      if (!out) {
+        const trace = parseCodexJsonl(stdout);
+        try { out = extractJSON(trace.last_agent_text || ""); } catch (_e) {}
+      }
+      if (!out) return reject(new Error(`codex visual critic produced no JSON: ${stderr.slice(0, 400)}`));
+      const status = ["PASS", "NEEDS_IMPROVEMENT", "FAIL"].includes(String(out.status || "").toUpperCase())
+        ? String(out.status).toUpperCase()
+        : "NEEDS_IMPROVEMENT";
+      const actorsCount = (actors && actors.result && actors.result.actors && actors.result.actors.length) || 0;
+      resolve({
+        status,
+        issues: Array.isArray(out.issues) ? out.issues.map(String).filter(Boolean) : [],
+        suggestions: Array.isArray(out.suggestions) ? out.suggestions.map(String).filter(Boolean) : [],
+        raw: out.raw_notes || JSON.stringify(out),
+        screenshots: validScreens,
+        actorsCount,
+      });
+    });
+  });
+}
+
 async function getActorsSnapshot() {
   const r = await ueCommand("get_actors_in_level", {}, 15000);
   return r || {};
 }
 
-async function visualCritique({ originalPrompt, screenshots, model, timeoutMs = 180000 }) {
+async function visualCritique({ originalPrompt, screenshots, model, timeoutMs = 180000, provider, runner }) {
+  const selectedProvider = normalizeProvider(provider || runner || process.env.LLM_PROVIDER);
+  if (selectedProvider === "codex") {
+    return visualCritiqueCodex({ originalPrompt, screenshots, model, timeoutMs });
+  }
   if (!screenshots || !screenshots.length) {
     return { status: "FAIL", issues: ["No screenshots captured"], suggestions: [], raw: "", screenshots: [], actorsCount: 0 };
   }
@@ -364,6 +488,7 @@ async function runVisualSceneLoop({
   maxRounds = 5,
   criticModel,
   criticTimeoutMs = 180000,
+  criticProvider,
   builderRunner,
   emit,
   destDir,
@@ -388,6 +513,7 @@ async function runVisualSceneLoop({
       feedback: round === 1
         ? null
         : formatVisualFeedback({ issues: lastIssues, suggestions: lastSuggestions, screenshots: lastScreenshots }),
+      visualFeedbackImages: round === 1 ? [] : lastScreenshots.map(s => s.path).filter(Boolean),
       round,
       maxRounds,
     };
@@ -429,6 +555,7 @@ async function runVisualSceneLoop({
         originalPrompt: intentSummary || prompt,
         screenshots: shots,
         model: criticModel,
+        provider: criticProvider,
         timeoutMs: criticTimeoutMs,
       });
     } catch (e) {
@@ -490,9 +617,14 @@ async function handleVisualSceneLoop(req, res, deps) {
   const prior = (deps.intentStore && deps.intentStore.get(STUDIO_SESSION)) || "";
   let intentSummary = prior;
   try {
+    const summarizerProvider = outerRunner || process.env.LLM_PROVIDER || "";
+    const summarizerModel = String(summarizerProvider).toLowerCase() === "codex"
+      ? (req.body.model || process.env.CODEX_MODEL || "gpt-5.5")
+      : (process.env.SUMMARIZER_MODEL || "claude-sonnet-4-6");
     intentSummary = await updateIntentSummary({
       priorSummary: prior, newPrompt: message,
-      model: process.env.SUMMARIZER_MODEL || "claude-sonnet-4-6",
+      model: summarizerModel,
+      provider: summarizerProvider,
       timeoutMs: parseInt(process.env.SUMMARIZER_TIMEOUT_MS || "60000", 10),
     });
     if (deps.intentStore) deps.intentStore.set(STUDIO_SESSION, intentSummary);
@@ -504,7 +636,7 @@ async function handleVisualSceneLoop(req, res, deps) {
     emit("intent_updated", { summary: intentSummary, fallback: true });
   }
 
-  async function builderRunner({ prompt, intentSummary, feedback, round }) {
+  async function builderRunner({ prompt, intentSummary, feedback, visualFeedbackImages, round }) {
     return new Promise((resolve) => {
       const combinedPrompt =
         `USER INTENT (cumulative across all prior prompts in this session):\n${intentSummary}\n\n` +
@@ -515,7 +647,10 @@ async function handleVisualSceneLoop(req, res, deps) {
         sessionId,
         skills: skills || [],
         feedback: combinedFeedback,
+        visualFeedbackImages: Array.isArray(visualFeedbackImages) ? visualFeedbackImages : [],
         useLoop: false, // route to the existing single-turn path
+        dynamicSkills: false,
+        ...(req.body.model ? { model: req.body.model } : {}),
         ...(outerRunner ? { runner: outerRunner } : {}),
         ...(assetMode ? { assetMode } : {}),  // forward A/B palette mode into each builder round
         ...(assetRetrievalMode ? { assetRetrievalMode } : {}),
@@ -558,7 +693,10 @@ async function handleVisualSceneLoop(req, res, deps) {
     intentSummary,
     sessionId: STUDIO_SESSION,
     maxRounds: parseInt(process.env.SCENE_LOOP_MAX_ROUNDS || "5", 10),
-    criticModel: process.env.CRITIC_MODEL || "claude-sonnet-4-6",
+    criticModel: String(outerRunner || process.env.LLM_PROVIDER || "").toLowerCase() === "codex"
+      ? (req.body.model || process.env.CODEX_MODEL || "gpt-5.5")
+      : (process.env.CRITIC_MODEL || "claude-sonnet-4-6"),
+    criticProvider: outerRunner || process.env.LLM_PROVIDER || "",
     criticTimeoutMs: parseInt(process.env.CRITIC_TIMEOUT_MS || "180000", 10),
     builderRunner,
     emit,

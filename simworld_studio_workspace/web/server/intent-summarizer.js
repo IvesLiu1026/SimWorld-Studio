@@ -1,12 +1,9 @@
 "use strict";
 // Rolling per-session user-intent summary with recency-wins on contradictions.
-// Each new user prompt fires a small claude -p (Sonnet by default) that takes the prior summary +
+// Each new user prompt fires a small one-shot LLM call that takes the prior summary +
 // the new prompt and returns an updated summary. If the new prompt contradicts prior intent,
 // the new prompt wins. Stays concise — ~1-2 short paragraphs OR up to ~8 bullets.
-const { spawn } = require("child_process");
-const path = require("path");
-
-const NL = String.fromCharCode(10);
+const { oneshotText, normalizeProvider, codexModel } = require("./llm-oneshot");
 
 const SUMMARIZER_SYSTEM_PROMPT = `You maintain a brief rolling SUMMARY of what the user wants for a 3D scene being built incrementally.
 
@@ -16,37 +13,24 @@ You will be given the PRIOR summary (may be empty) and the user's NEW prompt. Pr
 - Keeps it CONCISE: 1-2 short paragraphs OR up to ~8 bullet points. No preamble, no commentary, no explanation of what you changed.
 - Output ONLY the updated summary text, nothing else.`;
 
-async function updateIntentSummary({ priorSummary, newPrompt, model, timeoutMs = 60000 }) {
+async function updateIntentSummary({ priorSummary, newPrompt, model, timeoutMs = 60000, provider, runner }) {
   const prior = String(priorSummary || "").trim() || "(no prior — this is the first prompt)";
   const prompt =
+    SUMMARIZER_SYSTEM_PROMPT + "\n\n" +
     "PRIOR SUMMARY:\n" + prior + "\n\n" +
     "NEW USER PROMPT:\n" + String(newPrompt || "").trim() + "\n\n" +
     "Output the updated rolling summary (only the summary text):";
-
-  const CLAUDE = process.env.CLAUDE_BIN || "claude";
-  const args = ["-p", prompt, "--output-format", "json", "--dangerously-skip-permissions", "--append-system-prompt", SUMMARIZER_SYSTEM_PROMPT];
-  if (model) args.push("--model", model);
-
-  return new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    Object.keys(env).forEach((k) => { if (k.startsWith("CLAUDE")) delete env[k]; });
-    const p = spawn(CLAUDE, args, { stdio: ["ignore", "pipe", "pipe"], cwd: path.resolve(__dirname, ".."), env });
-    const timer = setTimeout(() => { try { p.kill("SIGTERM"); } catch (_e) {} reject(new Error("summarizer timed out")); }, timeoutMs);
-    let out = "", err = "";
-    p.stdout.on("data", (d) => { out += d.toString(); });
-    p.stderr.on("data", (d) => { err += d.toString(); });
-    p.on("error", (e) => { clearTimeout(timer); reject(e); });
-    p.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) return reject(new Error(`summarizer exited ${code}: ${err.slice(0, 200)}`));
-      let parsed;
-      try { parsed = JSON.parse(out); } catch { return reject(new Error("summarizer non-JSON output: " + out.slice(0, 200))); }
-      if (parsed.is_error) return reject(new Error("summarizer claude error: " + (parsed.error || JSON.stringify(parsed).slice(0, 200))));
-      const summary = String(parsed.result || "").trim();
-      if (!summary) return reject(new Error("summarizer returned empty summary"));
-      resolve(summary);
-    });
-  });
+  const selectedProvider = normalizeProvider(provider || runner || process.env.LLM_PROVIDER) || "claude";
+  const selectedModel = selectedProvider === "codex" ? codexModel(model) : model;
+  const summary = String(await oneshotText(prompt, {
+    provider: selectedProvider,
+    model: selectedModel,
+    timeoutMs,
+    reasoningEffort: selectedProvider === "codex" ? (process.env.SUMMARIZER_REASONING_EFFORT || "high") : undefined,
+    telemetryComponent: "summarizer",
+  }) || "").trim();
+  if (!summary) throw new Error("summarizer returned empty summary");
+  return summary;
 }
 
 module.exports = { updateIntentSummary, SUMMARIZER_SYSTEM_PROMPT };

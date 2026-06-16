@@ -78,7 +78,7 @@ Current bring-up sequence:
 cd /data/siddhant/SimWorld-Studio
 docker compose up -d
 
-export POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db
+export POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db
 python3 tools/apply_schema.py
 
 ASSET_DB_DIR=/data/siddhant/asset_db \
@@ -94,7 +94,7 @@ Validation before enabling:
 ```bash
 ASSET_PREFILTER=false \
 ASSET_DB_DIR=/data/siddhant/asset_db \
-POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db \
+POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db \
 QDRANT_URL=http://127.0.0.1:6333 \
 EMBED_SERVICE_URL=http://127.0.0.1:7777 \
 PREFILTER_TOP_K=150 \
@@ -383,7 +383,7 @@ Add to server startup (or `.env` file read by index.js):
 
 ```bash
 # Postgres
-POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db
+POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db
 
 # Qdrant
 QDRANT_URL=http://127.0.0.1:6333
@@ -1051,7 +1051,7 @@ Import existing asset_db/catalog/ JSON files into Postgres.
 
 Usage:
   ASSET_DB_DIR=/data/siddhant/asset_db \
-  POSTGRES_URL=postgresql://simworld:simworld@127.0.0.1:55432/asset_db \
+  POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db \
   python tools/migrate_to_postgres.py
 """
 import os, json, glob, sys
