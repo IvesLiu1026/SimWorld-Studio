@@ -612,6 +612,27 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                   }
                   break;
                 }
+                case "intent_start":
+                case "intent_updated":
+                  break;
+                case "round_start": {
+                  msg.blocks = [...(msg.blocks || []), { type: "round_header", round: event.data.round, total: event.data.max || event.data.total }];
+                  break;
+                }
+                case "critic_verdict": {
+                  msg.blocks = [...(msg.blocks || []), { type: "critic", round: event.data.round, status: event.data.status, issues: event.data.issues, suggestions: event.data.suggestions }];
+                  break;
+                }
+                case "builder_done": {
+                  if (event.data && event.data.isError) {
+                    msg.blocks = [...(msg.blocks || []), { type: "text", content: `[builder error] ${event.data.error || ""}` }];
+                  }
+                  break;
+                }
+                case "loop_done": {
+                  msg.blocks = [...(msg.blocks || []), { type: "loop_done", reason: event.data.reason, rounds: event.data.rounds, finalStatus: event.data.finalStatus }];
+                  break;
+                }
                 case "done": {
                   const sid = event.data.sessionId;
                   const isErr = event.data.isError;

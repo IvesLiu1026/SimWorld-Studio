@@ -57,6 +57,10 @@ function buildMcpOverrideArgs(mcpConfigPath, unrealPort, logToFile) {
       if (Array.isArray(cfg.args)) out.push("-c", `mcp_servers.${name}.args=${tomlVal(cfg.args)}`);
       const env = { ...(cfg.env || {}) };
       if (unrealPort) env.UNREAL_PORT = String(unrealPort);
+      // Pass through provider/runtime env the scene-loop + verify_scene(codex) path needs.
+      for (const k of ['LLM_PROVIDER','CODEX_MODEL','CODEX_BIN','CODEX_HOME','HOME','PORT','CRITIC_TIMEOUT_MS']) {
+        if (process.env[k] && env[k] == null) env[k] = String(process.env[k]);
+      }
       for (const [k, val] of Object.entries(env)) {
         out.push("-c", `mcp_servers.${name}.env.${k}=${tomlVal(val)}`);
       }

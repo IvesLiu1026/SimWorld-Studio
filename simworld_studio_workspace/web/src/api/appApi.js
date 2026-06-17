@@ -92,6 +92,10 @@ export async function sendChat(message, sessionId, onEvent, signal, options) {
         skillSelectionMode: options?.skillSelectionMode,
         agent: options?.agent,
         model: options?.model,
+        loopMode: options?.loopMode,
+        runner: options?.runner,
+        assetMode: options?.assetMode,
+        assetRetrievalMode: options?.assetRetrievalMode,
       }),
       signal: effectiveSignal,
     });

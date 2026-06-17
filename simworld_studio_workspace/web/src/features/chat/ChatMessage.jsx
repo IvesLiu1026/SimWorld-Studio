@@ -12,6 +12,39 @@ function MarkdownBlock({ children }) {
   );
 }
 
+// Scene-loop (build-critic) blocks: round headers, critic verdicts, loop-done.
+function LoopBlock({ block }) {
+  if (block.type === "round_header") {
+    return (
+      <div className="loop-round-header">
+        Round {block.round}{block.total ? ` / ${block.total}` : ""} · Developer
+      </div>
+    );
+  }
+  if (block.type === "critic") {
+    const st = String(block.status || "").toUpperCase();
+    const tone = st.includes("PASS") ? "pass" : (st.includes("FAIL") ? "fail" : "warn");
+    const issues = Array.isArray(block.issues) ? block.issues : [];
+    const sugg = Array.isArray(block.suggestions) ? block.suggestions : [];
+    const txt = (x) => (typeof x === "string" ? x : (x && (x.text || x.message)) || JSON.stringify(x));
+    return (
+      <div className={`loop-critic loop-critic-${tone}`}>
+        <div className="loop-critic-head">Critic: {st || "REVIEW"}{block.round ? ` · round ${block.round}` : ""}</div>
+        {issues.length > 0 && <ul className="loop-critic-issues">{issues.map((x, i) => <li key={i}>{txt(x)}</li>)}</ul>}
+        {sugg.length > 0 && <ul className="loop-critic-suggestions">{sugg.map((x, i) => <li key={i}>{txt(x)}</li>)}</ul>}
+      </div>
+    );
+  }
+  if (block.type === "loop_done") {
+    return (
+      <div className="loop-done">
+        Loop finished — {block.reason || "done"}{block.rounds ? ` · ${block.rounds} round(s)` : ""}{block.finalStatus ? ` · ${block.finalStatus}` : ""}
+      </div>
+    );
+  }
+  return null;
+}
+
 function AssistantContent({ agentLabel, fallbackToolIcon, message, toolIcons }) {
   const toolCalls = message.toolCalls || [];
 
@@ -27,6 +60,8 @@ function AssistantContent({ agentLabel, fallbackToolIcon, message, toolIcons }) 
         ? message.blocks.map((block, index) => (
             block.type === "text" ? (
               <MarkdownBlock key={`text-${index}`}>{block.content}</MarkdownBlock>
+            ) : (block.type === "round_header" || block.type === "critic" || block.type === "loop_done") ? (
+              <LoopBlock key={`loop-${index}`} block={block} />
             ) : (
               <ToolCallBlock
                 key={block.toolId}

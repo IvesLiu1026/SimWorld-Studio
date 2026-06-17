@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "display_name":      {"type": "string", "description": "Concise human-readable name, e.g. 'Vintage Tufted Leather Armchair'."},
+    "category":          {"type": "string", "enum": ["buildings","building_pieces","vegetation","nature_terrain","seating","furniture_indoor","lighting","signage","vehicles","carts_and_vendors","market_goods","industrial_goods","pipes_tanks_infra","tools_equipment","barriers_and_fencing","waste_and_bins","litter_and_debris","ground_and_road","decor_and_landmarks","religious_ritual","medieval_fantasy_props","sci_fi_props","winter_snow_props","agricultural_props","camping_outdoor","indoor_clutter"]},
+    "subcategory":       {"type": "string", "description": "Fine-grained type, free text, e.g. 'food cart', 'dumpster', 'brownstone facade'."},
+    "short_description": {"type": "string", "description": "One sentence."},
+    "description":       {"type": "string", "description": "2-4 sentences describing form, material, condition, character."},
+    "tags":              {"type": "array", "items": {"type": "string"}, "description": "8-15 lowercase keyword tags."},
+    "style":             {"type": "string"},
+    "materials":         {"type": "array", "items": {"type": "string"}},
+    "color_palette":     {"type": "array", "items": {"type": "string"}},
+    "mood":              {"type": "array", "items": {"type": "string"}},
+    "typical_placement": {"type": "array", "items": {"type": "string"}, "description": "where it usually sits, e.g. 'on sidewalk','against a wall','in a loading bay','on a shelf','in a corner','on the ground'."},
+    "function":          {"type": "string"},
+    "affordances":       {"type": "array", "items": {"type": "string"}},
+    "scene_types":       {"type": "array", "items": {"type": "string"}, "description": "environment/scene types it fits (any genre), e.g. 'shopping street','industrial yard','medieval market','temple courtyard','sci-fi bay','winter town','harbor','farm','graveyard'."},
+    "is_symmetric":      {"type": "boolean"},
+    "condition":         {"type": "string", "description": "e.g. 'new','worn','rusty','damaged'."},
+    "setting":           {"type": "string", "enum": ["modern_urban","industrial","suburban_residential","commercial_retail","nature_rural","coastal_harbor","medieval","fantasy_gothic","ancient_temple","middle_eastern","east_asian","winter","sci_fi","indoor","generic"], "description": "Primary thematic setting/genre this asset reads as; use 'generic' for plain cross-setting props that fit many genres."}
+  },
+  "required": ["display_name","category","subcategory","short_description","description","tags","style","materials","color_palette","mood","typical_placement","function","affordances","scene_types","is_symmetric","condition","setting"]
+}
