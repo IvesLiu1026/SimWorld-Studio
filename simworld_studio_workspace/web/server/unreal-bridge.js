@@ -59,6 +59,14 @@ class UcvBroker {
     this.totalRequeues = 0;
     this.lastError = null;
     this.lastConnectedAt = null;
+
+    // Robustness kill-switch: each UCV (port 9000) connection leaks a thread in
+    // UE's UnrealCV plugin, and a connection storm can wedge UE's game thread.
+    // Set DISABLE_UCV_BROKER=1 to make the broker a no-op (rejects UCV commands
+    // without opening a socket). Scene-gen uses MCP take_screenshot (not UCV),
+    // so disabling only affects UCV-based agent-observation features.
+    this.disabled = (process.env.DISABLE_UCV_BROKER === "1" || process.env.DISABLE_UCV_BROKER === "true");
+    if (this.disabled) { try { console.log("[ucv-broker] DISABLED via DISABLE_UCV_BROKER env — no UCV connections will be opened"); } catch (_e) {} }
   }
 
   /**
@@ -72,6 +80,7 @@ class UcvBroker {
    * @param {number} opts.queueDeadlineMs reject if not started within this many ms (default 30s)
    */
   send(cmd, opts = {}) {
+    if (this.disabled) return Promise.reject(new Error("UCV broker disabled (DISABLE_UCV_BROKER=1)"));
     const {
       timeoutMs = DEFAULT_TIMEOUT_MS,
       retries = DEFAULT_RETRIES,

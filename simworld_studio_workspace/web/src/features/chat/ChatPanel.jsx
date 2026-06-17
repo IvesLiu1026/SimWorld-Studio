@@ -170,6 +170,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   const [mcpStatus, setMcpStatus] = useState(initialState.mcpStatus || "-");
   const [selectedSkills, setSelectedSkills] = useState(initialState.selectedSkills || []);
   const [autoSkillSelectionEnabled, setAutoSkillSelectionEnabled] = useState(initialState.autoSkillSelectionEnabled ?? true);
+  const [loopMode, setLoopMode] = useState(initialState.loopMode || "vanilla");
   const [autoSelectedSkills, setAutoSelectedSkills] = useState(initialState.autoSelectedSkills || []);
   const [autoSelectingSkills, setAutoSelectingSkills] = useState(false);
   const [autoSelectionError, setAutoSelectionError] = useState(initialState.autoSelectionError || "");
@@ -668,6 +669,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
             skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
             agent: codingAgent,
             model: codingModel,
+            loopMode,
           }
         );
         // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
@@ -1022,6 +1024,13 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
           <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "var(--blue)" : "var(--ink-3)" }}>
             {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
             {autoSelectingSkills ? " (selecting...)" : ""}
+          </span>
+          <span
+            onClick={() => setLoopMode((m) => (m === "vanilla" ? "text_loop" : m === "text_loop" ? "visual_loop" : "vanilla"))}
+            style={{ marginLeft: 8, cursor: "pointer", color: loopMode === "vanilla" ? "var(--ink-3)" : "var(--blue)" }}
+            title="Build-critic loop — click to cycle: off → text → visual"
+          >
+            Loop: {loopMode === "vanilla" ? "off" : loopMode === "text_loop" ? "text" : "visual"}
           </span>
           {activeSkills.length > 0 && (
             <span style={{ color: "var(--blue)", marginLeft: 8 }}>
