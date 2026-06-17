@@ -285,6 +285,44 @@ async function prefilterCategory(category, plan, opts) {
   }
 }
 
+// Free-text semantic search over the WHOLE library (hybrid dense+sparse RRF), with an
+// optional category filter and NO setting exclusion — the caller's query drives relevance.
+// Powers the search_assets MCP tool so the builder can PULL relevant assets on demand
+// (filling gaps / adding variety) instead of being limited to the pushed seed palette.
+async function searchAssets({ query, category, k } = {}) {
+  const limit = Math.max(1, Math.min(parseInt(k, 10) || 12, 40));
+  const text = String(query || "").trim() || "asset";
+  const cat = category && String(category).trim() ? String(category).trim() : null;
+  const filter = cat ? { must: [{ key: "category", match: { value: cat } }] } : undefined;
+  try {
+    const { dense, sparse } = await embedQuery(text);
+    const prefetch = [{ query: dense, using: "text_dense", limit: limit * 4, ...(filter ? { filter } : {}) }];
+    if (sparse && Array.isArray(sparse.indices) && sparse.indices.length) {
+      prefetch.push({ query: sparse, using: "text_sparse", limit: limit * 4, ...(filter ? { filter } : {}) });
+    }
+    const result = await qdrant().query(COLLECTION, { prefetch, query: { fusion: "rrf" }, limit, with_payload: true });
+    const out = resultPoints(result).map(r => compactFromPayload(r.payload, r.score)).filter(a => a.id && a.path);
+    if (out.length) return out;
+  } catch (e) { /* fall through to postgres */ }
+  // postgres full-text fallback (qdrant down / empty)
+  const sql = `
+    WITH q AS (SELECT websearch_to_tsquery('english', $1) AS query)
+    SELECT asset_id, name, category, subcategory, short_description, tags, scene_types,
+           setting, width_m, depth_m, height_m, unreal_asset_path, asset_type,
+           ts_rank_cd(search_tsv, q.query) AS text_rank
+    FROM assets, q
+    WHERE ($2::text IS NULL OR category = $2)
+    ORDER BY text_rank DESC, name ASC
+    LIMIT $3`;
+  const res = await pgPool().query(sql, [text, cat, limit]);
+  return res.rows.map(row => compactFromPayload({
+    asset_id: row.asset_id, name: row.name, category: row.category, subcategory: row.subcategory,
+    short_description: row.short_description, tags: row.tags, scene_types: row.scene_types, setting: row.setting,
+    width_m: row.width_m, depth_m: row.depth_m, height_m: row.height_m,
+    unreal_asset_path: row.unreal_asset_path, asset_type: row.asset_type,
+  }, Number(row.text_rank || 0))).filter(a => a.id && a.path);
+}
+
 module.exports = {
   SETTING_COMPAT,
   VALID_SETTINGS,
@@ -295,4 +333,5 @@ module.exports = {
   preferredSettings,
   prefilterCategory,
   qdrantPrefilterCategory,
+  searchAssets,
 };

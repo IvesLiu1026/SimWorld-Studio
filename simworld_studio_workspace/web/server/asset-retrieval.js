@@ -47,6 +47,22 @@ function _truthy(v) {
   return /^(1|true|yes|on)$/i.test(String(v || ""));
 }
 
+// Env-gated (ASSET_DROP_JUNK) filter: drop assets that should never enter a buildable
+// palette — VFX blueprints (e.g. BP_fountain_on, whose water particles float and wreck
+// framing), sky/weather/atmosphere blueprints, and absurdly oversized background/terrain
+// (sky domes up to millions of metres). Default OFF so committed behavior is unchanged.
+const _DROP_JUNK = _truthy(process.env.ASSET_DROP_JUNK || "");
+function _isJunkAsset(a) {
+  const p = String((a && a.path) || "").toLowerCase();
+  const n = String((a && a.name) || "").toLowerCase();
+  if (/\/vfx\//.test(p)) return true;
+  if (/(skydome|skysphere|sky_sphere|skybox|infinitysky|infinityweather|infinityprecip|precipitation|backgroundisland|background_[abc]\b)/.test(p)) return true;
+  if (/(sky dome|sky sphere|skybox|atmospheric sky|volumetric sky|distant island|background (cliff|island)|infinity (sky|lightning))/.test(n)) return true;
+  const d = a && a.dims;
+  if (d) { const mx = Math.max(Number(d.width) || 0, Number(d.depth) || 0, Number(d.height) || 0); if (mx > 300) return true; }
+  return false;
+}
+
 function _legacyPrefilterDefault() {
   return _truthy(process.env.ASSET_PREFILTER);
 }
@@ -55,7 +71,8 @@ function _normalizeAssetModeValue(v) {
   const s = String(v || "").trim().toLowerCase();
   if (!s) return null;
   if (["off", "none", "no", "false", "0", "disabled"].includes(s)) return "off";
-  if (["db", "qdrant", "prefilter", "vector", "hybrid"].includes(s)) return "db";
+  if (["db", "qdrant", "prefilter", "vector"].includes(s)) return "db";
+  if (["hybrid", "seed", "both", "seed_plus_tools"].includes(s)) return "hybrid";
   if (["file", "catalog", "retrieval_file", "llm"].includes(s)) return "file";
   if (["baseline_full", "full", "all", "full_list"].includes(s)) return "baseline_full";
   if (s === "retrieval") return _legacyPrefilterDefault() ? "db" : "file";
@@ -71,7 +88,7 @@ function resolveAssetMode(bodyOrMode) {
   if (explicit) return explicit;
   const envMode = _normalizeAssetModeValue(process.env.ASSET_RETRIEVAL_MODE);
   if (envMode) return envMode;
-  return "db";
+  return "hybrid";
 }
 
 function _usePrefilter(opts) {
@@ -143,6 +160,7 @@ function loadDB() {
         assetType: tech.asset_type || "",
         spawnTool: _spawnTool(rec),
       };
+      if (_DROP_JUNK && _isJunkAsset(compact)) continue;
       assets.set(compact.id, compact);
       list.push(compact);
     }
@@ -389,11 +407,28 @@ function _groundMaterialsBlock() {
 
 const _HOWTO = 'This is a CURATED PALETTE of assets selected for this scene — build the scene from it. Spawn each by its EXACT full path shown: spawn_blueprint_actor for Blueprints, spawn_actor for static meshes (as labelled). Dimensions are width×depth×height in metres (UE: 1 m = 100 units) — use them for spacing/overlaps.\n\nGROUND FIRST (do this before any props): carpet the WHOLE ~100 m × 100 m floor with a base ground matched to the scene, so nothing sits on the bare default grey plane. PREFER tiling the ground/floor MESHES in the palette (category ground_and_road — grass tiles, park-walkway slabs, snowy-road tiles, plaza/stone-floor pieces have baked UVs and tile cleanly): repeat them edge-to-edge across the full 100 m at z≈0. If no palette ground MESH fits the setting, instead spawn a grid of flat base planes (/Engine/BasicShapes/Plane, scaled ~4–8 m each, tiled to cover 100×100 m at z≈0) and apply the best-matching GROUND SURFACE MATERIAL listed below via StaticMeshComponent.set_material(0, material) so the texture tiles instead of stretching. NEVER use ocean/sea/water as the floor (water only as a separate edge feature). Then place EVERY object ON the ground, upright.\n\nNow build a FULL ~100 m × 100 m (≈10000×10000 UE units, X/Y roughly -5000..+5000), DENSE, lived-in scene: LEAD with the large/structural assets in the palette (whole buildings, houses, stalls, walls, big trees, large set-pieces like fountains/cranes/gates) as the backbone and REUSE them in rows and clusters DISTRIBUTED across the WHOLE 100×100 m (something roughly every 8–12 m, aim ~80–150+ assets total, NOT clustered in one corner); add smaller props only as light dressing, never the bulk. Use execute_python_script to place many instances efficiently. Aim for a busy, instantly-recognizable ~100 m place — dense and organized around a clear focal point with natural variation, NOT a sparse handful and NOT a random pile.';
 
+// HYBRID mode HOWTO: the retrieved palette is a non-exclusive SEED, and the builder is
+// told it ALSO has the search_assets tool to pull more relevant assets on demand. This
+// keeps db's relevance prior while removing the over-constraint / missing-category /
+// junk failure modes — the model can always fetch the right ground or fill any gap.
+const _HOWTO_HYBRID = 'The list below is a SEED PALETTE — a high-relevance STARTING SET retrieved for this scene. Lead with it, but you are NOT limited to it.\n\nYou ALSO have a search_assets tool: call it any time to pull MORE relevant real assets from the full ~16k-asset library — give it a natural-language query (e.g. "snow covered ground", "leafy park trees", "fruit market stall", "stone temple gate") and it returns real assets with exact spawn paths + dimensions. USE IT for: (a) the correct GROUND for this setting (always search e.g. "grass lawn ground" / "snow ground tiles" / "cobblestone" if the seed lacks a fitting ground MESH), (b) any category the seed is missing, and (c) extra variety so the scene is not repetitive. NEVER skip or fake a needed asset because it is not in the seed — search_assets it (or browse a specific pack via list_assets / execute_python_script EditorAssetLibrary.list_assets). Spawn Blueprints with spawn_blueprint_actor and static meshes with spawn_actor, by EXACT path. Dimensions are width×depth×height in metres (1 m = 100 units).\n\nGROUND FIRST (before any props): carpet the WHOLE ~100 m × 100 m floor with a base ground matched to the scene so nothing sits on bare default grey. PREFER tiling ground/floor MESHES (grass tiles, park-walkway slabs, snowy-road tiles, plaza/stone-floor pieces — from the seed or from search_assets) edge-to-edge across the full 100 m at z≈0. If no ground MESH fits, spawn a grid of flat planes (/Engine/BasicShapes/Plane, ~4–8 m each, tiled to cover 100×100 m at z≈0) and apply the best-matching GROUND SURFACE MATERIAL below via StaticMeshComponent.set_material(0, material). NEVER use ocean/sea/water as the floor. Then place EVERY object ON the ground, upright.\n\nNow build a FULL ~100 m × 100 m (≈10000×10000 UE units, X/Y roughly -5000..+5000), DENSE, lived-in scene: LEAD with large/structural assets (whole buildings, houses, stalls, walls, big trees, large set-pieces) as the backbone and REUSE them in rows and clusters DISTRIBUTED across the WHOLE 100×100 m (something roughly every 8–12 m, aim ~80–150+ assets total, NOT clustered in one corner); add smaller props only as light dressing. Use execute_python_script to place many instances efficiently. Aim for a busy, instantly-recognizable ~100 m place — dense and organized around a clear focal point with natural variation.';
+
 // Public entry used by /api/chat. Returns a system-prompt block (string), or "" if nothing.
 async function buildPromptBlock(scene, mode, opts) {
   const resolvedMode = resolveAssetMode(mode);
   if (resolvedMode === "off") return "";
   const db = loadDB();
+  if (resolvedMode === "hybrid") {
+    const r = await retrieve(scene, { ...(opts || {}), usePrefilter: true });
+    const seed = (r.assets || []).filter(a => !_isJunkAsset(a));
+    if (!seed.length) throw new Error("asset retrieval produced an empty seed palette");
+    const body = formatAssetsForPrompt(seed);
+    return [
+      "## SEED ASSET PALETTE FOR THIS SCENE (high-relevance starting set — NOT an exclusive list)",
+      r.rationale ? ("Scene rationale: " + r.rationale) : "",
+      _HOWTO_HYBRID, "", body, "", _groundMaterialsBlock(),
+    ].filter(Boolean).join("\n");
+  }
   if (resolvedMode === "baseline_full") {
     const body = formatAssetsForPrompt([...db.assets.values()]);
     return ["## AVAILABLE ASSET PALETTE (build the scene using these curated assets)", _HOWTO, "", body, "", _groundMaterialsBlock()].join("\n");
