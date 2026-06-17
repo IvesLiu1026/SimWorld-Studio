@@ -165,23 +165,36 @@ else
 fi
 
 # ── 2. UE Editor ──────────────────────────────────────────────────────────────
-echo "[ue] Launching UnrealEditor (headless, GPU $GPU_INDEX)..."
-"$UE_EDITOR" "$PROJECT_FILE" \
-    "$MAP" \
-    -MCPPort=$MCP_PORT \
-    -Unattended -NOSPLASH -NOSOUND -Messaging \
-    -ResX=1280 -ResY=720 -FPSMAX=15 \
-    -graphicsadapter=$GPU_INDEX \
-    -RenderOffScreen \
-    -EditorPixelStreamingRes=1280x720 \
-    -EditorPixelStreamingStartOnLaunch=true \
-    -EditorPixelStreamingUseRemoteSignallingServer=true \
-    -PixelStreamingURL=ws://127.0.0.1:$CIRRUS_WS_PORT \
-    -log \
-    >> "$WORKSPACE/logs/ue.log" 2>&1 &
-UE_PID=$!
-PIDS+=($UE_PID)
-echo "[ue] PID $UE_PID, log: $WORKSPACE/logs/ue.log"
+# Opt-in crash self-heal (DEFAULT OFF). When UE_AUTORESTART=1 the monitor restarts
+# UE in place instead of tearing the whole instance down — strictly bounded
+# (max N restarts per window + cooldown) so a crash-loop can never run away.
+UE_AUTORESTART="${UE_AUTORESTART:-0}"
+UE_AUTORESTART_MAX="${UE_AUTORESTART_MAX:-3}"            # max restarts within the window
+UE_AUTORESTART_WINDOW="${UE_AUTORESTART_WINDOW:-600}"   # window length (seconds)
+UE_AUTORESTART_COOLDOWN="${UE_AUTORESTART_COOLDOWN:-10}" # wait before relaunch (seconds)
+_ue_restart_count=0
+_ue_window_start=$(date +%s)
+
+launch_ue() {
+    echo "[ue] Launching UnrealEditor (headless, GPU $GPU_INDEX)..."
+    "$UE_EDITOR" "$PROJECT_FILE" \
+        "$MAP" \
+        -MCPPort=$MCP_PORT \
+        -Unattended -NOSPLASH -NOSOUND -Messaging \
+        -ResX=1280 -ResY=720 -FPSMAX=15 \
+        -graphicsadapter=$GPU_INDEX \
+        -RenderOffScreen \
+        -EditorPixelStreamingRes=1280x720 \
+        -EditorPixelStreamingStartOnLaunch=true \
+        -EditorPixelStreamingUseRemoteSignallingServer=true \
+        -PixelStreamingURL=ws://127.0.0.1:$CIRRUS_WS_PORT \
+        -log \
+        >> "$WORKSPACE/logs/ue.log" 2>&1 &
+    UE_PID=$!
+    PIDS+=($UE_PID)
+    echo "[ue] PID $UE_PID, log: $WORKSPACE/logs/ue.log"
+}
+launch_ue
 
 # ── 3. Wait for MCP port ──────────────────────────────────────────────────────
 echo "[ue] Waiting for MCP port $MCP_PORT..."
@@ -236,6 +249,27 @@ while true; do
     sleep 5
     if ! kill -0 $UE_PID 2>/dev/null; then
         echo "[studio] UE exited unexpectedly. Check $WORKSPACE/logs/ue.log"
+        if [ "$UE_AUTORESTART" = "1" ]; then
+            now=$(date +%s)
+            if [ $((now - _ue_window_start)) -ge "$UE_AUTORESTART_WINDOW" ]; then
+                _ue_window_start=$now; _ue_restart_count=0
+            fi
+            if [ "$_ue_restart_count" -lt "$UE_AUTORESTART_MAX" ]; then
+                _ue_restart_count=$((_ue_restart_count+1))
+                echo "[studio] UE_AUTORESTART: restart $_ue_restart_count/$UE_AUTORESTART_MAX (window ${UE_AUTORESTART_WINDOW}s) after ${UE_AUTORESTART_COOLDOWN}s cooldown..."
+                sleep "$UE_AUTORESTART_COOLDOWN"
+                launch_ue
+                W=0
+                until nc -z 127.0.0.1 $MCP_PORT 2>/dev/null; do
+                    if ! kill -0 $UE_PID 2>/dev/null; then echo "[studio] restarted UE exited early — giving up"; cleanup; fi
+                    sleep 3; W=$((W+3))
+                    if [ $W -ge 120 ]; then echo "[studio] restarted UE MCP not ready in 120s — giving up"; cleanup; fi
+                done
+                echo "[studio] UE restarted, MCP ready on $MCP_PORT."
+                continue
+            fi
+            echo "[studio] UE_AUTORESTART: exceeded $UE_AUTORESTART_MAX restarts in ${UE_AUTORESTART_WINDOW}s — giving up to avoid a crash loop."
+        fi
         cleanup
     fi
     if [ -n "$CIRRUS_PID" ] && ! kill -0 $CIRRUS_PID 2>/dev/null; then

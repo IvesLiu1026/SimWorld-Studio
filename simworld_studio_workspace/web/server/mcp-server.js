@@ -22,7 +22,10 @@ const COOLDOWN={
 };
 let _lastCmdEnd=0,_lastCooldown=50;
 
-function ueCommand(e,t,s=3e4){return new Promise((n,o)=>{cmdQueue.push({type:e,params:t,timeoutMs:s,resolve:n,reject:o}),processQueue()})}
+// ueCommand now funnels through the main-process UeMcpBroker (loopback RPC) so
+// ALL per-session mcp-server subprocesses share ONE global serial queue at UE.
+// (Local cmdQueue/processQueue/_execOnce/_execWithRetry below are retired/unused.)
+function ueCommand(type,params,timeoutMs=3e4){return(async()=>{let res;try{res=await fetch(UE_BROKER_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type,params,timeoutMs})})}catch(err){throw new Error(`UE broker unreachable at ${UE_BROKER_URL}: ${err.message}`)}let json;try{json=await res.json()}catch{json={ok:!1,error:`broker non-JSON (HTTP ${res.status})`}}if(res.status===429){const ra=parseInt(res.headers.get("Retry-After")||"1",10);throw Object.assign(new Error(`UE busy (backpressure), retry after ${ra}s`),{retryAfterMs:ra*1e3})}if(!json.ok)throw new Error(json.error||"UE error");return json.result})()}
 
 function processQueue(){
   if(cmdRunning||cmdQueue.length===0)return;
@@ -300,6 +303,7 @@ _notifyBackend({type:'screenshot',data:sp});const actorsList=JSON.stringify(ar,n
 const BROKER_HOST=process.env.SIMWORLD_BROKER_HOST||"127.0.0.1";
 const BROKER_PORT=process.env.PORT||"3002";
 const BROKER_URL=`http://${BROKER_HOST}:${BROKER_PORT}/api/internal/ucv`;
+const UE_BROKER_URL=`http://${BROKER_HOST}:${BROKER_PORT}/api/internal/ue`;
 
 const AGENT_REGISTRY=JSON.parse(fs.readFileSync(path.resolve(__dirname,"agent-registry.json"),"utf-8"));
 

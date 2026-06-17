@@ -296,4 +296,201 @@ function getBroker() {
   return _instance;
 }
 
-module.exports = { UcvBroker, getBroker };
+// ---------------------------------------------------------------------------
+// UeMcpBroker — single-process GLOBAL funnel for UE's MCP command port (55559).
+//
+// WHY: every per-session mcp-server.js subprocess used to own its OWN cmdQueue
+// and open one-shot TCP straight to 55559. With N Claude/agent sessions that's
+// N independent "serial" queues all firing at UE with zero cross-process
+// coordination => effectively N-concurrent bursts that overload/segfault UE.
+// All sessions now funnel through this ONE broker via /api/internal/ue, so the
+// global concurrency is truly 1 and we can shape traffic (削峰填谷).
+//
+// Unlike UcvBroker, UE's MCP is ONE-SHOT TCP per command (connect→write→read→
+// close), so there is no persistent socket — just global serialization +
+// queueing policy on top of _execOnce().
+//
+// Policy: concurrency=1, bounded queue + backpressure (429/Retry-After),
+// token-bucket rate limit, adaptive cooldown, a dedicated execute_python_script
+// SLOW LANE (own bounded queue + min start interval), queue-deadline drop, and
+// a `paused` flag used by the opt-in crash self-heal while UE restarts.
+// ---------------------------------------------------------------------------
+const UE_MCP_PORT = parseInt(process.env.UNREAL_PORT || '55559', 10);
+const UE_MCP_HOST = process.env.UNREAL_HOST || '127.0.0.1';
+const UE_MAX_QUEUE = parseInt(process.env.UE_GATE_MAX_QUEUE || '64', 10);
+const UE_MAX_PYQUEUE = parseInt(process.env.UE_GATE_MAX_PYQUEUE || '10', 10);
+const UE_PY_MIN_INTERVAL_MS = parseInt(process.env.UE_GATE_PY_INTERVAL_MS || '500', 10);
+const UE_BUCKET_CAP = parseInt(process.env.UE_GATE_BUCKET_CAP || '20', 10);
+const UE_BUCKET_RATE = parseFloat(process.env.UE_GATE_BUCKET_RATE || '10'); // tokens/sec
+const UE_DEFAULT_TIMEOUT_MS = 30000;
+const UE_DEFAULT_RETRIES = 2; // was 3 in mcp-server.js — trimmed to dampen retry amplification
+
+const UE_COOLDOWN = {
+  spawn_blueprint_actor: 200,
+  execute_python_script: 200,
+  spawn_actor: 200,
+  delete_all_spawned: 300,
+  setup_environment: 300,
+  delete_actor: 100,
+  _default: 50,
+};
+
+function _retryAfter(ms, msg) {
+  return Object.assign(new Error(msg || 'UE busy'), { retryAfterMs: ms });
+}
+
+class UeMcpBroker {
+  constructor(opts = {}) {
+    this.queue = [];
+    this.pyQueue = [];
+    this.inFlight = null;
+    this._lastCmdEnd = 0;
+    this._lastCooldown = 0;
+    this._lastPyStart = 0;
+    this.tokens = UE_BUCKET_CAP;
+    this._lastRefill = Date.now();
+    this.paused = false;
+    this._pumpScheduled = false;
+    // injectable for tests: a fake one-shot executor
+    this._exec = opts.exec || ((type, params, timeoutMs) => this._execOnce(type, params, timeoutMs));
+    this.totalSent = 0;
+    this.totalErrors = 0;
+    this.total429 = 0;
+    this.lastError = null;
+  }
+
+  /**
+   * Funnel entry point. Resolves with the UE JSON response, or rejects.
+   * On backpressure it rejects with err.retryAfterMs set (caller maps to 429).
+   */
+  send(type, params, opts = {}) {
+    const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : UE_DEFAULT_TIMEOUT_MS;
+    const queueDeadlineMs = typeof opts.queueDeadlineMs === 'number'
+      ? opts.queueDeadlineMs : Math.max(timeoutMs * 2, 15000);
+    return new Promise((resolve, reject) => {
+      if (this.paused) { this.total429++; return reject(_retryAfter(2000, 'UE restarting, retry shortly')); }
+      const isPy = type === 'execute_python_script';
+      const q = isPy ? this.pyQueue : this.queue;
+      const cap = isPy ? UE_MAX_PYQUEUE : UE_MAX_QUEUE;
+      if (q.length >= cap) {
+        this.total429++;
+        const drain = Math.max(1000, q.length * (this._lastCooldown || 200));
+        return reject(_retryAfter(drain, `UE busy (${isPy ? 'python' : 'cmd'} queue full ${q.length}/${cap})`));
+      }
+      q.push({ type, params, timeoutMs, queueDeadlineMs, enqueuedAt: Date.now(), resolve, reject });
+      // Honor the queue deadline even if a long inFlight job (e.g. a 300s python)
+      // would otherwise block the next _pump from sweeping this one.
+      const t = setTimeout(() => this._dropStale(), queueDeadlineMs + 10);
+      if (t.unref) t.unref();
+      this._pump();
+    });
+  }
+
+  status() {
+    return {
+      queueDepth: this.queue.length,
+      pyQueueDepth: this.pyQueue.length,
+      inFlight: this.inFlight ? this.inFlight.type : null,
+      tokens: Math.floor(this.tokens),
+      paused: this.paused,
+      totalSent: this.totalSent,
+      totalErrors: this.totalErrors,
+      total429: this.total429,
+      lastError: this.lastError,
+    };
+  }
+
+  setPaused(p) { this.paused = !!p; if (!p) this._pump(); }
+
+  _refill() {
+    const now = Date.now();
+    const dt = (now - this._lastRefill) / 1000;
+    if (dt > 0) {
+      this.tokens = Math.min(UE_BUCKET_CAP, this.tokens + dt * UE_BUCKET_RATE);
+      this._lastRefill = now;
+    }
+  }
+
+  _dropStale() {
+    const now = Date.now();
+    const sweep = (arr) => {
+      const live = [];
+      for (const job of arr) {
+        if (now - job.enqueuedAt > job.queueDeadlineMs) {
+          this.totalErrors++;
+          job.reject(new Error(`UE queue deadline ${job.queueDeadlineMs}ms exceeded: ${job.type}`));
+        } else live.push(job);
+      }
+      return live;
+    };
+    this.queue = sweep(this.queue);
+    this.pyQueue = sweep(this.pyQueue);
+  }
+
+  _schedulePump(ms) {
+    if (this._pumpScheduled) return;
+    this._pumpScheduled = true;
+    setTimeout(() => { this._pumpScheduled = false; this._pump(); }, Math.max(0, ms));
+  }
+
+  _pump() {
+    this._dropStale();
+    if (this.inFlight || this.paused) return;
+    if (this.queue.length === 0 && this.pyQueue.length === 0) return;
+
+    this._refill();
+    if (this.tokens < 1) { this._schedulePump(Math.ceil(1000 / UE_BUCKET_RATE)); return; }
+
+    const now = Date.now();
+    const cdWait = this._lastCooldown - (now - this._lastCmdEnd);
+    if (cdWait > 0) { this._schedulePump(cdWait); return; }
+
+    // Normal queue has priority. If only python jobs remain, enforce the slow-lane interval.
+    let job;
+    if (this.queue.length > 0) {
+      job = this.queue.shift();
+    } else {
+      const wait = UE_PY_MIN_INTERVAL_MS - (now - this._lastPyStart);
+      if (wait > 0) { this._schedulePump(wait); return; }
+      job = this.pyQueue.shift();
+    }
+    if (!job) return;
+
+    this.inFlight = job;
+    this.tokens -= 1;
+    if (job.type === 'execute_python_script') this._lastPyStart = Date.now();
+    this._lastCooldown = UE_COOLDOWN[job.type] || UE_COOLDOWN._default;
+
+    Promise.resolve()
+      .then(() => this._execWithRetry(job.type, job.params, job.timeoutMs, UE_DEFAULT_RETRIES))
+      .then((r) => { this.totalSent++; job.resolve(r); })
+      .catch((e) => { this.totalErrors++; this.lastError = e && e.message; job.reject(e); })
+      .finally(() => { this._lastCmdEnd = Date.now(); this.inFlight = null; this._pump(); });
+  }
+
+  _execOnce(type, params, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const sock = new net.Socket();
+      const timer = setTimeout(() => { sock.destroy(); reject(new Error(`UE command '${type}' timed out after ${timeoutMs}ms`)); }, timeoutMs);
+      sock.connect(UE_MCP_PORT, UE_MCP_HOST, () => { sock.write(JSON.stringify({ type, params }) + '\n'); });
+      let buf = '';
+      sock.on('data', (d) => { buf += d.toString(); try { const p = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(p); } catch {} });
+      sock.on('error', (e) => { clearTimeout(timer); reject(new Error(`UE connection error: ${e.message}`)); });
+      sock.on('close', () => { clearTimeout(timer); if (buf.trim()) { try { resolve(JSON.parse(buf)); } catch { reject(new Error('Incomplete response from UE')); } } });
+    });
+  }
+
+  async _execWithRetry(type, params, timeoutMs, retries) {
+    let lastErr;
+    for (let i = 0; i < retries; i++) {
+      try { return await this._exec(type, params, timeoutMs); }
+      catch (e) { lastErr = e; if (i < retries - 1) await new Promise((r) => setTimeout(r, 300 * (i + 1))); }
+    }
+    throw lastErr;
+  }
+}
+
+let _ueInstance = null;
+function getUeBroker() { if (!_ueInstance) _ueInstance = new UeMcpBroker(); return _ueInstance; }
+
+module.exports = { UcvBroker, getBroker, UeMcpBroker, getUeBroker };
