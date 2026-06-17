@@ -272,6 +272,7 @@ simworld-studio start \
 - **Pluggable backends** — Claude Code, Codex, OpenCode, or Gemini CLI, each with a selectable model, chosen from the top-left of the UI (see [Step 1 — Set Up a Coding Agent](#step-1--set-up-a-coding-agent))
 - **125 buildings** (BP_Building_01–127), 6 trees, vehicles, street furniture, static meshes
 - **17 marketplace packs** discoverable via `list_assets()` (allow-AI licensed)
+- **Asset retrieval pipeline** — semantic retrieval over the full asset library injects a setting-appropriate palette into the build and exposes a `search_assets` tool for on-demand lookups (default `hybrid` mode); see [Asset Retrieval & Scene Generation](docs/asset-retrieval/README.md)
 - Auto session-suffix on actor names prevents cross-map name collision crashes
 - `verify_scene` tool: the agent evaluates a screenshot and returns PASS/NEEDS_IMPROVEMENT/FAIL
 
@@ -341,6 +342,7 @@ The UnrealCV plugin has been extended with:
 | Web Server (backend) | [`web/server/README.md`](simworld_studio_workspace/web/server/README.md) |
 | Frontend (React) | [`web/src/README.md`](simworld_studio_workspace/web/src/README.md) |
 | Web (full stack) | [`web/README.md`](simworld_studio_workspace/web/README.md) |
+| Asset Retrieval & Scene Gen | [`docs/asset-retrieval/README.md`](docs/asset-retrieval/README.md) |
 | Gym / Navigation | [`gym_env/README.md`](simworld_studio_workspace/gym_env/README.md) |
 | Co-Evolve | [`co_evolve/README.md`](simworld_studio_workspace/co_evolve/README.md) |
 
