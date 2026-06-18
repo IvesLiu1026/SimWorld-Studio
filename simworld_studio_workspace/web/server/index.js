@@ -740,6 +740,11 @@ g.on("exit",()=>_chatProcs.delete(n||"_global"));let f="",w=new Set,v=new Set,S=
 // up" fatal), whereas spawn/destroy are safe and never interrupt the stream. Checkpoints
 // are pure filesystem state (no UE assets), so cleanup is a directory removal.
 const CKPT_TTL_MS = parseInt(process.env.CKPT_TTL_MS || String(30 * 60 * 1000), 10);
+// Hardening knobs: debounce rapid auto-snapshots + bound the UE scene scan so a capture
+// can never iterate/serialize a pathological number of actors on the game thread.
+const CKPT_MIN_INTERVAL_MS = parseInt(process.env.CKPT_MIN_INTERVAL_MS || "6000", 10); // reuse last ckpt if fresher
+const CKPT_MAX_ACTORS = parseInt(process.env.CKPT_MAX_ACTORS || "1500", 10);            // cap manifest size
+const CKPT_MAX_SCAN = parseInt(process.env.CKPT_MAX_SCAN || "20000", 10);               // cap actors examined
 // Actor-label prefixes that are base-map infrastructure (not user content): skipped on
 // capture and preserved on restore.
 const CKPT_INFRA_PREFIXES = ["Floor","SkySphere","Sky","Light","Atmo","Fog","PostProcess",
@@ -747,7 +752,15 @@ const CKPT_INFRA_PREFIXES = ["Floor","SkySphere","Sky","Light","Atmo","Fog","Pos
   "Landscape","Volume","Note","Camera","Directional","ExponentialHeight"];
 const _PY_INFRA = "(" + CKPT_INFRA_PREFIXES.map(p => JSON.stringify(p)).join(",") + ",)";
 
+// All web-initiated UE Python funnels through the shared UeMcpBroker (concurrency=1,
+// dedicated execute_python_script slow-lane, bounded queue + 429/queue-deadline
+// backpressure) so a heavy script — e.g. a checkpoint scene scan — can't stack with
+// other web UE calls and wedge the game thread. Non-fatal contract preserved: resolves
+// null on timeout / backpressure / error (callers treat null as "capture failed").
 function ueExecScript(script, timeoutMs = 60000) {
+  if (ueBroker && typeof ueBroker.send === "function") {
+    return ueBroker.send("execute_python_script", { script }, { timeoutMs }).catch(() => null);
+  }
   return new Promise((resolve) => {
     const sock = new (require("net").Socket)();
     const timer = setTimeout(() => { try { sock.destroy(); } catch (_e) {} resolve(null); }, timeoutMs);
@@ -782,13 +795,20 @@ async function getDemoVideoRoots() {
 demoVideos.registerDemoVideoRoutes(app, { getRoots: getDemoVideoRoots });
 
 // Capture the current scene's user-built actors (read-only — never loads or saves a map).
+let _ckptCaptureInFlight = null;
 async function ckptCaptureManifest() {
+  // Single-flight: coalesce concurrent capture requests onto ONE UE scene scan so
+  // overlapping auto-snapshots can't stack heavy Python on the game thread.
+  if (_ckptCaptureInFlight) return _ckptCaptureInFlight;
   const script = [
     "import unreal, json",
     "eas=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
     "INFRA=" + _PY_INFRA,
-    "items=[]",
+    "CAP=" + CKPT_MAX_ACTORS + "; MAXSCAN=" + CKPT_MAX_SCAN,
+    "items=[]; scanned=0",
     "for a in eas.get_all_level_actors():",
+    "    scanned+=1",
+    "    if scanned>MAXSCAN or len(items)>=CAP: break",
     "    try:",
     "        lbl=a.get_actor_label()",
     "        if (not lbl) or lbl.startswith(INFRA): continue",
@@ -803,10 +823,14 @@ async function ckptCaptureManifest() {
     "        pass",
     "print('CKPT_MANIFEST='+json.dumps(items))",
   ].join("\n");
-  const r = await ueExecScript(script, 60000);
-  const m = _ueLogs(r).match(/CKPT_MANIFEST=(.*)$/m);
-  if (!m) return null;
-  try { return JSON.parse(m[1]); } catch (_e) { return null; }
+  _ckptCaptureInFlight = (async () => {
+    const r = await ueExecScript(script, 60000);
+    const m = _ueLogs(r).match(/CKPT_MANIFEST=(.*)$/m);
+    if (!m) return null;
+    try { return JSON.parse(m[1]); } catch (_e) { return null; }
+  })();
+  try { return await _ckptCaptureInFlight; }
+  finally { _ckptCaptureInFlight = null; }
 }
 
 // Restore: delete current user actors, then respawn the checkpoint's manifest. No map load.
@@ -873,6 +897,18 @@ app.post("/api/checkpoints", async (req, res) => {
   const owner = body.ownerId || sid;
   let thumb = null;
   if (body.thumbnailPath && typeof body.thumbnailPath === "string" && body.thumbnailPath.endsWith(".png") && fs.existsSync(body.thumbnailPath)) thumb = body.thumbnailPath;
+  // Debounce: rapid scene-changing turns shouldn't each fire a UE scene scan. If the
+  // session's latest checkpoint is fresher than CKPT_MIN_INTERVAL_MS, reuse it instead
+  // of scanning UE again. (force=true bypasses, e.g. an explicit user snapshot.)
+  if (!body.force) {
+    try {
+      const recs = checkpointManager.list(sid, owner);
+      const last = recs && recs.length ? recs[recs.length - 1] : null;
+      if (last && Date.now() - new Date(last.createdAt).getTime() < CKPT_MIN_INTERVAL_MS) {
+        return res.status(200).json({ ...last, throttled: true });
+      }
+    } catch (_e) {}
+  }
   try {
     const manifest = await ckptCaptureManifest();
     if (manifest === null) return res.status(502).json({ error: "UE scene capture failed" });
