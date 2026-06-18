@@ -2004,6 +2004,91 @@ print('SCENE_CHECK:' + json.dumps(result))
   }
 });
 
+
+/* ===== siddhant: demo + ab-eval endpoints + helpers ===== */
+
+async function _contentPyDir() {
+  if (_contentPyCache !== null) return _contentPyCache;
+  const up = process.env.UE_PROJECT_PATH;
+  if (up) { try { const d = path.join(path.dirname(up), "Content", "Python"); if (fs.existsSync(d)) { _contentPyCache = d; return d; } } catch (_e) {} }
+  try {
+    const r = await ueExecScript("import unreal\nprint(unreal.SystemLibrary.get_project_directory())", 20000);
+    const m = _ueLogs(r).match(/(\/[\w\/.\-]+)/);
+    if (m) { const d = path.join(m[1].replace(/\/+$/, ""), "Content", "Python"); try { fs.mkdirSync(d, { recursive: true }); } catch (_e) {} _contentPyCache = d; return d; }
+  } catch (_e) {}
+  _contentPyCache = false; return false;
+}
+
+
+async function _deleteUeModules(mods) {
+  if (!mods || !mods.length) return;
+  const dir = await _contentPyDir(); if (!dir) return;
+  for (const pm of mods) { try { fs.unlinkSync(path.join(dir, pm + ".py")); } catch (_e) {} }
+}
+
+
+async function abEvalClearToBlankScene() {
+  const script = [
+    "import unreal",
+    "eas=unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
+    "KEEP_CLASSES={",
+    "  'WorldSettings','LevelScriptActor','WorldDataLayers','ExternalDataLayerAsset',",
+    "  'DataLayerManager','LevelBounds','Brush','PlayerStart','CameraActor',",
+    "  'DirectionalLight','SkyLight','SkyAtmosphere','ExponentialHeightFog',",
+    "  'PostProcessVolume','SphereReflectionCapture','NavMeshBoundsVolume',",
+    "  'AbstractNavData','NavigationData','RecastNavMesh'",
+    "}",
+    // NOTE: keep by CLASS (above) for all engine lighting/sky/fog/post-process — those classes are
+    // already in KEEP_CLASSES. Do NOT keep by the generic label prefixes 'Light'/'Fog'/'Sky'/'Camera'/'Atmo':
+    // builders legitimately name scene props 'Lighthouse…', 'Foggy_Stone…', 'Fog_Sheet…', 'Skyscraper…',
+    // and a label-prefix match would preserve them across every reset → they leak/accumulate into all later
+    // scenes. Only keep harness/engine-system labels that builder props never use.
+    "KEEP_LABEL_PREFIXES=('WorldSettings','Brush','Default','Player','Directional','PostProcess','SphereReflection','Nav','LevelBounds','Arena_Env_Sun','Arena_Env_SkyLight','Arena_Env_Atmosphere','Arena_Env_Fog')",
+    "deleted=[]",
+    "kept=[]",
+    "for a in list(eas.get_all_level_actors()):",
+    "    try:",
+    "        lbl=a.get_actor_label() or a.get_name()",
+    "        cls=a.get_class().get_name()",
+    "        if cls in KEEP_CLASSES or lbl.startswith(KEEP_LABEL_PREFIXES):",
+    "            kept.append(lbl)",
+    "            continue",
+    "        eas.destroy_actor(a)",
+    "        deleted.append(lbl)",
+    "    except Exception as e:",
+    "        print('AB_EVAL_RESET_DELETE_ERR '+str(e))",
+    "unreal.SystemLibrary.collect_garbage()",
+    "print('AB_EVAL_RESET_OK deleted='+str(len(deleted))+' kept='+str(len(kept)))",
+  ].join("\n");
+  const r = await ueExecScript(script, 120000);
+  const logs = _ueLogs(r);
+  return { ok: logs.includes("AB_EVAL_RESET_OK"), ue: r, logs };
+}
+
+
+
+app.post("/api/ab-eval/reset-scene", async (req, res) => {
+  const result = await abEvalClearToBlankScene();
+  if (typeof ctxManager.resetSession === "function") ctxManager.resetSession(STUDIO_SESSION);
+  else ctxManager.clearAllSpawned(STUDIO_SESSION);
+  if (!result.ok) return res.status(502).json({ ok: false, error: "UE blank-scene reset failed", logs: result.logs || "" });
+  logToFile("ab_eval", "blank-scene reset ok");
+  res.json({ ok: true, logs: result.logs || "" });
+});
+
+
+app.post("/api/demo/reset",(s,e)=>{try{delete require.cache[require.resolve("./chat-replay")]}catch(_){};const __dr=require("./chat-replay");__dr.reset();e.json({ok:true,reloaded:true,...__dr.status()})});
+
+
+app.get("/api/demo/status",(s,e)=>{const __dr=require("./chat-replay");e.json({demoMode:process.env.DEMO_MODE==="1",...__dr.status()})});
+
+
+app.post("/api/demo/stop",(s,e)=>{const __dr=require("./chat-replay");__dr.requestStop();e.json({ok:true})});
+
+
+app.post("/api/demo/360",(s,e)=>{const __dr=require("./chat-replay");return __dr.handle360(s,e,{UNREAL_HOST,UNREAL_PORT,logToFile})});
+
+
 app.all("/api/*",(s,e)=>{e.status(404).json({error:`Unknown API endpoint: ${s.method} ${s.path}`})});
 const FRONTEND_DIR=path.resolve(__dirname,"../dist");fs.existsSync(FRONTEND_DIR)&&(app.use(express.static(FRONTEND_DIR)),app.get("*",(s,e)=>{e.sendFile(path.join(FRONTEND_DIR,"index.html"))}),console.log("  Frontend served from:",FRONTEND_DIR)),app.listen(PORT,"0.0.0.0",()=>{console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557`),console.log("\u2551       SimWorld Studio Backend                      \u2551"),console.log("\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563"),console.log(`\u2551  Listening : http://0.0.0.0:${PORT}                  \u2551`),console.log(`\u2551  Claude    : ${CLAUDE_BIN}                            \u2551`),console.log("\u2551  MCP config: mcp.json (local stdio)               \u2551"),console.log(`\u2551  UE TCP    : ${UNREAL_HOST}:${UNREAL_PORT}                 \u2551`),console.log(`\u2551  Logs      : ${LOG_DIR}          \u2551`),console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
