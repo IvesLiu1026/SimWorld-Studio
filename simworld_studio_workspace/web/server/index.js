@@ -398,13 +398,19 @@ print('SWASSET_BEGIN' + __import__('json').dumps(result) + 'SWASSET_END')
   }
 }
 
+// Live UE asset scan via Python is gated behind LIVE_ASSET_SCAN_ENABLED.
+// On UE 5.8 (official MCP) auto-firing execute_python_script against the editor is
+// unsafe — it can destabilize the MCP server — so it is OFF by default and the static
+// asset catalog (_assetTree) is served instead. Set LIVE_ASSET_SCAN_ENABLED=1 to opt in.
+const LIVE_ASSET_SCAN_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.LIVE_ASSET_SCAN_ENABLED || ''));
 // Trigger scan once when UE is reachable — check every 5s until done
-const _assetScanInterval = setInterval(() => {
+const _assetScanInterval = LIVE_ASSET_SCAN_ENABLED ? setInterval(() => {
   if (_cachedUeConn && !_assetScanDone) {
     clearInterval(_assetScanInterval);
     setTimeout(_scanUeAssets, 2000); // 2s grace for UE Python to be ready
   }
-}, 5000);
+}, 5000) : null;
+if (!LIVE_ASSET_SCAN_ENABLED) log.system('info', 'Live UE asset scan disabled (set LIVE_ASSET_SCAN_ENABLED=1 to enable); serving static asset catalog.');
 
 // Auto-discover player-controlled agents via vget /objects
 // Patterns: actual agent pawns only — excludes cameras, controllers, HUDs, spectators
@@ -1338,6 +1344,7 @@ app.get('/api/asset-tree',(req,res) => res.json(_liveAssetTree || _assetTree));
 
 // Manual refresh — call after importing new assets into UE
 app.post('/api/asset-tree/refresh', async(req,res) => {
+  if (!LIVE_ASSET_SCAN_ENABLED) return res.status(403).json({ error:'live asset scan disabled (set LIVE_ASSET_SCAN_ENABLED=1)' });
   _assetScanDone = false;
   try { await _scanUeAssets(); res.json({ ok:true, scannedAt:_liveAssetTree?.scannedAt }); }
   catch(e) { res.status(503).json({ error:e.message }); }
