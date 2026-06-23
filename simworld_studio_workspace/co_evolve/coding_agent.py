@@ -39,6 +39,9 @@ better idea.
    accepted but logged.
 2. Base scene-content decisions (which objects to add/remove) on the
    ROLLING SR + failure patterns shown below.
+3. If a downstream tool needs Unreal Python/editor automation, generate
+   small focused batches and verify each batch before continuing. Never
+   produce one giant Python script for an entire scene update.
 {retry_feedback}
 
 ## EMBODIED AGENT STATUS

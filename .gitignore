@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 *.egg-info/
+*.bak
 node_modules/
 .DS_Store
 *.log
@@ -13,12 +14,14 @@ simworld_studio_workspace/tmp/
 simworld_studio_workspace/logs/
 simworld_studio_workspace/tasksets/
 simworld_studio_workspace/arena_data/
+simworld_studio_workspace/results/
 simworld_studio_workspace/experiments/*
 !simworld_studio_workspace/experiments/README.md
 !simworld_studio_workspace/experiments/env_diversity_ablation/
 simworld_studio_workspace/experiments/env_diversity_ablation/tasks/
 simworld_studio_workspace/experiments/env_diversity_ablation/conditions/
 simworld_studio_workspace/experiments/env_diversity_ablation/results/
+simworld_studio_workspace/experiments/env_diversity_ablation/valid_umaps/
 !simworld_studio_workspace/experiments/observation_modality_ablation/
 simworld_studio_workspace/experiments/observation_modality_ablation/tasks/
 simworld_studio_workspace/experiments/observation_modality_ablation/results/
@@ -33,7 +36,10 @@ simworld_studio_workspace/probe_stdout.txt
 simworld_studio_workspace/agent_memory.json
 simworld_studio_workspace/strategy_memory*.json
 simworld_studio_workspace/tasks/
+simworld_studio_workspace/web/test-results/
+simworld_studio_workspace/web/playwright-report/
 .venv/
+tmp/
 
 claw-code/
 wandb/
@@ -51,6 +57,14 @@ static_scene_eval_code.zip
 # local tool configs
 .codex/
 simworld_studio_workspace/.mcp.json
+simworld_studio_workspace/web/.runtime/
+
+# asset retrieval generated data/cache (do not commit)
+fastembed_cache/
+asset_db*/
+indexing_bkp_siddhant/
+*.snapshot
+*.dump
 
 !simworld_studio_workspace/web/public/SimCoder.png
 !simworld_studio_workspace/web/public/simworld-studio-logo.png

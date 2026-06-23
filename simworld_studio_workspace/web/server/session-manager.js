@@ -28,7 +28,13 @@ function uePortsForSlot(slotId) {
 }
 
 class SessionManager extends EventEmitter {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {object} [opts.slotPool] Optional SlotPool that actually starts/stops
+   *   UE per slot. If omitted, sessions still get assigned a slot id + ports
+   *   (legacy single-UE / dev mode), but no UE process is spawned.
+   */
+  constructor(opts = {}) {
     super();
     /** @type {Map<string, object>} token → record */
     this._sessions  = new Map();
@@ -36,6 +42,7 @@ class SessionManager extends EventEmitter {
     this._freeSlots = new Set(Array.from({ length: UE_POOL_SIZE }, (_, i) => i));
     /** @type {Array<{userId,resolve,reject,enqueuedAt}>} */
     this._queue     = [];
+    this._slotPool  = opts.slotPool || null;
     this._sweeper   = setInterval(() => this._sweep(), SWEEP_INTERVAL);
     if (this._sweeper.unref) this._sweeper.unref();
   }
@@ -48,28 +55,45 @@ class SessionManager extends EventEmitter {
   get queueLength()    { return this._queue.length; }
 
   /**
+   * Attach (or replace) the SlotPool that owns UE lifecycle. Designed to be
+   * called once at boot from a deploy-time shim (see deploy/aws/scripts/
+   * session-shim.js). Resizes the free-slot set if the pool size differs.
+   */
+  setSlotPool(pool) {
+    this._slotPool = pool;
+    if (pool && pool.size && pool.size !== this._freeSlots.size + this._sessions.size) {
+      // Pool size overrides UE_POOL_SIZE env var
+      this._freeSlots = new Set();
+      for (let i = 0; i < pool.size; i++) {
+        const inUse = [...this._sessions.values()].some(r => r.slotId === i);
+        if (!inUse) this._freeSlots.add(i);
+      }
+    }
+  }
+
+  /**
    * Acquire a session slot (returns existing if userId already has one).
    * @param {string} userId
    * @returns {Promise<object>} session record
    */
-  acquire(userId) {
+  async acquire(userId) {
     // Reuse existing session for same user
     for (const rec of this._sessions.values()) {
       if (rec.userId === userId) {
         rec.lastActivity = Date.now();
-        return Promise.resolve(rec);
+        return rec;
       }
     }
 
     if (this._freeSlots.size > 0) {
-      return Promise.resolve(this._assign(userId));
+      return this._assignAndStart(userId);
     }
 
     if (this._queue.length >= UE_MAX_QUEUE) {
       const err = new Error('Server at capacity. Please try again later.');
       err.code = 'POOL_FULL';
       err.queueLength = this._queue.length;
-      return Promise.reject(err);
+      throw err;
     }
 
     return new Promise((resolve, reject) => {
@@ -130,10 +154,44 @@ class SessionManager extends EventEmitter {
       acquiredAt:   now,
       lastActivity: now,
       uePorts:      uePortsForSlot(slotId),
+      mcpReady:     false,
     };
     this._sessions.set(rec.token, rec);
     this.emit('acquired', { token: rec.token, slotId, userId });
     return rec;
+  }
+
+  /**
+   * Assign a slot AND, if a SlotPool is wired up, start the UE process.
+   * Returns once MCP is reachable (or, in no-pool mode, immediately).
+   */
+  async _assignAndStart(userId) {
+    const rec = this._assign(userId);
+    if (!this._slotPool) {
+      rec.mcpReady = true;
+      return rec;
+    }
+    try {
+      const info = await this._slotPool.start(rec.slotId);
+      // Pool is authoritative for actual ports
+      rec.uePorts = {
+        mcpPort:    info.ports.mcp,
+        cirrusHttp: info.ports.cirrusHttp,
+        cirrusWs:   info.ports.cirrusWs,
+        cirrusSfu:  info.ports.cirrusSfu,
+        ucvPort:    info.ports.ucv,
+      };
+      rec.mcpReady = true;
+      this.emit('ready', { token: rec.token, slotId: rec.slotId });
+      return rec;
+    } catch (err) {
+      // Roll back the slot assignment so the user can retry / queue
+      this._sessions.delete(rec.token);
+      this._freeSlots.add(rec.slotId);
+      const e = new Error(`Failed to start UE slot ${rec.slotId}: ${err.message}`);
+      e.code = 'SLOT_START_FAILED';
+      throw e;
+    }
   }
 
   _evict(token, reason) {
@@ -142,11 +200,15 @@ class SessionManager extends EventEmitter {
     this._sessions.delete(token);
     this._freeSlots.add(rec.slotId);
     this.emit('released', { token, slotId: rec.slotId, reason });
+    // Stop the UE process for this slot (best-effort, fire-and-forget)
+    if (this._slotPool) {
+      this._slotPool.stop(rec.slotId).catch((e) => this.emit('error', e));
+    }
     // Drain wait queue
     while (this._queue.length > 0 && this._freeSlots.size > 0) {
       const waiter = this._queue.shift();
-      try { waiter.resolve(this._assign(waiter.userId)); }
-      catch (e) { waiter.reject(e); }
+      // _assignAndStart is async; resolve/reject the original promise
+      this._assignAndStart(waiter.userId).then(waiter.resolve, waiter.reject);
     }
   }
 

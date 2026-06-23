@@ -1,0 +1,92 @@
+# SimWorld Studio — containerized web stack (UE on host).
+#
+# Run from the repo root:
+#   docker compose -f deploy/aws/docker/docker-compose.yml up -d
+#
+# Prereqs on host:
+#   - UE 5.3.2 at /opt/ue-engine
+#   - Project skeleton at /opt/simworld-project
+#   - Content at /opt/simworld-content
+#   - Per-slot state dirs at /var/lib/simworld/slots (created by slot-launcher.sh)
+#   - simworld user exists (so per-slot files inherit correct ownership)
+
+services:
+  web:
+    build:
+      context: ../../..        # repo root
+      dockerfile: deploy/aws/docker/Dockerfile.web
+    image: simworld/web:latest
+    container_name: simworld-web
+    restart: unless-stopped
+
+    # Host networking so the container can:
+    #   1. Reach UE on 127.0.0.1:55559+ (MCP) and :9017+ (UCV)
+    #   2. Bind :3002 directly for nginx upstream
+    #   3. Be reached by Cirrus WebRTC peers without container NAT mangling
+    network_mode: host
+
+    # Mount everything UE-related read-write so spawning slot-launcher.sh
+    # (which writes Saved/Intermediate) works. The script itself is bind-
+    # mounted into /deploy/scripts during image build (see Dockerfile).
+    volumes:
+      - /opt/ue-engine:/opt/ue-engine:ro
+      - /opt/simworld-project:/opt/simworld-project:ro
+      - /opt/simworld-content:/opt/simworld-content:ro
+      - /var/lib/simworld:/var/lib/simworld
+      # Optional: persist logs to host
+      - ../../../simworld_studio_workspace/logs:/app/server/logs
+
+    # IMPORTANT: the container needs to be able to spawn UE on the HOST, not
+    # in itself. We do that by giving it access to the host's process
+    # namespace and exec'ing /opt/ue-engine/Engine/Binaries/Linux/UnrealEditor
+    # directly — but the Vulkan/NVIDIA stack requires the host driver, which
+    # is NOT visible to the container by default.
+    #
+    # Two options:
+    #   A) Don't spawn UE from the container — run slot-launcher.sh on the
+    #      HOST, supervised by the host's systemd. The container's slot-pool
+    #      sends start/stop over a small unix socket. (cleaner but more code)
+    #   B) Give the container access to the NVIDIA stack via the NVIDIA
+    #      Container Toolkit's runtime. Requires `--gpus all` and the host
+    #      having `nvidia-container-toolkit` installed.
+    #
+    # For this compose file we go with (B) for simplicity. If your host
+    # doesn't have nvidia-container-toolkit, comment out the deploy block
+    # below and use option (A) via the slot-pool-host-bridge service further
+    # down (not yet shipped — see deploy/aws/README.md "Docker (optional)").
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, video, utility]
+
+    environment:
+      - UE_POOL_ENABLED=1
+      - UE_POOL_SIZE=${UE_POOL_SIZE:-4}
+      - UE_STARTUP_TIMEOUT_MS=${UE_STARTUP_TIMEOUT_MS:-180000}
+      - SESSION_TTL_MS=${SESSION_TTL_MS:-1800000}
+
+  # ── Reverse proxy ──────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: simworld-nginx
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ../templates/nginx.conf:/etc/nginx/conf.d/simworld.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /etc/nginx/htpasswd:/etc/nginx/htpasswd:ro
+    depends_on:
+      - web
+
+  # ── TURN server for WebRTC ─────────────────────────────────────────────────
+  coturn:
+    image: coturn/coturn:4.6
+    container_name: simworld-coturn
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ../templates/coturn.conf:/etc/turnserver.conf:ro
+    command: ["-c", "/etc/turnserver.conf"]

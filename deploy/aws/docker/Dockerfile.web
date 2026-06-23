@@ -1,0 +1,76 @@
+# Containerized web stack for SimWorld Studio (UE stays on host).
+#
+# Why this layout (and not "UE in container too"):
+#   - UE binary is 58 GB → image bloat
+#   - Needs NVIDIA Container Toolkit runtime
+#   - Pixel Streaming (WebRTC/UDP) crosses container boundary cleanly only
+#     with --net=host, defeating most of containerization's value
+#   - Each UE slot would need `docker run` with --gpus device=N — works but
+#     adds latency to the spawn path
+#
+# What this image runs:
+#   - The Node web server (port 3002)
+#   - The slot-pool / session-shim
+# What stays outside:
+#   - The slot-launcher.sh (calls host UE binary at /opt/ue-engine/...)
+#   - UE itself
+#
+# Network: `--network host` so the container's net.Socket.connect can reach
+# 127.0.0.1:55559..55565 (MCP) and 127.0.0.1:9017+ (UCV) on the host where UE
+# runs. Without host networking, we'd need a TCP relay per port.
+
+FROM node:18-bookworm-slim
+
+# Tools the shim + launcher invocation need
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        bash netcat-openbsd ca-certificates curl tini && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI inside the container so the spawned subprocess
+# doesn't need a host-side binary.
+RUN npm install -g @anthropic-ai/claude-code@latest
+
+WORKDIR /app
+
+# Install server deps in their own layer for cache friendliness
+COPY simworld_studio_workspace/web/server/package*.json ./server/
+RUN cd server && npm ci --omit=dev
+
+# Then the rest of the source
+COPY simworld_studio_workspace/web/server         ./server
+COPY simworld_studio_workspace/web/dist           ./dist
+COPY simworld_studio_workspace/web/package.json   ./web-package.json
+COPY deploy/aws/scripts                           /deploy/scripts
+
+# Default config — overridden by docker-compose / runtime envs.
+ENV NODE_ENV=production \
+    PORT=3002 \
+    UE_POOL_ENABLED=1 \
+    UE_POOL_SIZE=4 \
+    UE_BASE_MCP_PORT=55559 \
+    UE_BASE_CIRRUS_HTTP=8585 \
+    UE_BASE_CIRRUS_WS=8586 \
+    UE_BASE_CIRRUS_SFU=8989 \
+    UE_BASE_UCV=9017 \
+    UE_PORT_STRIDE=2 \
+    UE_ENGINE_DIR=/opt/ue-engine \
+    UE_PROJECT_DIR_SHARED=/opt/simworld-project \
+    SLOTS_ROOT=/var/lib/simworld/slots \
+    HOME=/var/lib/simworld/claude-home \
+    NODE_OPTIONS=--require=/deploy/scripts/session-shim.js
+
+# Run as a non-root user (matches host simworld user UID/GID if you set them)
+# Override at runtime: `docker run --user $(id -u simworld):$(id -g simworld)`
+RUN groupadd -r simworld && useradd -r -g simworld simworld && \
+    mkdir -p /var/lib/simworld/claude-home && \
+    chown -R simworld:simworld /app /var/lib/simworld /deploy
+
+USER simworld
+
+EXPOSE 3002
+
+# tini reaps zombies (important: the server spawns Claude CLI subprocesses
+# per chat turn, and they can be SIGKILLed mid-session)
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "server/index.js"]

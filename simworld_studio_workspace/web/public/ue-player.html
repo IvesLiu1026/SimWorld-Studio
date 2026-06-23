@@ -13,11 +13,16 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 #playerUI,#videoElementParent{
   position:absolute!important;inset:0!important;
   width:100%!important;height:100%!important;
+  min-width:0!important;min-height:0!important;
+  max-width:100vw!important;max-height:100vh!important;
+  overflow:hidden!important;contain:size layout paint;
   background:#000!important;margin:0!important;padding:0!important;
 }
 #streamingVideo{
+  position:absolute!important;inset:0!important;
   width:100%!important;height:100%!important;
   object-fit:contain!important;display:block!important;
+  max-width:none!important;max-height:none!important;
 }
 
 /* Hide ALL Cirrus UI chrome */
@@ -30,6 +35,19 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 
 /* Keep click-to-start overlays in DOM (dispatchEvent needs them) but invisible */
 #connectOverlay,#playOverlay{opacity:0!important;pointer-events:none!important}
+
+/* Pixel Streaming notifications/progress UI must not participate in layout.
+   Some Cirrus builds append bottom-right toasts or loading bars near the video
+   container; keeping them fixed prevents MatchViewportRes from recalculating
+   the stream size when those transient nodes appear. */
+#connectOverlay,#playOverlay,#afkOverlay,#disconnectOverlay,#messageOverlay,
+#freezeFrameOverlay,#qualityStatus,#qualityText,
+[class*="toast"],[class*="Toast"],[class*="notification"],[class*="Notification"],
+[class*="message"],[class*="Message"],[class*="progress"],[class*="Progress"]{
+  position:fixed!important;
+  max-width:min(360px,calc(100vw - 24px))!important;
+  max-height:calc(100vh - 24px)!important;
+}
 
 /* Status overlay */
 #sw-status-overlay{
@@ -136,13 +154,33 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 <div id="sw-status-overlay">
   <div id="sw-spinner"></div>
   <div id="sw-status-text">Connecting to UE Stream…</div>
-  <div id="sw-status-sub" id="sw-status-sub">Establishing WebRTC connection via Cirrus.</div>
+  <div id="sw-status-sub">Establishing WebRTC connection via Cirrus.</div>
 </div>
 
 <script>
 var _overlay   = null;
 var _hidden    = false;
 var _f11Sent   = false;
+var _lastViewportKey = "";
+var _resizeTimer = null;
+
+function swViewportKey() {
+  var vv = window.visualViewport;
+  var w = Math.round((vv && vv.width) || window.innerWidth || document.documentElement.clientWidth || 0);
+  var h = Math.round((vv && vv.height) || window.innerHeight || document.documentElement.clientHeight || 0);
+  return w && h ? (w + "x" + h) : "";
+}
+
+function swDispatchViewportResize(force) {
+  var key = swViewportKey();
+  if (!key) return;
+  if (!force && key === _lastViewportKey) return;
+  _lastViewportKey = key;
+  if (_resizeTimer) clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(function() {
+    window.dispatchEvent(new Event('resize'));
+  }, 80);
+}
 
 // Auto-enter UE editor Immersive mode (F11) for first-time viewers by injecting the F11
 // key through the same path a manual press uses: the pixel-streaming lib forwards keyboard
@@ -238,11 +276,18 @@ window.addEventListener('load', function() {
     t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
   }, 1500);
 
-  // ResizeObserver: keep stream resolution matched to container
+  // Keep stream resolution matched to the real iframe viewport only.
+  // Do not dispatch resize for Pixel Streaming toasts/progress overlays; those
+  // DOM mutations used to make MatchViewportRes renegotiate and visually jitter.
   setTimeout(function() {
-    var c = document.getElementById('videoElementParent');
-    if (c && window.ResizeObserver)
-      new ResizeObserver(function() { window.dispatchEvent(new Event('resize')); }).observe(c);
+    swDispatchViewportResize(true);
+    window.addEventListener('resize', function() { swDispatchViewportResize(false); });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', function() { swDispatchViewportResize(false); });
+    }
+    if (window.ResizeObserver) {
+      new ResizeObserver(function() { swDispatchViewportResize(false); }).observe(document.documentElement);
+    }
   }, 2000);
 
   // Start watching for the video element as soon as load fires

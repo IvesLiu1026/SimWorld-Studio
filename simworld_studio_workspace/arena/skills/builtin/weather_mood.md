@@ -17,6 +17,8 @@ The `setup_environment` tool creates the base lighting setup: SkyAtmosphere,
 DirectionalLight (sun), SkyLight, ExponentialHeightFog, and a ground plane.
 Fine-tune with `execute_python_script`.
 
+Keep lighting Python scripts single-purpose. Do not combine environment tuning with scene construction; use small `execute_python_script` batches with `[DONE]` / `[ERROR]` markers when the edit grows beyond a single lighting operation.
+
 ## Basic Setup
 ```
 Tool: setup_environment

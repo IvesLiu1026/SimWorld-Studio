@@ -1,0 +1,20 @@
+[Unit]
+Description=One-shot — download SimWorld Content from HuggingFace
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/simworld-content/.downloaded
+
+[Service]
+Type=oneshot
+User=simworld
+Group=simworld
+ExecStart=/opt/simworld-studio/deploy/aws/scripts/download-content.sh
+# 15 minute timeout for the 100+ GB download
+TimeoutStartSec=900
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=simworld-content-init
+
+[Install]
+WantedBy=multi-user.target

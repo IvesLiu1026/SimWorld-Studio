@@ -272,8 +272,19 @@ simworld-studio start \
 - **Pluggable backends** — Claude Code, Codex, OpenCode, or Gemini CLI, each with a selectable model, chosen from the top-left of the UI (see [Step 1 — Set Up a Coding Agent](#step-1--set-up-a-coding-agent))
 - **125 buildings** (BP_Building_01–127), 6 trees, vehicles, street furniture, static meshes
 - **17 marketplace packs** discoverable via `list_assets()` (allow-AI licensed)
+- **Asset retrieval pipeline** — semantic retrieval over the full asset library injects a setting-appropriate palette into the build and exposes a `search_assets` tool for on-demand lookups (default `hybrid` mode); see [Asset Retrieval & Scene Generation](docs/asset-retrieval/README.md)
 - Auto session-suffix on actor names prevents cross-map name collision crashes
 - `verify_scene` tool: the agent evaluates a screenshot and returns PASS/NEEDS_IMPROVEMENT/FAIL
+
+### 🔁 Build-Critic Loop & Asset Retrieval
+- **Build-critic loop**: an iterative builder → critic → refine loop (text or multi-view *visual* critic) with a rolling intent summary, streaming `round_start` / `critic_verdict` / `loop_done` cards to the chat. Toggle from the chat status bar (**Loop: off → text → visual**) or `POST /api/scene-loop {"mode":"text_loop"}`. **Default off** — vanilla single-shot generation is unchanged.
+- **Asset retrieval**: the `search_assets(query, category, k)` MCP tool runs semantic search over the full ~16k-asset library (Qdrant + Postgres + embedding service) and returns real spawn paths + dimensions ranked by relevance, so the agent places setting-appropriate real assets. Indexing pipeline + DB setup live under [`tools/`](tools/) and [`docs/asset-retrieval/`](docs/asset-retrieval/).
+
+### 🛡️ Robustness (server-side traffic shaping)
+- **UE-MCP broker**: every session funnels through one global serial queue at UE (concurrency=1, bounded queue + `429`/Retry-After backpressure, token-bucket rate limit, dedicated `execute_python_script` slow lane) so request bursts can't overload/crash UE. Live status at `/api/internal/ue/status`.
+- **Opt-in UE auto-restart**: `UE_AUTORESTART=1` restarts a crashed UE editor in place instead of tearing the instance down — strictly bounded (max N restarts per window + cooldown) so a crash loop can't run away. Default off.
+- **UCV kill-switch**: `DISABLE_UCV_BROKER=1` makes the UnrealCV (port 9000) broker a no-op if leaking UCV connections wedge UE's game thread (scene-gen uses MCP `take_screenshot`, not UCV).
+- **PixelStreaming throttle**: per-IP connection debounce (`PS_CONN_MIN_GAP_MS`, default 200ms) + single-flight `ControlPixelStreaming` to absorb reconnect storms.
 
 ### 👁️ Live Viewport
 - Pixel Streaming via Cirrus signalling server — full UE viewport in browser
@@ -341,6 +352,7 @@ The UnrealCV plugin has been extended with:
 | Web Server (backend) | [`web/server/README.md`](simworld_studio_workspace/web/server/README.md) |
 | Frontend (React) | [`web/src/README.md`](simworld_studio_workspace/web/src/README.md) |
 | Web (full stack) | [`web/README.md`](simworld_studio_workspace/web/README.md) |
+| Asset Retrieval & Scene Gen | [`docs/asset-retrieval/README.md`](docs/asset-retrieval/README.md) |
 | Gym / Navigation | [`gym_env/README.md`](simworld_studio_workspace/gym_env/README.md) |
 | Co-Evolve | [`co_evolve/README.md`](simworld_studio_workspace/co_evolve/README.md) |
 

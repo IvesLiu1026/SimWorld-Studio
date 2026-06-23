@@ -103,7 +103,16 @@ export default function PixelStreamPlayer({ playerUrl }) {
 
   return (
     <div
-      style={{ width: "100%", height: "100%", position: "relative", background: "#0b1220" }}
+      style={{
+        width: "100%",
+        height: "100%",
+        minWidth: 0,
+        minHeight: 0,
+        position: "relative",
+        overflow: "hidden",
+        contain: "size layout paint",
+        background: "var(--viewport, #0b1220)",
+      }}
       onClick={() => iframeRef.current?.focus()}
       onMouseEnter={() => iframeRef.current?.focus()}
     >
@@ -114,7 +123,7 @@ export default function PixelStreamPlayer({ playerUrl }) {
           onLoad={() => {
             if (status === "idle" || status === "disconnected") setStatus("connecting");
           }}
-          style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none", display: "block" }}
           allow="pointer-lock *; fullscreen *; autoplay *; clipboard-read *; clipboard-write *"
           allowFullScreen
           tabIndex={0}
@@ -127,10 +136,10 @@ export default function PixelStreamPlayer({ playerUrl }) {
         <div style={{
           position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          background: "rgba(11,18,32,0.85)", gap: 10,
+          background: "var(--viewport, #0b1220)", gap: 10,
         }}>
-          <div style={{ fontSize: 28, opacity: 0.3 }}>📡</div>
-          <div style={{ color: "#64748b", fontSize: 12 }}>No stream URL — is Cirrus running?</div>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 0, opacity: 0.45 }}>SIGNAL</div>
+          <div style={{ color: "var(--ink-3)", fontSize: 12 }}>No stream URL — is Cirrus running?</div>
         </div>
       )}
     </div>

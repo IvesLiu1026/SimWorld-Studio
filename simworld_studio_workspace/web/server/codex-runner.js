@@ -57,6 +57,10 @@ function buildMcpOverrideArgs(mcpConfigPath, unrealPort, logToFile) {
       if (Array.isArray(cfg.args)) out.push("-c", `mcp_servers.${name}.args=${tomlVal(cfg.args)}`);
       const env = { ...(cfg.env || {}) };
       if (unrealPort) env.UNREAL_PORT = String(unrealPort);
+      // Pass through provider/runtime env the scene-loop + verify_scene(codex) path needs.
+      for (const k of ['LLM_PROVIDER','CODEX_MODEL','CODEX_BIN','CODEX_HOME','HOME','PORT','CRITIC_TIMEOUT_MS']) {
+        if (process.env[k] && env[k] == null) env[k] = String(process.env[k]);
+      }
       for (const [k, val] of Object.entries(env)) {
         out.push("-c", `mcp_servers.${name}.env.${k}=${tomlVal(val)}`);
       }
@@ -108,16 +112,18 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     "exec",
     "--json",
     "--skip-git-repo-check",
-    // SECURITY: scene-gen agent. Sandbox writes to the throwaway workspace cwd only, so it
-    // cannot modify Studio's source. (Codex's sandbox can't block reads, so it may still read
-    // files — but it can't write/modify them. It should use the simworld MCP tools.)
-    "-s", "workspace-write",
-    "-c", 'approval_policy="never"',
+    // Bypass codex's internal sandbox + approval flow entirely. REQUIRED for MCP: codex 0.133
+    // raises an approval *elicitation* for every MCP tool call (ToolCallMcpElicitation feature),
+    // and in headless `exec` mode there is no responder, so codex auto-cancels it with
+    // "user cancelled MCP tool call" — before the server ever runs. `approval_policy="never"`
+    // does NOT suppress this (it only governs shell-command sandbox escalation), and the
+    // `features.*` toggles are ignored. Only this flag makes codex auto-approve MCP calls.
+    //
+    // SECURITY: this is safe because we're "externally sandboxed" exactly as the flag intends —
+    // agent-sandbox.js wraps this process in bwrap with the repo bound READ-ONLY, so the agent
+    // still cannot modify Studio's source. The OS sandbox is the real guardrail, not codex's.
+    "--dangerously-bypass-approvals-and-sandbox",
     "-C", codexCwd,
-    // Allow writes to the UE project dir (incl Saved/) on top of the throwaway cwd, so the
-    // agent can read & write the project's logs/assets. Repo source is unaffected (not a
-    // writable root) and stays protected by the OS sandbox (agent-sandbox.js).
-    ...(process.env.UE_PROJECT_PATH ? ["-c", `sandbox_workspace_write.writable_roots=["${process.env.UE_PROJECT_PATH}"]`] : []),
     ...buildMcpOverrideArgs(MCP_CONFIG, UNREAL_PORT, logToFile),
   ];
   if (model) args.push("-m", model);
