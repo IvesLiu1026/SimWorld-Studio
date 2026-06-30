@@ -146,6 +146,13 @@ function loadDB() {
       const fp = path.join(ASSET_DB_DIR, "catalog", cat.id, a.asset_id + ".json");
       let rec; try { rec = JSON.parse(fs.readFileSync(fp, "utf-8")); } catch { continue; }
       const sem = rec.semantic || {}, geo = rec.geometry || {}, tech = rec.technical || {};
+      // Geometry for the IR solver (collision boxes + on-ground z). Footprint/radius fall
+      // back to dims-derived values for older catalogs that only stored dimensions_m.
+      const _dims = geo.dimensions_m || null;
+      const _fp = geo.footprint_m || (_dims ? { width: _dims.width, depth: _dims.depth } : null);
+      const _br = (typeof geo.bounding_radius_m === "number" && geo.bounding_radius_m > 0)
+        ? geo.bounding_radius_m
+        : (_fp ? Math.sqrt(Math.pow((_fp.width || 0) / 2, 2) + Math.pow((_fp.depth || 0) / 2, 2)) : null);
       const compact = {
         id: rec.identity.asset_id,
         name: rec.identity.name,
@@ -155,7 +162,11 @@ function loadDB() {
         tags: (sem.tags || []).slice(0, 8),
         sceneTypes: (sem.scene_types || []).slice(0, 5),
         setting: sem.setting || "generic",
-        dims: geo.dimensions_m || null,
+        dims: _dims,
+        footprint: _fp,
+        boundingRadius: _br,
+        pivot: geo.pivot || "base_center",
+        upAxis: geo.up_axis || "Z",
         path: tech.unreal_asset_path || "",
         assetType: tech.asset_type || "",
         spawnTool: _spawnTool(rec),
@@ -261,6 +272,29 @@ async function aggregate(scene, picked, db, opts) {
   return { rationale: out.scene_rationale || "", final: ids.map(id => ({ id })) };
 }
 
+// Persist the retrieved palette (assets the pipeline selected for this scene) so the A/B harness
+// can copy it into each run dir for later analysis. Keyed by scene, same scheme as the IR artifacts.
+function _persistRetrieval(scene, result) {
+  try {
+    const dir = process.env.RETRIEVAL_OUTPUT_DIR || path.join(path.resolve(__dirname, "../.."), "tmp", "retrieval");
+    fs.mkdirSync(dir, { recursive: true });
+    const slug = String(scene || "scene").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "scene";
+    const hash = require("crypto").createHash("sha1").update(String(scene || "")).digest("hex").slice(0, 8);
+    const file = path.join(dir, slug + "-" + hash + ".json");
+    const assets = (result && result.assets) || [];
+    // NB: deliberately omit result.trace — it can hold circular/huge refs that make
+    // JSON.stringify throw (which the old catch swallowed → no file was ever written).
+    const payload = { scene, count: assets.length, rationale: (result && result.rationale) || null, assets, final: (result && result.final) || null };
+    let json;
+    try { json = JSON.stringify(payload, null, 2); }
+    catch (_e1) {
+      const slim = assets.map(a => (a && typeof a === "object") ? { path: a.path || a.assetPath || a.id, name: a.name, category: a.category } : a);
+      json = JSON.stringify({ scene, count: slim.length, assets: slim, final: (result && result.final) || null, _note: "slim (full serialize failed)" }, null, 2);
+    }
+    fs.writeFileSync(file, json);
+  } catch (_e) {}
+}
+
 // ── orchestrator ─────────────────────────────────────────────────────────────
 async function retrieve(scene, opts) {
   const o = Object.assign({ reasoningEffort: process.env.ASSET_RETRIEVAL_REASONING_EFFORT || "medium", telemetryComponent: "retrieval" }, opts || {});
@@ -356,6 +390,7 @@ async function retrieve(scene, opts) {
   log(`final: ${final.length} -> ${final.map(f => f.id).join(",")}`);
   const assets = final.map(f => ({ ...db.assets.get(f.id), role: f.role }));
   const result = { final, rationale, trace, assets };
+  _persistRetrieval(scene, result);
   _retrievalCache.set(cacheKey, result);
   return result;
 }

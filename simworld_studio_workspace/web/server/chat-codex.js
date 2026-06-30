@@ -46,6 +46,8 @@ function buildPrompt(deps, body, options) {
   }
   const assetPromptBlock = (options.assetPromptBlock || "").trim();
   if (assetPromptBlock) systemPrompt += "\n\n" + assetPromptBlock;
+  const irPromptBlock = (options.irPromptBlock || "").trim();
+  if (irPromptBlock) systemPrompt += "\n\n" + irPromptBlock;
   return `${systemPrompt}\n\n## TASK\n${body.message}`;
 }
 
@@ -370,10 +372,35 @@ async function handleCodexChat(req, res, deps) {
     return;
   }
 
+  // ── Intermediate-Representation (IR) stage: plan → solve → ASCII top-down map, injected
+  //    as a build plan AFTER the asset palette. Toggle SCENE_IR (env) or body.sceneIr/irMode;
+  //    default OFF → this block is skipped and the prompt is byte-identical to before. The
+  //    retrieve() inside buildIRBlock is a cache hit on the palette retrieval above (no extra cost
+  //    beyond the planner call). Non-fatal: any failure logs and builds without the plan. ──
+  let irPromptBlock = "";
+  try {
+    const sceneIR = require("./scene-ir");
+    if (!deps.MOCK_MODE && sceneIR.resolveIRMode(body) === "on") {
+      emit("ir", { phase: "start" });
+      const irModel = require("./model-config").resolveModel(body);
+      irPromptBlock = await sceneIR.buildIRBlock(message, {
+        model: irModel, provider: "codex", runner: "codex",
+        irSolver: body.irSolver, irRepair: body.irRepair,
+        log: (x) => deps.logToFile && deps.logToFile("ir", x),
+      });
+      emit("ir", { phase: "done", chars: irPromptBlock ? irPromptBlock.length : 0 });
+      if (deps.logToFile) deps.logToFile("ir", `injected=${irPromptBlock ? irPromptBlock.length : 0}chars runner=codex`);
+    }
+  } catch (err) {
+    if (deps.logToFile) deps.logToFile("ir", "ERR " + ((err && err.message) || err));
+    emit("ir", { phase: "error", message: (err && err.message) || String(err) });
+  }
+
   const options = {
     arenaSystemPrompt: arenaPrompt,
     sceneContext,
     assetPromptBlock,
+    irPromptBlock,
     studioSession: deps.studioSession,
     logToFile: deps.logToFile,
     mcpServerJs: deps.mcpServerJs || path.resolve(__dirname, "mcp-server.js"),
