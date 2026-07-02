@@ -141,6 +141,31 @@ function oneshotText(prompt, opts) {
 }
 
 // Extract a JSON value from model text (tolerates prose / ``` fences / leading commentary).
+// Best-effort repair of a TRUNCATED JSON value (model hit its output-token cap mid-object): close a
+// dangling string, drop the trailing incomplete fragment, and close open braces/brackets in order.
+// Only ever used after normal parsing has already failed, so any success is strictly a win.
+function _closeTruncatedJSON(body) {
+  const start = body.search(/[{[]/);
+  if (start < 0) return null;
+  let s = body.slice(start);
+  const stack = []; let inStr = false, esc = false;
+  for (let k = 0; k < s.length; k++) {
+    const c = s[k];
+    if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true;
+    else if (c === "{") stack.push("}");
+    else if (c === "[") stack.push("]");
+    else if (c === "}" || c === "]") stack.pop();
+  }
+  if (inStr) s = s.replace(/"[^"]*$/, "");                       // drop a dangling unterminated string
+  s = s.replace(/[,\s]*$/, "");                                  // trailing comma/space
+  s = s.replace(/,?\s*"[^"]*"\s*:\s*$/, "");                     // dangling "key": whose value was truncated
+  s = s.replace(/,\s*"[^"]*"\s*$/, "");                          // dangling ,"key" truncated before its colon
+  s = s.replace(/[,\s]*$/, "");
+  for (let k = stack.length - 1; k >= 0; k--) s += stack[k];
+  return s;
+}
+
 function extractJSON(raw) {
   const t = String(raw || "").trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -150,6 +175,8 @@ function extractJSON(raw) {
     const i = body.indexOf(open), j = body.lastIndexOf(close);
     if (i >= 0 && j > i) { try { return JSON.parse(body.slice(i, j + 1)); } catch {} }
   }
+  const repaired = _closeTruncatedJSON(body);                    // truncation fallback
+  if (repaired) { try { return JSON.parse(repaired); } catch {} }
   throw new Error("no JSON found in model output: " + body.slice(0, 200));
 }
 

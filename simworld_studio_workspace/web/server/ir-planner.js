@@ -236,34 +236,50 @@ async function planSceneCot(scene, assets, opts) {
 function buildLayoutRevisePrompt(scene, graph, critique, assets) {
   const issues = (critique.issues || []).map(x => "- " + x).join("\n") || "(none)";
   const sugg = (critique.suggestions || []).map(x => "- " + x).join("\n") || "(none)";
+  const anchorNames = Object.keys((graph && graph.anchors) || {});
   return [
-    "You are REVISING a 3D scene LAYOUT PLAN (a JSON relational graph). A critic looked at a TOP-DOWN",
-    "RENDER of your solved plan and flagged LAYOUT problems. Revise the plan to fix them: ADD objects/",
-    "patterns to fill sparse/empty areas, regroup related items into tighter functional clusters,",
-    "strengthen the focal structure, and balance density across the site. Keep it coherent and",
-    "scene-appropriate. Do NOT worry about small overlaps — a deterministic solver fixes collisions.",
+    "You are IMPROVING a 3D scene LAYOUT PLAN. A critic looked at a TOP-DOWN RENDER of the current",
+    "solved plan and flagged LAYOUT problems (emptiness, weak grouping/focal, imbalance). Your job:",
+    "output ADDITIONAL objects and patterns to ADD to the plan that fix these — fill sparse/empty areas,",
+    "reinforce functional clusters, strengthen the focal structure, balance density. Collisions are NOT",
+    "your concern (a deterministic solver handles them).",
     "",
     "CRITIC ISSUES:", issues,
     "CRITIC SUGGESTIONS:", sugg,
     "",
     "SCENE:", scene, "",
-    "CURRENT PLAN (revise and return the FULL updated graph — same anchors/objects/patterns/constraints schema):",
+    "EXISTING PLAN (read-only context — do NOT repeat or restate these items):",
     JSON.stringify(graph),
     "",
     "ASSET PALETTE (use ONLY these exact asset_id values):",
     _assetLines(assets, true),
     "",
-    "Output ONLY the revised JSON layout graph. No prose, no markdown fences.",
+    "You may place items relative to EXISTING anchors by name (" + (anchorNames.slice(0, 12).join(", ") || "none") + ")",
+    "or define new anchors. Output ONLY the ADDITIONS as a compact JSON object of this shape:",
+    '{"anchors": {"name":[x_m,y_m], ...}, "objects": [ ...new objects... ], "patterns": [ ...new patterns... ]}',
+    "Include ONLY the new items needed to fix the issues (this keeps the output small). Objects/patterns use",
+    "the SAME schema as the main plan. No prose, no markdown fences, no repetition of existing items.",
   ].join("\n");
 }
 
+// Additive revise: the model returns ONLY new items to ADD (small output → no truncation of the full,
+// densified graph, which is what was silently failing the revise). We merge them into the base graph.
 async function revisePlanForLayout(scene, graph, critique, assets, opts) {
   const o = opts || {};
   const prompt = buildLayoutRevisePrompt(scene, graph, critique || {}, assets || []);
   const raw = await oneshotJSON(prompt, Object.assign({ telemetryComponent: "ir_plan_revise" }, o));
+  const addObjs = Array.isArray(raw && raw.objects) ? raw.objects : [];
+  const addPats = Array.isArray(raw && raw.patterns) ? raw.patterns : [];
+  const merged = {
+    scene_name: graph.scene_name,
+    anchors: Object.assign({}, graph.anchors || {}, (raw && raw.anchors) || {}),
+    objects: (graph.objects || []).concat(addObjs),
+    patterns: (graph.patterns || []).concat(addPats),
+    constraints: graph.constraints || [],
+  };
   const assetIndex = new Map((assets || []).map(a => [a.id, a]));
-  const { graph: g2, report } = normalizeGraph(raw, assetIndex);
-  return { graph: g2, report, raw };
+  const { graph: g2, report } = normalizeGraph(merged, assetIndex);
+  return { graph: g2, report, raw, added: { objects: addObjs.length, patterns: addPats.length } };
 }
 
 module.exports = { planScene, planSceneCot, repairGraph, revisePlanForLayout, normalizeGraph, buildPlannerPrompt, buildDesignBriefPrompt, buildRepairPrompt };
