@@ -474,11 +474,80 @@ function solveStructured(graph, assetIndex, opts) {
   return { placed: _emit(placedList, positions, { yawSnapDeg, organicJitterM }), report };
 }
 
+// ── GENTLE solver ─────────────────────────────────────────────────────────────
+// Intent-preserving: trust the planner's coordinates and fix only genuine LOCAL
+// overlaps. Structural objects move as RIGID groups, capped near their planned spot
+// (IR_GENTLE_GROUP_BUDGET_M, default 3 m); only loose clutter floats freely
+// (IR_GENTLE_CLUTTER_BUDGET_M, default 12 m). Residual overlaps within the cap are
+// ACCEPTED — the builder/physics settle minor contacts. Unlike solveStructured, there is
+// NO global group-separation / anchor-pull / target clamp, so the planner's composition
+// (perimeter at the edges, focal object centered, zones in place) is preserved.
+function solveGentle(graph, assetIndex, opts) {
+  const o = opts || {};
+  const { placedList, positions, report, constraints, halfM } = _layout(graph, assetIndex, o);
+  report.solver = "gentle";
+
+  const wantNoOverlap = o.noOverlap !== false && !constraints.includes("allow_overlap");
+  if (wantNoOverlap) {
+    const PAD = Math.max(0, Number(process.env.IR_STRUCT_PAD_M || 0.3));
+    const GROUP_BUDGET = Math.max(0, _num(o.groupBudgetM, Number(process.env.IR_GENTLE_GROUP_BUDGET_M || 3)));
+    const CLUT_BUDGET = Math.max(0, _num(o.clutterBudgetM, Number(process.env.IR_GENTLE_CLUTTER_BUDGET_M || 12)));
+    const ITERS = Math.max(1, Number(process.env.IR_GENTLE_ITERS || 120));
+    const movable = placedList.filter(p => !_isGround(p.geom));
+    const isClutter = (p) => !p._group && p.geom.radius < CLUTTER_R;
+    const clutter = movable.filter(isClutter);
+    const structural = movable.filter(p => !isClutter(p));
+
+    // structural groups: pattern members share _group; standalone bigs are singletons
+    const gmap = new Map();
+    for (const p of structural) { const g = p._group || ("__" + p.obj.id); if (!gmap.has(g)) gmap.set(g, []); gmap.get(g).push(p); }
+    const groups = [...gmap.values()];
+    const cent = (m) => { let x = 0, y = 0; for (const p of m) { x += p.x; y += p.y; } return { x: x / m.length, y: y / m.length }; };
+    const ghome = groups.map(cent);
+    const chome = new Map(clutter.map(p => [p.obj.id, { x: p.x, y: p.y }]));
+
+    for (let it = 0; it < ITERS; it++) {
+      let moved = 0;
+      // rigid group vs group: small damped nudges (no big shoves)
+      for (let i = 0; i < groups.length; i++) for (let j = i + 1; j < groups.length; j++) {
+        const A = groups[i], B = groups[j]; let pen = 0;
+        for (const a of A) for (const b of B) { const p = a.geom.radius + b.geom.radius + PAD - Math.hypot(b.x - a.x, b.y - a.y); if (p > pen) pen = p; }
+        if (pen <= 0) continue;
+        const cA = cent(A), cB = cent(B); let nx = cB.x - cA.x, ny = cB.y - cA.y, nl = Math.hypot(nx, ny);
+        if (nl < 1e-6) { nx = (i % 2 ? 1 : -1); ny = (j % 2 ? 1 : -1); nl = Math.hypot(nx, ny); }
+        nx /= nl; ny /= nl; const step = Math.min(pen, 1.0) * 0.25;
+        for (const m of A) { m.x -= nx * step; m.y -= ny * step; } for (const m of B) { m.x += nx * step; m.y += ny * step; }
+        moved++;
+      }
+      // HARD displacement cap: pull each group back to within GROUP_BUDGET of its planned home
+      groups.forEach((m, k) => { const c = cent(m), dx = c.x - ghome[k].x, dy = c.y - ghome[k].y, dist = Math.hypot(dx, dy); if (dist > GROUP_BUDGET) { const b = (dist - GROUP_BUDGET) / dist; for (const p of m) { p.x -= dx * b; p.y -= dy * b; } } });
+      // clutter: float fully out of structure + each other, capped to CLUT_BUDGET
+      for (const c of clutter) {
+        for (const s of structural) { const dx = s.x - c.x, dy = s.y - c.y, dd = Math.hypot(dx, dy), minD = c.geom.radius + s.geom.radius + PAD; if (dd >= minD) continue; let nx, ny; if (dd < 1e-6) { nx = 1; ny = 0; } else { nx = -dx / dd; ny = -dy / dd; } c.x += nx * (minD - dd); c.y += ny * (minD - dd); moved++; }
+        for (const c2 of clutter) { if (c2 === c) continue; const dx = c2.x - c.x, dy = c2.y - c.y, dd = Math.hypot(dx, dy), minD = c.geom.radius + c2.geom.radius + PAD; if (dd >= minD || dd < 1e-6) continue; const nx = dx / dd, ny = dy / dd, pen = (minD - dd) / 2; c.x -= nx * pen; c.y -= ny * pen; c2.x += nx * pen; c2.y += ny * pen; moved++; }
+        const h = chome.get(c.obj.id), dx = c.x - h.x, dy = c.y - h.y, dist = Math.hypot(dx, dy); if (dist > CLUT_BUDGET) { const b = (dist - CLUT_BUDGET) / dist; c.x -= dx * b; c.y -= dy * b; }
+      }
+      if (!moved) break;
+    }
+
+    // residual structural overlaps (informational only — gentle accepts minor contacts)
+    let remain = 0;
+    for (let i = 0; i < structural.length; i++) for (let j = i + 1; j < structural.length; j++) if (Math.hypot(structural[j].x - structural[i].x, structural[j].y - structural[i].y) < structural[i].geom.radius + structural[j].geom.radius) remain++;
+    report.overlapsRemaining = remain;
+  }
+
+  _clamp(placedList, halfM, report);
+  const yawSnapDeg = _num(o.yawSnapDeg, Number(process.env.IR_YAW_SNAP_DEG || 90));
+  const organicJitterM = _num(o.organicJitterM, Number(process.env.IR_ORGANIC_JITTER_M || 1.5));
+  return { placed: _emit(placedList, positions, { yawSnapDeg, organicJitterM }), report };
+}
+
 function solve(graph, assetIndex, opts) {
   const o = opts || {};
   const mode = String(o.mode || process.env.IR_SOLVER || "legacy").toLowerCase();
+  if (mode === "gentle") return solveGentle(graph, assetIndex, o);
   if (mode === "structure" || mode === "structured" || mode === "structure_preserving") return solveStructured(graph, assetIndex, o);
   return solveLegacy(graph, assetIndex, o);
 }
 
-module.exports = { solve, solveLegacy, solveStructured, _assetGeom, _expandPattern, GROUND_HALF_M };
+module.exports = { solve, solveLegacy, solveStructured, solveGentle, _assetGeom, _expandPattern, GROUND_HALF_M };

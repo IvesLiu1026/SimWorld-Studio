@@ -28,13 +28,15 @@ function resolveIRMode(bodyOrMode) {
 // shares the IDENTICAL plan → the A/B isolates the solver. The block cache is per variant.
 const _planCache = new Map();
 const _cache = new Map();
-function _planKey(scene, o) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), v: 1 }); }
-function _blockKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), mode, repair: !!repair, v: 2 }); }
+const _artifactCache = new Map(); // bkey -> {ascii, intent}; surfaced to the visual-loop critic so it can judge intended-vs-built
+function _planKey(scene, o) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), cot: resolveCot(o), rich: resolveRichAssets(o), v: 1 }); }
+function _blockKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), mode, repair: !!repair, cot: resolveCot(o), ascii: resolveAscii(o), rich: resolveRichAssets(o), planCritic: resolvePlanCritic(o), v: 2 }); }
 
 // Solver mode: body.irSolver | env IR_SOLVER. Default "legacy" (the original scatter solver).
 function resolveSolverMode(o) {
   const b = o || {};
   const s = String(b.irSolver || b.solverMode || process.env.IR_SOLVER || "").toLowerCase();
+  if (s === "gentle") return "gentle";
   if (s === "structure" || s === "structured" || s === "structure_preserving") return "structure";
   return "legacy";
 }
@@ -43,6 +45,33 @@ function resolveRepair(o) {
   const b = o || {};
   if (b.irRepair != null && b.irRepair !== "") return _truthy(b.irRepair);
   return _truthy(process.env.IR_REPAIR);
+}
+// CoT/reasoning planner toggle: body.irCot | env IR_COT. Default OFF (single-shot planner).
+function resolveCot(o) {
+  const b = o || {};
+  if (b.irCot != null && b.irCot !== "") return _truthy(b.irCot);
+  return _truthy(process.env.IR_COT);
+}
+// Include the ASCII top-down map in the builder block: body.irAscii | env IR_ASCII. Default ON.
+function resolveAscii(o) {
+  const b = o || {};
+  if (b.irAscii != null && b.irAscii !== "") return _truthy(b.irAscii);
+  if (process.env.IR_ASCII != null && process.env.IR_ASCII !== "") return _truthy(process.env.IR_ASCII);
+  return true;
+}
+// Rich asset context: feed the retrieved desc/tags/subcategory into the planner so it isn't blind to
+// what each asset is. body.irRichAssets | env IR_RICH_ASSETS. Default OFF (preserves prior behavior).
+function resolveRichAssets(o) {
+  const b = o || {};
+  if (b.irRichAssets != null && b.irRichAssets !== "") return _truthy(b.irRichAssets);
+  return _truthy(process.env.IR_RICH_ASSETS);
+}
+// Plan-level visual critic (fix B): render the solved plan, VLM critiques layout/density, revise, re-solve.
+// body.irPlanCritic | env IR_PLAN_CRITIC. Default OFF.
+function resolvePlanCritic(o) {
+  const b = o || {};
+  if (b.irPlanCritic != null && b.irPlanCritic !== "") return _truthy(b.irPlanCritic);
+  return _truthy(process.env.IR_PLAN_CRITIC);
 }
 
 // Plan ONCE per (scene, model): retrieve palette + LLM plan → normalized graph. Cached so all
@@ -55,14 +84,20 @@ async function _planOnce(scene, o, log) {
   const r = await ar.retrieve(scene, Object.assign({ usePrefilter: o.usePrefilter !== false }, o));
   const assets = (r && Array.isArray(r.assets) ? r.assets : []).filter(a => a && a.id);
   if (!assets.length) { const res = { graph: null, assets: [], planReport: {} }; _planCache.set(key, res); return res; }
-  const planned = await planner.planScene(scene, assets, Object.assign({}, o, {
+  const plannerOpts = Object.assign({}, o, {
     model: process.env.IR_MODEL || o.model,
     provider: process.env.IR_PROVIDER || o.provider || o.runner,
     runner: process.env.IR_PROVIDER || o.runner || o.provider,
     reasoningEffort: process.env.IR_PLANNER_REASONING_EFFORT || o.reasoningEffort || "high",
     timeoutMs: Number(process.env.IR_PLANNER_TIMEOUT_MS || o.timeoutMs || 300000),
-  }));
-  const res = { graph: planned.graph || planned, assets, planReport: planned.report || {} };
+    richAssets: resolveRichAssets(o),
+  });
+  const useCot = resolveCot(o) && typeof planner.planSceneCot === "function";
+  if (useCot) log("ir planner: CoT/reasoning two-stage (design brief -> graph)");
+  const planned = useCot
+    ? await planner.planSceneCot(scene, assets, plannerOpts)
+    : await planner.planScene(scene, assets, plannerOpts);
+  const res = { graph: planned.graph || planned, assets, planReport: planned.report || {}, brief: (planned && planned.brief) || "" };
   _planCache.set(key, res);
   return res;
 }
@@ -87,7 +122,7 @@ function _extentM(list) {
 }
 
 // Format the IR into the system-prompt block the builder consumes.
-function formatIRBlock(placed, ascii, report, graph) {
+function formatIRBlock(placed, ascii, report, graph, includeAscii) {
   const ground = placed.filter(p => p.isGround);
   const objs = placed.filter(p => !p.isGround);
   const L = [];
@@ -101,10 +136,12 @@ function formatIRBlock(placed, ascii, report, graph) {
   L.push("ON THE GROUND: every object's Z is 0 — spawn each resting on the ground (base at z=0). "
     + "Nothing should float above the surface; do not raise objects into the air.");
   L.push("");
-  L.push("### TOP-DOWN MAP");
-  L.push("```");
-  L.push(ascii);
-  L.push("```");
+  if (includeAscii !== false && ascii) {
+    L.push("### TOP-DOWN MAP");
+    L.push("```");
+    L.push(ascii);
+    L.push("```");
+  }
   if (ground.length) {
     L.push("");
     L.push("### GROUND (carpet the floor first, at z=0)");
@@ -166,7 +203,7 @@ async function buildIRBlock(scene, opts) {
     const planner = require("./ir-planner");
 
     // Plan ONCE (shared across solver variants), then solve in THIS variant's mode.
-    const { graph, assets, planReport } = await _planOnce(scene, o, log);
+    const { graph, assets, planReport, brief } = await _planOnce(scene, o, log);
     if (!graph || !assets.length) { log("ir: no plan/palette, skipping IR"); _cache.set(bkey, ""); return ""; }
     const assetIndex = new Map(assets.map(a => [a.id, a]));
 
@@ -200,11 +237,43 @@ async function buildIRBlock(scene, opts) {
       }
     }
 
+    // Plan-level visual critic (fix B): render the solved plan → VLM critiques LAYOUT (density/grouping/
+    // focal, NOT collisions) → revise the graph → re-solve. Keeps the deterministic solver.
+    if (resolvePlanCritic(o) && placed.length) {
+      const planCritic = require("./ir-plan-critic");
+      const ROUNDS = Math.max(1, Number(process.env.IR_PLAN_CRITIC_ROUNDS || 1));
+      for (let r = 1; r <= ROUNDS; r++) {
+        const img = planCritic.renderPlanImage(placed, `${_slug(scene)}_r${r}`);
+        let crit;
+        try {
+          crit = await planCritic.critiquePlan({ scene, imagePath: img, intent: (brief && brief.trim()) || _planIntent(curGraph), model: process.env.IR_MODEL || o.model, timeoutMs: Number(process.env.IR_PLAN_CRITIC_TIMEOUT_MS || 120000) });
+        } catch (e) { log("ir plan-critic failed (non-fatal): " + (e && e.message)); break; }
+        try { if (img) fs.rmSync(img, { force: true }); } catch (_e) {}
+        log(`ir plan-critic ${r}/${ROUNDS}: ${crit.status} — ${(crit.issues || []).length} issue(s), ${(crit.suggestions || []).length} fix(es)`);
+        if (crit.status === "PASS" || (!(crit.suggestions || []).length && !(crit.issues || []).length)) break;
+        try {
+          const rev = await planner.revisePlanForLayout(scene, curGraph, crit, assets, Object.assign({}, o, {
+            model: process.env.IR_MODEL || o.model, provider: process.env.IR_PROVIDER || o.provider || o.runner,
+            runner: process.env.IR_PROVIDER || o.runner || o.provider,
+            reasoningEffort: process.env.IR_PLANNER_REASONING_EFFORT || o.reasoningEffort || "high",
+            timeoutMs: Number(process.env.IR_PLANNER_TIMEOUT_MS || o.timeoutMs || 300000),
+          }));
+          if (rev && rev.graph && ((rev.graph.objects || []).length || (rev.graph.patterns || []).length)) {
+            curGraph = rev.graph;
+            const solved = solve(curGraph, assetIndex, { mode });
+            placed = solved.placed; solveReport = solved.report;
+            log(`ir plan-critic ${r}: revised -> ${(curGraph.objects || []).length} obj + ${(curGraph.patterns || []).length} pat, ${placed.length} placed`);
+          } else { log("ir plan-critic: empty revision, stopping"); break; }
+        } catch (e) { log("ir plan-critic revise failed (non-fatal): " + (e && e.message)); break; }
+      }
+    }
+
     if (!placed.length) { log("ir: solver produced no placements, skipping"); _cache.set(bkey, ""); return ""; }
 
     const ascii = renderAscii(placed, { sceneName: curGraph.scene_name || "" });
-    const block = formatIRBlock(placed, ascii, solveReport, curGraph);
+    const block = formatIRBlock(placed, ascii, solveReport, curGraph, resolveAscii(o));
     _persist(o, { scene, graph: curGraph, placed, solveReport, planReport, ascii });
+    _artifactCache.set(bkey, { ascii, intent: (brief && brief.trim()) ? brief.trim() : _planIntent(curGraph) });
 
     log(`ir[${mode}${repair ? "+repair" : ""}]: ${(curGraph.objects || []).length} obj + ${(curGraph.patterns || []).length} patterns → ${placed.length} placed `
       + `(overlapsRemaining=${solveReport.overlapsRemaining}, clamped=${solveReport.clamped}, solver=${solveReport.solver})`);
@@ -216,4 +285,27 @@ async function buildIRBlock(scene, opts) {
   }
 }
 
-module.exports = { resolveIRMode, buildIRBlock, formatIRBlock };
+// Short human/VLM-readable summary of the plan's intent (scene name + named zones/anchors),
+// for the visual-loop critic to judge whether the built scene realizes the intended structure.
+function _planIntent(g) {
+  g = g || {};
+  const skip = new Set(["origin", "center"]);
+  const zones = Object.keys(g.anchors || {}).filter(k => !skip.has(k));
+  const parts = [];
+  if (g.scene_name) parts.push(String(g.scene_name).replace(/_/g, " "));
+  if (zones.length) parts.push("intended zones/anchors: " + zones.slice(0, 12).join(", "));
+  return parts.join("; ");
+}
+
+// Return {ascii, intent} for a scene's plan (building + caching it if needed). Used by the visual
+// loop to give the critic the INTENDED top-down layout alongside the rendered screenshots.
+async function getPlanArtifacts(scene, opts) {
+  const o = opts || {};
+  const mode = resolveSolverMode(o);
+  const repair = resolveRepair(o) && mode !== "legacy";
+  const bkey = _blockKey(scene, o, mode, repair);
+  if (!_artifactCache.has(bkey)) { try { await buildIRBlock(scene, o); } catch (_e) {} }
+  return _artifactCache.get(bkey) || { ascii: "", intent: "" };
+}
+
+module.exports = { resolveIRMode, buildIRBlock, formatIRBlock, getPlanArtifacts };

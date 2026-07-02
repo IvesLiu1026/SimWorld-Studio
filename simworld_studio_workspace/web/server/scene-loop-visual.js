@@ -299,7 +299,7 @@ function visualCriticSchemaPath() {
   return fp;
 }
 
-async function visualCritiqueCodex({ originalPrompt, screenshots, model, timeoutMs = 180000 }) {
+async function visualCritiqueCodex({ originalPrompt, screenshots, model, timeoutMs = 180000, planAscii, planIntent }) {
   const validScreens = (screenshots || []).filter(s => s && s.path && fs.existsSync(s.path));
   if (!validScreens.length) {
     return { status: "FAIL", issues: ["No screenshots captured"], suggestions: [], raw: "", screenshots: [], actorsCount: 0 };
@@ -314,6 +314,8 @@ async function visualCritiqueCodex({ originalPrompt, screenshots, model, timeout
     `You are attached ${validScreens.length} screenshots of the SAME current Unreal scene.`,
     "Evaluate only what is visible in those images plus the actor list below.",
     originalPrompt ? `Original scene request: "${originalPrompt}"` : "",
+    planIntent ? `\nINTENDED LAYOUT (from the planner): ${planIntent}` : "",
+    planAscii ? "Intended top-down plan (ASCII, N up). The scene SHOULD realize this structure — check it is present (enclosure/perimeter, focal point on its axis, distinct zones), then focus your suggestions on DENSITY, GROUND THEMING, and realism (the planner set structure; the build should look full and themed, not sparse or bare-grey):\n" + planAscii : "",
     "",
     "Current actors in the scene:",
     JSON.stringify(actors, null, 2),
@@ -377,10 +379,10 @@ async function getActorsSnapshot() {
   return r || {};
 }
 
-async function visualCritique({ originalPrompt, screenshots, model, timeoutMs = 180000, provider, runner }) {
+async function visualCritique({ originalPrompt, screenshots, model, timeoutMs = 180000, provider, runner, planAscii, planIntent }) {
   const selectedProvider = normalizeProvider(provider || runner || process.env.LLM_PROVIDER);
   if (selectedProvider === "codex") {
-    return visualCritiqueCodex({ originalPrompt, screenshots, model, timeoutMs });
+    return visualCritiqueCodex({ originalPrompt, screenshots, model, timeoutMs, planAscii, planIntent });
   }
   if (!screenshots || !screenshots.length) {
     return { status: "FAIL", issues: ["No screenshots captured"], suggestions: [], raw: "", screenshots: [], actorsCount: 0 };
@@ -395,6 +397,8 @@ async function visualCritique({ originalPrompt, screenshots, model, timeoutMs = 
       `You will see ${screenshots.length} screenshots of the SAME 3D scene from different camera angles. ` +
       `The views are labeled below each image.\n\n` +
       (originalPrompt ? `Original scene request: "${originalPrompt}"\n\n` : "") +
+      (planIntent ? `INTENDED LAYOUT (from the planner): ${planIntent}\n` : "") +
+      (planAscii ? "Intended top-down plan (ASCII, N up). The scene SHOULD realize this structure (enclosure/perimeter, focal point on axis, distinct zones) — check it's present, then focus suggestions on DENSITY, GROUND THEMING, and realism:\n" + planAscii + "\n\n" : "") +
       `Current actors in the scene:\n${JSON.stringify(actors, null, 2)}\n\n` +
       `Now reviewing the views:`,
   });
@@ -492,6 +496,8 @@ async function runVisualSceneLoop({
   builderRunner,
   emit,
   destDir,
+  planAscii,
+  planIntent,
 }) {
   if (typeof builderRunner !== "function") throw new Error("builderRunner is required");
   let lastStatus = "NEEDS_IMPROVEMENT";
@@ -557,6 +563,8 @@ async function runVisualSceneLoop({
         model: criticModel,
         provider: criticProvider,
         timeoutMs: criticTimeoutMs,
+        planAscii,
+        planIntent,
       });
     } catch (e) {
       if (emit) emit("critic_verdict", { round, status: "FAIL", issues: ["Critic error: " + String(e && e.message)], suggestions: [], error: true });
@@ -654,6 +662,16 @@ async function handleVisualSceneLoop(req, res, deps) {
         ...(outerRunner ? { runner: outerRunner } : {}),
         ...(assetMode ? { assetMode } : {}),  // forward A/B palette mode into each builder round
         ...(assetRetrievalMode ? { assetRetrievalMode } : {}),
+        // Forward the IR planner flags so each builder round gets the plan (plan-once cache → same
+        // plan every round). Round 1 builds the structured skeleton; refine rounds keep it + the
+        // critic's density/ground notes ("refine, don't restart").
+        ...(req.body.sceneIr != null ? { sceneIr: req.body.sceneIr } : {}),
+        ...(req.body.irSolver ? { irSolver: req.body.irSolver } : {}),
+        ...(req.body.irRepair != null ? { irRepair: req.body.irRepair } : {}),
+        ...(req.body.irCot != null ? { irCot: req.body.irCot } : {}),
+        ...(req.body.irAscii != null ? { irAscii: req.body.irAscii } : {}),
+        ...(req.body.irRichAssets != null ? { irRichAssets: req.body.irRichAssets } : {}),
+        ...(req.body.irPlanCritic != null ? { irPlanCritic: req.body.irPlanCritic } : {}),
       });
       const opts = {
         host: "127.0.0.1", port, path: "/api/chat", method: "POST",
@@ -687,11 +705,37 @@ async function handleVisualSceneLoop(req, res, deps) {
     });
   }
 
+  // Plan-aware critic: if IR is on, fetch the INTENDED layout (ASCII + intent) so the critic can
+  // judge intended-vs-built each round. We pass the SAME combined prompt string the builder rounds
+  // use, so the plan-once cache is shared (critic sees exactly the plan the builder builds).
+  let planAscii = "", planIntent = "";
+  try {
+    const sceneIrMod = require("./scene-ir");
+    if (sceneIrMod.resolveIRMode(req.body) === "on") {
+      const combinedForPlan = `USER INTENT (cumulative across all prior prompts in this session):\n${intentSummary}\n\nCURRENT TURN INSTRUCTION:\n${message}`;
+      const arts = await sceneIrMod.getPlanArtifacts(combinedForPlan, {
+        model: req.body.model,
+        provider: outerRunner || process.env.LLM_PROVIDER,
+        runner: outerRunner || process.env.LLM_PROVIDER,
+        irSolver: req.body.irSolver,
+        irRepair: req.body.irRepair,
+        irCot: req.body.irCot,
+        irAscii: req.body.irAscii,
+        irRichAssets: req.body.irRichAssets,
+        irPlanCritic: req.body.irPlanCritic,
+      });
+      planAscii = (arts && arts.ascii) || ""; planIntent = (arts && arts.intent) || "";
+      log("vloop", `IR plan-aware critic: intended layout ${planAscii ? "ready (" + planAscii.length + " chars)" : "unavailable"}`);
+    }
+  } catch (e) { log("vloop", "IR plan artifacts failed (non-fatal): " + (e && e.message)); }
+
   const destDir = path.join(VISUAL_DIR, `${STUDIO_SESSION}_${Date.now()}`);
   const result = await runVisualSceneLoop({
     prompt: message,
     intentSummary,
     sessionId: STUDIO_SESSION,
+    planAscii,
+    planIntent,
     maxRounds: parseInt(process.env.SCENE_LOOP_MAX_ROUNDS || "5", 10),
     criticModel: String(outerRunner || process.env.LLM_PROVIDER || "").toLowerCase() === "codex"
       ? (req.body.model || process.env.CODEX_MODEL || "gpt-5.5")

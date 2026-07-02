@@ -963,9 +963,18 @@ async function main() {
   // Run2: IR-ON solver variants (all share the same plan; only the solver/repair differs).
   // Falls back to --ir-modes (or one null cell) when --variants is not given.
   const VARIANT_PRESETS = {
+    "vanilla": { sceneIr: false },                                              // no-IR baseline (builder decides layout)
     "solver-baseline": { sceneIr: true, irSolver: "legacy", irRepair: false },
     "solver-structure": { sceneIr: true, irSolver: "structure", irRepair: false },
     "solver-structrepair": { sceneIr: true, irSolver: "structure", irRepair: true },
+    "solver-gentle": { sceneIr: true, irSolver: "gentle", irRepair: false },    // intent-preserving solver
+    // CoT experiment (ASCII off for both; JSON coords always present):
+    "gentle-nocot": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false },
+    "gentle-cot":   { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: true,  irAscii: false },
+    // Un-blind planner experiment (rich asset context = desc/tags/subcategory fed to the planner):
+    "gentle-rich":  { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true },
+    // Fix B: rich planner + plan-level visual critic (render plan -> VLM critiques layout -> revise -> re-solve):
+    "gentle-plancritic": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true },
   };
   const variantList = (opts.variants && opts.variants.length)
     ? opts.variants.map(v => ({ name: v, cfg: VARIANT_PRESETS[v] || { sceneIr: true } }))
@@ -1005,6 +1014,10 @@ async function main() {
         baseBody.sceneIr = !!variant.cfg.sceneIr;
         if (variant.cfg.irSolver) baseBody.irSolver = variant.cfg.irSolver;
         baseBody.irRepair = !!variant.cfg.irRepair;
+        if (variant.cfg.irCot != null) baseBody.irCot = !!variant.cfg.irCot;
+        if (variant.cfg.irAscii != null) baseBody.irAscii = !!variant.cfg.irAscii;
+        if (variant.cfg.irRichAssets != null) baseBody.irRichAssets = !!variant.cfg.irRichAssets;
+        if (variant.cfg.irPlanCritic != null) baseBody.irPlanCritic = !!variant.cfg.irPlanCritic;
       } else if (irMode) baseBody.sceneIr = (irMode === "on");
       if (opts.runner) baseBody.runner = opts.runner;
       if (opts.model) baseBody.model = opts.model;

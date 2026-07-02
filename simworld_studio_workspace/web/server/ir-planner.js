@@ -3,18 +3,27 @@
 // LLM stage: scene prompt + retrieved asset palette → a RELATIONAL layout graph
 // (anchors + objects + patterns + constraints), then validate/normalize it so the
 // solver only ever sees clean, real-asset-referencing input.
-const { oneshotJSON } = require("./llm-oneshot");
+const { oneshotJSON, oneshotText } = require("./llm-oneshot");
 
 function _num(v, d) { const n = Number(v); return Number.isFinite(n) ? n : d; }
 function _clampInt(v, lo, hi) { let n = Math.floor(_num(v, lo)); if (n < lo) n = lo; if (n > hi) n = hi; return n; }
 function _fmtDims(d) { if (!d) return "?"; const r = x => Math.round(Number(x) * 10) / 10; return `${r(d.width)}×${r(d.depth)}×${r(d.height)}m`; }
 
 // Compact palette listing the planner picks asset_id values from.
-function _assetLines(assets) {
-  return (assets || []).map(a => `- ${a.id} | ${a.category} | ${a.name} | ${_fmtDims(a.dims)}`).join("\n");
+function _assetLines(assets, rich) {
+  return (assets || []).map(a => {
+    if (!rich) return `- ${a.id} | ${a.category} | ${a.name} | ${_fmtDims(a.dims)}`;
+    // "un-blind" the planner: surface the description + tags + subcategory we already retrieve
+    // (asset-retrieval provides these but the base prompt drops them), so the planner knows what
+    // each asset actually IS, not just its filename + bounding box.
+    const cat = a.category + (a.subcategory ? `/${a.subcategory}` : "");
+    const desc = a.desc ? " — " + String(a.desc).replace(/\s+/g, " ").trim().slice(0, 110) : "";
+    const tags = (Array.isArray(a.tags) && a.tags.length) ? "  [" + a.tags.slice(0, 8).join(", ") + "]" : "";
+    return `- ${a.id} | ${cat} | ${a.name} | ${_fmtDims(a.dims)}${desc}${tags}`;
+  }).join("\n");
 }
 
-function buildPlannerPrompt(scene, assets) {
+function buildPlannerPrompt(scene, assets, brief, rich) {
   return [
     "You are the SCENE LAYOUT PLANNER for a 3D scene built in Unreal Engine. Produce a STRUCTURED",
     "LAYOUT PLAN as JSON that a builder will execute verbatim. You DECIDE what goes where, using",
@@ -24,8 +33,9 @@ function buildPlannerPrompt(scene, assets) {
     "SCENE:",
     scene,
     "",
+    ...(brief ? ["DESIGN BRIEF (you reasoned this out first — realize it FAITHFULLY in the layout below: honor the boundary/focal/axis/symmetry/ground/zone decisions it makes):", brief, ""] : []),
     "ASSET PALETTE (use ONLY these exact asset_id values; dimensions are width×depth×height in metres):",
-    _assetLines(assets),
+    _assetLines(assets, rich),
     "",
     "OUTPUT a JSON layout graph with EXACTLY this schema:",
     '{',
@@ -121,7 +131,7 @@ function normalizeGraph(raw, assetIndex) {
 // LLM call → normalized graph. assets = retrieve().assets (compact records with dims).
 async function planScene(scene, assets, opts) {
   const o = opts || {};
-  const prompt = buildPlannerPrompt(scene, assets || []);
+  const prompt = buildPlannerPrompt(scene, assets || [], null, o.richAssets);
   const raw = await oneshotJSON(prompt, Object.assign({ telemetryComponent: "ir_planner" }, o));
   const assetIndex = new Map((assets || []).map(a => [a.id, a]));
   const { graph, report } = normalizeGraph(raw, assetIndex);
@@ -170,4 +180,90 @@ async function repairGraph(scene, graph, conflicts, assets, opts) {
   return { graph: g2, report, raw };
 }
 
-module.exports = { planScene, repairGraph, normalizeGraph, buildPlannerPrompt, buildRepairPrompt };
+// ── CoT / reasoning planner (two-stage) ───────────────────────────────────────
+// Stage 1: reason like an art director → a prose DESIGN BRIEF that DECIDES the composition
+// per-scene (boundary? focal where? axis? symmetry-or-organic? ground materials? zones?).
+// Stage 2: realize that brief as the JSON graph. Nothing is hardcoded — the LLM decides what
+// applies to THIS scene (e.g. symmetry for a temple, organic for a market).
+function _categorySummary(assets) {
+  const m = new Map();
+  for (const a of (assets || [])) { const c = (a && a.category) || "?"; m.set(c, (m.get(c) || 0) + 1); }
+  return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} (${n})`).join(", ");
+}
+
+function buildDesignBriefPrompt(scene, assets) {
+  return [
+    "You are an expert 3D environment ART DIRECTOR. BEFORE any coordinates, reason about how to",
+    "compose this scene so it reads like a real, recognizable place.",
+    "",
+    "SCENE:", scene, "",
+    "ASSET CATEGORIES AVAILABLE (with counts):", _categorySummary(assets), "",
+    "Think step by step, then write a concise DESIGN BRIEF (prose, ~120-220 words). Decide what",
+    "actually applies to THIS scene — do NOT force ideas that don't fit (e.g. formal symmetry suits",
+    "a temple/palace but NOT a market, village, or harbour). Cover, only as appropriate:",
+    "- Real-world reference: what IS this place and how is such a place actually laid out?",
+    "- Boundary/enclosure: is there a perimeter (wall / fence / buildings-as-edge) with a gate or",
+    "  opening, or is it open on some sides?",
+    "- Focal element: the main structure — where does it sit (dead center, off-center, set back from",
+    "  the entrance)? Is there an approach axis or path leading to it?",
+    "- Symmetry vs organic: is this scene type formal/symmetric or irregular/organic? Decide and commit.",
+    "- Ground & materials: what covers the floor, and where does it CHANGE (e.g. grass field + a stone",
+    "  path + a stone building base; a concrete yard; sand; snow)?",
+    "- Zones, density & functional groupings: where is it dense vs open; which small clusters belong",
+    "  together (stalls in a row, benches under trees, crates against a wall).",
+    "Be specific and decisive — this brief will directly drive the layout. Output ONLY the brief prose.",
+  ].join("\n");
+}
+
+async function planSceneCot(scene, assets, opts) {
+  const o = opts || {};
+  let brief = "";
+  try {
+    brief = await oneshotText(buildDesignBriefPrompt(scene, assets || []), Object.assign({ telemetryComponent: "ir_planner_brief" }, o));
+    brief = String(brief || "").trim();
+  } catch (_e) { brief = ""; }
+  const prompt = buildPlannerPrompt(scene, assets || [], brief, o.richAssets);
+  const raw = await oneshotJSON(prompt, Object.assign({ telemetryComponent: "ir_planner" }, o));
+  const assetIndex = new Map((assets || []).map(a => [a.id, a]));
+  const { graph, report } = normalizeGraph(raw, assetIndex);
+  return { graph, report, raw, brief };
+}
+
+// ── Plan-critic revision (fix B) ──────────────────────────────────────────────
+// A VLM critic looked at a TOP-DOWN render of the solved plan and flagged LAYOUT problems
+// (emptiness, poor grouping, weak focal, imbalance). Revise the relational graph to address them —
+// add/regroup to fill sparse areas, strengthen structure. Collisions are NOT the concern (solver handles).
+function buildLayoutRevisePrompt(scene, graph, critique, assets) {
+  const issues = (critique.issues || []).map(x => "- " + x).join("\n") || "(none)";
+  const sugg = (critique.suggestions || []).map(x => "- " + x).join("\n") || "(none)";
+  return [
+    "You are REVISING a 3D scene LAYOUT PLAN (a JSON relational graph). A critic looked at a TOP-DOWN",
+    "RENDER of your solved plan and flagged LAYOUT problems. Revise the plan to fix them: ADD objects/",
+    "patterns to fill sparse/empty areas, regroup related items into tighter functional clusters,",
+    "strengthen the focal structure, and balance density across the site. Keep it coherent and",
+    "scene-appropriate. Do NOT worry about small overlaps — a deterministic solver fixes collisions.",
+    "",
+    "CRITIC ISSUES:", issues,
+    "CRITIC SUGGESTIONS:", sugg,
+    "",
+    "SCENE:", scene, "",
+    "CURRENT PLAN (revise and return the FULL updated graph — same anchors/objects/patterns/constraints schema):",
+    JSON.stringify(graph),
+    "",
+    "ASSET PALETTE (use ONLY these exact asset_id values):",
+    _assetLines(assets, true),
+    "",
+    "Output ONLY the revised JSON layout graph. No prose, no markdown fences.",
+  ].join("\n");
+}
+
+async function revisePlanForLayout(scene, graph, critique, assets, opts) {
+  const o = opts || {};
+  const prompt = buildLayoutRevisePrompt(scene, graph, critique || {}, assets || []);
+  const raw = await oneshotJSON(prompt, Object.assign({ telemetryComponent: "ir_plan_revise" }, o));
+  const assetIndex = new Map((assets || []).map(a => [a.id, a]));
+  const { graph: g2, report } = normalizeGraph(raw, assetIndex);
+  return { graph: g2, report, raw };
+}
+
+module.exports = { planScene, planSceneCot, repairGraph, revisePlanForLayout, normalizeGraph, buildPlannerPrompt, buildDesignBriefPrompt, buildRepairPrompt };
