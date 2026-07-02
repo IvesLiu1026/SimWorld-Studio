@@ -187,6 +187,28 @@ function _persist(o, data) {
   } catch (e) { (o.log || (() => {}))("ir persist failed: " + e.message); return null; }
 }
 
+// Persist top-down PLAN renders (every solve + every plan-critic round) so their evolution can be
+// inspected later. Default dir: tmp/ir/plan_renders (override IR_PLAN_RENDER_DIR). Never fatal.
+function _planRenderDir() { return process.env.IR_PLAN_RENDER_DIR || path.join(path.resolve(__dirname, "../.."), "tmp", "ir", "plan_renders"); }
+function _keepPlanRender(srcPng, name, log) {
+  try {
+    if (!srcPng || !fs.existsSync(srcPng)) return null;
+    const dir = _planRenderDir(); fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, name + ".png");
+    fs.copyFileSync(srcPng, dest);
+    (log || (() => {}))("ir plan render -> " + dest);
+    return dest;
+  } catch (e) { (log || (() => {}))("ir plan render save failed: " + (e && e.message)); return null; }
+}
+function _keepPlanCritique(name, crit, log) {
+  try {
+    const dir = _planRenderDir(); fs.mkdirSync(dir, { recursive: true });
+    const txt = `status: ${crit.status}\n\nISSUES:\n` + ((crit.issues || []).map(x => "- " + x).join("\n") || "(none)")
+      + `\n\nSUGGESTIONS:\n` + ((crit.suggestions || []).map(x => "- " + x).join("\n") || "(none)") + "\n";
+    fs.writeFileSync(path.join(dir, name + ".critique.txt"), txt);
+  } catch (_e) {}
+}
+
 // Build the IR prompt block for a scene. Returns "" on any failure or when no assets are
 // available — IR is an enhancement and must NEVER break the build.
 async function buildIRBlock(scene, opts) {
@@ -209,6 +231,8 @@ async function buildIRBlock(scene, opts) {
 
     let curGraph = graph;
     let { placed, report: solveReport } = solve(curGraph, assetIndex, { mode });
+    const renderStamp = Date.now(); // groups this build's plan renders
+    const rslug = _slug(scene);
 
     // LLM-repair loop (structure mode only): if STRUCTURAL overlaps remain, ask the LLM to
     // relocate/respace the clashing GROUPS (semantic, never coords), re-solve, accept iff better.
@@ -243,12 +267,14 @@ async function buildIRBlock(scene, opts) {
       const planCritic = require("./ir-plan-critic");
       const ROUNDS = Math.max(1, Number(process.env.IR_PLAN_CRITIC_ROUNDS || 1));
       for (let r = 1; r <= ROUNDS; r++) {
-        const img = planCritic.renderPlanImage(placed, `${_slug(scene)}_r${r}`);
+        const img = planCritic.renderPlanImage(placed, `${rslug}_r${r}`);
+        _keepPlanRender(img, `${rslug}__${renderStamp}__r${r}pre__${placed.length}obj`, log); // keep this round's plan for analysis
         let crit;
         try {
           crit = await planCritic.critiquePlan({ scene, imagePath: img, intent: (brief && brief.trim()) || _planIntent(curGraph), model: process.env.IR_MODEL || o.model, timeoutMs: Number(process.env.IR_PLAN_CRITIC_TIMEOUT_MS || 120000) });
         } catch (e) { log("ir plan-critic failed (non-fatal): " + (e && e.message)); break; }
         try { if (img) fs.rmSync(img, { force: true }); } catch (_e) {}
+        _keepPlanCritique(`${rslug}__${renderStamp}__r${r}pre__${placed.length}obj`, crit, log);
         log(`ir plan-critic ${r}/${ROUNDS}: ${crit.status} — ${(crit.issues || []).length} issue(s), ${(crit.suggestions || []).length} fix(es)`);
         if (crit.status === "PASS" || (!(crit.suggestions || []).length && !(crit.issues || []).length)) break;
         try {
@@ -272,6 +298,13 @@ async function buildIRBlock(scene, opts) {
 
     const ascii = renderAscii(placed, { sceneName: curGraph.scene_name || "" });
     const block = formatIRBlock(placed, ascii, solveReport, curGraph, resolveAscii(o));
+    // final top-down plan render (every IR build) for offline layout analysis
+    try {
+      const pc = require("./ir-plan-critic");
+      const fimg = pc.renderPlanImage(placed, "final");
+      _keepPlanRender(fimg, `${rslug}__${renderStamp}__final__${placed.length}obj`, log);
+      try { if (fimg) fs.rmSync(fimg, { force: true }); } catch (_e) {}
+    } catch (_e) {}
     _persist(o, { scene, graph: curGraph, placed, solveReport, planReport, ascii });
     _artifactCache.set(bkey, { ascii, intent: (brief && brief.trim()) ? brief.trim() : _planIntent(curGraph) });
 
