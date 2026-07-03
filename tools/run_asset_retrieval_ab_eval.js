@@ -976,6 +976,8 @@ async function main() {
     "gentle-rich":  { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true },
     // Fix B: rich planner + plan-level visual critic (render plan -> VLM critiques layout -> revise -> re-solve):
     "gentle-plancritic": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true },
+    // Fix #1: plan-critic + deterministic themed ground carpet:
+    "gentle-pc-ground": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true },
   };
   const variantList = (opts.variants && opts.variants.length)
     ? opts.variants.map(v => ({ name: v, cfg: VARIANT_PRESETS[v] || { sceneIr: true } }))
@@ -1019,6 +1021,7 @@ async function main() {
         if (variant.cfg.irAscii != null) baseBody.irAscii = !!variant.cfg.irAscii;
         if (variant.cfg.irRichAssets != null) baseBody.irRichAssets = !!variant.cfg.irRichAssets;
         if (variant.cfg.irPlanCritic != null) baseBody.irPlanCritic = !!variant.cfg.irPlanCritic;
+        if (variant.cfg.irGroundPass != null) baseBody.irGroundPass = !!variant.cfg.irGroundPass;
       } else if (irMode) baseBody.sceneIr = (irMode === "on");
       if (opts.runner) baseBody.runner = opts.runner;
       if (opts.model) baseBody.model = opts.model;

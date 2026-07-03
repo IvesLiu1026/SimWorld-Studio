@@ -30,7 +30,7 @@ const _planCache = new Map();
 const _cache = new Map();
 const _artifactCache = new Map(); // bkey -> {ascii, intent}; surfaced to the visual-loop critic so it can judge intended-vs-built
 function _planKey(scene, o) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), cot: resolveCot(o), rich: resolveRichAssets(o), v: 1 }); }
-function _blockKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), mode, repair: !!repair, cot: resolveCot(o), ascii: resolveAscii(o), rich: resolveRichAssets(o), planCritic: resolvePlanCritic(o), v: 2 }); }
+function _blockKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), mode, repair: !!repair, cot: resolveCot(o), ascii: resolveAscii(o), rich: resolveRichAssets(o), planCritic: resolvePlanCritic(o), ground: resolveGroundPass(o), v: 2 }); }
 
 // Solver mode: body.irSolver | env IR_SOLVER. Default "legacy" (the original scatter solver).
 function resolveSolverMode(o) {
@@ -72,6 +72,13 @@ function resolvePlanCritic(o) {
   const b = o || {};
   if (b.irPlanCritic != null && b.irPlanCritic !== "") return _truthy(b.irPlanCritic);
   return _truthy(process.env.IR_PLAN_CRITIC);
+}
+// Ground-carpet pass (fix #1): prepend a deterministic gapless themed ground carpet to the IR block.
+// body.irGroundPass | env IR_GROUND_PASS. Default OFF.
+function resolveGroundPass(o) {
+  const b = o || {};
+  if (b.irGroundPass != null && b.irGroundPass !== "") return _truthy(b.irGroundPass);
+  return _truthy(process.env.IR_GROUND_PASS);
 }
 
 // Plan ONCE per (scene, model): retrieve palette + LLM plan → normalized graph. Cached so all
@@ -297,7 +304,19 @@ async function buildIRBlock(scene, opts) {
     if (!placed.length) { log("ir: solver produced no placements, skipping"); _cache.set(bkey, ""); return ""; }
 
     const ascii = renderAscii(placed, { sceneName: curGraph.scene_name || "" });
-    const block = formatIRBlock(placed, ascii, solveReport, curGraph, resolveAscii(o));
+    let block = formatIRBlock(placed, ascii, solveReport, curGraph, resolveAscii(o));
+    // Ground-carpet pass (fix #1): prepend a deterministic, gapless, theme-matched ground carpet so
+    // scenes stop showing bare-grey / striped ground (the palette is ground-poor; this picks from the
+    // full library and lays it as a guaranteed first step).
+    if (resolveGroundPass(o)) {
+      try {
+        const irGround = require("./ir-ground");
+        const db = await require("./asset-retrieval").loadDB();
+        const carpet = irGround.groundCarpetBlock(scene, db, Number(process.env.IR_GROUND_CARPET_HALF_M || 52));
+        if (carpet) { block = carpet + "\n" + block; log("ir ground-carpet: prepended themed gapless carpet"); }
+        else log("ir ground-carpet: no suitable tile found (skipped)");
+      } catch (e) { log("ir ground-pass failed (non-fatal): " + (e && e.message)); }
+    }
     // final top-down plan render (every IR build) for offline layout analysis
     try {
       const pc = require("./ir-plan-critic");

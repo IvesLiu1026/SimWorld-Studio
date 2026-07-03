@@ -385,7 +385,7 @@ async function handleCodexChat(req, res, deps) {
       const irModel = require("./model-config").resolveModel(body);
       irPromptBlock = await sceneIR.buildIRBlock(message, {
         model: irModel, provider: "codex", runner: "codex",
-        irSolver: body.irSolver, irRepair: body.irRepair, irCot: body.irCot, irAscii: body.irAscii, irRichAssets: body.irRichAssets, irPlanCritic: body.irPlanCritic,
+        irSolver: body.irSolver, irRepair: body.irRepair, irCot: body.irCot, irAscii: body.irAscii, irRichAssets: body.irRichAssets, irPlanCritic: body.irPlanCritic, irGroundPass: body.irGroundPass,
         log: (x) => deps.logToFile && deps.logToFile("ir", x),
       });
       emit("ir", { phase: "done", chars: irPromptBlock ? irPromptBlock.length : 0 });
