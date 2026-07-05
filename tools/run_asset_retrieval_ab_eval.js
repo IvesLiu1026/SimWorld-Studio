@@ -695,11 +695,22 @@ async function ensureDaytimeSky(opts) {
   catch (e) { return { ok: false, error: e && e.message ? e.message : String(e) }; }
 }
 
-async function captureComparisonViews(opts, runDir, count) {
+// Phase A1: derive lighting/atmosphere from the scene prompt + apply it deterministically in UE
+// (post-build, pre-staged-capture). Never fatal — a mood failure leaves the flat-lit scene intact.
+async function applyMood(opts, scene) {
+  try {
+    const { deriveMood, buildMoodScript } = require(path.resolve(__dirname, "..", "simworld_studio_workspace", "web", "server", "scene-mood"));
+    const mood = await deriveMood(scene, { model: opts.model, provider: opts.runner || "codex", runner: opts.runner || "codex" });
+    await ueCommand(opts, "execute_python_script", { script: buildMoodScript(mood) }, 60000);
+    return { ok: true, mood_tag: mood.mood_tag, params: mood };
+  } catch (e) { return { ok: false, error: String(e && e.message) }; }
+}
+
+async function captureComparisonViews(opts, runDir, count, subdir) {
   const n = Math.max(0, Math.min(COMPARISON_VIEW_CONFIGS.length, Number(count) || 0));
   if (!n) return [];
   if (!opts.uePort) return [{ error: "ue port not configured" }];
-  const outDir = path.join(runDir, "comparison_views");
+  const outDir = path.join(runDir, subdir || "comparison_views");
   mkdirp(outDir);
   // 1) Frame the scene ONCE: centroid + extent from non-infra actor POSITIONS (percentile).
   const boundsScript = [
@@ -790,13 +801,19 @@ function promptSet(opts) {
 
 function evalPromptText(prompt, opts, mode) {
   const OFF_DISCOVERY = (mode === "off") ? "\n\nASSET DISCOVERY (no curated palette is provided for this scene): the UE content library has MANY themed asset packs beyond the basic CityDatabase. DISCOVER and use them — call execute_python_script and run `import unreal; print(chr(10).join(unreal.EditorAssetLibrary.list_assets('/Game', recursive=False)))` to list the top-level packs/folders, then drill into the ones matching THIS scene's setting with `unreal.EditorAssetLibrary.list_assets('/Game/<Pack>', recursive=True, include_folder=False)`. Spawn the genre-appropriate meshes/blueprints you find by their FULL /Game/... path (spawn_actor for static meshes, spawn_blueprint_actor for blueprints). STRONGLY prefer these themed assets over generic CityDatabase BP_Building towers, and do NOT use BasicShapes cubes/planes as stand-ins for real objects." : "";
+  // Scene size is parameterized by AB_EVAL_SIZE_M (default 100 for back-compat). Density + spacing scale with area.
+  const SIZE = Math.max(60, Number(process.env.AB_EVAL_SIZE_M) || 100);
+  const HALF = Math.round(SIZE / 2), UU = HALF * 100;
+  const dens = Math.round(Math.pow(SIZE / 100, 2) * 100);          // ~100 @100 m, ~400 @200 m
+  const dLo = Math.round(dens * 0.75), dHi = Math.round(dens * 1.6);
+  const step = Math.max(8, Math.round(SIZE / 12));                 // ~8 m @100 m, ~17 m @200 m
   const BUILD_GUIDE =
-    "\n\nBUILD A FULL ~100 m × 100 m SCENE (≈10000×10000 UE units centered at origin, so X and Y roughly -5000..+5000) — a substantial, real-world-scale place you could walk around in, NOT a small patch with a few props. FIRST PLAN, then build to the plan — organized with natural real-world variation, not random." +
-    "\nPLAN: decide a focal anchor (main building / fountain / gate) + the main streets/axes/paths + ZONES spread ACROSS the full 100×100 m (buildings around the perimeter and lining the streets, open plaza/paths between them, clustered detail areas). " +
-    "\nGROUND FIRST (before any props): carpet the WHOLE 100×100 m with a solid, scene-appropriate ground (asphalt/concrete for city or harbor; cobblestone/dirt for medieval; stone for a temple; sand for a bazaar; grass for a park; snow for winter) so NO bare default grey ground shows anywhere. Lay it by EITHER tiling ground/floor MESHES (grass tiles, walkway/plaza slabs, snowy-road or stone-floor pieces) edge-to-edge across the full 100 m, OR spawning a grid of flat planes (/Engine/BasicShapes/Plane, ~4–8 m each) and applying a matching ground MATERIAL via StaticMeshComponent.set_material(0, material) so the texture tiles instead of stretching. NEVER use water/ocean as the floor (water only as a separate edge feature). Every object sits ON this ground, inside the 100 m." +
-    "\nFILL DENSELY ACROSS THE WHOLE AREA: 100×100 m is large, so you MUST place MANY assets — aim for ~80–150+ — DISTRIBUTED across the full area (something roughly every 8–12 m), NOT clustered in one corner with empty ground around it. LEAD with LARGE / structural assets (whole buildings, houses, sheds, market stalls, walls, big trees, large set-pieces) as the backbone, arranged in rows and clusters along the streets/zones; REUSE each type many times; THEN add mid-size and small props as dressing (small props like bags/bottles/rocks are NEVER the bulk). Layer background structures → midground → foreground so little ground is left empty." +
-    "\nUse execute_python_script to place many instances efficiently (loops/grids spanning the 100 m). Prefer COMPLETE buildings over modular fragments; realistic scale (~0.8–1.3×, no giant stretching); everything upright (yaw only) and on the ground. The result must read as ONE busy, organized, instantly-recognizable ~100 m place with believable variation." +
-    "\nSPAWN ROBUSTLY (critical for dense scenes — a whole scene has been lost to this): the UE python job is SERIAL and TIME-LIMITED, so do NOT put hundreds of spawns in ONE execute_python_script call. Split them across SEVERAL calls of at most ~120 spawns each (e.g. ground first, then structures, then dressing), and read the job log after each call before the next. Wrap EACH individual spawn in its own try/except so one failing asset is SKIPPED, never aborting the batch, and print a running spawned-count from each job. After the final batch, call get_actors_in_level; if far fewer actors exist than you intended, spawn the missing ones in another batch. NEVER finish with a near-empty scene (ground only).";
+    `\n\nBUILD A FULL ~${SIZE} m × ${SIZE} m SCENE (≈${SIZE * 100}×${SIZE * 100} UE units centered at origin, so X and Y roughly -${UU}..+${UU}) — a substantial, real-world-scale place you could walk around in, NOT a small patch with a few props. FIRST PLAN, then build to the plan — organized with natural real-world variation, not random.` +
+    `\nPLAN: decide a focal anchor (main building / fountain / gate) + the main streets/axes/paths + ZONES spread ACROSS the full ${SIZE}×${SIZE} m (buildings around the perimeter and lining the streets, open plaza/paths between them, clustered detail areas). This is a LARGE site — use its full extent, but EVERY region must be FULL: no large empty gaps between zones (fill with paths, secondary clusters, vegetation, dressing).` +
+    `\nGROUND FIRST (before any props): carpet the WHOLE ${SIZE}×${SIZE} m with a solid, scene-appropriate ground (asphalt/concrete for city or harbor; cobblestone/dirt for medieval; stone for a temple; sand for a bazaar; grass for a park; snow for winter) so NO bare default grey ground shows anywhere. Lay it by EITHER tiling ground/floor MESHES (grass tiles, walkway/plaza slabs, snowy-road or stone-floor pieces) edge-to-edge across the full ${SIZE} m, OR spawning a grid of flat planes (/Engine/BasicShapes/Plane, ~4–8 m each) and applying a matching ground MATERIAL via StaticMeshComponent.set_material(0, material) so the texture tiles instead of stretching. NEVER use water/ocean as the floor (water only as a separate edge feature). Every object sits ON this ground, inside the ${SIZE} m.` +
+    `\nFILL DENSELY ACROSS THE WHOLE AREA: ${SIZE}×${SIZE} m is a big site, so you MUST place MANY assets — aim for ~${dLo}–${dHi}+ — DISTRIBUTED across the full area (something roughly every ${step}–${step + 6} m), NOT clustered in one corner with empty ground around it. LEAD with LARGE / structural assets (whole buildings, houses, sheds, market stalls, walls, big trees, large set-pieces) as the backbone, arranged in rows and clusters along the streets/zones; REUSE each type many times; THEN add mid-size and small props as dressing (small props like bags/bottles/rocks are NEVER the bulk). Layer background structures → midground → foreground so little ground is left empty.` +
+    `\nUse execute_python_script to place many instances efficiently (loops/grids spanning the ${SIZE} m). Prefer COMPLETE buildings over modular fragments; realistic scale (~0.8–1.3×, no giant stretching); everything upright (yaw only) and on the ground. The result must read as ONE busy, organized, instantly-recognizable ~${SIZE} m place with believable variation.` +
+    `\nSPAWN ROBUSTLY (critical for dense scenes — a whole scene has been lost to this): the UE python job is SERIAL and TIME-LIMITED, so do NOT put hundreds of spawns in ONE execute_python_script call. Split them across SEVERAL calls of at most ~120 spawns each (e.g. ground first, then structures, then dressing), and read the job log after each call before the next. Wrap EACH individual spawn in its own try/except so one failing asset is SKIPPED, never aborting the batch, and print a running spawned-count from each job. After the final batch, call get_actors_in_level; if far fewer actors exist than you intended, spawn the missing ones in another batch. NEVER finish with a near-empty scene (ground only).`;
   prompt = `${prompt}${OFF_DISCOVERY}${BUILD_GUIDE}`;
   const screenshotCount = Math.max(1, Math.floor(Number(opts.screenshotAngles) || 1));
   const screenshotInstruction = screenshotCount > 1
@@ -978,6 +995,8 @@ async function main() {
     "gentle-plancritic": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true },
     // Fix #1: plan-critic + deterministic themed ground carpet:
     "gentle-pc-ground": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true },
+    // Phase A1: plan-critic + mood/lighting/camera stage (`mood` is harness-only — dual-capture flat+staged):
+    "gentle-pc-mood": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, mood: true },
   };
   const variantList = (opts.variants && opts.variants.length)
     ? opts.variants.map(v => ({ name: v, cfg: VARIANT_PRESETS[v] || { sceneIr: true } }))
@@ -1093,7 +1112,14 @@ async function main() {
         fs.writeFileSync(path.join(runDir, "metrics.json"), JSON.stringify(run.metrics, null, 2), "utf-8");
         run.straighten = await straightenScene(opts);
         run.sky = await ensureDaytimeSky(opts);
-        run.comparison_views = await captureComparisonViews(opts, runDir, opts.comparisonViews);
+        if (variant && variant.cfg && variant.cfg.mood) {
+          // Phase A1 dual-capture: flat-lit set first (for layout A/B), then apply mood + staged set.
+          await captureComparisonViews(opts, runDir, opts.comparisonViews, "comparison_views_flat");
+          run.mood = await applyMood(opts, prompt.text);
+          run.comparison_views = await captureComparisonViews(opts, runDir, opts.comparisonViews);
+        } else {
+          run.comparison_views = await captureComparisonViews(opts, runDir, opts.comparisonViews);
+        }
         // Persist the evaluated (post-straighten) scene as a reloadable .umap.
         run.umap = (run.actual && run.actual.ok) ? await saveSceneUmap(opts.serverUrl, label + "__" + launchId, runDir) : { ok: false, error: "build not ok" };
         // Let the editor finish its post-save content-validation pass before the next cell's reset.

@@ -20,7 +20,7 @@
 //
 // Returns { placed: [...], report: {...} }.
 
-const GROUND_HALF_M = Number(process.env.IR_GROUND_HALF_M || 130); // matches mcp-server GROUND_HALF=13000cm
+const GROUND_HALF_M = Number(process.env.IR_GROUND_HALF_M) || (process.env.AB_EVAL_SIZE_M ? Math.round(Number(process.env.AB_EVAL_SIZE_M) / 2 + 15) : 130); // ±(size/2+margin); mcp-server hard clamp=130 m
 const M2CM = 100;
 const DEG = Math.PI / 180;
 const DEFAULT_ANCHOR = "origin";

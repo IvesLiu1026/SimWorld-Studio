@@ -24,6 +24,8 @@ function _assetLines(assets, rich) {
 }
 
 function buildPlannerPrompt(scene, assets, brief, rich) {
+  const SITE_M = Math.max(60, Number(process.env.AB_EVAL_SIZE_M) || 100);   // full build-area size (m)
+  const nLo = Math.round(Math.pow(SITE_M / 100, 2) * 120), nHi = Math.round(Math.pow(SITE_M / 100, 2) * 260);
   return [
     "You are the SCENE LAYOUT PLANNER for a 3D scene built in Unreal Engine. Produce a STRUCTURED",
     "LAYOUT PLAN as JSON that a builder will execute verbatim. You DECIDE what goes where, using",
@@ -60,8 +62,8 @@ function buildPlannerPrompt(scene, assets, brief, rich) {
     "- Angles in DEGREES: 0°=+X (East), 90°=+Y (North), counter-clockwise. All distances/offsets in METRES.",
     "- Place RELATIVE in a chain: hang buildings off roads/anchors, props off buildings, trees off paths — NOT everything from one center.",
     "- COMPOSE WITH INTENT — do NOT sprinkle objects evenly across the map. Cluster related items into tight functional ZONES (market stalls packed in the square; temple halls on a central axis; container stacks in a yard; buildings lining a street) with deliberate NEGATIVE SPACE (paths, plaza, courtyard) between zones. Give each zone/anchor its OWN region so zones don't pile onto each other.",
-    "- RIGHT-SIZE to the scene type and keep it COMPACT: an enclosed courtyard / square / market ≈ 40–60 m across; a street or district up to ~100 m. Do NOT push objects out toward the far corners just to fill space — a smaller, fuller scene reads far better than a large sparse one.",
-    "- WITHIN a zone, place objects CLOSE but NON-OVERLAPPING — leave each its own footprint (a small gap between them), dense enough to read as full and lived-in. Use line/grid PATTERNS for BUILT repetition only (fences, columns, container rows, lamp lines, stall rows). Aim for ~100–200 placements once patterns expand.",
+    `- SIZE the layout to a ~${SITE_M} m × ${SITE_M} m build area (roughly ±${Math.round(SITE_M / 2)} m from center): spread the focal composition, streets/axes, and multiple ZONES across the FULL extent so it reads as a substantial place — but keep EVERY zone internally dense/full and connect them with paths, secondary clusters, vegetation and dressing so there are NO large empty gaps between zones. A big site must be FULL, not a few clusters floating in a void.`,
+    `- WITHIN a zone, place objects CLOSE but NON-OVERLAPPING — leave each its own footprint (a small gap between them), dense enough to read as full and lived-in. Use line/grid PATTERNS for BUILT repetition only (fences, columns, container rows, lamp lines, stall rows). Aim for ~${nLo}–${nHi} placements once patterns expand (scale up with the ${SITE_M} m site).`,
     "- NATURE IS NOT GRIDDED: scatter trees / plants / rocks in IRREGULAR, DENSE CLUMPS of varying spacing — NEVER a ring or grid of trees (it looks fake). A park or garden should be FULL of trees in natural clusters, not a thin perimeter ring around empty grass.",
     "- BUILD FUNCTIONAL GROUPS by chaining small props off EACH OTHER (relative_to another OBJECT, not always an anchor/center): a bench beside or under a tree, a trash bin next to that bench, lanterns along a path, crates stacked against a wall, stalls flanking a lane. Scatter several such little groups through the scene — that is what makes it feel lived-in and real.",
     "- ALWAYS tile a ground/floor asset from the palette (category ground_and_road) with a grid pattern to carpet the area at z≈0.",

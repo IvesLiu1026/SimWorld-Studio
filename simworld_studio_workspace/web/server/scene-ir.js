@@ -312,7 +312,8 @@ async function buildIRBlock(scene, opts) {
       try {
         const irGround = require("./ir-ground");
         const db = await require("./asset-retrieval").loadDB();
-        const carpet = irGround.groundCarpetBlock(scene, db, Number(process.env.IR_GROUND_CARPET_HALF_M || 52));
+        const carpetHalf = Number(process.env.IR_GROUND_CARPET_HALF_M) || (process.env.AB_EVAL_SIZE_M ? Math.round(Number(process.env.AB_EVAL_SIZE_M) / 2 + 5) : 52);
+        const carpet = irGround.groundCarpetBlock(scene, db, carpetHalf);
         if (carpet) { block = carpet + "\n" + block; log("ir ground-carpet: prepended themed gapless carpet"); }
         else log("ir ground-carpet: no suitable tile found (skipped)");
       } catch (e) { log("ir ground-pass failed (non-fatal): " + (e && e.message)); }
