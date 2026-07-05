@@ -61,6 +61,11 @@ async function deriveMood(scene, opts) {
 // (e.g. missing PostProcessVolume API) never aborts the rest. Idempotent (reuses existing actors).
 function buildMoodScript(m) {
   const P = m || NOON;
+  // Day/night-aware lighting so daytime/snow scenes stay bright (winter over-darkened before):
+  const _day = P.sun_elevation_deg > 5, _night = P.sun_elevation_deg < -3;
+  const _sunI = _day ? Math.max(P.sun_intensity_lux, 6) : P.sun_intensity_lux;   // daytime directional floor
+  const _skyI = _day ? 1.3 : (_night ? 0.14 : 0.55);                             // ambient: bright day, dim night
+  const _expo = _day ? Math.max(P.exposure_comp, 0.0) : P.exposure_comp;         // never under-expose daytime
   return [
     "import unreal",
     "eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
@@ -77,7 +82,7 @@ function buildMoodScript(m) {
     "    dl=_find('DirectionalLight') or eas.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0,0,300), unreal.Rotator(0,0,0))",
     `    dl.set_actor_rotation(unreal.Rotator(${(-P.sun_elevation_deg).toFixed(2)}, ${P.sun_azimuth_deg.toFixed(2)}, 0.0), False)`,
     "    c=dl.get_component_by_class(unreal.DirectionalLightComponent)",
-    `    c.set_intensity(${P.sun_intensity_lux.toFixed(3)})`,
+    `    c.set_intensity(${_sunI.toFixed(3)})`,
     `    c.set_temperature(${Math.round(P.color_temp_k)}); c.set_editor_property('use_temperature', True)`,
     "    log.append('sun ok')",
     "except Exception as e: log.append('sun FAIL '+str(e))",
@@ -85,7 +90,7 @@ function buildMoodScript(m) {
     "try:",
     "    sl=_find('SkyLight')",
     "    if sl:",
-    `        sc=sl.get_component_by_class(unreal.SkyLightComponent); sc.set_intensity(${Math.max(0.05, Math.min(3, P.sun_intensity_lux / 8)).toFixed(3)}); sc.recapture_sky()`,
+    `        sc=sl.get_component_by_class(unreal.SkyLightComponent); sc.set_intensity(${_skyI.toFixed(3)}); sc.recapture_sky()`,
     "        log.append('skylight ok')",
     "except Exception as e: log.append('skylight FAIL '+str(e))",
     "# --- Exponential height fog ---",
@@ -102,7 +107,7 @@ function buildMoodScript(m) {
     "    pp.set_editor_property('unbound', True)",
     "    s=pp.get_editor_property('settings')",
     "    s.set_editor_property('override_auto_exposure_bias', True)",
-    `    s.set_editor_property('auto_exposure_bias', ${P.exposure_comp.toFixed(3)})`,
+    `    s.set_editor_property('auto_exposure_bias', ${_expo.toFixed(3)})`,
     "    s.set_editor_property('override_color_saturation', True)",
     `    s.set_editor_property('color_saturation', unreal.Vector4(${P.saturation.toFixed(3)}, ${P.saturation.toFixed(3)}, ${P.saturation.toFixed(3)}, 1.0))`,
     "    pp.set_editor_property('settings', s)",

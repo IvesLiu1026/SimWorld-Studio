@@ -537,7 +537,8 @@ pitch_deg=${view.pitch}; kind="${view.kind}"
 if kind=="overhead":
     cam_z=max(extent*1.55, 2500.0); horiz=max(extent*0.28, 800.0)
 elif kind=="street":
-    horiz=extent+1000.0; cam_z=220.0
+    # eye-level from INSIDE the scene looking across, not outside staring at a perimeter building
+    horiz=max(0.32*extent, 1500.0); cam_z=190.0
 elif kind=="mid":
     horiz=max(1.1*extent, 2400.0); cam_z=max(horiz*math.tan(math.radians(abs(pitch_deg))), max(0.4*zt, 500.0))
 else:
