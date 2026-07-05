@@ -228,13 +228,20 @@ function _emit(placedList, positions, emitOpts) {
     const organic = JIT > 0 && !_isGround(p.geom) && _isOrganic(p.geom.category);
     if (organic) { px += (_hashUnit(obj.id, "jx") * 2 - 1) * JIT; py += (_hashUnit(obj.id, "jy") * 2 - 1) * JIT; }
     let yaw = _num(obj.rotation_deg, _num(obj.yaw, 0));
+    const hasExplicitYaw = (obj.rotation_deg != null || obj.yaw != null);
     const faceName = obj.facing || obj.face;
+    let faced = false;
     if (faceName) {
       const tp = positions.get(faceName);
-      if (tp) yaw = Math.atan2(tp.y - py, tp.x - px) / DEG;
+      if (tp && (tp.x !== px || tp.y !== py)) { yaw = Math.atan2(tp.y - py, tp.x - px) / DEG; faced = true; }
+    } else if (!hasExplicitYaw && (obj.relative_to || obj.rel) && !organic && !_isGround(p.geom)) {
+      // Fallback: orient toward the anchor it was placed against — breaks the all-0° monotony with a
+      // mostly-plausible inward orientation instead of leaving every object at default 0°.
+      const tp = positions.get(obj.relative_to || obj.rel);
+      if (tp && (tp.x !== px || tp.y !== py)) { yaw = Math.atan2(tp.y - py, tp.x - px) / DEG; faced = true; }
     }
     if (organic) yaw = _hashUnit(obj.id, "jr") * 360;          // natural random spin
-    else if (snapStructural(p)) yaw = Math.round(yaw / yawSnap) * yawSnap;
+    else if (!faced && snapStructural(p)) yaw = Math.round(yaw / yawSnap) * yawSnap;   // only snap NON-faced structural objects
     return {
       id: obj.id,
       asset_id: obj.asset_id || obj.asset || "",

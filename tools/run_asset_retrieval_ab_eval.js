@@ -997,6 +997,8 @@ async function main() {
     "gentle-pc-ground": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true },
     // Phase A1: plan-critic + mood/lighting/camera stage (`mood` is harness-only — dual-capture flat+staged):
     "gentle-pc-mood": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, mood: true },
+    // Phase A/B ENHANCED: plan-critic + ground carpet + mood (facing fix is now default in the solver):
+    "gentle-enh": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true, mood: true },
   };
   const variantList = (opts.variants && opts.variants.length)
     ? opts.variants.map(v => ({ name: v, cfg: VARIANT_PRESETS[v] || { sceneIr: true } }))
