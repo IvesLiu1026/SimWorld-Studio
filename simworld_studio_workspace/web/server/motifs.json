@@ -1,0 +1,159 @@
+{
+  "_comment": "Motif library (Phase C). Local frame: +X = the direction the motif FACES (its 'front', toward the walkway/plaza it serves); origin = motif center. place = [dx_m, dy_m, yaw_deg] per instance (yaw 0 = face +X). Slots bind against the scene's retrieved palette by cats (categories) + kw (keywords over id/name/tags/subcategory); avoid excludes; maxm caps footprint size (m). core:true = if unbound, skip the whole motif. distinct:true = vary the bound asset across placements.",
+  "motifs": {
+    "market_stall_unit": {
+      "desc": "a vendor stall with goods (crates/baskets/sacks) displayed at its front, barrels/crates stacked at the side, and a lantern — the atom of any market",
+      "slots": [
+        { "role": "stall", "cats": ["carts_and_vendors", "market_goods", "medieval_fantasy_props", "buildings", "building_pieces"], "kw": ["stall", "stand", "booth", "market", "vendor", "tent", "awning", "kiosk"], "maxm": 8, "core": true, "place": [[0, 0, 0]] },
+        { "role": "goods", "cats": ["market_goods", "indoor_clutter", "agricultural_props", "industrial_goods"], "kw": ["crate", "basket", "sack", "box", "pottery", "jar", "fruit", "vegetable", "goods", "bread"], "maxm": 3, "distinct": true, "place": [[2.2, 0.9, 20], [2.2, -0.8, -15], [1.6, 1.8, 45]] },
+        { "role": "side_stock", "cats": ["market_goods", "industrial_goods", "agricultural_props"], "kw": ["barrel", "crate", "sack", "box"], "maxm": 3, "place": [[-1.4, 1.8, 70], [-1.5, -1.6, 15]] },
+        { "role": "lantern", "cats": ["lighting"], "kw": ["lantern", "lamp", "torch", "light"], "maxm": 4, "place": [[2.6, -2.2, 0]] }
+      ]
+    },
+    "vendor_cart": {
+      "desc": "a lone vendor cart/wagon with a couple of goods beside it — scatter between stalls and lanes",
+      "slots": [
+        { "role": "cart", "cats": ["carts_and_vendors", "vehicles", "medieval_fantasy_props"], "kw": ["cart", "wagon", "barrow", "pushcart"], "maxm": 6, "core": true, "place": [[0, 0, 10]] },
+        { "role": "goods", "cats": ["market_goods", "indoor_clutter", "agricultural_props"], "kw": ["crate", "basket", "sack", "jar", "box"], "maxm": 3, "distinct": true, "place": [[1.6, 0.8, -25], [1.4, -1.0, 40]] }
+      ]
+    },
+    "bench_rest_spot": {
+      "desc": "two benches at a slight angle with a bin, a lamp and greenery — a small resting corner for plazas/parks/paths",
+      "slots": [
+        { "role": "bench", "cats": ["seating"], "kw": ["bench", "seat"], "maxm": 4, "core": true, "place": [[0, 0, 0], [0.6, 2.6, -25]] },
+        { "role": "bin", "cats": ["waste_and_bins"], "kw": ["bin", "trash", "waste", "basket"], "maxm": 2, "place": [[-0.6, -1.8, 0]] },
+        { "role": "lamp", "cats": ["lighting"], "kw": ["lamp", "street", "lantern", "light"], "maxm": 7, "place": [[-1.4, 1.2, 0]] },
+        { "role": "green", "cats": ["vegetation"], "kw": ["bush", "planter", "plant", "flower", "shrub"], "maxm": 3, "place": [[-1.8, 3.6, 0]] }
+      ]
+    },
+    "plaza_center": {
+      "desc": "a focal centerpiece (fountain/statue/monument/well) ringed by benches facing it and planters — THE center of a square",
+      "slots": [
+        { "role": "centerpiece", "cats": ["decor_and_landmarks", "religious_ritual", "medieval_fantasy_props"], "kw": ["fountain", "statue", "monument", "well", "obelisk", "sculpture", "memorial"], "maxm": 12, "core": true, "place": [[0, 0, 0]] },
+        { "role": "bench", "cats": ["seating"], "kw": ["bench", "seat"], "maxm": 4, "place": [[5.5, 0, 180], [-2.75, 4.76, -60], [-2.75, -4.76, 60]] },
+        { "role": "planter", "cats": ["vegetation", "decor_and_landmarks"], "kw": ["planter", "bush", "flower", "pot", "plant"], "maxm": 3, "distinct": true, "place": [[4.2, 3.8, 0], [4.2, -3.8, 0]] }
+      ]
+    },
+    "shrine_spot": {
+      "desc": "a shrine/statue/altar flanked by two stone lanterns with an offering pot and greenery — temple and garden focal",
+      "slots": [
+        { "role": "shrine", "cats": ["religious_ritual", "decor_and_landmarks", "medieval_fantasy_props"], "kw": ["shrine", "statue", "altar", "buddha", "deity", "monument", "pagoda"], "maxm": 8, "core": true, "place": [[0, 0, 0]] },
+        { "role": "stone_lantern", "cats": ["lighting", "religious_ritual", "decor_and_landmarks"], "kw": ["lantern", "stone", "toro", "lamp"], "maxm": 3, "place": [[2.2, 2.0, 0], [2.2, -2.0, 0]] },
+        { "role": "offering", "cats": ["religious_ritual", "market_goods", "indoor_clutter"], "kw": ["pot", "bowl", "urn", "vase", "incense", "jar"], "maxm": 2, "place": [[1.5, 0, 180]] },
+        { "role": "green", "cats": ["vegetation"], "kw": ["bush", "plant", "bamboo", "shrub", "flower"], "maxm": 4, "place": [[-1.8, 2.8, 0], [-1.8, -2.8, 0]] }
+      ]
+    },
+    "garden_corner": {
+      "desc": "a tree with rocks, a stone lantern and bushes — organic garden/park filler with structure",
+      "slots": [
+        { "role": "tree", "cats": ["vegetation"], "kw": ["tree"], "maxm": 12, "core": true, "place": [[0, 0, 0]] },
+        { "role": "rock", "cats": ["nature_terrain"], "kw": ["rock", "stone", "boulder"], "maxm": 4, "distinct": true, "place": [[2.0, 1.2, 30], [1.4, -1.8, 70]] },
+        { "role": "lantern", "cats": ["lighting", "religious_ritual"], "kw": ["lantern", "stone", "lamp"], "maxm": 3, "place": [[3.0, -0.5, 0]] },
+        { "role": "bush", "cats": ["vegetation"], "kw": ["bush", "shrub", "plant", "flower", "grass"], "maxm": 3, "distinct": true, "place": [[-1.6, 2.2, 0], [-2.2, -1.4, 0]] }
+      ]
+    },
+    "container_workzone": {
+      "desc": "a shipping container with pallets, barrels and traffic cones around its working side — industrial yard atom",
+      "slots": [
+        { "role": "container", "cats": ["industrial_goods"], "kw": ["container"], "maxm": 14, "core": true, "place": [[0, 0, 0]] },
+        { "role": "pallet", "cats": ["industrial_goods", "market_goods"], "kw": ["pallet"], "maxm": 4, "distinct": true, "place": [[3.6, 1.4, 10], [3.8, -1.2, -5]] },
+        { "role": "barrel", "cats": ["industrial_goods", "pipes_tanks_infra", "waste_and_bins"], "kw": ["barrel", "drum"], "maxm": 2, "distinct": true, "place": [[2.8, 3.0, 0], [3.2, -3.0, 0]] },
+        { "role": "cone", "cats": ["barriers_and_fencing"], "kw": ["cone", "drum", "barrier"], "maxm": 2, "place": [[5.0, 0.8, 0], [5.0, -1.2, 0]] }
+      ]
+    },
+    "cargo_cluster": {
+      "desc": "stacked crates, barrels and sacks with a hand cart — dock/warehouse dressing cluster",
+      "slots": [
+        { "role": "crates", "cats": ["industrial_goods", "market_goods"], "kw": ["crate", "box", "cargo"], "maxm": 4, "core": true, "distinct": true, "place": [[0, 0, 0], [1.3, 0.9, 35], [0.4, -1.4, 70]] },
+        { "role": "barrel", "cats": ["industrial_goods", "pipes_tanks_infra"], "kw": ["barrel", "drum"], "maxm": 2, "distinct": true, "place": [[-1.4, 0.8, 0], [-1.2, -1.0, 0]] },
+        { "role": "cart", "cats": ["carts_and_vendors", "tools_equipment", "vehicles"], "kw": ["cart", "trolley", "dolly", "barrow"], "maxm": 4, "place": [[2.4, -0.6, -30]] }
+      ]
+    },
+    "firewood_yard": {
+      "desc": "a firewood stack with a chopping stump and fence segments — rustic/winter homestead corner",
+      "slots": [
+        { "role": "wood", "cats": ["winter_snow_props", "agricultural_props", "medieval_fantasy_props", "nature_terrain"], "kw": ["firewood", "log", "woodpile", "wood", "lumber", "plank"], "maxm": 4, "core": true, "distinct": true, "place": [[0, 0, 0], [1.2, 1.0, 40]] },
+        { "role": "stump", "cats": ["nature_terrain", "vegetation", "agricultural_props"], "kw": ["stump", "trunk", "log"], "maxm": 2, "place": [[1.8, -1.2, 0]] },
+        { "role": "fence", "cats": ["barriers_and_fencing"], "kw": ["fence", "picket", "wood"], "maxm": 5, "place": [[-1.8, 1.5, 90], [-1.8, -1.5, 90]] }
+      ]
+    },
+    "winter_lamp_corner": {
+      "desc": "a street lantern with snow piles and a bare tree — winter street dressing",
+      "slots": [
+        { "role": "lamp", "cats": ["lighting"], "kw": ["lamp", "lantern", "street", "light"], "maxm": 7, "core": true, "place": [[0, 0, 0]] },
+        { "role": "snow", "cats": ["winter_snow_props", "nature_terrain"], "kw": ["snow", "pile", "drift"], "maxm": 4, "distinct": true, "place": [[1.4, 1.0, 20], [0.8, -1.4, 60]] },
+        { "role": "tree", "cats": ["vegetation"], "kw": ["tree", "bare", "dead", "winter"], "maxm": 10, "place": [[-2.2, 1.8, 0]] }
+      ]
+    },
+    "bazaar_shopfront": {
+      "desc": "a bazaar stall with carpets laid in front and pottery clustered beside — souk atom",
+      "slots": [
+        { "role": "stall", "cats": ["carts_and_vendors", "market_goods", "buildings", "building_pieces"], "kw": ["stall", "awning", "stand", "tent", "bazaar", "shop", "market"], "maxm": 8, "core": true, "place": [[0, 0, 0]] },
+        { "role": "carpet", "cats": ["market_goods", "indoor_clutter", "decor_and_landmarks", "furniture_indoor"], "kw": ["carpet", "rug", "textile", "cloth", "fabric"], "maxm": 5, "distinct": true, "place": [[2.6, 0.6, 5], [2.4, -1.4, -10]] },
+        { "role": "pottery", "cats": ["market_goods", "indoor_clutter", "religious_ritual"], "kw": ["pot", "jar", "vase", "pottery", "urn", "amphora", "ceramic"], "maxm": 2, "distinct": true, "place": [[1.4, 2.0, 0], [1.8, 2.6, 0], [-1.2, -1.8, 0]] },
+        { "role": "crate", "cats": ["market_goods", "industrial_goods"], "kw": ["crate", "sack", "basket", "box"], "maxm": 3, "place": [[-1.6, 1.4, 30]] }
+      ]
+    },
+    "goods_corner": {
+      "desc": "a dense little pile of sacks, baskets and jars — market/souk clutter between stalls",
+      "slots": [
+        { "role": "sacks", "cats": ["market_goods", "agricultural_props", "indoor_clutter"], "kw": ["sack", "bag", "basket"], "maxm": 3, "core": true, "distinct": true, "place": [[0, 0, 0], [0.9, 0.6, 45], [0.2, -0.9, 20]] },
+        { "role": "jars", "cats": ["market_goods", "indoor_clutter"], "kw": ["jar", "pot", "vase", "urn", "amphora"], "maxm": 2, "distinct": true, "place": [[-0.9, 0.7, 0], [-0.8, -0.7, 0]] }
+      ]
+    },
+    "gate_flank": {
+      "desc": "banners/flags and lanterns flanking an entry/gate axis — marks an entrance",
+      "slots": [
+        { "role": "banner", "cats": ["signage", "decor_and_landmarks", "medieval_fantasy_props"], "kw": ["banner", "flag", "sign", "standard"], "maxm": 8, "core": true, "place": [[0, 3.0, 0], [0, -3.0, 0]] },
+        { "role": "lantern", "cats": ["lighting"], "kw": ["lantern", "torch", "lamp", "brazier"], "maxm": 4, "distinct": true, "place": [[1.2, 4.2, 0], [1.2, -4.2, 0]] }
+      ]
+    },
+    "tree_grove": {
+      "desc": "a natural clump of 4 varied trees with rocks and bushes — organic space filler that reads as nature, not a grid",
+      "slots": [
+        { "role": "tree", "cats": ["vegetation"], "kw": ["tree"], "maxm": 14, "core": true, "distinct": true, "place": [[0, 0, 0], [3.4, 2.2, 0], [-2.6, 3.0, 0], [1.2, -3.4, 0]] },
+        { "role": "rock", "cats": ["nature_terrain"], "kw": ["rock", "stone", "boulder"], "maxm": 4, "place": [[-1.2, -1.6, 50]] },
+        { "role": "bush", "cats": ["vegetation"], "kw": ["bush", "shrub", "plant", "fern", "grass"], "maxm": 3, "distinct": true, "place": [[2.2, -0.8, 0], [-3.6, 0.6, 0]] }
+      ]
+    },
+    "junk_corner": {
+      "desc": "a dumpster/bin with trash bags and debris — lived-in urban grime for alleys and back walls",
+      "slots": [
+        { "role": "bin", "cats": ["waste_and_bins"], "kw": ["dumpster", "bin", "trash", "container", "skip"], "maxm": 4, "core": true, "place": [[0, 0, 0]] },
+        { "role": "bags", "cats": ["litter_and_debris", "waste_and_bins", "indoor_clutter"], "kw": ["bag", "garbage", "trash", "junk", "rubbish"], "maxm": 2, "distinct": true, "place": [[1.4, 0.8, 30], [1.2, -1.0, 70]] },
+        { "role": "debris", "cats": ["litter_and_debris", "industrial_goods"], "kw": ["debris", "junk", "scrap", "box", "plank"], "maxm": 3, "place": [[-1.2, 1.2, 15]] }
+      ]
+    },
+    "lamp_bench_path": {
+      "desc": "a street lamp with a bench under it and a bin — path-side furniture atom",
+      "slots": [
+        { "role": "lamp", "cats": ["lighting"], "kw": ["lamp", "street", "lantern", "light", "pole"], "maxm": 8, "core": true, "place": [[0, 0, 0]] },
+        { "role": "bench", "cats": ["seating"], "kw": ["bench", "seat"], "maxm": 4, "place": [[1.6, 0.4, 0]] },
+        { "role": "bin", "cats": ["waste_and_bins"], "kw": ["bin", "trash", "basket"], "maxm": 2, "place": [[1.2, -1.6, 0]] }
+      ]
+    },
+    "scaffold_workzone": {
+      "desc": "scaffolding against a structure with a material pile, barriers and cones — construction/repair corner",
+      "slots": [
+        { "role": "scaffold", "cats": ["building_pieces", "industrial_goods", "tools_equipment"], "kw": ["scaffold", "platform", "frame", "truss"], "maxm": 10, "core": true, "place": [[0, 0, 0]] },
+        { "role": "materials", "cats": ["industrial_goods", "building_pieces", "litter_and_debris"], "kw": ["pile", "plank", "brick", "cinder", "material", "lumber", "pallet"], "maxm": 4, "distinct": true, "place": [[2.6, 1.2, 20], [2.2, -1.6, -10]] },
+        { "role": "barrier", "cats": ["barriers_and_fencing"], "kw": ["barrier", "cone", "fence", "drum"], "maxm": 3, "distinct": true, "place": [[4.2, 1.0, 90], [4.2, -1.2, 90]] }
+      ]
+    },
+    "table_gathering": {
+      "desc": "a table with benches/chairs around it and a basket/jug on the side — tavern/picnic/social spot",
+      "slots": [
+        { "role": "table", "cats": ["furniture_indoor", "seating", "medieval_fantasy_props", "camping_outdoor"], "kw": ["table"], "maxm": 4, "core": true, "place": [[0, 0, 0]] },
+        { "role": "seat", "cats": ["seating", "furniture_indoor"], "kw": ["bench", "chair", "stool", "seat"], "maxm": 3, "distinct": true, "place": [[1.4, 0, 180], [-1.4, 0, 0], [0, 1.6, -90]] },
+        { "role": "stuff", "cats": ["market_goods", "indoor_clutter"], "kw": ["basket", "jug", "jar", "bottle", "bowl"], "maxm": 2, "place": [[0.6, -1.8, 0]] }
+      ]
+    },
+    "barrel_cluster": {
+      "desc": "barrels grouped against a wall with a crate — universal filler for docks, taverns, yards",
+      "slots": [
+        { "role": "barrel", "cats": ["industrial_goods", "market_goods", "pipes_tanks_infra", "medieval_fantasy_props"], "kw": ["barrel", "keg", "drum", "cask"], "maxm": 2.5, "core": true, "distinct": true, "place": [[0, 0, 0], [1.0, 0.5, 30], [0.4, -1.0, 60], [1.2, -0.6, 15]] },
+        { "role": "crate", "cats": ["industrial_goods", "market_goods"], "kw": ["crate", "box", "sack"], "maxm": 2.5, "place": [[-1.2, 0.4, 20]] }
+      ]
+    }
+  }
+}

@@ -241,7 +241,7 @@ function _emit(placedList, positions, emitOpts) {
       if (tp && (tp.x !== px || tp.y !== py)) { yaw = Math.atan2(tp.y - py, tp.x - px) / DEG; faced = true; }
     }
     if (organic) yaw = _hashUnit(obj.id, "jr") * 360;          // natural random spin
-    else if (!faced && snapStructural(p)) yaw = Math.round(yaw / yawSnap) * yawSnap;   // only snap NON-faced structural objects
+    else if (!faced && !hasExplicitYaw && snapStructural(p)) yaw = Math.round(yaw / yawSnap) * yawSnap;   // snap only default-yaw structural objects (explicit rotation_deg — e.g. motif members — is deliberate)
     return {
       id: obj.id,
       asset_id: obj.asset_id || obj.asset || "",

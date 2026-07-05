@@ -673,6 +673,7 @@ async function handleVisualSceneLoop(req, res, deps) {
         ...(req.body.irRichAssets != null ? { irRichAssets: req.body.irRichAssets } : {}),
         ...(req.body.irPlanCritic != null ? { irPlanCritic: req.body.irPlanCritic } : {}),
         ...(req.body.irGroundPass != null ? { irGroundPass: req.body.irGroundPass } : {}),
+        ...(req.body.irMotifs != null ? { irMotifs: req.body.irMotifs } : {}),
       });
       const opts = {
         host: "127.0.0.1", port, path: "/api/chat", method: "POST",
@@ -725,6 +726,7 @@ async function handleVisualSceneLoop(req, res, deps) {
         irRichAssets: req.body.irRichAssets,
         irPlanCritic: req.body.irPlanCritic,
         irGroundPass: req.body.irGroundPass,
+        irMotifs: req.body.irMotifs,
       });
       planAscii = (arts && arts.ascii) || ""; planIntent = (arts && arts.intent) || "";
       log("vloop", `IR plan-aware critic: intended layout ${planAscii ? "ready (" + planAscii.length + " chars)" : "unavailable"}`);

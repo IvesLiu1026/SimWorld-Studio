@@ -29,8 +29,8 @@ function resolveIRMode(bodyOrMode) {
 const _planCache = new Map();
 const _cache = new Map();
 const _artifactCache = new Map(); // bkey -> {ascii, intent}; surfaced to the visual-loop critic so it can judge intended-vs-built
-function _planKey(scene, o) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), cot: resolveCot(o), rich: resolveRichAssets(o), v: 1 }); }
-function _blockKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), mode, repair: !!repair, cot: resolveCot(o), ascii: resolveAscii(o), rich: resolveRichAssets(o), planCritic: resolvePlanCritic(o), ground: resolveGroundPass(o), v: 2 }); }
+function _planKey(scene, o) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), cot: resolveCot(o), rich: resolveRichAssets(o), motifs: resolveMotifs(o), v: 1 }); }
+function _blockKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), mode, repair: !!repair, cot: resolveCot(o), ascii: resolveAscii(o), rich: resolveRichAssets(o), planCritic: resolvePlanCritic(o), ground: resolveGroundPass(o), motifs: resolveMotifs(o), v: 2 }); }
 
 // Solver mode: body.irSolver | env IR_SOLVER. Default "legacy" (the original scatter solver).
 function resolveSolverMode(o) {
@@ -80,6 +80,13 @@ function resolveGroundPass(o) {
   if (b.irGroundPass != null && b.irGroundPass !== "") return _truthy(b.irGroundPass);
   return _truthy(process.env.IR_GROUND_PASS);
 }
+// Motif/assembly layer (Phase C): planner places multi-object assemblies as single units; expanded
+// into rigid groups before solve. body.irMotifs | env IR_MOTIFS. Default OFF.
+function resolveMotifs(o) {
+  const b = o || {};
+  if (b.irMotifs != null && b.irMotifs !== "") return _truthy(b.irMotifs);
+  return _truthy(process.env.IR_MOTIFS);
+}
 
 // Plan ONCE per (scene, model): retrieve palette + LLM plan → normalized graph. Cached so all
 // solver variants reuse the same graph. Returns { graph, assets, planReport }.
@@ -98,6 +105,7 @@ async function _planOnce(scene, o, log) {
     reasoningEffort: process.env.IR_PLANNER_REASONING_EFFORT || o.reasoningEffort || "high",
     timeoutMs: Number(process.env.IR_PLANNER_TIMEOUT_MS || o.timeoutMs || 300000),
     richAssets: resolveRichAssets(o),
+    motifs: resolveMotifs(o),
   });
   const useCot = resolveCot(o) && typeof planner.planSceneCot === "function";
   if (useCot) log("ir planner: CoT/reasoning two-stage (design brief -> graph)");
@@ -237,6 +245,14 @@ async function buildIRBlock(scene, opts) {
     const assetIndex = new Map(assets.map(a => [a.id, a]));
 
     let curGraph = graph;
+    // Motif expansion (Phase C): bind palette assets into each planned assembly and merge the concrete,
+    // rigid-grouped members into the graph BEFORE solve (the plan-critic then sees the full density).
+    if (resolveMotifs(o) && Array.isArray(curGraph.motifs) && curGraph.motifs.length) {
+      try {
+        const em = require("./ir-motifs").expandMotifs(curGraph, assets, { log });
+        curGraph = em.graph;
+      } catch (e) { log("ir motifs expansion failed (non-fatal): " + (e && e.message)); }
+    }
     let { placed, report: solveReport } = solve(curGraph, assetIndex, { mode });
     const renderStamp = Date.now(); // groups this build's plan renders
     const rslug = _slug(scene);

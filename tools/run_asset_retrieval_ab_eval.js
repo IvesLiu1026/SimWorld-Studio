@@ -1000,6 +1000,8 @@ async function main() {
     "gentle-pc-mood": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, mood: true },
     // Phase A/B ENHANCED: plan-critic + ground carpet + mood (facing fix is now default in the solver):
     "gentle-enh": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true, mood: true },
+    // Phase C: enhanced + motif/assembly layer (planner places multi-object units; expander binds + arranges):
+    "gentle-enh-motifs": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true, mood: true, irMotifs: true },
   };
   const variantList = (opts.variants && opts.variants.length)
     ? opts.variants.map(v => ({ name: v, cfg: VARIANT_PRESETS[v] || { sceneIr: true } }))
@@ -1044,6 +1046,7 @@ async function main() {
         if (variant.cfg.irRichAssets != null) baseBody.irRichAssets = !!variant.cfg.irRichAssets;
         if (variant.cfg.irPlanCritic != null) baseBody.irPlanCritic = !!variant.cfg.irPlanCritic;
         if (variant.cfg.irGroundPass != null) baseBody.irGroundPass = !!variant.cfg.irGroundPass;
+        if (variant.cfg.irMotifs != null) baseBody.irMotifs = !!variant.cfg.irMotifs;
       } else if (irMode) baseBody.sceneIr = (irMode === "on");
       if (opts.runner) baseBody.runner = opts.runner;
       if (opts.model) baseBody.model = opts.model;

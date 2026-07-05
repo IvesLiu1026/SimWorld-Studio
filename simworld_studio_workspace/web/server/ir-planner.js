@@ -23,7 +23,25 @@ function _assetLines(assets, rich) {
   }).join("\n");
 }
 
-function buildPlannerPrompt(scene, assets, brief, rich) {
+function buildPlannerPrompt(scene, assets, brief, rich, motifs) {
+  // Motif library block (Phase C): only when enabled, and only motifs bindable against THIS palette.
+  let motifBlock = "", motifSchema = [], motifRule = [];
+  if (motifs) {
+    try { motifBlock = require("./ir-motifs").motifPromptBlock(assets); } catch (_e) { motifBlock = ""; }
+    if (motifBlock) {
+      motifSchema = [
+        '  "motifs": [   // PREFER these for FUNCTIONAL CLUSTERS — each expands into a full arranged assembly',
+        '    { "motif": "<name from MOTIF LIBRARY>", "id_prefix": "<unique>", "at": "<anchor or object id>",',
+        '      "offset": { "dx": <m>, "dy": <m> },   // optional, relative to `at`',
+        '      "rotation_deg": <deg the motif FRONT faces — point it at the walkway/plaza/street it serves>',
+        '      /* or "facing": "<anchor id>" to aim its front at that anchor */ }',
+        '  ],',
+      ];
+      motifRule = [
+        "- USE MOTIFS for the small-scale life of the scene: place market_stall_unit / bench_rest_spot / cargo clusters etc. as single units instead of hand-placing each crate and lantern — they expand into canonically-arranged, properly-facing assemblies. Line several stall/shopfront motifs along lanes and squares (varying rotation_deg with the lane direction), scatter rest/goods/junk motifs through zones. Use plain objects/patterns for buildings, walls, rows, and anything the library lacks. Aim for 8–20 motif instances in a typical scene.",
+      ];
+    }
+  }
   const SITE_M = Math.max(60, Number(process.env.AB_EVAL_SIZE_M) || 100);   // full build-area size (m)
   const nLo = Math.round(Math.pow(SITE_M / 100, 2) * 120), nHi = Math.round(Math.pow(SITE_M / 100, 2) * 260);
   return [
@@ -39,6 +57,7 @@ function buildPlannerPrompt(scene, assets, brief, rich) {
     "ASSET PALETTE (use ONLY these exact asset_id values; dimensions are width×depth×height in metres):",
     _assetLines(assets, rich),
     "",
+    ...(motifBlock ? [motifBlock] : []),
     "OUTPUT a JSON layout graph with EXACTLY this schema:",
     '{',
     '  "scene_name": "<short name>",',
@@ -55,10 +74,12 @@ function buildPlannerPrompt(scene, assets, brief, rich) {
     '      "radius": <m>, "start_angle": <deg>,                                                 // ring',
     '      "rows": <n>, "cols": <n> }                                                           // grid',
     '  ],',
+    ...motifSchema,
     '  "constraints": ["non_overlap", "on_ground"]',
     '}',
     "",
     "RULES:",
+    ...motifRule,
     "- Angles in DEGREES: 0°=+X (East), 90°=+Y (North), counter-clockwise. All distances/offsets in METRES.",
     "- Place RELATIVE in a chain: hang buildings off roads/anchors, props off buildings, trees off paths — NOT everything from one center.",
     "- COMPOSE WITH INTENT — do NOT sprinkle objects evenly across the map. Cluster related items into tight functional ZONES (market stalls packed in the square; temple halls on a central axis; container stacks in a yard; buildings lining a street) with deliberate NEGATIVE SPACE (paths, plaza, courtyard) between zones. Give each zone/anchor its OWN region so zones don't pile onto each other.",
@@ -105,6 +126,9 @@ function normalizeGraph(raw, assetIndex) {
     if (ob.facing) norm.facing = String(ob.facing);
     if (ob.rotation_deg != null) norm.rotation_deg = _num(ob.rotation_deg, 0);
     if (ob.scale != null) norm.scale = _num(ob.scale, 1);
+    // motif-expansion internals must survive re-normalization (plan-critic revise merges + re-normalizes)
+    if (ob._group) norm._group = String(ob._group);
+    if (ob._gkind) norm._gkind = String(ob._gkind);
     objects.push(norm);
   }
 
@@ -125,16 +149,28 @@ function normalizeGraph(raw, assetIndex) {
     patterns.push(np);
   }
 
+  // motif instances (Phase C): validated lightly here; ir-motifs.expandMotifs binds + expands them later
+  const motifs = [];
+  for (const m of (Array.isArray(g.motifs) ? g.motifs : [])) {
+    if (!m || !m.motif) continue;
+    const nm = { motif: String(m.motif), id_prefix: uniq(m.id_prefix || m.motif), at: String(m.at || m.relative_to || "origin") };
+    if (m.offset && typeof m.offset === "object") nm.offset = m.offset;
+    if (m.rotation_deg != null) nm.rotation_deg = _num(m.rotation_deg, 0);
+    if (m.facing) nm.facing = String(m.facing);
+    motifs.push(nm);
+  }
+
   report.keptObjects = objects.length;
   report.keptPatterns = patterns.length;
+  report.keptMotifs = motifs.length;
   const constraints = (Array.isArray(g.constraints) && g.constraints.length) ? g.constraints.map(String) : ["non_overlap", "on_ground"];
-  return { graph: { scene_name: String(g.scene_name || ""), anchors, objects, patterns, constraints }, report };
+  return { graph: { scene_name: String(g.scene_name || ""), anchors, objects, patterns, motifs, constraints }, report };
 }
 
 // LLM call → normalized graph. assets = retrieve().assets (compact records with dims).
 async function planScene(scene, assets, opts) {
   const o = opts || {};
-  const prompt = buildPlannerPrompt(scene, assets || [], null, o.richAssets);
+  const prompt = buildPlannerPrompt(scene, assets || [], null, o.richAssets, o.motifs);
   const raw = await oneshotJSON(prompt, Object.assign({ telemetryComponent: "ir_planner" }, o));
   const assetIndex = new Map((assets || []).map(a => [a.id, a]));
   const { graph, report } = normalizeGraph(raw, assetIndex);
