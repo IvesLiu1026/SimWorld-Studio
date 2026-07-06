@@ -232,7 +232,14 @@ async function buildIRBlock(scene, opts) {
   const mode = resolveSolverMode(o);
   const repair = resolveRepair(o) && mode !== "legacy";
   const bkey = _blockKey(scene, o, mode, repair);
-  if (_cache.has(bkey)) { log(`ir cache HIT (block mode=${mode}${repair ? "+repair" : ""})`); return _cache.get(bkey); }
+  if (_cache.has(bkey)) {
+    log(`ir cache HIT (block mode=${mode}${repair ? "+repair" : ""})`);
+    // Re-persist THIS variant's artifacts on hit: the persisted tmp/ir/<slug-hash>.json is shared across
+    // variants of the same scene, so without this a cache-hit cell would copy a stale sibling's plan.
+    const art = _artifactCache.get(bkey);
+    if (art && art.persist) { try { _persist(o, art.persist); } catch (_e) {} }
+    return _cache.get(bkey);
+  }
 
   try {
     const { solve } = require("./ir-solver");
@@ -289,7 +296,13 @@ async function buildIRBlock(scene, opts) {
     if (resolvePlanCritic(o) && placed.length) {
       const planCritic = require("./ir-plan-critic");
       const ROUNDS = Math.max(1, Number(process.env.IR_PLAN_CRITIC_ROUNDS || 1));
+      // capacity guard: densifying a FULL site just packs props into buildings (measured on the bazaar:
+      // 910 objects -> 365 prop-in-building clips). Cap scales with site area; beyond it, skip the critic.
+      const siteM = Math.max(60, Number(process.env.AB_EVAL_SIZE_M) || 100);
+      const CAP = Math.max(150, Number(process.env.IR_PLAN_CAP) || Math.round(Math.pow(siteM / 100, 2) * 380));
       for (let r = 1; r <= ROUNDS; r++) {
+        const nonGround = placed.filter(p => !p.isGround).length;
+        if (nonGround >= CAP) { log(`ir plan-critic: site at capacity (${nonGround} >= ${CAP}) — skipping densify round ${r}`); break; }
         const img = planCritic.renderPlanImage(placed, `${rslug}_r${r}`);
         _keepPlanRender(img, `${rslug}__${renderStamp}__r${r}pre__${placed.length}obj`, log); // keep this round's plan for analysis
         let crit;
@@ -342,7 +355,8 @@ async function buildIRBlock(scene, opts) {
       try { if (fimg) fs.rmSync(fimg, { force: true }); } catch (_e) {}
     } catch (_e) {}
     _persist(o, { scene, graph: curGraph, placed, solveReport, planReport, ascii });
-    _artifactCache.set(bkey, { ascii, intent: (brief && brief.trim()) ? brief.trim() : _planIntent(curGraph) });
+    _artifactCache.set(bkey, { ascii, intent: (brief && brief.trim()) ? brief.trim() : _planIntent(curGraph),
+      persist: { scene, graph: curGraph, placed, solveReport, planReport } });
 
     log(`ir[${mode}${repair ? "+repair" : ""}]: ${(curGraph.objects || []).length} obj + ${(curGraph.patterns || []).length} patterns → ${placed.length} placed `
       + `(overlapsRemaining=${solveReport.overlapsRemaining}, clamped=${solveReport.clamped}, solver=${solveReport.solver})`);

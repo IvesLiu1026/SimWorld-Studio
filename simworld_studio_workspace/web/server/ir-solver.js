@@ -537,6 +537,61 @@ function solveGentle(graph, assetIndex, opts) {
       if (!moved) break;
     }
 
+    // ── B-2: rigid-penetration resolution ─────────────────────────────────────
+    // The composition loop above is deliberately gentle (3 m budget) and tolerates residual overlaps;
+    // fine for benign contacts, but DEEP rigid-rigid clips (cart-through-wall) kill eye-level realism —
+    // and dense motif packing makes them common. Resolve ONLY those: pairs of non-benign units
+    // penetrating > PEN_TH move apart (lighter unit yields, groups move rigidly), capped displacement.
+    {
+      const PEN_TH = Math.max(0, Number(process.env.IR_PEN_THRESH_M || 0.3));
+      const PEN_BUDGET = Math.max(0, Number(process.env.IR_PEN_BUDGET_M || 9));
+      const PEN_ITERS = Math.max(0, Number(process.env.IR_PEN_ITERS || 50));
+      const PROP_MAX = Math.max(1, Number(process.env.IR_PEN_PROP_MAX_M || 7)); // "prop-scale" = movable
+      // INNER radius (min half-dimension): certain-clip region — a hit here is a real interpenetration
+      // regardless of yaw (bounding circles overcount hugely for elongated walls/buildings).
+      const innerR = (p) => { const f = p.geom.footprint || {}; const w = Number(f.width) || 0, d = Number(f.depth) || 0; return (w && d) ? Math.min(w, d) / 2 : p.geom.radius; };
+      const benign = (p) => innerR(p) < 0.4 || /veg|nature|plant|tree|foliage|grass|bush|flower|litter|debris|clutter/i.test(p.geom.category || "");
+      const units = [];
+      const seen = new Set();
+      for (const p of structural) {
+        const gid = p._group || ("__obj_" + p.obj.id);
+        if (seen.has(gid)) continue;
+        seen.add(gid);
+        const members = p._group ? structural.filter(q => q._group === p._group) : [p];
+        const rigid = members.filter(m => !benign(m));
+        if (!rigid.length) continue;
+        const propScale = members.every(m => m.geom.radius <= PROP_MAX);
+        units.push({ members, rigid, propScale, mass: rigid.reduce((s, m) => s + m.geom.radius * m.geom.radius, 0), moved: 0 });
+      }
+      let resolved = 0;
+      for (let it = 0; it < PEN_ITERS; it++) {
+        let acted = 0;
+        for (let i = 0; i < units.length; i++) for (let j = i + 1; j < units.length; j++) {
+          const A = units[i], B = units[j];
+          if (!A.propScale && !B.propScale) continue;    // big-vs-big adjacency = composition, accept
+          let pen = 0, ax = 0, ay = 0, bx = 0, by = 0;
+          for (const a of A.rigid) for (const b of B.rigid) {
+            const d = Math.hypot(b.x - a.x, b.y - a.y);
+            const p = innerR(a) + innerR(b) - d;         // certain clip only
+            if (p > pen) { pen = p; ax = a.x; ay = a.y; bx = b.x; by = b.y; }
+          }
+          if (pen <= PEN_TH) continue;
+          // the prop-scale unit yields (lighter of the two if both are prop-scale)
+          let mover = A.propScale && B.propScale ? (A.mass <= B.mass ? A : B) : (A.propScale ? A : B);
+          if (mover.moved >= PEN_BUDGET) continue;        // cap reached — tolerate
+          let nx = bx - ax, ny = by - ay, nl = Math.hypot(nx, ny);
+          if (nl < 1e-6) { nx = 1; ny = 0; nl = 1; }
+          nx /= nl; ny /= nl;
+          const sgn = (mover === B) ? 1 : -1;
+          const step = Math.min(pen + PEN_TH, PEN_BUDGET - mover.moved);
+          for (const m of mover.members) { m.x += sgn * nx * step; m.y += sgn * ny * step; }
+          mover.moved += step; acted++; resolved++;
+        }
+        if (!acted) break;
+      }
+      report.rigidPenResolved = resolved;
+    }
+
     // residual structural overlaps (informational only — gentle accepts minor contacts)
     let remain = 0;
     for (let i = 0; i < structural.length; i++) for (let j = i + 1; j < structural.length; j++) if (Math.hypot(structural[j].x - structural[i].x, structural[j].y - structural[i].y) < structural[i].geom.radius + structural[j].geom.radius) remain++;
