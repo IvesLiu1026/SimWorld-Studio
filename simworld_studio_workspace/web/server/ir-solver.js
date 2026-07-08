@@ -248,8 +248,18 @@ function _emit(placedList, positions, emitOpts) {
       const tp = positions.get(faceName);
       if (tp) yaw = Math.atan2(tp.y - py, tp.x - px) / DEG;
     }
+    // FENCE/WALL run-yaw: a boundary asset in a line/ring pattern must yaw to its RUN/TANGENT direction so
+    // the run reads continuous — otherwise the perpendicular sides of a compound sit crosswise instead of
+    // in-line (a consistent visible bug). Only for boundary assets with no explicit rotation/facing; keep
+    // the exact run angle (skip the structural yaw-snap that would misalign it).
+    let boundaryRun = false;
+    if (obj.rotation_deg == null && obj.yaw == null && !faceName &&
+        /barrier|fenc|wall|railing|hedge|parapet|balustrade/i.test((p.geom.category || "") + " " + (p.geom.name || ""))) {
+      if (p._gkind === "line" && p._axisDeg != null) { yaw = p._axisDeg; boundaryRun = true; }
+      else if (p._gkind === "ring" && p._ringStart != null && p._ringCount) { yaw = p._ringStart + 360 * (p._ringI || 0) / p._ringCount + 90; boundaryRun = true; }
+    }
     if (organic) yaw = _hashUnit(obj.id, "jr") * 360;          // natural random spin
-    else if (snapStructural(p)) yaw = Math.round(yaw / yawSnap) * yawSnap;
+    else if (!boundaryRun && snapStructural(p)) yaw = Math.round(yaw / yawSnap) * yawSnap;
     return {
       id: obj.id,
       asset_id: obj.asset_id || obj.asset || "",

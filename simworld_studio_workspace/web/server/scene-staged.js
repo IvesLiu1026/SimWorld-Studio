@@ -204,8 +204,11 @@ async function handleStagedBuild(req, res, deps) {
     // Fit the ground to the actual (re-solved) object cluster. The tuned structure solver clusters objects
     // tighter than the planner's fixed ground-fill grid assumed, so a fixed-size carpet AND that grid would
     // overhang the objects as an empty offset square. Size both to the 92nd-pct object extent (outlier-robust).
+    // Cover the 98th-pct object extent + a generous margin so assets don't sit off the carpet / float over
+    // void (only genuine far-outlier solver-escapees, <2%, fall outside — a separate solver fix). Margin
+    // also absorbs the small position shifts from later tiers' re-solves.
     const _cheb = objectEntries.map(p => Math.max(Math.abs(p.x_m || 0), Math.abs(p.y_m || 0))).sort((a, b) => a - b);
-    const groundHalfM = Math.max(20, Math.ceil((_cheb.length ? _cheb[Math.floor(0.92 * (_cheb.length - 1))] : 40) + 8));
+    const groundHalfM = Math.max(20, Math.ceil((_cheb.length ? _cheb[Math.floor(0.98 * (_cheb.length - 1))] : 40) + 12));
     // Clip the plan's ground-FILL grid (a high-count repeated tile asset) to that extent; keep singular
     // ground ACCENTS (roads, manholes, junctions) wherever the planner put them.
     let groundEntries = plan.placed.filter(p => p.isGround);
