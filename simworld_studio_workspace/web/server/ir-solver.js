@@ -69,6 +69,21 @@ function _hashUnit(id, salt) {
   return (h >>> 0) / 4294967296;
 }
 
+// Frozen-obstacle map for the staged builder's per-tier re-solve (opts.frozen): id -> {x, y, r} (metres)
+// from the MEASURED footprints of already-spawned actors. Radius = footprint half-diagonal.
+function _frozenMap(frozen) {
+  const m = new Map();
+  const list = Array.isArray(frozen) ? frozen : (frozen && typeof frozen.values === "function" ? [...frozen.values()] : []);
+  for (const f of list) {
+    if (!f || f.id == null) continue;
+    const w = _num(f.w_m, 1), d = _num(f.d_m, 1);
+    let r = Math.sqrt((w / 2) * (w / 2) + (d / 2) * (d / 2));
+    if (!(r > 0)) r = 0.5;
+    m.set(String(f.id), { x: _num(f.x_m, 0), y: _num(f.y_m, 0), r });
+  }
+  return m;
+}
+
 // Expand a pattern (line | ring | grid) into concrete object entries that each carry a
 // {dx,dy} offset relative to the pattern's reference, so they flow through normal resolution.
 // Members are tagged (_group/_gkind/…) so the structure-preserving solver can keep them rigid.
@@ -313,8 +328,19 @@ function solveStructured(graph, assetIndex, opts) {
   report.solver = "structure";
 
   const wantNoOverlap = o.noOverlap !== false && !constraints.includes("allow_overlap");
-  const PAD = Math.max(0, Number(process.env.IR_STRUCT_PAD_M || 0.3));
+  const PAD = Math.max(0, _num(o.structPadM, Number(process.env.IR_STRUCT_PAD_M || 0.3)));
   const movable = placedList.filter(p => !_isGround(p.geom));
+
+  // Staged builder: opts.frozen = MEASURED footprints of already-spawned actors. Pin them immovable so
+  // pending groups/clutter de-overlap AGAINST them (they never move). No-op when absent → unchanged.
+  const FROZEN = (o.frozen && (Array.isArray(o.frozen) ? o.frozen.length : (o.frozen.size || 0))) ? _frozenMap(o.frozen) : null;
+  if (FROZEN) {
+    for (const p of placedList) {
+      const f = FROZEN.get(String(p.obj.id));
+      if (f) { p.x = f.x; p.y = f.y; p.geom = Object.assign({}, p.geom, { radius: f.r }); p._frozen = true; }
+    }
+  }
+  const isFrozen = (p) => !!(p && p._frozen);
 
   // Partition: pattern members → rigid groups; standalone big objects → singleton groups;
   // standalone small props → free clutter.
@@ -330,6 +356,8 @@ function solveStructured(graph, assetIndex, opts) {
   const groupList = [...groups.values()];
   const centroid = (G) => { let sx = 0, sy = 0; for (const m of G.members) { sx += m.x; sy += m.y; } return { x: sx / G.members.length, y: sy / G.members.length }; };
   const maxDiam = (G) => { let r = 0; for (const m of G.members) if (m.geom.radius > r) r = m.geom.radius; return 2 * r; };
+  // Frozen groups (staged): all-members-pinned → obstacles that never move. All false when no frozen.
+  for (const G of groupList) G.frozen = G.members.length > 0 && G.members.every(isFrozen);
 
   if (wantNoOverlap) {
     // 1) Intra-group normalize — re-derive member coords on the pattern shape with spacing
@@ -362,15 +390,15 @@ function solveStructured(graph, assetIndex, opts) {
     //    toward its PLANNED position so the scene stays COMPACT (no spreading into the void).
     //    IR_ANCHOR_PULL (0..0.9): fraction pulled home each sweep; higher = denser/tighter.
     for (const G of groupList) G.home = centroid(G);
-    const ITERS = Math.max(1, Number(process.env.IR_GROUP_ITERS || 250));
-    const PULL = Math.max(0, Math.min(0.9, Number(process.env.IR_ANCHOR_PULL || 0.25)));
-    const DAMP = Math.max(0.05, Math.min(1, Number(process.env.IR_PUSH_DAMP || 1)));
-    const TGT = Math.max(0, Number(process.env.IR_TARGET_EXTENT_M || 0)); // 0=off; else floor ±TGT m
+    const ITERS = Math.max(1, _num(o.groupIters, Number(process.env.IR_GROUP_ITERS || 250)));
+    const PULL = Math.max(0, Math.min(0.9, _num(o.anchorPull, Number(process.env.IR_ANCHOR_PULL || 0.25))));
+    const DAMP = Math.max(0.05, Math.min(1, _num(o.pushDamp, Number(process.env.IR_PUSH_DAMP || 1))));
+    const TGT = Math.max(0, _num(o.targetExtentM, Number(process.env.IR_TARGET_EXTENT_M || 0))); // 0=off; else floor ±TGT m
     // Size-aware: grow the clamp box to hold the scene's total object footprint area, so dense /
     // big-structure scenes (harbor) aren't crushed into overlap while small scenes (market) stay tight.
     let TEFF = TGT;
     if (TGT > 0) {
-      const PACK = Math.max(0, Number(process.env.IR_TARGET_PACK || 0)); // 0=fixed TGT; else area-scaled
+      const PACK = Math.max(0, _num(o.targetPack, Number(process.env.IR_TARGET_PACK || 0))); // 0=fixed TGT; else area-scaled
       if (PACK > 0) {
         let area = 0;
         for (const p of movable) area += Math.PI * p.geom.radius * p.geom.radius;
@@ -383,6 +411,7 @@ function solveStructured(graph, assetIndex, opts) {
       for (let i = 0; i < groupList.length; i++) {
         for (let j = i + 1; j < groupList.length; j++) {
           const G = groupList[i], H = groupList[j];
+          if (G.frozen && H.frozen) continue;
           let pen = 0;
           for (const a of G.members) for (const b of H.members) {
             const d = Math.hypot(b.x - a.x, b.y - a.y);
@@ -394,10 +423,14 @@ function solveStructured(graph, assetIndex, opts) {
           let nx = cH.x - cG.x, ny = cH.y - cG.y, nl = Math.hypot(nx, ny);
           if (nl < 1e-6) { nx = (i % 2 ? 1 : -1); ny = (j % 2 ? 1 : -1); nl = Math.hypot(nx, ny); }
           nx /= nl; ny /= nl;
-          const ws = G.mass + H.mass || 1, wG = H.mass / ws, wH = G.mass / ws;
-          for (const m of G.members) { m.x -= nx * pen * wG * DAMP; m.y -= ny * pen * wG * DAMP; }
-          for (const m of H.members) { m.x += nx * pen * wH * DAMP; m.y += ny * pen * wH * DAMP; }
-          G.over = true; H.over = true;
+          if (G.frozen) { for (const m of H.members) { m.x += nx * pen * DAMP; m.y += ny * pen * DAMP; } H.over = true; }        // G fixed → H clears fully
+          else if (H.frozen) { for (const m of G.members) { m.x -= nx * pen * DAMP; m.y -= ny * pen * DAMP; } G.over = true; }   // H fixed → G clears fully
+          else {
+            const ws = G.mass + H.mass || 1, wG = H.mass / ws, wH = G.mass / ws;
+            for (const m of G.members) { m.x -= nx * pen * wG * DAMP; m.y -= ny * pen * wG * DAMP; }
+            for (const m of H.members) { m.x += nx * pen * wH * DAMP; m.y += ny * pen * wH * DAMP; }
+            G.over = true; H.over = true;
+          }
           moved++;
         }
       }
@@ -407,7 +440,7 @@ function solveStructured(graph, assetIndex, opts) {
       // nestle home until they just touch a neighbour → compact AND collision-free, not fanned out.
       if (PULL > 0) {
         for (const G of groupList) {
-          if (G.over) continue;
+          if (G.over || G.frozen) continue;
           const c = centroid(G), dx = (G.home.x - c.x) * PULL, dy = (G.home.y - c.y) * PULL;
           if (dx || dy) for (const m of G.members) { m.x += dx; m.y += dy; }
         }
@@ -416,6 +449,7 @@ function solveStructured(graph, assetIndex, opts) {
       // past the ground/build area. The group translates as one unit, so lines/grids keep their shape.
       if (TGT > 0) {
         for (const G of groupList) {
+          if (G.frozen) continue;
           const c = centroid(G);
           let hx = 0, hy = 0;
           for (const m of G.members) { const ax = Math.abs(m.x - c.x), ay = Math.abs(m.y - c.y); if (ax > hx) hx = ax; if (ay > hy) hy = ay; }
@@ -436,9 +470,11 @@ function solveStructured(graph, assetIndex, opts) {
     for (let it = 0; it < CITERS; it++) {
       let moved = 0;
       for (const c of clutter) {
+        const cFrozen = isFrozen(c);
         for (const s of structMembers) {
           const d = Math.hypot(s.x - c.x, s.y - c.y), minD = c.geom.radius + s.geom.radius + PAD;
           if (d >= minD) continue;
+          if (cFrozen) continue;
           let nx = c.x - s.x, ny = c.y - s.y, nl = Math.hypot(nx, ny);
           if (nl < 1e-6) { nx = 1; ny = 0; nl = 1; }
           nx /= nl; ny /= nl; const pen = minD - d;
@@ -449,10 +485,25 @@ function solveStructured(graph, assetIndex, opts) {
           const d = Math.hypot(c2.x - c.x, c2.y - c.y), minD = c.geom.radius + c2.geom.radius + PAD;
           if (d >= minD || d < 1e-6) continue;
           const nx = (c.x - c2.x) / d, ny = (c.y - c2.y) / d, pen = (minD - d) / 2;
-          c.x += nx * pen; c.y += ny * pen; c2.x -= nx * pen; c2.y -= ny * pen; moved++;
+          if (!cFrozen) { c.x += nx * pen; c.y += ny * pen; }
+          if (!isFrozen(c2)) { c2.x -= nx * pen; c2.y -= ny * pen; }
+          moved++;
         }
       }
       if (!moved) break;
+    }
+
+    // Escalation (staged): pending groups still penetrating a frozen obstacle after full iterations.
+    if (FROZEN) {
+      const blockPad = Math.max(0, Number(process.env.IR_SOLVER_BLOCKED_PAD_M || 0.1));
+      const blocked = [];
+      for (const G of groupList) {
+        if (G.frozen) continue;
+        let pen = 0;
+        for (const m of G.members) { if (isFrozen(m)) continue; for (const f of FROZEN.values()) { const p = m.geom.radius + f.r - Math.hypot(m.x - f.x, m.y - f.y); if (p > pen) pen = p; } }
+        if (pen > blockPad) { const g0 = G.members[0]; blocked.push({ id: (g0 && (g0._group || g0.obj.id)) || null, penetration: _round(pen) }); }
+      }
+      report.solverBlocked = blocked;
     }
 
     // Residual STRUCTURAL overlaps (for the repair decision): pairs among non-clutter objects.
@@ -487,6 +538,19 @@ function solveGentle(graph, assetIndex, opts) {
   const { placedList, positions, report, constraints, halfM } = _layout(graph, assetIndex, o);
   report.solver = "gentle";
 
+  // Staged builder (Phase 2): opts.frozen = MEASURED footprints of already-spawned actors. Pin those
+  // placed entries to their measured position + radius and mark them immovable — pending objects
+  // de-overlap AGAINST them but they never move. When absent, every guard below is a no-op → the
+  // baseline gentle solve is byte-for-byte unchanged.
+  const FROZEN = (o.frozen && (Array.isArray(o.frozen) ? o.frozen.length : (o.frozen.size || 0))) ? _frozenMap(o.frozen) : null;
+  if (FROZEN) {
+    for (const p of placedList) {
+      const f = FROZEN.get(String(p.obj.id));
+      if (f) { p.x = f.x; p.y = f.y; p.geom = Object.assign({}, p.geom, { radius: f.r }); p._frozen = true; }
+    }
+  }
+  const isFrozen = (p) => !!(p && p._frozen);
+
   const wantNoOverlap = o.noOverlap !== false && !constraints.includes("allow_overlap");
   if (wantNoOverlap) {
     const PAD = Math.max(0, Number(process.env.IR_STRUCT_PAD_M || 0.3));
@@ -505,29 +569,52 @@ function solveGentle(graph, assetIndex, opts) {
     const cent = (m) => { let x = 0, y = 0; for (const p of m) { x += p.x; y += p.y; } return { x: x / m.length, y: y / m.length }; };
     const ghome = groups.map(cent);
     const chome = new Map(clutter.map(p => [p.obj.id, { x: p.x, y: p.y }]));
+    // A group is frozen iff all its members are pinned (homogeneous per tier). Frozen groups/clutter
+    // exert push but never move; when no frozen obstacles exist these are all false → unchanged.
+    const gfrozen = groups.map(g => g.length > 0 && g.every(isFrozen));
 
     for (let it = 0; it < ITERS; it++) {
       let moved = 0;
-      // rigid group vs group: small damped nudges (no big shoves)
+      // rigid group vs group: small damped nudges (no big shoves). Against a FROZEN group, only the
+      // pending group moves — by the full penetration — since the obstacle won't yield.
       for (let i = 0; i < groups.length; i++) for (let j = i + 1; j < groups.length; j++) {
+        if (gfrozen[i] && gfrozen[j]) continue;
         const A = groups[i], B = groups[j]; let pen = 0;
         for (const a of A) for (const b of B) { const p = a.geom.radius + b.geom.radius + PAD - Math.hypot(b.x - a.x, b.y - a.y); if (p > pen) pen = p; }
         if (pen <= 0) continue;
         const cA = cent(A), cB = cent(B); let nx = cB.x - cA.x, ny = cB.y - cA.y, nl = Math.hypot(nx, ny);
         if (nl < 1e-6) { nx = (i % 2 ? 1 : -1); ny = (j % 2 ? 1 : -1); nl = Math.hypot(nx, ny); }
-        nx /= nl; ny /= nl; const step = Math.min(pen, 1.0) * 0.25;
-        for (const m of A) { m.x -= nx * step; m.y -= ny * step; } for (const m of B) { m.x += nx * step; m.y += ny * step; }
+        nx /= nl; ny /= nl;
+        if (gfrozen[i]) { for (const m of B) { m.x += nx * pen; m.y += ny * pen; } }        // A fixed → B clears fully
+        else if (gfrozen[j]) { for (const m of A) { m.x -= nx * pen; m.y -= ny * pen; } }    // B fixed → A clears fully
+        else { const step = Math.min(pen, 1.0) * 0.25; for (const m of A) { m.x -= nx * step; m.y -= ny * step; } for (const m of B) { m.x += nx * step; m.y += ny * step; } }
         moved++;
       }
-      // HARD displacement cap: pull each group back to within GROUP_BUDGET of its planned home
-      groups.forEach((m, k) => { const c = cent(m), dx = c.x - ghome[k].x, dy = c.y - ghome[k].y, dist = Math.hypot(dx, dy); if (dist > GROUP_BUDGET) { const b = (dist - GROUP_BUDGET) / dist; for (const p of m) { p.x -= dx * b; p.y -= dy * b; } } });
-      // clutter: float fully out of structure + each other, capped to CLUT_BUDGET
+      // HARD displacement cap: pull each (non-frozen) group back to within GROUP_BUDGET of its home.
+      groups.forEach((m, k) => { if (gfrozen[k]) return; const c = cent(m), dx = c.x - ghome[k].x, dy = c.y - ghome[k].y, dist = Math.hypot(dx, dy); if (dist > GROUP_BUDGET) { const b = (dist - GROUP_BUDGET) / dist; for (const p of m) { p.x -= dx * b; p.y -= dy * b; } } });
+      // clutter: float fully out of structure + each other, capped to CLUT_BUDGET. Frozen clutter is an
+      // obstacle (never moved); a frozen partner in a pair is not displaced.
       for (const c of clutter) {
-        for (const s of structural) { const dx = s.x - c.x, dy = s.y - c.y, dd = Math.hypot(dx, dy), minD = c.geom.radius + s.geom.radius + PAD; if (dd >= minD) continue; let nx, ny; if (dd < 1e-6) { nx = 1; ny = 0; } else { nx = -dx / dd; ny = -dy / dd; } c.x += nx * (minD - dd); c.y += ny * (minD - dd); moved++; }
-        for (const c2 of clutter) { if (c2 === c) continue; const dx = c2.x - c.x, dy = c2.y - c.y, dd = Math.hypot(dx, dy), minD = c.geom.radius + c2.geom.radius + PAD; if (dd >= minD || dd < 1e-6) continue; const nx = dx / dd, ny = dy / dd, pen = (minD - dd) / 2; c.x -= nx * pen; c.y -= ny * pen; c2.x += nx * pen; c2.y += ny * pen; moved++; }
-        const h = chome.get(c.obj.id), dx = c.x - h.x, dy = c.y - h.y, dist = Math.hypot(dx, dy); if (dist > CLUT_BUDGET) { const b = (dist - CLUT_BUDGET) / dist; c.x -= dx * b; c.y -= dy * b; }
+        const cFrozen = isFrozen(c);
+        for (const s of structural) { const dx = s.x - c.x, dy = s.y - c.y, dd = Math.hypot(dx, dy), minD = c.geom.radius + s.geom.radius + PAD; if (dd >= minD) continue; if (cFrozen) continue; let nx, ny; if (dd < 1e-6) { nx = 1; ny = 0; } else { nx = -dx / dd; ny = -dy / dd; } c.x += nx * (minD - dd); c.y += ny * (minD - dd); moved++; }
+        for (const c2 of clutter) { if (c2 === c) continue; const dx = c2.x - c.x, dy = c2.y - c.y, dd = Math.hypot(dx, dy), minD = c.geom.radius + c2.geom.radius + PAD; if (dd >= minD || dd < 1e-6) continue; const nx = dx / dd, ny = dy / dd, pen = (minD - dd) / 2; if (!cFrozen) { c.x -= nx * pen; c.y -= ny * pen; } if (!isFrozen(c2)) { c2.x += nx * pen; c2.y += ny * pen; } moved++; }
+        if (!cFrozen) { const h = chome.get(c.obj.id), dx = c.x - h.x, dy = c.y - h.y, dist = Math.hypot(dx, dy); if (dist > CLUT_BUDGET) { const b = (dist - CLUT_BUDGET) / dist; c.x -= dx * b; c.y -= dy * b; } }
       }
       if (!moved) break;
+    }
+
+    // Escalation (staged): a pending group that still penetrates a frozen obstacle after full iterations
+    // is `solver_blocked` — surfaced so a later reflect round may move/remove it (never auto-moved here).
+    if (FROZEN) {
+      const blockPad = Math.max(0, Number(process.env.IR_SOLVER_BLOCKED_PAD_M || 0.1));
+      const blocked = [];
+      for (let k = 0; k < groups.length; k++) {
+        if (gfrozen[k]) continue;
+        let pen = 0;
+        for (const m of groups[k]) { if (isFrozen(m)) continue; for (const f of FROZEN.values()) { const p = m.geom.radius + f.r - Math.hypot(m.x - f.x, m.y - f.y); if (p > pen) pen = p; } }
+        if (pen > blockPad) { const g0 = groups[k][0]; blocked.push({ id: (g0 && (g0._group || g0.obj.id)) || null, penetration: _round(pen) }); }
+      }
+      report.solverBlocked = blocked;
     }
 
     // residual structural overlaps (informational only — gentle accepts minor contacts)

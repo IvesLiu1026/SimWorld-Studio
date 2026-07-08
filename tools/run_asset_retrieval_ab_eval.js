@@ -652,22 +652,26 @@ for a in B:
     if abs(a['lx'])>GH or abs(a['ly'])>GH: oob+=1; oobs.append(a['n'])
 print('AB_METRICS '+json.dumps({'checked':n,'collision_actors':len(coll),'collision_pairs':pairs,'structural_collision_pairs':spairs,'structural_collision_actors':len(scoll),'floating':fl,'out_of_bounds':oob,'floaters':flers[:25],'oob':oobs[:25]}))
 `;
-  try {
-    const r = await ueCommand(opts, "execute_python_script", { script }, 120000);
-    const logs = (r && r.result && r.result.python_logs) || [];
-    // koe's editor returns python output only via the editor log; the vendored bridge scrapes
-    // it back as `LogPython: ...` lines — so match the marker ANYWHERE in a line, not at start.
-    const joined = Array.isArray(logs) ? logs.join("\n") : String(logs || "");
-    const idx = joined.indexOf("AB_METRICS ");
-    if (idx < 0) return { ok: false, error: "no metrics output", logs_tail: (Array.isArray(logs) ? logs.slice(-3) : joined.slice(-300)) };
-    const m = JSON.parse(joined.slice(idx + "AB_METRICS ".length).split(/\r?\n/)[0]);
-    m.ok = true;
-    m.collision_rate = m.checked ? +(m.collision_actors / m.checked).toFixed(4) : 0;
-    m.structural_collision_rate = m.checked ? +((m.structural_collision_actors || 0) / m.checked).toFixed(4) : 0;
-    m.floating_rate = m.checked ? +(m.floating / m.checked).toFixed(4) : 0;
-    m.oob_rate = m.checked ? +(m.out_of_bounds / m.checked).toFixed(4) : 0;
-    return m;
-  } catch (e) { return { ok: false, error: e && e.message ? e.message : String(e) }; }
+  // The editor's log capture intermittently returns stale output (e.g. a prior "SETUP_ENV created="
+  // line) right after a burst of python jobs, so the AB_METRICS marker is missed. Retry a few times.
+  let lastTail = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await ueCommand(opts, "execute_python_script", { script }, 120000);
+      const logs = (r && r.result && r.result.python_logs) || [];
+      const joined = Array.isArray(logs) ? logs.join("\n") : String(logs || "");
+      const idx = joined.indexOf("AB_METRICS ");
+      if (idx < 0) { lastTail = (Array.isArray(logs) ? logs.slice(-3) : joined.slice(-300)); await new Promise(res => setTimeout(res, 2500)); continue; }
+      const m = JSON.parse(joined.slice(idx + "AB_METRICS ".length).split(/\r?\n/)[0]);
+      m.ok = true;
+      m.collision_rate = m.checked ? +(m.collision_actors / m.checked).toFixed(4) : 0;
+      m.structural_collision_rate = m.checked ? +((m.structural_collision_actors || 0) / m.checked).toFixed(4) : 0;
+      m.floating_rate = m.checked ? +(m.floating / m.checked).toFixed(4) : 0;
+      m.oob_rate = m.checked ? +(m.out_of_bounds / m.checked).toFixed(4) : 0;
+      return m;
+    } catch (e) { lastTail = e && e.message ? e.message : String(e); await new Promise(res => setTimeout(res, 2500)); }
+  }
+  return { ok: false, error: "no metrics output (3 attempts)", logs_tail: lastTail };
 }
 
 // Ensure a daytime SkyAtmosphere so screenshots/umap show a blue sky (vanilla setup leaves it
@@ -790,12 +794,17 @@ function promptSet(opts) {
 
 function evalPromptText(prompt, opts, mode) {
   const OFF_DISCOVERY = (mode === "off") ? "\n\nASSET DISCOVERY (no curated palette is provided for this scene): the UE content library has MANY themed asset packs beyond the basic CityDatabase. DISCOVER and use them — call execute_python_script and run `import unreal; print(chr(10).join(unreal.EditorAssetLibrary.list_assets('/Game', recursive=False)))` to list the top-level packs/folders, then drill into the ones matching THIS scene's setting with `unreal.EditorAssetLibrary.list_assets('/Game/<Pack>', recursive=True, include_folder=False)`. Spawn the genre-appropriate meshes/blueprints you find by their FULL /Game/... path (spawn_actor for static meshes, spawn_blueprint_actor for blueprints). STRONGLY prefer these themed assets over generic CityDatabase BP_Building towers, and do NOT use BasicShapes cubes/planes as stand-ins for real objects." : "";
+  // Scene footprint is parametric: AB_EVAL_SIZE_M (metres per side, default 100 — unchanged behavior).
+  const SIZE = Math.max(40, Number(process.env.AB_EVAL_SIZE_M) || 100);
+  const HALF_U = SIZE * 50;                                   // half-extent in UE units (1 m = 100 u)
+  const AREA_SCALE = (SIZE / 100) * (SIZE / 100);
+  const AIM_LO = Math.round(80 * AREA_SCALE), AIM_HI = Math.round(150 * AREA_SCALE);
   const BUILD_GUIDE =
-    "\n\nBUILD A FULL ~100 m × 100 m SCENE (≈10000×10000 UE units centered at origin, so X and Y roughly -5000..+5000) — a substantial, real-world-scale place you could walk around in, NOT a small patch with a few props. FIRST PLAN, then build to the plan — organized with natural real-world variation, not random." +
-    "\nPLAN: decide a focal anchor (main building / fountain / gate) + the main streets/axes/paths + ZONES spread ACROSS the full 100×100 m (buildings around the perimeter and lining the streets, open plaza/paths between them, clustered detail areas). " +
-    "\nGROUND FIRST (before any props): carpet the WHOLE 100×100 m with a solid, scene-appropriate ground (asphalt/concrete for city or harbor; cobblestone/dirt for medieval; stone for a temple; sand for a bazaar; grass for a park; snow for winter) so NO bare default grey ground shows anywhere. Lay it by EITHER tiling ground/floor MESHES (grass tiles, walkway/plaza slabs, snowy-road or stone-floor pieces) edge-to-edge across the full 100 m, OR spawning a grid of flat planes (/Engine/BasicShapes/Plane, ~4–8 m each) and applying a matching ground MATERIAL via StaticMeshComponent.set_material(0, material) so the texture tiles instead of stretching. NEVER use water/ocean as the floor (water only as a separate edge feature). Every object sits ON this ground, inside the 100 m." +
-    "\nFILL DENSELY ACROSS THE WHOLE AREA: 100×100 m is large, so you MUST place MANY assets — aim for ~80–150+ — DISTRIBUTED across the full area (something roughly every 8–12 m), NOT clustered in one corner with empty ground around it. LEAD with LARGE / structural assets (whole buildings, houses, sheds, market stalls, walls, big trees, large set-pieces) as the backbone, arranged in rows and clusters along the streets/zones; REUSE each type many times; THEN add mid-size and small props as dressing (small props like bags/bottles/rocks are NEVER the bulk). Layer background structures → midground → foreground so little ground is left empty." +
-    "\nUse execute_python_script to place many instances efficiently (loops/grids spanning the 100 m). Prefer COMPLETE buildings over modular fragments; realistic scale (~0.8–1.3×, no giant stretching); everything upright (yaw only) and on the ground. The result must read as ONE busy, organized, instantly-recognizable ~100 m place with believable variation." +
+    `\n\nBUILD A FULL ~${SIZE} m × ${SIZE} m SCENE (≈${SIZE * 100}×${SIZE * 100} UE units centered at origin, so X and Y roughly -${HALF_U}..+${HALF_U}) — a substantial, real-world-scale place you could walk around in, NOT a small patch with a few props. FIRST PLAN, then build to the plan — organized with natural real-world variation, not random.` +
+    `\nPLAN: decide a focal anchor (main building / fountain / gate) + the main streets/axes/paths + ZONES spread ACROSS the full ${SIZE}×${SIZE} m (buildings around the perimeter and lining the streets, open plaza/paths between them, clustered detail areas). ` +
+    `\nGROUND FIRST (before any props): carpet the WHOLE ${SIZE}×${SIZE} m with a solid, scene-appropriate ground (asphalt/concrete for city or harbor; cobblestone/dirt for medieval; stone for a temple; sand for a bazaar; grass for a park; snow for winter) so NO bare default grey ground shows anywhere. Lay it by EITHER tiling ground/floor MESHES (grass tiles, walkway/plaza slabs, snowy-road or stone-floor pieces) edge-to-edge across the full ${SIZE} m, OR spawning a grid of flat planes (/Engine/BasicShapes/Plane, ~4–8 m each) and applying a matching ground MATERIAL via StaticMeshComponent.set_material(0, material) so the texture tiles instead of stretching. NEVER use water/ocean as the floor (water only as a separate edge feature). Every object sits ON this ground, inside the ${SIZE} m.` +
+    `\nFILL DENSELY ACROSS THE WHOLE AREA: ${SIZE}×${SIZE} m is large, so you MUST place MANY assets — aim for ~${AIM_LO}–${AIM_HI}+ — DISTRIBUTED across the full area (something roughly every 8–12 m), NOT clustered in one corner with empty ground around it. LEAD with LARGE / structural assets (whole buildings, houses, sheds, market stalls, walls, big trees, large set-pieces) as the backbone, arranged in rows and clusters along the streets/zones; REUSE each type many times; THEN add mid-size and small props as dressing (small props like bags/bottles/rocks are NEVER the bulk). Layer background structures → midground → foreground so little ground is left empty.` +
+    `\nUse execute_python_script to place many instances efficiently (loops/grids spanning the ${SIZE} m). Prefer COMPLETE buildings over modular fragments; realistic scale (~0.8–1.3×, no giant stretching); everything upright (yaw only) and on the ground. The result must read as ONE busy, organized, instantly-recognizable ~${SIZE} m place with believable variation.` +
     "\nSPAWN ROBUSTLY (critical for dense scenes — a whole scene has been lost to this): the UE python job is SERIAL and TIME-LIMITED, so do NOT put hundreds of spawns in ONE execute_python_script call. Split them across SEVERAL calls of at most ~120 spawns each (e.g. ground first, then structures, then dressing), and read the job log after each call before the next. Wrap EACH individual spawn in its own try/except so one failing asset is SKIPPED, never aborting the batch, and print a running spawned-count from each job. After the final batch, call get_actors_in_level; if far fewer actors exist than you intended, spawn the missing ones in another batch. NEVER finish with a near-empty scene (ground only).";
   prompt = `${prompt}${OFF_DISCOVERY}${BUILD_GUIDE}`;
   const screenshotCount = Math.max(1, Math.floor(Number(opts.screenshotAngles) || 1));
@@ -978,6 +987,13 @@ async function main() {
     "gentle-plancritic": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true },
     // Fix #1: plan-critic + deterministic themed ground carpet:
     "gentle-pc-ground": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true },
+    // Staged reflective builder — SAME plan config as gentle-pc-ground (the baseline arm), but the
+    // deterministic executor spawns the solved plan instead of the LLM builder. Phase 1: exec only.
+    "staged-exec": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true, stagedBuild: true },
+    // + tiers + measured-bounds frozen re-solve between tiers (isolates measured-bounds staging).
+    "staged-noreflect": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true, stagedBuild: true, irMeasureResolve: true },
+    // + per-tier VLM reflect editing the IR (the full feature).
+    "staged-reflect": { sceneIr: true, irSolver: "gentle", irRepair: false, irCot: false, irAscii: false, irRichAssets: true, irPlanCritic: true, irGroundPass: true, stagedBuild: true, irMeasureResolve: true, irReflect: true },
   };
   const variantList = (opts.variants && opts.variants.length)
     ? opts.variants.map(v => ({ name: v, cfg: VARIANT_PRESETS[v] || { sceneIr: true } }))
@@ -1022,6 +1038,17 @@ async function main() {
         if (variant.cfg.irRichAssets != null) baseBody.irRichAssets = !!variant.cfg.irRichAssets;
         if (variant.cfg.irPlanCritic != null) baseBody.irPlanCritic = !!variant.cfg.irPlanCritic;
         if (variant.cfg.irGroundPass != null) baseBody.irGroundPass = !!variant.cfg.irGroundPass;
+        // Staged reflective builder flags (Phase 1+): master switch + tiers/measure/reflect knobs.
+        if (variant.cfg.stagedBuild != null) baseBody.stagedBuild = !!variant.cfg.stagedBuild;
+        if (variant.cfg.irTiers != null) baseBody.irTiers = variant.cfg.irTiers;
+        if (variant.cfg.irMeasureResolve != null) baseBody.irMeasureResolve = !!variant.cfg.irMeasureResolve;
+        if (variant.cfg.irReflect != null) baseBody.irReflect = !!variant.cfg.irReflect;
+        // Solver-config passthrough (env → body) so ONE server session can A/B configs on the SAME cached
+        // plan (removes re-plan variance). Only set when the env var is present this invocation.
+        for (const [b, e] of [["irStagedExtentM", "IR_STAGED_TARGET_EXTENT_M"], ["irStagedPack", "IR_STAGED_TARGET_PACK"], ["irStagedPull", "IR_STAGED_ANCHOR_PULL"], ["irStagedIters", "IR_STAGED_GROUP_ITERS"], ["irStagedJitterM", "IR_STAGED_JITTER_M"]])
+          if (process.env[e] != null && process.env[e] !== "") baseBody[b] = Number(process.env[e]);
+        if (process.env.IR_REFLECT_EYE_VIEWS != null && process.env.IR_REFLECT_EYE_VIEWS !== "") baseBody.irReflectEyeViews = process.env.IR_REFLECT_EYE_VIEWS;
+        if (process.env.IR_REFLECT_MULTIVIEW != null && process.env.IR_REFLECT_MULTIVIEW !== "") baseBody.irReflectMultiview = process.env.IR_REFLECT_MULTIVIEW;
       } else if (irMode) baseBody.sceneIr = (irMode === "on");
       if (opts.runner) baseBody.runner = opts.runner;
       if (opts.model) baseBody.model = opts.model;
@@ -1092,7 +1119,9 @@ async function main() {
         run.metrics = await computeSceneMetrics(opts);   // raw build quality (pre-straighten)
         fs.writeFileSync(path.join(runDir, "metrics.json"), JSON.stringify(run.metrics, null, 2), "utf-8");
         run.straighten = await straightenScene(opts);
-        run.sky = await ensureDaytimeSky(opts);
+        // ensureDaytimeSky re-links the sun to the atmosphere, which silently undoes a night
+        // lighting setup (dusk sky washed out the cyberpunk night runs). Skippable for night scenes.
+        run.sky = process.env.AB_EVAL_SKIP_DAYSKY ? { ok: true, skipped: "AB_EVAL_SKIP_DAYSKY" } : await ensureDaytimeSky(opts);
         run.comparison_views = await captureComparisonViews(opts, runDir, opts.comparisonViews);
         // Persist the evaluated (post-straighten) scene as a reloadable .umap.
         run.umap = (run.actual && run.actual.ok) ? await saveSceneUmap(opts.serverUrl, label + "__" + launchId, runDir) : { ok: false, error: "build not ok" };

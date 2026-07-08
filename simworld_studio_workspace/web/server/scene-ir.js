@@ -29,8 +29,16 @@ function resolveIRMode(bodyOrMode) {
 const _planCache = new Map();
 const _cache = new Map();
 const _artifactCache = new Map(); // bkey -> {ascii, intent}; surfaced to the visual-loop critic so it can judge intended-vs-built
+// Solved-plan cache: full solved plan (graph + placed + report) keyed by the inputs that determine
+// the GEOMETRY (not the text formatting). Shared by the legacy text-block path (buildIRBlock) and the
+// staged deterministic executor (planAndSolve) so every A/B arm of one scene builds on ONE identical
+// post-critic plan.
+const _solvedCache = new Map();
 function _planKey(scene, o) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), cot: resolveCot(o), rich: resolveRichAssets(o), v: 1 }); }
 function _blockKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), mode, repair: !!repair, cot: resolveCot(o), ascii: resolveAscii(o), rich: resolveRichAssets(o), planCritic: resolvePlanCritic(o), ground: resolveGroundPass(o), v: 2 }); }
+// Solve-key: inputs that determine the SOLVED plan (graph + placed), independent of block formatting
+// (ascii/ground only change the emitted text, never the geometry).
+function _solveKey(scene, o, mode, repair) { return JSON.stringify({ scene: String(scene || ""), model: String((o && o.model) || ""), cot: resolveCot(o), rich: resolveRichAssets(o), planCritic: resolvePlanCritic(o), mode, repair: !!repair, v: 1 }); }
 
 // Solver mode: body.irSolver | env IR_SOLVER. Default "legacy" (the original scatter solver).
 function resolveSolverMode(o) {
@@ -216,6 +224,97 @@ function _keepPlanCritique(name, crit, log) {
   } catch (_e) {}
 }
 
+// Shared PLAN → SOLVE → (repair) → (plan-critic) core. Returns the SOLVED plan STRUCTURALLY so BOTH
+// the legacy text-block builder (buildIRBlock) and the staged deterministic executor (planAndSolve)
+// build on ONE identical plan per (scene, solver mode). Cached by solve-key; callers wrap in try.
+async function _planSolveCritic(scene, o, log) {
+  const mode = resolveSolverMode(o);
+  const repair = resolveRepair(o) && mode !== "legacy";
+  const skey = _solveKey(scene, o, mode, repair);
+  if (_solvedCache.has(skey)) { log(`ir solved-plan cache HIT (mode=${mode}${repair ? "+repair" : ""})`); return _solvedCache.get(skey); }
+
+  const { solve } = require("./ir-solver");
+  const planner = require("./ir-planner");
+
+  // Plan ONCE (shared across solver variants), then solve in THIS variant's mode.
+  const { graph, assets, planReport, brief } = await _planOnce(scene, o, log);
+  if (!graph || !assets.length) {
+    const empty = { graph: null, assets: [], assetIndex: new Map(), placed: [], solveReport: {}, brief: "", planReport: planReport || {}, renderStamp: Date.now(), rslug: _slug(scene) };
+    _solvedCache.set(skey, empty);
+    return empty;
+  }
+  const assetIndex = new Map(assets.map(a => [a.id, a]));
+
+  let curGraph = graph;
+  let { placed, report: solveReport } = solve(curGraph, assetIndex, { mode });
+  const renderStamp = Date.now(); // groups this build's plan renders
+  const rslug = _slug(scene);
+
+  // LLM-repair loop (structure mode only): if STRUCTURAL overlaps remain, ask the LLM to
+  // relocate/respace the clashing GROUPS (semantic, never coords), re-solve, accept iff better.
+  if (repair) {
+    const TH = Math.max(1, Number(process.env.IR_REPAIR_THRESHOLD || 1));
+    const ROUNDS = Math.max(0, Number(process.env.IR_REPAIR_ROUNDS || 2));
+    for (let round = 1; round <= ROUNDS && solveReport.overlapsRemaining >= TH; round++) {
+      const conflicts = (solveReport.residualPairs || []).slice(0, 30);
+      log(`ir repair ${round}/${ROUNDS}: ${solveReport.overlapsRemaining} structural overlap(s) → revising ${conflicts.length} group-pair(s)`);
+      try {
+        const rep = await planner.repairGraph(scene, curGraph, conflicts, assets, Object.assign({}, o, {
+          model: process.env.IR_MODEL || o.model,
+          provider: process.env.IR_PROVIDER || o.provider || o.runner,
+          runner: process.env.IR_PROVIDER || o.runner || o.provider,
+          reasoningEffort: process.env.IR_PLANNER_REASONING_EFFORT || o.reasoningEffort || "high",
+          timeoutMs: Number(process.env.IR_PLANNER_TIMEOUT_MS || o.timeoutMs || 300000),
+        }));
+        const g2 = rep && rep.graph;
+        if (!g2 || (!(g2.objects || []).length && !(g2.patterns || []).length)) { log("ir repair: empty revision, stopping"); break; }
+        const solved2 = solve(g2, assetIndex, { mode });
+        if (solved2.report.overlapsRemaining < solveReport.overlapsRemaining) {
+          curGraph = g2; placed = solved2.placed; solveReport = solved2.report;
+          log(`ir repair ${round}: improved → overlapsRemaining=${solveReport.overlapsRemaining}`);
+        } else { log(`ir repair ${round}: no improvement (${solved2.report.overlapsRemaining}), keeping prior plan`); break; }
+      } catch (e) { log("ir repair failed (non-fatal): " + (e && e.message)); break; }
+    }
+  }
+
+  // Plan-level visual critic (fix B): render the solved plan → VLM critiques LAYOUT (density/grouping/
+  // focal, NOT collisions) → revise the graph → re-solve. Keeps the deterministic solver.
+  if (resolvePlanCritic(o) && placed.length) {
+    const planCritic = require("./ir-plan-critic");
+    const ROUNDS = Math.max(1, Number(process.env.IR_PLAN_CRITIC_ROUNDS || 1));
+    for (let r = 1; r <= ROUNDS; r++) {
+      const img = planCritic.renderPlanImage(placed, `${rslug}_r${r}`);
+      _keepPlanRender(img, `${rslug}__${renderStamp}__r${r}pre__${placed.length}obj`, log); // keep this round's plan for analysis
+      let crit;
+      try {
+        crit = await planCritic.critiquePlan({ scene, imagePath: img, intent: (brief && brief.trim()) || _planIntent(curGraph), model: process.env.IR_MODEL || o.model, timeoutMs: Number(process.env.IR_PLAN_CRITIC_TIMEOUT_MS || 120000) });
+      } catch (e) { log("ir plan-critic failed (non-fatal): " + (e && e.message)); break; }
+      try { if (img) fs.rmSync(img, { force: true }); } catch (_e) {}
+      _keepPlanCritique(`${rslug}__${renderStamp}__r${r}pre__${placed.length}obj`, crit, log);
+      log(`ir plan-critic ${r}/${ROUNDS}: ${crit.status} — ${(crit.issues || []).length} issue(s), ${(crit.suggestions || []).length} fix(es)`);
+      if (crit.status === "PASS" || (!(crit.suggestions || []).length && !(crit.issues || []).length)) break;
+      try {
+        const rev = await planner.revisePlanForLayout(scene, curGraph, crit, assets, Object.assign({}, o, {
+          model: process.env.IR_MODEL || o.model, provider: process.env.IR_PROVIDER || o.provider || o.runner,
+          runner: process.env.IR_PROVIDER || o.runner || o.provider,
+          reasoningEffort: process.env.IR_PLANNER_REASONING_EFFORT || o.reasoningEffort || "high",
+          timeoutMs: Number(process.env.IR_PLANNER_TIMEOUT_MS || o.timeoutMs || 300000),
+        }));
+        if (rev && rev.graph && ((rev.graph.objects || []).length || (rev.graph.patterns || []).length)) {
+          curGraph = rev.graph;
+          const solved = solve(curGraph, assetIndex, { mode });
+          placed = solved.placed; solveReport = solved.report;
+          log(`ir plan-critic ${r}: revised -> ${(curGraph.objects || []).length} obj + ${(curGraph.patterns || []).length} pat, ${placed.length} placed`);
+        } else { log("ir plan-critic: empty revision, stopping"); break; }
+      } catch (e) { log("ir plan-critic revise failed (non-fatal): " + (e && e.message)); break; }
+    }
+  }
+
+  const result = { graph: curGraph, assets, assetIndex, placed, solveReport, brief, planReport: planReport || {}, renderStamp, rslug };
+  _solvedCache.set(skey, result);
+  return result;
+}
+
 // Build the IR prompt block for a scene. Returns "" on any failure or when no assets are
 // available — IR is an enhancement and must NEVER break the build.
 async function buildIRBlock(scene, opts) {
@@ -227,80 +326,12 @@ async function buildIRBlock(scene, opts) {
   if (_cache.has(bkey)) { log(`ir cache HIT (block mode=${mode}${repair ? "+repair" : ""})`); return _cache.get(bkey); }
 
   try {
-    const { solve } = require("./ir-solver");
     const { renderAscii } = require("./ir-ascii");
-    const planner = require("./ir-planner");
 
-    // Plan ONCE (shared across solver variants), then solve in THIS variant's mode.
-    const { graph, assets, planReport, brief } = await _planOnce(scene, o, log);
-    if (!graph || !assets.length) { log("ir: no plan/palette, skipping IR"); _cache.set(bkey, ""); return ""; }
-    const assetIndex = new Map(assets.map(a => [a.id, a]));
-
-    let curGraph = graph;
-    let { placed, report: solveReport } = solve(curGraph, assetIndex, { mode });
-    const renderStamp = Date.now(); // groups this build's plan renders
-    const rslug = _slug(scene);
-
-    // LLM-repair loop (structure mode only): if STRUCTURAL overlaps remain, ask the LLM to
-    // relocate/respace the clashing GROUPS (semantic, never coords), re-solve, accept iff better.
-    if (repair) {
-      const TH = Math.max(1, Number(process.env.IR_REPAIR_THRESHOLD || 1));
-      const ROUNDS = Math.max(0, Number(process.env.IR_REPAIR_ROUNDS || 2));
-      for (let round = 1; round <= ROUNDS && solveReport.overlapsRemaining >= TH; round++) {
-        const conflicts = (solveReport.residualPairs || []).slice(0, 30);
-        log(`ir repair ${round}/${ROUNDS}: ${solveReport.overlapsRemaining} structural overlap(s) → revising ${conflicts.length} group-pair(s)`);
-        try {
-          const rep = await planner.repairGraph(scene, curGraph, conflicts, assets, Object.assign({}, o, {
-            model: process.env.IR_MODEL || o.model,
-            provider: process.env.IR_PROVIDER || o.provider || o.runner,
-            runner: process.env.IR_PROVIDER || o.runner || o.provider,
-            reasoningEffort: process.env.IR_PLANNER_REASONING_EFFORT || o.reasoningEffort || "high",
-            timeoutMs: Number(process.env.IR_PLANNER_TIMEOUT_MS || o.timeoutMs || 300000),
-          }));
-          const g2 = rep && rep.graph;
-          if (!g2 || (!(g2.objects || []).length && !(g2.patterns || []).length)) { log("ir repair: empty revision, stopping"); break; }
-          const solved2 = solve(g2, assetIndex, { mode });
-          if (solved2.report.overlapsRemaining < solveReport.overlapsRemaining) {
-            curGraph = g2; placed = solved2.placed; solveReport = solved2.report;
-            log(`ir repair ${round}: improved → overlapsRemaining=${solveReport.overlapsRemaining}`);
-          } else { log(`ir repair ${round}: no improvement (${solved2.report.overlapsRemaining}), keeping prior plan`); break; }
-        } catch (e) { log("ir repair failed (non-fatal): " + (e && e.message)); break; }
-      }
-    }
-
-    // Plan-level visual critic (fix B): render the solved plan → VLM critiques LAYOUT (density/grouping/
-    // focal, NOT collisions) → revise the graph → re-solve. Keeps the deterministic solver.
-    if (resolvePlanCritic(o) && placed.length) {
-      const planCritic = require("./ir-plan-critic");
-      const ROUNDS = Math.max(1, Number(process.env.IR_PLAN_CRITIC_ROUNDS || 1));
-      for (let r = 1; r <= ROUNDS; r++) {
-        const img = planCritic.renderPlanImage(placed, `${rslug}_r${r}`);
-        _keepPlanRender(img, `${rslug}__${renderStamp}__r${r}pre__${placed.length}obj`, log); // keep this round's plan for analysis
-        let crit;
-        try {
-          crit = await planCritic.critiquePlan({ scene, imagePath: img, intent: (brief && brief.trim()) || _planIntent(curGraph), model: process.env.IR_MODEL || o.model, timeoutMs: Number(process.env.IR_PLAN_CRITIC_TIMEOUT_MS || 120000) });
-        } catch (e) { log("ir plan-critic failed (non-fatal): " + (e && e.message)); break; }
-        try { if (img) fs.rmSync(img, { force: true }); } catch (_e) {}
-        _keepPlanCritique(`${rslug}__${renderStamp}__r${r}pre__${placed.length}obj`, crit, log);
-        log(`ir plan-critic ${r}/${ROUNDS}: ${crit.status} — ${(crit.issues || []).length} issue(s), ${(crit.suggestions || []).length} fix(es)`);
-        if (crit.status === "PASS" || (!(crit.suggestions || []).length && !(crit.issues || []).length)) break;
-        try {
-          const rev = await planner.revisePlanForLayout(scene, curGraph, crit, assets, Object.assign({}, o, {
-            model: process.env.IR_MODEL || o.model, provider: process.env.IR_PROVIDER || o.provider || o.runner,
-            runner: process.env.IR_PROVIDER || o.runner || o.provider,
-            reasoningEffort: process.env.IR_PLANNER_REASONING_EFFORT || o.reasoningEffort || "high",
-            timeoutMs: Number(process.env.IR_PLANNER_TIMEOUT_MS || o.timeoutMs || 300000),
-          }));
-          if (rev && rev.graph && ((rev.graph.objects || []).length || (rev.graph.patterns || []).length)) {
-            curGraph = rev.graph;
-            const solved = solve(curGraph, assetIndex, { mode });
-            placed = solved.placed; solveReport = solved.report;
-            log(`ir plan-critic ${r}: revised -> ${(curGraph.objects || []).length} obj + ${(curGraph.patterns || []).length} pat, ${placed.length} placed`);
-          } else { log("ir plan-critic: empty revision, stopping"); break; }
-        } catch (e) { log("ir plan-critic revise failed (non-fatal): " + (e && e.message)); break; }
-      }
-    }
-
+    // Plan → solve → (repair) → (plan-critic) via the shared core, so the staged executor and this
+    // legacy text-block path build on ONE identical post-critic plan. Everything below is formatting.
+    const { graph: curGraph, assets, placed, solveReport, brief, planReport, renderStamp, rslug } = await _planSolveCritic(scene, o, log);
+    if (!curGraph || !assets.length) { log("ir: no plan/palette, skipping IR"); _cache.set(bkey, ""); return ""; }
     if (!placed.length) { log("ir: solver produced no placements, skipping"); _cache.set(bkey, ""); return ""; }
 
     const ascii = renderAscii(placed, { sceneName: curGraph.scene_name || "" });
@@ -360,4 +391,35 @@ async function getPlanArtifacts(scene, opts) {
   return _artifactCache.get(bkey) || { ascii: "", intent: "" };
 }
 
-module.exports = { resolveIRMode, buildIRBlock, formatIRBlock, getPlanArtifacts };
+// ── Structured entry point for the STAGED builder ─────────────────────────────
+// Returns the SOLVED plan (graph, assets, assetIndex, placed[], solveReport, brief, ascii) instead of
+// a text block, so a deterministic executor can spawn `placed[]` directly (no LLM re-typing coords).
+// Same plan the legacy builder gets (shared _planSolveCritic cache). Non-fatal: throws only on a hard
+// planner failure; returns { placed: [] } when there is no palette/plan so the caller can bail cleanly.
+async function planAndSolve(scene, opts) {
+  const o = opts || {};
+  const log = o.log || (() => {});
+  const { renderAscii } = require("./ir-ascii");
+  const r = await _planSolveCritic(scene, o, log);
+  const ascii = (r.graph && r.placed.length) ? renderAscii(r.placed, { sceneName: r.graph.scene_name || "" }) : "";
+  // CLONE graph + placed: the staged orchestrator mutates them (tiers, calibrated positions, reflect
+  // edits), but r is the SHARED _solvedCache object — every A/B arm must start from an identical yet
+  // INDEPENDENT copy, else arm N corrupts the plan arm N+1 reads. assets/assetIndex are read-only → shared.
+  return {
+    graph: r.graph ? JSON.parse(JSON.stringify(r.graph)) : r.graph,
+    placed: Array.isArray(r.placed) ? JSON.parse(JSON.stringify(r.placed)) : r.placed,
+    assets: r.assets, assetIndex: r.assetIndex,
+    solveReport: r.solveReport, brief: r.brief, planReport: r.planReport, ascii,
+    mode: resolveSolverMode(o),
+  };
+}
+
+// Path base (no extension) where a scene's IR artifacts are persisted. The eval harness copies
+// {base}.json → ir_scene.json and {base}.ascii.txt → ir_scene.ascii.txt into the cell dir (ir-on
+// cells only), so the staged orchestrator writes ir_scene.json here with this exact naming.
+function irArtifactBase(scene) {
+  const dir = process.env.IR_OUTPUT_DIR || path.join(path.resolve(__dirname, "../.."), "tmp", "ir");
+  return path.join(dir, _slug(scene) + "-" + _hash(scene));
+}
+
+module.exports = { resolveIRMode, buildIRBlock, formatIRBlock, getPlanArtifacts, planAndSolve, irArtifactBase, resolveGroundPass, resolveSolverMode };

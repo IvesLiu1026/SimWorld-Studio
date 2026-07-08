@@ -96,4 +96,68 @@ function groundCarpetBlock(scene, db, halfM) {
   ].join("\n");
 }
 
-module.exports = { pickGroundTile, groundCarpetBlock, themeKeys };
+// Deterministic ground-carpet as an EXECUTABLE python script (tier 0 of the staged builder), instead
+// of the prompt-block text `groundCarpetBlock` returns. Same tiling loop; the staged executor runs it
+// directly so the LLM builder is not involved. Returns { script, name, path, w, d } or null.
+function groundCarpetScript(scene, db, halfM) {
+  const pick = pickGroundTile(scene, db);
+  if (!pick) return null;
+  return { script: _carpetScript(pick, halfM), name: pick.a.name, path: pick.a.path, w: pick.w, d: pick.d };
+}
+
+// Verified themed ground MATERIALS (paths mirror asset-retrieval._GROUND_MATERIALS), applied to flat
+// planes below. First regex match wins; falls through to neutral concrete.
+const _THEME_MATERIALS = [
+  { re: /snow|winter|frost|\bice\b|arctic|blizzard/, path: "/Game/Village/Materials/MI_Snow01.MI_Snow01" },
+  { re: /desert|bazaar|sand|dune|oasis|arab|middle[- ]?east|souk/, path: "/Game/Downtown_West/Materials/Ground_Shared/MI_Sand_Ground_A.MI_Sand_Ground_A" },
+  { re: /medieval|old town|village|rustic|fantasy/, path: "/Game/UrbanDistrict/Environment/Cobble_01/mi_Cobble_01_01.mi_Cobble_01_01" },
+  { re: /temple|shrine|zen|pagoda|monastery|courtyard/, path: "/Game/UrbanDistrict/Environment/GroundConcrete_01/mi_GroundConcrete_01_01.mi_GroundConcrete_01_01" },
+  { re: /park|garden|lawn|grass|meadow|field|forest|nature/, path: "/Game/SuburbNeighborhoodHousePack/Materials/MI_Floor_Grass.MI_Floor_Grass" },
+  { re: /harbor|harbour|dock|port|industrial|factory|construction/, path: "/Game/UrbanDistrict/Environment/GroundConcrete_01/mi_GroundConcrete_01_01.mi_GroundConcrete_01_01" },
+  { re: /city|urban|street|market|plaza|town|road/, path: "/Game/CityDatabase/materials/M_Asphalt_Master_Inst.M_Asphalt_Master_Inst" },
+];
+function themeMaterial(scene) {
+  const s = String(scene || "").toLowerCase();
+  for (const t of _THEME_MATERIALS) if (t.re.test(s)) return t.path;
+  return "/Game/UrbanDistrict/Environment/GroundConcrete_01/mi_GroundConcrete_01_01.mi_GroundConcrete_01_01";
+}
+
+// FLAT-PLANE carpet (staged builder): tile /Engine/BasicShapes/Plane (1×1 m, scaled to planeM) with a
+// themed material, sunk 1 cm. Unlike thick mesh tiles this is (a) perfectly flat (h=0) so it is ALWAYS
+// excluded from the collision metric, (b) few actors (large planes), (c) robust (no fragile per-asset
+// pick). Labeled 'Ground_Plane_*' so BOTH ir-measure and the harness computeSceneMetrics infra-filter
+// it (its INFRA list contains 'ground_plane'). Returns { script, material, planeM }.
+function groundCarpetPlaneScript(scene, halfM, planeM) {
+  const mat = themeMaterial(scene);
+  const PM = Math.max(4, Number(planeM || process.env.IR_GROUND_PLANE_M || 10)); // metres per plane
+  const HALF = Math.round(halfM * 100), STEP = Math.round(PM * 100), SCALE = PM; // Plane base is 1×1 m
+  return {
+    material: mat, planeM: PM,
+    script: [
+      "import unreal",
+      "_eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
+      "_plane = unreal.EditorAssetLibrary.load_asset('/Engine/BasicShapes/Plane.Plane')",
+      `_mat = unreal.EditorAssetLibrary.load_asset(${JSON.stringify(mat)})`,
+      `HALF, STEP, SCALE = ${HALF}, ${STEP}, ${SCALE}.0`,
+      "n = 0; x = -HALF",
+      "while x <= HALF:",
+      "    y = -HALF",
+      "    while y <= HALF:",
+      "        try:",
+      "            a = _eas.spawn_actor_from_object(_plane, unreal.Vector(x, y, -1.0), unreal.Rotator(0,0,0))",
+      "            a.set_actor_scale3d(unreal.Vector(SCALE, SCALE, 1.0))",
+      "            a.set_actor_label('Ground_Plane_Carpet')",
+      "            if _mat is not None:",
+      "                _smc = a.get_component_by_class(unreal.StaticMeshComponent)",
+      "                if _smc is not None: _smc.set_material(0, _mat)",
+      "            n += 1",
+      "        except Exception as _e:",
+      "            pass",
+      "        y += STEP",
+      "    x += STEP",
+      "print('[GROUND] carpet planes spawned:', n)",
+    ].join("\n"),
+  };
+}
+
+module.exports = { pickGroundTile, groundCarpetBlock, groundCarpetScript, groundCarpetPlaneScript, themeMaterial, themeKeys };

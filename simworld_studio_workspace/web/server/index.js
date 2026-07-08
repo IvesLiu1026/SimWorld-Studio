@@ -680,6 +680,13 @@ if(!__mode){
   else __mode=sceneLoopMode;
 }
 if(!MOCK_MODE){
+  // ── Staged reflective builder (body.stagedBuild / env IR_STAGED) ──
+  // Replaces the LLM builder with a deterministic, visually-grounded build loop; independent of
+  // loopMode, so it must be checked BEFORE the visual/text/codex dispatch. Owns its own SSE stream.
+  { const __staged=require('./scene-staged');
+    if(__staged.resolveStaged(s.body)){
+      return __staged.handleStagedBuild(s,e,{ ueExecScript, ueLogs:_ueLogs, ueCommand, ckptCaptureManifest, ckptRestoreManifest, ctxManager, studioSession:STUDIO_SESSION, logToFile, MOCK_MODE });
+    } }
   if(__mode==='visual_loop'){return handleVisualSceneLoop(s,e,{STUDIO_SESSION,intentStore,logToFile});}
   if(__mode==='text_loop'){return handleSceneLoop(s,e,{STUDIO_SESSION,intentStore,logToFile});}
   // ── codex (gpt-5.5) builder route ──
@@ -789,6 +796,17 @@ function ueExecScript(script, timeoutMs = 60000) {
   });
 }
 function _ueLogs(r) { try { return (r.result.python_logs || []).join("\n"); } catch (_e) { return ""; } }
+// General one-shot UE command (e.g. take_screenshot) over the same TCP bridge. Mirrors ueExecScript.
+function ueCommand(type, params, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    const sock = new (require("net").Socket)();
+    const timer = setTimeout(() => { try { sock.destroy(); } catch (_e) {} resolve(null); }, timeoutMs);
+    let buf = "";
+    sock.connect(parseInt(UNREAL_PORT), UNREAL_HOST, () => { sock.write(JSON.stringify({ type, params: params || {} }) + "\n"); });
+    sock.on("data", (d) => { buf += d.toString(); try { const r = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(r); } catch (_e) {} });
+    sock.on("error", () => { clearTimeout(timer); try { sock.destroy(); } catch (_e) {} resolve(null); });
+  });
+}
 // Resolve the UE project's Content/Python dir (cached). Skill modules are written here directly
 // by Node (fast/reliable) — NOT sent over the MCP socket, which chokes on multi-KB payloads.
 let _contentPyCache = null;
