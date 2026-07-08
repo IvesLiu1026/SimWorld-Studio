@@ -60,8 +60,10 @@ function resolveCapture(body) {
 }
 
 // Idempotent atmosphere pass — mirrors mcp-server.js:toolSetupEnvironment's core (afternoon light):
-// spawn sky/sun/skylight/fog ONLY if the class is missing, so a deterministic scene is lit even
-// outside the eval harness. The harness's ensureDaytimeSky still runs after `done` for eval parity.
+// spawn sky/sun/skylight/fog if missing, and — crucially — RE-CONFIGURE existing sun/skylight (sun→8.0
+// + re-angle, skylight→5.0) so a scene that starts with dim default map lighting isn't left with black
+// shadows (the previous spawn-only version skipped existing lights → underexposed eye-level views).
+// The harness's ensureDaytimeSky still runs after `done` for eval parity.
 function _atmosphereScript() {
   return [
     "import unreal",
@@ -82,11 +84,27 @@ function _atmosphereScript() {
     "    _c = _sun.get_component_by_class(unreal.DirectionalLightComponent)",
     "    if _c: _c.set_intensity(10.0); _c.set_atmosphere_sun_light(True)",
     "    _created.append('sun')",
+    "else:",
+    "    for _a in _acts:",
+    "        if _a.get_class().get_name() == 'DirectionalLight':",
+    "            _a.set_actor_rotation(unreal.Rotator(pitch=-45.0, yaw=30.0, roll=0.0), False)",
+    "            _c = _a.get_component_by_class(unreal.DirectionalLightComponent)",
+    "            if _c: _c.set_intensity(8.0); _c.set_atmosphere_sun_light(True)",
+    "            _created.append('sun*'); break",
     "if not _hasc(['SkyLight']):",
     "    _sky = _s.spawn_actor_from_class(unreal.SkyLight.static_class(), unreal.Vector(0,0,500)); _sky.set_actor_label('Arena_Env_SkyLight')",
     "    _sc = _sky.get_component_by_class(unreal.SkyLightComponent)",
     "    if _sc: _sc.set_editor_property('intensity', 3.0)",
     "    _created.append('skylight')",
+    "else:",
+    "    for _a in _acts:",
+    "        if _a.get_class().get_name() == 'SkyLight':",
+    "            _sc = _a.get_component_by_class(unreal.SkyLightComponent)",
+    "            if _sc:",
+    "                _sc.set_editor_property('intensity', 5.0)",
+    "                try: _sc.recapture_sky()",
+    "                except Exception: pass",
+    "            _created.append('skylight*'); break",
     "if not _hasc(['ExponentialHeightFog','AtmosphericFog']):",
     "    _fog = _s.spawn_actor_from_class(unreal.ExponentialHeightFog.static_class(), unreal.Vector(0,0,0)); _fog.set_actor_label('Arena_Env_Fog')",
     "    _fc = _fog.get_component_by_class(unreal.ExponentialHeightFogComponent)",
