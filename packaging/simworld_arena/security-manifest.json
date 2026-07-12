@@ -1,0 +1,13 @@
+{
+  "schema": "vista-simworld-security-manifest/v1",
+  "workspace_sha256": {
+    "web/server/index.js": "cbcf5a6e002c9a02782ab9f37979bb4c635427a988dcc9d3ccc989b8368249f3",
+    "web/server/runtime-security.js": "17446841bdd3db9e81519bcf4954e0e3c11a4a21f827a9cf325ef92e6267e153",
+    "web/server/agent-sandbox.js": "b5e575cbadf685e138d7f00593c12f829df4930ce0c27262648c14e57338f82c"
+  },
+  "cirrus": {
+    "patch_version": "VISTA_LOOPBACK_PATCH_V1",
+    "original_sha256": "85cc7809250e2de92de0fe16cbabc27392d580a916d10851dc4c48197028215f",
+    "patched_sha256": "724b64ea93b863d42a69a22b10e75046d66ee39a5e852be425d9706bdd11abc7"
+  }
+}

@@ -16,8 +16,8 @@
 // server's files — more fragile; "cannot modify" is the firm requirement. Reads are
 // further discouraged by the per-CLI tool restrictions (Claude --disallowedTools, etc.).
 //
-// Falls back to a plain (unwrapped) spawn if bwrap is unavailable or AGENT_SANDBOX=0, so
-// the system still runs (relying on the per-CLI restrictions) — a warning is logged.
+// Fail closed if bwrap is unavailable or AGENT_SANDBOX=0. Coding-agent execution must
+// never silently downgrade to an unsandboxed process.
 
 const path = require("path");
 const { execSync } = require("child_process");
@@ -33,15 +33,16 @@ const HAS_BWRAP = (() => {
 
 const SANDBOX_DISABLED = process.env.AGENT_SANDBOX === "0";
 
-/**
- * Wrap a CLI invocation so the repo is read-only.
- * @returns {{cmd:string, args:string[], sandboxed:boolean}}
- */
-function sandboxedSpawn(bin, args, cwd) {
-  if (!HAS_BWRAP || SANDBOX_DISABLED) return { cmd: bin, args, sandboxed: false };
+function buildSandboxCommand({ hasBwrap, disabled, repoRoot, bin, args, cwd }) {
+  if (disabled) {
+    throw new Error("Coding-agent sandbox is required; AGENT_SANDBOX=0 is forbidden");
+  }
+  if (!hasBwrap) {
+    throw new Error("Coding-agent sandbox is required but bwrap is unavailable");
+  }
   const bw = [
     "--dev-bind", "/", "/",            // share the host read-write (incl. /dev, network)
-    "--ro-bind", REPO_ROOT, REPO_ROOT, // ...except the repo: read-only (no source writes)
+    "--ro-bind", repoRoot, repoRoot,     // ...except the repo: read-only (no source writes)
     "--die-with-parent",               // sandbox dies if the web server kills us
     ...(cwd ? ["--chdir", cwd] : []),
     "--", bin, ...args,
@@ -49,4 +50,28 @@ function sandboxedSpawn(bin, args, cwd) {
   return { cmd: "bwrap", args: bw, sandboxed: true };
 }
 
-module.exports = { sandboxedSpawn, HAS_BWRAP, REPO_ROOT, SANDBOX_DISABLED };
+/**
+ * Wrap a CLI invocation so the repo is read-only.
+ *
+ * This only proves a fail-closed, read-only source boundary. It does not make
+ * the rest of HOME private or remove network access, so live agents remain
+ * disabled until the stronger T2 confinement gate passes.
+ */
+function sandboxedSpawn(bin, args, cwd) {
+  return buildSandboxCommand({
+    hasBwrap: HAS_BWRAP,
+    disabled: SANDBOX_DISABLED,
+    repoRoot: REPO_ROOT,
+    bin,
+    args,
+    cwd,
+  });
+}
+
+module.exports = {
+  buildSandboxCommand,
+  sandboxedSpawn,
+  HAS_BWRAP,
+  REPO_ROOT,
+  SANDBOX_DISABLED,
+};

@@ -9,18 +9,222 @@ Single-command launcher that:
 5. Prints access URL (auto-detects local vs remote)
 """
 import argparse
+import atexit
+import hashlib
+import http.client
 import json
 import os
 import shutil
 import signal
 import re
+import secrets
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from . import __version__
+
+
+CIRRUS_LOOPBACK_PATCH_MARKER = "VISTA_LOOPBACK_PATCH_V1"
+EXPECTED_ORIGINAL_CIRRUS_SHA256 = "85cc7809250e2de92de0fe16cbabc27392d580a916d10851dc4c48197028215f"
+EXPECTED_PATCHED_CIRRUS_SHA256 = "724b64ea93b863d42a69a22b10e75046d66ee39a5e852be425d9706bdd11abc7"
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_prepared_workspace(workspace: Path, manifest_path: Optional[Path] = None) -> Path:
+    """Require a staged workspace containing the reviewed source security patch."""
+    workspace = Path(workspace).resolve()
+    version_file = workspace / ".studio_version"
+    index_file = workspace / "web" / "server" / "index.js"
+    security_file = workspace / "web" / "server" / "runtime-security.js"
+    if not version_file.is_file() or version_file.read_text().strip() != __version__:
+        raise RuntimeError(f"Prepared workspace must contain .studio_version={__version__}: {workspace}")
+    agent_sandbox_file = workspace / "web" / "server" / "agent-sandbox.js"
+    dist_index = workspace / "web" / "dist" / "index.html"
+    express_package = workspace / "web" / "server" / "node_modules" / "express" / "package.json"
+    if not index_file.is_file() or not security_file.is_file() or not agent_sandbox_file.is_file():
+        raise RuntimeError(f"Prepared workspace is missing the reviewed source server: {workspace}")
+    if not dist_index.is_file() or not express_package.is_file():
+        raise RuntimeError(f"Prepared workspace dependencies/frontend are incomplete: {workspace}")
+
+    manifest_path = Path(manifest_path) if manifest_path else get_package_dir() / "security-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "vista-simworld-security-manifest/v1":
+        raise RuntimeError("Installed Studio security manifest has an invalid schema")
+    for relative, expected in manifest.get("workspace_sha256", {}).items():
+        candidate = workspace / relative
+        if not candidate.is_file() or sha256_file(candidate) != expected:
+            raise RuntimeError(f"Prepared workspace security SHA-256 mismatch: {relative}")
+
+    receipt_path = workspace.parent / "source-receipt.json"
+    if not receipt_path.is_file():
+        raise RuntimeError(f"Prepared workspace receipt is missing: {receipt_path}")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_files = receipt.get("security_files", {})
+    receipt_expected = {
+        "index.js": sha256_file(index_file),
+        "runtime-security.js": sha256_file(security_file),
+    }
+    if receipt.get("schema") != "vista-simworld-staged-workspace/v1" or any(
+        receipt_files.get(name) != digest for name, digest in receipt_expected.items()
+    ):
+        raise RuntimeError("Prepared workspace source receipt is invalid")
+    return workspace
+
+
+def validate_cirrus_loopback_patch(cirrus_js: Path) -> None:
+    """Refuse to start stock UE 5.3 Cirrus, which listens on every interface."""
+    cirrus_js = Path(cirrus_js)
+    receipt_path = cirrus_js.with_name("cirrus.js.vista-receipt.json")
+    if not receipt_path.is_file():
+        raise RuntimeError("Cirrus loopback patch receipt is missing")
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    actual_sha256 = sha256_file(cirrus_js)
+    if (
+        receipt.get("schema") != "vista-cirrus-loopback-patch/v1"
+        or receipt.get("patch_version") != CIRRUS_LOOPBACK_PATCH_MARKER
+        or receipt.get("original_sha256") != EXPECTED_ORIGINAL_CIRRUS_SHA256
+        or receipt.get("patched_sha256") != EXPECTED_PATCHED_CIRRUS_SHA256
+        or actual_sha256 != EXPECTED_PATCHED_CIRRUS_SHA256
+    ):
+        raise RuntimeError("Cirrus loopback patch receipt or SHA-256 is invalid")
+    text = cirrus_js.read_text(encoding="utf-8", errors="strict")
+    required = (
+        CIRRUS_LOOPBACK_PATCH_MARKER,
+        "BindAddress",
+        "http.listen(httpPort, bindAddress",
+        "https.listen(httpsPort, bindAddress",
+        "host: bindAddress",
+    )
+    if any(marker not in text for marker in required):
+        raise RuntimeError(
+            "Cirrus does not contain the reviewed VISTA loopback patch; "
+            "refusing to expose Pixel Streaming listeners"
+        )
+
+
+def make_cirrus_config(args) -> dict:
+    return {
+        "UseFrontend": True,
+        "UseMatchmaker": False,
+        "BindAddress": "127.0.0.1",
+        "HttpPort": args.cirrus_http_port,
+        "StreamerPort": args.cirrus_ws_port,
+        "SFUPort": args.cirrus_sfu_port,
+    }
+
+
+def tcp_listener_addresses(port: int) -> list[str]:
+    result = subprocess.run(
+        ["ss", "-H", "-ltn", f"sport = :{port}"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    addresses = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 4:
+            addresses.append(fields[3].rsplit(":", 1)[0].strip("[]"))
+    return addresses
+
+
+def require_ports_free(ports: dict[str, int]) -> None:
+    values = list(ports.values())
+    invalid = {name: port for name, port in ports.items() if not 1024 <= port <= 65535}
+    if invalid:
+        raise RuntimeError(f"User-space ports must be between 1024 and 65535: {invalid}")
+    if len(values) != len(set(values)):
+        raise RuntimeError(f"Every service needs a unique port: {ports}")
+    occupied = {name: port for name, port in ports.items() if tcp_listener_addresses(port)}
+    if occupied:
+        raise RuntimeError(f"Requested ports are already listening: {occupied}")
+
+
+def require_loopback_listeners(ports: dict[str, int]) -> None:
+    invalid = {}
+    for name, port in ports.items():
+        addresses = tcp_listener_addresses(port)
+        if not addresses or any(address != "127.0.0.1" for address in addresses):
+            invalid[name] = {"port": port, "addresses": addresses}
+    if invalid:
+        raise RuntimeError(f"Listeners are missing or not IPv4-loopback-only: {invalid}")
+
+
+def wait_for_http_health(port: int, access_token: str, timeout: int = 30) -> bool:
+    start = time.time()
+    while time.time() - start < timeout:
+        connection = None
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            connection.request(
+                "GET",
+                "/api/health",
+                headers={
+                    "Host": f"127.0.0.1:{port}",
+                    "Authorization": f"Bearer {access_token}",
+                },
+            )
+            response = connection.getresponse()
+            response.read()
+            if response.status == 200:
+                return True
+        except OSError:
+            pass
+        finally:
+            if connection is not None:
+                connection.close()
+        time.sleep(1)
+    return False
+
+
+def http_status(port: int, access_token: Optional[str] = None) -> int:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    headers = {"Host": f"127.0.0.1:{port}"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    try:
+        connection.request("GET", "/", headers=headers)
+        response = connection.getresponse()
+        response.read()
+        return response.status
+    finally:
+        connection.close()
+
+
+def require_cirrus_http_auth(port: int, access_token: str) -> None:
+    if http_status(port) != 401:
+        raise RuntimeError("Cirrus accepted an unauthenticated HTTP request")
+    if http_status(port, access_token) == 401:
+        raise RuntimeError("Cirrus rejected the configured access token")
+
+
+def cleanup_managed_processes(processes, files) -> None:
+    for process in reversed(processes):
+        if process is not None and process.poll() is None:
+            process.terminate()
+    for process in reversed(processes):
+        if process is None:
+            continue
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    for handle in files:
+        if handle is not None and not handle.closed:
+            handle.close()
 
 
 def get_package_dir():
@@ -269,23 +473,26 @@ def find_simworld_binary(binary_path=None):
     """Find the SimWorld binary directory or UE installation.
     
     Supports:
-    1. Environment variable UE_ROOT (for local UE installation)
-    2. Command line argument --binary
+    1. Command line argument --binary
+    2. Environment variable UE_ROOT (for local UE installation)
     3. SimWorld-Studio-Minimal in common locations
     """
     search_paths = []
     
-    # Priority 1: Environment variable UE_ROOT (for local UE installation)
+    # Priority 1: Explicit command line argument
+    if binary_path:
+        explicit = Path(binary_path)
+        if (explicit / "Engine" / "Binaries" / "Linux" / "UnrealEditor").exists():
+            return explicit
+        return None
+
+    # Priority 2: Environment variable UE_ROOT (for local UE installation)
     ue_root = os.environ.get("UE_ROOT")
     if ue_root:
         ue_root_path = Path(ue_root)
         if (ue_root_path / "Engine" / "Binaries" / "Linux" / "UnrealEditor").exists():
             return ue_root_path
-    
-    # Priority 2: Command line argument
-    if binary_path:
-        search_paths.append(Path(binary_path))
-    
+
     # Priority 3: Common locations for SimWorld-Studio-Minimal
     search_paths.extend([
         Path.cwd() / "SimWorld-Studio-Minimal",
@@ -334,7 +541,6 @@ def find_ue_project(ue_root_path):
 
 def start_server(args):
     """Start everything: UE binary + Studio web server."""
-    pkg_dir = get_package_dir()
     node = find_node()
 
     print()
@@ -342,18 +548,42 @@ def start_server(args):
     print("  SimWorld Studio v" + __version__)
     print("=" * 55)
 
-    # ── Step 1: Check Claude auth ──
+    if args.model_mode != "off" or args.mock:
+        print("  [!!] This T2 secure launcher currently permits only --model-mode off")
+        print("       Mock replay is incomplete upstream; live agents remain confinement-gated")
+        sys.exit(1)
+
+    unrealcv_port = int(os.environ.get("UNREALCV_PORT", os.environ.get("UCV_PORT", "9000")))
+    access_token = secrets.token_urlsafe(32)
+    requested_ports = {
+        "web": args.port,
+        "mcp": args.mcp_port,
+        "cirrus_http": args.cirrus_http_port,
+        "cirrus_streamer": args.cirrus_ws_port,
+        "cirrus_sfu": args.cirrus_sfu_port,
+        "unrealcv": unrealcv_port,
+    }
+    try:
+        require_ports_free(requested_ports)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"  [!!] Port preflight failed: {error}")
+        sys.exit(1)
+
+    # ── Step 1: Check model mode and authentication ──
     print()
-    auth = check_claude_auth()
-    if auth == "api_key":
-        print("  [OK] Claude auth: API key")
-    elif auth == "oauth":
-        print("  [OK] Claude auth: OAuth (claude login)")
+    if args.model_mode == "off":
+        print("  [OK] Model mode: off (no external agent/model execution)")
     else:
-        print("  [!!] Claude not authenticated!")
-        print("       Set ANTHROPIC_API_KEY or run 'claude login'")
-        if not args.skip_auth_check:
-            sys.exit(1)
+        auth = check_claude_auth()
+        if auth == "api_key":
+            print("  [OK] Claude auth: API key")
+        elif auth == "oauth":
+            print("  [OK] Claude auth: OAuth (claude login)")
+        else:
+            print("  [!!] Claude not authenticated!")
+            print("       Set ANTHROPIC_API_KEY or run 'claude login'")
+            if not args.skip_auth_check:
+                sys.exit(1)
 
     # ── Step 2: Detect GPU ──
     gpus = detect_gpu()
@@ -388,17 +618,34 @@ def start_server(args):
         print("         export UE_PROJECT_PATH=/path/to/your/project")
         print()
         print("       Option 2: Download SimWorld-Studio-Minimal")
-        print("         wget -O SimWorld-Studio-Minimal.tar.gz \\")
-        print("             https://huggingface.co/datasets/SimWorld-AI/SimWorld-Studio/resolve/main/SimWorld-Studio-Minimal.tar.gz")
-        print("         tar xzf SimWorld-Studio-Minimal.tar.gz")
+        print("       Use the T2 pinned archive revision 26bdd2ca18f06ab455023b0a602ede60b3afb243")
+        print("       and verify SHA-256 806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f")
         sys.exit(1)
     print(f"  [OK] UE Root: {binary_dir}")
 
-    # ── Step 4: Setup workspace ──
-    workspace = Path(args.data_dir) if args.data_dir else Path.cwd() / "simworld_studio_workspace"
-    workspace = setup_workspace(workspace, pkg_dir)
+    # ── Step 4: Validate the separately staged source workspace ──
+    if not args.data_dir:
+        print("  [!!] Secure bring-up requires --data-dir pointing to a prepared source workspace")
+        sys.exit(1)
+    try:
+        workspace = validate_prepared_workspace(Path(args.data_dir))
+    except RuntimeError as error:
+        print(f"  [!!] {error}")
+        sys.exit(1)
     generate_mcp_config(workspace, "127.0.0.1", str(args.mcp_port))
     print(f"  [OK] Workspace: {workspace}")
+
+    project_file = find_ue_project(binary_dir)
+    if not project_file:
+        print("  [!!] UE project file not found!")
+        print("       Set UE_PROJECT_PATH or use a verified SimWorld Minimal runtime")
+        sys.exit(1)
+    print(f"  [OK] Project: {project_file}")
+    sync_unrealcv_port_in_saved_ini(Path(project_file).parent, unrealcv_port)
+
+    managed_processes = []
+    managed_files = []
+    atexit.register(cleanup_managed_processes, managed_processes, managed_files)
 
     # ── Step 5: Start Cirrus signaling server ──
     print()
@@ -406,62 +653,55 @@ def start_server(args):
     cirrus_js = cirrus_dir / "cirrus.js"
     cirrus_proc = None
 
-    # Check if Cirrus is already running on the expected ports
-    cirrus_already_running = False
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        s.connect(("127.0.0.1", args.cirrus_http_port))
-        s.close()
-        cirrus_already_running = True
-    except (ConnectionRefusedError, socket.timeout, OSError):
-        pass
-
-    if cirrus_already_running:
-        print(f"  [OK] Cirrus already running (HTTP :{args.cirrus_http_port}, WS :{args.cirrus_ws_port})")
-    elif cirrus_js.exists():
-        # Generate cirrus config
-        cirrus_config = {
-            "UseFrontend": True,
-            "UseMatchmaker": False,
-            "HttpPort": args.cirrus_http_port,
-            "StreamerPort": args.cirrus_ws_port,
-            "SFUPort": args.cirrus_sfu_port,
-        }
+    if cirrus_js.exists():
+        try:
+            validate_cirrus_loopback_patch(cirrus_js)
+        except RuntimeError as error:
+            print(f"  [!!] {error}")
+            sys.exit(1)
+        cirrus_config = make_cirrus_config(args)
         cirrus_config_path = workspace / "cirrus-config.json"
         cirrus_config_path.write_text(json.dumps(cirrus_config, indent=2))
 
         cirrus_log = workspace / "logs" / "cirrus.log"
         cirrus_log_file = open(cirrus_log, "w")
+        managed_files.append(cirrus_log_file)
+        cirrus_env = os.environ.copy()
+        cirrus_env["STUDIO_ACCESS_TOKEN"] = access_token
         cirrus_proc = subprocess.Popen(
             [node, str(cirrus_js), f"--configFile={cirrus_config_path}"],
             cwd=str(cirrus_dir),
+            env=cirrus_env,
             stdout=cirrus_log_file,
             stderr=subprocess.STDOUT,
         )
-        time.sleep(2)
-        if cirrus_proc.poll() is None:
-            print(f"  [OK] Cirrus signaling server (HTTP :{args.cirrus_http_port}, WS :{args.cirrus_ws_port})")
-        else:
-            print("  [!!] Cirrus failed to start — Pixel Streaming may not work")
-            cirrus_proc = None
+        managed_processes.append(cirrus_proc)
+        cirrus_ports = {
+            "cirrus_http": args.cirrus_http_port,
+            "cirrus_streamer": args.cirrus_ws_port,
+            "cirrus_sfu": args.cirrus_sfu_port,
+        }
+        if (
+            any(not wait_for_port(port, timeout=30) for port in cirrus_ports.values())
+            or cirrus_proc.poll() is not None
+        ):
+            print("  [!!] Cirrus failed readiness checks")
+            sys.exit(1)
+        try:
+            require_loopback_listeners(cirrus_ports)
+            require_cirrus_http_auth(args.cirrus_http_port, access_token)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            print(f"  [!!] Cirrus listener audit failed: {error}")
+            sys.exit(1)
+        print(f"  [OK] Cirrus signaling server (HTTP :{args.cirrus_http_port}, WS :{args.cirrus_ws_port})")
     else:
-        print("  [!!] Cirrus not found — Pixel Streaming may not work")
+        print("  [!!] Cirrus not found; secure Pixel Streaming is required")
+        sys.exit(1)
 
     # ── Step 6: Launch UE ──
     print("  Launching Unreal Engine (headless)...")
     ue_editor = str(binary_dir / "Engine" / "Binaries" / "Linux" / "UnrealEditor")
     
-    # Find project file (supports local UE_PROJECT_PATH or default gym_citynav)
-    project_file = find_ue_project(binary_dir)
-    if not project_file:
-        print("  [!!] UE project file not found!")
-        print("       Set UE_PROJECT_PATH environment variable:")
-        print("         export UE_PROJECT_PATH=/path/to/your/project")
-        print("       Or ensure gym_citynav/gym_citynav.uproject exists in SimWorld-Studio-Minimal")
-        sys.exit(1)
-    print(f"  [OK] Project: {project_file}")
-
     ue_env = os.environ.copy()
     ue_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
     nvidia_icd = "/usr/share/vulkan/icd.d/nvidia_icd.json"
@@ -471,10 +711,6 @@ def start_server(args):
     ue_log = workspace / "logs" / "ue.log"
 
     ue_map = normalize_map_path(args.map)
-
-    # UnrealCV TCP port (default 9000). On shared hosts 9000 often races at boot; set UNREALCV_PORT + UCV_PORT to match.
-    unrealcv_port = int(os.environ.get("UNREALCV_PORT", os.environ.get("UCV_PORT", "9000")))
-    sync_unrealcv_port_in_saved_ini(Path(project_file).parent, unrealcv_port)
 
     ue_cmd = [
         ue_editor, project_file,
@@ -494,12 +730,14 @@ def start_server(args):
     ]
 
     ue_log_file = open(ue_log, "w")
+    managed_files.append(ue_log_file)
     ue_proc = subprocess.Popen(
         ue_cmd,
         env=ue_env,
         stdout=ue_log_file,
         stderr=subprocess.STDOUT,
     )
+    managed_processes.append(ue_proc)
     print(f"  UE PID: {ue_proc.pid} (log: {ue_log})")
     print(f"  Map: {ue_map}")
 
@@ -512,6 +750,14 @@ def start_server(args):
         print(f"  UE may have crashed. Check log: {ue_log}")
         ue_proc.terminate()
         sys.exit(1)
+    if not wait_for_port(unrealcv_port, timeout=120):
+        print(f"  [!!] UnrealCV port {unrealcv_port} did not become ready")
+        sys.exit(1)
+    try:
+        require_loopback_listeners({"mcp": args.mcp_port, "unrealcv": unrealcv_port})
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"  [!!] UE listener audit failed: {error}")
+        sys.exit(1)
 
     # ── Step 7: Start web server ──
     env = os.environ.copy()
@@ -522,6 +768,10 @@ def start_server(args):
     env["CIRRUS_HTTP_PORT"] = str(args.cirrus_http_port)
     env["CIRRUS_WS_PORT"] = str(args.cirrus_ws_port)
     env["UCV_PORT"] = str(unrealcv_port)
+    env["STUDIO_HOST"] = "127.0.0.1"
+    env["STUDIO_MODEL_MODE"] = args.model_mode
+    env["STUDIO_CODING_AGENTS_ENABLED"] = "0"
+    env["STUDIO_ACCESS_TOKEN"] = access_token
 
     # Mock mode
     if args.mock:
@@ -550,9 +800,17 @@ def start_server(args):
         cwd=str(workspace / "web"),
         env=env,
     )
+    managed_processes.append(server_proc)
+    if not wait_for_http_health(args.port, access_token, timeout=30) or server_proc.poll() is not None:
+        print("  [!!] Studio web server failed its loopback health check")
+        sys.exit(1)
+    try:
+        require_loopback_listeners({"web": args.port})
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"  [!!] Studio listener audit failed: {error}")
+        sys.exit(1)
 
     # ── Step 8: Print access info ──
-    server_ip = get_server_ip()
     is_local = is_local_machine()
 
     print()
@@ -560,19 +818,18 @@ def start_server(args):
     print("  SimWorld Studio is running!")
     print()
     if is_local:
-        print(f"  Open: http://localhost:{args.port}")
+        print(f"  Open: http://localhost:{args.port}/?token={access_token}")
     else:
         print(f"  Local access:  http://localhost:{args.port}")
-        print(f"  Remote access: http://{server_ip}:{args.port}")
         print()
-        print(f"  Or use SSH tunnel from your laptop:")
-        print(f"    ssh -L {args.port}:localhost:{args.port} -L {args.cirrus_http_port}:localhost:{args.cirrus_http_port} user@{server_ip}")
-        print(f"    Then open: http://localhost:{args.port}")
+        print("  Use an SSH tunnel from your laptop:")
+        print(f"    ssh -L {args.port}:127.0.0.1:{args.port} -L {args.cirrus_http_port}:127.0.0.1:{args.cirrus_http_port} user@server")
+        print(f"    Then open: http://localhost:{args.port}/?token={access_token}")
     print()
     print(f"  GPU: {gpu_index}  |  MCP: {args.mcp_port}  |  Web: {args.port}  |  Cirrus: HTTP:{args.cirrus_http_port} WS:{args.cirrus_ws_port} SFU:{args.cirrus_sfu_port}")
     print("=" * 55)
     print()
-    print('  Try: "Set up a sunset scene with 4 houses and trees"')
+    print("  Model calls are disabled; use the Pixel Streaming viewport to move and inspect.")
     print()
     print("  Press Ctrl+C to stop.")
     print()
@@ -580,24 +837,7 @@ def start_server(args):
     # ── Handle shutdown ──
     def shutdown(sig=None, frame=None):
         print("\n  Shutting down...")
-        server_proc.terminate()
-        ue_proc.terminate()
-        if cirrus_proc:
-            cirrus_proc.terminate()
-        try:
-            server_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            server_proc.kill()
-        try:
-            ue_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            ue_proc.kill()
-        if cirrus_proc:
-            try:
-                cirrus_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                cirrus_proc.kill()
-        ue_log_file.close()
+        cleanup_managed_processes(managed_processes, managed_files)
         print("  Done.")
         sys.exit(0)
 
@@ -616,6 +856,9 @@ def start_server(args):
             if server_proc.poll() is not None:
                 print(f"\n  [!!] Web server exited with code {server_proc.returncode}")
                 ue_proc.terminate()
+                sys.exit(1)
+            if cirrus_proc.poll() is not None:
+                print(f"\n  [!!] Cirrus exited with code {cirrus_proc.returncode}")
                 sys.exit(1)
             time.sleep(2)
     except KeyboardInterrupt:
@@ -638,11 +881,10 @@ def main():
     sp_start.add_argument("--cirrus-sfu-port", type=int, default=8889, help="Cirrus SFU port for Pixel Streaming (default: 8889)")
     sp_start.add_argument("--map", default="/Game/Main", help="UE map path to open (default: /Game/Main)")
     sp_start.add_argument("--binary", default=None, help="Path to UE installation or SimWorld-Studio-Minimal directory (overrides UE_ROOT env var)")
-    sp_start.add_argument("--data-dir", default=None, help="Workspace directory")
-    sp_start.add_argument("--skip-auth-check", action="store_true", help="Skip Claude auth check")
+    sp_start.add_argument("--data-dir", default=None, help="Prepared, versioned source workspace directory")
+    sp_start.add_argument("--model-mode", choices=("off",), default="off", help="T2 secure bring-up disables all model execution")
     sp_start.add_argument("--skip-gpu-check", action="store_true", help="Skip GPU check")
-    sp_start.add_argument("--mock", action="store_true", help="Enable mock mode (use mock_responses.txt instead of calling Claude)")
-    sp_start.add_argument("--mock-file", default=None, help="Path to mock responses file (default: workspace/mock_responses.txt)")
+    sp_start.set_defaults(mock=False, mock_file=None, skip_auth_check=False)
 
     subparsers.add_parser("version", help="Show version")
 
