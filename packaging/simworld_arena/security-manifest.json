@@ -7,7 +7,7 @@
   },
   "cirrus": {
     "patch_version": "VISTA_LOOPBACK_PATCH_V1",
-    "original_sha256": "85cc7809250e2de92de0fe16cbabc27392d580a916d10851dc4c48197028215f",
-    "patched_sha256": "724b64ea93b863d42a69a22b10e75046d66ee39a5e852be425d9706bdd11abc7"
+    "original_sha256": "92298e881c9240ebe76adfdf0fda39310cc28f5fd5934070194940cca7be29a4",
+    "patched_sha256": "133a12cf843c69914263a41c3ea3d7f09914ad9241125358850ea0318e55300e"
   }
 }
