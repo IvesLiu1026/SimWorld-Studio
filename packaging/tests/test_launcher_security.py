@@ -22,6 +22,18 @@ from simworld_arena.launcher import (
 
 
 class LauncherSecurityTests(unittest.TestCase):
+    def test_launcher_disables_unreal_network_messaging(self):
+        launcher_source = (
+            Path(__file__).resolve().parents[1] / "simworld_arena" / "launcher.py"
+        ).read_text()
+        self.assertNotIn('"-Messaging"', launcher_source)
+        self.assertIn('"-UDPMESSAGING_TRANSPORT_ENABLE=0"', launcher_source)
+        self.assertIn(
+            '"-ini:Engine:[/Script/TcpMessaging.TcpMessagingSettings]:'
+            'EnableTransport=False"',
+            launcher_source,
+        )
+
     def test_headless_nvidia_icd_is_pinned_to_egl(self):
         manifest = get_nvidia_headless_icd()
         payload = json.loads(manifest.read_text())

@@ -743,7 +743,11 @@ def start_server(args):
         ue_editor, project_file,
         ue_map,
         f"-MCPPort={args.mcp_port}",
-        "-Unattended", "-NOSPLASH", "-NOSOUND", "-Messaging",
+        "-Unattended", "-NOSPLASH", "-NOSOUND",
+        # Studio does not use Unreal's message bus. Keep its UDP multicast and
+        # TCP transport disabled so an editor launch cannot join LAN interfaces.
+        "-UDPMESSAGING_TRANSPORT_ENABLE=0",
+        "-ini:Engine:[/Script/TcpMessaging.TcpMessagingSettings]:EnableTransport=False",
         "-ResX=1280", "-ResY=720",
         "-FPSMAX=15",
         f"-graphicsadapter={gpu_index}",
