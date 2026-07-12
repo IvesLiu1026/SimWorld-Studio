@@ -11,9 +11,11 @@ from simworld_arena.launcher import (
     CIRRUS_LOOPBACK_PATCH_MARKER,
     EXPECTED_ORIGINAL_CIRRUS_SHA256,
     get_nvidia_headless_icd,
+    has_unrealcv_plugin,
     make_cirrus_config,
     require_loopback_listeners,
     require_ports_free,
+    resolve_project_map,
     sha256_file,
     validate_cirrus_loopback_patch,
     validate_prepared_workspace,
@@ -22,6 +24,46 @@ from simworld_arena.launcher import (
 
 
 class LauncherSecurityTests(unittest.TestCase):
+    def test_project_map_must_exist_inside_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary) / "project"
+            content = project_root / "Content" / "Maps"
+            content.mkdir(parents=True)
+            project = project_root / "project.uproject"
+            project.write_text("{}")
+            (content / "Empty.umap").write_bytes(b"map")
+
+            self.assertEqual(
+                resolve_project_map(project, "/Game/Maps/Empty"),
+                "/Game/Maps/Empty.umap",
+            )
+            self.assertEqual(
+                resolve_project_map(project, "/Game/Maps/Empty.umap"),
+                "/Game/Maps/Empty.umap",
+            )
+            with self.assertRaisesRegex(RuntimeError, "does not exist"):
+                resolve_project_map(project, "/Game/Main")
+            with self.assertRaisesRegex(RuntimeError, "Unsafe"):
+                resolve_project_map(project, "/Game/../outside")
+
+    def test_unrealcv_requires_descriptor_and_linux_binary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_root = root / "gym_citynav"
+            project_root.mkdir()
+            project = project_root / "gym_citynav.uproject"
+            project.write_text("{}")
+            self.assertFalse(has_unrealcv_plugin(root, project))
+
+            plugin = project_root / "Plugins" / "UnrealCV"
+            plugin.mkdir(parents=True)
+            (plugin / "UnrealCV.uplugin").write_text("{}")
+            self.assertFalse(has_unrealcv_plugin(root, project))
+            binaries = plugin / "Binaries" / "Linux"
+            binaries.mkdir(parents=True)
+            (binaries / "libUnrealEditor-UnrealCV.so").write_bytes(b"binary")
+            self.assertTrue(has_unrealcv_plugin(root, project))
+
     def test_launcher_disables_unreal_network_messaging(self):
         launcher_source = (
             Path(__file__).resolve().parents[1] / "simworld_arena" / "launcher.py"

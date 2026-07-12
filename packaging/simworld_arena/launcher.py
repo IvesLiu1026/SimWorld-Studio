@@ -370,11 +370,46 @@ def wait_for_port(port, host="127.0.0.1", timeout=120, process=None):
     return False
 
 
-def normalize_map_path(map_path: str) -> str:
-    """Normalize UE map path to include .umap suffix when omitted."""
-    if not map_path:
-        return "/Game/Main.umap"
-    return map_path if map_path.endswith(".umap") else f"{map_path}.umap"
+def resolve_project_map(project_file: Path, map_path: str) -> str:
+    """Validate a /Game asset path against a real map in project Content."""
+    requested = (map_path or "/Game/Maps/Empty").strip()
+    if requested.endswith(".umap"):
+        requested = requested[:-5]
+    if not requested.startswith("/Game/"):
+        raise RuntimeError("UE map must be a /Game asset path")
+    relative = requested.removeprefix("/Game/")
+    if (
+        not relative
+        or "\\" in relative
+        or "//" in relative
+        or any(part in ("", ".", "..") for part in relative.split("/"))
+    ):
+        raise RuntimeError(f"Unsafe UE map path: {map_path}")
+    content_root = (Path(project_file).parent / "Content").resolve()
+    candidate = (content_root / f"{relative}.umap").resolve()
+    try:
+        candidate.relative_to(content_root)
+    except ValueError as error:
+        raise RuntimeError(f"UE map escapes project Content: {map_path}") from error
+    if not candidate.is_file():
+        raise RuntimeError(f"UE map does not exist in the pinned runtime: {requested}")
+    return f"/Game/{relative}.umap"
+
+
+def has_unrealcv_plugin(ue_root: Path, project_file: Path) -> bool:
+    """Detect a loadable UnrealCV plugin without scanning the full runtime."""
+    project_root = Path(project_file).parent
+    candidates = (
+        project_root / "Plugins" / "UnrealCV" / "UnrealCV.uplugin",
+        Path(ue_root) / "Engine" / "Plugins" / "UnrealCV" / "UnrealCV.uplugin",
+        Path(ue_root) / "Engine" / "Plugins" / "Marketplace" / "UnrealCV" / "UnrealCV.uplugin",
+        Path(ue_root) / "Engine" / "Plugins" / "Runtime" / "UnrealCV" / "UnrealCV.uplugin",
+    )
+    return any(
+        descriptor.is_file()
+        and any((descriptor.parent / "Binaries" / "Linux").glob("*UnrealCV*.so"))
+        for descriptor in candidates
+    )
 
 
 def setup_workspace(workspace, pkg_dir):
@@ -582,13 +617,7 @@ def start_server(args):
         "cirrus_http": args.cirrus_http_port,
         "cirrus_streamer": args.cirrus_ws_port,
         "cirrus_sfu": args.cirrus_sfu_port,
-        "unrealcv": unrealcv_port,
     }
-    try:
-        require_ports_free(requested_ports)
-    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-        print(f"  [!!] Port preflight failed: {error}")
-        sys.exit(1)
 
     # ── Step 1: Check model mode and authentication ──
     print()
@@ -662,7 +691,30 @@ def start_server(args):
         print("       Set UE_PROJECT_PATH or use a verified SimWorld Minimal runtime")
         sys.exit(1)
     print(f"  [OK] Project: {project_file}")
-    sync_unrealcv_port_in_saved_ini(Path(project_file).parent, unrealcv_port)
+    try:
+        ue_map = resolve_project_map(Path(project_file), args.map)
+    except RuntimeError as error:
+        print(f"  [!!] {error}")
+        sys.exit(1)
+    print(f"  [OK] Map: {ue_map}")
+
+    unrealcv_available = has_unrealcv_plugin(binary_dir, Path(project_file))
+    if args.unrealcv_mode == "required" and not unrealcv_available:
+        print("  [!!] --unrealcv-mode required but the pinned Minimal runtime has no UnrealCV plugin binary")
+        sys.exit(1)
+    unrealcv_enabled = unrealcv_available
+    if unrealcv_enabled:
+        requested_ports["unrealcv"] = unrealcv_port
+        sync_unrealcv_port_in_saved_ini(Path(project_file).parent, unrealcv_port)
+        print(f"  [OK] UnrealCV plugin: enabled on loopback port {unrealcv_port}")
+    else:
+        print("  [OK] UnrealCV plugin: unavailable/disabled; Studio broker will stay off")
+
+    try:
+        require_ports_free(requested_ports)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"  [!!] Port preflight failed: {error}")
+        sys.exit(1)
 
     managed_processes = []
     managed_files = []
@@ -737,8 +789,6 @@ def start_server(args):
 
     ue_log = workspace / "logs" / "ue.log"
 
-    ue_map = normalize_map_path(args.map)
-
     ue_cmd = [
         ue_editor, project_file,
         ue_map,
@@ -785,7 +835,7 @@ def start_server(args):
             ue_proc.terminate()
         print(f"  Check UE log: {ue_log}")
         sys.exit(1)
-    if not wait_for_port(unrealcv_port, timeout=120, process=ue_proc):
+    if unrealcv_enabled and not wait_for_port(unrealcv_port, timeout=120, process=ue_proc):
         returncode = ue_proc.poll()
         if returncode is not None:
             print(f"  [!!] UE exited with code {returncode} before UnrealCV became ready")
@@ -793,7 +843,10 @@ def start_server(args):
             print(f"  [!!] UnrealCV port {unrealcv_port} did not become ready")
         sys.exit(1)
     try:
-        require_loopback_listeners({"mcp": args.mcp_port, "unrealcv": unrealcv_port})
+        ue_ports = {"mcp": args.mcp_port}
+        if unrealcv_enabled:
+            ue_ports["unrealcv"] = unrealcv_port
+        require_loopback_listeners(ue_ports)
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"  [!!] UE listener audit failed: {error}")
         sys.exit(1)
@@ -807,6 +860,8 @@ def start_server(args):
     env["CIRRUS_HTTP_PORT"] = str(args.cirrus_http_port)
     env["CIRRUS_WS_PORT"] = str(args.cirrus_ws_port)
     env["UCV_PORT"] = str(unrealcv_port)
+    if not unrealcv_enabled:
+        env["DISABLE_UCV_BROKER"] = "1"
     env["STUDIO_HOST"] = "127.0.0.1"
     env["STUDIO_MODEL_MODE"] = args.model_mode
     env["STUDIO_CODING_AGENTS_ENABLED"] = "0"
@@ -865,7 +920,8 @@ def start_server(args):
         print(f"    ssh -L {args.port}:127.0.0.1:{args.port} -L {args.cirrus_http_port}:127.0.0.1:{args.cirrus_http_port} user@server")
         print(f"    Then open: http://localhost:{args.port}/?token={access_token}")
     print()
-    print(f"  GPU: {gpu_index}  |  MCP: {args.mcp_port}  |  Web: {args.port}  |  Cirrus: HTTP:{args.cirrus_http_port} WS:{args.cirrus_ws_port} SFU:{args.cirrus_sfu_port}")
+    ucv_status = str(unrealcv_port) if unrealcv_enabled else "disabled"
+    print(f"  GPU: {gpu_index}  |  MCP: {args.mcp_port}  |  UCV: {ucv_status}  |  Web: {args.port}  |  Cirrus: HTTP:{args.cirrus_http_port} WS:{args.cirrus_ws_port} SFU:{args.cirrus_sfu_port}")
     print("=" * 55)
     print()
     print("  Model calls are disabled; use the Pixel Streaming viewport to move and inspect.")
@@ -918,7 +974,8 @@ def main():
     sp_start.add_argument("--cirrus-http-port", type=int, default=8585, help="Cirrus HTTP port for Pixel Streaming (default: 8585)")
     sp_start.add_argument("--cirrus-ws-port", type=int, default=8586, help="Cirrus WebSocket port for Pixel Streaming (default: 8586)")
     sp_start.add_argument("--cirrus-sfu-port", type=int, default=8889, help="Cirrus SFU port for Pixel Streaming (default: 8889)")
-    sp_start.add_argument("--map", default="/Game/Main", help="UE map path to open (default: /Game/Main)")
+    sp_start.add_argument("--map", default="/Game/Maps/Empty", help="Existing /Game map asset path (default: /Game/Maps/Empty)")
+    sp_start.add_argument("--unrealcv-mode", choices=("auto", "required"), default="auto", help="Use UnrealCV when a loadable plugin is present, or require it (default: auto)")
     sp_start.add_argument("--binary", default=None, help="Path to UE installation or SimWorld-Studio-Minimal directory (overrides UE_ROOT env var)")
     sp_start.add_argument("--data-dir", default=None, help="Prepared, versioned source workspace directory")
     sp_start.add_argument("--model-mode", choices=("off",), default="off", help="T2 secure bring-up disables all model execution")
