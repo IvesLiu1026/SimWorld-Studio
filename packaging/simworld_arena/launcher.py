@@ -232,6 +232,24 @@ def get_package_dir():
     return Path(__file__).parent
 
 
+def get_nvidia_headless_icd() -> Path:
+    """Return the reviewed EGL-backed NVIDIA ICD used for offscreen rendering."""
+    manifest = get_package_dir() / "nvidia-headless-icd.json"
+    if not manifest.is_file():
+        raise RuntimeError(f"Packaged NVIDIA headless Vulkan ICD is missing: {manifest}")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    icd = payload.get("ICD", {})
+    library = Path(str(icd.get("library_path", "")))
+    if (
+        payload.get("file_format_version") != "1.0.1"
+        or library != Path("/usr/lib/x86_64-linux-gnu/libEGL_nvidia.so.0")
+        or icd.get("api_version") != "1.4.325"
+        or not library.is_file()
+    ):
+        raise RuntimeError("Packaged NVIDIA headless Vulkan ICD is invalid or unavailable")
+    return manifest.resolve()
+
+
 def sync_unrealcv_port_in_saved_ini(project_root: Path, port: int) -> None:
     """Set UnrealCV listen port in Saved/unrealcv.ini.
 
@@ -334,18 +352,21 @@ def is_local_machine():
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def wait_for_port(port, host="127.0.0.1", timeout=120):
-    """Wait for a TCP port to become available."""
-    start = time.time()
-    while time.time() - start < timeout:
+def wait_for_port(port, host="127.0.0.1", timeout=120, process=None):
+    """Wait for a TCP port, aborting early if its child process exits."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            return False
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            s.connect((host, port))
-            s.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(min(0.25, max(0.01, deadline - time.monotonic())))
+                s.connect((host, port))
             return True
         except (ConnectionRefusedError, socket.timeout, OSError):
-            time.sleep(2)
+            if process is not None and process.poll() is not None:
+                return False
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
     return False
 
 
@@ -682,7 +703,10 @@ def start_server(args):
             "cirrus_sfu": args.cirrus_sfu_port,
         }
         if (
-            any(not wait_for_port(port, timeout=30) for port in cirrus_ports.values())
+            any(
+                not wait_for_port(port, timeout=30, process=cirrus_proc)
+                for port in cirrus_ports.values()
+            )
             or cirrus_proc.poll() is not None
         ):
             print("  [!!] Cirrus failed readiness checks")
@@ -704,9 +728,12 @@ def start_server(args):
     
     ue_env = os.environ.copy()
     ue_env["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
-    nvidia_icd = "/usr/share/vulkan/icd.d/nvidia_icd.json"
-    if os.path.isfile(nvidia_icd):
-        ue_env["VK_ICD_FILENAMES"] = nvidia_icd
+    try:
+        nvidia_icd = get_nvidia_headless_icd()
+    except RuntimeError as error:
+        print(f"  [!!] {error}")
+        sys.exit(1)
+    ue_env["VK_ICD_FILENAMES"] = str(nvidia_icd)
 
     ue_log = workspace / "logs" / "ue.log"
 
@@ -743,15 +770,23 @@ def start_server(args):
 
     # ── Step 6: Wait for MCP port ──
     print(f"  Waiting for MCP port {args.mcp_port}...", end="", flush=True)
-    if wait_for_port(args.mcp_port, timeout=120):
+    if wait_for_port(args.mcp_port, timeout=120, process=ue_proc):
         print(" ready!")
     else:
-        print(" TIMEOUT!")
-        print(f"  UE may have crashed. Check log: {ue_log}")
-        ue_proc.terminate()
+        returncode = ue_proc.poll()
+        if returncode is not None:
+            print(f" FAILED! UE exited with code {returncode}.")
+        else:
+            print(" TIMEOUT!")
+            ue_proc.terminate()
+        print(f"  Check UE log: {ue_log}")
         sys.exit(1)
-    if not wait_for_port(unrealcv_port, timeout=120):
-        print(f"  [!!] UnrealCV port {unrealcv_port} did not become ready")
+    if not wait_for_port(unrealcv_port, timeout=120, process=ue_proc):
+        returncode = ue_proc.poll()
+        if returncode is not None:
+            print(f"  [!!] UE exited with code {returncode} before UnrealCV became ready")
+        else:
+            print(f"  [!!] UnrealCV port {unrealcv_port} did not become ready")
         sys.exit(1)
     try:
         require_loopback_listeners({"mcp": args.mcp_port, "unrealcv": unrealcv_port})

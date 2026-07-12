@@ -1,6 +1,7 @@
 import json
 import socket
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,16 +10,27 @@ from unittest import mock
 from simworld_arena.launcher import (
     CIRRUS_LOOPBACK_PATCH_MARKER,
     EXPECTED_ORIGINAL_CIRRUS_SHA256,
+    get_nvidia_headless_icd,
     make_cirrus_config,
     require_loopback_listeners,
     require_ports_free,
     sha256_file,
     validate_cirrus_loopback_patch,
     validate_prepared_workspace,
+    wait_for_port,
 )
 
 
 class LauncherSecurityTests(unittest.TestCase):
+    def test_headless_nvidia_icd_is_pinned_to_egl(self):
+        manifest = get_nvidia_headless_icd()
+        payload = json.loads(manifest.read_text())
+        self.assertEqual(
+            payload["ICD"]["library_path"],
+            "/usr/lib/x86_64-linux-gnu/libEGL_nvidia.so.0",
+        )
+        self.assertEqual(payload["ICD"]["api_version"], "1.4.325")
+
     def test_checked_in_manifest_matches_source(self):
         repository = Path(__file__).resolve().parents[2]
         manifest = json.loads(
@@ -139,6 +151,17 @@ class LauncherSecurityTests(unittest.TestCase):
                 require_loopback_listeners({"test": port})
         finally:
             listener.close()
+
+    def test_wait_for_port_aborts_when_child_exits(self):
+        process = mock.Mock()
+        process.poll.return_value = 17
+        start = time.monotonic()
+
+        with mock.patch("simworld_arena.launcher.socket.socket") as socket_factory:
+            self.assertFalse(wait_for_port(65535, timeout=30, process=process))
+
+        self.assertLess(time.monotonic() - start, 1)
+        socket_factory.assert_not_called()
 
 
 if __name__ == "__main__":

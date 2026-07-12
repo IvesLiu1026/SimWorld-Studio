@@ -20,6 +20,7 @@ include = ["simworld_arena*"]
 
 [tool.setuptools.package-data]
 simworld_arena = [
+    "nvidia-headless-icd.json",
     "security-manifest.json",
     "server/*.js",
     "server/*.json",
