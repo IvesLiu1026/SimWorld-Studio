@@ -250,6 +250,45 @@ def get_nvidia_headless_icd() -> Path:
     return manifest.resolve()
 
 
+def prepare_nvidia_compat_libraries(workspace: Path) -> Path:
+    """Provide unversioned NVIDIA DSOs expected by the pinned UE 5.3 build."""
+    workspace = Path(workspace).resolve()
+    runtime_dir = workspace / "runtime"
+    if runtime_dir.is_symlink():
+        raise RuntimeError("NVIDIA runtime directory must not be a symlink")
+    runtime_dir.mkdir(mode=0o700, exist_ok=True)
+    if runtime_dir.resolve().parent != workspace:
+        raise RuntimeError("NVIDIA runtime directory escapes the prepared workspace")
+    runtime_dir.chmod(0o700)
+    compat_dir = runtime_dir / "nvidia-compat"
+    if compat_dir.is_symlink():
+        raise RuntimeError("NVIDIA compatibility directory must not be a symlink")
+    compat_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if compat_dir.resolve().parent != runtime_dir.resolve():
+        raise RuntimeError("NVIDIA compatibility directory escapes the prepared workspace")
+    compat_dir.chmod(0o700)
+
+    required = {
+        "libcuda.so": Path("/usr/lib/x86_64-linux-gnu/libcuda.so.1"),
+        "libnvcuvid.so": Path("/usr/lib/x86_64-linux-gnu/libnvcuvid.so.1"),
+    }
+    for link_name, versioned_path in required.items():
+        try:
+            target = versioned_path.resolve(strict=True)
+        except FileNotFoundError as error:
+            raise RuntimeError(f"Required NVIDIA runtime library is missing: {versioned_path}") from error
+        target_stat = target.stat()
+        if target_stat.st_uid != 0 or target_stat.st_mode & 0o022:
+            raise RuntimeError(f"NVIDIA runtime library is not root-owned/read-only: {target}")
+        link = compat_dir / link_name
+        if link.exists() or link.is_symlink():
+            if not link.is_symlink() or link.resolve(strict=True) != target:
+                raise RuntimeError(f"Unexpected NVIDIA compatibility link: {link}")
+        else:
+            link.symlink_to(target)
+    return compat_dir.resolve()
+
+
 def sync_unrealcv_port_in_saved_ini(project_root: Path, port: int) -> None:
     """Set UnrealCV listen port in Saved/unrealcv.ini.
 
@@ -786,6 +825,15 @@ def start_server(args):
         print(f"  [!!] {error}")
         sys.exit(1)
     ue_env["VK_ICD_FILENAMES"] = str(nvidia_icd)
+    try:
+        nvidia_compat_dir = prepare_nvidia_compat_libraries(workspace)
+    except RuntimeError as error:
+        print(f"  [!!] {error}")
+        sys.exit(1)
+    inherited_library_path = ue_env.get("LD_LIBRARY_PATH")
+    ue_env["LD_LIBRARY_PATH"] = str(nvidia_compat_dir)
+    if inherited_library_path:
+        ue_env["LD_LIBRARY_PATH"] += os.pathsep + inherited_library_path
 
     ue_log = workspace / "logs" / "ue.log"
 

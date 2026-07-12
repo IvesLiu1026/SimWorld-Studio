@@ -1,5 +1,8 @@
 import json
+import os
 import socket
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -13,6 +16,7 @@ from simworld_arena.launcher import (
     get_nvidia_headless_icd,
     has_unrealcv_plugin,
     make_cirrus_config,
+    prepare_nvidia_compat_libraries,
     require_loopback_listeners,
     require_ports_free,
     resolve_project_map,
@@ -24,6 +28,29 @@ from simworld_arena.launcher import (
 
 
 class LauncherSecurityTests(unittest.TestCase):
+    def test_nvidia_compat_links_resolve_root_owned_driver_libraries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            compat = prepare_nvidia_compat_libraries(Path(temporary))
+            for name in ("libcuda.so", "libnvcuvid.so"):
+                link = compat / name
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(link.resolve().stat().st_uid, 0)
+            environment = dict(os.environ, LD_LIBRARY_PATH=str(compat))
+            probe = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import ctypes; "
+                    "[ctypes.CDLL(name) for name in "
+                    "('libcuda.so','libnvcuvid.so')]",
+                ],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+
     def test_project_map_must_exist_inside_content(self):
         with tempfile.TemporaryDirectory() as temporary:
             project_root = Path(temporary) / "project"
