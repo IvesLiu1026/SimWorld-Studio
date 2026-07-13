@@ -41,6 +41,8 @@ VISTA_DEMO_MAP = "/Game/Maps/Empty"
 VISTA_DEMO_MAP_SHA256 = "432bc559e18c6d3814fb9e1f7ba21c3b83bde5536037208e765d079619b8d606"
 GPU_IDLE_MAX_MEMORY_MIB = 1024
 GPU_IDLE_MAX_UTILIZATION_PERCENT = 10
+DEFAULT_UE_STARTUP_TIMEOUT_SECONDS = 120
+VISTA_DEMO_COLD_UE_STARTUP_TIMEOUT_SECONDS = 300
 REVIEWED_IDLE_GRAPHICS_PROCESSES = {
     ("/usr/lib/xorg/Xorg", "gdm", "G"): 64,
 }
@@ -1041,6 +1043,14 @@ def build_ue_map_url(ue_map: str, vista_demo: bool) -> str:
     return f"{map_asset}?game={VISTA_DEMO_GAME_MODE}"
 
 
+def ue_startup_timeout_seconds(vista_demo: bool) -> int:
+    """Allow the isolated demo DDC one bounded first-start shader compile."""
+
+    if vista_demo:
+        return VISTA_DEMO_COLD_UE_STARTUP_TIMEOUT_SECONDS
+    return DEFAULT_UE_STARTUP_TIMEOUT_SECONDS
+
+
 def make_ue_command(
     *,
     ue_editor: str,
@@ -1604,7 +1614,11 @@ def start_server(args):
 
     # ── Step 6: Wait for MCP port ──
     print(f"  Waiting for MCP port {args.mcp_port}...", end="", flush=True)
-    if wait_for_port(args.mcp_port, timeout=120, process=ue_proc):
+    if wait_for_port(
+        args.mcp_port,
+        timeout=ue_startup_timeout_seconds(args.vista_demo),
+        process=ue_proc,
+    ):
         print(" ready!")
     else:
         returncode = ue_proc.poll()

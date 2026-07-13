@@ -38,6 +38,7 @@ from simworld_arena.launcher import (
     sha256_tree,
     start_managed_process,
     terminate_managed_process_group,
+    ue_startup_timeout_seconds,
     ue_fps_log_confirms,
     validate_gpu_index,
     validate_model_off_child_environment,
@@ -58,6 +59,10 @@ STAGE_TOOL_SPEC.loader.exec_module(STAGE_TOOL)
 
 
 class LauncherSecurityTests(unittest.TestCase):
+    def test_vista_demo_allows_one_bounded_cold_shader_compile(self):
+        self.assertEqual(ue_startup_timeout_seconds(vista_demo=True), 300)
+        self.assertEqual(ue_startup_timeout_seconds(vista_demo=False), 120)
+
     def test_nvidia_compat_links_resolve_root_owned_driver_libraries(self):
         with tempfile.TemporaryDirectory() as temporary:
             compat = prepare_nvidia_compat_libraries(Path(temporary))
