@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { forwardRef, useState, useEffect, useRef, useCallback, useImperativeHandle } from "react";
 
 /**
  * PixelStreamPlayer
@@ -6,7 +6,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
  * - Keepalive via postMessage from iframe (sw-keepalive / sw-stream-connected)
  * - No status badge, no config overlay, no click-to-control gate
  */
-export default function PixelStreamPlayer({ playerUrl }) {
+const PixelStreamPlayer = forwardRef(function PixelStreamPlayer({ playerUrl, onStreamReadyChange }, ref) {
   const iframeRef      = useRef(null);
   const reconnectTimer = useRef(null);
   const pingTimer      = useRef(null);
@@ -14,28 +14,72 @@ export default function PixelStreamPlayer({ playerUrl }) {
 
   const [status,     setStatus]     = useState("idle");
   const [reconnects, setReconnects] = useState(0);
+  const [streamReady, setStreamReady] = useState(false);
 
   const effectiveUrl = useCallback(() => playerUrl || null, [playerUrl]);
 
+  useImperativeHandle(ref, () => ({
+    playVistaDemo() {
+      const frame = iframeRef.current;
+      if (!streamReady || !frame?.contentWindow) return false;
+      frame.contentWindow.postMessage({ type: "sw-vista-play" }, window.location.origin);
+      frame.focus();
+      return true;
+    },
+    stopVistaDemo() {
+      const frame = iframeRef.current;
+      if (!streamReady || !frame?.contentWindow) return false;
+      frame.contentWindow.postMessage({ type: "sw-vista-stop" }, window.location.origin);
+      return true;
+    },
+  }), [streamReady]);
+
+  useEffect(() => {
+    onStreamReadyChange?.(streamReady);
+  }, [onStreamReadyChange, streamReady]);
+
   // Reset when URL changes
   useEffect(() => {
-    if (!playerUrl) return;
+    if (!playerUrl) {
+      setStatus("idle");
+      setStreamReady(false);
+      return;
+    }
     setStatus("connecting");
+    setStreamReady(false);
     setReconnects(0);
   }, [playerUrl]);
 
   // Listen for messages from iframe
   useEffect(() => {
+    const exactMessage = (data, type) => Boolean(
+      data &&
+      typeof data === "object" &&
+      !Array.isArray(data) &&
+      Object.keys(data).length === 1 &&
+      data.type === type
+    );
     function onMsg(e) {
-      if (e.data?.type === "sw-stream-connected") {
+      if (e.origin !== window.location.origin || e.source !== iframeRef.current?.contentWindow) return;
+      if (exactMessage(e.data, "sw-stream-connected")) {
+        if (reconnectTimer.current) {
+          clearTimeout(reconnectTimer.current);
+          reconnectTimer.current = null;
+        }
         setStatus("connected");
+        setStreamReady(true);
         setReconnects(0);
         lastAlive.current = Date.now();
         // Auto-focus so keyboard/mouse work immediately
         setTimeout(() => iframeRef.current?.focus(), 150);
       }
-      if (e.data?.type === "sw-keepalive") {
+      if (exactMessage(e.data, "sw-keepalive")) {
         lastAlive.current = Date.now();
+      }
+      if (exactMessage(e.data, "sw-stream-disconnected")) {
+        lastAlive.current = null;
+        setStreamReady(false);
+        setStatus("disconnected");
       }
     }
     window.addEventListener("message", onMsg);
@@ -53,8 +97,8 @@ export default function PixelStreamPlayer({ playerUrl }) {
     return () => clearTimeout(connectTimer.current);
   }, [status]);
 
-  // (Immersive/F11 is now handled inside ue-player.html — it injects the F11 key into the
-  // pixel-streaming input on first connect, which is what actually replicates a manual press.)
+  // Immersive mode is a one-time launcher state. Browser reconnects must never
+  // inject F11 because it is an editor toggle shared by every viewer.
 
   // Heartbeat — detect silent drops after 60s silence
   useEffect(() => {
@@ -62,6 +106,7 @@ export default function PixelStreamPlayer({ playerUrl }) {
     pingTimer.current = setInterval(() => {
       if (lastAlive.current && Date.now() - lastAlive.current > 60_000) {
         clearInterval(pingTimer.current);
+        setStreamReady(false);
         setStatus("disconnected");
         scheduleReconnect();
       }
@@ -81,8 +126,13 @@ export default function PixelStreamPlayer({ playerUrl }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reconnects]);
 
+  useEffect(() => {
+    if (status === "disconnected") scheduleReconnect();
+  }, [scheduleReconnect, status]);
+
   const doReconnect = useCallback(() => {
     if (!iframeRef.current) return;
+    setStreamReady(false);
     setStatus("connecting");
     const url = effectiveUrl();
     if (!url) return;
@@ -144,4 +194,6 @@ export default function PixelStreamPlayer({ playerUrl }) {
       )}
     </div>
   );
-}
+});
+
+export default PixelStreamPlayer;

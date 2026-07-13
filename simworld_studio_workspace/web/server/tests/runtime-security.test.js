@@ -8,12 +8,15 @@ const path = require("node:path");
 const {
   codingAgentsEnabled,
   createAccessGuard,
+  createLoopbackBrowserHeaders,
   createModelGate,
   requestIsLoopback,
   resolveAccessToken,
   resolveBindHost,
   resolveContainedFile,
   resolveModelMode,
+  resolveVistaDemoFps,
+  setLoopbackBrowserHeaders,
 } = require("../runtime-security");
 
 const ACCESS_TOKEN = "t".repeat(43);
@@ -30,6 +33,36 @@ test("bind and mode defaults fail closed", () => {
   assert.equal(codingAgentsEnabled({}), false);
   assert.equal(codingAgentsEnabled({ STUDIO_CODING_AGENTS_ENABLED: "1" }), true);
   assert.throws(() => codingAgentsEnabled({ STUDIO_CODING_AGENTS_ENABLED: "yes" }));
+  assert.equal(resolveVistaDemoFps({}), 60);
+  assert.equal(resolveVistaDemoFps({ VISTA_DEMO_ENABLED: "1", VISTA_DEMO_FPS: "30" }), 30);
+  assert.equal(resolveVistaDemoFps({ VISTA_DEMO_ENABLED: "1", VISTA_DEMO_FPS: "60" }), 60);
+  assert.throws(
+    () => resolveVistaDemoFps({ VISTA_DEMO_ENABLED: "1", VISTA_DEMO_FPS: "45" }),
+    /30 or 60/,
+  );
+});
+
+test("browser headers prohibit external web origins and referrer leakage", () => {
+  const headers = {};
+  let nextCalled = false;
+  setLoopbackBrowserHeaders({}, {
+    set(name, value) { headers[name] = value; return this; },
+  }, () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
+  assert.equal(headers["Referrer-Policy"], "no-referrer");
+  assert.equal(headers["X-Content-Type-Options"], "nosniff");
+  assert.match(headers["Content-Security-Policy"], /default-src 'self'/);
+  assert.match(headers["Content-Security-Policy"], /connect-src 'self' ws:\/\/127\.0\.0\.1:\*/);
+  assert.doesNotMatch(headers["Content-Security-Policy"], /https:\/\/\*/);
+  assert.doesNotMatch(headers["Content-Security-Policy"], /fonts\.googleapis|googleapis\.com/);
+
+  const strictHeaders = {};
+  createLoopbackBrowserHeaders({ signalingPort: 8585 })({}, {
+    set(name, value) { strictHeaders[name] = value; return this; },
+  }, () => {});
+  assert.match(strictHeaders["Content-Security-Policy"], /ws:\/\/127\.0\.0\.1:8585/);
+  assert.doesNotMatch(strictHeaders["Content-Security-Policy"], /127\.0\.0\.1:\*/);
+  assert.throws(() => createLoopbackBrowserHeaders({ signalingPort: 0 }), /valid TCP port/);
 });
 
 test("access token guard supports bearer and one-time cookie bootstrap", () => {
@@ -136,6 +169,60 @@ test("off mode blocks every external model or workload endpoint", () => {
   }
   assert.equal(invokeGate({ mode: "off" }, "/api/health", {}, "GET").nextCalled, true);
   assert.equal(invokeGate({ mode: "off" }, "/api/session/heartbeat").nextCalled, true);
+});
+
+test("model-off admits only the exact fixed VISTA setup and stop mutations", () => {
+  for (const mode of ["off", "mock"]) {
+    for (const route of [
+      "/api/vista/setup_vista_play_mode",
+      "/api/vista/stop_vista_play_mode",
+    ]) {
+      assert.equal(invokeGate({ mode }, route, {}).nextCalled, true, `${mode} ${route}`);
+    }
+  }
+  for (const path of [
+    "/api/vista/setup_vista_play_mode/",
+    "/api/vista/setup_vista_play_mode_extra",
+    "/api/vista/stop_vista_play_mode/",
+    "/api/vista/stop_vista_play_mode_extra",
+    "/api/vista/command",
+    "/api/vista/execute_python_script",
+    "/api/internal/ue",
+  ]) {
+    const result = invokeGate({ mode: "off" }, path);
+    assert.equal(result.nextCalled, false, path);
+    assert.equal(result.statusCode, 503, path);
+    assert.equal(result.responseBody.code, "MODEL_CALLS_DISABLED", path);
+  }
+  assert.equal(
+    invokeGate({ mode: "off" }, "/api/vista/get_vista_state", {}, "GET").nextCalled,
+    true,
+  );
+});
+
+test("VISTA demo mode blocks GET routes that mutate UE or bypass the shared broker", () => {
+  for (const path of [
+    "/api/agent-camera/Pedestrian_1",
+    "/api/agent-camera/Pedestrian_1/",
+    "/api/saved-maps",
+    "/api/saved-maps/",
+    "/api/saved-maps/ReviewedMap/download",
+    "/api/asset-ls",
+    "/api/asset-ls/",
+  ]) {
+    const result = invokeGate({ mode: "off", demoMode: true }, path, {}, "GET");
+    assert.equal(result.nextCalled, false, path);
+    assert.equal(result.statusCode, 503, path);
+    assert.equal(result.responseBody.code, "MODEL_CALLS_DISABLED", path);
+  }
+  assert.equal(
+    invokeGate({ mode: "off", demoMode: true }, "/api/vista/get_vista_state", {}, "GET").nextCalled,
+    true,
+  );
+  assert.equal(
+    invokeGate({ mode: "off", demoMode: false }, "/api/saved-maps", {}, "GET").nextCalled,
+    true,
+  );
 });
 
 test("mock mode allows only ready chat and forces a non-agent path", () => {

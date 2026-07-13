@@ -31,6 +31,52 @@ function codingAgentsEnabled(env = process.env) {
   throw new Error("STUDIO_CODING_AGENTS_ENABLED must be 1, true, 0, or false");
 }
 
+function resolveVistaDemoFps(env = process.env) {
+  const enabled = env.VISTA_DEMO_ENABLED === "1";
+  const raw = String(env.VISTA_DEMO_FPS || "60");
+  if (enabled && raw !== "30" && raw !== "60") {
+    throw new Error("VISTA_DEMO_FPS must be 30 or 60 when VISTA demo mode is enabled");
+  }
+  return enabled ? Number(raw) : 60;
+}
+
+function buildLoopbackBrowserCsp(signalingPort = null) {
+  if (signalingPort !== null &&
+      (!Number.isSafeInteger(signalingPort) || signalingPort < 1 || signalingPort > 65535)) {
+    throw new TypeError("signalingPort must be a valid TCP port");
+  }
+  const port = signalingPort === null ? "*" : String(signalingPort);
+  return [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors 'self'",
+    "frame-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
+    "img-src 'self' blob: data:",
+    "media-src 'self' blob:",
+    "worker-src 'self' blob:",
+    `connect-src 'self' ws://127.0.0.1:${port} ws://localhost:${port} ws://[::1]:${port} ` +
+      `wss://127.0.0.1:${port} wss://localhost:${port} wss://[::1]:${port}`,
+  ].join("; ");
+}
+
+const LOOPBACK_BROWSER_CSP = buildLoopbackBrowserCsp();
+
+function createLoopbackBrowserHeaders(options = {}) {
+  const csp = buildLoopbackBrowserCsp(options.signalingPort ?? null);
+  return function loopbackBrowserHeaders(_req, res, next) {
+    res.set("Content-Security-Policy", csp);
+    res.set("Referrer-Policy", "no-referrer");
+    res.set("X-Content-Type-Options", "nosniff");
+    return next();
+  };
+}
+
+const setLoopbackBrowserHeaders = createLoopbackBrowserHeaders();
+
 function resolveAccessToken(env = process.env) {
   const token = String(env.STUDIO_ACCESS_TOKEN || "");
   if (token.length < 32) throw new Error("STUDIO_ACCESS_TOKEN must contain at least 32 characters");
@@ -141,10 +187,17 @@ const MODEL_ENDPOINTS = [
   { kind: "workload", method: "POST", path: /^\/api\/training\/start$/ },
 ];
 const OFF_MODE_SAFE_MUTATIONS = [
+  { method: "POST", path: /^\/api\/vista\/setup_vista_play_mode$/ },
+  { method: "POST", path: /^\/api\/vista\/stop_vista_play_mode$/ },
   { method: "POST", path: /^\/api\/session\/(acquire|heartbeat|release)$/ },
   { method: "POST", path: /^\/api\/chat-stop$/ },
   { method: "POST", path: /^\/api\/agent-stop(-all)?$/ },
   { method: "POST", path: /^\/api\/demo\/stop$/ },
+];
+const VISTA_DEMO_UNSAFE_GETS = [
+  /^\/api\/agent-camera\/[^/]+\/?$/,
+  /^\/api\/saved-maps(?:\/.*)?$/,
+  /^\/api\/asset-ls\/?$/,
 ];
 
 function classifyModelEndpoint(method, requestPath) {
@@ -160,12 +213,26 @@ function disabled(res, reason = "Model and agent calls are disabled") {
   return res.status(503).json({ code: "MODEL_CALLS_DISABLED", error: reason });
 }
 
-function createModelGate({ mode = "off", allowCodingAgents = false, isMockReady = () => false } = {}) {
+function createModelGate({
+  mode = "off",
+  allowCodingAgents = false,
+  demoMode = false,
+  isMockReady = () => false,
+} = {}) {
   if (!MODEL_MODES.has(mode)) throw new Error(`Invalid model mode: ${mode}`);
 
   return function modelGate(req, res, next) {
     const method = String(req.method || "GET").toUpperCase();
     const requestPath = String(req.path || req.url || "").split("?", 1)[0];
+
+    if (
+      mode !== "live" &&
+      demoMode &&
+      method === "GET" &&
+      VISTA_DEMO_UNSAFE_GETS.some((pattern) => pattern.test(requestPath))
+    ) {
+      return disabled(res, "UE-mutating or unqueued reads are disabled during VISTA demo mode");
+    }
 
     if (method === "POST" && requestPath === "/api/scene-loop" && mode !== "live") {
       const requested = req.body && req.body.mode;
@@ -206,13 +273,18 @@ function createModelGate({ mode = "off", allowCodingAgents = false, isMockReady 
 
 module.exports = {
   classifyModelEndpoint,
+  buildLoopbackBrowserCsp,
   codingAgentsEnabled,
   createAccessGuard,
+  createLoopbackBrowserHeaders,
   createModelGate,
+  LOOPBACK_BROWSER_CSP,
   requestIsLoopback,
   requestLoopbackGuard,
   resolveAccessToken,
   resolveBindHost,
   resolveContainedFile,
   resolveModelMode,
+  resolveVistaDemoFps,
+  setLoopbackBrowserHeaders,
 };
