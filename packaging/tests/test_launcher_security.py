@@ -194,7 +194,7 @@ class LauncherSecurityTests(unittest.TestCase):
         self.assertIn("-ExecCmds=t.MaxFPS 60,t.MaxFPS", command)
         self.assertIn("-PixelStreamingWebRTCFps=60", command)
         self.assertIn(f"/Game/Maps/Empty?game={VISTA_DEMO_GAME_MODE}", command)
-        self.assertIn("-NOAUTOINIUPDATE", command)
+        self.assertNotIn("-NOAUTOINIUPDATE", command)
         self.assertIn("-NOWRITE", command)
         self.assertEqual(command.count("-Immersive"), 1)
         self.assertIn(

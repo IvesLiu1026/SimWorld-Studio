@@ -1099,7 +1099,11 @@ def make_ue_command(
                 "-Immersive",
                 # These are process-local config overrides. NOWRITE prevents the
                 # editor from persisting the value into the user's project config.
-                "-NOAUTOINIUPDATE",
+                # The published project carries stale generated platform INIs.
+                # UE must refresh them in memory so BaseEngine's Linux Vulkan
+                # TargetedRHIs reaches RHI startup. NOAUTOINIUPDATE rejects that
+                # refresh and exits before Vulkan initializes. NOWRITE keeps the
+                # refreshed config process-local instead of persisting it.
                 "-NOWRITE",
                 "-ini:EditorPerProjectUserSettings:"
                 "[/Script/UnrealEd.EditorLoadingSavingSettings]:bAutoSaveEnable=False",
