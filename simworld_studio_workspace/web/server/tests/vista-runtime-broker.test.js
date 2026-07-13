@@ -142,6 +142,8 @@ test("fixed scripts prepare only and expose no caller-authored Python surface", 
   assert.match(FIXED_STATE_SCRIPT, /is_in_play_in_editor\(\)/);
   assert.match(FIXED_STATE_SCRIPT, /'pie': False/);
   assert.match(FIXED_STATE_SCRIPT, /get_player_controller\(game_world, 0\)/);
+  assert.match(FIXED_STATE_SCRIPT, /get_player_pawn\(game_world, 0\)/);
+  assert.doesNotMatch(FIXED_STATE_SCRIPT, /controller\.get_pawn\(\)/);
   assert.match(FIXED_STATE_SCRIPT, new RegExp(VISTA_STATE_MARKER));
   assert.equal(FIXED_STATE_SCRIPT.split(VISTA_STATE_MARKER).length - 1, 1);
   assert.doesNotMatch(FIXED_STATE_SCRIPT, /get_editor_world|editor_play_(?:simulate|in_viewport)|save_/i);

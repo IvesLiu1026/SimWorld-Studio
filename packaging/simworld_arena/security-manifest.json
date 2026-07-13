@@ -3,9 +3,9 @@
   "workspace_sha256": {
     "web/server/index.js": "d591052da8262993a05db8624a332c4725641dfa8903c39bcb1f99805f1e64df",
     "web/server/runtime-security.js": "c8e73f16df29e88e373d89435b85a997bb9a8427702c21d1477001c5e0b01ced",
-    "web/server/vista-runtime-broker.js": "6902a9b373547f0be793b62670ec29512ad3d6470429d59906a381d375168c58",
+    "web/server/vista-runtime-broker.js": "eb09b2e596ae8e5003b7be451b79b3cf85f75e8421c1280c5a9bbc2fd5e348c5",
     "web/server/agent-sandbox.js": "b5e575cbadf685e138d7f00593c12f829df4930ce0c27262648c14e57338f82c",
-    "web/public/ue-player.html": "f34c9b465d48a0b34d19e56c36cda12957d4e2caf6cc3e9dc08e72ec162ab932",
+    "web/public/ue-player.html": "287ea008219916c80f61223051e456b6c87cdb0b1f73f6802461a479b8909dd8",
     "web/public/ue-assets/player.js": "a52517e0160cf021121137f3c3c17949f60ae08ddbb129ec9a3c7e56c89c0828",
     "web/src/PixelStreamPlayer.jsx": "1fb991df169c1242bf7ca679987e6856f92f6757a9d0f2c293b75196e049a3f4",
     "web/src/features/viewport/ViewportPanel.jsx": "dc1bd2aac48d77fb0951e4e4b2cfb1e04e0639440ce883e5e0a87bcf8ff40b65",

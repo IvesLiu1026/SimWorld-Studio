@@ -1,10 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 const ACCESS_TOKEN = "vista-ui-test-access-token-000000000000";
+const TEST_PORT = process.env.VISTA_UI_TEST_PORT || "3002";
+
+function studioOrigin(host = "127.0.0.1") {
+  return `http://${host}:${TEST_PORT}`;
+}
 
 async function openAuthenticated(page, host = "127.0.0.1") {
-  await page.goto(`http://${host}:3002/?token=${ACCESS_TOKEN}`);
-  await expect(page).toHaveURL(`http://${host}:3002/`);
+  await page.goto(`${studioOrigin(host)}/?token=${ACCESS_TOKEN}`);
+  await expect(page).toHaveURL(`${studioOrigin(host)}/`);
 }
 
 async function playerFrame(page) {
@@ -31,6 +36,27 @@ async function recordKeys(frame) {
     };
     document.addEventListener("keydown", record, true);
     document.addEventListener("keyup", record, true);
+  });
+}
+
+async function recordPointerInputs(frame) {
+  await frame.waitForSelector("#videoElementParent");
+  await frame.evaluate(() => {
+    window.__vistaTestPointerInputs = [];
+    const target = document.getElementById("videoElementParent");
+    const record = (event) => {
+      window.__vistaTestPointerInputs.push({
+        type: event.type,
+        button: event.button,
+        buttons: event.buttons,
+        offsetX: Math.round(event.offsetX),
+        offsetY: Math.round(event.offsetY),
+        at: performance.now(),
+      });
+    };
+    for (const type of ["mouseenter", "mousemove", "mousedown", "mouseup"]) {
+      target.addEventListener(type, record);
+    }
   });
 }
 
@@ -226,12 +252,12 @@ test.describe("VISTA Pixel Streaming controls", () => {
 
   test("server rejects a non-configured signaling destination", async ({ page }) => {
     await openAuthenticated(page);
-    const allowed = await page.request.get("/ue-player.html?cirrus=8585");
+    const allowed = await page.request.get(`${studioOrigin()}/ue-player.html?cirrus=8585`);
     expect(allowed.status()).toBe(200);
     expect(allowed.headers()["content-security-policy"]).toContain("ws://127.0.0.1:8585");
     expect(allowed.headers()["content-security-policy"]).not.toContain("127.0.0.1:*");
     const response = await page.request.get(
-      "/ue-player.html?ss=wss%3A%2F%2Fexample.com%3A443&cirrus=99999",
+      `${studioOrigin()}/ue-player.html?ss=wss%3A%2F%2Fexample.com%3A443&cirrus=99999`,
     );
     expect(response.status()).toBe(400);
     expect(await response.text()).toContain("configured signaling port");
@@ -240,12 +266,31 @@ test.describe("VISTA Pixel Streaming controls", () => {
   test("accepts only exact commands from the same-origin direct parent", async ({ page }) => {
     await openAuthenticated(page);
     await page.setContent(`
-      <iframe id="player" title="UE Pixel Streaming" src="/ue-player.html?cirrus=8585"></iframe>
+      <iframe
+        id="player"
+        title="UE Pixel Streaming"
+        src="/ue-player.html?cirrus=8585"
+        style="width:666px;height:728px;border:0"
+      ></iframe>
       <iframe id="sibling" src="about:blank"></iframe>
     `);
 
     const frame = await playerFrame(page);
     await recordKeys(frame);
+    await recordPointerInputs(frame);
+    const geometry = await frame.evaluate(() => {
+      const video = document.getElementById("streamingVideo");
+      Object.defineProperty(video, "videoWidth", { configurable: true, value: 666 });
+      Object.defineProperty(video, "videoHeight", { configurable: true, value: 728 });
+      return window.swPixelStreamingClientPoint(
+        { videoWidth: 1280, videoHeight: 720 },
+        { clientWidth: 640, clientHeight: 640 },
+        1100,
+        78,
+      );
+    });
+    expect(geometry.x).toBeCloseTo(550, 5);
+    expect(geometry.y).toBeCloseTo(179, 5);
 
     await page.evaluate(() => {
       const player = document.getElementById("player");
@@ -258,54 +303,80 @@ test.describe("VISTA Pixel Streaming controls", () => {
     });
     await page.waitForTimeout(50);
     await expect.poll(() => frame.evaluate(() => window.__vistaTestKeys)).toEqual([]);
+    await expect.poll(() => frame.evaluate(() => window.__vistaTestPointerInputs)).toEqual([]);
 
     await page.evaluate(() => {
-      document.getElementById("player").contentWindow.postMessage({ type: "sw-vista-play" }, location.origin);
+      const player = document.getElementById("player");
+      player.contentWindow.postMessage({ type: "sw-vista-play" }, location.origin);
+      // A duplicate command while the bounded click is in flight must not
+      // double-toggle the UE Play toolbar.
+      player.contentWindow.postMessage({ type: "sw-vista-play" }, location.origin);
     });
-    await expect.poll(() => frame.evaluate(() => window.__vistaTestKeys)).toEqual([
-      { type: "keydown", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: true },
-      { type: "keydown", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: false },
+    await expect.poll(() => frame.evaluate(() => window.__vistaTestPointerInputs.length)).toBe(4);
+    const pointerInputs = await frame.evaluate(() => window.__vistaTestPointerInputs);
+    expect(pointerInputs.map(({ at: _at, ...event }) => event)).toEqual([
+      { type: "mouseenter", button: 0, buttons: 0, offsetX: 486, offsetY: 78 },
+      { type: "mousemove", button: 0, buttons: 0, offsetX: 486, offsetY: 78 },
+      { type: "mousedown", button: 0, buttons: 1, offsetX: 486, offsetY: 78 },
+      { type: "mouseup", button: 0, buttons: 0, offsetX: 486, offsetY: 78 },
     ]);
+    expect(pointerInputs[2].at - pointerInputs[1].at).toBeGreaterThanOrEqual(40);
+    expect(pointerInputs[3].at - pointerInputs[2].at).toBeGreaterThanOrEqual(60);
+    expect(await frame.evaluate(() => window.__vistaTestKeys)).toEqual([]);
 
     await page.evaluate(() => {
       document.getElementById("player").contentWindow.postMessage({ type: "sw-vista-stop" }, location.origin);
     });
     await expect.poll(() => frame.evaluate(() => window.__vistaTestKeys)).toEqual([
-      { type: "keydown", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: true },
-      { type: "keydown", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: false },
       { type: "keydown", key: "Escape", code: "Escape", keyCode: 27, which: 27, altKey: false },
       { type: "keyup", key: "Escape", code: "Escape", keyCode: 27, which: 27, altKey: false },
     ]);
+    expect(await frame.evaluate(() => window.__vistaTestPointerInputs.length)).toBe(4);
   });
 
   test("rejects a valid-looking command from a cross-origin parent", async ({ page }) => {
-    await openAuthenticated(page, "localhost");
-    await page.setContent(`
-      <iframe
-        id="player"
-        title="UE Pixel Streaming"
-        src="http://127.0.0.1:3002/ue-player.html?token=${ACCESS_TOKEN}&cirrus=8585"
-      ></iframe>
-    `);
+    // Production CSP already rejects cross-origin embedding. Strip only that
+    // response header in this browser test so the player's own origin/source
+    // validation is exercised independently as a second line of defense.
+    await page.route(`${studioOrigin()}/**`, async (route) => {
+      const headers = {
+        ...route.request().headers(),
+        authorization: `Bearer ${ACCESS_TOKEN}`,
+      };
+      if (new URL(route.request().url()).pathname === "/ue-player.html") {
+        const response = await route.fetch({ headers });
+        const responseHeaders = { ...response.headers() };
+        delete responseHeaders["content-security-policy"];
+        await route.fulfill({ response, headers: responseHeaders });
+        return;
+      }
+      await route.continue({ headers });
+    });
+    const parentUrl = `${studioOrigin("localhost")}/cross-origin-parent`;
+    await page.route(parentUrl, (route) => route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<iframe id="player" title="UE Pixel Streaming" src="${studioOrigin()}/ue-player.html?cirrus=8585"></iframe>`,
+    }));
+    await page.goto(parentUrl);
     const frame = await playerFrame(page);
     await recordKeys(frame);
+    await recordPointerInputs(frame);
 
-    await page.evaluate(() => {
+    await page.evaluate((targetOrigin) => {
       document.getElementById("player").contentWindow.postMessage(
         { type: "sw-vista-play" },
-        "http://127.0.0.1:3002",
+        targetOrigin,
       );
-    });
+    }, studioOrigin());
     await page.waitForTimeout(50);
     await expect.poll(() => frame.evaluate(() => window.__vistaTestKeys)).toEqual([]);
+    await expect.poll(() => frame.evaluate(() => window.__vistaTestPointerInputs)).toEqual([]);
   });
 
   test("sets up, sends Play, verifies state, and uses backend Stop after stream loss", async ({ page }) => {
     let setupRequest = null;
+    let releaseSetupResponse = null;
     let stopRequest = null;
     let stateRequests = 0;
 
@@ -352,6 +423,9 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await page.route("**/api/screenshot/latest**", (route) => route.fulfill({ status: 404, body: "" }));
     await page.route("**/api/vista/setup_vista_play_mode", async (route) => {
       setupRequest = route.request();
+      await new Promise((resolve) => {
+        releaseSetupResponse = resolve;
+      });
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -429,6 +503,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await openAuthenticated(page);
     const frame = await playerFrame(page);
     await recordKeys(frame);
+    await recordPointerInputs(frame);
 
     const toggle = page.getByTestId("vista-demo-toggle");
     await expect(toggle).toBeDisabled();
@@ -443,19 +518,30 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await expect(toggle).toBeEnabled();
 
     await toggle.click();
-    await expect(page.getByTestId("vista-demo-status")).toContainText("verifying after 30s");
-    expect(setupRequest).not.toBeNull();
+    await expect.poll(() => setupRequest !== null).toBe(true);
     expect(setupRequest.method()).toBe("POST");
     expect(setupRequest.postData()).toBeNull();
     expect(setupRequest.headers()["content-type"]).toBeUndefined();
     expect(setupRequest.headers().cookie).toContain("vista_studio_access=");
+    expect(releaseSetupResponse).not.toBeNull();
+    expect(await frame.evaluate(() => window.__vistaTestPointerInputs)).toEqual([]);
+    expect(await frame.evaluate(() => window.__vistaTestKeys)).toEqual([]);
 
-    await expect.poll(() => frame.evaluate(() => window.__vistaTestKeys)).toEqual([
-      { type: "keydown", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: true },
-      { type: "keydown", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: false },
+    // Only a successful prepared response with a granted lease may release
+    // the single reviewed toolbar click into Pixel Streaming.
+    releaseSetupResponse();
+    await expect(page.getByTestId("vista-demo-status")).toContainText("verifying after 30s");
+
+    await expect.poll(() => frame.evaluate(() => window.__vistaTestPointerInputs.length)).toBe(4);
+    const playInputs = await frame.evaluate(() => window.__vistaTestPointerInputs);
+    expect(playInputs.map((event) => [event.type, event.button, event.buttons])).toEqual([
+      ["mouseenter", 0, 0],
+      ["mousemove", 0, 0],
+      ["mousedown", 0, 1],
+      ["mouseup", 0, 0],
     ]);
+    expect(new Set(playInputs.map((event) => `${event.offsetX},${event.offsetY}`)).size).toBe(1);
+    expect(await frame.evaluate(() => window.__vistaTestKeys)).toEqual([]);
     await page.waitForTimeout(150);
     expect(stateRequests).toBe(1);
     expect(await page.evaluate(() => window.__vistaHeldDelays)).toContain(30_000);
@@ -482,12 +568,8 @@ test.describe("VISTA Pixel Streaming controls", () => {
     expect(stopRequest.postData()).toBeNull();
     expect(stopRequest.headers()["content-type"]).toBeUndefined();
     expect(stopRequest.headers().cookie).toContain("vista_studio_access=");
-    await expect.poll(() => frame.evaluate(() => window.__vistaTestKeys)).toEqual([
-      { type: "keydown", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: true },
-      { type: "keydown", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "p", code: "KeyP", keyCode: 80, which: 80, altKey: true },
-      { type: "keyup", key: "Alt", code: "AltLeft", keyCode: 18, which: 18, altKey: false },
-    ]);
+    expect(await frame.evaluate(() => window.__vistaTestKeys)).toEqual([]);
+    expect(await frame.evaluate(() => window.__vistaTestPointerInputs.length)).toBe(4);
     await expect(page.getByTestId("vista-demo-status")).toHaveText("VISTA Demo stopped — UE confirmed");
     expect(stateRequests).toBe(4);
     await expect(toggle).toHaveText("Start VISTA Demo");

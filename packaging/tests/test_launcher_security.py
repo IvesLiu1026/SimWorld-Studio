@@ -187,6 +187,7 @@ class LauncherSecurityTests(unittest.TestCase):
             fps=60,
             vista_demo=True,
             local_data_cache_path="/private/cache/ue-ddc",
+            user_dir="/private/runtime/vista-demo-sandbox/ue-user",
         )
         self.assertIn("-NoAnalytics", command)
         self.assertIn(
@@ -204,11 +205,21 @@ class LauncherSecurityTests(unittest.TestCase):
         self.assertIn("-NOWRITE", command)
         self.assertNotIn("-Immersive", command)
         self.assertIn(
+            "-ini:Engine:[/Script/Engine.RendererSettings]:"
+            "r.Shadow.Virtual.Enable=0",
+            command,
+        )
+        self.assertIn(
             "-ini:EditorPerProjectUserSettings:"
             "[/Script/UnrealEd.EditorLoadingSavingSettings]:bAutoSaveEnable=False",
             command,
         )
         self.assertIn("-LocalDataCachePath=/private/cache/ue-ddc", command)
+        self.assertIn("-SaveToUserDir", command)
+        self.assertIn(
+            "-UserDir=/private/runtime/vista-demo-sandbox/ue-user",
+            command,
+        )
         non_demo_command = make_ue_command(
             ue_editor="editor",
             project_file="project",
@@ -221,6 +232,8 @@ class LauncherSecurityTests(unittest.TestCase):
         )
         self.assertNotIn("-Immersive", non_demo_command)
         self.assertNotIn("bAutoSaveEnable=False", " ".join(non_demo_command))
+        self.assertNotIn("-SaveToUserDir", non_demo_command)
+        self.assertFalse(any(argument.startswith("-UserDir=") for argument in non_demo_command))
         with self.assertRaisesRegex(ValueError, "30 or 60"):
             make_ue_command(
                 ue_editor="editor",
@@ -253,6 +266,18 @@ class LauncherSecurityTests(unittest.TestCase):
                 cirrus_ws_port=8586,
                 fps=60,
                 vista_demo=True,
+            )
+        with self.assertRaisesRegex(ValueError, "isolated Unreal user directory"):
+            make_ue_command(
+                ue_editor="editor",
+                project_file="project",
+                ue_map="/Game/Maps/Empty.umap",
+                mcp_port=55560,
+                gpu_index=0,
+                cirrus_ws_port=8586,
+                fps=60,
+                vista_demo=True,
+                local_data_cache_path="/private/cache/ue-ddc",
             )
 
     def test_ue_fps_confirmation_requires_runtime_query_not_command_line_echo(self):
@@ -386,6 +411,10 @@ class LauncherSecurityTests(unittest.TestCase):
             ddc_path = Path(environment["XDG_CACHE_HOME"]) / "UnrealEngine" / "DDC"
             self.assertTrue(ddc_path.is_dir())
             self.assertEqual(ddc_path.stat().st_mode & 0o777, 0o700)
+            ue_user_dir = Path(environment["HOME"]).parent / "ue-user"
+            self.assertTrue(ue_user_dir.is_dir())
+            self.assertTrue(ue_user_dir.is_relative_to(workspace.resolve()))
+            self.assertEqual(ue_user_dir.stat().st_mode & 0o777, 0o700)
             for key in source:
                 if "TOKEN" in key or key in (
                     "GOOGLE_APPLICATION_CREDENTIALS",

@@ -248,6 +248,7 @@ def prepare_isolated_demo_environment(workspace: Path, source=None) -> dict[str,
     workspace = Path(workspace).resolve()
     runtime_root = workspace / "runtime"
     sandbox_root = runtime_root / "vista-demo-sandbox"
+    ue_user_dir = sandbox_root / "ue-user"
     paths = {
         "HOME": sandbox_root / "home",
         "XDG_CONFIG_HOME": sandbox_root / "xdg-config",
@@ -257,7 +258,7 @@ def prepare_isolated_demo_environment(workspace: Path, source=None) -> dict[str,
         "XDG_RUNTIME_DIR": sandbox_root / "xdg-runtime",
         "TMPDIR": sandbox_root / "tmp",
     }
-    for directory in (runtime_root, sandbox_root, *paths.values()):
+    for directory in (runtime_root, sandbox_root, ue_user_dir, *paths.values()):
         if directory.is_symlink():
             raise RuntimeError(f"Demo environment directory must not be a symlink: {directory}")
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1071,6 +1072,7 @@ def make_ue_command(
     fps: int,
     vista_demo: bool,
     local_data_cache_path: Optional[str] = None,
+    user_dir: Optional[str] = None,
 ) -> list[str]:
     """Return the reviewed off-screen Pixel Streaming editor command."""
 
@@ -1080,6 +1082,8 @@ def make_ue_command(
         raise ValueError("GPU index must be a non-negative integer")
     if vista_demo and not local_data_cache_path:
         raise ValueError("VISTA demo requires an isolated local data cache path")
+    if vista_demo and not user_dir:
+        raise ValueError("VISTA demo requires an isolated Unreal user directory")
     command = [
         ue_editor,
         project_file,
@@ -1121,6 +1125,18 @@ def make_ue_command(
                 # refresh and exits before Vulkan initializes. NOWRITE keeps the
                 # refreshed config process-local instead of persisting it.
                 "-NOWRITE",
+                # The staged project enables Virtual Shadow Maps, but this
+                # pinned Linux UE 5.3 build targets Vulkan SM5. Disable the
+                # unsupported renderer feature process-locally so its startup
+                # warning cannot capture the streamed editor controls.
+                "-ini:Engine:[/Script/Engine.RendererSettings]:"
+                "r.Shadow.Virtual.Enable=0",
+                # Pixel Streaming UI actions can persist editor user settings
+                # even with NOWRITE. Redirect ProjectSavedDir and generated
+                # config into this release's private sandbox instead of the
+                # shared pinned runtime project.
+                "-SaveToUserDir",
+                f"-UserDir={Path(user_dir).resolve()}",
                 "-ini:EditorPerProjectUserSettings:"
                 "[/Script/UnrealEd.EditorLoadingSavingSettings]:bAutoSaveEnable=False",
                 f"-LocalDataCachePath={Path(local_data_cache_path).resolve()}",
@@ -1600,6 +1616,11 @@ def start_server(args):
         vista_demo=args.vista_demo,
         local_data_cache_path=(
             str(Path(base_child_environment["XDG_CACHE_HOME"]) / "UnrealEngine" / "DDC")
+            if args.vista_demo
+            else None
+        ),
+        user_dir=(
+            str(Path(base_child_environment["HOME"]).parent / "ue-user")
             if args.vista_demo
             else None
         ),

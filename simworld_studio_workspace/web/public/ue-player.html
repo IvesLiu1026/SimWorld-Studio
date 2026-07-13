@@ -254,6 +254,7 @@ var _videoFrameReady = false;
 var _readyPosted = false;
 var _lastVideoFrameAt = 0;
 var _disconnectPosted = false;
+var _vistaPlayClickInFlight = false;
 
 function swDispatchPixelStreamingKey(type, key, code, keyCode, altKey) {
   var target = document.getElementById('streamingVideo') || document.body;
@@ -269,11 +270,72 @@ function swDispatchPixelStreamingKey(type, key, code, keyCode, altKey) {
   target.dispatchEvent(ev);
 }
 
-function swSendVistaPlayKey() {
-  swDispatchPixelStreamingKey('keydown', 'Alt', 'AltLeft', 18, true);
-  swDispatchPixelStreamingKey('keydown', 'p', 'KeyP', 80, true);
-  swDispatchPixelStreamingKey('keyup',   'p', 'KeyP', 80, true);
-  swDispatchPixelStreamingKey('keyup',   'Alt', 'AltLeft', 18, false);
+function swPixelStreamingClientPoint(video, target, sourceX, sourceY) {
+  var sourceWidth = Number(video && video.videoWidth) || target.clientWidth;
+  var sourceHeight = Number(video && video.videoHeight) || target.clientHeight;
+  var targetWidth = target.clientWidth;
+  var targetHeight = target.clientHeight;
+  if (!sourceWidth || !sourceHeight || !targetWidth || !targetHeight) return null;
+
+  // #streamingVideo uses object-fit:contain. Convert the reviewed UE toolbar
+  // pixel into the parent coordinates consumed by Pixel Streaming's hovering
+  // mouse controller, including any letterbox/pillarbox offset.
+  var scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  var renderedWidth = sourceWidth * scale;
+  var renderedHeight = sourceHeight * scale;
+  return {
+    x: (targetWidth - renderedWidth) / 2 + sourceX * scale,
+    y: (targetHeight - renderedHeight) / 2 + sourceY * scale
+  };
+}
+
+function swDispatchPixelStreamingMouse(type, target, x, y, button, buttons) {
+  var rect = target.getBoundingClientRect();
+  var ev = new MouseEvent(type, {
+    bubbles: type !== 'mouseenter',
+    cancelable: true,
+    view: window,
+    clientX: rect.left + x,
+    clientY: rect.top + y,
+    button: button,
+    buttons: buttons
+  });
+  Object.defineProperty(ev, 'offsetX',  { get: function() { return x; } });
+  Object.defineProperty(ev, 'offsetY',  { get: function() { return y; } });
+  Object.defineProperty(ev, 'movementX',{ get: function() { return 0; } });
+  Object.defineProperty(ev, 'movementY',{ get: function() { return 0; } });
+  target.dispatchEvent(ev);
+}
+
+function swClickVistaPlayToolbar() {
+  if (_vistaPlayClickInFlight) return;
+  var video = document.getElementById('streamingVideo');
+  var target = document.getElementById('videoElementParent');
+  if (!video || !target) return;
+
+  var sourceWidth = Number(video.videoWidth) || target.clientWidth;
+  var sourceHeight = Number(video.videoHeight) || target.clientHeight;
+  // UE 5.3 right-aligns the Play group. The reviewed live click is 180
+  // intrinsic pixels from the right edge and 78 pixels from the top
+  // (486,78 at 666x728; protocol coordinate 47823,7021).
+  var point = swPixelStreamingClientPoint(
+    video,
+    target,
+    Math.max(0, sourceWidth - 180),
+    Math.min(78, Math.max(0, sourceHeight - 1))
+  );
+  if (!point) return;
+
+  _vistaPlayClickInFlight = true;
+  swDispatchPixelStreamingMouse('mouseenter', target, point.x, point.y, 0, 0);
+  swDispatchPixelStreamingMouse('mousemove', target, point.x, point.y, 0, 0);
+  setTimeout(function() {
+    swDispatchPixelStreamingMouse('mousedown', target, point.x, point.y, 0, 1);
+  }, 60);
+  setTimeout(function() {
+    swDispatchPixelStreamingMouse('mouseup', target, point.x, point.y, 0, 0);
+    _vistaPlayClickInFlight = false;
+  }, 140);
 }
 
 function swSendVistaStopKey() {
@@ -402,7 +464,7 @@ function swWatchForVideo() {
 // Listen for parent frame messages
 window.addEventListener('message', function(e) {
   var command = swExactParentCommand(e);
-  if (command === 'sw-vista-play') swSendVistaPlayKey();
+  if (command === 'sw-vista-play') swClickVistaPlayToolbar();
   if (command === 'sw-vista-stop') swSendVistaStopKey();
 });
 

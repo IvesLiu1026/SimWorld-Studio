@@ -102,7 +102,7 @@ const FIXED_STATE_SCRIPT = [
   "    controller = unreal.GameplayStatics.get_player_controller(game_world, 0)",
   "    if controller is None:",
   "        raise RuntimeError('player zero controller is unavailable')",
-  "    pawn = controller.get_pawn()",
+  "    pawn = unreal.GameplayStatics.get_player_pawn(game_world, 0)",
   "    if pawn is None:",
   "        raise RuntimeError('player zero pawn is not possessed')",
   "    location = pawn.get_actor_location()",
