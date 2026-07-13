@@ -940,9 +940,15 @@ def ue_fps_log_confirms(text: str, fps: int) -> bool:
 
     if fps not in (30, 60):
         raise ValueError("VISTA demo FPS must be 30 or 60")
+    timestamp = (
+        r"\[\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d{3}\]"
+        r"\[[ \t]*\d+\]"
+    )
+    category = r"LogConsoleResponse:[ \t]+(?:Display:[ \t]+)?"
     pattern = re.compile(
-        rf"(?mi)^.*LogConsoleResponse.*\bt\.MaxFPS\s*=\s*"
-        rf'"{fps}(?:\.0+)?"\s+LastSetBy:'
+        rf"(?m)^(?:{timestamp}[ \t]*(?:{category})?|{category})"
+        rf't\.MaxFPS[ \t]*=[ \t]*"{fps}(?:\.0+)?"'
+        rf"[ \t]+LastSetBy:[ \t]*Console[ \t]*\r?$"
     )
     return bool(pattern.search(text))
 
@@ -1033,14 +1039,17 @@ def validate_vista_demo_map(project_file: Path, ue_map: str) -> None:
 
 
 def build_ue_map_url(ue_map: str, vista_demo: bool) -> str:
-    """Build a fixed travel URL; callers cannot choose a demo GameMode class."""
+    """Build the editor map argument; the demo broker pins GameMode before PIE."""
 
     if not vista_demo:
         return ue_map
     map_asset = ue_map.removesuffix(".umap")
     if map_asset != VISTA_DEMO_MAP:
         raise ValueError(f"VISTA demo requires the fixed map {VISTA_DEMO_MAP}")
-    return f"{map_asset}?game={VISTA_DEMO_GAME_MODE}"
+    # UnrealEditor treats a ?game= suffix as part of the package name during
+    # editor startup, then silently falls back to EditorStartupMap. The VISTA
+    # runtime broker applies and verifies the fixed GameMode before starting PIE.
+    return f"{map_asset}.umap"
 
 
 def ue_startup_timeout_seconds(vista_demo: bool) -> int:

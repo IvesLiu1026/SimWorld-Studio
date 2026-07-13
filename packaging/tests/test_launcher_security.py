@@ -15,7 +15,6 @@ from unittest import mock
 from simworld_arena.launcher import (
     CIRRUS_LOOPBACK_PATCH_MARKER,
     EXPECTED_ORIGINAL_CIRRUS_SHA256,
-    VISTA_DEMO_GAME_MODE,
     VISTA_DEMO_MAP,
     build_ue_map_url,
     configure_vista_demo_server_environment,
@@ -168,7 +167,7 @@ class LauncherSecurityTests(unittest.TestCase):
     def test_vista_demo_map_url_uses_only_fixed_game_mode(self):
         self.assertEqual(
             build_ue_map_url("/Game/Maps/Empty.umap", True),
-            f"/Game/Maps/Empty?game={VISTA_DEMO_GAME_MODE}",
+            "/Game/Maps/Empty.umap",
         )
         self.assertEqual(
             build_ue_map_url("/Game/Maps/Empty.umap", False),
@@ -198,7 +197,9 @@ class LauncherSecurityTests(unittest.TestCase):
         self.assertNotIn("-FPSMAX=60", command)
         self.assertIn("-ExecCmds=t.MaxFPS 60,t.MaxFPS", command)
         self.assertIn("-PixelStreamingWebRTCFps=60", command)
-        self.assertIn(f"/Game/Maps/Empty?game={VISTA_DEMO_GAME_MODE}", command)
+        self.assertEqual(command[2], "/Game/Maps/Empty.umap")
+        self.assertNotIn("?game=", " ".join(command))
+        self.assertNotIn("GlobalDefaultGameMode", " ".join(command))
         self.assertNotIn("-NOAUTOINIUPDATE", command)
         self.assertIn("-NOWRITE", command)
         self.assertEqual(command.count("-Immersive"), 1)
@@ -254,16 +255,57 @@ class LauncherSecurityTests(unittest.TestCase):
                 vista_demo=True,
             )
 
-    def test_ue_fps_confirmation_requires_console_response_not_command_line_echo(self):
+    def test_ue_fps_confirmation_requires_runtime_query_not_command_line_echo(self):
         command_line_only = (
             "LogInit: Command Line: -ExecCmds=t.MaxFPS 60,t.MaxFPS "
             "-PixelStreamingWebRTCFps=60\n"
         )
         self.assertFalse(ue_fps_log_confirms(command_line_only, 60))
+        self.assertFalse(
+            ue_fps_log_confirms(
+                "[2026.07.13-17.10.20:000][  0]LogInit: Command Line: "
+                '-ExecCmds=t.MaxFPS 60,t.MaxFPS LastSetBy: Console\n',
+                60,
+            )
+        )
+        self.assertFalse(
+            ue_fps_log_confirms(
+                '[not a UE timestamp]t.MaxFPS = "60" LastSetBy: Console\n',
+                60,
+            )
+        )
+        self.assertFalse(
+            ue_fps_log_confirms(
+                "[2026.07.13-17.10.26:722][  1]\n"
+                't.MaxFPS = "60" LastSetBy: Console\n',
+                60,
+            )
+        )
+        self.assertFalse(
+            ue_fps_log_confirms(
+                '[2026.07.13-17.10.26:722][  1]t.MaxFPS = "60"\n'
+                "LastSetBy: Console\n",
+                60,
+            )
+        )
+        self.assertFalse(
+            ue_fps_log_confirms(
+                '[2026.07.13-17.10.26:722][  1]t.MaxFPS = "60" '
+                "LastSetBy: ProjectSetting\n",
+                60,
+            )
+        )
         self.assertTrue(
             ue_fps_log_confirms(
                 command_line_only
                 + 'LogConsoleResponse: Display: t.MaxFPS = "60.000000"      '
+                "LastSetBy: Console\n",
+                60,
+            )
+        )
+        self.assertTrue(
+            ue_fps_log_confirms(
+                '[2026.07.13-17.10.26:722][  1]t.MaxFPS = "60"      '
                 "LastSetBy: Console\n",
                 60,
             )
