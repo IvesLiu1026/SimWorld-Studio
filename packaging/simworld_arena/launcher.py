@@ -1113,9 +1113,6 @@ def make_ue_command(
     if vista_demo:
         command.extend(
             [
-                # UE handles this as a startup state, unlike browser-side F11
-                # toggles that can invert on reload or reconnect.
-                "-Immersive",
                 # These are process-local config overrides. NOWRITE prevents the
                 # editor from persisting the value into the user's project config.
                 # The published project carries stale generated platform INIs.

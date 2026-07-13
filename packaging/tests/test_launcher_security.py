@@ -202,7 +202,7 @@ class LauncherSecurityTests(unittest.TestCase):
         self.assertNotIn("GlobalDefaultGameMode", " ".join(command))
         self.assertNotIn("-NOAUTOINIUPDATE", command)
         self.assertIn("-NOWRITE", command)
-        self.assertEqual(command.count("-Immersive"), 1)
+        self.assertNotIn("-Immersive", command)
         self.assertIn(
             "-ini:EditorPerProjectUserSettings:"
             "[/Script/UnrealEd.EditorLoadingSavingSettings]:bAutoSaveEnable=False",
