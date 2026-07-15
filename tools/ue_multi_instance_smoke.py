@@ -152,6 +152,11 @@ def prepare_ue58_config(project_dir: pathlib.Path, source_project: pathlib.Path)
         raise RuntimeError(f"refusing to replace non-directory config path: {dst}")
     shutil.copytree(src, dst, dirs_exist_ok=True)
     ensure_ini_setting(dst / "DefaultEngine.ini", "ConsoleVariables", "AssetRegistry.DisableDirectoryWatcher", "1")
+    # Defer the DDC cleanup pass far past any run: on a large seeded local DDC (~75GB) the cleanup
+    # thread scans the whole cache (~7min, deletes 0) and its I/O makes the editor sluggish/unresponsive
+    # to MCP calls right when the run loop starts. Push it out so it never runs during indexing.
+    ensure_ini_setting(dst / "DefaultEngine.ini", "DDCCleanup", "TimeToWaitAfterInit", "100000000")
+    ensure_ini_setting(dst / "DefaultEngine.ini", "DDCCleanup", "MaxFileChecksPerSec", "1")
 
 
 def prepare_ue58_project(project_dir: pathlib.Path, source_project: pathlib.Path, content_root: pathlib.Path) -> None:
