@@ -270,7 +270,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
         id="player"
         title="UE Pixel Streaming"
         src="/ue-player.html?cirrus=8585"
-        style="width:666px;height:728px;border:0"
+        style="width:526px;height:418px;border:0"
       ></iframe>
       <iframe id="sibling" src="about:blank"></iframe>
     `);
@@ -280,8 +280,10 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await recordPointerInputs(frame);
     const geometry = await frame.evaluate(() => {
       const video = document.getElementById("streamingVideo");
-      Object.defineProperty(video, "videoWidth", { configurable: true, value: 666 });
-      Object.defineProperty(video, "videoHeight", { configurable: true, value: 728 });
+      // Match the live narrow viewport that exposed sourceWidth - 180 as a
+      // mis-click at x=346 instead of the reviewed UE toolbar point x=486.
+      Object.defineProperty(video, "videoWidth", { configurable: true, value: 526 });
+      Object.defineProperty(video, "videoHeight", { configurable: true, value: 418 });
       return window.swPixelStreamingClientPoint(
         { videoWidth: 1280, videoHeight: 720 },
         { clientWidth: 640, clientHeight: 640 },

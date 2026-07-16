@@ -315,13 +315,13 @@ function swClickVistaPlayToolbar() {
 
   var sourceWidth = Number(video.videoWidth) || target.clientWidth;
   var sourceHeight = Number(video.videoHeight) || target.clientHeight;
-  // UE 5.3 right-aligns the Play group. The reviewed live click is 180
-  // intrinsic pixels from the right edge and 78 pixels from the top
-  // (486,78 at 666x728; protocol coordinate 47823,7021).
+  // The reviewed UE 5.3 Play button is anchored at intrinsic pixel (486,78).
+  // MatchViewportRes changes the streamed width with the browser viewport, so
+  // deriving this point from the right edge mis-clicks at narrower resolutions.
   var point = swPixelStreamingClientPoint(
     video,
     target,
-    Math.max(0, sourceWidth - 180),
+    Math.min(486, Math.max(0, sourceWidth - 1)),
     Math.min(78, Math.max(0, sourceHeight - 1))
   );
   if (!point) return;

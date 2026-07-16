@@ -132,6 +132,14 @@ test("fixed scripts prepare only and expose no caller-authored Python surface", 
   assert.doesNotMatch(brokerSource, /console\.|logToFile|logger\.(?:info|warn|error)/);
   assert.match(FIXED_SETUP_SCRIPT, /set_editor_property\('default_game_mode'/);
   assert.match(FIXED_SETUP_SCRIPT, /PlayerStart/);
+  assert.match(FIXED_SETUP_SCRIPT, /VISTA_RuntimeGround/);
+  assert.match(FIXED_SETUP_SCRIPT, /\/Engine\/BasicShapes\/Cube\.Cube/);
+  assert.match(FIXED_SETUP_SCRIPT, /get_unscaled_capsule_half_height\(\)/);
+  assert.match(FIXED_SETUP_SCRIPT, /spawn_actor_from_object/);
+  assert.match(FIXED_SETUP_SCRIPT, /GROUND_SCALE_XY = 10000\.0/);
+  assert.match(FIXED_SETUP_SCRIPT, /set_actor_scale3d/);
+  assert.match(FIXED_SETUP_SCRIPT, /set_collision_enabled/);
+  assert.match(FIXED_SETUP_SCRIPT, /set_collision_profile_name\('BlockAll'\)/);
   assert.match(FIXED_SETUP_SCRIPT, new RegExp(VISTA_SETUP_MARKER));
   assert.equal(FIXED_SETUP_SCRIPT.split(VISTA_SETUP_MARKER).length - 1, 1);
   assert.match(FIXED_SETUP_SCRIPT, new RegExp(VISTA_GAME_MODE_CLASS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
