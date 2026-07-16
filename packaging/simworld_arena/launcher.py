@@ -44,7 +44,8 @@ GPU_IDLE_MAX_UTILIZATION_PERCENT = 10
 DEFAULT_UE_STARTUP_TIMEOUT_SECONDS = 120
 VISTA_DEMO_COLD_UE_STARTUP_TIMEOUT_SECONDS = 300
 REVIEWED_IDLE_GRAPHICS_PROCESSES = {
-    ("/usr/lib/xorg/Xorg", "gdm", "G"): 64,
+    ("/usr/lib/xorg/Xorg", "root", "G"): 64,
+    ("/usr/bin/gnome-shell", "gdm", "G"): 64,
 }
 VISTA_DEMO_ASSETS = {
     "Human_Avatar/DefaultCharacter/ThirdPerson/Blueprints/"
@@ -804,22 +805,21 @@ def _parse_used_memory_mib(value: str) -> int:
 def is_reviewed_idle_graphics_process(
     *, pid: int, process_type: str, process_name: str, used_memory_mib: int
 ) -> bool:
-    """Allow only the root-owned Xorg binary running as the system gdm account."""
+    """Allow only exact system display processes with bounded GPU memory."""
 
-    limit = REVIEWED_IDLE_GRAPHICS_PROCESSES.get(
-        (process_name, "gdm", process_type)
-    )
-    if limit is None or used_memory_mib > limit:
-        return False
     try:
-        gdm_uid = pwd.getpwnam("gdm").pw_uid
         process_uid = Path(f"/proc/{pid}").stat().st_uid
+        process_user = pwd.getpwuid(process_uid).pw_name
+        limit = REVIEWED_IDLE_GRAPHICS_PROCESSES.get(
+            (process_name, process_user, process_type)
+        )
         binary = Path(process_name)
         binary_stat = binary.stat()
     except (KeyError, OSError):
         return False
     return (
-        process_uid == gdm_uid
+        limit is not None
+        and used_memory_mib <= limit
         and binary.is_file()
         and binary_stat.st_uid == 0
         and not binary_stat.st_mode & 0o022

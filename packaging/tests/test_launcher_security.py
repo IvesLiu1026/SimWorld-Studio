@@ -23,6 +23,7 @@ from simworld_arena.launcher import (
     get_nvidia_headless_icd,
     has_unrealcv_plugin,
     make_cirrus_config,
+    is_reviewed_idle_graphics_process,
     make_model_off_child_environment,
     make_ue_command,
     prepare_isolated_demo_environment,
@@ -523,6 +524,36 @@ class LauncherSecurityTests(unittest.TestCase):
             "simworld_arena.launcher.subprocess.run", return_value=failed_query
         ), self.assertRaisesRegex(RuntimeError, "audit failed"):
             require_gpu_idle(2)
+
+    def test_reviewed_idle_graphics_process_is_exact_and_bounded(self):
+        def reviewed(process_name, process_user, used_memory=4, *, binary_mode=0o100755):
+            process_uid = 120 if process_user == "gdm" else 0
+            process_stat = SimpleNamespace(st_uid=process_uid)
+            binary_stat = SimpleNamespace(st_uid=0, st_mode=binary_mode)
+            with mock.patch(
+                "simworld_arena.launcher.Path.stat",
+                side_effect=[process_stat, binary_stat],
+            ), mock.patch(
+                "simworld_arena.launcher.Path.is_file", return_value=True
+            ), mock.patch(
+                "simworld_arena.launcher.pwd.getpwuid",
+                return_value=SimpleNamespace(pw_name=process_user),
+            ):
+                return is_reviewed_idle_graphics_process(
+                    pid=2302,
+                    process_type="G",
+                    process_name=process_name,
+                    used_memory_mib=used_memory,
+                )
+
+        self.assertTrue(reviewed("/usr/lib/xorg/Xorg", "root", 43))
+        self.assertTrue(reviewed("/usr/bin/gnome-shell", "gdm", 15))
+        self.assertFalse(reviewed("/usr/lib/xorg/Xorg", "gdm"))
+        self.assertFalse(reviewed("/usr/bin/gnome-shell", "root"))
+        self.assertFalse(reviewed("/usr/bin/gnome-shell", "gdm", 65))
+        self.assertFalse(
+            reviewed("/usr/bin/gnome-shell", "gdm", binary_mode=0o100775)
+        )
 
     def test_children_start_in_owned_process_groups_and_cleanup_uses_killpg(self):
         registered = []
