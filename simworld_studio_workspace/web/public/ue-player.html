@@ -80,11 +80,34 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
     if (!p.has(key)) { p.set(key, val); changed = true; }
   }
 
+  function validPort(value) {
+    return /^\d{1,5}$/.test(value || '') && Number(value) >= 1 && Number(value) <= 65535;
+  }
+  function localSignallingUrl(value) {
+    try {
+      var parsed = new URL(value);
+      return (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') &&
+        parsed.hostname.toLowerCase() === location.hostname.toLowerCase() &&
+        !parsed.username && !parsed.password && validPort(parsed.port);
+    } catch (_error) {
+      return false;
+    }
+  }
+
   var cirrusPort = p.get('cirrus');
-  if (cirrusPort) {
+  if (validPort(cirrusPort)) {
     var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':' + cirrusPort;
     window._swCirrusWs = wsUrl;
-    setDefault('ss', wsUrl);
+    if (p.get('ss') !== wsUrl) { p.set('ss', wsUrl); changed = true; }
+  } else {
+    if (cirrusPort !== null) { p.delete('cirrus'); changed = true; }
+    var requestedSignalling = p.get('ss');
+    if (requestedSignalling && localSignallingUrl(requestedSignalling)) {
+      window._swCirrusWs = requestedSignalling;
+    } else if (requestedSignalling !== null) {
+      p.delete('ss');
+      changed = true;
+    }
   }
 
   // Subscribe directly to the Editor streamer (skip streamer-select UI)
@@ -132,6 +155,71 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
   window.WebSocket.prototype  = _OrigWS.prototype;
 })();
 
+// Observe the actual WebRTC data channel. A playing <video> is not sufficient
+// evidence that keyboard input can reach UE; commands sent before the input
+// channel opens are dropped by the Pixel Streaming frontend.
+(function() {
+  var OriginalPeerConnection = window.RTCPeerConnection;
+  if (!OriginalPeerConnection) return;
+  window._swInputDataChannelOpen = false;
+  window._swOpenDataChannelCount = 0;
+
+  function watchChannel(channel) {
+    if (!channel || channel._swObserved) return;
+    channel._swObserved = true;
+    function markOpen() {
+      if (channel._swOpen) return;
+      channel._swOpen = true;
+      window._swOpenDataChannelCount += 1;
+      window._swInputDataChannelOpen = true;
+      if (typeof window.swMaybeSignalReady === 'function') window.swMaybeSignalReady();
+    }
+    function markClosed() {
+      if (!channel._swOpen && channel.readyState !== 'closed') return;
+      if (channel._swOpen) {
+        window._swOpenDataChannelCount = Math.max(0, window._swOpenDataChannelCount - 1);
+      }
+      channel._swOpen = false;
+      window._swInputDataChannelOpen = window._swOpenDataChannelCount > 0;
+      if (!window._swInputDataChannelOpen && typeof window.swMarkStreamDisconnected === 'function') {
+        window.swMarkStreamDisconnected();
+      }
+    }
+    if (channel.readyState === 'open') markOpen();
+    else channel.addEventListener('open', markOpen, { once: true });
+    channel.addEventListener('close', markClosed);
+    channel.addEventListener('error', markClosed);
+  }
+
+  var originalCreateDataChannel = OriginalPeerConnection.prototype.createDataChannel;
+  OriginalPeerConnection.prototype.createDataChannel = function() {
+    var channel = originalCreateDataChannel.apply(this, arguments);
+    watchChannel(channel);
+    return channel;
+  };
+
+  function ObservedPeerConnection() {
+    var connection = new OriginalPeerConnection(...arguments);
+    connection.addEventListener('datachannel', function(event) { watchChannel(event.channel); });
+    connection.addEventListener('connectionstatechange', function() {
+      if (connection.connectionState === 'failed' ||
+          connection.connectionState === 'disconnected' ||
+          connection.connectionState === 'closed') {
+        window._swOpenDataChannelCount = 0;
+        window._swInputDataChannelOpen = false;
+        if (typeof window.swMarkStreamDisconnected === 'function') window.swMarkStreamDisconnected();
+      }
+    });
+    return connection;
+  }
+  Object.setPrototypeOf(ObservedPeerConnection, OriginalPeerConnection);
+  ObservedPeerConnection.prototype = OriginalPeerConnection.prototype;
+  window.RTCPeerConnection = ObservedPeerConnection;
+  if (window.webkitRTCPeerConnection === OriginalPeerConnection) {
+    window.webkitRTCPeerConnection = ObservedPeerConnection;
+  }
+})();
+
 // ── Silence benign player.js console noise ───────────────────────────────────
 (function() {
   var origLog = console.log;
@@ -160,9 +248,110 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 <script>
 var _overlay   = null;
 var _hidden    = false;
-var _f11Sent   = false;
 var _lastViewportKey = "";
 var _resizeTimer = null;
+var _videoFrameReady = false;
+var _readyPosted = false;
+var _lastVideoFrameAt = 0;
+var _disconnectPosted = false;
+var _vistaPlayClickInFlight = false;
+
+function swDispatchPixelStreamingKey(type, key, code, keyCode, altKey) {
+  var target = document.getElementById('streamingVideo') || document.body;
+  var ev = new KeyboardEvent(type, {
+    key: key,
+    code: code,
+    altKey: altKey === true,
+    bubbles: true,
+    cancelable: true
+  });
+  Object.defineProperty(ev, 'keyCode', { get: function() { return keyCode; } });
+  Object.defineProperty(ev, 'which',   { get: function() { return keyCode; } });
+  target.dispatchEvent(ev);
+}
+
+function swPixelStreamingClientPoint(video, target, sourceX, sourceY) {
+  var sourceWidth = Number(video && video.videoWidth) || target.clientWidth;
+  var sourceHeight = Number(video && video.videoHeight) || target.clientHeight;
+  var targetWidth = target.clientWidth;
+  var targetHeight = target.clientHeight;
+  if (!sourceWidth || !sourceHeight || !targetWidth || !targetHeight) return null;
+
+  // #streamingVideo uses object-fit:contain. Convert the reviewed UE toolbar
+  // pixel into the parent coordinates consumed by Pixel Streaming's hovering
+  // mouse controller, including any letterbox/pillarbox offset.
+  var scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  var renderedWidth = sourceWidth * scale;
+  var renderedHeight = sourceHeight * scale;
+  return {
+    x: (targetWidth - renderedWidth) / 2 + sourceX * scale,
+    y: (targetHeight - renderedHeight) / 2 + sourceY * scale
+  };
+}
+
+function swDispatchPixelStreamingMouse(type, target, x, y, button, buttons) {
+  var rect = target.getBoundingClientRect();
+  var ev = new MouseEvent(type, {
+    bubbles: type !== 'mouseenter',
+    cancelable: true,
+    view: window,
+    clientX: rect.left + x,
+    clientY: rect.top + y,
+    button: button,
+    buttons: buttons
+  });
+  Object.defineProperty(ev, 'offsetX',  { get: function() { return x; } });
+  Object.defineProperty(ev, 'offsetY',  { get: function() { return y; } });
+  Object.defineProperty(ev, 'movementX',{ get: function() { return 0; } });
+  Object.defineProperty(ev, 'movementY',{ get: function() { return 0; } });
+  target.dispatchEvent(ev);
+}
+
+function swClickVistaPlayToolbar() {
+  if (_vistaPlayClickInFlight) return;
+  var video = document.getElementById('streamingVideo');
+  var target = document.getElementById('videoElementParent');
+  if (!video || !target) return;
+
+  var sourceWidth = Number(video.videoWidth) || target.clientWidth;
+  var sourceHeight = Number(video.videoHeight) || target.clientHeight;
+  // The reviewed UE 5.3 Play button is anchored at intrinsic pixel (486,78).
+  // MatchViewportRes changes the streamed width with the browser viewport, so
+  // deriving this point from the right edge mis-clicks at narrower resolutions.
+  var point = swPixelStreamingClientPoint(
+    video,
+    target,
+    Math.min(486, Math.max(0, sourceWidth - 1)),
+    Math.min(78, Math.max(0, sourceHeight - 1))
+  );
+  if (!point) return;
+
+  _vistaPlayClickInFlight = true;
+  swDispatchPixelStreamingMouse('mouseenter', target, point.x, point.y, 0, 0);
+  swDispatchPixelStreamingMouse('mousemove', target, point.x, point.y, 0, 0);
+  setTimeout(function() {
+    swDispatchPixelStreamingMouse('mousedown', target, point.x, point.y, 0, 1);
+  }, 60);
+  setTimeout(function() {
+    swDispatchPixelStreamingMouse('mouseup', target, point.x, point.y, 0, 0);
+    _vistaPlayClickInFlight = false;
+  }, 140);
+}
+
+function swSendVistaStopKey() {
+  swDispatchPixelStreamingKey('keydown', 'Escape', 'Escape', 27, false);
+  swDispatchPixelStreamingKey('keyup',   'Escape', 'Escape', 27, false);
+}
+
+function swExactParentCommand(e) {
+  if (window.parent === window || e.origin !== location.origin || e.source !== window.parent) return null;
+  var data = e.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  var keys = Object.keys(data);
+  if (keys.length !== 1 || keys[0] !== 'type') return null;
+  if (data.type === 'sw-vista-play' || data.type === 'sw-vista-stop') return data.type;
+  return null;
+}
 
 function swViewportKey() {
   var vv = window.visualViewport;
@@ -182,34 +371,28 @@ function swDispatchViewportResize(force) {
   }, 80);
 }
 
-// Auto-enter UE editor Immersive mode (F11) for first-time viewers by injecting the F11
-// key through the same path a manual press uses: the pixel-streaming lib forwards keyboard
-// events to UE. Synthetic KeyboardEvents drop keyCode/which, and the Epic lib reads keyCode,
-// so we force them. Dispatch on the video element (bubbles to document where the lib listens).
-function swSendImmersiveKey() {
-  if (_f11Sent) return;
-  _f11Sent = true;
-  setTimeout(function() {
-    try {
-      var target = document.getElementById('streamingVideo') || document.body;
-      ['keydown', 'keyup'].forEach(function(type) {
-        var ev = new KeyboardEvent(type, { key: 'F11', code: 'F11', bubbles: true, cancelable: true });
-        Object.defineProperty(ev, 'keyCode', { get: function() { return 122; } });
-        Object.defineProperty(ev, 'which',   { get: function() { return 122; } });
-        target.dispatchEvent(ev);
-        document.dispatchEvent(ev);
-      });
-    } catch (e) {}
-  }, 1500);  // let the stream become interactive + lib input handlers register
-}
-
 function swHideOverlay() {
   if (_hidden) return;
   _hidden = true;
   if (_overlay) _overlay.classList.add('hidden');
-  try { window.parent.postMessage({ type: 'sw-stream-connected' }, '*'); } catch {}
-  swSendImmersiveKey();
 }
+
+function swMaybeSignalReady() {
+  if (_readyPosted || !_videoFrameReady || window._swInputDataChannelOpen !== true) return;
+  _readyPosted = true;
+  _disconnectPosted = false;
+  swHideOverlay();
+  try { window.parent.postMessage({ type: 'sw-stream-connected' }, location.origin); } catch {}
+}
+
+function swMarkStreamDisconnected() {
+  _videoFrameReady = false;
+  _readyPosted = false;
+  if (_disconnectPosted) return;
+  _disconnectPosted = true;
+  try { window.parent.postMessage({ type: 'sw-stream-disconnected' }, location.origin); } catch {}
+}
+window.swMarkStreamDisconnected = swMarkStreamDisconnected;
 
 // Attach listeners to the video element — hide overlay on first frame
 function swAttachVideo(v) {
@@ -222,11 +405,20 @@ function swAttachVideo(v) {
   function onFrame() {
     if (v.currentTime !== lastTime && v.currentTime > 0) {
       lastTime = v.currentTime;
-      swHideOverlay();
-      // Keepalive to parent every 10s
+      _videoFrameReady = true;
+      _lastVideoFrameAt = Date.now();
+      swMaybeSignalReady();
+      // Keepalive is evidence of advancing decoded video plus an open input
+      // channel, not merely evidence that the iframe JavaScript is alive.
       if (!keepaliveTimer) {
         keepaliveTimer = setInterval(function() {
-          try { window.parent.postMessage({ type: 'sw-keepalive' }, '*'); } catch {}
+          if (_lastVideoFrameAt > 0 &&
+              Date.now() - _lastVideoFrameAt <= 15000 &&
+              window._swInputDataChannelOpen === true) {
+            try { window.parent.postMessage({ type: 'sw-keepalive' }, location.origin); } catch {}
+          } else {
+            swMarkStreamDisconnected();
+          }
         }, 10000);
       }
     }
@@ -234,10 +426,23 @@ function swAttachVideo(v) {
 
   // timeupdate fires whenever video time advances (works for WebRTC streams)
   v.addEventListener('timeupdate', onFrame);
-  // playing fires when autoplay/resume starts
-  v.addEventListener('playing', function() { if (!_hidden) swHideOverlay(); });
+  // requestVideoFrameCallback is the strongest browser signal that a decoded
+  // frame was actually presented; timeupdate remains the compatibility path.
+  if (typeof v.requestVideoFrameCallback === 'function') {
+    var watchDecodedFrame = function() {
+      onFrame();
+      v.requestVideoFrameCallback(watchDecodedFrame);
+    };
+    v.requestVideoFrameCallback(watchDecodedFrame);
+  }
+  v.addEventListener('stalled', swMarkStreamDisconnected);
+  v.addEventListener('emptied', swMarkStreamDisconnected);
+  v.addEventListener('ended', swMarkStreamDisconnected);
+  v.addEventListener('playing', function() {
+    if (v.readyState >= 2 && v.currentTime > 0) onFrame();
+  });
   // Immediate check in case already playing
-  if (!v.paused && v.readyState >= 2 && v.currentTime > 0) swHideOverlay();
+  if (!v.paused && v.readyState >= 2 && v.currentTime > 0) onFrame();
 }
 
 // Watch DOM for streamingVideo appearing (player.js creates it asynchronously)
@@ -258,9 +463,9 @@ function swWatchForVideo() {
 
 // Listen for parent frame messages
 window.addEventListener('message', function(e) {
-  if (!e.data) return;
-  if (e.data.type === 'sw-focus-stream') { document.body.focus(); }
-  if (e.data.type === 'sw-reconnect') { location.reload(); }
+  var command = swExactParentCommand(e);
+  if (command === 'sw-vista-play') swClickVistaPlayToolbar();
+  if (command === 'sw-vista-stop') swSendVistaStopKey();
 });
 
 document.addEventListener('DOMContentLoaded', function() {

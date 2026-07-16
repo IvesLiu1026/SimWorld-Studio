@@ -1,0 +1,19 @@
+{
+  "schema": "vista-simworld-security-manifest/v1",
+  "workspace_sha256": {
+    "web/server/index.js": "d591052da8262993a05db8624a332c4725641dfa8903c39bcb1f99805f1e64df",
+    "web/server/runtime-security.js": "c8e73f16df29e88e373d89435b85a997bb9a8427702c21d1477001c5e0b01ced",
+    "web/server/vista-runtime-broker.js": "d2f744073a5589b1b256abb6e8a616625cacf577aa4b1a65efd0f83987d3e798",
+    "web/server/agent-sandbox.js": "b5e575cbadf685e138d7f00593c12f829df4930ce0c27262648c14e57338f82c",
+    "web/public/ue-player.html": "c12676e21cb6f4f379f8a5e24f739f727d17d817f2001cb21241fc2c97e6ffa0",
+    "web/public/ue-assets/player.js": "a52517e0160cf021121137f3c3c17949f60ae08ddbb129ec9a3c7e56c89c0828",
+    "web/src/PixelStreamPlayer.jsx": "1fb991df169c1242bf7ca679987e6856f92f6757a9d0f2c293b75196e049a3f4",
+    "web/src/features/viewport/ViewportPanel.jsx": "dc1bd2aac48d77fb0951e4e4b2cfb1e04e0639440ce883e5e0a87bcf8ff40b65",
+    "web/src/index.css": "dd688b05f20a5875e3574e7e4b832fb7f7fb3d7fafb7e3e94f3530b7ec868853"
+  },
+  "cirrus": {
+    "patch_version": "VISTA_LOOPBACK_PATCH_V1",
+    "original_sha256": "92298e881c9240ebe76adfdf0fda39310cc28f5fd5934070194940cca7be29a4",
+    "patched_sha256": "133a12cf843c69914263a41c3ea3d7f09914ad9241125358850ea0318e55300e"
+  }
+}
