@@ -25,9 +25,12 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6333")
 COLLECTION = os.environ.get("QDRANT_COLLECTION", "assets")
 DENSE_MODEL = os.environ.get("EMBED_DENSE_MODEL", os.environ.get("EMBED_MODEL", "BAAI/bge-large-en-v1.5"))
 SPARSE_MODEL = os.environ.get("EMBED_SPARSE_MODEL", "Qdrant/bm25")
+DENSE_REVISION = os.environ.get("EMBED_DENSE_REVISION", "")
+SPARSE_REVISION = os.environ.get("EMBED_SPARSE_REVISION", "")
 DENSE_SIZE = int(os.environ.get("EMBED_DENSE_SIZE", "1024"))
 EMBED_VER = os.environ.get("EMBED_VERSION", "bge-large-en-v1.5-bm25-v1")
 BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "32"))
+EMBED_CACHE_DIR = os.environ.get("FASTEMBED_CACHE_PATH") or None
 
 
 def parse_args():
@@ -37,6 +40,8 @@ def parse_args():
     p.add_argument("--collection", default=COLLECTION)
     p.add_argument("--dense-model", default=DENSE_MODEL)
     p.add_argument("--sparse-model", default=SPARSE_MODEL)
+    p.add_argument("--dense-revision", default=DENSE_REVISION)
+    p.add_argument("--sparse-revision", default=SPARSE_REVISION)
     p.add_argument("--dense-size", type=int, default=DENSE_SIZE)
     p.add_argument("--embed-version", default=EMBED_VER)
     p.add_argument("--batch-size", type=int, default=BATCH_SIZE)
@@ -102,7 +107,15 @@ def build_embedding_text(row):
     return " | ".join(p for p in parts if not p.endswith(": "))
 
 
-def payload_for_row(row, embed_version: str, dense_model: str, sparse_model: str, dense_size: int):
+def payload_for_row(
+    row,
+    embed_version: str,
+    dense_model: str,
+    dense_revision: str,
+    sparse_model: str,
+    sparse_revision: str,
+    dense_size: int,
+):
     return {
         "asset_id": row["asset_id"],
         "name": row["name"],
@@ -123,18 +136,31 @@ def payload_for_row(row, embed_version: str, dense_model: str, sparse_model: str
         "triangle_count": int(row["triangle_count"] or 0),
         "embedding_version": embed_version,
         "dense_model": dense_model,
+        "dense_revision": dense_revision,
         "sparse_model": sparse_model,
+        "sparse_revision": sparse_revision,
         "dense_size": int(dense_size),
     }
 
 
-def embedding_hash(text, payload, embed_version: str, dense_model: str, sparse_model: str, dense_size: int):
+def embedding_hash(
+    text,
+    payload,
+    embed_version: str,
+    dense_model: str,
+    dense_revision: str,
+    sparse_model: str,
+    sparse_revision: str,
+    dense_size: int,
+):
     material = {
         "text": text,
         "payload": payload,
         "embed_version": embed_version,
         "dense_model": dense_model,
+        "dense_revision": dense_revision,
         "sparse_model": sparse_model,
+        "sparse_revision": sparse_revision,
         "dense_size": int(dense_size),
     }
     return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
@@ -178,6 +204,12 @@ def ensure_collection(qd, collection: str, dense_size: int):
         ("depth_m", PayloadSchemaType.FLOAT),
         ("height_m", PayloadSchemaType.FLOAT),
         ("triangle_count", PayloadSchemaType.INTEGER),
+        ("embedding_version", PayloadSchemaType.KEYWORD),
+        ("dense_model", PayloadSchemaType.KEYWORD),
+        ("dense_revision", PayloadSchemaType.KEYWORD),
+        ("sparse_model", PayloadSchemaType.KEYWORD),
+        ("sparse_revision", PayloadSchemaType.KEYWORD),
+        ("dense_size", PayloadSchemaType.INTEGER),
     ]
     for field, schema in indexes:
         try:
@@ -191,6 +223,12 @@ def main():
     args = parse_args()
     if not args.postgres_url:
         print("ERROR: POSTGRES_URL is required", file=sys.stderr)
+        sys.exit(2)
+    if not args.dense_revision or args.dense_revision.casefold() in {"dev", "latest", "main", "master", "unknown", "unversioned"}:
+        print("ERROR: EMBED_DENSE_REVISION must identify an immutable model artifact revision", file=sys.stderr)
+        sys.exit(2)
+    if not args.sparse_revision or args.sparse_revision.casefold() in {"dev", "latest", "main", "master", "unknown", "unversioned"}:
+        print("ERROR: EMBED_SPARSE_REVISION must identify an immutable model artifact revision", file=sys.stderr)
         sys.exit(2)
     EMBED_VER = args.embed_version
 
@@ -232,8 +270,25 @@ def main():
     pending = []
     for row in rows:
         text = build_embedding_text(row)
-        payload = payload_for_row(row, args.embed_version, args.dense_model, args.sparse_model, args.dense_size)
-        h = embedding_hash(text, payload, args.embed_version, args.dense_model, args.sparse_model, args.dense_size)
+        payload = payload_for_row(
+            row,
+            args.embed_version,
+            args.dense_model,
+            args.dense_revision,
+            args.sparse_model,
+            args.sparse_revision,
+            args.dense_size,
+        )
+        h = embedding_hash(
+            text,
+            payload,
+            args.embed_version,
+            args.dense_model,
+            args.dense_revision,
+            args.sparse_model,
+            args.sparse_revision,
+            args.dense_size,
+        )
         point_missing = (not collection_exists) or (
             not args.skip_point_check and str(row["qdrant_point_id"]) not in qdrant_ids
         )
@@ -247,9 +302,16 @@ def main():
     print(f"Loading dense embedding model {args.dense_model}...")
     from fastembed import SparseTextEmbedding, TextEmbedding
 
-    dense_model = TextEmbedding(args.dense_model)
+    dense_model = TextEmbedding(args.dense_model, cache_dir=EMBED_CACHE_DIR)
+    observed_dense_size = int(dense_model.embedding_size)
+    if observed_dense_size != args.dense_size:
+        print(
+            f"ERROR: configured dense size {args.dense_size} does not match model size {observed_dense_size}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     print(f"Loading sparse embedding model {args.sparse_model}...")
-    sparse_model = SparseTextEmbedding(args.sparse_model)
+    sparse_model = SparseTextEmbedding(args.sparse_model, cache_dir=EMBED_CACHE_DIR)
     print("Embedding models loaded.")
 
     batch_size = max(1, args.batch_size)

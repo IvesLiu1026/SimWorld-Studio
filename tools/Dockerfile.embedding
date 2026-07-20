@@ -1,0 +1,19 @@
+ARG UV_IMAGE
+FROM ${UV_IMAGE} AS uv
+
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/asset-tools-venv
+
+COPY --from=uv /uv /uvx /usr/local/bin/
+WORKDIR /opt/simworld
+COPY tools/pyproject.toml tools/uv.lock ./tools/
+RUN uv sync --project tools --frozen --no-dev
+
+COPY tools/embed_service.py ./tools/embed_service.py
+ENV PATH="/opt/asset-tools-venv/bin:${PATH}"
+EXPOSE 7777
+CMD ["python", "tools/embed_service.py"]

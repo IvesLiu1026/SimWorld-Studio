@@ -25,6 +25,42 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  embedding:
+    profiles: ["asset-stack"]
+    build:
+      context: .
+      dockerfile: tools/Dockerfile.embedding
+      args:
+        PYTHON_IMAGE: "${ASSET_TOOLS_PYTHON_IMAGE:?Set ASSET_TOOLS_PYTHON_IMAGE to an approved pinned tag or digest}"
+        UV_IMAGE: "${ASSET_TOOLS_UV_IMAGE:?Set ASSET_TOOLS_UV_IMAGE to an approved pinned tag or digest}"
+    image: "${EMBED_SERVICE_IMAGE:-simworld-asset-embedding:local}"
+    restart: unless-stopped
+    environment:
+      PORT: "7777"
+      EMBED_DENSE_MODEL: "${EMBED_DENSE_MODEL:?Set EMBED_DENSE_MODEL}"
+      EMBED_DENSE_REVISION: "${EMBED_DENSE_REVISION:?Set EMBED_DENSE_REVISION to the deployed model artifact revision}"
+      EMBED_SPARSE_MODEL: "${EMBED_SPARSE_MODEL:?Set EMBED_SPARSE_MODEL}"
+      EMBED_SPARSE_REVISION: "${EMBED_SPARSE_REVISION:?Set EMBED_SPARSE_REVISION to the deployed model artifact revision}"
+      EMBED_DENSE_SIZE: "${EMBED_DENSE_SIZE:?Set EMBED_DENSE_SIZE}"
+      EMBED_VERSION: "${EMBED_VERSION:?Set EMBED_VERSION to the index recipe revision}"
+      EMBED_PRELOAD: "1"
+      FASTEMBED_CACHE_PATH: "/var/cache/fastembed"
+    ports:
+      - "127.0.0.1:${EMBED_HOST_PORT:-7777}:7777"
+    volumes:
+      - embedding_model_cache:/var/cache/fastembed
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:7777/health', timeout=3)); raise SystemExit(0 if r.get('status') == 'ready' else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
 volumes:
   postgres_data:
   qdrant_data:
+  embedding_model_cache:

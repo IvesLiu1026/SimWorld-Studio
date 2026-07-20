@@ -2,6 +2,11 @@
 
 Scripts in this directory build and maintain the asset catalog used by `asset-retrieval.js`.
 
+Python dependencies are managed with the checked-in `pyproject.toml` and
+`uv.lock`. Install them with `uv sync --project tools --frozen`; do not use
+system `pip`. Production snapshot provisioning and verification are documented
+in `docs/specs/production-readiness/asset-stack-operations.md`.
+
 ---
 
 ## Before running: things you must configure
@@ -73,13 +78,13 @@ export UE_PROJECT=/data/yourname/simworld_studio_projects  # or set UE_SHOTDIR d
 export MANIFEST=/path/to/your_manifest.json
 export MCP_PORT=55571
 
-python tools/index_assets.py
+uv run --project tools --frozen python tools/index_assets.py
 ```
 The indexer is resumable — re-run after a crash and it skips already-indexed assets.
 
 ### Step 3 — Rebuild the category index
 ```bash
-python tools/build_category_index.py
+uv run --project tools --frozen python tools/build_category_index.py
 ```
 This regenerates `$ASSET_DB_DIR/category_index.json`, which `asset-retrieval.js` loads at startup.
 Run it after every indexing session.

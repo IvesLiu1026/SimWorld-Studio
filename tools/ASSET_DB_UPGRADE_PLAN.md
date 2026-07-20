@@ -412,7 +412,7 @@ npm install pg @qdrant/js-client-rest
 In Python (for migration scripts + embedding service):
 
 ```bash
-pip install psycopg2-binary qdrant-client fastembed fastapi uvicorn
+uv sync --project tools --frozen
 ```
 
 ### 3.4 Embedding microservice — BGE-M3 via FastEmbed
@@ -1361,7 +1361,7 @@ Work through these in sequence. Each step is independently verifiable.
 - [ ] Run `docker compose up -d`
 - [ ] Add env vars to server startup / `.env` file
 - [ ] Run `npm install pg @qdrant/js-client-rest` in server dir
-- [ ] Run `pip install psycopg2-binary qdrant-client fastembed fastapi uvicorn`
+- [ ] Run `uv sync --project tools --frozen`
 - [ ] Create `tools/embed_service.py` (from section 3.4) and start it: `python tools/embed_service.py`
 - [ ] Verify health: `curl http://127.0.0.1:7777/health`
 

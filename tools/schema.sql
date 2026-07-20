@@ -1,3 +1,15 @@
+CREATE TABLE IF NOT EXISTS simworld_schema_metadata (
+  component       TEXT PRIMARY KEY,
+  schema_version  INTEGER NOT NULL CHECK (schema_version > 0),
+  applied_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO simworld_schema_metadata (component, schema_version)
+VALUES ('asset_catalog', 1)
+ON CONFLICT (component) DO UPDATE SET
+  schema_version = EXCLUDED.schema_version,
+  applied_at = now();
+
 CREATE TABLE IF NOT EXISTS assets (
   asset_id          TEXT PRIMARY KEY,
   qdrant_point_id  UUID NOT NULL UNIQUE,
