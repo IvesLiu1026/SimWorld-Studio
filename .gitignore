@@ -13,6 +13,7 @@ RELEASE_PLAN.md
 simworld_studio_workspace/tmp/
 simworld_studio_workspace/logs/
 simworld_studio_workspace/tasksets/
+simworld_studio_workspace/checkpoints/
 simworld_studio_workspace/arena_data/
 simworld_studio_workspace/results/
 simworld_studio_workspace/experiments/*
