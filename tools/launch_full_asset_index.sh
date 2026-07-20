@@ -7,7 +7,10 @@ MANIFEST="${MANIFEST:-${ASSET_DB_DIR}/manifest_full.json}"
 RUN_ROOT="${RUN_ROOT:-${ASSET_DB_DIR}/runs}"
 RUN_ID="${RUN_ID:-full_index_gpt55_$(date -u +%Y%m%d_%H%M%S)}"
 RUN_DIR="${RUN_DIR:-${RUN_ROOT}/${RUN_ID}}"
-POSTGRES_URL="${POSTGRES_URL:-postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db}"
+# Inject the database DSN through the environment.  It must never be copied to
+# the runner argv or the run's launch metadata.
+POSTGRES_URL="${POSTGRES_URL:-}"
+export POSTGRES_URL
 QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
 QDRANT_COLLECTION="${QDRANT_COLLECTION:-assets}"
 CAPTION_PROVIDER="${CAPTION_PROVIDER:-codex}"
@@ -20,6 +23,15 @@ QWEN_TEMPERATURE="${QWEN_TEMPERATURE:-0.0}"
 QWEN_TIMEOUT="${QWEN_TIMEOUT:-240}"
 UE_PROJECT="${UE_PROJECT:-/data/siddhant/simworld_studio_projects}"
 MCP_PORT="${MCP_PORT:-55571}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --postgres-url|--postgres-url=*|*postgresql://*|*postgres://*)
+      echo "Refusing a Postgres DSN on the command line; set POSTGRES_URL in the service environment instead." >&2
+      exit 2
+      ;;
+  esac
+done
 
 mkdir -p "$RUN_DIR"
 LOG="${RUN_DIR}/runner.log"
@@ -36,7 +48,6 @@ CMD=(
   --qwen-max-tokens "$QWEN_MAX_TOKENS"
   --qwen-temperature "$QWEN_TEMPERATURE"
   --qwen-timeout "$QWEN_TIMEOUT"
-  --postgres-url "$POSTGRES_URL"
   --qdrant-url "$QDRANT_URL"
   --qdrant-collection "$QDRANT_COLLECTION"
   --ue-project "$UE_PROJECT"
@@ -52,7 +63,12 @@ esac
   echo "asset_db_dir=${ASSET_DB_DIR}"
   echo "manifest=${MANIFEST}"
   echo "run_dir=${RUN_DIR}"
-  echo "postgres_url=${POSTGRES_URL}"
+  if [[ -n "${POSTGRES_URL}" ]]; then
+    echo "postgres_url_configured=true"
+  else
+    echo "postgres_url_configured=false"
+  fi
+  echo "postgres_url_source=POSTGRES_URL_environment"
   echo "qdrant_url=${QDRANT_URL}"
   echo "qdrant_collection=${QDRANT_COLLECTION}"
   echo "caption_provider=${CAPTION_PROVIDER}"

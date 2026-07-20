@@ -14,8 +14,15 @@
 const fs = require("fs");
 const path = require("path");
 const { oneshotJSON } = require("./llm-oneshot");
+const {
+  AssetDependencyError,
+  AssetRetrievalUnavailableError,
+  serializeDependencyCause,
+} = require("./asset-retrieval-db");
 
-const ASSET_DB_DIR = process.env.ASSET_DB_DIR || "/data/siddhant/asset_db";
+const DEFAULT_DATA_ROOT = process.env.XDG_DATA_HOME
+  || (process.env.HOME ? path.join(process.env.HOME, ".local", "share") : path.resolve(__dirname, "..", ".runtime"));
+const ASSET_DB_DIR = process.env.ASSET_DB_DIR || path.join(DEFAULT_DATA_ROOT, "simworld-studio", "asset-db");
 const PREFILTER_TOP_K = parseInt(process.env.PREFILTER_TOP_K || "150", 10);
 const FULL_FALLBACK_MAX = parseInt(process.env.ASSET_FULL_FALLBACK_MAX || "0", 10);
 
@@ -91,6 +98,183 @@ function resolveAssetMode(bodyOrMode) {
   return "hybrid";
 }
 
+class AssetRetrievalPolicyError extends Error {
+  constructor(message, details) {
+    super(message);
+    this.name = "AssetRetrievalPolicyError";
+    this.code = "ASSET_RETRIEVAL_POLICY_INVALID";
+    this.details = details || {};
+  }
+}
+
+function _optionalBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+  const s = String(value === undefined || value === null ? "" : value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(s)) return true;
+  if (["0", "false", "no", "off"].includes(s)) return false;
+  return undefined;
+}
+
+function _normalizeDegradedMode(value) {
+  const s = String(value === undefined || value === null ? "" : value).trim().toLowerCase();
+  if (!s || ["off", "none", "disabled", "false", "0"].includes(s)) return "disabled";
+  if (["basic", "basic_geometry", "geometry", "whitebox", "true", "1"].includes(s)) return "basic_geometry";
+  return null;
+}
+
+function resolveAssetPolicy(bodyOrMode) {
+  const body = bodyOrMode && typeof bodyOrMode === "object" ? bodyOrMode : {};
+  const requestModeRaw = typeof bodyOrMode === "string"
+    ? bodyOrMode
+    : (body.assetRetrievalMode !== undefined ? body.assetRetrievalMode : body.assetMode);
+  const configuredModeRaw = requestModeRaw !== undefined && String(requestModeRaw).trim()
+    ? requestModeRaw
+    : process.env.ASSET_RETRIEVAL_MODE;
+  if (configuredModeRaw !== undefined && String(configuredModeRaw).trim() && !_normalizeAssetModeValue(configuredModeRaw)) {
+    throw new AssetRetrievalPolicyError("unsupported asset retrieval mode", {
+      mode: String(configuredModeRaw),
+    });
+  }
+  const mode = resolveAssetMode(bodyOrMode);
+  const requestRequireRaw = body.require_real_assets !== undefined ? body.require_real_assets : body.requireRealAssets;
+  const requestRequire = _optionalBoolean(requestRequireRaw);
+  if (requestRequireRaw !== undefined && requestRequire === undefined) {
+    throw new AssetRetrievalPolicyError("require_real_assets must be a boolean", {
+      require_real_assets: String(requestRequireRaw),
+    });
+  }
+  const envRequireRaw = process.env.ASSET_REQUIRE_REAL_ASSETS !== undefined
+    ? process.env.ASSET_REQUIRE_REAL_ASSETS
+    : process.env.REQUIRE_REAL_ASSETS;
+  const envRequire = _optionalBoolean(envRequireRaw);
+  if (envRequireRaw !== undefined && envRequire === undefined) {
+    throw new AssetRetrievalPolicyError("configured require_real_assets must be a boolean", {});
+  }
+  const requireRealAssets = requestRequire !== undefined ? requestRequire : Boolean(envRequire);
+
+  const degradedRaw = body.asset_degraded_mode !== undefined ? body.asset_degraded_mode
+    : body.assetDegradedMode !== undefined ? body.assetDegradedMode
+      : body.asset_fallback_mode !== undefined ? body.asset_fallback_mode
+        : body.assetFallbackMode !== undefined ? body.assetFallbackMode
+          : process.env.ASSET_DEGRADED_MODE;
+  const allowDegradedValue = body.allow_degraded_assets !== undefined
+    ? body.allow_degraded_assets
+    : body.allowDegradedAssets;
+  const allowDegradedRaw = _optionalBoolean(allowDegradedValue);
+  if (allowDegradedValue !== undefined && allowDegradedRaw === undefined) {
+    throw new AssetRetrievalPolicyError("allow_degraded_assets must be a boolean", {
+      allow_degraded_assets: String(allowDegradedValue),
+    });
+  }
+  let degradedMode = _normalizeDegradedMode(degradedRaw);
+  if (degradedMode === null) {
+    throw new AssetRetrievalPolicyError("unsupported asset degraded mode", {
+      degraded_mode: String(degradedRaw),
+    });
+  }
+  if ((degradedRaw === undefined || degradedRaw === null || String(degradedRaw).trim() === "") && allowDegradedRaw === true) {
+    degradedMode = "basic_geometry";
+  }
+  if (allowDegradedRaw === false) degradedMode = "disabled";
+
+  if (requireRealAssets && mode === "off") {
+    throw new AssetRetrievalPolicyError("require_real_assets cannot be combined with asset retrieval mode off", {
+      mode,
+      require_real_assets: true,
+    });
+  }
+  if (requireRealAssets && degradedMode !== "disabled") {
+    throw new AssetRetrievalPolicyError("require_real_assets cannot be combined with basic geometry fallback", {
+      mode,
+      require_real_assets: true,
+      degraded_mode: degradedMode,
+    });
+  }
+
+  return Object.freeze({
+    policy_version: 1,
+    mode,
+    require_real_assets: requireRealAssets,
+    degraded_mode: degradedMode,
+    allow_degraded_assets: degradedMode === "basic_geometry" && !requireRealAssets,
+  });
+}
+
+function _asAssetPolicy(input) {
+  if (input && input.policy_version === 1 && typeof input.mode === "string") return input;
+  return resolveAssetPolicy(input);
+}
+
+function _redactDependencyMessage(value) {
+  return String(value || "asset dependency failed")
+    .replace(/\b(postgres(?:ql)?|https?):\/\/[^\s/@]+:[^\s/@]+@/gi, "$1://[redacted]@")
+    .replace(/\b(token|password|secret|api[_-]?key)=([^\s&]+)/gi, "$1=[redacted]");
+}
+
+function normalizeAssetRetrievalError(error, context) {
+  if (error instanceof AssetRetrievalUnavailableError) return error;
+  const operation = context && context.operation || "asset_retrieval";
+  const cause = error instanceof AssetDependencyError
+    ? error
+    : new AssetDependencyError(
+      context && context.dependency || "retrieval",
+      error && error.code && String(error.code).startsWith("ASSET_")
+        ? error.code
+        : "ASSET_DEPENDENCY_UNAVAILABLE",
+      _redactDependencyMessage(error && error.message || error),
+      { operation, retryable: Boolean(error && error.retryable), cause: error },
+    );
+  return new AssetRetrievalUnavailableError(
+    context && context.message || "asset retrieval is unavailable",
+    { operation, causes: [cause] },
+  );
+}
+
+function serializeAssetRetrievalError(error) {
+  const typed = normalizeAssetRetrievalError(error);
+  return {
+    code: typed.code,
+    message: _redactDependencyMessage(typed.message),
+    retryable: Boolean(typed.retryable),
+    causes: typed.causes.map((cause) => {
+      const serialized = serializeDependencyCause(cause);
+      return { ...serialized, message: _redactDependencyMessage(serialized.message) };
+    }),
+  };
+}
+
+function assetFailureDecision(error, policyInput) {
+  const policy = _asAssetPolicy(policyInput);
+  const typed = normalizeAssetRetrievalError(error);
+  const reason = serializeAssetRetrievalError(typed);
+  if (policy.allow_degraded_assets) {
+    return {
+      action: "degrade",
+      policy,
+      metadata: {
+        status: "degraded",
+        mode: policy.mode,
+        degraded_mode: policy.degraded_mode,
+        require_real_assets: false,
+        reason,
+      },
+    };
+  }
+  return {
+    action: "block",
+    policy,
+    error: typed,
+    metadata: {
+      status: "blocked",
+      mode: policy.mode,
+      degraded_mode: "disabled",
+      require_real_assets: policy.require_real_assets,
+      reason,
+    },
+  };
+}
+
 function _usePrefilter(opts) {
   if (opts && typeof opts.usePrefilter === "boolean") return opts.usePrefilter;
   return _legacyPrefilterDefault();
@@ -123,21 +307,44 @@ function _normalizePlan(raw, scene) {
   };
 }
 
-function _retrievalCacheKey(scene, opts) {
+function getAssetSnapshotRevision(db, opts) {
+  const o = opts || {};
+  return String(
+    o.snapshotRevision
+      || o.assetRevision
+      || process.env.ASSET_SNAPSHOT_REVISION
+      || process.env.ASSET_CATALOG_REVISION
+      || (db && db.revision)
+      || "unversioned",
+  );
+}
+
+function buildRetrievalCacheKey(scene, opts, revision) {
   const usePrefilter = _usePrefilter(opts);
   return JSON.stringify({
     scene: String(scene || ""),
     model: String((opts && opts.model) || ""),
     prefilter: usePrefilter,
     topK: PREFILTER_TOP_K,
-    collection: process.env.QDRANT_COLLECTION || "assets",
-    embedVersion: process.env.EMBED_VERSION || "bge-large-en-v1.5-bm25-v1",
+    collection: String((opts && opts.collection) || process.env.QDRANT_COLLECTION || "assets"),
+    embedVersion: String((opts && opts.embedVersion) || process.env.EMBED_VERSION || "bge-large-en-v1.5-bm25-v1"),
+    snapshotRevision: String(revision || getAssetSnapshotRevision(null, opts)),
   });
 }
 
 function loadDB() {
-  if (_cache) return _cache;
-  const idx = JSON.parse(fs.readFileSync(path.join(ASSET_DB_DIR, "category_index.json"), "utf-8"));
+  const indexPath = path.join(ASSET_DB_DIR, "category_index.json");
+  const stat = fs.statSync(indexPath);
+  const configuredRevision = process.env.ASSET_SNAPSHOT_REVISION || process.env.ASSET_CATALOG_REVISION || "";
+  const sourceKey = JSON.stringify({
+    dir: ASSET_DB_DIR,
+    configuredRevision,
+    size: stat.size,
+    mtimeMs: Math.trunc(stat.mtimeMs),
+  });
+  if (_cache && _cache.sourceKey === sourceKey) return _cache;
+  const idx = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+  if (!idx || !Array.isArray(idx.categories)) throw new Error("asset category index has no categories array");
   const assets = new Map();
   const byCat = new Map();
   for (const cat of idx.categories) {
@@ -167,9 +374,22 @@ function loadDB() {
     byCat.set(cat.id, { id: cat.id, description: cat.description, count: list.length, assets: list });
   }
   if (!assets.size) throw new Error("asset DB empty at " + ASSET_DB_DIR);
+  const declaredRevision = idx.snapshot_revision
+    || idx.snapshotRevision
+    || idx.revision
+    || idx.checksum
+    || (idx.manifest && (idx.manifest.revision || idx.manifest.checksum));
+  const revision = String(
+    configuredRevision
+      || declaredRevision
+      || `category-index:${stat.size}:${Math.trunc(stat.mtimeMs)}`,
+  );
+  if (_cache && (_cache.revision !== revision || _cache.sourceKey !== sourceKey)) _retrievalCache.clear();
   _cache = {
     categories: idx.categories.map(c => ({ id: c.id, description: c.description, count: c.count })),
     byCat, assets,
+    revision,
+    sourceKey,
   };
   return _cache;
 }
@@ -261,15 +481,37 @@ async function aggregate(scene, picked, db, opts) {
   return { rationale: out.scene_rationale || "", final: ids.map(id => ({ id })) };
 }
 
+function _dependencyCausesFromErrors(errors) {
+  const causes = [];
+  for (const error of errors || []) {
+    const nested = Array.isArray(error && error.causes)
+      ? error.causes
+      : (Array.isArray(error && error.details && error.details.causes) ? error.details.causes : []);
+    if (nested.length) {
+      causes.push(...nested);
+    } else {
+      causes.push(new AssetDependencyError(
+        error && error.dependency || "retrieval",
+        error && error.code || "ASSET_DEPENDENCY_UNAVAILABLE",
+        _redactDependencyMessage(error && error.message || error),
+        { operation: error && error.operation || "prefilter", retryable: Boolean(error && error.retryable) },
+      ));
+    }
+  }
+  return causes;
+}
+
 // ── orchestrator ─────────────────────────────────────────────────────────────
 async function retrieve(scene, opts) {
   const o = Object.assign({ reasoningEffort: process.env.ASSET_RETRIEVAL_REASONING_EFFORT || "medium", telemetryComponent: "retrieval" }, opts || {});
   const log = o.log || (() => {});
   const usePrefilter = _usePrefilter(o);
-  const cacheKey = _retrievalCacheKey(scene, o);
-  if (_retrievalCache.has(cacheKey)) { log("retrieval cache HIT (reusing this scene's prior result)"); return _retrievalCache.get(cacheKey); }
   const db = loadDB();
-  const trace = { routed: [], plan: {}, perCategory: {}, prefilter: {} };
+  const revision = getAssetSnapshotRevision(db, o);
+  const cacheKey = buildRetrievalCacheKey(scene, o, revision);
+  if (_retrievalCache.has(cacheKey)) { log("retrieval cache HIT (reusing this scene's prior result)"); return _retrievalCache.get(cacheKey); }
+  const trace = { revision, routed: [], plan: {}, perCategory: {}, prefilter: {}, prefilterTelemetry: {} };
+  const prefilterFailures = [];
 
   const routeResult = await routeCategories(scene, db, o);
   const routed = Array.isArray(routeResult) ? routeResult : (routeResult.categories || []);
@@ -303,6 +545,7 @@ async function retrieve(scene, opts) {
       try {
         const { prefilterCategory } = require("./asset-retrieval-db");
         const pref = await prefilterCategory(r.id, plan, { ...o, topK: PREFILTER_TOP_K, log });
+        if (pref.retrieval) trace.prefilterTelemetry[r.id] = pref.retrieval;
         const seenIds = new Set();
         const compact = [];
         for (const p of pref) {
@@ -310,22 +553,31 @@ async function retrieve(scene, opts) {
           const a = db.assets.get(p.id);
           if (a) { seenIds.add(p.id); compact.push(a); }
         }
-        if (!compact.length) throw new Error(`prefilter returned no in-memory assets for ${r.id}`);
+        if (!compact.length) {
+          throw new AssetDependencyError(
+            "catalog",
+            "ASSET_SNAPSHOT_REVISION_MISMATCH",
+            `prefilter returned assets outside the loaded catalog revision for ${r.id}`,
+            { operation: "join_prefilter_catalog", retryable: false },
+          );
+        }
         candidates = { ...cat, count: compact.length, assets: compact };
         trace.prefilter[r.id] = compact.map(a => a.id);
         log(`prefilter ${r.id}: ${compact.length} candidates (from ${cat.count})`);
       } catch (e) {
+        const errorSummary = serializeAssetRetrievalError(e);
         if (FULL_FALLBACK_MAX > 0 && cat.count <= FULL_FALLBACK_MAX) {
-          trace.prefilter[r.id] = { fallback: "full_category", error: e.message };
-          log(`prefilter ${r.id} FAILED (${e.message}); using bounded full-list fallback ${cat.count}/${FULL_FALLBACK_MAX}`);
+          trace.prefilter[r.id] = { fallback: "full_category", error: errorSummary };
+          log(`prefilter ${r.id} FAILED (${errorSummary.code}); using bounded full-list fallback ${cat.count}/${FULL_FALLBACK_MAX}`);
           candidates = cat;
         } else {
           // Non-fatal: one off-theme/empty category (e.g. router pulled in winter_snow_props
           // for a non-winter scene, then excluded the winter setting → 0 candidates) must NOT
           // abort the whole retrieval. Skip just this category. A true infra outage fails every
           // category → empty palette → buildPromptBlock throws, so real failures still surface.
-          trace.prefilter[r.id] = { skipped: true, error: e.message };
-          log(`prefilter ${r.id} FAILED (${e.message}); skipping this category`);
+          trace.prefilter[r.id] = { skipped: true, error: errorSummary };
+          prefilterFailures.push(e);
+          log(`prefilter ${r.id} FAILED (${errorSummary.code}); skipping this category`);
           return [];
         }
       }
@@ -341,7 +593,13 @@ async function retrieve(scene, opts) {
   const seen = new Set(), picked = [];
   for (const p of results.flat()) if (!seen.has(p.id)) { seen.add(p.id); picked.push(p); }
   log(`picked total: ${picked.length}`);
-  if (!picked.length) return { final: [], rationale: "", trace, assets: [] };
+  if (!picked.length && prefilterFailures.length) {
+    throw new AssetRetrievalUnavailableError("asset prefilter dependencies are unavailable", {
+      operation: "retrieve",
+      causes: _dependencyCausesFromErrors(prefilterFailures),
+    });
+  }
+  if (!picked.length) return { final: [], rationale: "", trace, assets: [], revision };
 
   let rationale = "", final;
   try {
@@ -355,7 +613,7 @@ async function retrieve(scene, opts) {
   }
   log(`final: ${final.length} -> ${final.map(f => f.id).join(",")}`);
   const assets = final.map(f => ({ ...db.assets.get(f.id), role: f.role }));
-  const result = { final, rationale, trace, assets };
+  const result = { final, rationale, trace, assets, revision };
   _retrievalCache.set(cacheKey, result);
   return result;
 }
@@ -421,7 +679,17 @@ async function buildPromptBlock(scene, mode, opts) {
   if (resolvedMode === "hybrid") {
     const r = await retrieve(scene, { ...(opts || {}), usePrefilter: true });
     const seed = (r.assets || []).filter(a => !_isJunkAsset(a));
-    if (!seed.length) throw new Error("asset retrieval produced an empty seed palette");
+    if (!seed.length) {
+      throw new AssetRetrievalUnavailableError("asset retrieval produced an empty seed palette", {
+        operation: "build_prompt",
+        causes: [new AssetDependencyError(
+          "catalog",
+          "ASSET_RETRIEVAL_EMPTY",
+          "no buildable real assets remained after retrieval",
+          { operation: "filter_seed", retryable: false },
+        )],
+      });
+    }
     const body = formatAssetsForPrompt(seed);
     return [
       "## SEED ASSET PALETTE FOR THIS SCENE (high-relevance starting set — NOT an exclusive list)",
@@ -435,7 +703,15 @@ async function buildPromptBlock(scene, mode, opts) {
   }
   const r = await retrieve(scene, { ...(opts || {}), usePrefilter: resolvedMode === "db" });
   if (!r.assets.length) {
-    throw new Error("asset retrieval produced an empty palette");
+    throw new AssetRetrievalUnavailableError("asset retrieval produced an empty palette", {
+      operation: "build_prompt",
+      causes: [new AssetDependencyError(
+        "catalog",
+        "ASSET_RETRIEVAL_EMPTY",
+        "no buildable real assets were selected",
+        { operation: "select_assets", retryable: false },
+      )],
+    });
   }
   const body = formatAssetsForPrompt(r.assets);
   return [
@@ -445,4 +721,54 @@ async function buildPromptBlock(scene, mode, opts) {
   ].filter(Boolean).join("\n");
 }
 
-module.exports = { loadDB, retrieve, buildPromptBlock, formatAssetsForPrompt, resolveAssetMode };
+async function buildPromptBlockWithPolicy(scene, policyInput, opts) {
+  const policy = _asAssetPolicy(policyInput);
+  const revision = () => getAssetSnapshotRevision(_cache, opts);
+  if (policy.mode === "off") {
+    return {
+      promptBlock: "",
+      metadata: {
+        status: "off",
+        mode: "off",
+        require_real_assets: false,
+        degraded_mode: "disabled",
+        snapshot_revision: revision(),
+      },
+    };
+  }
+  try {
+    const promptBlock = await buildPromptBlock(scene, policy.mode, opts);
+    return {
+      promptBlock,
+      metadata: {
+        status: "ready",
+        mode: policy.mode,
+        require_real_assets: policy.require_real_assets,
+        degraded_mode: "disabled",
+        snapshot_revision: revision(),
+      },
+    };
+  } catch (error) {
+    const decision = assetFailureDecision(error, policy);
+    const metadata = { ...decision.metadata, snapshot_revision: revision() };
+    if (decision.action === "degrade") return { promptBlock: "", metadata };
+    decision.error.retrieval = metadata;
+    throw decision.error;
+  }
+}
+
+module.exports = {
+  AssetRetrievalPolicyError,
+  assetFailureDecision,
+  buildPromptBlock,
+  buildPromptBlockWithPolicy,
+  buildRetrievalCacheKey,
+  formatAssetsForPrompt,
+  getAssetSnapshotRevision,
+  loadDB,
+  normalizeAssetRetrievalError,
+  resolveAssetMode,
+  resolveAssetPolicy,
+  retrieve,
+  serializeAssetRetrievalError,
+};

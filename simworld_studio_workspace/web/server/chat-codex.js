@@ -343,28 +343,51 @@ async function handleCodexChat(req, res, deps) {
   }
 
   let assetPromptBlock = "";
+  let assetPolicy = null;
   try {
     const assetRetrieval = require("./asset-retrieval");
-    const mode = assetRetrieval.resolveAssetMode(body);
-    if (!deps.MOCK_MODE && mode !== "off") {
-      emit("retrieval", { phase: "start", mode });
+    assetPolicy = assetRetrieval.resolveAssetPolicy(body);
+    if (!deps.MOCK_MODE) {
+      emit("retrieval", { phase: "start", mode: assetPolicy.mode });
       const model = require("./model-config").resolveModel(body);
-      assetPromptBlock = await assetRetrieval.buildPromptBlock(message, mode, {
+      const result = await assetRetrieval.buildPromptBlockWithPolicy(message, assetPolicy, {
         model,
         provider: "codex",
         runner: "codex",
         log: (x) => deps.logToFile && deps.logToFile("retrieval", x),
       });
+      assetPromptBlock = result.promptBlock;
       const chars = assetPromptBlock ? assetPromptBlock.length : 0;
-      if (deps.logToFile) deps.logToFile("retrieval", `mode=${mode} injected=${chars}chars runner=codex`);
-      emit("retrieval", { phase: "done", mode, chars });
+      if (deps.logToFile) {
+        deps.logToFile("retrieval", JSON.stringify({
+          status: result.metadata.status,
+          mode: result.metadata.mode,
+          chars,
+          runner: "codex",
+        }));
+      }
+      emit("retrieval", { phase: "done", chars, ...result.metadata });
     }
   } catch (err) {
-    const msg = (err && err.message) || String(err);
-    if (deps.logToFile) deps.logToFile("retrieval", "ERR " + msg);
-    emit("retrieval", { phase: "error", message: msg });
-    emit("text", { delta: "\n\nAsset retrieval failed: " + msg + "\n" });
-    emit("done", { sessionId: deps.studioSession, isError: true, runner: "codex", latestScreenshot: null });
+    const assetRetrieval = require("./asset-retrieval");
+    const metadata = assetPolicy
+      ? assetRetrieval.assetFailureDecision(err, assetPolicy).metadata
+      : {
+        status: "blocked",
+        code: err && err.code || "ASSET_RETRIEVAL_POLICY_INVALID",
+        message: "Asset retrieval policy is invalid.",
+      };
+    const code = metadata.reason && metadata.reason.code || metadata.code;
+    if (deps.logToFile) deps.logToFile("retrieval", JSON.stringify({ status: "blocked", code }));
+    emit("retrieval", { phase: "error", ...metadata });
+    emit("text", { delta: `\n\nAsset retrieval blocked the build: ${code}\n` });
+    emit("done", {
+      sessionId: deps.studioSession,
+      isError: true,
+      runner: "codex",
+      latestScreenshot: null,
+      retrieval: metadata,
+    });
     clearInterval(ping);
     res.end();
     return;

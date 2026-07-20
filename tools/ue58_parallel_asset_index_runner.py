@@ -29,7 +29,6 @@ import ue_multi_instance_smoke as smoke
 DEFAULT_ASSET_DB_DIR = pathlib.Path("/data/siddhant/asset_db_ue58_qwen")
 DEFAULT_MANIFEST = pathlib.Path("/data/siddhant/asset_db/ue58_object_manifest.json")
 DEFAULT_RUN_ROOT = DEFAULT_ASSET_DB_DIR / "runs"
-DEFAULT_POSTGRES_URL = "postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db_ue58_qwen"
 DEFAULT_QDRANT_COLLECTION = "assets_ue58_qwen"
 DEFAULT_MIN_INOTIFY_WATCHES = 524288
 
@@ -79,6 +78,10 @@ def run_parallel_preflight(args: argparse.Namespace, schema: pathlib.Path) -> No
     (args.asset_db_dir / "catalog").mkdir(parents=True, exist_ok=True)
     (args.asset_db_dir / "renders").mkdir(parents=True, exist_ok=True)
     if not args.dry_run and not args.skip_service_checks and not args.no_db_sync:
+        if not args.postgres_url:
+            raise RuntimeError(
+                "POSTGRES_URL is required for DB sync; inject it through the service environment"
+            )
         try:
             runner.check_postgres(args.postgres_url)
             runner.check_qdrant(args.qdrant_url)
@@ -135,6 +138,10 @@ def check_parallel_config(args: argparse.Namespace) -> int:
         )
         return 1
     if not args.skip_service_checks:
+        if not args.postgres_url:
+            raise RuntimeError(
+                "POSTGRES_URL is required for DB checks; inject it through the service environment"
+            )
         runner.check_postgres(args.postgres_url)
         print("postgres: OK")
         runner.check_qdrant(args.qdrant_url)
@@ -456,7 +463,7 @@ def run_parallel(args: argparse.Namespace) -> int:
         state["_last_sync_monotonic"] = time.monotonic()
         state["_last_sync_attempt_monotonic"] = time.monotonic()
         state["_last_sync_attempt_pending_count"] = 0
-        runner.write_json(run_dir / "config.json", runner.jsonable(vars(args) | {"schema": str(schema)}))
+        runner.write_json(run_dir / "config.json", runner.serialize_run_config(args, schema))
         runner.write_text_atomic(run_dir / "selected_asset_ids.txt", "".join(f"{asset.get('asset_id')}\n" for asset in assets))
         runner.write_json(run_dir / "pid.json", {"pid": os.getpid(), "started_at": runner.utc_now()})
         runner.write_json(state_path, state)
@@ -698,7 +705,6 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(
         asset_db_dir=str(DEFAULT_ASSET_DB_DIR),
         manifest=str(DEFAULT_MANIFEST),
-        postgres_url=DEFAULT_POSTGRES_URL,
         qdrant_collection=DEFAULT_QDRANT_COLLECTION,
         caption_provider="qwen",
     )
