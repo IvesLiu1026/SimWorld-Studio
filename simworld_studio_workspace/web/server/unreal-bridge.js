@@ -361,7 +361,7 @@ class UeMcpBroker {
     this.paused = false;
     this._pumpScheduled = false;
     // injectable for tests: a fake one-shot executor
-    this._exec = opts.exec || ((type, params, timeoutMs) => this._execOnce(type, params, timeoutMs));
+    this._exec = opts.exec || ((type, params, timeoutMs, signal) => this._execOnce(type, params, timeoutMs, signal));
     this.totalSent = 0;
     this.totalErrors = 0;
     this.total429 = 0;
@@ -376,7 +376,13 @@ class UeMcpBroker {
     const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : UE_DEFAULT_TIMEOUT_MS;
     const queueDeadlineMs = typeof opts.queueDeadlineMs === 'number'
       ? opts.queueDeadlineMs : Math.max(timeoutMs * 2, 15000);
+    const signal = opts.signal;
     return new Promise((resolve, reject) => {
+      if (signal && signal.aborted) {
+        const error = new Error(`UE command '${type}' was aborted`);
+        error.name = 'AbortError'; error.code = 'UE_COMMAND_ABORTED';
+        return reject(error);
+      }
       if (this.paused) { this.total429++; return reject(_retryAfter(2000, 'UE restarting, retry shortly')); }
       const isPy = type === 'execute_python_script';
       const q = isPy ? this.pyQueue : this.queue;
@@ -386,7 +392,29 @@ class UeMcpBroker {
         const drain = Math.max(1000, q.length * (this._lastCooldown || 200));
         return reject(_retryAfter(drain, `UE busy (${isPy ? 'python' : 'cmd'} queue full ${q.length}/${cap})`));
       }
-      q.push({ type, params, timeoutMs, queueDeadlineMs, enqueuedAt: Date.now(), resolve, reject });
+      let settled = false;
+      let job;
+      const cleanup = () => { if (signal) signal.removeEventListener('abort', onAbort); };
+      const safeResolve = (value) => { if (settled) return; settled = true; cleanup(); resolve(value); };
+      const safeReject = (error) => { if (settled) return; settled = true; cleanup(); reject(error); };
+      const onAbort = () => {
+        if (settled) return;
+        job.cancelled = true;
+        const queued = isPy ? this.pyQueue : this.queue;
+        const index = queued.indexOf(job);
+        if (index >= 0) queued.splice(index, 1);
+        const error = new Error(`UE command '${type}' was aborted`);
+        error.name = 'AbortError'; error.code = 'UE_COMMAND_ABORTED';
+        this.totalErrors++;
+        safeReject(error);
+        if (this.inFlight !== job) this._pump();
+      };
+      job = {
+        type, params, timeoutMs, queueDeadlineMs, enqueuedAt: Date.now(),
+        resolve: safeResolve, reject: safeReject, signal, cancelled: false,
+      };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      q.push(job);
       // Honor the queue deadline even if a long inFlight job (e.g. a 300s python)
       // would otherwise block the next _pump from sweeping this one.
       const t = setTimeout(() => this._dropStale(), queueDeadlineMs + 10);
@@ -471,29 +499,60 @@ class UeMcpBroker {
     this._lastCooldown = UE_COOLDOWN[job.type] || UE_COOLDOWN._default;
 
     Promise.resolve()
-      .then(() => this._execWithRetry(job.type, job.params, job.timeoutMs, UE_DEFAULT_RETRIES))
-      .then((r) => { this.totalSent++; job.resolve(r); })
-      .catch((e) => { this.totalErrors++; this.lastError = e && e.message; job.reject(e); })
+      .then(() => this._execWithRetry(job.type, job.params, job.timeoutMs, UE_DEFAULT_RETRIES, job.signal))
+      .then((r) => { if (!job.cancelled) { this.totalSent++; job.resolve(r); } })
+      .catch((e) => { if (!job.cancelled) { this.totalErrors++; this.lastError = e && e.message; job.reject(e); } })
       .finally(() => { this._lastCmdEnd = Date.now(); this.inFlight = null; this._pump(); });
   }
 
-  _execOnce(type, params, timeoutMs) {
+  _execOnce(type, params, timeoutMs, signal) {
     return new Promise((resolve, reject) => {
+      if (signal && signal.aborted) {
+        const error = new Error(`UE command '${type}' was aborted`);
+        error.name = 'AbortError'; error.code = 'UE_COMMAND_ABORTED';
+        reject(error); return;
+      }
       const sock = new net.Socket();
-      const timer = setTimeout(() => { sock.destroy(); reject(new Error(`UE command '${type}' timed out after ${timeoutMs}ms`)); }, timeoutMs);
-      sock.connect(UE_MCP_PORT, UE_MCP_HOST, () => { sock.write(JSON.stringify({ type, params }) + '\n'); });
+      let settled = false;
       let buf = '';
-      sock.on('data', (d) => { buf += d.toString(); try { const p = JSON.parse(buf); clearTimeout(timer); sock.destroy(); resolve(p); } catch {} });
-      sock.on('error', (e) => { clearTimeout(timer); reject(new Error(`UE connection error: ${e.message}`)); });
-      sock.on('close', () => { clearTimeout(timer); if (buf.trim()) { try { resolve(JSON.parse(buf)); } catch { reject(new Error('Incomplete response from UE')); } } });
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        try { sock.destroy(); } catch (_error) {}
+      };
+      const finish = (fn, value) => { if (settled) return; settled = true; cleanup(); fn(value); };
+      const onAbort = () => {
+        const error = new Error(`UE command '${type}' was aborted`);
+        error.name = 'AbortError'; error.code = 'UE_COMMAND_ABORTED';
+        finish(reject, error);
+      };
+      const timer = setTimeout(() => finish(reject, new Error(`UE command '${type}' timed out after ${timeoutMs}ms`)), timeoutMs);
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      sock.connect(UE_MCP_PORT, UE_MCP_HOST, () => { sock.write(JSON.stringify({ type, params }) + '\n'); });
+      sock.on('data', (d) => { buf += d.toString(); try { finish(resolve, JSON.parse(buf)); } catch {} });
+      sock.on('error', (e) => finish(reject, new Error(`UE connection error: ${e.message}`)));
+      sock.on('close', () => {
+        if (settled) return;
+        if (!buf.trim()) return finish(reject, new Error('UE connection closed without a response'));
+        try { finish(resolve, JSON.parse(buf)); } catch { finish(reject, new Error('Incomplete response from UE')); }
+      });
     });
   }
 
-  async _execWithRetry(type, params, timeoutMs, retries) {
+  async _execWithRetry(type, params, timeoutMs, retries, signal) {
     let lastErr;
     for (let i = 0; i < retries; i++) {
-      try { return await this._exec(type, params, timeoutMs); }
-      catch (e) { lastErr = e; if (i < retries - 1) await new Promise((r) => setTimeout(r, 300 * (i + 1))); }
+      if (signal && signal.aborted) {
+        const error = new Error(`UE command '${type}' was aborted`);
+        error.name = 'AbortError'; error.code = 'UE_COMMAND_ABORTED';
+        throw error;
+      }
+      try { return await this._exec(type, params, timeoutMs, signal); }
+      catch (e) {
+        lastErr = e;
+        if (e && e.code === 'UE_COMMAND_ABORTED') throw e;
+        if (i < retries - 1) await new Promise((r) => setTimeout(r, 300 * (i + 1)));
+      }
     }
     throw lastErr;
   }
