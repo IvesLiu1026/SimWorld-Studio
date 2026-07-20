@@ -22,23 +22,31 @@ import CheckpointBar from "./CheckpointBar.jsx";
 import SkillsPanel from "./SkillsPanel.jsx";
 import {
   appendTextDeltaToMessage,
+  buildChatStopPayload,
   buildWelcomeMessage,
   generateMessageId,
   getUniqueTextAppend,
+  mergeReviewAccounting,
+  mergeReviewEvidence,
+  normalizeLoopMode,
   screenshotPathFromUrl,
   turnChangedScene,
 } from "./chatRuntime.js";
 
 const QUICK_SUGGESTIONS = [
-  "Add more trees",
-  "Move buildings further apart",
-  "Change to sunset lighting",
-  "Take a screenshot from a different angle",
+  "Increase tree coverage",
+  "Increase building setbacks",
+  "Set late-afternoon lighting",
+  "Capture an alternate camera view",
   "Add street furniture",
 ];
 
 const CHAT_CONVERSATIONS_KEY = "simworld.chat.conversations.v1";
 const CHAT_ACTIVE_KEY = "simworld.chat.activeConversation.v1";
+
+function normalizeAssetPolicy(value) {
+  return value === "basic_geometry" ? "basic_geometry" : "real_assets";
+}
 
 function readJsonStorage(key, fallback) {
   try {
@@ -71,6 +79,8 @@ function makeConversation(overrides = {}) {
       autoSkillSelectionEnabled: overrides.state?.autoSkillSelectionEnabled ?? true,
       autoSelectedSkills: overrides.state?.autoSelectedSkills || [],
       autoSelectionError: overrides.state?.autoSelectionError || "",
+      loopMode: normalizeLoopMode(overrides.state?.loopMode),
+      assetPolicy: normalizeAssetPolicy(overrides.state?.assetPolicy),
       latestScreenshot: overrides.state?.latestScreenshot || null,
       turnCount: overrides.state?.turnCount || 0,
     },
@@ -150,6 +160,49 @@ function buildToolIcons(icons = {}) {
   };
 }
 
+function ReviewEvidenceGallery({ evidence }) {
+  if (!Array.isArray(evidence) || evidence.length === 0) return null;
+  const rounds = [...new Set(evidence.map((item) => item.round).filter(Number.isFinite))];
+  const roundLabel = rounds.length === 1 ? ` · round ${rounds[0]}` : "";
+
+  return (
+    <section
+      aria-label="Visual review evidence"
+      style={{
+        width: "100%",
+        padding: "8px 10px 10px",
+        borderBottom: "1px solid var(--line-soft)",
+      }}
+    >
+      <div className="loop-critic-head">Visual evidence{roundLabel} · {evidence.length} view{evidence.length === 1 ? "" : "s"}</div>
+      <div
+        className="chat-tool-screenshot"
+        style={{
+          display: "grid",
+          gridTemplateColumns: evidence.length === 1 ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))",
+          gap: 6,
+        }}
+      >
+        {evidence.map((item, index) => (
+          <a
+            href={item.url}
+            key={item.url}
+            rel="noreferrer"
+            target="_blank"
+            title={`Open visual review evidence ${index + 1}`}
+          >
+            <img
+              alt={`Visual review evidence ${index + 1}`}
+              loading="lazy"
+              src={item.url}
+            />
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, onChatDone, codingAgent, codingModel, icons = {} }) {
   const initialChatStateRef = useRef(null);
   if (!initialChatStateRef.current) initialChatStateRef.current = loadChatConversations();
@@ -170,7 +223,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   const [mcpStatus, setMcpStatus] = useState(initialState.mcpStatus || "-");
   const [selectedSkills, setSelectedSkills] = useState(initialState.selectedSkills || []);
   const [autoSkillSelectionEnabled, setAutoSkillSelectionEnabled] = useState(initialState.autoSkillSelectionEnabled ?? true);
-  const [loopMode, setLoopMode] = useState(initialState.loopMode || "vanilla");
+  const [loopMode, setLoopMode] = useState(normalizeLoopMode(initialState.loopMode));
+  const [assetPolicy, setAssetPolicy] = useState(normalizeAssetPolicy(initialState.assetPolicy));
   const [autoSelectedSkills, setAutoSelectedSkills] = useState(initialState.autoSelectedSkills || []);
   const [autoSelectingSkills, setAutoSelectingSkills] = useState(false);
   const [autoSelectionError, setAutoSelectionError] = useState(initialState.autoSelectionError || "");
@@ -181,6 +235,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
+  const activeRunRef = useRef(null);
   const textareaRef = useRef(null);
   const selfEvolutionReqSeqRef = useRef(0);
   const activeSkills = autoSkillSelectionEnabled ? autoSelectedSkills : selectedSkills;
@@ -196,6 +251,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
       loadScene: (scene) => {
         if (scene.sessionId) {
           setSessionId(scene.sessionId);
+          setLoopMode(normalizeLoopMode(scene.loopMode));
+          setAssetPolicy(normalizeAssetPolicy(scene.assetPolicy));
           setMessages(
             scene.chatHistory || [
               {
@@ -263,6 +320,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
       autoSkillSelectionEnabled,
       autoSelectedSkills,
       autoSelectionError,
+      loopMode,
+      assetPolicy,
       latestScreenshot,
       turnCount,
     };
@@ -277,6 +336,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
     autoSkillSelectionEnabled,
     autoSelectedSkills,
     autoSelectionError,
+    loopMode,
+    assetPolicy,
     latestScreenshot,
     turnCount,
   ]);
@@ -292,6 +353,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
     setAutoSelectedSkills(Array.isArray(state.autoSelectedSkills) ? state.autoSelectedSkills : []);
     setAutoSelectingSkills(false);
     setAutoSelectionError(state.autoSelectionError || "");
+    setLoopMode(normalizeLoopMode(state.loopMode));
+    setAssetPolicy(normalizeAssetPolicy(state.assetPolicy));
     setLatestScreenshot(state.latestScreenshot || null);
     setTurnCount(state.turnCount || 0);
     onSessionChange?.(state.sessionId || null);
@@ -438,6 +501,14 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
 
       const controller = new AbortController();
       abortRef.current = controller;
+      activeRunRef.current = {
+        assistantId,
+        conversationId: activeConversationId,
+        runId: null,
+        // Vanilla runs use the request key. A review loop may replace it later
+        // with the server-authoritative key published by run_start.
+        sessionId: sessionId || "_global",
+      };
       const inputBuffers = new Map();
 
       // P2-2 SSE text batching: buffer rapid text deltas, flush via rAF to avoid
@@ -484,6 +555,16 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
           text,
           sessionId,
           (event) => {
+            const eventRunId = event.data?.runId || event.data?.run_id;
+            const runSessionId = event.type === "run_start" ? event.data?.sessionId : null;
+            if ((eventRunId || runSessionId) && activeRunRef.current?.assistantId === assistantId) {
+              activeRunRef.current = {
+                ...activeRunRef.current,
+                ...(eventRunId ? { runId: eventRunId } : {}),
+                // run_start is the server-authoritative process scope for loop requests.
+                ...(runSessionId ? { sessionId: runSessionId } : {}),
+              };
+            }
             setMessages((prev) => {
               const updated = [...prev];
               const idx = updated.findIndex((m) => m.id === assistantId);
@@ -496,7 +577,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                 if (result.changed) msg = result.message;
               }
               // Clear waiting flag on first real event
-              if (msg.waiting && (event.type === "text" || event.type === "tool_start" || event.type === "system")) {
+              if (msg.waiting && (event.type === "text" || event.type === "tool_start" || event.type === "system" || event.type === "retrieval")) {
                 msg.waiting = false;
               }
 
@@ -535,6 +616,28 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                     setSessionId(event.data.sessionId);
                     onSessionChange?.(event.data.sessionId);
                   }
+                  break;
+                }
+                case "retrieval": {
+                  const data = event.data || {};
+                  if (data.phase === "start" && !data.status) break;
+                  const status = data.status
+                    || (data.phase === "error" ? "blocked" : data.phase === "done" ? "ready" : "unknown");
+                  const block = {
+                    type: "asset_retrieval",
+                    status,
+                    mode: data.mode,
+                    degradedMode: data.degraded_mode,
+                    snapshotRevision: data.snapshot_revision,
+                    reason: data.reason,
+                    code: data.code,
+                    message: data.message,
+                  };
+                  const blocks = [...(msg.blocks || [])];
+                  const blockIndex = blocks.findIndex((item) => item.type === "asset_retrieval");
+                  if (blockIndex >= 0) blocks[blockIndex] = block;
+                  else blocks.push(block);
+                  msg.blocks = blocks;
                   break;
                 }
                 case "text": {
@@ -621,20 +724,46 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                   break;
                 }
                 case "critic_verdict": {
-                  msg.blocks = [...(msg.blocks || []), { type: "critic", round: event.data.round, status: event.data.status, issues: event.data.issues, suggestions: event.data.suggestions }];
+                  msg.blocks = [...(msg.blocks || []), {
+                    type: "critic",
+                    round: event.data.round,
+                    status: event.data.status,
+                    issues: event.data.issues,
+                    suggestions: event.data.suggestions,
+                    provider: event.data.provider,
+                    model: event.data.model,
+                    error: event.data.error,
+                  }];
+                  msg.reviewEvidence = mergeReviewEvidence(msg.reviewEvidence, event.data, API_BASE);
+                  msg.reviewAccounting = mergeReviewAccounting(msg.reviewAccounting, event.data, "critic");
+                  break;
+                }
+                case "multi_shots":
+                case "review_evidence":
+                case "visual_evidence": {
+                  msg.reviewEvidence = mergeReviewEvidence(msg.reviewEvidence, event.data, API_BASE);
                   break;
                 }
                 case "builder_done": {
+                  msg.reviewAccounting = mergeReviewAccounting(msg.reviewAccounting, event.data, "builder");
                   if (event.data && event.data.isError) {
                     msg.blocks = [...(msg.blocks || []), { type: "text", content: `[builder error] ${event.data.error || ""}` }];
                   }
                   break;
                 }
                 case "loop_done": {
-                  msg.blocks = [...(msg.blocks || []), { type: "loop_done", reason: event.data.reason, rounds: event.data.rounds, finalStatus: event.data.finalStatus }];
+                  msg.reviewAccounting = mergeReviewAccounting(msg.reviewAccounting, event.data, "run");
+                  msg.blocks = [...(msg.blocks || []), {
+                    type: "loop_done",
+                    reason: event.data.reason,
+                    rounds: event.data.rounds,
+                    finalStatus: event.data.finalStatus,
+                    error: event.data.error,
+                  }];
                   break;
                 }
                 case "done": {
+                  msg.reviewAccounting = mergeReviewAccounting(msg.reviewAccounting, event.data, "run");
                   const sid = event.data.sessionId;
                   const isErr = event.data.isError;
                   // Always keep sessionId - it's the stable studio session, not Claude's transient one
@@ -650,8 +779,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                   // If no content was streamed at all, show fallback but keep session
                   if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
                     msg.content = isErr
-                      ? "**Warning:** Agent exited unexpectedly. Try again; each message starts a fresh process."
-                      : "**Warning:** No response received. Try sending your message again.";
+                      ? "**Warning:** Scene build process ended unexpectedly. Retry the operation."
+                      : "**Warning:** No operation result was received. Retry the command.";
                   }
                   onChatDone?.();
                   break;
@@ -668,8 +797,11 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
             feedback: feedbackText,
             skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
             agent: codingAgent,
+            conversationId: activeConversationId,
             model: codingModel,
             loopMode,
+            requireRealAssets: assetPolicy === "real_assets",
+            assetDegradedMode: assetPolicy === "basic_geometry" ? "basic_geometry" : "disabled",
           }
         );
         // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
@@ -709,17 +841,42 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
         setLoading(false);
         setAutoSelectingSkills(false);
         abortRef.current = null;
+        if (activeRunRef.current?.assistantId === assistantId) activeRunRef.current = null;
       }
     },
-    [input, loading, sessionId, selectedSkills, autoSkillSelectionEnabled, codingAgent, codingModel, onScreenshotUpdate]
+    [
+      activeConversationId,
+      autoSkillSelectionEnabled,
+      assetPolicy,
+      codingAgent,
+      codingModel,
+      input,
+      loading,
+      loopMode,
+      onChatDone,
+      onScreenshotUpdate,
+      onSessionChange,
+      selectedSkills,
+      sessionId,
+    ]
   );
+
+  const requestChatStop = useCallback(() => {
+    const payload = buildChatStopPayload(activeRunRef.current, sessionIdRef.current);
+    return fetch(`${API_BASE}/chat-stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => null);
+  }, []);
 
   const handleStop = () => {
     // Tell the server to actually kill the Claude subprocess. Without this,
     // aborting the SSE alone just leaves the agent running in background
     // (server-side e.on("close") no longer kills on disconnect).
-    fetch(`${API_BASE}/chat-stop`, { method: "POST" }).catch(() => {});
+    requestChatStop();
     abortRef.current?.abort();
+    activeRunRef.current = null;
     setLoading(false);
   };
 
@@ -731,8 +888,9 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   };
 
   const handleReset = () => {
-    fetch(`${API_BASE}/chat-stop`, { method: "POST" }).catch(() => {});
+    requestChatStop();
     abortRef.current?.abort();
+    activeRunRef.current = null;
     setInput("");
     setLoading(false);
     setSessionId(null);
@@ -786,6 +944,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
         prompt,
         description: `${turnCount} turns, ${messages.length} messages`,
         sessionId: sessionId || undefined,
+        loopMode,
+        assetPolicy,
         skills: activeSkills,
         chatHistory: messages,
       });
@@ -877,17 +1037,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
         icons={icons}
       />
 
-      {/* Messages */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "14px",
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-        }}
-      >
+      {/* Operation history */}
+      <div className="chat-record-list">
         {messages.map((msg) => {
           const ckpt = checkpoints.find((c) => c.messageId === msg.id);
           return (
@@ -898,6 +1049,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                 toolIcons={toolIcons}
                 fallbackToolIcon={icons?.hammer}
               />
+              <ReviewEvidenceGallery evidence={msg.reviewEvidence} />
               {ckpt && (
                 <CheckpointBar
                   checkpoint={ckpt}
@@ -917,31 +1069,14 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
 
       {/* Quick suggestions */}
       {!loading && sessionId && turnCount > 0 && (
-        <div
-          style={{
-            padding: "6px 14px",
-            borderTop: "1px solid var(--line)",
-            background: "var(--panel)",
-            display: "flex",
-            gap: 6,
-            flexWrap: "wrap",
-          }}
-        >
+        <div className="chat-quick-actions">
+          <span className="chat-quick-label">COMMON REVISIONS</span>
           {QUICK_SUGGESTIONS.map((suggestion) => (
             <button
               key={suggestion}
               onClick={() => handleSend(suggestion)}
-              style={{
-                padding: "4px 11px",
-                fontSize: 12,
-                borderRadius: 999,
-                border: "1px solid var(--line)",
-                background: "var(--panel-2)",
-                color: "var(--ink-2)",
-                cursor: "pointer",
-                fontWeight: 600,
-                fontFamily: "inherit",
-              }}
+              className="chat-quick-action"
+              type="button"
             >
               {suggestion}
             </button>
@@ -950,25 +1085,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
       )}
 
       {/* Input area */}
-      <div
-        style={{
-          padding: "10px 14px",
-          borderTop: "1px solid var(--line)",
-          flexShrink: 0,
-          background: "var(--panel)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "flex-end",
-            background: "var(--bg-tertiary)",
-            border: "1px solid var(--line)",
-            borderRadius: 10,
-            padding: "8px 12px",
-          }}
-        >
+      <div className="chat-command-area">
+        <div className="chat-command-box">
           <textarea
             ref={textareaRef}
             value={input}
@@ -976,65 +1094,49 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
             onKeyDown={handleKeyDown}
             placeholder={
               sessionId
-                ? "Refine the scene or describe changes..."
-                : "Describe the city scene you want to generate..."
+                ? "Enter a scene revision command..."
+                : "Enter scene requirements, constraints, and camera needs..."
             }
             disabled={loading}
             rows={1}
-            style={{
-              flex: 1,
-              background: "none",
-              border: "none",
-              outline: "none",
-              color: "var(--ink)",
-              fontSize: 13,
-              resize: "none",
-              lineHeight: 1.5,
-              maxHeight: 160,
-              overflow: "auto",
-              fontFamily: "inherit",
-              cursor: "text",
-            }}
+            className="chat-command-input"
           />
           <button
             onClick={() => (loading ? handleStop() : handleSend())}
             disabled={!loading && !input.trim()}
-            style={{
-              flexShrink: 0,
-              width: 34,
-              height: 34,
-              borderRadius: 10,
-              border: "none",
-              background: loading ? "color-mix(in srgb, var(--red) 12%, transparent)" : input.trim() ? "var(--blue)" : "var(--panel-2)",
-              color: loading ? "var(--red)" : input.trim() ? "var(--accent-ink)" : "var(--ink-3)",
-              cursor: loading || input.trim() ? "pointer" : "default",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 15,
-              boxShadow: input.trim() && !loading ? "var(--shadow-card)" : "none",
-            }}
+            className={`chat-command-submit${loading ? " stop" : input.trim() ? " ready" : ""}`}
+            title={loading ? "Stop operation" : "Run command"}
+            type="button"
           >
-            {loading ? icons?.close?.(15) : icons?.zap?.(15)}
+            {loading ? icons?.close?.(15) : icons?.activity?.(15)}
           </button>
         </div>
-        <div style={{ marginTop: 5, fontSize: 12, color: "var(--ink-3)" }}>
-          Enter to send - Shift+Enter for new line
-          {/* Agent/model picker moved to the top-left nav bar (see CodingAgentSelector). */}
-          <span style={{ marginLeft: 8, color: autoSkillSelectionEnabled ? "var(--blue)" : "var(--ink-3)" }}>
-            {autoSkillSelectionEnabled ? "Auto-select skills: on" : "Auto-select skills: off"}
+        <div className="chat-command-meta">
+          Enter to run · Shift+Enter for new line
+          {/* Execution backend selection is available in Settings. */}
+          <span className={autoSkillSelectionEnabled ? "active" : ""}>
+            Procedures: {autoSkillSelectionEnabled ? "Automatic" : "Manual"}
             {autoSelectingSkills ? " (selecting...)" : ""}
           </span>
           <span
             onClick={() => setLoopMode((m) => (m === "vanilla" ? "text_loop" : m === "text_loop" ? "visual_loop" : "vanilla"))}
-            style={{ marginLeft: 8, cursor: "pointer", color: loopMode === "vanilla" ? "var(--ink-3)" : "var(--blue)" }}
-            title="Build-critic loop — click to cycle: off → text → visual"
+            className={loopMode === "vanilla" ? "" : "active"}
+            title="Verification mode — click to cycle: off → text → visual"
           >
-            Loop: {loopMode === "vanilla" ? "off" : loopMode === "text_loop" ? "text" : "visual"}
+            Review: {loopMode === "vanilla" ? "Off" : loopMode === "text_loop" ? "Text" : "Visual"}
+          </span>
+          <span
+            onClick={() => setAssetPolicy((policy) => policy === "real_assets" ? "basic_geometry" : "real_assets")}
+            className={assetPolicy === "real_assets" ? "active" : ""}
+            title={assetPolicy === "real_assets"
+              ? "Require retrieved 3D assets; block the build when retrieval is unavailable"
+              : "Basic geometry fallback is explicitly allowed for this conversation"}
+          >
+            Assets: {assetPolicy === "real_assets" ? "Verified only" : "Fallback allowed"}
           </span>
           {activeSkills.length > 0 && (
-            <span style={{ color: "var(--blue)", marginLeft: 8 }}>
-              {activeSkills.length} skill{activeSkills.length > 1 ? "s" : ""} active
+            <span className="active">
+              {activeSkills.length} procedure{activeSkills.length > 1 ? "s" : ""}
             </span>
           )}
           {autoSelectionError && (
@@ -1048,21 +1150,21 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
           <>
             <button
               className="chat-session-scrim"
-              aria-label="Close chat sessions"
+              aria-label="Close build sessions"
               onClick={() => setSessionsOpen(false)}
               type="button"
             />
-            <aside className="chat-session-drawer" aria-label="Chat sessions">
+            <aside className="chat-session-drawer" aria-label="Build sessions">
               <div className="chat-session-drawer-head">
                 <div>
-                  <span>Chats</span>
+                  <span>Build Sessions</span>
                   <small>{sortedConversations.length} saved</small>
                 </div>
                 <button
                   className="chat-session-new"
                   onClick={handleNewConversation}
                   disabled={loading}
-                  title="New conversation"
+                  title="New build session"
                   type="button"
                 >
                   {icons.plus?.(13)}
@@ -1070,7 +1172,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                 <button
                   className="chat-session-close"
                   onClick={() => setSessionsOpen(false)}
-                  title="Close chat sessions"
+                  title="Close build sessions"
                   type="button"
                 >
                   {icons.close?.(12)}
@@ -1091,7 +1193,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                     >
                       <span className="chat-session-title">{conversation.title}</span>
                       <span className="chat-session-meta">
-                        {conversation.state?.turnCount || 0} turns
+                        {conversation.state?.turnCount || 0} operations
                       </span>
                     </button>
                     <button

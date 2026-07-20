@@ -4,46 +4,46 @@ export const STUDIO_MODES = [
   {
     id: "scene",
     num: 1,
-    label: "Scene Generation",
-    sub: "Create & verify UE5 environments from text/image/edit",
-    cta: "Generate Scene",
+    label: "Scene",
+    sub: "Define and validate an Unreal Engine environment",
+    cta: "Build Scene",
     ctaColor: "blue",
-    iconKey: "chat",
+    iconKey: "cube",
   },
   {
     id: "task",
     num: 2,
-    label: "Task Generation",
-    sub: "Generate PointNav / ObjectNav tasks from verified scenes",
-    cta: "Generate Tasks",
+    label: "Tasks",
+    sub: "Configure PointNav, ObjectNav, or custom task sets",
+    cta: "Build Task Set",
     ctaColor: "green",
     iconKey: "target",
   },
   {
     id: "training",
     num: 3,
-    label: "Agent Training",
-    sub: "Run embodied agent experiments and collect trajectories",
+    label: "Training",
+    sub: "Run navigation experiments and collect trajectories",
     cta: "Start Training",
     ctaColor: "violet",
-    iconKey: "robot",
+    iconKey: "activity",
   },
   {
     id: "coevolve",
     num: 4,
-    label: "Co-evolution",
-    sub: "Adaptive curriculum driven by agent-environment feedback",
-    cta: "Run Co-evolution",
+    label: "Iteration",
+    sub: "Review results and adjust curriculum parameters",
+    cta: "Start Iteration",
     ctaColor: "orange",
     iconKey: "refresh",
   },
 ];
 
 const ARTIFACT_STAGES = [
-  { id: "scene", label: "Scene", placeholder: "No scene yet", iconKey: "cube" },
-  { id: "task", label: "Task Set", placeholder: "No tasks yet", iconKey: "target" },
-  { id: "training", label: "Training", placeholder: "No run yet", iconKey: "activity" },
-  { id: "coevolve", label: "Curriculum", placeholder: "No curriculum", iconKey: "refresh" },
+  { id: "scene", label: "Scene", placeholder: "Scene not saved", iconKey: "cube" },
+  { id: "task", label: "Task Set", placeholder: "Tasks not configured", iconKey: "target" },
+  { id: "training", label: "Training", placeholder: "No training run", iconKey: "activity" },
+  { id: "coevolve", label: "Curriculum", placeholder: "No iteration record", iconKey: "refresh" },
 ];
 
 function renderIcon(icons, key, size) {
@@ -94,7 +94,7 @@ export function ArtifactChain({ artifacts, activeMode, onSelect, icons }) {
           flexShrink: 0,
         }}
       >
-        Pipeline
+        Workflow
       </span>
       {ARTIFACT_STAGES.map((stage, index) => {
         const artifact = artifacts[stage.id];
@@ -127,7 +127,7 @@ export function StudioLanding({ activeMode, onSelect, artifacts, icons }) {
           SimWorld Studio
         </div>
         <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
-          Select a pipeline stage to begin or continue your work.
+          Select a workflow stage to begin or continue the project.
         </div>
       </div>
       <div className="mode-landing">
@@ -150,7 +150,7 @@ export function StudioLanding({ activeMode, onSelect, artifacts, icons }) {
                     {renderIcon(icons, "check", 11)} {artifact.name}
                   </>
                 ) : (
-                  "No output yet"
+                  "Not configured"
                 )}
               </div>
             </div>

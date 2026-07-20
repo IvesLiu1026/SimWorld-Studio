@@ -13,24 +13,25 @@ const RIGHT_PANEL_BY_MODE = {
 };
 
 const LEFT_PANEL_META = {
-  chat: { icon: "chat", title: "Intent + SimCoder" },
-  taskgen: { icon: "target", title: "Task Builder" },
-  trainconfig: { icon: "activity", title: "Training Config" },
-  curriculum: { icon: "refresh", title: "Curriculum Builder" },
+  chat: { icon: "clipboard", title: "Scene Specification" },
+  taskgen: { icon: "target", title: "Task Parameters" },
+  trainconfig: { icon: "activity", title: "Run Configuration" },
+  curriculum: { icon: "refresh", title: "Curriculum Configuration" },
 };
 
 const RIGHT_PANEL_META = {
-  sceneinsp: { icon: "scan", title: "Scene Inspector" },
-  taskinsp: { icon: "check", title: "Task Inspector" },
-  agentmonitor: { icon: "robot", title: "Agent Monitor" },
-  roundinsp: { icon: "chartBar", title: "Round Inspector" },
+  sceneinsp: { icon: "scan", title: "Scene Validation" },
+  taskinsp: { icon: "check", title: "Task Set" },
+  agentmonitor: { icon: "activity", title: "Run Monitor" },
+  roundinsp: { icon: "chartBar", title: "Round Review" },
 };
 
 const DRAWER_TABS_BY_MODE = {
   scene: [
     { id: "assets", label: "Assets" },
-    { id: "scenes", label: "Scene Versions" },
-    { id: "context", label: "Tool Calls" },
+    { id: "scenes", label: "Revisions" },
+    { id: "context", label: "Operation Log" },
+    { id: "vista_import", label: "VISTA Import" },
   ],
   task: [
     { id: "assets", label: "Task Sets" },

@@ -1,36 +1,37 @@
 import React from "react";
+import CodingAgentSelector from "../agents/CodingAgentSelector.jsx";
 
 const THEMES = [
-  { id: "dark", label: "Dark", desc: "Dashboard default" },
-  { id: "light", label: "Light", desc: "Clean and bright" },
+  { id: "dark", label: "Dark", desc: "Low-glare workstation" },
+  { id: "light", label: "Light", desc: "High-contrast workspace" },
 ];
 
 const LAYOUTS = [
   {
     id: "scene",
-    label: "Scene Generation",
-    desc: "Intent+SimCoder | Viewport | Scene Inspector",
+    label: "Scene Setup",
+    desc: "Specification | Viewport | Validation",
     left: true,
     right: true,
   },
   {
     id: "task",
-    label: "Task Generation",
-    desc: "Task Builder | Viewport | Task Inspector",
+    label: "Task Design",
+    desc: "Parameters | Viewport | Task Set",
     left: true,
     right: true,
   },
   {
     id: "training",
-    label: "Agent Training",
-    desc: "Training Config | Viewport | Agent Monitor",
+    label: "Training",
+    desc: "Run Configuration | Viewport | Run Monitor",
     left: true,
     right: true,
   },
   {
     id: "coevolve",
-    label: "Co-evolution",
-    desc: "Curriculum Builder | Viewport | Round Inspector",
+    label: "Iteration",
+    desc: "Curriculum | Viewport | Round Review",
     left: true,
     right: true,
   },
@@ -59,7 +60,19 @@ function MiniLayoutPreview({ left, right }) {
   );
 }
 
-export default function SettingsModal({ icons, layoutMode, onClose, onLayoutMode, onThemeChange, uiTheme }) {
+export default function SettingsModal({
+  codingAgent,
+  codingAgents,
+  codingModel,
+  icons,
+  layoutMode,
+  onClose,
+  onCodingAgentChange,
+  onCodingModelChange,
+  onLayoutMode,
+  onThemeChange,
+  uiTheme,
+}) {
   return (
     <div className="settings-modal-overlay" onClick={(event) => event.target === event.currentTarget && onClose()}>
       <div className="settings-modal-card">
@@ -90,8 +103,26 @@ export default function SettingsModal({ icons, layoutMode, onClose, onLayoutMode
           </div>
         </section>
 
+        <section className="settings-section">
+          <div className="settings-section-label">Execution</div>
+          <div className="settings-execution-row">
+            <div className="settings-execution-copy">
+              <strong>Scene build runtime</strong>
+              <span>Advanced backend configuration for scene operations.</span>
+            </div>
+            <CodingAgentSelector
+              agents={codingAgents}
+              agent={codingAgent}
+              setAgent={onCodingAgentChange}
+              model={codingModel}
+              setModel={onCodingModelChange}
+              icon={icons.wrench(14)}
+            />
+          </div>
+        </section>
+
         <section className="settings-section no-margin">
-          <div className="settings-section-label">Layout Mode</div>
+          <div className="settings-section-label">Workspace Mode</div>
           <div className="settings-layout-list">
             {LAYOUTS.map((layout) => {
               const active = layoutMode === layout.id;

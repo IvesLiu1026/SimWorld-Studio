@@ -168,20 +168,20 @@ export default function SkillsPanel({
   const customSkills = skills.filter((skill) => skill.source === "custom");
 
   return (
-    <div style={{ padding: "6px 12px", borderBottom: "1px solid var(--line)", background: "var(--bg)" }}>
+    <div className="scene-procedures-bar">
       <div
         style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}
         onClick={() => setExpanded(!expanded)}
       >
         <span style={{ fontSize: 12, color: "var(--ink-3)", fontFamily: "monospace" }}>{expanded ? "v" : ">"}</span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Skills</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>Procedures</span>
         {activeSkills.length > 0 && (
           <Badge variant="blue" style={{ marginLeft: 4 }}>
             {activeSkills.length}
           </Badge>
         )}
         <div onClick={(event) => event.stopPropagation()} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Auto-select skills</span>
+          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Automatic</span>
           <button
             type="button"
             onClick={() => onAutoEnabledChange(!autoEnabled)}
@@ -195,8 +195,8 @@ export default function SkillsPanel({
               position: "relative",
               cursor: "pointer",
             }}
-            title={`Auto-select skills: ${autoEnabled ? "on" : "off"}`}
-            aria-label="Toggle auto-select skills"
+            title={`Automatic procedure selection: ${autoEnabled ? "on" : "off"}`}
+            aria-label="Toggle automatic procedure selection"
             aria-pressed={autoEnabled}
           >
             <span
@@ -212,19 +212,19 @@ export default function SkillsPanel({
             />
           </button>
         </div>
-        <span style={{ fontSize: 12, color: "var(--ink-2)", marginLeft: 6 }}>{skills.length} available</span>
+        <span style={{ fontSize: 12, color: "var(--ink-2)", marginLeft: 6 }}>{skills.length} configured</span>
       </div>
 
       {expanded && (
         <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflowY: "auto", paddingRight: 4 }}>
           <div style={{ fontSize: 12, color: "var(--ink-3)", border: "1px solid var(--line)", background: "var(--bg)", borderRadius: 6, padding: "6px 8px", marginBottom: 2 }}>
             {autoEnabled
-              ? "Auto mode: the agent pre-selects relevant skills before each run."
-              : "Manual mode: check the exact skills you want active."}
+              ? "Automatic mode selects registered procedures for each operation."
+              : "Manual mode uses only the procedures selected below."}
           </div>
 
           {builtinSkills.length > 0 && (
-            <div style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 600, padding: "4px 0 2px" }}>BUILTIN</div>
+            <div style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 600, padding: "4px 0 2px" }}>STANDARD</div>
           )}
           {builtinSkills.map((skill) => (
             <SkillItem
@@ -272,7 +272,7 @@ export default function SkillsPanel({
               justifyContent: "center",
             }}
           >
-            + Add Custom Skill
+            + Add procedure
           </button>
         </div>
       )}

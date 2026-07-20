@@ -195,9 +195,9 @@ test.describe("VISTA Pixel Streaming controls", () => {
     const toggle = page.getByTestId("vista-demo-toggle");
     await expect(page.getByTestId("vista-demo-status")).toContainText("Stop remains available");
     await expect(toggle).toBeEnabled();
-    await expect(toggle).toHaveText("Stop VISTA Demo");
+    await expect(toggle).toHaveText("Stop Simulation");
     await toggle.click();
-    await expect(page.getByTestId("vista-demo-status")).toHaveText("VISTA Demo stopped — UE confirmed");
+    await expect(page.getByTestId("vista-demo-status")).toHaveText("Simulation stopped — UE confirmed");
     expect(stopRequests).toBe(1);
   });
 
@@ -553,16 +553,16 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await expect(page.getByTestId("vista-demo-status")).toContainText("Entering Play mode");
     await page.waitForTimeout(100);
     expect(stateRequests).toBe(2);
-    await expect(page.getByTestId("vista-demo-status")).toContainText("VISTA Demo live");
+    await expect(page.getByTestId("vista-demo-status")).toContainText("Simulation running");
     expect(stateRequests).toBe(3);
-    await expect(toggle).toHaveText("Stop VISTA Demo");
-    await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Shot" })).toBeDisabled();
+    await expect(toggle).toHaveText("Stop Simulation");
+    await expect(page.getByRole("button", { name: "Camera", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Capture" })).toBeDisabled();
 
     await frame.evaluate(() => window.parent.postMessage({ type: "sw-stream-disconnected" }, location.origin));
     await expect(page.getByTestId("vista-demo-status")).toContainText("disconnected");
     await expect(toggle).toBeEnabled();
-    await expect(toggle).toHaveText("Stop VISTA Demo");
+    await expect(toggle).toHaveText("Stop Simulation");
     await toggle.click();
     await expect(page.getByTestId("vista-demo-status")).toContainText("Stop sent");
     expect(stopRequest).not.toBeNull();
@@ -572,9 +572,9 @@ test.describe("VISTA Pixel Streaming controls", () => {
     expect(stopRequest.headers().cookie).toContain("vista_studio_access=");
     expect(await frame.evaluate(() => window.__vistaTestKeys)).toEqual([]);
     expect(await frame.evaluate(() => window.__vistaTestPointerInputs.length)).toBe(4);
-    await expect(page.getByTestId("vista-demo-status")).toHaveText("VISTA Demo stopped — UE confirmed");
+    await expect(page.getByTestId("vista-demo-status")).toHaveText("Simulation stopped — UE confirmed");
     expect(stateRequests).toBe(4);
-    await expect(toggle).toHaveText("Start VISTA Demo");
-    await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeEnabled();
+    await expect(toggle).toHaveText("Start Simulation");
+    await expect(page.getByRole("button", { name: "Camera", exact: true })).toBeEnabled();
   });
 });

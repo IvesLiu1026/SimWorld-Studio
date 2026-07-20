@@ -126,14 +126,14 @@ export default function CodingAgentSelector({ agents, agent, setAgent, model, se
       Object.entries(agents).map(([id, agentDef]) => ({
         value: id,
         label: agentDef.label || id,
-        detail: agentDef.models?.length ? `${agentDef.models.length} models` : "Default",
+        detail: agentDef.models?.length ? `${agentDef.models.length} profiles` : "Default",
         provider: AGENT_PROVIDERS[id] || "openai",
       })),
     [agents],
   );
   const modelOptions = useMemo(
     () => [
-      { value: "", label: "Default", detail: "Agent default", provider: activeAgentProvider },
+      { value: "", label: "Default", detail: "Runtime default", provider: activeAgentProvider },
       ...models.map((modelId) => ({
         value: modelId,
         label: modelId,
@@ -142,7 +142,7 @@ export default function CodingAgentSelector({ agents, agent, setAgent, model, se
       })),
       {
         value: "__custom__",
-        label: "Custom model",
+        label: "Custom profile",
         detail: "Manual id",
         provider: getModelProvider(model, activeAgentProvider),
       },
@@ -165,18 +165,18 @@ export default function CodingAgentSelector({ agents, agent, setAgent, model, se
   return (
     <div
       className="coding-agent-selector"
-      title="Coding agent backend and model used for scene generation"
+      title="Scene build runtime and execution profile"
     >
       {icon ? <span className="coding-agent-selector-icon">{icon}</span> : null}
       <MenuSelect
-        ariaLabel="Coding agent"
+        ariaLabel="Execution backend"
         className="agent-menu"
         options={agentOptions}
         value={agent}
         onChange={setAgent}
       />
       <MenuSelect
-        ariaLabel="Model"
+        ariaLabel="Runtime profile"
         className="model-menu"
         options={modelOptions}
         value={showCustom ? "__custom__" : model || ""}
@@ -187,8 +187,8 @@ export default function CodingAgentSelector({ agents, agent, setAgent, model, se
           className="coding-agent-custom-input"
           value={model}
           onChange={(event) => setModel(event.target.value)}
-          placeholder="model id"
-          aria-label="Custom model id"
+          placeholder="profile id"
+          aria-label="Custom runtime profile id"
         />
       )}
     </div>

@@ -36,7 +36,7 @@ export default function ContextPanel({ categoryIcons, icons, refreshKey, session
     return (
       <div className="context-panel">
         <div className="context-empty">
-          {sessionId ? "No scene data yet - complete a round to populate." : "Start a chat session to see scene context."}
+          {sessionId ? "No scene data yet - complete an operation to populate." : "Start a build session to see scene context."}
         </div>
       </div>
     );

@@ -12,7 +12,7 @@ export default function LibraryPage({
 }) {
   const [tab, setTab] = useState("skills");
   const tabs = [
-    ["skills", "Skills", icons.book],
+    ["skills", "Procedures", icons.book],
     ["tools", "Tools", icons.wrench],
     ["arena", "Arena", icons.swords],
   ];
@@ -20,7 +20,7 @@ export default function LibraryPage({
   return (
     <div className="studio-page">
       <div className="studio-page-tabs">
-        <span className="studio-page-title">Library</span>
+        <span className="studio-page-title">Catalog</span>
         {tabs.map(([id, label, icon]) => (
           <button key={id} className={`sw-tab-btn${tab === id ? " active" : ""}`} onClick={() => setTab(id)}>
             <span className="studio-tab-label">

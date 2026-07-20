@@ -74,7 +74,7 @@ function LearningCurve({ curve, epochsTotal }) {
         return c ? (
           <div style={{ fontSize: 10, color: "var(--ink-2)", marginTop: 2 }}>
             epoch {c.epoch}: <b>{c.SR != null ? `${Math.round(c.SR * 100)}%` : "…"}</b>
-            {" "}({c.success}/{c.tasksTotal} tasks){c.lessons != null ? ` · ${c.lessons} lessons` : ""}
+            {" "}({c.success}/{c.tasksTotal} tasks){c.lessons != null ? ` · ${c.lessons} feedback records` : ""}
           </div>
         ) : null;
       })()}
@@ -101,14 +101,14 @@ function StepRow({ runId, task, st, open, onToggle }) {
               <img src={frameUrl(runId, task.runName, st.step)} alt="obs" style={{ width: "100%", display: "block", borderRadius: 4 }}
                 onError={(e) => { e.currentTarget.style.opacity = 0.2; }} />
             </div>
-            <div style={{ fontSize: 9, color: "var(--ink-3)", marginTop: 2 }}>first-person · what the LLM sees</div>
+            <div style={{ fontSize: 9, color: "var(--ink-3)", marginTop: 2 }}>First-person observation</div>
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 9, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: 0.4 }}>input → LLM</div>
+            <div style={{ fontSize: 9, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: 0.4 }}>Controller input</div>
             <div style={{ fontSize: 10, color: "var(--ink-2)", fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 64, overflow: "auto", margin: "2px 0 6px" }}>
               {(st.input && st.input.prompt) || "(image + goal/bearing/distance)"}
             </div>
-            <div style={{ fontSize: 9, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: 0.4 }}>output ← LLM</div>
+            <div style={{ fontSize: 9, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: 0.4 }}>Controller output</div>
             <div style={{ fontSize: 11, color: "var(--ink)", marginTop: 2 }}>{(st.output && st.output.text) || act}</div>
           </div>
         </div>
@@ -133,7 +133,7 @@ function TaskRow({ runId, task, open, onToggle }) {
       </div>
       {open && (
         <div style={{ background: "rgba(0,0,0,0.12)" }}>
-          {task.lesson && <div style={{ fontSize: 10, color: "var(--violet)", padding: "2px 10px 4px 32px", fontStyle: "italic" }}>learned: {task.lesson}</div>}
+          {task.lesson && <div style={{ fontSize: 10, color: "var(--violet)", padding: "2px 10px 4px 32px", fontStyle: "italic" }}>feedback: {task.lesson}</div>}
           {steps.map((st) => (
             <StepRow key={st.step} runId={runId} task={task} st={st} open={openStep === st.step}
               onToggle={() => setOpenStep(openStep === st.step ? null : st.step)} />
@@ -157,7 +157,7 @@ function EpochRow({ runId, ep, open, onToggle, defaultOpen }) {
           {srPct != null ? `${srPct}%` : "…"}
         </span>
         <span style={{ fontSize: 10, color: "var(--ink-3)" }}>{ep.successCount}/{ep.tasksTotal} tasks</span>
-        {ep.lessons != null && <span style={{ fontSize: 10, color: "var(--violet)" }}>{ep.lessons} lessons</span>}
+        {ep.lessons != null && <span style={{ fontSize: 10, color: "var(--violet)" }}>{ep.lessons} feedback records</span>}
         {/* color bar: one cell per task (green=success, red=fail, grey=pending) */}
         <div style={{ display: "flex", gap: 1, flex: 1, marginLeft: 6, height: 12 }}>
           {Array.from({ length: ep.tasksTotal || tasks.length }).map((_, i) => {
@@ -207,9 +207,8 @@ export default function TrainingMonitorPanel() {
   if (!run) {
     return (
       <div style={{ padding: 16, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.7 }}>
-        No training runs yet. Pick a task set + model on the left and <b>Start Training</b>. Each run is
-        N epochs over the tasks; you'll see the agent walk in the viewport, the learning curve (success
-        rate per epoch), and every task → step with the agent's observation + LLM input/output.
+        No training runs yet. Pick a task set and controller on the left, then select <b>Start Training</b>.
+        Each run includes viewport playback, a success-rate curve, and a task-by-task observation and control trace.
       </div>
     );
   }
