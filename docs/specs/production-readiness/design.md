@@ -1,6 +1,6 @@
 # SimWorld Studio × VISTA Production Readiness Design
 
-狀態：Approved，對應 `requirements.md`  
+狀態：Approved，對應 `requirements.md`
 原則：先恢復可觀測、可失敗的基礎鏈路，再自動化資料與時間軸，最後公開網路。
 
 ## 1. 稽核摘要與設計判斷

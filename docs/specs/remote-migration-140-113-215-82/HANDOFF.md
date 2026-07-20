@@ -1,6 +1,6 @@
 # Handoff: SimWorld on 140.113.215.82
 
-Status: Migration and offline validation complete; stateful runtime smoke gated  
+Status: Migration and offline validation complete; stateful runtime smoke gated
 Updated: 2026-07-15 Asia/Taipei
 
 ## Objective

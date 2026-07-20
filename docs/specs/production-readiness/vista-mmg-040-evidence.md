@@ -1,6 +1,6 @@
 # VISTA `mmg_040` Import Evidence
 
-Checked: 2026-07-14  
+Checked: 2026-07-14
 Purpose: bounded golden fixture for the `vista-simworld-scene/v1` importer. This evidence is reconstruction-only and must not be used as restricted assist-step prediction input.
 
 ## Identity disambiguation

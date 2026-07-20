@@ -1,6 +1,6 @@
 # Runbook: remote SimWorld continuation
 
-Updated: 2026-07-15  
+Updated: 2026-07-15
 Target: `yhliu@140.113.215.82`
 
 ## Start here for the remote Codex agent

@@ -1,7 +1,7 @@
 # SimWorld Studio × VISTA Production Readiness Tasks
 
-狀態：Approved，Phase 1A／2 code-only slice完成，Phase 1B／3／4安全基礎進行中（使用者於 2026-07-14 核准）  
-依賴：`requirements.md` → `design.md` → 本文件  
+狀態：Approved，Phase 1A／2 code-only slice完成，Phase 1B／3／4安全基礎進行中（使用者於 2026-07-14 核准）
+依賴：`requirements.md` → `design.md` → 本文件
 執行原則：每一 phase 是獨立可驗收 change set；不使用 `git add .`，不混入目前工作樹的既有 UI 變更。
 
 ## Phase 0 — Baseline、ownership 與安全護欄

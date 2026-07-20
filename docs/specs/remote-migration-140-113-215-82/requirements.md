@@ -1,7 +1,7 @@
 # Requirements: SimWorld migration to 140.113.215.82
 
-Status: Approved for staged migration and handoff  
-Updated: 2026-07-15  
+Status: Approved for staged migration and handoff
+Updated: 2026-07-15
 Requested and approved by: user request in this Codex task
 
 ## Problem

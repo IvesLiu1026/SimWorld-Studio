@@ -1,7 +1,7 @@
 # Design: SimWorld migration to 140.113.215.82
 
-Status: Approved for staged execution  
-Updated: 2026-07-15  
+Status: Approved for staged execution
+Updated: 2026-07-15
 Depends on: `requirements.md`
 
 ## Summary

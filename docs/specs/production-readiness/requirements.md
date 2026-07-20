@@ -1,7 +1,7 @@
 # SimWorld Studio × VISTA Production Readiness Requirements
 
-狀態：Approved（使用者於 2026-07-14 核准）  
-日期：2026-07-14  
+狀態：Approved（使用者於 2026-07-14 核准）
+日期：2026-07-14
 範圍：Semantic asset retrieval、Review pipeline、公開 Pixel Streaming、VISTA importer、12 秒 UE timeline，以及直接阻擋 Production 的共通能力。
 
 ## 1. 現況基線
