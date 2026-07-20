@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-review-smoke-receipt-v1.schema.json",
+  "title": "SimWorld Review Provider Smoke Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "outcome",
+    "review_type",
+    "provider",
+    "model",
+    "cli",
+    "source_revision",
+    "recorded_at",
+    "expires_at",
+    "scene",
+    "usage",
+    "verdict"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-review-smoke-receipt/v1" },
+    "receipt_id": { "$ref": "#/$defs/safeToken" },
+    "outcome": { "const": "success" },
+    "review_type": { "enum": ["text", "visual"] },
+    "provider": { "$ref": "#/$defs/safeToken" },
+    "model": { "$ref": "#/$defs/safeToken" },
+    "cli": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/$defs/safeToken" },
+        "version": { "$ref": "#/$defs/safeToken" }
+      }
+    },
+    "source_revision": { "$ref": "#/$defs/safeToken" },
+    "recorded_at": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "expires_at": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read_only", "digest_algorithm", "digest_before", "digest_after"],
+      "properties": {
+        "read_only": { "const": true },
+        "digest_algorithm": { "const": "sha256" },
+        "digest_before": { "$ref": "#/$defs/sha256" },
+        "digest_after": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens", "cost_usd"],
+      "properties": {
+        "input_tokens": { "$ref": "#/$defs/count" },
+        "output_tokens": { "$ref": "#/$defs/count" },
+        "cache_creation_input_tokens": { "$ref": "#/$defs/count" },
+        "cache_read_input_tokens": { "$ref": "#/$defs/count" },
+        "cost_usd": { "type": ["number", "null"], "minimum": 0, "maximum": 10 }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "issues_count", "suggestions_count", "schema_valid"],
+      "properties": {
+        "status": { "enum": ["PASS", "NEEDS_IMPROVEMENT", "FAIL"] },
+        "issues_count": { "$ref": "#/$defs/count" },
+        "suggestions_count": { "$ref": "#/$defs/count" },
+        "schema_valid": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "safeToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "count": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+  }
+}

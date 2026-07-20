@@ -3,6 +3,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const {
   createRetrievalReadinessProbe,
@@ -12,6 +15,35 @@ const {
   createTimelineReadinessProbe,
   resolveStudioFeaturePolicy,
 } = require("../studio-readiness");
+const {
+  createReviewSmokeReceipt,
+  digestReviewScene,
+  writeReviewSmokeReceiptAtomic,
+} = require("../review-smoke-receipt");
+
+const REVIEW_NOW = Date.parse("2026-07-21T05:00:00.000Z");
+
+function writeSmoke(file, overrides = {}) {
+  const digest = digestReviewScene({ actors: [{ name: "Chair", location: [0, 0, 0] }] });
+  const receipt = createReviewSmokeReceipt({
+    receiptId: "readiness-smoke-1",
+    reviewType: "visual",
+    provider: "claude",
+    model: "claude-opus-4-8",
+    cliName: "claude-code",
+    cliVersion: "2.1.17",
+    sourceRevision: "build-abc123",
+    recordedAt: new Date(REVIEW_NOW).toISOString(),
+    expiresAt: new Date(REVIEW_NOW + 60 * 60 * 1000).toISOString(),
+    sceneDigestBefore: digest,
+    sceneDigestAfter: digest,
+    usage: { input_tokens: 100, output_tokens: 20, cost_usd: 0.01 },
+    verdict: { status: "PASS", issues: [], suggestions: [], raw_notes: "ok" },
+    ...overrides,
+  });
+  writeReviewSmokeReceiptAtomic(file, receipt);
+  return receipt;
+}
 
 function executableFs(exists) {
   return {
@@ -39,32 +71,110 @@ function successfulConnection() {
 
 test("feature policy makes production retrieval and public streaming blocking", () => {
   const policy = resolveStudioFeaturePolicy({
+    NODE_ENV: "production",
     ASSET_REQUIRE_REAL_ASSETS: "true",
     STUDIO_TRANSPORT_PROFILE: "public_webrtc",
   });
   assert.equal(policy.retrieval, "required");
   assert.equal(policy.streaming, "required");
-  assert.equal(policy.review, "optional");
+  assert.equal(policy.review, "required");
   assert.equal(policy.timeline, "optional");
 });
 
-test("review readiness validates Opus configuration without invoking a model", async () => {
+test("review readiness ignores the legacy flag and requires a matching, current provider receipt", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-readiness-review-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const receiptPath = path.join(directory, "receipt.json");
   const env = {
     PATH: "/bin",
+    NODE_ENV: "production",
     CRITIC_PROVIDER: "claude",
     CRITIC_MODEL: "claude-opus-4-8",
+    SIMWORLD_BUILD_REVISION: "build-abc123",
+    REVIEW_SMOKE_RECEIPT_PATH: receiptPath,
+    REVIEW_SMOKE_RECEIPT_TYPE: "visual",
   };
-  const probe = createReviewReadinessProbe({ env, fsImpl: executableFs(true) });
+  const probe = createReviewReadinessProbe({ env, claudeBin: process.execPath, now: () => REVIEW_NOW + 1 });
   const report = await probe();
-  assert.equal(report.status, "degraded");
-  assert.deepEqual(report.revision, { provider: "claude", model: "claude-opus-4-8" });
-  assert.equal(report.causes[0].code, "REVIEW_PROVIDER_UNVERIFIED");
+  assert.equal(report.status, "not_ready");
+  assert.deepEqual(report.revision, {
+    provider: "claude",
+    model: "claude-opus-4-8",
+    source_revision: "build-abc123",
+  });
+  assert.equal(report.causes[0].code, "REVIEW_SMOKE_RECEIPT_UNAVAILABLE");
 
-  const verified = await createReviewReadinessProbe({
+  const legacy = await createReviewReadinessProbe({
     env: { ...env, REVIEW_READINESS_VERIFIED: "1", REVIEW_VERIFIED_MODEL: "claude-opus-4-8" },
+    claudeBin: process.execPath,
+    now: () => REVIEW_NOW + 1,
+  })();
+  assert.equal(legacy.status, "not_ready");
+  assert.equal(legacy.causes[0].code, "REVIEW_LEGACY_OVERRIDE_REJECTED");
+
+  writeSmoke(receiptPath);
+  const verified = await probe();
+  assert.equal(verified.status, "ready");
+  assert.equal(verified.revision.verification, "provider_smoke_receipt");
+  assert.equal(verified.revision.review_type, "visual");
+  assert.equal(verified.revision.cli_version, "2.1.17");
+  assert.equal(JSON.stringify(verified).includes(receiptPath), false);
+});
+
+test("review readiness fails closed for receipt mismatch and expiry without provider calls", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-readiness-mismatch-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const receiptPath = path.join(directory, "receipt.json");
+  writeSmoke(receiptPath);
+  const base = {
+    PATH: "/bin",
+    NODE_ENV: "production",
+    CRITIC_PROVIDER: "claude",
+    CRITIC_MODEL: "claude-opus-4-8",
+    SIMWORLD_BUILD_REVISION: "build-abc123",
+    REVIEW_SMOKE_RECEIPT_PATH: receiptPath,
+    REVIEW_SMOKE_RECEIPT_TYPE: "visual",
+  };
+
+  const mismatch = await createReviewReadinessProbe({
+    env: { ...base, SIMWORLD_BUILD_REVISION: "build-other" },
+    claudeBin: process.execPath,
+    now: () => REVIEW_NOW + 1,
+  })();
+  assert.equal(mismatch.status, "not_ready");
+  assert.equal(mismatch.causes[0].code, "REVIEW_SMOKE_RECEIPT_MISMATCH");
+
+  const expired = await createReviewReadinessProbe({
+    env: base,
+    claudeBin: process.execPath,
+    now: () => REVIEW_NOW + 60 * 60 * 1000,
+  })();
+  assert.equal(expired.status, "not_ready");
+  assert.equal(expired.causes[0].code, "REVIEW_SMOKE_RECEIPT_EXPIRED");
+});
+
+test("explicit demo and test overrides stay non-production only", async () => {
+  const config = { CRITIC_PROVIDER: "claude", CRITIC_MODEL: "claude-opus-4-8" };
+  const demo = await createReviewReadinessProbe({
+    env: { ...config, NODE_ENV: "development", REVIEW_READINESS_DEMO_OVERRIDE: "1" },
+    fsImpl: executableFs(false),
+  })();
+  assert.equal(demo.status, "ready");
+  assert.equal(demo.revision.verification, "demo_override");
+
+  const testOverride = await createReviewReadinessProbe({
+    env: { ...config, NODE_ENV: "test", REVIEW_READINESS_TEST_OVERRIDE: "1" },
+    fsImpl: executableFs(false),
+  })();
+  assert.equal(testOverride.status, "ready");
+  assert.equal(testOverride.revision.verification, "test_override");
+
+  const production = await createReviewReadinessProbe({
+    env: { ...config, NODE_ENV: "production", REVIEW_READINESS_DEMO_OVERRIDE: "1" },
     fsImpl: executableFs(true),
   })();
-  assert.equal(verified.status, "ready");
+  assert.equal(production.status, "not_ready");
+  assert.equal(production.causes[0].code, "REVIEW_READINESS_OVERRIDE_FORBIDDEN");
 });
 
 test("unsafe critic providers fail readiness before process execution", async () => {

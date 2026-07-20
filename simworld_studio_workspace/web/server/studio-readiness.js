@@ -6,6 +6,11 @@ const path = require("node:path");
 
 const { createReadinessRegistry } = require("./readiness-registry");
 const { resolveReviewConfig } = require("./review-provider");
+const {
+  readReviewSmokeReceipt,
+  resolveReviewSmokeReceiptPath,
+  verifyReviewSmokeReceipt,
+} = require("./review-smoke-receipt");
 const { validateAssetSnapshotManifest } = require("./asset-snapshot");
 
 const FEATURE_NAMES = Object.freeze(["review", "retrieval", "streaming", "timeline"]);
@@ -34,13 +39,14 @@ function resolveStudioFeaturePolicy(env = process.env) {
   const transportProfile = normalizeTransportProfile(
     env.STUDIO_TRANSPORT_PROFILE || env.TRANSPORT_PROFILE,
   );
+  const production = String(env.NODE_ENV || "").trim().toLowerCase() === "production";
   const requireRealAssets = envFlag(
     env.ASSET_REQUIRE_REAL_ASSETS !== undefined
       ? env.ASSET_REQUIRE_REAL_ASSETS
       : env.REQUIRE_REAL_ASSETS,
   );
   return Object.freeze({
-    review: explicitPolicy(env, "review", "optional"),
+    review: explicitPolicy(env, "review", production ? "required" : "optional"),
     retrieval: explicitPolicy(env, "retrieval", requireRealAssets ? "required" : "optional"),
     streaming: explicitPolicy(env, "streaming", transportProfile === "public_webrtc" ? "required" : "optional"),
     timeline: explicitPolicy(env, "timeline", envFlag(env.TIMELINE_REQUIRED) ? "required" : "optional"),
@@ -72,7 +78,19 @@ function executableExists(command, env = process.env, fsImpl = fs) {
   });
 }
 
-function createReviewReadinessProbe({ env = process.env, claudeBin, fsImpl = fs } = {}) {
+function reviewReceiptFailureStatus(env) {
+  return String(env.NODE_ENV || "").trim().toLowerCase() === "production"
+    ? "not_ready"
+    : "degraded";
+}
+
+function createReviewReadinessProbe({
+  env = process.env,
+  claudeBin,
+  fsImpl = fs,
+  now = Date.now,
+  sourceRevision,
+} = {}) {
   return async function probeReview() {
     let config;
     try {
@@ -91,10 +109,43 @@ function createReviewReadinessProbe({ env = process.env, claudeBin, fsImpl = fs 
         )],
       };
     }
+
+    const revision = {
+      provider: config.provider,
+      model: config.model,
+      source_revision: String(sourceRevision || env.SIMWORLD_BUILD_REVISION || "").trim() || null,
+    };
+    const production = String(env.NODE_ENV || "").trim().toLowerCase() === "production";
+    const demoOverride = envFlag(env.REVIEW_READINESS_DEMO_OVERRIDE);
+    const testOverride = envFlag(env.REVIEW_READINESS_TEST_OVERRIDE);
+    if (demoOverride || testOverride) {
+      const allowed = !production && (demoOverride || String(env.NODE_ENV || "").trim().toLowerCase() === "test");
+      if (!allowed) {
+        return {
+          status: "not_ready",
+          revision,
+          causes: [publicCause(
+            "REVIEW_READINESS_OVERRIDE_FORBIDDEN",
+            "Review readiness overrides are forbidden in production and test overrides require NODE_ENV=test.",
+            false,
+            "review_provider",
+          )],
+        };
+      }
+      return {
+        status: "ready",
+        revision: {
+          ...revision,
+          verification: demoOverride ? "demo_override" : "test_override",
+        },
+        causes: [],
+      };
+    }
+
     if (!executableExists(claudeBin || env.CLAUDE_BIN || "claude", env, fsImpl)) {
       return {
         status: "not_ready",
-        revision: { provider: config.provider, model: config.model },
+        revision,
         causes: [publicCause(
           "REVIEW_PROVIDER_EXECUTABLE_MISSING",
           "The configured review provider executable is unavailable.",
@@ -104,18 +155,86 @@ function createReviewReadinessProbe({ env = process.env, claudeBin, fsImpl = fs 
       };
     }
 
-    const verifiedModel = String(env.REVIEW_VERIFIED_MODEL || "").trim();
-    const verified = envFlag(env.REVIEW_READINESS_VERIFIED)
-      && (!verifiedModel || verifiedModel === config.model);
+    if (!revision.source_revision || revision.source_revision === "working-tree") {
+      return {
+        status: reviewReceiptFailureStatus(env),
+        revision,
+        causes: [publicCause(
+          "REVIEW_SOURCE_REVISION_UNPINNED",
+          "A concrete SIMWORLD_BUILD_REVISION is required to verify a review provider smoke receipt.",
+          false,
+          "review_provider",
+        )],
+      };
+    }
+
+    const expectedType = String(env.REVIEW_SMOKE_RECEIPT_TYPE || "").trim().toLowerCase();
+    if (expectedType && expectedType !== "text" && expectedType !== "visual") {
+      return {
+        status: "not_ready",
+        revision,
+        causes: [publicCause(
+          "REVIEW_SMOKE_TYPE_INVALID",
+          "REVIEW_SMOKE_RECEIPT_TYPE must be text or visual when configured.",
+          false,
+          "review_provider",
+        )],
+      };
+    }
+
+    let receipt;
+    try {
+      receipt = readReviewSmokeReceipt(resolveReviewSmokeReceiptPath(env), { fsImpl });
+      verifyReviewSmokeReceipt(receipt, {
+        provider: config.provider,
+        model: config.model,
+        sourceRevision: revision.source_revision,
+        ...(expectedType ? { reviewType: expectedType } : {}),
+        now,
+      });
+    } catch (error) {
+      const legacyOverride = envFlag(env.REVIEW_READINESS_VERIFIED);
+      const knownCode = error && typeof error.code === "string" && /^REVIEW_SMOKE_[A-Z0-9_]+$/.test(error.code)
+        ? error.code
+        : "REVIEW_SMOKE_RECEIPT_INVALID";
+      const code = legacyOverride && knownCode === "REVIEW_SMOKE_RECEIPT_UNAVAILABLE"
+        ? "REVIEW_LEGACY_OVERRIDE_REJECTED"
+        : knownCode;
+      const messages = {
+        REVIEW_LEGACY_OVERRIDE_REJECTED: "REVIEW_READINESS_VERIFIED is legacy metadata and cannot replace a provider smoke receipt.",
+        REVIEW_SMOKE_RECEIPT_UNAVAILABLE: "A real tool-free provider smoke receipt is not available.",
+        REVIEW_SMOKE_RECEIPT_EXPIRED: "The review provider smoke receipt has expired.",
+        REVIEW_SMOKE_RECEIPT_MISMATCH: "The review provider smoke receipt does not match the running provider, model, source revision, or review type.",
+        REVIEW_SMOKE_RECEIPT_NOT_YET_VALID: "The review provider smoke receipt timestamp is not yet valid.",
+        REVIEW_SMOKE_SCENE_MUTATED: "The Visual Review smoke changed the scene digest and is not read-only.",
+        REVIEW_SMOKE_RECEIPT_SENSITIVE: "The review provider smoke receipt contains forbidden credential-like material.",
+        REVIEW_SMOKE_RECEIPT_INVALID: "The review provider smoke receipt is invalid.",
+      };
+      return {
+        status: reviewReceiptFailureStatus(env),
+        revision,
+        causes: [publicCause(
+          code,
+          messages[code] || messages.REVIEW_SMOKE_RECEIPT_INVALID,
+          code === "REVIEW_SMOKE_RECEIPT_UNAVAILABLE",
+          "review_provider",
+        )],
+      };
+    }
+
     return {
-      status: verified ? "ready" : "degraded",
-      revision: { provider: config.provider, model: config.model },
-      causes: verified ? [] : [publicCause(
-        "REVIEW_PROVIDER_UNVERIFIED",
-        "The review configuration is valid, but a real tool-free provider smoke has not been recorded.",
-        false,
-        "review_provider",
-      )],
+      status: "ready",
+      revision: {
+        ...revision,
+        verification: "provider_smoke_receipt",
+        receipt_id: receipt.receipt_id,
+        review_type: receipt.review_type,
+        cli_name: receipt.cli.name,
+        cli_version: receipt.cli.version,
+        recorded_at: receipt.recorded_at,
+        expires_at: receipt.expires_at,
+      },
+      causes: [],
     };
   };
 }
@@ -349,8 +468,16 @@ function createStudioReadiness({
       throw new TypeError(`Invalid readiness probe override: ${name}`);
     }
   }
+  const buildRevision = revision && revision.build
+    ? revision.build
+    : (env.SIMWORLD_BUILD_REVISION || "working-tree");
   const probes = {
-    review: probeOverrides.review || createReviewReadinessProbe({ env, claudeBin, fsImpl }),
+    review: probeOverrides.review || createReviewReadinessProbe({
+      env,
+      claudeBin,
+      fsImpl,
+      sourceRevision: buildRevision,
+    }),
     retrieval: probeOverrides.retrieval || createRetrievalReadinessProbe({ env, fsImpl }),
     streaming: probeOverrides.streaming || createStreamingReadinessProbe({
       env,
@@ -361,7 +488,7 @@ function createStudioReadiness({
     timeline: probeOverrides.timeline || createTimelineReadinessProbe({ env }),
   };
   return createReadinessRegistry({
-    revision: revision || { build: env.SIMWORLD_BUILD_REVISION || "working-tree" },
+    revision: revision || { build: buildRevision },
     featurePolicy: resolveStudioFeaturePolicy(env),
     defaultTimeoutMs: 750,
     probes,
