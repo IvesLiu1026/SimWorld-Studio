@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-media-reference-v1.schema.json",
+  "title": "Sanitized VISTA media reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "profile", "privilege", "source", "media"],
+  "properties": {
+    "schema": { "const": "vista-media-reference/v1" },
+    "profile": { "const": "reconstruction" },
+    "privilege": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "evaluation_input_allowed"],
+      "properties": {
+        "classification": { "const": "reconstruction_source" },
+        "evaluation_input_allowed": { "const": false }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset_revision", "source_row_id", "visual_id", "case_scope", "scenario_type", "attempt"],
+      "properties": {
+        "dataset_revision": { "$ref": "#/$defs/safeIdentifier" },
+        "source_row_id": { "$ref": "#/$defs/safeIdentifier" },
+        "visual_id": { "$ref": "#/$defs/safeIdentifier" },
+        "case_scope": { "$ref": "#/$defs/safeIdentifier" },
+        "scenario_type": { "$ref": "#/$defs/safeIdentifier" },
+        "attempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "index", "selected"],
+          "properties": {
+            "provider": { "$ref": "#/$defs/safeIdentifier" },
+            "index": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "selected": { "const": true }
+          }
+        }
+      }
+    },
+    "media": { "$ref": "#/$defs/media" }
+  },
+  "$defs": {
+    "safeIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "logicalReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z][A-Za-z0-9+.-]*:)[A-Za-z0-9._/-]+$"
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["media_id", "role", "logical_ref", "media_type", "sha256", "bytes", "duration_sec", "width", "height", "bundled", "integrity_status", "privilege"],
+      "properties": {
+        "media_id": { "$ref": "#/$defs/safeIdentifier" },
+        "role": { "const": "reference_video" },
+        "logical_ref": { "$ref": "#/$defs/logicalReference" },
+        "media_type": { "const": "video/mp4" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "duration_sec": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "bundled": { "const": false },
+        "integrity_status": { "const": "recorded_checksum" },
+        "privilege": { "const": "reconstruction_only" }
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "schema": "vista-import-source/v1",
+  "bundle_id": "round1_reviewed_latest:mmg_040:multimodal_grounded_safety_040:sora2:attempt_007",
+  "dataset_revision": "round1_reviewed_latest",
+  "profile": "reconstruction",
+  "privilege": {
+    "classification": "reconstruction_source",
+    "evaluation_input_allowed": false,
+    "allowed_consumers": [
+      "vista_importer",
+      "scene_normalizer"
+    ]
+  },
+  "sample": {
+    "source_row_id": "mmg_040__multimodal_grounded::multimodal_grounded_safety_040::sora2::attempt_007",
+    "visual_id": "mmg_040",
+    "case_scope": "multimodal_grounded_safety_040",
+    "scenario_type": "multimodal_grounded",
+    "duration_sec": 12,
+    "attempt": {
+      "provider": "sora2",
+      "index": 7,
+      "selected": true
+    }
+  },
+  "files": [
+    {
+      "path": "render_script.yaml",
+      "role": "render_script",
+      "media_type": "application/yaml",
+      "sha256": "2ac3d5deb2de095490724f69929355b6a072c7467bf03e97dc3ac00eb6cf9dca",
+      "bytes": 2641,
+      "required": true,
+      "privilege": "reconstruction_only"
+    },
+    {
+      "path": "dialogue.no-oracle.json",
+      "role": "dialogue_no_oracle",
+      "media_type": "application/json",
+      "sha256": "af763ef1bea76df003d38a2e35939cf91d30a3d0a5337b8aab1edd9865cbb8a1",
+      "bytes": 902,
+      "required": true,
+      "privilege": "evaluation_safe"
+    },
+    {
+      "path": "media.descriptor.json",
+      "role": "media_descriptor",
+      "media_type": "application/json",
+      "sha256": "d9875182921aaa94e0b646b8c24a5c646bae91df2c69094043a926fb9801be66",
+      "bytes": 1026,
+      "required": true,
+      "privilege": "reconstruction_only"
+    }
+  ]
+}

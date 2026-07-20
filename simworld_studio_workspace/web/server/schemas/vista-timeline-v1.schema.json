@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-timeline-v1.schema.json",
+  "title": "Compiled VISTA timeline preflight",
+  "description": "A deterministic, mutation-free timeline compilation result. Cross-field at_sec <= duration_sec and policy invariants are enforced by vista-timeline-compiler.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "timeline_id",
+    "scene_id",
+    "scene_revision",
+    "source_checksum",
+    "duration_sec",
+    "policy",
+    "registry_revision",
+    "binding_revision",
+    "compiler",
+    "start_allowed",
+    "summary",
+    "bindings",
+    "events",
+    "issues"
+  ],
+  "properties": {
+    "schema": { "const": "vista-timeline/v1" },
+    "timeline_id": { "type": "string", "pattern": "^vtl-[a-f0-9]{24}$" },
+    "scene_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "scene_revision": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "source_checksum": { "$ref": "#/$defs/sha256" },
+    "duration_sec": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+    "policy": { "enum": ["strict", "lenient"] },
+    "registry_revision": { "$ref": "#/$defs/safeId" },
+    "binding_revision": { "$ref": "#/$defs/safeId" },
+    "compiler": { "$ref": "#/$defs/compiler" },
+    "start_allowed": { "type": "boolean" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "bindings": { "$ref": "#/$defs/bindings" },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/event" }
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 1001,
+      "items": { "$ref": "#/$defs/issue" }
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,119}$"
+    },
+    "eventId": {
+      "type": "string",
+      "pattern": "^beat-[0-9]{4}(?:-[a-z0-9_-]+)?$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "vista-timeline-compiler" },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "ready", "skipped", "blocked", "errors", "warnings"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "ready": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "skipped": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "blocked": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "errors": { "type": "integer", "minimum": 0, "maximum": 1001 },
+        "warnings": { "type": "integer", "minimum": 0, "maximum": 1000 }
+      }
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actors", "entities"],
+      "properties": {
+        "actors": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/binding" }
+        },
+        "entities": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/binding" }
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "binding_id", "kind", "capabilities"],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/safeId" },
+        "binding_id": { "$ref": "#/$defs/safeId" },
+        "kind": { "$ref": "#/$defs/safeId" },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "at_sec",
+        "action",
+        "actor_id",
+        "target_id",
+        "parameters",
+        "source_pointer",
+        "actor_binding_id",
+        "target_binding_id",
+        "adapter",
+        "preflight_status",
+        "disposition",
+        "issue_ids"
+      ],
+      "properties": {
+        "event_id": { "$ref": "#/$defs/eventId" },
+        "at_sec": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "action": { "$ref": "#/$defs/safeId" },
+        "actor_id": { "$ref": "#/$defs/safeId" },
+        "target_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/safeId" }
+          ]
+        },
+        "parameters": { "$ref": "#/$defs/parameters" },
+        "source_pointer": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "actor_binding_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/safeId" }
+          ]
+        },
+        "target_binding_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/safeId" }
+          ]
+        },
+        "adapter": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/adapterRef" }
+          ]
+        },
+        "preflight_status": {
+          "enum": ["ready", "unbound", "unsupported", "incompatible", "ambiguous"]
+        },
+        "disposition": { "enum": ["execute", "block", "skip"] },
+        "issue_ids": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^vti-[a-f0-9]{16}$" }
+        }
+      }
+    },
+    "adapterRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_id", "version", "timeout_ms"],
+      "properties": {
+        "adapter_id": { "$ref": "#/$defs/safeId" },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
+        },
+        "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 600000 }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issue_id", "event_id", "code", "severity", "message", "candidates"],
+      "properties": {
+        "issue_id": { "type": "string", "pattern": "^vti-[a-f0-9]{16}$" },
+        "event_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/eventId" }
+          ]
+        },
+        "code": {
+          "enum": [
+            "ACTOR_BINDING_MISSING",
+            "TARGET_BINDING_MISSING",
+            "ACTION_UNSUPPORTED",
+            "ACTION_ADAPTER_INCOMPATIBLE",
+            "ACTION_ADAPTER_AMBIGUOUS",
+            "NO_EXECUTABLE_EVENTS"
+          ]
+        },
+        "severity": { "enum": ["error", "warning"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "candidates": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "null" },
+          { "type": "boolean" },
+          { "type": "number" },
+          { "type": "string", "maxLength": 4000 },
+          {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "oneOf": [
+                { "type": "null" },
+                { "type": "boolean" },
+                { "type": "number" },
+                { "type": "string", "maxLength": 4000 }
+              ]
+            }
+          },
+          { "type": "object", "maxProperties": 128 }
+        ]
+      }
+    }
+  }
+}
