@@ -81,9 +81,8 @@ function malformedLearnedTool(id) {
   };
 }
 
-test('tools/list keeps static tools and excludes malformed learned tools', async () => {
-  const root = '/data/jingtian/work/SimWorld-Studio-Internal-main/simworld_studio_workspace';
-  const serverPath = path.join(root, 'web/server/mcp-server.js');
+test('tools/list keeps static tools and ignores caller-selected learned tool files', async () => {
+  const serverPath = path.resolve(__dirname, '..', 'mcp-server.js');
   const tmp = tmpDir('mcp-server-test-');
   const learnedFile = path.join(tmp, 'learned_tools.json');
 
@@ -163,12 +162,12 @@ test('tools/list keeps static tools and excludes malformed learned tools', async
     assert.equal(names.includes('delete_all_spawned'), true);
     assert.equal(names.includes('spawn_blueprint_actor'), true);
     assert.equal(names.includes('learned__bad_schema_tool'), false);
-    assert.equal(names.includes('learned__good_schema_tool'), true);
+    assert.equal(names.includes('learned__good_schema_tool'), false);
 
     const after = JSON.parse(fs.readFileSync(learnedFile, 'utf-8'));
     assert.equal(Array.isArray(after), true);
     const ids = after.map((t) => t.id);
-    assert.equal(ids.includes('bad_schema_tool'), false);
+    assert.equal(ids.includes('bad_schema_tool'), true);
     assert.equal(ids.includes('good_schema_tool'), true);
   } finally {
     proc.kill('SIGTERM');
