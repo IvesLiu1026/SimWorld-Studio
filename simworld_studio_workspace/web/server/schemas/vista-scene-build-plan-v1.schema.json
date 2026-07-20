@@ -1,0 +1,403 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-scene-build-plan-v1.schema.json",
+  "title": "Deterministic VISTA Unreal scene build plan",
+  "description": "A reconstruction-only, fully pinned, numeric plan that can be preflighted before any Unreal mutation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "plan_id",
+    "scene_id",
+    "scene_revision",
+    "profile",
+    "privilege",
+    "layout_revision",
+    "asset_snapshot_id",
+    "content_revision",
+    "verification_revision",
+    "coordinate_system",
+    "compiler",
+    "mutation_policy",
+    "actors",
+    "player_start",
+    "camera",
+    "evidence_requests"
+  ],
+  "properties": {
+    "schema": { "const": "vista-scene-build-plan/v1" },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^vsp-[a-f0-9]{24}$"
+    },
+    "scene_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}@[a-f0-9]{12,64}$"
+    },
+    "scene_revision": { "$ref": "#/$defs/sha256" },
+    "profile": { "const": "static_reconstruction" },
+    "privilege": { "const": "reconstruction_only" },
+    "layout_revision": { "$ref": "#/$defs/safeRevision" },
+    "asset_snapshot_id": { "$ref": "#/$defs/safeRevision" },
+    "content_revision": { "$ref": "#/$defs/safeRevision" },
+    "verification_revision": { "$ref": "#/$defs/safeRevision" },
+    "coordinate_system": { "const": "unreal_centimeters_z_up" },
+    "compiler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "vista-scene-build-plan-compiler" },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
+        }
+      }
+    },
+    "mutation_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflight", "fail_before_mutation", "actor_conflicts", "rollback"],
+      "properties": {
+        "preflight": { "const": "strict" },
+        "fail_before_mutation": { "const": true },
+        "actor_conflicts": { "const": "fail" },
+        "rollback": { "const": "delete_new_actors_reverse_then_restore_player_start" }
+      }
+    },
+    "actors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/actor" }
+    },
+    "player_start": { "$ref": "#/$defs/playerStart" },
+    "camera": { "$ref": "#/$defs/camera" },
+    "evidence_requests": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/evidenceRequest" }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "safeRevision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,119}$"
+    },
+    "actorName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^VISTA_[A-Za-z0-9_]+$"
+    },
+    "ueObjectPath": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 512,
+      "pattern": "^/(?:Game|Engine)/[A-Za-z0-9_./-]+$"
+    },
+    "ueClassPath": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 512,
+      "pattern": "^(?:/Script/[A-Za-z0-9_./-]+|/Game/[A-Za-z0-9_./-]+_C)$"
+    },
+    "location": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        { "type": "number", "minimum": -9500, "maximum": 9500 },
+        { "type": "number", "minimum": -9500, "maximum": 9500 },
+        { "type": "number", "minimum": -1000, "maximum": 50000 }
+      ],
+      "items": false
+    },
+    "rotation": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        { "type": "number", "minimum": -360000, "maximum": 360000 },
+        { "type": "number", "minimum": -360000, "maximum": 360000 },
+        { "type": "number", "minimum": -360000, "maximum": 360000 }
+      ],
+      "items": false
+    },
+    "scale": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 },
+        { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 },
+        { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 }
+      ],
+      "items": false
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location_cm", "rotation_deg", "scale"],
+      "properties": {
+        "location_cm": { "$ref": "#/$defs/location" },
+        "rotation_deg": { "$ref": "#/$defs/rotation" },
+        "scale": { "$ref": "#/$defs/scale" }
+      }
+    },
+    "collision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "profile_name", "generate_overlap_events"],
+      "properties": {
+        "mode": {
+          "enum": ["query_and_physics", "query_only", "disabled"]
+        },
+        "profile_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[A-Za-z0-9_]+$"
+        },
+        "generate_overlap_events": { "type": "boolean" }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_source",
+        "kind",
+        "snapshot_id",
+        "asset_id",
+        "ue_path",
+        "class_path",
+        "confidence",
+        "content_revision",
+        "verification_revision",
+        "verified"
+      ],
+      "properties": {
+        "binding_source": {
+          "enum": ["scene_binding", "curated_component", "infrastructure"]
+        },
+        "kind": {
+          "enum": ["static_mesh", "blueprint_class"]
+        },
+        "snapshot_id": { "$ref": "#/$defs/safeRevision" },
+        "asset_id": { "$ref": "#/$defs/safeRevision" },
+        "ue_path": { "$ref": "#/$defs/ueObjectPath" },
+        "class_path": { "$ref": "#/$defs/ueClassPath" },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "content_revision": { "$ref": "#/$defs/safeRevision" },
+        "verification_revision": { "$ref": "#/$defs/safeRevision" },
+        "verified": { "const": true }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_id",
+        "actor_name",
+        "fingerprint",
+        "role",
+        "source_entity_id",
+        "component_id",
+        "infrastructure_kind",
+        "spawn_tool",
+        "asset",
+        "transform",
+        "mobility",
+        "collision"
+      ],
+      "properties": {
+        "actor_id": { "$ref": "#/$defs/safeId" },
+        "actor_name": { "$ref": "#/$defs/actorName" },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^vsa-[a-f0-9]{24}$"
+        },
+        "role": {
+          "enum": ["scene_entity", "infrastructure"]
+        },
+        "source_entity_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/safeId" }
+          ]
+        },
+        "component_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/safeId" }
+          ]
+        },
+        "infrastructure_kind": {
+          "oneOf": [
+            { "type": "null" },
+            { "enum": ["runtime_ground", "environment_shell", "lighting"] }
+          ]
+        },
+        "spawn_tool": {
+          "enum": ["spawn_actor", "spawn_blueprint_actor"]
+        },
+        "asset": { "$ref": "#/$defs/asset" },
+        "transform": { "$ref": "#/$defs/transform" },
+        "mobility": {
+          "enum": ["static", "stationary", "movable"]
+        },
+        "collision": { "$ref": "#/$defs/collision" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "role": { "const": "scene_entity" } }
+          },
+          "then": {
+            "properties": {
+              "source_entity_id": { "$ref": "#/$defs/safeId" },
+              "infrastructure_kind": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "role": { "const": "infrastructure" } }
+          },
+          "then": {
+            "properties": {
+              "source_entity_id": { "type": "null" },
+              "component_id": { "type": "null" },
+              "infrastructure_kind": {
+                "enum": ["runtime_ground", "environment_shell", "lighting"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "asset": {
+                "properties": { "kind": { "const": "static_mesh" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "spawn_tool": { "const": "spawn_actor" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "asset": {
+                "properties": { "kind": { "const": "blueprint_class" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "spawn_tool": { "const": "spawn_blueprint_actor" }
+            }
+          }
+        }
+      ]
+    },
+    "playerStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_name", "class_path", "pawn_class_path", "transform"],
+      "properties": {
+        "actor_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[A-Za-z0-9_]+$"
+        },
+        "class_path": { "const": "/Script/Engine.PlayerStart" },
+        "pawn_class_path": {
+          "type": "string",
+          "pattern": "^/Game/[A-Za-z0-9_./-]+_C$",
+          "maxLength": 512
+        },
+        "transform": { "$ref": "#/$defs/transform" }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "perspective",
+        "fov_deg",
+        "near_clip_cm",
+        "eye_height_cm",
+        "relative_rotation_deg",
+        "target_actor_id",
+        "source_constraints"
+      ],
+      "properties": {
+        "perspective": { "const": "first_person" },
+        "fov_deg": {
+          "type": "number",
+          "minimum": 30,
+          "maximum": 150
+        },
+        "near_clip_cm": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100
+        },
+        "eye_height_cm": {
+          "type": "number",
+          "minimum": 50,
+          "maximum": 300
+        },
+        "relative_rotation_deg": { "$ref": "#/$defs/rotation" },
+        "target_actor_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/safeId" }
+          ]
+        },
+        "source_constraints": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "evidenceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "kind", "required"],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/safeId" },
+        "kind": {
+          "enum": ["actor_snapshot", "screenshot", "collision_report", "floating_report"]
+        },
+        "required": { "type": "boolean" }
+      }
+    }
+  }
+}

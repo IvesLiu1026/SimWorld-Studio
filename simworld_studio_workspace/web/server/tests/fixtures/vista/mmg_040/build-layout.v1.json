@@ -1,0 +1,189 @@
+{
+  "schema": "vista-scene-layout-profile/v1",
+  "profile_id": "mmg_040_static_office_v1",
+  "source_visual_id": "mmg_040",
+  "layout_revision": "mmg-040-layout-2026-07-21-r1",
+  "asset_snapshot_id": "ue-content-vista-test-r1",
+  "content_revision": "simworld-content-test-r1",
+  "verification_revision": "curated-mmg040-test-r1",
+  "placements": [
+    {
+      "actor_id": "office_chair",
+      "source_entity_id": "wheeled_office_chair_with_visible_casters",
+      "component_id": null,
+      "asset_source": "scene_binding",
+      "asset_kind": "static_mesh",
+      "class_path": "/Script/Engine.StaticMeshActor",
+      "asset_pin": null,
+      "transform": {
+        "location_cm": [220, -40, 50],
+        "rotation_deg": [0, 5, 0],
+        "scale": [1, 1, 1]
+      },
+      "mobility": "movable",
+      "collision": {
+        "mode": "query_and_physics",
+        "profile_name": "BlockAll",
+        "generate_overlap_events": false
+      }
+    },
+    {
+      "actor_id": "step_stool",
+      "source_entity_id": "stable_step_stool",
+      "component_id": null,
+      "asset_source": "scene_binding",
+      "asset_kind": "static_mesh",
+      "class_path": "/Script/Engine.StaticMeshActor",
+      "asset_pin": null,
+      "transform": {
+        "location_cm": [225, 190, 28],
+        "rotation_deg": [0, -18, 0],
+        "scale": [1, 1, 1]
+      },
+      "mobility": "static",
+      "collision": {
+        "mode": "query_and_physics",
+        "profile_name": "BlockAll",
+        "generate_overlap_events": false
+      }
+    },
+    {
+      "actor_id": "tall_cabinet",
+      "source_entity_id": "cardboard_box_on_a_high_cabinet",
+      "component_id": "cabinet",
+      "asset_source": "curated_component",
+      "asset_kind": "static_mesh",
+      "class_path": "/Script/Engine.StaticMeshActor",
+      "asset_pin": {
+        "snapshot_id": "ue-content-vista-test-r1",
+        "asset_id": "mmg040-tall-office-cabinet",
+        "ue_path": "/Game/VISTA/Curated/MMG040/SM_TallOfficeCabinet.SM_TallOfficeCabinet",
+        "confidence": 1,
+        "verified": true
+      },
+      "transform": {
+        "location_cm": [520, 0, 110],
+        "rotation_deg": [0, 180, 0],
+        "scale": [1, 1, 1]
+      },
+      "mobility": "static",
+      "collision": {
+        "mode": "query_and_physics",
+        "profile_name": "BlockAll",
+        "generate_overlap_events": false
+      }
+    },
+    {
+      "actor_id": "high_cardboard_box",
+      "source_entity_id": "cardboard_box_on_a_high_cabinet",
+      "component_id": "cardboard_box",
+      "asset_source": "curated_component",
+      "asset_kind": "static_mesh",
+      "class_path": "/Script/Engine.StaticMeshActor",
+      "asset_pin": {
+        "snapshot_id": "ue-content-vista-test-r1",
+        "asset_id": "mmg040-cardboard-box",
+        "ue_path": "/Game/VISTA/Curated/MMG040/SM_CardboardBox.SM_CardboardBox",
+        "confidence": 1,
+        "verified": true
+      },
+      "transform": {
+        "location_cm": [520, 0, 255],
+        "rotation_deg": [0, -7, 0],
+        "scale": [1, 1, 1]
+      },
+      "mobility": "movable",
+      "collision": {
+        "mode": "query_and_physics",
+        "profile_name": "BlockAll",
+        "generate_overlap_events": false
+      }
+    },
+    {
+      "actor_id": "first_person_hands",
+      "source_entity_id": "camera_wearer_hands_and_forearms",
+      "component_id": null,
+      "asset_source": "scene_binding",
+      "asset_kind": "blueprint_class",
+      "class_path": "/Game/Human_Avatar/DefaultCharacter/ThirdPerson/Blueprints/BP_ThirdPersonCharacter.BP_ThirdPersonCharacter_C",
+      "asset_pin": null,
+      "transform": {
+        "location_cm": [0, -350, 90],
+        "rotation_deg": [0, 90, 0],
+        "scale": [1, 1, 1]
+      },
+      "mobility": "movable",
+      "collision": {
+        "mode": "disabled",
+        "profile_name": "NoCollision",
+        "generate_overlap_events": false
+      }
+    }
+  ],
+  "infrastructure": [
+    {
+      "actor_id": "runtime_ground",
+      "infrastructure_kind": "runtime_ground",
+      "asset_kind": "static_mesh",
+      "class_path": "/Script/Engine.StaticMeshActor",
+      "asset_pin": {
+        "snapshot_id": "ue-engine-5.8",
+        "asset_id": "fixed-runtime-ground-cube",
+        "ue_path": "/Engine/BasicShapes/Cube.Cube",
+        "confidence": 1,
+        "verified": true
+      },
+      "transform": {
+        "location_cm": [300, 0, -50],
+        "rotation_deg": [0, 0, 0],
+        "scale": [8, 8, 1]
+      },
+      "mobility": "static",
+      "collision": {
+        "mode": "query_and_physics",
+        "profile_name": "BlockAll",
+        "generate_overlap_events": false
+      }
+    }
+  ],
+  "player_start": {
+    "actor_name": "PlayerStart",
+    "class_path": "/Script/Engine.PlayerStart",
+    "pawn_class_path": "/Game/Human_Avatar/DefaultCharacter/ThirdPerson/Blueprints/BP_ThirdPersonCharacter.BP_ThirdPersonCharacter_C",
+    "transform": {
+      "location_cm": [0, -350, 90],
+      "rotation_deg": [0, 90, 0],
+      "scale": [1, 1, 1]
+    }
+  },
+  "camera": {
+    "perspective": "first_person",
+    "fov_deg": 82,
+    "near_clip_cm": 5,
+    "eye_height_cm": 170,
+    "relative_rotation_deg": [0, 0, 0],
+    "target_actor_id": "high_cardboard_box"
+  },
+  "evidence_requests": [
+    {
+      "evidence_id": "actors_after_build",
+      "kind": "actor_snapshot",
+      "required": true
+    },
+    {
+      "evidence_id": "collision_after_build",
+      "kind": "collision_report",
+      "required": true
+    },
+    {
+      "evidence_id": "floating_after_build",
+      "kind": "floating_report",
+      "required": true
+    },
+    {
+      "evidence_id": "viewport_after_build",
+      "kind": "screenshot",
+      "required": true
+    }
+  ]
+}
