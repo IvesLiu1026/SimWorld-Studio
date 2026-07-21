@@ -96,6 +96,7 @@ function resolveCodingAgentRegistry(registry, env = process.env) {
   }
 
   return {
+    locked: production,
     default: production
       ? DEFAULT_BUILDER_AGENT
       : resolveBuilderAgent(source.default, env),

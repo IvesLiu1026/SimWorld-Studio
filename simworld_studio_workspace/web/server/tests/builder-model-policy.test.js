@@ -48,6 +48,7 @@ test("production ignores a stale non-Claude agent and advertises only the pinned
       codex: { label: "Codex", defaultModel: "gpt-5.5", models: ["gpt-5.5"] },
     },
   }, env), {
+    locked: true,
     default: "claude",
     agents: {
       claude: {
@@ -57,6 +58,15 @@ test("production ignores a stale non-Claude agent and advertises only the pinned
       },
     },
   });
+});
+
+test("development advertises an unlocked coding-agent registry", () => {
+  assert.equal(resolveCodingAgentRegistry({
+    default: "claude",
+    agents: {
+      claude: { label: "Claude", defaultModel: "claude-opus-4-8", models: ["claude-opus-4-8"] },
+    },
+  }, { NODE_ENV: "development" }).locked, false);
 });
 
 test("chat and skill-selection entry points share the deployment-aware resolver", () => {

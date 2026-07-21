@@ -4,7 +4,10 @@ import { API_BASE } from "./api/client.js";
 import { fetchCodingAgents, fetchHealth, fetchSession, studioQueryKeys } from "./api/studioApi.js";
 import AgentAggregatePanelTabs from "./features/agents/AgentAggregatePanelTabs.jsx";
 import AgentPanel from "./features/agents/AgentPanel.jsx";
-import { DEFAULT_CODING_AGENTS } from "./features/agents/codingAgents.js";
+import {
+  DEFAULT_CODING_AGENTS,
+  resolveCodingSelection,
+} from "./features/agents/codingAgents.js";
 import ArenaPage from "./features/arena/ArenaPage.jsx";
 import AssetBrowser from "./features/assets/AssetBrowser.jsx";
 import ChatPanel from "./features/chat/ChatPanel.jsx";
@@ -75,10 +78,28 @@ function App() {
     codingAgentsQuery.data?.agents && Object.keys(codingAgentsQuery.data.agents).length
       ? codingAgentsQuery.data.agents
       : DEFAULT_CODING_AGENTS;
+  const codingAgentsLocked = codingAgentsQuery.data?.locked === true;
   const handleCodingAgentChange = useCallback(
     (agentId) => setCodingAgent(agentId, codingAgents),
     [codingAgents, setCodingAgent]
   );
+
+  useEffect(() => {
+    if (!codingAgentsQuery.data?.agents) return;
+    const resolved = resolveCodingSelection(codingAgentsQuery.data, {
+      agent: codingAgent,
+      model: codingModel,
+    });
+    if (resolved.agent !== codingAgent) setCodingAgent(resolved.agent, codingAgents);
+    if (resolved.model !== codingModel) setCodingModel(resolved.model);
+  }, [
+    codingAgent,
+    codingAgents,
+    codingAgentsQuery.data,
+    codingModel,
+    setCodingAgent,
+    setCodingModel,
+  ]);
 
   // Artifact chain — tracks what's been produced
   const [artifacts, setArtifacts] = useState({
@@ -195,6 +216,7 @@ function App() {
         <SettingsModal
           codingAgent={codingAgent}
           codingAgents={codingAgents}
+          codingAgentsLocked={codingAgentsLocked}
           codingModel={codingModel}
           icons={ICONS}
           uiTheme={uiTheme}

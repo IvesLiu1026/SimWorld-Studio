@@ -63,6 +63,7 @@ function MiniLayoutPreview({ left, right }) {
 export default function SettingsModal({
   codingAgent,
   codingAgents,
+  codingAgentsLocked,
   codingModel,
   icons,
   layoutMode,
@@ -108,11 +109,16 @@ export default function SettingsModal({
           <div className="settings-execution-row">
             <div className="settings-execution-copy">
               <strong>Scene build runtime</strong>
-              <span>Advanced backend configuration for scene operations.</span>
+              <span>
+                {codingAgentsLocked
+                  ? "Deployment-managed runtime for reproducible scene builds."
+                  : "Advanced backend configuration for scene operations."}
+              </span>
             </div>
             <CodingAgentSelector
               agents={codingAgents}
               agent={codingAgent}
+              locked={codingAgentsLocked}
               setAgent={onCodingAgentChange}
               model={codingModel}
               setModel={onCodingModelChange}

@@ -1103,6 +1103,36 @@ input, textarea, select { cursor: text; }
   flex-shrink: 0;
   padding-left: 3px;
 }
+
+.coding-agent-selector.locked {
+  gap: 8px;
+}
+
+.coding-agent-managed {
+  min-width: 238px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.coding-agent-managed-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.coding-agent-managed strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
 .sw-menu-select {
   position: relative;
   min-width: 0;

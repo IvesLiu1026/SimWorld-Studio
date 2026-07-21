@@ -47,3 +47,23 @@ export const DEFAULT_CODING_AGENTS = {
 export function codingModelStorageKey(agentId) {
   return `simworld.codingModel.${agentId || "claude"}`;
 }
+
+export function resolveCodingSelection(registryPayload, currentSelection = {}) {
+  const agents = registryPayload?.agents && typeof registryPayload.agents === "object"
+    ? registryPayload.agents
+    : {};
+  const agentIds = Object.keys(agents);
+  const requestedDefault = String(registryPayload?.default || "");
+  const defaultAgent = agents[requestedDefault] ? requestedDefault : agentIds[0] || "claude";
+  const locked = registryPayload?.locked === true;
+  const currentAgent = String(currentSelection.agent || "");
+  const agent = locked || !agents[currentAgent] ? defaultAgent : currentAgent;
+  const definition = agents[agent] || {};
+  const configuredDefault = String(definition.defaultModel || definition.models?.[0] || "");
+  const currentModel = String(currentSelection.model || "");
+  const model = locked || agent !== currentAgent
+    ? configuredDefault
+    : currentModel || configuredDefault;
+
+  return { agent, model, locked };
+}

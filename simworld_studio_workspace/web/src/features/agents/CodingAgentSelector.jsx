@@ -114,7 +114,7 @@ function MenuSelect({ ariaLabel, className = "", options, value, onChange }) {
   );
 }
 
-export default function CodingAgentSelector({ agents, agent, setAgent, model, setModel, icon }) {
+export default function CodingAgentSelector({ agents, agent, locked = false, setAgent, model, setModel, icon }) {
   const cfg = agents[agent] || {};
   const models = cfg.models || [];
   const derivedCustom = !!model && !models.includes(model);
@@ -161,6 +161,21 @@ export default function CodingAgentSelector({ agents, agent, setAgent, model, se
       setModel(value);
     }
   };
+
+  if (locked) {
+    return (
+      <div
+        className="coding-agent-selector locked"
+        title="This runtime is managed by the production deployment policy"
+      >
+        {icon ? <span className="coding-agent-selector-icon">{icon}</span> : null}
+        <div className="coding-agent-managed" aria-label="Managed scene build runtime">
+          <span className="coding-agent-managed-label">Managed runtime</span>
+          <strong>{cfg.label || agent} · {model || cfg.defaultModel || "Default"}</strong>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
