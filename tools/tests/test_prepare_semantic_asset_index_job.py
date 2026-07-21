@@ -507,7 +507,7 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
             lambda: preparation.publish_job(prepared, self.fixture.output_dir, approval),
         )
 
-    def test_publish_revalidates_immutable_bytes_instead_of_mutable_views(self) -> None:
+    def test_publish_reprojects_from_raw_basis_instead_of_mutable_views(self) -> None:
         prepared = self.fixture.prepare()
         mutable_view = prepared.job
         mutable_view["pending_objects"]["count"] = 999
@@ -526,11 +526,11 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
         forged_job["pending_objects"]["count"] = 999
         basis = {key: value for key, value in forged_job.items() if key != "job_revision"}
         forged_job["job_revision"] = "sha256:" + preparation.json_sha256(basis)
-        forged = dataclasses.replace(prepared, job_bytes=preparation.canonical_json(forged_job))
-        self.assert_error(
-            "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
-            lambda: preparation.result(forged, status="dry_run"),
-        )
+        with self.assertRaises(TypeError):
+            dataclasses.replace(
+                prepared,
+                job_bytes=preparation.canonical_json(forged_job),
+            )
 
     def test_same_count_pending_identity_forgery_cannot_replace_bound_manifest(self) -> None:
         prepared = self.fixture.prepare()
@@ -550,13 +550,97 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
             key: value for key, value in forged_job.items() if key != "job_revision"
         }
         forged_job["job_revision"] = "sha256:" + preparation.json_sha256(revision_basis)
-        forged = dataclasses.replace(
-            prepared,
-            job_bytes=preparation.canonical_json(forged_job),
+        with self.assertRaises(TypeError):
+            dataclasses.replace(
+                prepared,
+                job_bytes=preparation.canonical_json(forged_job),
+                bootstrap_receipt_sha256="a" * 64,
+                object_manifest_sha256="b" * 64,
+                recipe_sha256="c" * 64,
+                pending_objects_sha256=forged_job["pending_objects"]["assets_sha256"],
+            )
+
+    def test_recipe_and_input_contract_forgery_cannot_replace_opaque_basis(self) -> None:
+        prepared = self.fixture.prepare()
+        self.assertEqual(
+            [(item.name, item.init) for item in dataclasses.fields(prepared)],
+            [("_trusted_basis", False)],
         )
+        with self.assertRaises(TypeError):
+            dataclasses.replace(prepared)
+
+        forged_recipe_job = prepared.job
+        forged_recipe_job["recipe_contract"]["caption"]["provider_id"] = "forged-provider"
+        forged_recipe_job["recipe_contract"]["caption_recipe_sha256"] = (
+            preparation.json_sha256(forged_recipe_job["recipe_contract"]["caption"])
+        )
+        forged_recipe_job["recipe_contract"]["recipe_sha256"] = "d" * 64
+        recipe_basis = {
+            key: value
+            for key, value in forged_recipe_job.items()
+            if key != "job_revision"
+        }
+        forged_recipe_job["job_revision"] = "sha256:" + preparation.json_sha256(
+            recipe_basis
+        )
+        with self.assertRaises(TypeError):
+            dataclasses.replace(
+                prepared,
+                job_bytes=preparation.canonical_json(forged_recipe_job),
+                bootstrap_receipt_sha256=prepared.bootstrap_receipt_sha256,
+                object_manifest_sha256=prepared.object_manifest_sha256,
+                recipe_sha256="d" * 64,
+                pending_objects_sha256=prepared.pending_objects_sha256,
+            )
+
+        forged_input_job = prepared.job
+        forged_input = forged_input_job["input_contract"]
+        forged_input.update(
+            {
+                "bootstrap_receipt_sha256": "1" * 64,
+                "bootstrap_bundle_revision": "sha256:" + "2" * 64,
+                "object_manifest_revision": "sha256:" + "3" * 64,
+                "object_manifest_sha256": "4" * 64,
+                "archive_receipt_sha256": "5" * 64,
+                "registry_audit_sha256": "6" * 64,
+            }
+        )
+        input_basis = {
+            key: value for key, value in forged_input_job.items() if key != "job_revision"
+        }
+        forged_input_job["job_revision"] = "sha256:" + preparation.json_sha256(
+            input_basis
+        )
+        with self.assertRaises(TypeError):
+            dataclasses.replace(
+                prepared,
+                job_bytes=preparation.canonical_json(forged_input_job),
+                bootstrap_receipt_sha256="1" * 64,
+                object_manifest_sha256="4" * 64,
+                recipe_sha256=prepared.recipe_sha256,
+                pending_objects_sha256=prepared.pending_objects_sha256,
+            )
+
+        with self.assertRaises(ValueError):
+            dataclasses.replace(
+                prepared,
+                _trusted_basis=object.__getattribute__(prepared, "_trusted_basis"),
+            )
+
+    def test_low_level_raw_recipe_tamper_is_revalidated_against_operator_pin(self) -> None:
+        prepared = self.fixture.prepare()
+        trusted_basis = object.__getattribute__(prepared, "_trusted_basis")
+        forged_recipe = json.loads(trusted_basis.recipe_raw)
+        forged_recipe["caption"]["provider_id"] = "forged-provider"
+        forged_basis = dataclasses.replace(
+            trusted_basis,
+            recipe_raw=preparation.canonical_json(forged_recipe),
+        )
+        counterfeit = object.__new__(preparation.PreparedJob)
+        object.__setattr__(counterfeit, "_trusted_basis", forged_basis)
         self.assert_error(
-            "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
-            lambda: preparation.result(forged, status="dry_run"),
+            "SEMANTIC_INDEX_RECIPE_PIN_MISMATCH",
+            lambda: preparation.result(counterfeit, status="dry_run"),
         )
 
     def test_apply_requires_non_secret_approval(self) -> None:

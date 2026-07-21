@@ -21,7 +21,7 @@ import shutil
 import stat
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -1123,37 +1123,94 @@ def validate_bootstrap_cross_references(
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class _TrustedJobBasis:
+    receipt_raw: bytes
+    registry_audit_raw: bytes
+    capability_inventory_raw: bytes
+    object_manifest_raw: bytes
+    recipe_raw: bytes
+    expected_bootstrap_receipt_sha256: str
+    expected_bundle_revision: str
+    expected_object_manifest_sha256: str
+    expected_object_count: int
+    expected_project_revision: str
+    expected_content_revision: str
+    expected_recipe_sha256: str
+    asset_snapshot_revision: str
+
+
+@dataclass(frozen=True, init=False, slots=True)
 class PreparedJob:
-    job_bytes: bytes
-    bootstrap_receipt_sha256: str
-    object_manifest_sha256: str
-    recipe_sha256: str
-    pending_objects_sha256: str
+    """Opaque handle whose public values are reprojected from trusted raw inputs."""
+
+    _trusted_basis: _TrustedJobBasis = field(init=False, repr=False)
+
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("PreparedJob instances must be created by build_job")
 
     @property
     def job(self) -> dict[str, Any]:
-        """Return a newly parsed, fully revalidated copy of the bound job."""
+        """Return a newly reprojected and fully validated job."""
 
         return _validated_prepared_job(self)
+
+    @property
+    def job_bytes(self) -> bytes:
+        return canonical_json(self.job)
 
     @property
     def job_sha256(self) -> str:
         return hashlib.sha256(self.job_bytes).hexdigest()
 
+    @property
+    def bootstrap_receipt_sha256(self) -> str:
+        return hashlib.sha256(self._trusted_basis.receipt_raw).hexdigest()
+
+    @property
+    def object_manifest_sha256(self) -> str:
+        return hashlib.sha256(self._trusted_basis.object_manifest_raw).hexdigest()
+
+    @property
+    def recipe_sha256(self) -> str:
+        return hashlib.sha256(self._trusted_basis.recipe_raw).hexdigest()
+
+    @property
+    def pending_objects_sha256(self) -> str:
+        return self.job["pending_objects"]["assets_sha256"]
+
 
 def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
-    """Fail closed if bytes or immutable identity scalars are inconsistent."""
+    """Reproject from the opaque raw-input basis, then validate the full job."""
 
-    if (
-        not isinstance(prepared.job_bytes, bytes)
-        or not 2 <= len(prepared.job_bytes) <= 128 * 1024 * 1024
-    ):
+    if type(prepared) is not PreparedJob:
         fail(
             "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
-            "Prepared job bytes are missing or outside the publication bound",
+            "Prepared job handle is not an authentic opaque preparation result",
         )
-    job = _strict_json(prepared.job_bytes, pointer="prepared job bytes")
+    try:
+        trusted_basis = object.__getattribute__(prepared, "_trusted_basis")
+    except (AttributeError, TypeError):
+        fail(
+            "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
+            "Prepared job trusted basis is unavailable",
+        )
+    if type(trusted_basis) is not _TrustedJobBasis:
+        fail(
+            "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
+            "Prepared job trusted basis is invalid",
+        )
+    reprojected = _reproject_job_from_basis(trusted_basis)
+    trusted_job_bytes = canonical_json(reprojected)
+    if not 2 <= len(trusted_job_bytes) <= 128 * 1024 * 1024:
+        fail(
+            "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
+            "Reprojected job bytes are outside the publication bound",
+        )
+    job = _strict_json(trusted_job_bytes, pointer="reprojected prepared job bytes")
+    trusted_receipt_sha256 = hashlib.sha256(trusted_basis.receipt_raw).hexdigest()
+    trusted_manifest_sha256 = hashlib.sha256(trusted_basis.object_manifest_raw).hexdigest()
+    trusted_recipe_sha256 = hashlib.sha256(trusted_basis.recipe_raw).hexdigest()
     job = _require_exact_keys(
         job,
         required={
@@ -1171,7 +1228,7 @@ def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
         },
         pointer="$",
     )
-    if job["schema"] != JOB_SCHEMA or canonical_json(job) != prepared.job_bytes:
+    if job["schema"] != JOB_SCHEMA or canonical_json(job) != trusted_job_bytes:
         fail(
             "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
             "Prepared job bytes are not the canonical supported job schema",
@@ -1213,9 +1270,9 @@ def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
         input_contract["bootstrap_receipt_schema"] != BOOTSTRAP_RECEIPT_SCHEMA
         or input_contract["object_manifest_schema"] != OBJECT_MANIFEST_SCHEMA
         or input_contract["bootstrap_receipt_sha256"]
-        != prepared.bootstrap_receipt_sha256
+        != trusted_receipt_sha256
         or input_contract["object_manifest_sha256"]
-        != prepared.object_manifest_sha256
+        != trusted_manifest_sha256
         or input_contract["manifest_kind"]
         != "asset_registry_object_candidates_not_catalog"
         or input_contract["bootstrap_bundle_complete"] is not True
@@ -1288,7 +1345,7 @@ def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
     )
     if (
         recipe_contract["recipe_schema"] != RECIPE_SCHEMA
-        or recipe_contract["recipe_sha256"] != prepared.recipe_sha256
+        or recipe_contract["recipe_sha256"] != trusted_recipe_sha256
         or json_sha256(recipe_contract["caption"])
         != recipe_contract["caption_recipe_sha256"]
         or json_sha256(recipe_contract["embedding"])
@@ -1410,7 +1467,6 @@ def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
         != "all_unindexed_objects_in_pinned_bootstrap_manifest"
         or not isinstance(pending["assets"], list)
         or len(pending["assets"]) != pending["count"]
-        or pending["assets_sha256"] != prepared.pending_objects_sha256
         or pending["assets_sha256"] != json_sha256(pending["assets"])
         or pending["count"] != input_contract["object_count"]
         or postgres_target["planned_candidate_rows"] != pending["count"]
@@ -1603,257 +1659,19 @@ def _assert_expected_pin(actual: Any, expected: Any, *, code: str, message: str,
         fail(code, message, pointer=pointer)
 
 
-def build_job(
+def _build_job_document(
     *,
-    bootstrap_receipt_path: Path,
-    object_manifest_path: Path,
-    recipe_path: Path,
-    expected_bootstrap_receipt_sha256: str,
-    expected_bundle_revision: str,
-    expected_object_manifest_sha256: str,
-    expected_object_count: int,
-    expected_project_revision: str,
-    expected_content_revision: str,
-    expected_recipe_sha256: str,
-    asset_snapshot_revision: str,
-) -> PreparedJob:
-    _sha256(expected_bootstrap_receipt_sha256, pointer="--expected-bootstrap-receipt-sha256")
-    _sha256(expected_bundle_revision, pointer="--expected-bundle-revision", prefixed=True)
-    _sha256(expected_object_manifest_sha256, pointer="--expected-object-manifest-sha256")
-    _bounded_integer(expected_object_count, minimum=1, maximum=MAX_OBJECTS, pointer="--expected-object-count")
-    _pinned_revision(expected_project_revision, pointer="--expected-project-revision")
-    _sha256(expected_content_revision, pointer="--expected-content-revision", prefixed=True)
-    _sha256(expected_recipe_sha256, pointer="--expected-recipe-sha256")
-    snapshot_revision = _pinned_revision(asset_snapshot_revision, pointer="--asset-snapshot-revision")
-    if ASSET_SNAPSHOT_RE.fullmatch(snapshot_revision) is None:
-        fail(
-            "SEMANTIC_INDEX_SNAPSHOT_REVISION_INVALID",
-            "Asset snapshot revision must use the asset-snapshot- namespace",
-            pointer="--asset-snapshot-revision",
-        )
+    receipt: Mapping[str, Any],
+    receipt_sha256: str,
+    manifest: Mapping[str, Any],
+    manifest_sha256: str,
+    recipe: Mapping[str, Any],
+    recipe_sha256: str,
+    snapshot_revision: str,
+) -> dict[str, Any]:
+    """Purely project the validated raw-input contracts into one exact job."""
 
-    if bootstrap_receipt_path.parent != object_manifest_path.parent:
-        fail(
-            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
-            "Bootstrap receipt and object manifest must come from the same bundle directory",
-            pointer="--object-manifest",
-        )
-    if (
-        bootstrap_receipt_path.name != "bootstrap-receipt.json"
-        or object_manifest_path.name != "object-manifest.json"
-    ):
-        fail(
-            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
-            "Bootstrap inputs must retain their fixed bundle filenames",
-            pointer="--bootstrap-receipt",
-        )
-    bundle_dir = bootstrap_receipt_path.parent
-    if not bundle_dir.is_absolute() or bundle_dir != Path(os.path.abspath(bundle_dir)):
-        fail(
-            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
-            "Bootstrap bundle directory must be absolute and normalized",
-            pointer="--bootstrap-receipt",
-        )
-    _reject_symlink_components(bundle_dir, pointer="--bootstrap-receipt")
-    bundle_stat = os.lstat(bundle_dir)
-    if (
-        not stat.S_ISDIR(bundle_stat.st_mode)
-        or bundle_stat.st_uid != os.geteuid()
-        or stat.S_IMODE(bundle_stat.st_mode) != 0o700
-    ):
-        fail(
-            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
-            "Bootstrap bundle directory must be current-user-owned mode 0700",
-            pointer="--bootstrap-receipt",
-        )
-
-    receipt_raw, receipt_value = _secure_read_json(
-        bootstrap_receipt_path,
-        max_bytes=MAX_RECEIPT_BYTES,
-        pointer="--bootstrap-receipt",
-    )
-    receipt_sha256 = hashlib.sha256(receipt_raw).hexdigest()
-    _assert_expected_pin(
-        receipt_sha256,
-        expected_bootstrap_receipt_sha256,
-        code="SEMANTIC_INDEX_BOOTSTRAP_RECEIPT_PIN_MISMATCH",
-        message="Bootstrap receipt SHA-256 differs from the operator pin",
-        pointer="--expected-bootstrap-receipt-sha256",
-    )
-    receipt = validate_bootstrap_receipt(receipt_value)
-    _assert_expected_pin(
-        receipt["bundle_revision"],
-        expected_bundle_revision,
-        code="SEMANTIC_INDEX_BUNDLE_PIN_MISMATCH",
-        message="Bootstrap bundle revision differs from the operator pin",
-        pointer="--expected-bundle-revision",
-    )
-    bootstrap_member_bytes: dict[str, bytes] = {}
-    for member_name in ("registry-audit.json", "content-capabilities.json"):
-        member_raw = _secure_read(
-            bundle_dir / member_name,
-            max_bytes=MAX_MANIFEST_BYTES,
-            pointer=f"bootstrap member {member_name}",
-        )
-        member_descriptor = receipt["files"][member_name]
-        if (
-            len(member_raw) != member_descriptor["bytes"]
-            or hashlib.sha256(member_raw).hexdigest() != member_descriptor["sha256"]
-        ):
-            fail(
-                "SEMANTIC_INDEX_BOOTSTRAP_MEMBER_MISMATCH",
-                "Bootstrap bundle member bytes do not match the receipt",
-                pointer=member_name,
-            )
-        bootstrap_member_bytes[member_name] = member_raw
-    registry_audit = _strict_json(
-        bootstrap_member_bytes["registry-audit.json"],
-        pointer="bootstrap member registry-audit.json",
-    )
-    if json_sha256(registry_audit) != receipt["registry_audit_sha256"]:
-        fail(
-            "SEMANTIC_INDEX_REGISTRY_BINDING_MISMATCH",
-            "Registry audit canonical digest differs from the bootstrap receipt",
-            pointer="registry-audit.json",
-        )
-    capability_inventory = _strict_json(
-        bootstrap_member_bytes["content-capabilities.json"],
-        pointer="bootstrap member content-capabilities.json",
-    )
-    if (
-        not isinstance(capability_inventory, dict)
-        or capability_inventory.get("schema") != CAPABILITY_INVENTORY_SCHEMA
-        or "assets" in capability_inventory
-        or capability_inventory.get("source_binding") != receipt["source_binding"]
-        or capability_inventory.get("inventory_revision")
-        != receipt["capability_inventory_revision"]
-        or not isinstance(capability_inventory.get("limit_per_group"), int)
-        or isinstance(capability_inventory.get("limit_per_group"), bool)
-        or not isinstance(capability_inventory.get("groups"), dict)
-    ):
-        fail(
-            "SEMANTIC_INDEX_CAPABILITY_SEPARATION_INVALID",
-            "Capability inventory is not a separate revision-bound non-semantic inventory",
-            pointer="content-capabilities.json",
-        )
-    capability_revision_basis = {
-        "schema": capability_inventory["schema"],
-        "source_binding": capability_inventory["source_binding"],
-        "limit_per_group": capability_inventory["limit_per_group"],
-        "groups": capability_inventory["groups"],
-    }
-    if capability_inventory["inventory_revision"] != "sha256:" + json_sha256(
-        capability_revision_basis
-    ):
-        fail(
-            "SEMANTIC_INDEX_CAPABILITY_SEPARATION_INVALID",
-            "Capability inventory canonical revision is invalid",
-            pointer="content-capabilities.json",
-        )
-
-    manifest_raw, manifest_value = _secure_read_json(
-        object_manifest_path,
-        max_bytes=MAX_MANIFEST_BYTES,
-        pointer="--object-manifest",
-    )
-    manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
-    descriptor = receipt["files"]["object-manifest.json"]
-    if len(manifest_raw) != descriptor["bytes"] or manifest_sha256 != descriptor["sha256"]:
-        fail(
-            "SEMANTIC_INDEX_MANIFEST_RECEIPT_MISMATCH",
-            "Object manifest bytes do not match the bootstrap receipt",
-            pointer="--object-manifest",
-        )
-    _assert_expected_pin(
-        manifest_sha256,
-        expected_object_manifest_sha256,
-        code="SEMANTIC_INDEX_MANIFEST_PIN_MISMATCH",
-        message="Object manifest SHA-256 differs from the operator pin",
-        pointer="--expected-object-manifest-sha256",
-    )
-    manifest = validate_object_manifest(manifest_value, source_binding=receipt["source_binding"])
-    if (
-        not isinstance(registry_audit, dict)
-        or registry_audit.get("schema") != REGISTRY_AUDIT_SCHEMA
-        or registry_audit.get("project_name") != receipt["source_binding"]["project"]["name"]
-        or registry_audit.get("engine_version") != receipt["source_binding"]["project"]["engine_version"]
-        or registry_audit.get("mount_point") != "/Game"
-        or isinstance(registry_audit.get("asset_count"), bool)
-        or not isinstance(registry_audit.get("asset_count"), int)
-        or not isinstance(registry_audit.get("assets"), list)
-        or registry_audit["asset_count"] != len(registry_audit["assets"])
-        or registry_audit["asset_count"] != manifest["source_registry_audit"]["row_count"]
-    ):
-        fail(
-            "SEMANTIC_INDEX_REGISTRY_BINDING_MISMATCH",
-            "Registry audit identity or count differs from the object manifest",
-            pointer="registry-audit.json",
-        )
-    validate_bootstrap_cross_references(
-        receipt=receipt,
-        registry_audit=registry_audit,
-        object_manifest=manifest,
-        capability_inventory=capability_inventory,
-    )
-    _assert_expected_pin(
-        manifest["manifest_revision"],
-        receipt["object_manifest_revision"],
-        code="SEMANTIC_INDEX_MANIFEST_RECEIPT_MISMATCH",
-        message="Object manifest revision differs from the bootstrap receipt",
-        pointer="$/manifest_revision",
-    )
-    _assert_expected_pin(
-        manifest["count"],
-        receipt["object_count"],
-        code="SEMANTIC_INDEX_MANIFEST_RECEIPT_MISMATCH",
-        message="Object manifest count differs from the bootstrap receipt",
-        pointer="$/count",
-    )
-    _assert_expected_pin(
-        manifest["count"],
-        expected_object_count,
-        code="SEMANTIC_INDEX_OBJECT_COUNT_PIN_MISMATCH",
-        message="Object count differs from the operator pin",
-        pointer="--expected-object-count",
-    )
     source_binding = receipt["source_binding"]
-    _assert_expected_pin(
-        source_binding["project"]["revision"],
-        expected_project_revision,
-        code="SEMANTIC_INDEX_PROJECT_REVISION_MISMATCH",
-        message="Project revision differs from the operator pin",
-        pointer="--expected-project-revision",
-    )
-    _assert_expected_pin(
-        source_binding["content"]["revision"],
-        expected_content_revision,
-        code="SEMANTIC_INDEX_CONTENT_REVISION_MISMATCH",
-        message="Content revision differs from the operator pin",
-        pointer="--expected-content-revision",
-    )
-    _assert_expected_pin(
-        manifest["source_registry_audit"]["sha256"],
-        receipt["registry_audit_sha256"],
-        code="SEMANTIC_INDEX_REGISTRY_BINDING_MISMATCH",
-        message="Object manifest and receipt bind different registry audits",
-        pointer="$/source_registry_audit/sha256",
-    )
-
-    recipe_raw, recipe_value = _secure_read_json(
-        recipe_path,
-        max_bytes=MAX_RECIPE_BYTES,
-        pointer="--recipe",
-    )
-    recipe_sha256 = hashlib.sha256(recipe_raw).hexdigest()
-    _assert_expected_pin(
-        recipe_sha256,
-        expected_recipe_sha256,
-        code="SEMANTIC_INDEX_RECIPE_PIN_MISMATCH",
-        message="Recipe SHA-256 differs from the operator pin",
-        pointer="--expected-recipe-sha256",
-    )
-    recipe = validate_recipe(recipe_value)
-
     count = manifest["count"]
     caption = recipe["caption"]
     embedding = recipe["embedding"]
@@ -2039,14 +1857,373 @@ def build_job(
     }
     job = dict(job_basis)
     job["job_revision"] = "sha256:" + json_sha256(job_basis)
-    job_bytes = canonical_json(job)
-    return PreparedJob(
-        job_bytes=job_bytes,
-        bootstrap_receipt_sha256=hashlib.sha256(receipt_raw).hexdigest(),
-        object_manifest_sha256=manifest_sha256,
-        recipe_sha256=recipe_sha256,
-        pending_objects_sha256=json_sha256(pending_assets),
+    return job
+
+
+def _reproject_job_from_basis(basis: _TrustedJobBasis) -> dict[str, Any]:
+    """Validate every captured raw pin again and deterministically rebuild the job."""
+
+    if type(basis) is not _TrustedJobBasis:
+        fail(
+            "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
+            "Prepared job trusted basis type is invalid",
+        )
+    raw_bounds = (
+        (basis.receipt_raw, MAX_RECEIPT_BYTES, "trusted bootstrap receipt"),
+        (basis.registry_audit_raw, MAX_MANIFEST_BYTES, "trusted registry audit"),
+        (
+            basis.capability_inventory_raw,
+            MAX_MANIFEST_BYTES,
+            "trusted capability inventory",
+        ),
+        (basis.object_manifest_raw, MAX_MANIFEST_BYTES, "trusted object manifest"),
+        (basis.recipe_raw, MAX_RECIPE_BYTES, "trusted semantic recipe"),
     )
+    for raw, maximum, pointer in raw_bounds:
+        if not isinstance(raw, bytes) or not 2 <= len(raw) <= maximum:
+            fail(
+                "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
+                "Prepared job trusted raw input is outside its byte bound",
+                pointer=pointer,
+            )
+
+    _sha256(
+        basis.expected_bootstrap_receipt_sha256,
+        pointer="trusted expected bootstrap receipt SHA-256",
+    )
+    _sha256(
+        basis.expected_bundle_revision,
+        pointer="trusted expected bootstrap bundle revision",
+        prefixed=True,
+    )
+    _sha256(
+        basis.expected_object_manifest_sha256,
+        pointer="trusted expected object manifest SHA-256",
+    )
+    _bounded_integer(
+        basis.expected_object_count,
+        minimum=1,
+        maximum=MAX_OBJECTS,
+        pointer="trusted expected object count",
+    )
+    _pinned_revision(
+        basis.expected_project_revision,
+        pointer="trusted expected project revision",
+    )
+    _sha256(
+        basis.expected_content_revision,
+        pointer="trusted expected content revision",
+        prefixed=True,
+    )
+    _sha256(
+        basis.expected_recipe_sha256,
+        pointer="trusted expected recipe SHA-256",
+    )
+    snapshot_revision = _pinned_revision(
+        basis.asset_snapshot_revision,
+        pointer="trusted asset snapshot revision",
+    )
+    if ASSET_SNAPSHOT_RE.fullmatch(snapshot_revision) is None:
+        fail(
+            "SEMANTIC_INDEX_SNAPSHOT_REVISION_INVALID",
+            "Asset snapshot revision must use the asset-snapshot- namespace",
+            pointer="trusted asset snapshot revision",
+        )
+
+    receipt_sha256 = hashlib.sha256(basis.receipt_raw).hexdigest()
+    _assert_expected_pin(
+        receipt_sha256,
+        basis.expected_bootstrap_receipt_sha256,
+        code="SEMANTIC_INDEX_BOOTSTRAP_RECEIPT_PIN_MISMATCH",
+        message="Bootstrap receipt SHA-256 differs from the operator pin",
+        pointer="trusted expected bootstrap receipt SHA-256",
+    )
+    receipt = validate_bootstrap_receipt(
+        _strict_json(basis.receipt_raw, pointer="trusted bootstrap receipt")
+    )
+    _assert_expected_pin(
+        receipt["bundle_revision"],
+        basis.expected_bundle_revision,
+        code="SEMANTIC_INDEX_BUNDLE_PIN_MISMATCH",
+        message="Bootstrap bundle revision differs from the operator pin",
+        pointer="trusted expected bundle revision",
+    )
+
+    member_raw = {
+        "registry-audit.json": basis.registry_audit_raw,
+        "content-capabilities.json": basis.capability_inventory_raw,
+        "object-manifest.json": basis.object_manifest_raw,
+    }
+    for member_name, raw in member_raw.items():
+        descriptor = receipt["files"][member_name]
+        if (
+            len(raw) != descriptor["bytes"]
+            or hashlib.sha256(raw).hexdigest() != descriptor["sha256"]
+        ):
+            if member_name == "object-manifest.json":
+                fail(
+                    "SEMANTIC_INDEX_MANIFEST_RECEIPT_MISMATCH",
+                    "Object manifest bytes do not match the bootstrap receipt",
+                    pointer="object-manifest.json",
+                )
+            fail(
+                "SEMANTIC_INDEX_BOOTSTRAP_MEMBER_MISMATCH",
+                "Bootstrap bundle member bytes do not match the receipt",
+                pointer=member_name,
+            )
+
+    registry_audit = _strict_json(
+        basis.registry_audit_raw,
+        pointer="trusted registry audit",
+    )
+    if json_sha256(registry_audit) != receipt["registry_audit_sha256"]:
+        fail(
+            "SEMANTIC_INDEX_REGISTRY_BINDING_MISMATCH",
+            "Registry audit canonical digest differs from the bootstrap receipt",
+            pointer="registry-audit.json",
+        )
+    capability_inventory = _strict_json(
+        basis.capability_inventory_raw,
+        pointer="trusted capability inventory",
+    )
+    if (
+        not isinstance(capability_inventory, dict)
+        or capability_inventory.get("schema") != CAPABILITY_INVENTORY_SCHEMA
+        or "assets" in capability_inventory
+        or capability_inventory.get("source_binding") != receipt["source_binding"]
+        or capability_inventory.get("inventory_revision")
+        != receipt["capability_inventory_revision"]
+        or not isinstance(capability_inventory.get("limit_per_group"), int)
+        or isinstance(capability_inventory.get("limit_per_group"), bool)
+        or not isinstance(capability_inventory.get("groups"), dict)
+    ):
+        fail(
+            "SEMANTIC_INDEX_CAPABILITY_SEPARATION_INVALID",
+            "Capability inventory is not a separate revision-bound non-semantic inventory",
+            pointer="content-capabilities.json",
+        )
+    capability_revision_basis = {
+        "schema": capability_inventory["schema"],
+        "source_binding": capability_inventory["source_binding"],
+        "limit_per_group": capability_inventory["limit_per_group"],
+        "groups": capability_inventory["groups"],
+    }
+    if capability_inventory["inventory_revision"] != "sha256:" + json_sha256(
+        capability_revision_basis
+    ):
+        fail(
+            "SEMANTIC_INDEX_CAPABILITY_SEPARATION_INVALID",
+            "Capability inventory canonical revision is invalid",
+            pointer="content-capabilities.json",
+        )
+
+    manifest_sha256 = hashlib.sha256(basis.object_manifest_raw).hexdigest()
+    _assert_expected_pin(
+        manifest_sha256,
+        basis.expected_object_manifest_sha256,
+        code="SEMANTIC_INDEX_MANIFEST_PIN_MISMATCH",
+        message="Object manifest SHA-256 differs from the operator pin",
+        pointer="trusted expected object manifest SHA-256",
+    )
+    manifest = validate_object_manifest(
+        _strict_json(basis.object_manifest_raw, pointer="trusted object manifest"),
+        source_binding=receipt["source_binding"],
+    )
+    if (
+        not isinstance(registry_audit, dict)
+        or registry_audit.get("schema") != REGISTRY_AUDIT_SCHEMA
+        or registry_audit.get("project_name") != receipt["source_binding"]["project"]["name"]
+        or registry_audit.get("engine_version")
+        != receipt["source_binding"]["project"]["engine_version"]
+        or registry_audit.get("mount_point") != "/Game"
+        or isinstance(registry_audit.get("asset_count"), bool)
+        or not isinstance(registry_audit.get("asset_count"), int)
+        or not isinstance(registry_audit.get("assets"), list)
+        or registry_audit["asset_count"] != len(registry_audit["assets"])
+        or registry_audit["asset_count"]
+        != manifest["source_registry_audit"]["row_count"]
+    ):
+        fail(
+            "SEMANTIC_INDEX_REGISTRY_BINDING_MISMATCH",
+            "Registry audit identity or count differs from the object manifest",
+            pointer="registry-audit.json",
+        )
+    validate_bootstrap_cross_references(
+        receipt=receipt,
+        registry_audit=registry_audit,
+        object_manifest=manifest,
+        capability_inventory=capability_inventory,
+    )
+    _assert_expected_pin(
+        manifest["manifest_revision"],
+        receipt["object_manifest_revision"],
+        code="SEMANTIC_INDEX_MANIFEST_RECEIPT_MISMATCH",
+        message="Object manifest revision differs from the bootstrap receipt",
+        pointer="$/manifest_revision",
+    )
+    _assert_expected_pin(
+        manifest["count"],
+        receipt["object_count"],
+        code="SEMANTIC_INDEX_MANIFEST_RECEIPT_MISMATCH",
+        message="Object manifest count differs from the bootstrap receipt",
+        pointer="$/count",
+    )
+    _assert_expected_pin(
+        manifest["count"],
+        basis.expected_object_count,
+        code="SEMANTIC_INDEX_OBJECT_COUNT_PIN_MISMATCH",
+        message="Object count differs from the operator pin",
+        pointer="trusted expected object count",
+    )
+    source_binding = receipt["source_binding"]
+    _assert_expected_pin(
+        source_binding["project"]["revision"],
+        basis.expected_project_revision,
+        code="SEMANTIC_INDEX_PROJECT_REVISION_MISMATCH",
+        message="Project revision differs from the operator pin",
+        pointer="trusted expected project revision",
+    )
+    _assert_expected_pin(
+        source_binding["content"]["revision"],
+        basis.expected_content_revision,
+        code="SEMANTIC_INDEX_CONTENT_REVISION_MISMATCH",
+        message="Content revision differs from the operator pin",
+        pointer="trusted expected content revision",
+    )
+    _assert_expected_pin(
+        manifest["source_registry_audit"]["sha256"],
+        receipt["registry_audit_sha256"],
+        code="SEMANTIC_INDEX_REGISTRY_BINDING_MISMATCH",
+        message="Object manifest and receipt bind different registry audits",
+        pointer="$/source_registry_audit/sha256",
+    )
+
+    recipe_sha256 = hashlib.sha256(basis.recipe_raw).hexdigest()
+    _assert_expected_pin(
+        recipe_sha256,
+        basis.expected_recipe_sha256,
+        code="SEMANTIC_INDEX_RECIPE_PIN_MISMATCH",
+        message="Recipe SHA-256 differs from the operator pin",
+        pointer="trusted expected recipe SHA-256",
+    )
+    recipe = validate_recipe(_strict_json(basis.recipe_raw, pointer="trusted semantic recipe"))
+    return _build_job_document(
+        receipt=receipt,
+        receipt_sha256=receipt_sha256,
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        recipe=recipe,
+        recipe_sha256=recipe_sha256,
+        snapshot_revision=snapshot_revision,
+    )
+
+
+def build_job(
+    *,
+    bootstrap_receipt_path: Path,
+    object_manifest_path: Path,
+    recipe_path: Path,
+    expected_bootstrap_receipt_sha256: str,
+    expected_bundle_revision: str,
+    expected_object_manifest_sha256: str,
+    expected_object_count: int,
+    expected_project_revision: str,
+    expected_content_revision: str,
+    expected_recipe_sha256: str,
+    asset_snapshot_revision: str,
+) -> PreparedJob:
+    _sha256(expected_bootstrap_receipt_sha256, pointer="--expected-bootstrap-receipt-sha256")
+    _sha256(expected_bundle_revision, pointer="--expected-bundle-revision", prefixed=True)
+    _sha256(expected_object_manifest_sha256, pointer="--expected-object-manifest-sha256")
+    _bounded_integer(expected_object_count, minimum=1, maximum=MAX_OBJECTS, pointer="--expected-object-count")
+    _pinned_revision(expected_project_revision, pointer="--expected-project-revision")
+    _sha256(expected_content_revision, pointer="--expected-content-revision", prefixed=True)
+    _sha256(expected_recipe_sha256, pointer="--expected-recipe-sha256")
+    snapshot_revision = _pinned_revision(asset_snapshot_revision, pointer="--asset-snapshot-revision")
+    if ASSET_SNAPSHOT_RE.fullmatch(snapshot_revision) is None:
+        fail(
+            "SEMANTIC_INDEX_SNAPSHOT_REVISION_INVALID",
+            "Asset snapshot revision must use the asset-snapshot- namespace",
+            pointer="--asset-snapshot-revision",
+        )
+
+    if bootstrap_receipt_path.parent != object_manifest_path.parent:
+        fail(
+            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
+            "Bootstrap receipt and object manifest must come from the same bundle directory",
+            pointer="--object-manifest",
+        )
+    if (
+        bootstrap_receipt_path.name != "bootstrap-receipt.json"
+        or object_manifest_path.name != "object-manifest.json"
+    ):
+        fail(
+            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
+            "Bootstrap inputs must retain their fixed bundle filenames",
+            pointer="--bootstrap-receipt",
+        )
+    bundle_dir = bootstrap_receipt_path.parent
+    if not bundle_dir.is_absolute() or bundle_dir != Path(os.path.abspath(bundle_dir)):
+        fail(
+            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
+            "Bootstrap bundle directory must be absolute and normalized",
+            pointer="--bootstrap-receipt",
+        )
+    _reject_symlink_components(bundle_dir, pointer="--bootstrap-receipt")
+    bundle_stat = os.lstat(bundle_dir)
+    if (
+        not stat.S_ISDIR(bundle_stat.st_mode)
+        or bundle_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(bundle_stat.st_mode) != 0o700
+    ):
+        fail(
+            "SEMANTIC_INDEX_BOOTSTRAP_LAYOUT_INVALID",
+            "Bootstrap bundle directory must be current-user-owned mode 0700",
+            pointer="--bootstrap-receipt",
+        )
+
+    receipt_raw, _receipt_value = _secure_read_json(
+        bootstrap_receipt_path,
+        max_bytes=MAX_RECEIPT_BYTES,
+        pointer="--bootstrap-receipt",
+    )
+    bootstrap_member_bytes = {
+        member_name: _secure_read(
+            bundle_dir / member_name,
+            max_bytes=MAX_MANIFEST_BYTES,
+            pointer=f"bootstrap member {member_name}",
+        )
+        for member_name in ("registry-audit.json", "content-capabilities.json")
+    }
+    manifest_raw, _manifest_value = _secure_read_json(
+        object_manifest_path,
+        max_bytes=MAX_MANIFEST_BYTES,
+        pointer="--object-manifest",
+    )
+    recipe_raw, _recipe_value = _secure_read_json(
+        recipe_path,
+        max_bytes=MAX_RECIPE_BYTES,
+        pointer="--recipe",
+    )
+    basis = _TrustedJobBasis(
+        receipt_raw=receipt_raw,
+        registry_audit_raw=bootstrap_member_bytes["registry-audit.json"],
+        capability_inventory_raw=bootstrap_member_bytes["content-capabilities.json"],
+        object_manifest_raw=manifest_raw,
+        recipe_raw=recipe_raw,
+        expected_bootstrap_receipt_sha256=expected_bootstrap_receipt_sha256,
+        expected_bundle_revision=expected_bundle_revision,
+        expected_object_manifest_sha256=expected_object_manifest_sha256,
+        expected_object_count=expected_object_count,
+        expected_project_revision=expected_project_revision,
+        expected_content_revision=expected_content_revision,
+        expected_recipe_sha256=expected_recipe_sha256,
+        asset_snapshot_revision=asset_snapshot_revision,
+    )
+    prepared = object.__new__(PreparedJob)
+    object.__setattr__(prepared, "_trusted_basis", basis)
+    _validated_prepared_job(prepared)
+    return prepared
 
 
 def validate_approval_ref(value: str) -> str:
@@ -2170,6 +2347,8 @@ def _rename_directory_no_replace(source: Path, destination: Path) -> None:
 
 def publish_job(prepared: PreparedJob, output_dir: Path, approval_ref: str) -> dict[str, Any]:
     job = _validated_prepared_job(prepared)
+    job_bytes = canonical_json(job)
+    job_sha256 = hashlib.sha256(job_bytes).hexdigest()
     output_dir = validate_output_dir(output_dir)
     approval_sha256 = validate_approval_ref(approval_ref)
     lock = output_dir.parent / f".{output_dir.name}.lock"
@@ -2203,19 +2382,19 @@ def publish_job(prepared: PreparedJob, output_dir: Path, approval_ref: str) -> d
         validate_output_dir(output_dir)
         temporary = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.tmp-", dir=output_dir.parent))
         os.chmod(temporary, 0o700)
-        _write_private(temporary / "semantic-index-job.json", prepared.job_bytes)
+        _write_private(temporary / "semantic-index-job.json", job_bytes)
         receipt = {
             "schema": RECEIPT_SCHEMA,
             "job_schema": JOB_SCHEMA,
             "job_revision": job["job_revision"],
-            "job_sha256": prepared.job_sha256,
-            "bootstrap_receipt_sha256": prepared.bootstrap_receipt_sha256,
+            "job_sha256": job_sha256,
+            "bootstrap_receipt_sha256": job["input_contract"]["bootstrap_receipt_sha256"],
             "bootstrap_bundle_revision": job["input_contract"]["bootstrap_bundle_revision"],
-            "object_manifest_sha256": prepared.object_manifest_sha256,
-            "recipe_sha256": prepared.recipe_sha256,
+            "object_manifest_sha256": job["input_contract"]["object_manifest_sha256"],
+            "recipe_sha256": job["recipe_contract"]["recipe_sha256"],
             "asset_snapshot_revision": job["snapshot_target"]["asset_snapshot_revision"],
             "pending_object_count": job["pending_objects"]["count"],
-            "pending_objects_sha256": prepared.pending_objects_sha256,
+            "pending_objects_sha256": job["pending_objects"]["assets_sha256"],
             "approval_ref_sha256": approval_sha256,
             "prepared_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "publication_policy": "atomic_non_overwriting_private",
@@ -2263,18 +2442,19 @@ def publish_job(prepared: PreparedJob, output_dir: Path, approval_ref: str) -> d
 
 def result(prepared: PreparedJob, *, status: str) -> dict[str, Any]:
     job = _validated_prepared_job(prepared)
+    job_sha256 = hashlib.sha256(canonical_json(job)).hexdigest()
     return {
         "schema": RESULT_SCHEMA,
         "valid": True,
         "status": status,
         "job_revision": job["job_revision"],
-        "job_sha256": prepared.job_sha256,
+        "job_sha256": job_sha256,
         "bootstrap_bundle_revision": job["input_contract"]["bootstrap_bundle_revision"],
-        "object_manifest_sha256": prepared.object_manifest_sha256,
-        "recipe_sha256": prepared.recipe_sha256,
+        "object_manifest_sha256": job["input_contract"]["object_manifest_sha256"],
+        "recipe_sha256": job["recipe_contract"]["recipe_sha256"],
         "asset_snapshot_revision": job["snapshot_target"]["asset_snapshot_revision"],
         "pending_object_count": job["pending_objects"]["count"],
-        "pending_objects_sha256": prepared.pending_objects_sha256,
+        "pending_objects_sha256": job["pending_objects"]["assets_sha256"],
         "resource_estimates": job["resource_contract"]["estimates"],
         "execution_started": False,
         "network_used": False,

@@ -200,15 +200,21 @@ temporary directory, `fsync`s files and directories, and uses
 preparation receipt marks only `bundle_complete: true`; execution, catalog,
 and snapshot completion remain false.
 
-Before writing, publication reparses the immutable canonical job bytes and
-revalidates their revision, source/recipe scalars, pending set and its separately
-bound SHA-256, estimates, limits, live gates, and execution state. A same-count
-replacement of valid-looking pending identities therefore fails even if the
-embedded asset digest and job revision are recomputed. Mutating a caller's
-parsed job view cannot change the bytes or the receipt identity. The output lock
-remains open and is removed only when its complete metadata identity still
-matches, so a replaced foreign lock is preserved. If the atomic rename succeeds
-but the parent-directory `fsync` fails, the CLI returns the distinct
+Before writing, publication discards caller-derived views and deterministically
+reprojects the entire canonical job from a private, non-init trusted basis. That
+basis retains the exact raw receipt, registry, capability inventory, object
+manifest, and recipe bytes plus the independently supplied pins; every raw hash,
+bundle/member relationship, recipe projection, and operator pin is revalidated.
+`PreparedJob` exposes derived read-only properties but has no replaceable public
+dataclass fields, so synchronized replacement of job bytes and all old identity
+scalars is rejected. A same-count replacement of valid-looking pending
+identities therefore fails even if the embedded asset digest and job revision
+are recomputed, and changing caption/input contracts cannot diverge from the raw
+recipe/bootstrap evidence. Mutating a caller's parsed job view cannot change the
+published bytes or receipt identity. The output lock remains open and is removed
+only when its complete metadata identity still matches, so a replaced foreign
+lock is preserved. If the atomic rename succeeds but the parent-directory
+`fsync` fails, the CLI returns the distinct
 `SEMANTIC_INDEX_OUTPUT_COMMITTED_NOT_DURABLE` condition with
 `committed: true` and `durability_uncertain: true`; inspect that already
 committed path and do not retry it.
@@ -270,12 +276,13 @@ uv run --project tools --frozen python -m json.tool \
   tools/semantic_asset_index_job_schema.json >/dev/null
 ```
 
-The 25-test focused suite covers deterministic job bytes, exact external pins,
+The 27-test focused suite covers deterministic job bytes, exact external pins,
 producer-contract reprojection, registry/capability membership and separation,
 receipt count reconciliation, manifest/receipt revision checks, duplicate JSON
 keys, weak/symlink/hard-link inputs, empty or floating revisions and collection
 tokens, resource ceilings, default no-write behavior, private atomic
 publication, non-secret approvals, schema drift, absence of direct live
-client/process imports, immutable pending identity, metadata drift, lock
+client/process imports, opaque raw-basis reprojection, synchronized recipe/input
+forgery rejection, immutable pending identity, metadata drift, lock
 replacement, committed-but-uncertain durability, and the legacy execution
 boundary.
