@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-animation-ue-capability-v1.schema.json",
+  "title": "VISTA Animation UE Plugin Live Capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "operation_id",
+    "operation_fingerprint",
+    "nonce_marker",
+    "challenge_digest",
+    "slot_binding",
+    "plugin_artifact",
+    "process_instance_id",
+    "content_proof",
+    "security",
+    "operation_allowlist_digest",
+    "operations"
+  ],
+  "properties": {
+    "schema": { "const": "vista-animation-ue-capability/v1" },
+    "status": { "const": "ready" },
+    "operation_id": { "const": "vista.animation.capabilities.v1" },
+    "operation_fingerprint": {
+      "const": "ab2e3e17bbf8a612054c09270ed7e593dab1706baa682e9e7da732c58a46692b"
+    },
+    "nonce_marker": { "$ref": "#/$defs/nonceMarker" },
+    "challenge_digest": { "$ref": "#/$defs/sha256" },
+    "slot_binding": { "$ref": "#/$defs/slotBinding" },
+    "plugin_artifact": { "$ref": "#/$defs/pluginArtifact" },
+    "process_instance_id": { "$ref": "#/$defs/opaqueId" },
+    "content_proof": { "$ref": "#/$defs/contentProof" },
+    "security": { "$ref": "#/$defs/securityPolicy" },
+    "operation_allowlist_digest": {
+      "const": "851302cc75bd70e99536fa4e7adbf359ab95d94f104a369108bda91b8377c1a3"
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "prefixItems": [
+        {
+          "const": {
+            "operation_id": "vista.animation.preflight.v1",
+            "operation_fingerprint": "44491226546ca0d78bc5d968a2d3ea98474a07a307256520e2321025957e56d0",
+            "request_schema": "vista-animation-preflight-request/v1",
+            "response_schema": "vista-animation-preflight-response/v1",
+            "mutation": false,
+            "max_attempts": 2
+          }
+        },
+        {
+          "const": {
+            "operation_id": "vista.animation.release.v1",
+            "operation_fingerprint": "958c71ab9525719a6e570c148563fef78bde3915a3ba3ac752c843a62f4f5674",
+            "request_schema": "vista-animation-release-request/v1",
+            "response_schema": "vista-animation-release-response/v1",
+            "mutation": true,
+            "max_attempts": 1
+          }
+        },
+        {
+          "const": {
+            "operation_id": "vista.animation.restore.v1",
+            "operation_fingerprint": "f47d059b6aa522571c68b1e7e726d1d5d5625fac330d3cc8413be1a1cce498a7",
+            "request_schema": "vista-animation-restore-request/v1",
+            "response_schema": "vista-animation-restore-response/v1",
+            "mutation": true,
+            "max_attempts": 1
+          }
+        },
+        {
+          "const": {
+            "operation_id": "vista.animation.snapshot.v1",
+            "operation_fingerprint": "2f00085b3d8474fc77bd395cea9fa4d8965320dc1a7413963ef4be49e63ff95d",
+            "request_schema": "vista-animation-snapshot-request/v1",
+            "response_schema": "vista-animation-snapshot-response/v1",
+            "mutation": false,
+            "max_attempts": 2
+          }
+        },
+        {
+          "const": {
+            "operation_id": "vista.animation.start.v1",
+            "operation_fingerprint": "9786b50f455a9277ddc857ec1aa4165a4110cc6d76a76f7e5ff7b7706ee4c30e",
+            "request_schema": "vista-animation-start-request/v1",
+            "response_schema": "vista-animation-start-response/v1",
+            "mutation": true,
+            "max_attempts": 1
+          }
+        },
+        {
+          "const": {
+            "operation_id": "vista.animation.stop.v1",
+            "operation_fingerprint": "39decfb45b7b691d3d962e63c4ad1d1e1de5c1e2c2ced610c7a158116ec16c38",
+            "request_schema": "vista-animation-stop-request/v1",
+            "response_schema": "vista-animation-stop-response/v1",
+            "mutation": true,
+            "max_attempts": 1
+          }
+        },
+        {
+          "const": {
+            "operation_id": "vista.animation.wait.v1",
+            "operation_fingerprint": "151df1d501b0ad2ba96604243cfa0a23a1aa7dffca8c6435e0b4a330e0596916",
+            "request_schema": "vista-animation-wait-request/v1",
+            "response_schema": "vista-animation-wait-response/v1",
+            "mutation": false,
+            "max_attempts": 2
+          }
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "nonceMarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "nonce"],
+      "properties": {
+        "schema": { "const": "vista-animation-ue-nonce-marker/v1" },
+        "nonce": { "type": "string", "pattern": "^[a-f0-9]{32}$" }
+      }
+    },
+    "slotBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "owner_id",
+        "session_id",
+        "slot_id",
+        "scene_revision",
+        "binding_digest"
+      ],
+      "properties": {
+        "schema": { "const": "vista-animation-ue-slot-binding/v1" },
+        "owner_id": { "$ref": "#/$defs/opaqueId" },
+        "session_id": { "$ref": "#/$defs/opaqueId" },
+        "slot_id": { "$ref": "#/$defs/opaqueId" },
+        "scene_revision": { "$ref": "#/$defs/opaqueId" },
+        "binding_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "pluginArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "plugin_name",
+        "plugin_version",
+        "plugin_build_id",
+        "binary_sha256",
+        "engine_version",
+        "target_platform",
+        "api_schema"
+      ],
+      "properties": {
+        "schema": { "const": "vista-animation-ue-plugin-artifact/v1" },
+        "plugin_name": { "const": "VistaAnimationContentApi" },
+        "plugin_version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]{0,63})?$",
+          "maxLength": 80
+        },
+        "plugin_build_id": { "$ref": "#/$defs/opaqueId" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "engine_version": { "$ref": "#/$defs/opaqueId" },
+        "target_platform": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+        },
+        "api_schema": { "const": "vista-animation-ue-content-api/v1" }
+      }
+    },
+    "contentProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "profile_id",
+        "profile_revision",
+        "content_revision",
+        "content_digest",
+        "verification_receipt_id"
+      ],
+      "properties": {
+        "schema": { "const": "vista-animation-ue-content-proof/v1" },
+        "profile_id": { "$ref": "#/$defs/opaqueId" },
+        "profile_revision": { "$ref": "#/$defs/opaqueId" },
+        "content_revision": { "$ref": "#/$defs/opaqueId" },
+        "content_digest": { "$ref": "#/$defs/sha256" },
+        "verification_receipt_id": { "$ref": "#/$defs/opaqueId" }
+      }
+    },
+    "securityPolicy": {
+      "const": {
+        "schema": "vista-animation-ue-security-policy/v1",
+        "json_only": true,
+        "fixed_operation_allowlist": true,
+        "nonce_echo_required": true,
+        "request_digest_echo_required": true,
+        "slot_binding_required": true,
+        "mutation_max_attempts": 1,
+        "caller_python": false,
+        "caller_console": false,
+        "caller_script": false,
+        "caller_asset_paths": false
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-animation-ue-capability-probe-v1.schema.json",
+  "title": "VISTA Animation UE Plugin Live Capability Challenge",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation_id",
+    "operation_fingerprint",
+    "nonce_marker",
+    "slot_binding",
+    "content_proof",
+    "operation_allowlist_digest",
+    "challenge_digest"
+  ],
+  "properties": {
+    "schema": { "const": "vista-animation-ue-capability-probe/v1" },
+    "operation_id": { "const": "vista.animation.capabilities.v1" },
+    "operation_fingerprint": {
+      "const": "ab2e3e17bbf8a612054c09270ed7e593dab1706baa682e9e7da732c58a46692b"
+    },
+    "nonce_marker": {
+      "$ref": "vista-animation-ue-capability-v1.schema.json#/$defs/nonceMarker"
+    },
+    "slot_binding": {
+      "$ref": "vista-animation-ue-capability-v1.schema.json#/$defs/slotBinding"
+    },
+    "content_proof": {
+      "$ref": "vista-animation-ue-capability-v1.schema.json#/$defs/contentProof"
+    },
+    "operation_allowlist_digest": {
+      "const": "851302cc75bd70e99536fa4e7adbf359ab95d94f104a369108bda91b8377c1a3"
+    },
+    "challenge_digest": {
+      "$ref": "vista-animation-ue-capability-v1.schema.json#/$defs/sha256"
+    }
+  }
+}

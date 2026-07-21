@@ -136,10 +136,11 @@ brace 與 lift-foot 明確拆成同一個 5 秒 frame，依 stable event ID 取�
   foot-contact anchors；wheeled chair 尚未證明可安全 drag 且保留 caster physics。
 - 尚未把這些高階 broker 方法接到 single-owner UE bridge；現有 generic `agent_action`
   registry 不是等價實作，不能當作 verified adapter。
-- 尚未有受信任的 UE `invokeAnimationContentApi` 實作與 immutable operation fingerprint
-  registry。現有 generic `execute_python_script`／`vbp`／montage path 工具不能接到此
-  adapter。若 Content API 無法只靠 profile proof 安全解析固定 content，factory 應因
-  缺少 injected transport 而 fail closed，不能退回 generic command。
+- Server-side immutable operation fingerprint registry 與 live capability/readiness contract
+  已完成，但尚未有受信任、可編譯與已部署的 UE `invokeAnimationContentApi` plugin
+  implementation。Repo audit、固定 plugin artifact 要求與管理員部署 gate 見
+  `animation-ue-plugin-readiness.md`。現有 generic `execute_python_script`／`vbp`／montage
+  path 工具不能接到此 adapter；缺少專用 transport 時必須 fail closed。
 - 現有 `UeMcpBroker` 尚未實作並證明 `maxAttempts` contract；把 options 傳入但 transport
   忽略它不算安全接線。正式 integration 必須加入 no-retry mutation transport test，並
   驗證 timeout／disconnect 後不會送出第二個 UE mutation。
@@ -157,10 +158,12 @@ profile／broker 只驗證 contract 與 failure semantics，不能複製到 Prod
 ```bash
 node --test simworld_studio_workspace/web/server/tests/vista-animation-runtime.test.js
 node --test simworld_studio_workspace/web/server/tests/vista-animation-ue-adapter.test.js
+node --test simworld_studio_workspace/web/server/tests/vista-animation-ue-readiness.test.js
 node --test \
   simworld_studio_workspace/web/server/tests/vista-timeline-compiler.test.js \
   simworld_studio_workspace/web/server/tests/vista-timeline-scheduler.test.js \
   simworld_studio_workspace/web/server/tests/vista-animation-runtime.test.js \
-  simworld_studio_workspace/web/server/tests/vista-animation-ue-adapter.test.js
+  simworld_studio_workspace/web/server/tests/vista-animation-ue-adapter.test.js \
+  simworld_studio_workspace/web/server/tests/vista-animation-ue-readiness.test.js
 git diff --check
 ```
