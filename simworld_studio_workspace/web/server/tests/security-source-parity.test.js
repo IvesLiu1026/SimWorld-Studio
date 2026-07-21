@@ -57,27 +57,25 @@ test("selected-candidate telemetry is guarded, lease-bound, and redacted before 
 test("fixed VISTA routes stay behind the shared guards with no dynamic command route", () => {
   const indexPath = path.resolve(__dirname, "../index.js");
   const source = fs.readFileSync(indexPath, "utf8");
+  const routeSource = fs.readFileSync(path.resolve(__dirname, "../vista-runtime-routes.js"), "utf8");
   const transportGuard = source.indexOf("app.use(createTransportRequestGuard(STUDIO_TRANSPORT))");
   const accessGuard = source.indexOf("app.use(createAccessGuard(STUDIO_ACCESS_TOKEN,{transport:STUDIO_TRANSPORT}))");
   const modelGate = source.indexOf("app.use(createModelGate(");
-  const setupRoute = source.indexOf(
-    'app.post("/api/vista/setup_vista_play_mode",vistaRuntimeBroker.setupVistaPlayMode)',
+  const runtimeMount = source.indexOf(
+    'app.use("/api/vista",createVistaRuntimeRouter({registry:vistaRuntimeRegistry}))',
   );
-  const stopRoute = source.indexOf(
-    'app.post("/api/vista/stop_vista_play_mode",vistaRuntimeBroker.stopVistaPlayMode)',
-  );
-  const stateRoute = source.indexOf(
-    'app.get("/api/vista/get_vista_state",vistaRuntimeBroker.getVistaState)',
-  );
-  for (const route of [setupRoute, stopRoute, stateRoute]) {
-    assert.ok(transportGuard >= 0 && transportGuard < route);
-    assert.ok(accessGuard >= 0 && accessGuard < route);
-    assert.ok(modelGate >= 0 && modelGate < route);
-  }
-  assert.ok(setupRoute >= 0);
-  assert.ok(stopRoute >= 0);
-  assert.ok(stateRoute >= 0);
-  assert.match(source, /createVistaRuntimeBroker\(\{ueBroker\}\)/);
+  assert.ok(transportGuard >= 0 && transportGuard < runtimeMount);
+  assert.ok(accessGuard >= 0 && accessGuard < runtimeMount);
+  assert.ok(modelGate >= 0 && modelGate < runtimeMount);
+  assert.ok(runtimeMount >= 0);
+  assert.match(source, /createVistaRuntimeControllerRegistry\(\{/);
+  assert.match(source, /resolveIdentity:_resolveVistaIdentity/);
+  assert.match(source, /resolveUeBroker:_resolveVistaSlotBroker/);
+  assert.match(source, /resolveSceneProof:\(identity\)=>vistaSceneBuildRuntime\.service\.resolveActiveRuntimeProof\(identity\)/);
+  assert.doesNotMatch(source, /createVistaRuntimeBroker\(\{ueBroker\}\)|vistaRuntimeBroker/);
+  assert.match(routeSource, /router\.post\("\/setup_vista_play_mode", emptyPost\("startForIdentity"\)\)/);
+  assert.match(routeSource, /router\.post\("\/stop_vista_play_mode", emptyPost\("stopForIdentity"\)\)/);
+  assert.match(routeSource, /router\.get\("\/get_vista_state"/);
   assert.match(source, /req\.query\.cirrus!==undefined/);
   assert.match(source, /req\.query\.ss!==undefined&&req\.query\.ss!==expectedSignallingUrl/);
   assert.match(source, /app\.get\("\/api\/pixel-streaming-url",studioStreaming\.issueEndpoint\)/);
@@ -99,6 +97,7 @@ test("animation timeline is mounted through the lease-bound dedicated UE transpo
   assert.ok(animationMount >= 0);
   assert.match(source, /createVistaAnimationDedicatedTransportResolver\(\{\s*resolveUeBroker:_resolveVistaSlotBroker/);
   assert.match(source, /transportResolver:_vistaAnimationTransportResolver/);
+  assert.match(source, /runtimeLifecycle:vistaRuntimeRegistry/);
   assert.match(
     source,
     /isActiveSessionBinding:\(identity\)=>studioStreaming\.isActiveSessionBinding\(identity\)/,
