@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-animation-content-inspection-receipt-v1.schema.json",
+  "title": "Live UE inspection receipt for a project-owned VISTA animation profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source_contract_sha256",
+    "profile_id",
+    "profile_revision",
+    "content_revision",
+    "content_digest",
+    "project",
+    "verification",
+    "assets",
+    "actions",
+    "checks"
+  ],
+  "properties": {
+    "schema": { "const": "vista-animation-content-inspection-receipt/v1" },
+    "source_contract_sha256": { "$ref": "#/$defs/sha256" },
+    "profile_id": { "$ref": "#/$defs/safeId" },
+    "profile_revision": { "$ref": "#/$defs/safeId" },
+    "content_revision": { "$ref": "#/$defs/opaqueId" },
+    "content_digest": { "$ref": "#/$defs/sha256" },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_name", "engine_version", "project_revision", "project_descriptor_sha256"],
+      "properties": {
+        "project_name": { "$ref": "#/$defs/safeId" },
+        "engine_version": { "const": "5.3.2" },
+        "project_revision": { "$ref": "#/$defs/opaqueId" },
+        "project_descriptor_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "receipt_id", "verified_at", "operator_id", "method"],
+      "properties": {
+        "status": { "const": "verified" },
+        "receipt_id": { "$ref": "#/$defs/opaqueId" },
+        "verified_at": { "type": "string", "format": "date-time" },
+        "operator_id": { "$ref": "#/$defs/opaqueId" },
+        "method": { "const": "ue53_disposable_live_inspection_v1" }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "items": { "$ref": "#/$defs/assetReceipt" }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": { "$ref": "#/$defs/actionReceipt" }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pawn_spawnable",
+        "generated_class_matches",
+        "skeletal_mesh_matches",
+        "anim_blueprint_matches",
+        "no_redirectors",
+        "dependency_closure",
+        "disposable_pie",
+        "scene_zero_diff"
+      ],
+      "properties": {
+        "pawn_spawnable": { "const": true },
+        "generated_class_matches": { "const": true },
+        "skeletal_mesh_matches": { "const": true },
+        "anim_blueprint_matches": { "const": true },
+        "no_redirectors": { "const": true },
+        "dependency_closure": { "const": true },
+        "disposable_pie": { "const": true },
+        "scene_zero_diff": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,119}$"
+    },
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "objectPath": {
+      "type": "string",
+      "pattern": "^/Game/[A-Za-z0-9_./-]{1,500}$"
+    },
+    "classPath": {
+      "type": "string",
+      "pattern": "^/Script/[A-Za-z0-9_./-]{1,250}$"
+    },
+    "assetReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "object_path",
+        "observed_class",
+        "package_sha256",
+        "loaded",
+        "skeleton_asset_id",
+        "notify_names",
+        "root_motion_enabled"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/safeId" },
+        "object_path": { "$ref": "#/$defs/objectPath" },
+        "observed_class": { "$ref": "#/$defs/classPath" },
+        "package_sha256": { "$ref": "#/$defs/sha256" },
+        "loaded": { "const": true },
+        "skeleton_asset_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/safeId" },
+            { "type": "null" }
+          ]
+        },
+        "notify_names": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "root_motion_enabled": { "type": "boolean" }
+      }
+    },
+    "actionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "implementation_asset_id",
+        "completion_signal",
+        "implementation_matches",
+        "skeleton_matches",
+        "completion_signal_observed",
+        "behavior_evidence_sha256",
+        "observed_live_checks",
+        "verified_parameters",
+        "ik_contact_verified",
+        "root_motion_verified",
+        "collision_verified",
+        "recovery_alignment_verified"
+      ],
+      "properties": {
+        "action": {
+          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+        },
+        "implementation_asset_id": { "$ref": "#/$defs/safeId" },
+        "completion_signal": { "$ref": "#/$defs/safeId" },
+        "implementation_matches": { "const": true },
+        "skeleton_matches": { "const": true },
+        "completion_signal_observed": { "const": true },
+        "behavior_evidence_sha256": { "$ref": "#/$defs/sha256" },
+        "observed_live_checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "verified_parameters": { "$ref": "#/$defs/exactParameters" },
+        "ik_contact_verified": { "type": "boolean" },
+        "root_motion_verified": { "type": "boolean" },
+        "collision_verified": { "type": "boolean" },
+        "recovery_alignment_verified": { "type": "boolean" }
+      }
+    },
+    "exactParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration_sec", "distance_cm", "height_cm", "hand", "foot", "direction"],
+      "properties": {
+        "duration_sec": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 60 }, { "type": "null" }] },
+        "distance_cm": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 500 }, { "type": "null" }] },
+        "height_cm": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 150 }, { "type": "null" }] },
+        "hand": { "oneOf": [{ "enum": ["left", "right", "both"] }, { "type": "null" }] },
+        "foot": { "oneOf": [{ "enum": ["left", "right"] }, { "type": "null" }] },
+        "direction": { "oneOf": [{ "enum": ["forward", "backward", "left", "right"] }, { "type": "null" }] }
+      }
+    }
+  }
+}

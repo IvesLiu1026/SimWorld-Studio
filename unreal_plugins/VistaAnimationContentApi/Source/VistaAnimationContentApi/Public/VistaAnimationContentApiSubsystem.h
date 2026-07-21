@@ -1,9 +1,11 @@
 #pragma once
 
+// clang-format off
 #include "CoreMinimal.h"
 #include "Subsystems/EngineSubsystem.h"
 #include "VistaAnimationContentDriver.h"
 #include "VistaAnimationContentApiSubsystem.generated.h"
+// clang-format on
 
 struct FVistaAnimationSlotBinding {
   FString OwnerId;
@@ -22,7 +24,10 @@ struct FVistaAnimationContentProof {
 
 struct FVistaAnimationTrustedAction {
   EVistaAnimationAction Action = EVistaAnimationAction::Pause;
+  FString AdapterId;
+  FString BridgeActionId;
   FString CompletionSignal;
+  int32 TimeoutMs = 0;
 };
 
 /**

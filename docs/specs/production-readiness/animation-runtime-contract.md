@@ -50,7 +50,7 @@ Blueprint function name 或 `vbp` command：
 | `preflightAnimation` | No | exact content/profile digest、capabilities、anchors、completion signal |
 | `snapshotAnimationState` | No | snapshot ID、actor/target IDs、state digest、engine time |
 | `startAnimationAction` | Yes | fixed bridge action ID、opaque action handle、engine time |
-| `waitAnimationAction` | No | exact verified completion signal、engine time、evidence IDs |
+| `waitAnimationAction` | No | backend-observed exact completion signal、immutable completion evidence ID/SHA、engine time、evidence IDs |
 | `stopAnimationAction` | Yes | `stopped` 或 `already_stopped` for exact handle |
 | `releaseAnimationAction` | Yes | transient IK/root-motion controls released |
 | `restoreAnimationState` | Yes | snapshot ID 與 state digest 完全相同 |
@@ -120,6 +120,10 @@ Adapter 另行維護單一 active preflight 與 lifecycle state，要求 snapsho
 ID + digest。所有七種 response payload 都再次做 exact validation，而不是只依賴外層
 runtime validator。
 
+UE plugin 不會從 trusted config 合成 completion。Project backend 的 `Wait` 必須回報實際
+observed notify/contact signal 與 immutable completion evidence descriptor；signal 不等於 action
+pin、evidence ID 不在 evidence list，或只有 timer elapsed，都會 fail closed。
+
 若 start 已送出卻拿不到可驗證 handle，runtime 會嘗試 restore snapshot，但 cleanup 必須
 標記為 incomplete；不得宣稱角色已停止。一般 failure、timeout 或 operator Stop 則依序：
 
@@ -158,14 +162,22 @@ Importer 的 golden SceneSpec 現在是 0／2／5／5／9 秒：`look_at`、`dra
 猜測成額外 event。原始 `Scene.Actions` 時間戳仍須嚴格遞增且唯一，只有經來源驗證後的
 normalized SceneSpec 允許同秒 event 以非遞減順序存在。
 
+第一個 `vista_mmg040` content revision 將 runtime parameters 精確限制為既有 server defaults：
+look-at 1s、drag right/120cm/2s、brace both/2s、lift-foot left/35cm/2s、pause 3s；額外的
+fall/recover capability 只驗證 `forward`。這是 content-evidence boundary，不是 wire schema
+的全域能力宣告。其他距離、手腳、duration 或方向必須以新 profile revision 和 variant-specific
+receipt 解鎖，不能沿用單份 evidence。
+
 30 FPS 的 `mmg_040` checkpoints 應至少對應 frame 0／60／150／270／360。已明確拆成
 同一個 5 秒 frame 的 brace 與 lift-foot 依 stable event ID 取得 `frame_order`
 0／1，不依 JavaScript callback race 決定順序。
 
 ## 尚未解除的 Live UE／Content Gates
 
-- UE content owner 尚未提供真實 pawn、skeleton、AnimBP／Control Rig、montage 與
-  completion notify 的 immutable revision + digest + receipt。
+- Project-owned `/Game/VISTA/MMG040/...` path、class、skeleton、AnimBP／Control Rig／IK Rig、
+  montage、notify 與 behavior receipt contract 已固定；UE content owner 尚未 author/import
+  對應真實 assets，也尚未提供 immutable live inspection/content receipt。完整矩陣與流程見
+  `animation-mmg040-content-driver-runbook.md`。
 - `mmg_040` 的 chair／cabinet／stool actors 尚未建立並驗證 gaze、hand-contact、
   foot-contact anchors；wheeled chair 尚未證明可安全 drag 且保留 caster physics。
 - 尚未把這些高階 broker 方法接到 single-owner UE bridge；現有 generic `agent_action`
@@ -173,10 +185,13 @@ normalized SceneSpec 允許同秒 event 以非遞減順序存在。
   接到 typed adapter policy，但不會執行 generic `vbp`；沒有 live driver proof 時仍
   `start_allowed=false`。
 - Server-side immutable operation fingerprint registry 與 live capability/readiness contract
-  已完成，但尚未有受信任、可編譯與已部署的 UE `invokeAnimationContentApi` plugin
-  implementation。Repo audit、固定 plugin artifact 要求與管理員部署 gate 見
-  `animation-ue-plugin-readiness.md`。現有 generic `execute_python_script`／`vbp`／montage
-  path 工具不能接到此 adapter；缺少專用 transport 時必須 fail closed。
+  已完成；plugin `1.1.0` source 也已有 `FVistaMmg040ContentDriver` concrete policy mapping，
+  configure 前會把 trusted proof 綁到 sealed receipt。但 typed project backend、exact UE 5.3.2
+  rebuild/load 與 project listener 尚未完成，因此仍沒有可部署的 live
+  `invokeAnimationContentApi` implementation。Repo audit、固定 plugin artifact 要求與管理員
+  deployment gate 見 `animation-ue-plugin-readiness.md`。現有 generic
+  `execute_python_script`／`vbp`／caller montage path 工具不能接到此 adapter；缺少 live
+  backend/transport 時必須 fail closed。
 - 現有 `UeMcpBroker` 尚未實作並證明 `maxAttempts` contract；把 options 傳入但 transport
   忽略它不算安全接線。正式 integration 必須加入 no-retry mutation transport test，並
   驗證 timeout／disconnect 後不會送出第二個 UE mutation。

@@ -1,20 +1,22 @@
 # VISTA Animation UE Plugin Capability / Readiness Contract
 
 狀態：**server-side contract、四命令 dedicated transport、portable UE plugin source 與
-UE 5.7.3 BuildPlugin package 已完成；project listener、真實 content driver 與 live-load
-receipt 尚未完成，因此 Live UE 仍是 `not_ready`。** 編譯流程沒有啟動 Unreal Editor、
-修改場景，或把 generic MCP、Python、console／`vbp` 包裝成假的 Content API。
+`mmg_040` concrete content-policy driver/profile contract 已完成；project-owned assets/backend、
+UE 5.3.2 rebuild、project listener 與 live-load/content receipt 尚未完成，因此 Live UE 仍是
+`not_ready`。** 舊 `1.0.0` source 曾通過 UE 5.7.3 BuildPlugin；目前 `1.1.0` source 已變更，
+舊 binary/hash 不再是有效 build evidence。本輪沒有啟動 Unreal Editor、修改場景，或把
+generic MCP、Python、console／`vbp` 包裝成假的 Content API。
 
 ## 結論
 
 目前 checkout 已提供完整、可攜的
-`unreal_plugins/VistaAnimationContentApi` source/module、machine-readable contract、dry-run
-install/build scripts，以及 artifact-manifest helper。Server 也已把 timeline runtime 接到只有
-四個方法的 dedicated transport；mutation policy 由固定 operation fingerprint 推導，
-`UeMcpBroker` 在 queue wait 與每次 bounded read retry 前重驗 lease，所有 mutation 永遠
-`maxAttempts=1`。
+`unreal_plugins/VistaAnimationContentApi` source/module、machine-readable API contract、
+byte-pinned `mmg_040` content source/receipt schemas、concrete policy driver、dry-run install/build
+scripts，以及 artifact/profile helpers。Server 也已把 timeline runtime 接到只有四個方法的
+dedicated transport；mutation policy 由固定 operation fingerprint 推導，`UeMcpBroker` 在
+queue wait 與每次 bounded read retry 前重驗 lease，所有 mutation 永遠 `maxAttempts=1`。
 
-2026-07-21 的可重現建置使用
+2026-07-21 的舊 `1.0.0` 可重現建置使用
 `/mnt/NAS2/yhliu/UE_5.7.3_prebuilt`。UHT、UnrealEditor Development、UnrealGame
 Development、UnrealGame Shipping 與 BuildPlugin package 全部成功。最終 Editor module
 SHA-256 為
@@ -22,11 +24,15 @@ SHA-256 為
 為 `ue573-9a5eb314-fourcmd2`；完整證據見
 `evidence/2026-07-21-host-preflight.md`。
 
-這關閉的是 source／protocol／compile／package gate，不是 content／live gate。Plugin 仍只
-定義 abstract `IVistaAnimationContentDriver`；repo 沒有真實人物 skeleton、AnimBP／Control
-Rig、hand/foot anchors、drag physics、fall/recover montages、completion notify，也沒有把
-四個 reserved commands exact-dispatch 到實際 project listener。因此不能宣稱人物手腳 IK、
-跌倒／復原或 12 秒 timeline 已在 UE 執行成功。
+該紀錄只關閉舊 revision 的 protocol／compile／package gate，不是目前 `1.1.0` source 的
+compile gate，更不是 content／live gate。目前 plugin 有 `FVistaMmg040ContentDriver`，會把
+server proof 綁到 byte-pinned source contract、13 asset receipts、7 behavior receipts，且只
+在 receipt 的 exact live-check/parameter coverage 通過後呼叫七個 typed project backend
+methods。Runtime completion 還必須帶 backend-observed signal 與 immutable evidence ID/SHA，
+不接受 timer 或 subsystem 合成成功；但 repo 仍沒有真實人物 skeleton、AnimBP／Control
+Rig、hand/foot anchors、drag physics、fall/recover montages、completion notify 或 backend，
+也沒有把四個 reserved commands exact-dispatch 到實際 project listener。因此不能宣稱人物
+手腳 IK、跌倒／復原或 12 秒 timeline 已在 UE 執行成功。
 
 ## Server-side machine contract
 
@@ -131,10 +137,10 @@ token 或任意設定）：
 {
   "schema": "vista-animation-ue-plugin-artifact/v1",
   "plugin_name": "VistaAnimationContentApi",
-  "plugin_version": "1.0.0",
-  "plugin_build_id": "ue573-9a5eb314-fourcmd2",
+  "plugin_version": "1.1.0",
+  "plugin_build_id": "ue532-mmg040-reviewed-build-id",
   "binary_sha256": "<64 lowercase hex>",
-  "engine_version": "5.7.3",
+  "engine_version": "5.3.2",
   "target_platform": "linux-x86_64",
   "api_schema": "vista-animation-ue-content-api/v1"
 }
@@ -182,6 +188,11 @@ driver 必須維持這些條件：
   caller-supplied function name、class name、content path、console command 或 script body。
 - 由 slot owner/session/scene context 驗證 actor/target opaque binding ID；caller 不能透過
   binding ID 跨 slot 存取 actor。
+- Trusted config 的 adapter ID、bridge ID、completion signal、timeout 必須逐 action 與 sealed
+  content contract 相同；第一個 `mmg_040` revision 只接受 server defaults 與 forward
+  fall/recover，未驗證 variants 必須 fail closed。
+- `Wait` 必須證明 exact completion notify/contact signal，並回傳 evidence list 內的 immutable
+  completion evidence ID 與 lowercase SHA-256；wall-clock elapsed 本身不是成功條件。
 - mutation 不做 transport retry。若 socket timeout/disconnect 發生在送出後，server 端
   只能得到 outcome-unknown，再走 snapshot/reconcile；不能重送 start/stop/release/restore。
 - 可用 invocation ID + request digest 做 idempotency journal 以辨識 duplicate，但 duplicate
@@ -200,8 +211,9 @@ timeline routes、global readiness proof expiry/revocation與 UI workbench 已�
 
 1. 將 package 安裝到 disposable／正式 project，並在 private listener 對四個 reserved
    commands exact-dispatch；任何 `vista_animation_*` unknown command 都 terminal reject。
-2. 實作 project-owned content driver，逐項綁定 verified pawn、skeleton、Control Rig／IK、
-   montage、notify、interaction assertion 與 screenshot／pose evidence。
+2. 依 `animation-mmg040-content-driver-runbook.md` author 13 個 pinned project assets，實作
+   `IVistaMmg040ProjectBackend`，產生 live inspection/content receipt；現有 concrete driver
+   只會驗證與調度 typed backend，不會替代真正 montage／IK／physics/evidence implementation。
 3. 以 root-owned manifest、verified content profile及 current owner/session/slot/scene 執行
    live nonce challenge；readiness 失效必須立即 fail closed。
 4. 將 plugin package receipt、live capability receipt、content receipt與 disposable UE
@@ -231,5 +243,5 @@ Focused tests cover exact schema/fingerprints, regular-file source audit, four-c
 valid live challenge, forbidden generic transports, legacy env override rejection, nonce/digest/slot/
 artifact/content/security/operation mismatch, unknown fields, response bounds, credential-safe failures,
 timeout/cancellation, nonce replay, queue-wait lease revocation and mutation no-retry behavior. The
-UE 5.7.3 package build is separately recorded as host evidence; tests do not substitute for live
-project/content evidence.
+old `1.0.0` UE 5.7.3 package build is separately recorded as historical host evidence; it does not
+attest `1.1.0`, and tests do not substitute for an exact UE 5.3.2 build or live project/content evidence.

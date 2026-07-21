@@ -83,6 +83,9 @@ struct FVistaAnimationStartOutput {
 
 struct FVistaAnimationWaitOutput {
   bool bCompleted = false;
+  FString ObservedCompletionSignal;
+  FString CompletionEvidenceId;
+  FString CompletionEvidenceSha256;
   double EngineTimeSec = 0.0;
   TArray<FString> EvidenceIds;
 };
@@ -127,6 +130,22 @@ struct FVistaAnimationEvidenceCaptureOutput {
       EVistaAnimationEvidenceAssertion::NotApplicable;
 };
 
+struct FVistaAnimationDriverProfileProof {
+  FString ProfileId;
+  FString ProfileRevision;
+  FString ContentRevision;
+  FString ContentDigest;
+  FString VerificationReceiptId;
+};
+
+struct FVistaAnimationDriverTrustedAction {
+  EVistaAnimationAction Action = EVistaAnimationAction::Pause;
+  FString AdapterId;
+  FString BridgeActionId;
+  FString CompletionSignal;
+  int32 TimeoutMs = 0;
+};
+
 /**
  * Trusted, project-owned content implementation.
  *
@@ -139,6 +158,16 @@ struct FVistaAnimationEvidenceCaptureOutput {
 class VISTAANIMATIONCONTENTAPI_API IVistaAnimationContentDriver {
 public:
   virtual ~IVistaAnimationContentDriver() = default;
+
+  /**
+   * Bind the subsystem's trusted proof to the driver's independently sealed
+   * content receipt before the private listener can become configured.
+   * Implementations must fail closed; a matching string shape is not evidence.
+   */
+  virtual bool ValidateTrustedProfile(
+      const FVistaAnimationDriverProfileProof &Proof,
+      const TArray<FVistaAnimationDriverTrustedAction> &Actions,
+      FString &OutSafeErrorCode) const = 0;
 
   virtual bool Preflight(const FVistaAnimationPreflightInput &Input,
                          FVistaAnimationPreflightOutput &Output,

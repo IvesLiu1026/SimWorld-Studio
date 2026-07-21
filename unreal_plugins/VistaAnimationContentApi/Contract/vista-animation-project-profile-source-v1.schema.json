@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-animation-project-profile-source-v1.schema.json",
+  "title": "Project-owned VISTA animation profile source contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile_id",
+    "profile_revision",
+    "sample_id",
+    "target",
+    "source_provenance",
+    "current_readiness",
+    "assets",
+    "actions",
+    "receipt_requirements"
+  ],
+  "properties": {
+    "schema": { "const": "vista-animation-project-profile-source/v1" },
+    "profile_id": { "$ref": "#/$defs/safeId" },
+    "profile_revision": { "$ref": "#/$defs/safeId" },
+    "sample_id": { "$ref": "#/$defs/safeId" },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_name", "engine_version", "content_namespace"],
+      "properties": {
+        "project_name": { "$ref": "#/$defs/safeId" },
+        "engine_version": { "const": "5.3.2" },
+        "content_namespace": {
+          "type": "string",
+          "pattern": "^/Game/[A-Za-z0-9_/.-]{1,500}/$"
+        }
+      }
+    },
+    "source_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "dataset_revision",
+        "archive_name",
+        "archive_sha256",
+        "project_patch",
+        "status"
+      ],
+      "properties": {
+        "repository": { "const": "SimWorld-AI/SimWorld-Studio" },
+        "dataset_revision": { "$ref": "#/$defs/gitRevision" },
+        "archive_name": { "const": "SimWorld-Studio-Minimal.tar.gz" },
+        "archive_sha256": { "$ref": "#/$defs/sha256" },
+        "project_patch": { "$ref": "#/$defs/gitRevision" },
+        "status": { "const": "retarget_source_only" }
+      }
+    },
+    "current_readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "reason_codes"],
+      "properties": {
+        "ready": { "const": false },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/errorCode" }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "receipt_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "method", "required_checks"],
+      "properties": {
+        "schema": { "const": "vista-animation-content-inspection-receipt/v1" },
+        "method": { "const": "ue53_disposable_live_inspection_v1" },
+        "required_checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,119}$"
+    },
+    "errorCode": {
+      "type": "string",
+      "pattern": "^ANIMATION_[A-Z0-9_]{1,119}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "gitRevision": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "objectPath": {
+      "type": "string",
+      "pattern": "^/Game/[A-Za-z0-9_./-]{1,500}$"
+    },
+    "classPath": {
+      "type": "string",
+      "pattern": "^/Script/[A-Za-z0-9_./-]{1,250}$"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "role",
+        "object_path",
+        "expected_class",
+        "skeleton_asset_id",
+        "required_notifies",
+        "root_motion_policy"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/safeId" },
+        "role": {
+          "enum": [
+            "pawn_class",
+            "skeletal_mesh",
+            "skeleton",
+            "anim_blueprint",
+            "control_rig",
+            "ik_rig",
+            "anim_montage"
+          ]
+        },
+        "object_path": { "$ref": "#/$defs/objectPath" },
+        "expected_class": { "$ref": "#/$defs/classPath" },
+        "skeleton_asset_id": {
+          "oneOf": [
+            { "$ref": "#/$defs/safeId" },
+            { "type": "null" }
+          ]
+        },
+        "required_notifies": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "root_motion_policy": {
+          "enum": ["required", "forbidden", "not_applicable"]
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "adapter_id",
+        "bridge_action_id",
+        "implementation_asset_id",
+        "supporting_asset_ids",
+        "completion_signal",
+        "timeout_ms",
+        "target_policy",
+        "actor_capabilities",
+        "target_capabilities",
+        "anchor_kinds",
+        "parameter_contract",
+        "live_checks"
+      ],
+      "properties": {
+        "action": {
+          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+        },
+        "adapter_id": { "$ref": "#/$defs/safeId" },
+        "bridge_action_id": { "$ref": "#/$defs/safeId" },
+        "implementation_asset_id": { "$ref": "#/$defs/safeId" },
+        "supporting_asset_ids": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "completion_signal": { "$ref": "#/$defs/safeId" },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 60000
+        },
+        "target_policy": { "enum": ["required", "optional", "forbidden"] },
+        "actor_capabilities": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "target_capabilities": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "anchor_kinds": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
+        "parameter_contract": { "$ref": "#/$defs/exactParameters" },
+        "live_checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        }
+      }
+    },
+    "exactParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration_sec", "distance_cm", "height_cm", "hand", "foot", "direction"],
+      "properties": {
+        "duration_sec": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 60 }, { "type": "null" }] },
+        "distance_cm": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 500 }, { "type": "null" }] },
+        "height_cm": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 150 }, { "type": "null" }] },
+        "hand": { "oneOf": [{ "enum": ["left", "right", "both"] }, { "type": "null" }] },
+        "foot": { "oneOf": [{ "enum": ["left", "right"] }, { "type": "null" }] },
+        "direction": { "oneOf": [{ "enum": ["forward", "backward", "left", "right"] }, { "type": "null" }] }
+      }
+    }
+  }
+}

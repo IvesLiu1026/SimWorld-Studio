@@ -1,0 +1,268 @@
+{
+  "schema": "vista-animation-project-profile-source/v1",
+  "profile_id": "vista_mmg040",
+  "profile_revision": "mmg040_project_content_r1",
+  "sample_id": "mmg_040",
+  "target": {
+    "project_name": "gym_citynav",
+    "engine_version": "5.3.2",
+    "content_namespace": "/Game/VISTA/MMG040/"
+  },
+  "source_provenance": {
+    "repository": "SimWorld-AI/SimWorld-Studio",
+    "dataset_revision": "26bdd2ca18f06ab455023b0a602ede60b3afb243",
+    "archive_name": "SimWorld-Studio-Minimal.tar.gz",
+    "archive_sha256": "806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f",
+    "project_patch": "51426e97354477dca1635217455e644e9ca98976",
+    "status": "retarget_source_only"
+  },
+  "current_readiness": {
+    "ready": false,
+    "reason_codes": [
+      "ANIMATION_MMG040_PROJECT_CONTENT_NOT_AUTHORED",
+      "ANIMATION_MMG040_LIVE_ASSET_RECEIPT_MISSING",
+      "ANIMATION_MMG040_BEHAVIOR_RECEIPT_MISSING",
+      "ANIMATION_MMG040_UE53_PLUGIN_LOAD_PROOF_MISSING"
+    ]
+  },
+  "assets": [
+    {
+      "asset_id": "pawn_class",
+      "role": "pawn_class",
+      "object_path": "/Game/VISTA/MMG040/Character/BP_MMG040Character.BP_MMG040Character_C",
+      "expected_class": "/Script/Engine.BlueprintGeneratedClass",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": [],
+      "root_motion_policy": "not_applicable"
+    },
+    {
+      "asset_id": "skeletal_mesh",
+      "role": "skeletal_mesh",
+      "object_path": "/Game/VISTA/MMG040/Character/SK_MMG040Character.SK_MMG040Character",
+      "expected_class": "/Script/Engine.SkeletalMesh",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": [],
+      "root_motion_policy": "not_applicable"
+    },
+    {
+      "asset_id": "skeleton",
+      "role": "skeleton",
+      "object_path": "/Game/VISTA/MMG040/Character/SKEL_MMG040Character.SKEL_MMG040Character",
+      "expected_class": "/Script/Engine.Skeleton",
+      "skeleton_asset_id": null,
+      "required_notifies": [],
+      "root_motion_policy": "not_applicable"
+    },
+    {
+      "asset_id": "anim_blueprint",
+      "role": "anim_blueprint",
+      "object_path": "/Game/VISTA/MMG040/Character/ABP_MMG040Character.ABP_MMG040Character_C",
+      "expected_class": "/Script/Engine.AnimBlueprintGeneratedClass",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": [],
+      "root_motion_policy": "not_applicable"
+    },
+    {
+      "asset_id": "control_rig",
+      "role": "control_rig",
+      "object_path": "/Game/VISTA/MMG040/Rigs/CR_MMG040Character.CR_MMG040Character",
+      "expected_class": "/Script/ControlRigDeveloper.ControlRigBlueprint",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": [],
+      "root_motion_policy": "not_applicable"
+    },
+    {
+      "asset_id": "ik_rig",
+      "role": "ik_rig",
+      "object_path": "/Game/VISTA/MMG040/Rigs/IK_MMG040Character.IK_MMG040Character",
+      "expected_class": "/Script/IKRig.IKRigDefinition",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": [],
+      "root_motion_policy": "not_applicable"
+    },
+    {
+      "asset_id": "look_at_montage",
+      "role": "anim_montage",
+      "object_path": "/Game/VISTA/MMG040/Montages/AM_MMG040_LookAt.AM_MMG040_LookAt",
+      "expected_class": "/Script/Engine.AnimMontage",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": ["vista_look_at_completed"],
+      "root_motion_policy": "forbidden"
+    },
+    {
+      "asset_id": "brace_montage",
+      "role": "anim_montage",
+      "object_path": "/Game/VISTA/MMG040/Montages/AM_MMG040_Brace.AM_MMG040_Brace",
+      "expected_class": "/Script/Engine.AnimMontage",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": ["vista_brace_contact_verified"],
+      "root_motion_policy": "forbidden"
+    },
+    {
+      "asset_id": "drag_montage",
+      "role": "anim_montage",
+      "object_path": "/Game/VISTA/MMG040/Montages/AM_MMG040_DragChair.AM_MMG040_DragChair",
+      "expected_class": "/Script/Engine.AnimMontage",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": ["vista_drag_distance_reached"],
+      "root_motion_policy": "required"
+    },
+    {
+      "asset_id": "lift_foot_montage",
+      "role": "anim_montage",
+      "object_path": "/Game/VISTA/MMG040/Montages/AM_MMG040_LiftFootHesitate.AM_MMG040_LiftFootHesitate",
+      "expected_class": "/Script/Engine.AnimMontage",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": ["vista_lift_foot_contact_verified"],
+      "root_motion_policy": "forbidden"
+    },
+    {
+      "asset_id": "pause_montage",
+      "role": "anim_montage",
+      "object_path": "/Game/VISTA/MMG040/Montages/AM_MMG040_HoldPose.AM_MMG040_HoldPose",
+      "expected_class": "/Script/Engine.AnimMontage",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": ["vista_pause_completed"],
+      "root_motion_policy": "forbidden"
+    },
+    {
+      "asset_id": "fall_montage",
+      "role": "anim_montage",
+      "object_path": "/Game/VISTA/MMG040/Montages/AM_MMG040_Fall.AM_MMG040_Fall",
+      "expected_class": "/Script/Engine.AnimMontage",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": ["vista_fall_landed"],
+      "root_motion_policy": "required"
+    },
+    {
+      "asset_id": "recover_montage",
+      "role": "anim_montage",
+      "object_path": "/Game/VISTA/MMG040/Montages/AM_MMG040_Recover.AM_MMG040_Recover",
+      "expected_class": "/Script/Engine.AnimMontage",
+      "skeleton_asset_id": "skeleton",
+      "required_notifies": ["vista_recover_aligned"],
+      "root_motion_policy": "required"
+    }
+  ],
+  "actions": [
+    {
+      "action": "look_at",
+      "adapter_id": "vista_look_at_v1",
+      "bridge_action_id": "vista_look_at_v1",
+      "implementation_asset_id": "look_at_montage",
+      "supporting_asset_ids": ["anim_blueprint", "control_rig"],
+      "completion_signal": "vista_look_at_completed",
+      "timeout_ms": 5000,
+      "target_policy": "required",
+      "actor_capabilities": ["gaze"],
+      "target_capabilities": ["gaze_target"],
+      "anchor_kinds": ["gaze_target"],
+      "parameter_contract": {"duration_sec": 1, "distance_cm": null, "height_cm": null, "hand": null, "foot": null, "direction": null},
+      "live_checks": ["constrained_gaze", "completion_notify"]
+    },
+    {
+      "action": "brace",
+      "adapter_id": "vista_brace_ik_v1",
+      "bridge_action_id": "vista_brace_ik_v1",
+      "implementation_asset_id": "brace_montage",
+      "supporting_asset_ids": ["anim_blueprint", "control_rig", "ik_rig"],
+      "completion_signal": "vista_brace_contact_verified",
+      "timeout_ms": 8000,
+      "target_policy": "required",
+      "actor_capabilities": ["upper_body_ik"],
+      "target_capabilities": ["hand_contact_target"],
+      "anchor_kinds": ["hand_contact"],
+      "parameter_contract": {"duration_sec": 2, "distance_cm": null, "height_cm": null, "hand": "both", "foot": null, "direction": null},
+      "live_checks": ["both_hand_contact", "feet_planted", "completion_notify"]
+    },
+    {
+      "action": "drag",
+      "adapter_id": "vista_drag_ik_v1",
+      "bridge_action_id": "vista_drag_ik_v1",
+      "implementation_asset_id": "drag_montage",
+      "supporting_asset_ids": ["anim_blueprint", "control_rig", "ik_rig"],
+      "completion_signal": "vista_drag_distance_reached",
+      "timeout_ms": 10000,
+      "target_policy": "required",
+      "actor_capabilities": ["root_motion", "upper_body_ik"],
+      "target_capabilities": ["draggable", "hand_contact_target"],
+      "anchor_kinds": ["hand_contact"],
+      "parameter_contract": {"duration_sec": 2, "distance_cm": 120, "height_cm": null, "hand": "right", "foot": null, "direction": null},
+      "live_checks": ["hand_contact", "root_motion", "caster_physics", "completion_notify"]
+    },
+    {
+      "action": "lift_foot",
+      "adapter_id": "vista_lift_foot_ik_v1",
+      "bridge_action_id": "vista_lift_foot_ik_v1",
+      "implementation_asset_id": "lift_foot_montage",
+      "supporting_asset_ids": ["anim_blueprint", "control_rig", "ik_rig"],
+      "completion_signal": "vista_lift_foot_contact_verified",
+      "timeout_ms": 8000,
+      "target_policy": "required",
+      "actor_capabilities": ["lower_body_ik"],
+      "target_capabilities": ["foot_contact_target"],
+      "anchor_kinds": ["foot_contact"],
+      "parameter_contract": {"duration_sec": 2, "distance_cm": null, "height_cm": 35, "hand": null, "foot": "left", "direction": null},
+      "live_checks": ["foot_contact", "no_penetration", "completion_notify"]
+    },
+    {
+      "action": "pause",
+      "adapter_id": "vista_pause_pose_v1",
+      "bridge_action_id": "vista_pause_pose_v1",
+      "implementation_asset_id": "pause_montage",
+      "supporting_asset_ids": ["anim_blueprint"],
+      "completion_signal": "vista_pause_completed",
+      "timeout_ms": 10000,
+      "target_policy": "optional",
+      "actor_capabilities": ["hold_pose"],
+      "target_capabilities": [],
+      "anchor_kinds": [],
+      "parameter_contract": {"duration_sec": 3, "distance_cm": null, "height_cm": null, "hand": null, "foot": null, "direction": null},
+      "live_checks": ["pose_hold", "completion_notify"]
+    },
+    {
+      "action": "fall",
+      "adapter_id": "vista_fall_montage_v1",
+      "bridge_action_id": "vista_fall_montage_v1",
+      "implementation_asset_id": "fall_montage",
+      "supporting_asset_ids": ["anim_blueprint"],
+      "completion_signal": "vista_fall_landed",
+      "timeout_ms": 8000,
+      "target_policy": "forbidden",
+      "actor_capabilities": ["fall_montage"],
+      "target_capabilities": [],
+      "anchor_kinds": [],
+      "parameter_contract": {"duration_sec": null, "distance_cm": null, "height_cm": null, "hand": null, "foot": null, "direction": "forward"},
+      "live_checks": ["collision_transition", "landed_pose", "completion_notify"]
+    },
+    {
+      "action": "recover",
+      "adapter_id": "vista_recover_montage_v1",
+      "bridge_action_id": "vista_recover_montage_v1",
+      "implementation_asset_id": "recover_montage",
+      "supporting_asset_ids": ["anim_blueprint"],
+      "completion_signal": "vista_recover_aligned",
+      "timeout_ms": 10000,
+      "target_policy": "forbidden",
+      "actor_capabilities": ["recover_montage"],
+      "target_capabilities": [],
+      "anchor_kinds": [],
+      "parameter_contract": {"duration_sec": null, "distance_cm": null, "height_cm": null, "hand": null, "foot": null, "direction": "forward"},
+      "live_checks": ["root_alignment", "capsule_alignment", "completion_notify"]
+    }
+  ],
+  "receipt_requirements": {
+    "schema": "vista-animation-content-inspection-receipt/v1",
+    "method": "ue53_disposable_live_inspection_v1",
+    "required_checks": [
+      "pawn_spawnable",
+      "generated_class_matches",
+      "skeletal_mesh_matches",
+      "anim_blueprint_matches",
+      "no_redirectors",
+      "dependency_closure",
+      "disposable_pie",
+      "scene_zero_diff"
+    ]
+  }
+}

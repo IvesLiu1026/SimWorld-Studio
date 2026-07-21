@@ -369,6 +369,26 @@ public:
     }
     if (!ValidateConfig(InConfig, OutSafeErrorCode))
       return false;
+    FVistaAnimationDriverProfileProof DriverProof;
+    DriverProof.ProfileId = InConfig.ContentProof.ProfileId;
+    DriverProof.ProfileRevision = InConfig.ContentProof.ProfileRevision;
+    DriverProof.ContentRevision = InConfig.ContentProof.ContentRevision;
+    DriverProof.ContentDigest = InConfig.ContentProof.ContentDigest;
+    DriverProof.VerificationReceiptId =
+        InConfig.ContentProof.VerificationReceiptId;
+    TArray<FVistaAnimationDriverTrustedAction> DriverActions;
+    DriverActions.Reserve(InConfig.Actions.Num());
+    for (const FVistaAnimationTrustedAction &Action : InConfig.Actions)
+      DriverActions.Add({Action.Action, Action.AdapterId, Action.BridgeActionId,
+                         Action.CompletionSignal, Action.TimeoutMs});
+    FString DriverProfileError;
+    if (!InDriver->ValidateTrustedProfile(DriverProof, DriverActions,
+                                          DriverProfileError)) {
+      OutSafeErrorCode = IsSafeErrorCode(DriverProfileError)
+                             ? DriverProfileError
+                             : TEXT("ANIMATION_DRIVER_PROFILE_UNVERIFIED");
+      return false;
+    }
     Config = InConfig;
     Driver = InDriver;
     ProcessInstanceId =
@@ -861,8 +881,11 @@ private:
     }
     TSet<EVistaAnimationAction> Seen;
     for (const FVistaAnimationTrustedAction &Action : Candidate.Actions) {
-      if (!FindAction(Action.Action) || !IsSafeId(Action.CompletionSignal) ||
-          Seen.Contains(Action.Action)) {
+      const FActionContract *Fixed = FindAction(Action.Action);
+      if (!Fixed || Action.AdapterId != Fixed->BridgeActionId ||
+          Action.BridgeActionId != Fixed->BridgeActionId ||
+          !IsSafeId(Action.CompletionSignal) || Action.TimeoutMs < 100 ||
+          Action.TimeoutMs > 60000 || Seen.Contains(Action.Action)) {
         OutError = TEXT("ANIMATION_TRUSTED_CONFIG_INVALID");
         return false;
       }
@@ -1863,9 +1886,16 @@ bool UVistaAnimationContentApiSubsystem::FImplementation::HandleWait(
                            true);
     return false;
   }
+  if (!Output.bCompleted ||
+      Output.ObservedCompletionSignal != CompletionSignal) {
+    OutPayload = MakeError(TEXT("ANIMATION_COMPLETION_SIGNAL_MISMATCH"));
+    return false;
+  }
   Output.EvidenceIds.Sort();
-  if (!Output.bCompleted || !FMath::IsFinite(Output.EngineTimeSec) ||
-      Output.EngineTimeSec < 0 || Output.EngineTimeSec > MaxEngineTimeSec ||
+  if (!IsOpaqueId(Output.CompletionEvidenceId) ||
+      !IsLowerHex(Output.CompletionEvidenceSha256, 64) ||
+      !FMath::IsFinite(Output.EngineTimeSec) || Output.EngineTimeSec < 0 ||
+      Output.EngineTimeSec > MaxEngineTimeSec || Output.EvidenceIds.IsEmpty() ||
       Output.EvidenceIds.Num() > 32) {
     OutPayload = MakeError(TEXT("ANIMATION_WAIT_DRIVER_PROTOCOL_INVALID"));
     return false;
@@ -1877,6 +1907,10 @@ bool UVistaAnimationContentApiSubsystem::FImplementation::HandleWait(
       OutPayload = MakeError(TEXT("ANIMATION_WAIT_DRIVER_PROTOCOL_INVALID"));
       return false;
     }
+  }
+  if (!Output.EvidenceIds.Contains(Output.CompletionEvidenceId)) {
+    OutPayload = MakeError(TEXT("ANIMATION_WAIT_DRIVER_PROTOCOL_INVALID"));
+    return false;
   }
   {
     FScopeLock Guard(&Mutex);
@@ -1892,7 +1926,7 @@ bool UVistaAnimationContentApiSubsystem::FImplementation::HandleWait(
            "\"completion_signal\":%s,\"engine_time\":%.17g,\"evidence_ids\":%"
            "s}"),
       *Quote(Envelope.Operation->ResponseSchema), *Quote(ActionHandle),
-      *Quote(CompletionSignal), Output.EngineTimeSec,
+      *Quote(Output.ObservedCompletionSignal), Output.EngineTimeSec,
       *JsonStringArray(Output.EvidenceIds));
   return true;
 }

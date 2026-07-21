@@ -38,6 +38,14 @@ const driverHeader = readFileSync(path.join(
   pluginRoot,
   "Source/VistaAnimationContentApi/Public/VistaAnimationContentDriver.h",
 ), "utf8");
+const mmg040DriverHeader = readFileSync(path.join(
+  pluginRoot,
+  "Source/VistaAnimationContentApi/Public/VistaMmg040ContentDriver.h",
+), "utf8");
+const mmg040DriverSource = readFileSync(path.join(
+  pluginRoot,
+  "Source/VistaAnimationContentApi/Private/VistaMmg040ContentDriver.cpp",
+), "utf8");
 const strictJsonSource = readFileSync(path.join(
   pluginRoot,
   "Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.cpp",
@@ -46,7 +54,7 @@ const strictJsonSource = readFileSync(path.join(
 test("plugin descriptor and minimum source inventory are complete", () => {
   const descriptor = JSON.parse(readFileSync(path.join(pluginRoot, "VistaAnimationContentApi.uplugin"), "utf8"));
   assert.equal(descriptor.FileVersion, 3);
-  assert.equal(descriptor.VersionName, "1.0.0");
+  assert.equal(descriptor.VersionName, "1.1.0");
   assert.equal(descriptor.CanContainContent, false);
   assert.deepEqual(descriptor.Modules, [{
     Name: "VistaAnimationContentApi",
@@ -61,6 +69,219 @@ test("plugin descriptor and minimum source inventory are complete", () => {
   const audit = readiness.inspectVistaAnimationUePluginSource(temporaryProject);
   assert.equal(audit.source_tree_complete, true);
   assert.deepEqual(audit.missing_files, []);
+  for (const relative of [
+    "Source/VistaAnimationContentApi/Public/VistaMmg040ContentDriver.h",
+    "Source/VistaAnimationContentApi/Private/VistaMmg040ContentDriver.cpp",
+    "ContentProfiles/vista-mmg040-project-profile-source-v1.json",
+    "Contract/vista-animation-project-profile-source-v1.schema.json",
+    "Contract/vista-animation-content-inspection-receipt-v1.schema.json",
+  ]) assert.equal(existsSync(path.join(pluginRoot, relative)), true, `missing ${relative}`);
+});
+
+test("subsystem binds every trusted config to the driver's sealed profile receipt", () => {
+  assert.match(driverHeader, /virtual bool ValidateTrustedProfile\(/);
+  const validationIndex = subsystemSource.indexOf("InDriver->ValidateTrustedProfile");
+  const configuredIndex = subsystemSource.indexOf("Config = InConfig");
+  assert.ok(validationIndex > 0);
+  assert.ok(configuredIndex > validationIndex, "profile validation must run before configuration is accepted");
+  assert.match(subsystemSource, /ANIMATION_DRIVER_PROFILE_UNVERIFIED/);
+});
+
+test("mmg_040 concrete driver pins content and dispatches only typed project actions", () => {
+  const sourceContractPath = path.join(
+    pluginRoot,
+    "ContentProfiles/vista-mmg040-project-profile-source-v1.json",
+  );
+  const sourceContractBytes = readFileSync(sourceContractPath);
+  const sourceContract = JSON.parse(sourceContractBytes);
+  const sourceContractSha = createHash("sha256").update(sourceContractBytes).digest("hex");
+  const joinedCppLiterals = mmg040DriverSource.replace(/"\s*"/g, "");
+  assert.ok(mmg040DriverSource.includes(sourceContractSha));
+  for (const asset of sourceContract.assets) {
+    assert.ok(joinedCppLiterals.includes(asset.object_path), `missing C++ pin ${asset.object_path}`);
+    for (const notify of asset.required_notifies) {
+      assert.ok(mmg040DriverSource.includes(notify), `missing C++ notify ${notify}`);
+    }
+  }
+  for (const action of sourceContract.actions) {
+    assert.ok(mmg040DriverSource.includes(action.adapter_id));
+    assert.ok(mmg040DriverSource.includes(action.bridge_action_id));
+    assert.ok(mmg040DriverSource.includes(action.completion_signal));
+    for (const capability of [
+      ...action.actor_capabilities,
+      ...action.target_capabilities,
+      ...action.anchor_kinds,
+      ...action.live_checks,
+    ]) assert.ok(mmg040DriverSource.includes(capability), `missing C++ action pin ${capability}`);
+  }
+  const enumNames = {
+    look_at: "LookAt", brace: "Brace", drag: "Drag", lift_foot: "LiftFoot",
+    pause: "Pause", fall: "Fall", recover: "Recover",
+  };
+  const actionSection = mmg040DriverSource.slice(
+    mmg040DriverSource.indexOf("FVistaMmg040ContentDriver::PinnedActions()"),
+    mmg040DriverSource.indexOf("FVistaMmg040ContentDriver::FVistaMmg040ContentDriver("),
+  );
+  for (const [index, action] of sourceContract.actions.entries()) {
+    const marker = `{EVistaAnimationAction::${enumNames[action.action]},`;
+    const start = actionSection.indexOf(marker);
+    const next = index + 1 < sourceContract.actions.length
+      ? actionSection.indexOf(`{EVistaAnimationAction::${enumNames[sourceContract.actions[index + 1].action]},`, start + marker.length)
+      : actionSection.length;
+    assert.ok(start >= 0 && next > start, `missing grouped C++ pin for ${action.action}`);
+    const block = actionSection.slice(start, next);
+    for (const value of [
+      action.action, action.adapter_id, action.bridge_action_id, action.completion_signal,
+      ...action.actor_capabilities, ...action.target_capabilities, ...action.anchor_kinds,
+      ...action.live_checks,
+    ]) assert.ok(block.includes(value), `${action.action} C++ block missing ${value}`);
+    assert.ok(block.includes(String(action.timeout_ms)), `${action.action} C++ block missing timeout`);
+    for (const value of Object.values(action.parameter_contract).filter((entry) => entry !== null)) {
+      assert.ok(block.includes(String(value)), `${action.action} C++ block missing parameter ${value}`);
+    }
+  }
+  for (const method of [
+    "StartLookAt", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
+  ]) {
+    assert.match(mmg040DriverHeader, new RegExp(`virtual bool ${method}\\(`));
+    assert.match(mmg040DriverSource, new RegExp(`Backend->${method}\\(`));
+  }
+  for (const forbidden of [
+    "execute_python_script", "ExecutePythonCommand", "ExecuteConsoleCommand", "GEngine->Exec",
+    "ProcessEvent(", "StaticLoadObject", "LoadObject<", "ExecuteCommand(", "vbp ",
+  ]) {
+    assert.equal(mmg040DriverSource.includes(forbidden), false, `forbidden driver primitive: ${forbidden}`);
+  }
+  assert.match(mmg040DriverSource, /Backend->InspectPinnedAsset\(/);
+  assert.match(mmg040DriverSource, /ANIMATION_MMG040_PINNED_ASSET_MISSING/);
+  assert.match(mmg040DriverSource, /ANIMATION_MMG040_NOTIFY_MISMATCH/);
+  assert.match(mmg040DriverSource, /ANIMATION_MMG040_CONTENT_DIGEST_MISMATCH/);
+  assert.match(mmg040DriverSource, /MatchesRuntimeParameters\(Parameters, Pin->Parameters\)/);
+  assert.match(mmg040DriverSource, /ANIMATION_MMG040_PARAMETERS_UNVERIFIED/);
+  assert.match(mmg040DriverSource, /ContainsAll\(Binding\.Capabilities, Pin\.TargetCapabilities\)/);
+  assert.match(mmg040DriverSource, /ContainsAll\(Binding\.AnchorKinds, Pin\.AnchorKinds\)/);
+});
+
+test("failed mmg_040 starts are contained by driver-owned handles, rollback, and quarantine", () => {
+  const backendOutput = mmg040DriverHeader.match(
+    /struct FVistaMmg040BackendStartOutput \{([\s\S]*?)\n\};/,
+  );
+  assert.ok(backendOutput, "typed backend start output is missing");
+  assert.match(backendOutput[1], /double EngineTimeSec/);
+  assert.doesNotMatch(backendOutput[1], /ActionHandle/);
+
+  for (const method of [
+    "StartLookAt", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
+  ]) {
+    const declaration = mmg040DriverHeader.match(
+      new RegExp(`virtual bool ${method}\\(([\\s\\S]*?)\\) = 0;`),
+    );
+    assert.ok(declaration, `missing backend declaration ${method}`);
+    assert.match(declaration[1], /const FString &ActionHandle/);
+    assert.match(declaration[1], /FVistaMmg040BackendStartOutput &Output/);
+    assert.ok(
+      declaration[1].indexOf("ActionHandle") < declaration[1].indexOf("FVistaAnimationActionParameters"),
+      `${method} must receive the reserved handle before parameters`,
+    );
+  }
+
+  const startBody = mmg040DriverSource.slice(
+    mmg040DriverSource.indexOf("bool FVistaMmg040ContentDriver::Start("),
+    mmg040DriverSource.indexOf("bool FVistaMmg040ContentDriver::Wait("),
+  );
+  assert.match(mmg040DriverSource, /HandleNamespace\(\s*FGuid::NewGuid\(\)\.ToString\(EGuidFormats::Digits\)\.ToLower\(\)\)/);
+  assert.match(startBody, /NextHandleSequence > MaxActionHandlesPerDriver/);
+  assert.match(startBody, /ANIMATION_MMG040_ACTION_HANDLE_BUDGET_EXHAUSTED/);
+  assert.match(startBody, /FString::FromInt\(static_cast<int32>\(NextHandleSequence\+\+\)\)/);
+  assert.match(startBody, /ActiveHandles\.Add\(ActionHandle, Action\)/);
+  for (const method of [
+    "StartLookAt", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
+  ]) assert.match(startBody, new RegExp(`Backend->${method}\\([\\s\\S]*?ActionHandle`));
+
+  const backendFalse = startBody.match(/if \(!bStarted\) \{([\s\S]*?)\n  \}/);
+  assert.ok(backendFalse, "backend false-return containment is missing");
+  assert.match(backendFalse[1], /ActiveHandles\.Remove\(ActionHandle\)/);
+  assert.match(backendFalse[1], /ANIMATION_MMG040_START_REJECTED/);
+  assert.match(mmg040DriverHeader, /Returning false MUST be side-effect-free/);
+
+  assert.match(startBody, /Backend->RollbackFailedStart\(Action, ActionHandle, RollbackError\)/);
+  assert.match(startBody, /ANIMATION_MMG040_START_OUTPUT_INVALID/);
+  assert.match(startBody, /bMutationQuarantined = true/);
+  assert.match(startBody, /bPreflightReady = false/);
+  assert.match(startBody, /ANIMATION_MMG040_MUTATION_OUTCOME_UNKNOWN/);
+  assert.ok(
+    startBody.indexOf("ANIMATION_MMG040_MUTATION_QUARANTINED") <
+      startBody.indexOf("IsPreflightBindingAllowed"),
+    "quarantine must be reported before a stale preflight error",
+  );
+
+  const waitBody = mmg040DriverSource.slice(
+    mmg040DriverSource.indexOf("bool FVistaMmg040ContentDriver::Wait("),
+    mmg040DriverSource.indexOf("bool FVistaMmg040ContentDriver::Stop("),
+  );
+  assert.match(waitBody, /ActiveHandles\.Find\(ActionHandle\)/);
+  assert.doesNotMatch(waitBody, /bPreflightReady|bMutationQuarantined/);
+});
+
+test("mmg_040 evidence capture preserves the exact preflight action-target pair", () => {
+  const preflightBody = mmg040DriverSource.slice(
+    mmg040DriverSource.indexOf("bool FVistaMmg040ContentDriver::Preflight("),
+    mmg040DriverSource.indexOf("bool FVistaMmg040ContentDriver::IsPreflightBindingAllowed("),
+  );
+  const evidenceBody = mmg040DriverSource.slice(
+    mmg040DriverSource.indexOf("bool FVistaMmg040ContentDriver::CaptureEvidence("),
+  );
+  assert.match(preflightBody, /ReadyActionTargetPairs = MoveTemp\(VerifiedActionTargetPairs\)/);
+  assert.match(evidenceBody, /bTargetRequired/);
+  assert.match(
+    evidenceBody,
+    /ReadyActionTargetPairs\.Contains\(\s*ActionTargetKey\(\s*Action,\s*Input\.TargetBindingId\.GetValue\(\)\)\)/,
+  );
+  assert.match(evidenceBody, /ANIMATION_MMG040_EVIDENCE_UNVERIFIED/);
+  assert.ok(
+    evidenceBody.indexOf("ReadyActionTargetPairs.Contains") <
+      evidenceBody.indexOf("Backend->CaptureEvidence"),
+    "backend evidence capture must follow exact action-target authorization",
+  );
+});
+
+test("completion cannot be synthesized from a timer or trusted config string", () => {
+  assert.match(driverHeader, /FString ObservedCompletionSignal;/);
+  assert.match(driverHeader, /FString CompletionEvidenceId;/);
+  assert.match(driverHeader, /FString CompletionEvidenceSha256;/);
+  assert.match(mmg040DriverSource, /Output\.ObservedCompletionSignal != Pin->CompletionSignal/);
+  assert.match(mmg040DriverSource, /SeenEvidence\.Contains\(Output\.CompletionEvidenceId\)/);
+  assert.match(mmg040DriverSource, /ANIMATION_MMG040_COMPLETION_SIGNAL_MISMATCH/);
+  assert.match(mmg040DriverSource, /ANIMATION_MMG040_COMPLETION_EVIDENCE_INVALID/);
+  assert.match(subsystemSource, /Output\.ObservedCompletionSignal != CompletionSignal/);
+  assert.match(subsystemSource, /Output\.EvidenceIds\.Contains\(Output\.CompletionEvidenceId\)/);
+  assert.match(subsystemSource, /Quote\(Output\.ObservedCompletionSignal\)/);
+  assert.doesNotMatch(subsystemSource, /Quote\(CompletionSignal\), Output\.EngineTimeSec/);
+  assert.match(subsystemSource, /Action\.AdapterId != Fixed->BridgeActionId/);
+  assert.match(subsystemSource, /Action\.BridgeActionId != Fixed->BridgeActionId/);
+  assert.match(subsystemSource, /Action\.TimeoutMs < 100/);
+});
+
+test("compiled receipt validation preserves exact provenance and live coverage", () => {
+  for (const literal of [
+    "vista-animation-content-inspection-receipt/v1",
+    "gym_citynav",
+    "5.3.2",
+    "verified",
+    "ue53_disposable_live_inspection_v1",
+    "pawn_spawnable",
+    "generated_class_matches",
+    "skeletal_mesh_matches",
+    "anim_blueprint_matches",
+    "no_redirectors",
+    "dependency_closure",
+    "disposable_pie",
+    "scene_zero_diff",
+  ]) assert.ok(mmg040DriverSource.includes(literal), `missing compiled receipt pin ${literal}`);
+  assert.match(mmg040DriverSource, /SameStringSet\(Candidate\.PassedChecks, RequiredReceiptChecks\(\)\)/);
+  assert.match(mmg040DriverSource, /SameStringSet\(Observed\.ObservedLiveChecks, Pin->LiveChecks\)/);
+  assert.match(mmg040DriverSource, /SameParameters\(Observed\.VerifiedParameters, Pin->Parameters\)/);
+  assert.doesNotMatch(mmg040DriverHeader, /bAllRequiredChecksPassed/);
 });
 
 test("portable manifest exactly matches server capability, operation, action, and security contracts", () => {
@@ -238,7 +459,7 @@ test("server accepts a capability response with the portable fixed contract", ()
   const pluginArtifact = {
     schema: readiness.ANIMATION_UE_PLUGIN_ARTIFACT_SCHEMA,
     plugin_name: readiness.ANIMATION_UE_PLUGIN_NAME,
-    plugin_version: "1.0.0",
+    plugin_version: "1.1.0",
     plugin_build_id: "offline-test-build",
     binary_sha256: "2".repeat(64),
     engine_version: "5.3.2",
@@ -286,7 +507,7 @@ test("artifact manifest helper hashes a regular binary and emits the exact schem
   assert.deepEqual(manifest, {
     schema: readiness.ANIMATION_UE_PLUGIN_ARTIFACT_SCHEMA,
     plugin_name: readiness.ANIMATION_UE_PLUGIN_NAME,
-    plugin_version: "1.0.0",
+    plugin_version: "1.1.0",
     plugin_build_id: "offline-test-build",
     binary_sha256: createHash("sha256").update("offline-test-binary\n").digest("hex"),
     engine_version: "5.3.2",
