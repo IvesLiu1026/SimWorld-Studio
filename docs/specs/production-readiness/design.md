@@ -152,6 +152,14 @@ SceneSpec 是 importer、asset resolver、scene builder 與 timeline compiler �
 - `ReviewProvider`：`review({prompt, scene, images, signal}) -> ReviewVerdict`，禁止 tools。
 - `ReviewEvidenceStore`：截圖與 structured evidence、TTL cleanup。
 
+Intent summarizer 是 builder 前的正式 Review stage，而不是帳外 helper：
+
+1. coordinator 先以同一份 `ReviewBudget` 檢查 `summarizer` stage 是否有最低可用額度；
+2. provider CLI 的 `max-budget` 取 operator one-shot ceiling 與該 run 剩餘額度的較小值；
+3. provider terminal event 的 usage/cost 通過 schema、token 與 cost 驗證後，原子記入 `stages.summarizer`；
+4. 若 provider 尚未啟動，可用 deterministic concatenation fallback 且 accounting 保持零；若 process 已可能啟動但結果或 accounting 不可信，handler 必須以 typed error 在第一個 builder round 前終止；
+5. Text 與 Visual handler 共用上述 stage contract，並沿用同一個 AbortSignal。Review Off 不建立 Review run，因此仍為零 summarizer/critic/VLM 呼叫。
+
 關鍵修改：
 
 1. Text/Visual inner calls 使用同一 `internal-http`，非 2xx 在讀 SSE 前就失敗。

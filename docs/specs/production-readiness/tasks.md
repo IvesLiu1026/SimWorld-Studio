@@ -31,11 +31,12 @@ Implementation note（2026-07-21）：所有工作已隔離到乾淨 integration
 - [x] **T1A.10** Fake-provider E2E涵蓋Text/Visual成功、所有failure classes、cancel、跨session isolation與cost budget。
 - [x] **T1A.10a [Code Evidence]** Durable coordinator/outbox、artifact binding、執行前preflight與browser recovery完成離線驗證。
 - [x] **T1A.10b [Code Evidence]** Managed private evidence lifecycle已整合並通過離線驗證：opaque handle、bounded/cancellable capture、fail-closed retain/cleanup與path redaction，builder拿不到raw server path。
+- [ ] **T1A.10c [Correctness]** 將 provider intent summarizer 納入同一份 aggregate Review budget：執行前 gate、run-remaining CLI cap、usage/cost snapshot、Text/Visual parity，以及 provider-attempt accounting 不明時在 builder mutation 前 fail closed。
 - [ ] **T1A.11** 經使用者核准後，在disposable scene各執行一次真實Text與read-only Visual smoke，保存provider/model/usage/verdict與scene diff。
 
-驗收：`requirements.md` REVIEW-001～010全部通過；Visual前後scene snapshot零差異。
+驗收：`requirements.md` REVIEW-001～011全部通過；Visual前後scene snapshot零差異。
 
-Implementation note（2026-07-21）：T1A.8 的 conversation/run cancellation、builder/critic/summarizer/capture abort、intent、round 與 aggregate dollar budget isolation 已完成；builder 與 critic 都受 run 剩餘額度約束，budget 耗盡會在下一個 mutation 前停止。T1A.10 現由實際 HTTP `/api/chat` coordinator harness 覆蓋 Text/Visual success、401、429、500、timeout、malformed SSE、builder failure 不叫 critic、Visual-only capture、exact cancel、獨立 cost budget 與跨 lease isolation。Production review scope 已改由 server-side active Studio lease 權限衍生，不再信任 caller 提供的 session id；loopback 則保留可預期的開發相容行為。Durable outbox會把paid attempt與artifact journal綁定，preflight發生在builder工作之前，browser由server-owned state恢復；managed opaque evidence lifecycle已整合並通過離線測試，但尚未 provision Production journal/evidence root、以service identity執行retention/cleanup/restart或完成backup/restore。T1A.11 仍依 cost/state gate 刻意未執行，本輪沒有paid/live provider call。
+Implementation note（2026-07-22）：T1A.8 的 conversation/run cancellation、builder/critic/summarizer/capture abort，以及 intent/round/session isolation 已完成；builder 與 critic 受 aggregate run 剩餘額度約束。稽核發現 provider summarizer 雖有獨立 CLI cap 與 usage/cost 驗證，尚未記入同一份 aggregate snapshot，因此 aggregate dollar budget closure 改由 T1A.10c 追蹤，在完成前不得宣稱整個 Review cost 已閉合。T1A.10 現由實際 HTTP `/api/chat` coordinator harness 覆蓋 Text/Visual success、401、429、500、timeout、malformed SSE、builder failure 不叫 critic、Visual-only capture、exact cancel、獨立 cost budget 與跨 lease isolation。Production review scope 已改由 server-side active Studio lease 權限衍生，不再信任 caller 提供的 session id；loopback 則保留可預期的開發相容行為。Durable outbox會把paid attempt與artifact journal綁定，preflight發生在builder工作之前，browser由server-owned state恢復；managed opaque evidence lifecycle已整合並通過離線測試，但尚未 provision Production journal/evidence root、以service identity執行retention/cleanup/restart或完成backup/restore。T1A.11 仍需在 disposable scene 保存真實 provider/model/usage/verdict 與 Visual scene diff。
 
 ## Phase 1B — Asset retrieval foundation（P0，需要asset snapshot/admin）
 

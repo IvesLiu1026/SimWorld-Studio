@@ -57,6 +57,7 @@
 - **REVIEW-008**：`/api/verifier-update` 必須實作 authenticated、schema-validated contract，或移除 callback 與死程式碼；不得保留 ghost endpoint。
 - **REVIEW-009**：Stop 必須以 conversation/run id 取消 builder、critic、summarizer、visual capture 與後續 rounds；不同 session 不得共享 intent summary 或取消狀態。
 - **REVIEW-010**：UI 必須保存/恢復實際 review mode，顯示 screenshot evidence、provider/model、round status 與失敗原因。
+- **REVIEW-011**：啟用 provider intent summarizer 時，它必須先通過同一個 per-run aggregate budget gate，CLI 上限不得超過 run 剩餘額度，且經驗證的 usage/cost 必須記入同一份 budget snapshot。若 provider process 已可能開始但無法取得可信 accounting，該 Review 必須在任何 builder mutation 前明確失敗；只有能證明尚未啟動 provider 時，才可使用 deterministic intent fallback 且不得計費。
 
 ### 4.3 公開原生 WebRTC / Coturn
 
