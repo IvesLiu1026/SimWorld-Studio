@@ -78,7 +78,7 @@ Implementation note（2026-07-21）：Phase 2 的 code-only contract、API、art
 - [x] **T3.1** 定義`vista-timeline/v1`與`vista-timeline-run/v1` schema、strict/lenient policy與event lifecycle。
 - [x] **T3.2** 實作timestamp parser、entity binder與capability checker；所有unsupported actions在Start前列出。
 - [x] **T3.3** 建立fixed action adapter interface：precondition、execute、completion、timeout、cancel、cleanup。
-- [ ] **T3.4** 將現有`agent_action` registry接入adapter層並補unit tests；不要讓LLM自由組合未驗證`vbp`命令。
+- [x] **T3.4** 將現有`agent_action` registry接入adapter層並補unit tests；不要讓LLM自由組合未驗證`vbp`命令。
 - [ ] **T3.5** 與UE content owner完成第一批必要Blueprint/montage functions。若`mmg_040`為P0，至少包含drag chair、brace、lift-foot/hesitate及look-at。
 - [x] **T3.6** 將Start從browser硬編碼toolbar click搬到backend/UE runtime bridge；保留lease、nonce、state reconciliation與idempotent Stop。
 - [x] **T3.7** 實作server monotonic scheduler、drift measurement、UE engine-time sampling與bounded queue。
@@ -89,7 +89,7 @@ Implementation note（2026-07-21）：Phase 2 的 code-only contract、API、art
 
 驗收：browser不是clock authority；所有event可追溯，Stop後無PIE/pending action殘留。
 
-Implementation note（2026-07-21）：Browser toolbar coordinates、synthetic Escape 與 iframe Play/Stop 已移除。Lease-bound backend Start/state/Stop、PIE/possession gate、live mesh/material/content receipt revalidation、monotonic scheduler、Stop/Replay、cleanup quarantine、restart recovery-required state及 timeline workbench 已完成離線驗證。`ended_pie` 只在 backend state 明確確認後記錄。T3.5／10／11仍需真實 UE：目前 plugin 只有 abstract content driver，沒有 skeleton/AnimBP/Control Rig、drag/brace/lift-foot/fall/recover montage、notify/contact proof，也尚未在 disposable scene 驗證 0／2／5／9／12 秒 keyframes。
+Implementation note（2026-07-21）：Browser toolbar coordinates、synthetic Escape 與 iframe Play/Stop 已移除。Lease-bound backend Start/state/Stop、PIE/possession gate、live mesh/material/content receipt revalidation、monotonic scheduler、Stop/Replay、cleanup quarantine、restart recovery-required state及 timeline workbench 已完成離線驗證。`ended_pie` 只在 backend state 明確確認後記錄。Legacy `agent_action` 目前只提供 `humanoid.stop_action → pause` candidate；仍需 pinned profile、dedicated driver、live `hold_pose` capability與 completion signal 才會註冊成 executable adapter，絕不 fallback 到 `vbp`/Python。T3.5／10／11仍需真實 UE：目前 plugin 只有 abstract content driver，沒有 skeleton/AnimBP/Control Rig、drag/brace/lift-foot/fall/recover montage、notify/contact proof，也尚未在 disposable scene 驗證 0／2／5／9／12 秒 keyframes。
 
 ## Phase 4 — Public WebRTC + Coturn（可先做程式碼，開網需Admin Gate）
 
