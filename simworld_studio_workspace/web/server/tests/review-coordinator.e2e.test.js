@@ -4,10 +4,16 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 
-const { createReviewLoopCoordinator } = require("../review-loop-coordinator");
+const {
+  createLeaseBoundReviewBroker,
+  createReviewLoopCoordinator,
+  createReviewScopeResolver,
+  createScopedReviewModeStore,
+} = require("../review-loop-coordinator");
 const { ReviewRunRegistry } = require("../review-run-registry");
 const { handleSceneLoop } = require("../scene-loop");
 const { handleVisualSceneLoop } = require("../scene-loop-visual");
+const { createVistaSlotBrokerResolver } = require("../vista-scene-executor-runtime");
 
 const TOKEN = "coordinator-test-access-token-0123456789abcdef";
 
@@ -36,6 +42,14 @@ function identity(request) {
     leaseId: `lease-${principal}`,
     mcpPort: principal === "a" ? 55561 : 55563,
   };
+}
+
+function isActiveIdentity(binding, revoked = new Set()) {
+  if (!binding || revoked.has(binding.leaseId)) return false;
+  const principal = String(binding.ownerId || "").replace(/^owner-/, "");
+  if (!/^[ab]$/.test(principal)) return false;
+  const expected = identity({ headers: { "x-test-principal": principal } });
+  return Object.keys(expected).every((key) => binding[key] === expected[key]);
 }
 
 function readJsonRequest(request) {
@@ -73,14 +87,21 @@ function builderCost(message) {
   return value;
 }
 
-async function createHarness(t) {
+async function createHarness(t, options = {}) {
   const registry = new ReviewRunRegistry();
   const counters = { critic: 0, capture: 0 };
+  const builderBodies = [];
+  const processKeys = new Set();
+  const revokedLeases = new Set();
   let port = 0;
   const coordinator = createReviewLoopCoordinator({
     registry,
     transportProfile: "trusted_proxy",
-    resolveActiveSession: identity,
+    resolveActiveSession(request) {
+      const binding = identity(request);
+      return isActiveIdentity(binding, revokedLeases) ? binding : null;
+    },
+    isActiveSessionBinding: (binding) => isActiveIdentity(binding, revokedLeases),
     loopbackSessionId: "loopback-test",
     textHandler: handleSceneLoop,
     visualHandler: handleVisualSceneLoop,
@@ -90,7 +111,7 @@ async function createHarness(t) {
       internalPort: port,
       internalChatTimeoutMs: 40,
       intentStore: new Map(),
-      updateIntentSummary: async ({ newPrompt }) => newPrompt,
+      updateIntentSummary: options.updateIntentSummary || (async ({ newPrompt }) => newPrompt),
       env: {
         SCENE_LOOP_MAX_ROUNDS: "1",
         REVIEW_RUN_MAX_BUDGET_USD: "1.00",
@@ -126,6 +147,8 @@ async function createHarness(t) {
       response.setHeader("Content-Type", "application/json");
       return response.end(JSON.stringify({ error: "unauthorized" }));
     }
+    builderBodies.push({ ...request.body });
+    processKeys.add(request.body.sessionId);
     const scenario = scenarioFromMessage(request.body.message);
     if (/^(401|429|500)$/.test(scenario)) {
       response.statusCode = Number(scenario);
@@ -158,16 +181,23 @@ async function createHarness(t) {
     if (request.method === "POST" && parsed.pathname === "/api/chat-stop") {
       try {
         const cancellation = coordinator.cancel(request);
+        const requestedRunId = request.body && request.body.runId;
+        const subprocessStopped = (!requestedRunId || cancellation.record)
+          ? processKeys.delete(cancellation.scope.scopeId)
+          : false;
         return response.json({
-          stopped: Boolean(cancellation.record),
+          stopped: Boolean(cancellation.record) || subprocessStopped,
           runId: cancellation.record && cancellation.record.runId,
+          subprocessStopped,
         });
       } catch (error) {
         return response.status(error.statusCode || 400).json({ code: error.code, error: error.message });
       }
     }
     if (request.method === "POST" && parsed.pathname === "/api/chat") {
-      return coordinator.handleChat(request, response, () => fakeBuilder(request, response));
+      return coordinator.handleChat(request, response, () => (
+        coordinator.bindVanillaChat(request, response, () => fakeBuilder(request, response))
+      ));
     }
     return response.status(404).json({ error: "not found" });
   });
@@ -193,6 +223,7 @@ async function createHarness(t) {
         path: pathname,
         method: "POST",
         headers: {
+          Authorization: `Bearer ${TOKEN}`,
           "Content-Type": "application/json",
           "Content-Length": String(payload.length),
           "x-test-principal": principal,
@@ -208,7 +239,15 @@ async function createHarness(t) {
     });
   }
 
-  return { coordinator, counters, post, registry };
+  return {
+    builderBodies,
+    coordinator,
+    counters,
+    post,
+    processKeys,
+    registry,
+    revoke(principal) { revokedLeases.add(`lease-${principal}`); },
+  };
 }
 
 function reviewRequest(mode, scenario, overrides = {}) {
@@ -290,7 +329,11 @@ test("lease-derived scopes prevent cross-session cancellation", async (t) => {
     conversationId: "shared-conversation",
     runId: "run-a",
   }, "b");
-  assert.deepEqual(JSON.parse(wrongSession.raw), { stopped: false, runId: null });
+  assert.deepEqual(JSON.parse(wrongSession.raw), {
+    stopped: false,
+    runId: null,
+    subprocessStopped: false,
+  });
   assert.equal(harness.registry.size, 2);
 
   const stopA = await harness.post("/api/chat-stop", {
@@ -312,10 +355,189 @@ test("lease-derived scopes prevent cross-session cancellation", async (t) => {
   await waitFor(() => harness.registry.size === 0);
 });
 
+test("trusted vanilla child keys ignore caller sessionId and only the owning lease can stop them", async (t) => {
+  const harness = await createHarness(t);
+  const request = {
+    message: "[scenario:success] vanilla fixture",
+    sessionId: "shared-caller-controlled-id",
+    conversationId: "vanilla-conversation",
+    loopMode: "vanilla",
+  };
+  const reply = await harness.post("/api/chat", request, "a");
+  assert.equal(reply.statusCode, 200);
+  const bound = harness.builderBodies.at(-1);
+  assert.match(bound.sessionId, /^review-[a-f0-9]{64}$/);
+  assert.equal(bound.sessionId, bound.conversationId);
+  assert.notEqual(bound.sessionId, request.sessionId);
+  assert.equal(harness.processKeys.has(bound.sessionId), true);
+
+  const crossLease = await harness.post("/api/chat-stop", {
+    sessionId: bound.sessionId,
+    conversationId: "vanilla-conversation",
+  }, "b");
+  assert.equal(JSON.parse(crossLease.raw).stopped, false);
+  assert.equal(harness.processKeys.has(bound.sessionId), true);
+
+  const ownLease = await harness.post("/api/chat-stop", {
+    sessionId: "another-caller-value",
+    conversationId: "vanilla-conversation",
+  }, "a");
+  assert.equal(JSON.parse(ownLease.raw).subprocessStopped, true);
+  assert.equal(harness.processKeys.has(bound.sessionId), false);
+});
+
+test("trusted vanilla and active Review inner requests fail closed after lease revocation", async (t) => {
+  let releaseIntent;
+  let markIntentStarted;
+  const intentStarted = new Promise((resolve) => { markIntentStarted = resolve; });
+  const intentGate = new Promise((resolve) => { releaseIntent = resolve; });
+  const harness = await createHarness(t, {
+    async updateIntentSummary({ newPrompt }) {
+      markIntentStarted();
+      await intentGate;
+      return newPrompt;
+    },
+  });
+  const activeReview = harness.post("/api/chat", reviewRequest("text_loop", "success", {
+    conversationId: "revoked-inner-conversation",
+  }), "a");
+  await intentStarted;
+  harness.revoke("a");
+  releaseIntent();
+  const reviewReply = await activeReview;
+  assert.equal(reviewReply.statusCode, 200);
+  const reviewEvents = parseEvents(reviewReply.raw);
+  assert.equal(reviewEvents.find((event) => event.name === "loop_done").data.reason, "builder_error");
+  assert.equal(reviewEvents.find((event) => event.name === "done").data.isError, true);
+  assert.equal(harness.builderBodies.length, 0);
+
+  const denied = await harness.post("/api/chat", {
+    message: "vanilla fixture",
+    sessionId: "caller-value",
+    conversationId: "revoked-conversation",
+    loopMode: "vanilla",
+  }, "a");
+  assert.equal(denied.statusCode, 401);
+  assert.equal(JSON.parse(denied.raw).code, "REVIEW_ACTIVE_SESSION_REQUIRED");
+  assert.equal(harness.builderBodies.length, 0);
+});
+
+test("scoped Review modes isolate trusted leases and preserve loopback global compatibility", () => {
+  const resolve = createReviewScopeResolver({
+    transportProfile: "trusted_proxy",
+    resolveActiveSession: identity,
+    loopbackSessionId: "unused",
+  });
+  const scopeA = resolve({
+    headers: { "x-test-principal": "a" },
+    body: { conversationId: "shared-conversation" },
+    query: {},
+  });
+  const scopeB = resolve({
+    headers: { "x-test-principal": "b" },
+    body: { conversationId: "shared-conversation" },
+    query: {},
+  });
+  const trusted = createScopedReviewModeStore({
+    transportProfile: "public_webrtc",
+    defaultMode: "vanilla",
+  });
+  assert.equal(trusted.get(scopeA), "vanilla");
+  assert.equal(trusted.get(scopeB), "vanilla");
+  trusted.set(scopeA, "text_loop");
+  trusted.set(scopeB, "visual_loop");
+  assert.equal(trusted.get(scopeA), "text_loop");
+  assert.equal(trusted.get(scopeB), "visual_loop");
+  trusted.delete(scopeA);
+  assert.equal(trusted.get(scopeA), "vanilla");
+  assert.equal(trusted.get(scopeB), "visual_loop");
+
+  const loopback = createScopedReviewModeStore({
+    transportProfile: "loopback",
+    defaultMode: "vanilla",
+  });
+  loopback.set(scopeA, "text_loop");
+  assert.equal(loopback.get(scopeB), "text_loop");
+  loopback.delete(scopeA);
+  assert.equal(loopback.get(scopeB), "text_loop");
+});
+
+test("lease-bound Review broker selects two slots and denies cross-slot drift or revoked leases", async () => {
+  const valid = [
+    identity({ headers: { "x-test-principal": "a" } }),
+    identity({ headers: { "x-test-principal": "b" } }),
+  ];
+  const revoked = new Set();
+  const calls = [];
+  class FakeBroker {
+    constructor({ host, port }) {
+      assert.equal(host, "127.0.0.1");
+      this.port = port;
+    }
+    async send(type) {
+      calls.push({ port: this.port, type });
+      return { port: this.port };
+    }
+  }
+  const defaultBroker = {
+    port: valid[0].mcpPort,
+    async send(type) {
+      calls.push({ port: this.port, type });
+      return { port: this.port };
+    },
+  };
+  const resolveUeBroker = createVistaSlotBrokerResolver({
+    studioStreaming: {
+      isActiveSessionBinding(binding) {
+        return valid.some((candidate) => (
+          !revoked.has(candidate.leaseId)
+          && Object.keys(candidate).every((key) => binding[key] === candidate[key])
+        ));
+      },
+    },
+    defaultBroker,
+    BrokerClass: FakeBroker,
+  });
+  const resolveScope = createReviewScopeResolver({
+    transportProfile: "trusted_proxy",
+    resolveActiveSession: identity,
+    loopbackSessionId: "unused",
+  });
+  const scopeA = resolveScope({
+    headers: { "x-test-principal": "a" },
+    body: { conversationId: "broker-test" },
+    query: {},
+  });
+  const scopeB = resolveScope({
+    headers: { "x-test-principal": "b" },
+    body: { conversationId: "broker-test" },
+    query: {},
+  });
+  assert.deepEqual(Object.keys(scopeA).sort(), ["conversationId", "leaseBound", "scopeId"]);
+  const brokerA = createLeaseBoundReviewBroker({ scope: scopeA, resolveUeBroker });
+  const brokerB = createLeaseBoundReviewBroker({ scope: scopeB, resolveUeBroker });
+  assert.deepEqual(await brokerA.send("slot-a"), { port: valid[0].mcpPort });
+  assert.deepEqual(await brokerB.send("slot-b"), { port: valid[1].mcpPort });
+  assert.equal(resolveUeBroker({ ...valid[0], slotId: valid[1].slotId, mcpPort: valid[1].mcpPort }), null);
+
+  revoked.add(valid[0].leaseId);
+  await assert.rejects(
+    brokerA.send("must-not-dispatch"),
+    (error) => error.code === "REVIEW_BROKER_LEASE_INVALID" && error.statusCode === 409,
+  );
+  assert.deepEqual(await brokerB.send("slot-b-still-active"), { port: valid[1].mcpPort });
+  assert.deepEqual(calls, [
+    { port: valid[0].mcpPort, type: "slot-a" },
+    { port: valid[1].mcpPort, type: "slot-b" },
+    { port: valid[1].mcpPort, type: "slot-b-still-active" },
+  ]);
+});
+
 test("trusted proxy fails closed without a lease while loopback remains deterministic", async () => {
   const trusted = createReviewLoopCoordinator({
     transportProfile: "trusted_proxy",
     resolveActiveSession: () => null,
+    isActiveSessionBinding: () => false,
     loopbackSessionId: "loopback-test",
     textHandler: async () => {},
     visualHandler: async () => {},
@@ -328,6 +550,7 @@ test("trusted proxy fails closed without a lease while loopback remains determin
   const leaseBound = createReviewLoopCoordinator({
     transportProfile: "trusted_proxy",
     resolveActiveSession: identity,
+    isActiveSessionBinding: (binding) => isActiveIdentity(binding),
     loopbackSessionId: "loopback-test",
     textHandler: async () => {},
     visualHandler: async () => {},

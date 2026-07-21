@@ -108,6 +108,25 @@ test("animation timeline is mounted through the lease-bound dedicated UE transpo
   assert.doesNotMatch(source, /vista_animation_(?:content_api|capabilities|engine_time|evidence_capture)["']\s*\+/);
 });
 
+test("Review mode, UE evidence, and vanilla subprocesses stay lease-scoped in public profiles", () => {
+  const source = fs.readFileSync(path.resolve(__dirname, "../index.js"), "utf8");
+  const coordinatorRoute = source.indexOf('app.post("/api/chat",reviewLoopCoordinator.handleChat)');
+  const authorityRoute = source.indexOf('app.post("/api/chat",reviewLoopCoordinator.bindVanillaChat)');
+  const legacyRoute = source.indexOf('app.post("/api/chat",async(s,e)=>');
+  assert.ok(coordinatorRoute >= 0 && coordinatorRoute < authorityRoute);
+  assert.ok(authorityRoute < legacyRoute);
+  assert.match(source, /createScopedReviewModeStore\(\{\s*transportProfile:STUDIO_TRANSPORT\.profile/);
+  assert.match(source, /defaultMode:\(\{scope\}\)=>reviewModeStore\.get\(scope\)/);
+  assert.match(
+    source,
+    /createLeaseBoundReviewBroker\(\{scope,resolveUeBroker:_resolveVistaSlotBroker\}\)/,
+  );
+  assert.match(source, /isActiveSessionBinding:\(identity\)=>studioStreaming\.isActiveSessionBinding\(identity\)/);
+  assert.match(source, /if\(!requestedRunId\|\|cancelled\)\{/);
+  assert.match(source, /if\(_chatProcs\.get\(n\|\|"_global"\)===g\)_chatProcs\.delete\(n\|\|"_global"\)/);
+  assert.doesNotMatch(source, /let sceneLoopMode|let sceneLoopEnabled/);
+});
+
 test("staged model-off workspace pins the fixed broker and exposes no agent MCP", () => {
   const stagePath = path.resolve(__dirname, "../../../../tools/stage_vista_workspace.py");
   const source = fs.readFileSync(stagePath, "utf8");

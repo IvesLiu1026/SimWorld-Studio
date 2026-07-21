@@ -6,6 +6,7 @@ const { ReviewRunRegistry } = require("./review-run-registry");
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const TRUSTED_PROFILES = new Set(["trusted_proxy", "trusted-proxy", "public_webrtc", "public-webrtc"]);
+const REQUEST_CONTEXT = Symbol("simworld.reviewRequestContext");
 
 class ReviewLoopCoordinatorError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -41,7 +42,7 @@ function requestValue(request, field) {
   return body[field] !== undefined ? body[field] : query[field];
 }
 
-function activeLeaseAuthority(identity) {
+function activeLeaseIdentity(identity) {
   if (!identity || typeof identity !== "object" || Array.isArray(identity)) return null;
   const ownerId = String(identity.ownerId || "");
   const sessionId = String(identity.sessionId || "");
@@ -53,7 +54,25 @@ function activeLeaseAuthority(identity) {
       || !Number.isSafeInteger(mcpPort) || mcpPort < 1 || mcpPort > 65535) {
     return null;
   }
-  return [ownerId, sessionId, slotId, leaseId, mcpPort];
+  return Object.freeze({ ownerId, sessionId, slotId, leaseId, mcpPort });
+}
+
+function activeLeaseAuthority(identity) {
+  const lease = activeLeaseIdentity(identity);
+  return lease
+    ? [lease.ownerId, lease.sessionId, lease.slotId, lease.leaseId, lease.mcpPort]
+    : null;
+}
+
+function scopeWithActiveLease(scope, activeLease) {
+  if (!activeLease) return Object.freeze(scope);
+  Object.defineProperty(scope, "activeLease", {
+    value: activeLease,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+  return Object.freeze(scope);
 }
 
 function createReviewScopeResolver({
@@ -79,7 +98,8 @@ function createReviewScopeResolver({
     if (requireActiveLease && typeof resolveActiveSession === "function") {
       try { identity = resolveActiveSession(request); } catch (_error) { identity = null; }
     }
-    const leaseAuthority = activeLeaseAuthority(identity);
+    const activeLease = activeLeaseIdentity(identity);
+    const leaseAuthority = activeLeaseAuthority(activeLease);
     if (requireActiveLease && !leaseAuthority) {
       fail(
         "REVIEW_ACTIVE_SESSION_REQUIRED",
@@ -93,15 +113,15 @@ function createReviewScopeResolver({
       .update("simworld/review-scope/v1\0")
       .update(JSON.stringify([authority, conversationId]))
       .digest("hex");
-    return Object.freeze({
+    return scopeWithActiveLease({
       scopeId: `review-${digest}`,
       conversationId,
       leaseBound: Boolean(leaseAuthority),
-    });
+    }, activeLease);
   };
 }
 
-function modeForRequest(request, defaultMode) {
+function explicitModeForRequest(request) {
   const body = request && request.body && typeof request.body === "object" ? request.body : {};
   if (body.loopMode !== undefined) {
     const explicit = normalizeReviewMode(body.loopMode);
@@ -110,13 +130,118 @@ function modeForRequest(request, defaultMode) {
   }
   if (body.useLoop === false) return "vanilla";
   if (body.useLoop === true) return "text_loop";
-  return normalizeReviewMode(typeof defaultMode === "function" ? defaultMode() : defaultMode) || "vanilla";
+  return null;
+}
+
+function modeForRequest(request, defaultMode, scope) {
+  const explicit = explicitModeForRequest(request);
+  if (explicit) return explicit;
+  const configured = typeof defaultMode === "function"
+    ? defaultMode({ request, scope })
+    : defaultMode;
+  return normalizeReviewMode(configured) || "vanilla";
+}
+
+function createScopedReviewModeStore({
+  transportProfile = "loopback",
+  defaultMode = "vanilla",
+  maxEntries = 1024,
+} = {}) {
+  const trusted = TRUSTED_PROFILES.has(String(transportProfile || "").trim().toLowerCase());
+  const configuredDefault = normalizeReviewMode(defaultMode);
+  if (!configuredDefault) throw new TypeError("defaultMode must be a valid Review mode");
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 10000) {
+    throw new TypeError("maxEntries must be an integer between 1 and 10000");
+  }
+  const scopedModes = new Map();
+  let loopbackMode = configuredDefault;
+
+  function requireScope(scope) {
+    if (!trusted) return null;
+    if (!scope || scope.leaseBound !== true || !SAFE_ID.test(String(scope.scopeId || ""))) {
+      fail("REVIEW_ACTIVE_SESSION_REQUIRED", "An active Studio streaming lease is required for Review.", 401);
+    }
+    return scope.scopeId;
+  }
+
+  function get(scope) {
+    if (!trusted) return loopbackMode;
+    const scopeId = requireScope(scope);
+    return scopedModes.get(scopeId) || configuredDefault;
+  }
+
+  function set(scope, value) {
+    const mode = normalizeReviewMode(value);
+    if (!mode) fail("REVIEW_MODE_INVALID", "mode is invalid", 400);
+    if (!trusted) {
+      loopbackMode = mode;
+      return mode;
+    }
+    const scopeId = requireScope(scope);
+    scopedModes.delete(scopeId);
+    scopedModes.set(scopeId, mode);
+    while (scopedModes.size > maxEntries) scopedModes.delete(scopedModes.keys().next().value);
+    return mode;
+  }
+
+  function remove(scope) {
+    if (!trusted) return false;
+    return scopedModes.delete(requireScope(scope));
+  }
+
+  return Object.freeze({
+    defaultMode: configuredDefault,
+    get,
+    set,
+    delete: remove,
+    get size() { return scopedModes.size; },
+  });
+}
+
+function createLeaseBoundReviewBroker({ scope, resolveUeBroker } = {}) {
+  const activeLease = scope && scope.activeLease;
+  if (!scope || scope.leaseBound !== true || !activeLease) {
+    fail("REVIEW_ACTIVE_SESSION_REQUIRED", "An active Studio streaming lease is required for Review.", 401);
+  }
+  if (typeof resolveUeBroker !== "function") {
+    throw new TypeError("resolveUeBroker is required for lease-bound Review");
+  }
+  const selected = resolveUeBroker(activeLease);
+  if (!selected || typeof selected.send !== "function" || Number(selected.port) !== activeLease.mcpPort) {
+    fail("REVIEW_BROKER_LEASE_INVALID", "The active Studio lease has no matching UE broker.", 409);
+  }
+
+  return Object.freeze({
+    port: activeLease.mcpPort,
+    async send(...args) {
+      const current = resolveUeBroker(activeLease);
+      if (current !== selected || !current || typeof current.send !== "function"
+          || Number(current.port) !== activeLease.mcpPort) {
+        fail("REVIEW_BROKER_LEASE_INVALID", "The active Studio lease is no longer valid.", 409);
+      }
+      return current.send(...args);
+    },
+  });
+}
+
+function setRequestContext(request, context) {
+  Object.defineProperty(request, REQUEST_CONTEXT, {
+    value: Object.freeze(context),
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+}
+
+function getReviewRequestContext(request) {
+  return request && request[REQUEST_CONTEXT] || null;
 }
 
 function createReviewLoopCoordinator({
   registry = new ReviewRunRegistry(),
   transportProfile,
   resolveActiveSession,
+  isActiveSessionBinding,
   loopbackSessionId,
   defaultMode = "vanilla",
   textHandler,
@@ -139,20 +264,28 @@ function createReviewLoopCoordinator({
     resolveActiveSession,
     loopbackSessionId,
   });
+  const trusted = TRUSTED_PROFILES.has(String(transportProfile || "").trim().toLowerCase());
+  if (trusted && typeof isActiveSessionBinding !== "function") {
+    throw new TypeError("trusted-proxy review coordination requires isActiveSessionBinding");
+  }
+  const activeRunScopes = new Map();
+  const activeRunKey = (scopeId, runId) => `${scopeId}\0${runId}`;
 
   async function handleChat(request, response, next) {
     let mode;
+    let scope = null;
     try {
-      mode = modeForRequest(request, defaultMode);
+      const explicitMode = explicitModeForRequest(request);
+      if (explicitMode === "vanilla") return next();
+      scope = resolveScope(request);
+      mode = explicitMode || modeForRequest(request, defaultMode, scope);
     } catch (error) {
       return response.status(error.statusCode || 400).json({ code: error.code, error: error.message });
     }
     if (mode === "vanilla") return next();
 
-    let scope;
     let run = null;
     try {
-      scope = resolveScope(request);
       const requestedRunId = requestValue(request, "runId");
       run = registry.start({
         scopeId: scope.scopeId,
@@ -160,6 +293,7 @@ function createReviewLoopCoordinator({
           ? {}
           : { runId: safeId(requestedRunId, "runId") }),
       });
+      if (scope.leaseBound) activeRunScopes.set(activeRunKey(scope.scopeId, run.runId), scope);
       const handler = mode === "visual_loop" ? visualHandler : textHandler;
       await handler(request, response, {
         ...handlerDependencies({ request, mode, scope, run }),
@@ -196,7 +330,54 @@ function createReviewLoopCoordinator({
         try { response.end(); } catch (_error) {}
       }
     } finally {
-      if (run && scope) registry.complete({ scopeId: scope.scopeId, runId: run.runId });
+      if (run && scope) {
+        activeRunScopes.delete(activeRunKey(scope.scopeId, run.runId));
+        registry.complete({ scopeId: scope.scopeId, runId: run.runId });
+      }
+    }
+  }
+
+  function bindVanillaChat(request, response, next) {
+    if (!trusted) return next();
+    let scope = null;
+    let internal = false;
+    let runId = null;
+    try {
+      try {
+        scope = resolveScope(request);
+      } catch (error) {
+        if (!error || error.code !== "REVIEW_ACTIVE_SESSION_REQUIRED") throw error;
+        const body = request && request.body && typeof request.body === "object" ? request.body : {};
+        if (body.useLoop !== false) throw error;
+        const scopeId = safeId(body.sessionId, "sessionId");
+        if (safeId(body.conversationId, "conversationId") !== scopeId) throw error;
+        runId = safeId(body.runId, "runId");
+        const record = registry.get({ scopeId, runId });
+        const activeScope = activeRunScopes.get(activeRunKey(scopeId, runId));
+        let stillActive = false;
+        try {
+          stillActive = Boolean(activeScope && isActiveSessionBinding(activeScope.activeLease));
+        } catch (_revalidationError) {
+          stillActive = false;
+        }
+        if (!record || record.signal.aborted || !activeScope || !stillActive) throw error;
+        scope = activeScope;
+        internal = true;
+      }
+      const body = request && request.body && typeof request.body === "object" ? request.body : {};
+      request.body = { ...body, sessionId: scope.scopeId, conversationId: scope.scopeId };
+      setRequestContext(request, {
+        scopeId: scope.scopeId,
+        runId,
+        internal,
+        activeLease: scope.activeLease,
+      });
+      return next();
+    } catch (error) {
+      return response.status(error.statusCode || 401).json({
+        code: error.code || "REVIEW_ACTIVE_SESSION_REQUIRED",
+        error: error.message || "An active Studio streaming lease is required.",
+      });
     }
   }
 
@@ -214,13 +395,17 @@ function createReviewLoopCoordinator({
     registry,
     resolveScope,
     handleChat,
+    bindVanillaChat,
     cancel,
   });
 }
 
 module.exports = {
   ReviewLoopCoordinatorError,
+  createLeaseBoundReviewBroker,
   createReviewLoopCoordinator,
   createReviewScopeResolver,
+  createScopedReviewModeStore,
+  getReviewRequestContext,
   normalizeReviewMode,
 };
