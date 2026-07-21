@@ -19,7 +19,9 @@
   "properties": {
     "schema": { "const": "vista-animation-project-profile-source/v1" },
     "profile_id": { "$ref": "#/$defs/safeId" },
-    "profile_revision": { "$ref": "#/$defs/safeId" },
+    "profile_revision": {
+      "enum": ["mmg040_project_content_r1", "mmg040_project_content_r2"]
+    },
     "sample_id": { "$ref": "#/$defs/safeId" },
     "target": {
       "type": "object",
@@ -72,13 +74,13 @@
     "assets": {
       "type": "array",
       "minItems": 13,
-      "maxItems": 13,
+      "maxItems": 14,
       "items": { "$ref": "#/$defs/asset" }
     },
     "actions": {
       "type": "array",
       "minItems": 7,
-      "maxItems": 7,
+      "maxItems": 8,
       "items": { "$ref": "#/$defs/action" }
     },
     "receipt_requirements": {
@@ -98,6 +100,51 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile_revision": { "const": "mmg040_project_content_r1" }
+        },
+        "required": ["profile_revision"]
+      },
+      "then": {
+        "properties": {
+          "assets": { "minItems": 13, "maxItems": 13 },
+          "actions": {
+            "minItems": 7,
+            "maxItems": 7,
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/action" },
+                {
+                  "properties": {
+                    "action": {
+                      "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile_revision": { "const": "mmg040_project_content_r2" }
+        },
+        "required": ["profile_revision"]
+      },
+      "then": {
+        "properties": {
+          "assets": { "minItems": 14, "maxItems": 14 },
+          "actions": { "minItems": 8, "maxItems": 8 }
+        }
+      }
+    }
+  ],
   "$defs": {
     "safeId": {
       "type": "string",
@@ -187,7 +234,7 @@
       ],
       "properties": {
         "action": {
-          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+          "enum": ["look_at", "pick_up", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
         },
         "adapter_id": { "$ref": "#/$defs/safeId" },
         "bridge_action_id": { "$ref": "#/$defs/safeId" },

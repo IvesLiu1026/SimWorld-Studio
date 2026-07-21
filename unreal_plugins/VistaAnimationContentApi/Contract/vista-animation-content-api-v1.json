@@ -117,6 +117,7 @@
   ],
   "actions": [
     { "action": "look_at", "bridge_action_id": "vista_look_at_v1", "target_policy": "required" },
+    { "action": "pick_up", "bridge_action_id": "vista_pick_up_ik_v1", "target_policy": "required" },
     { "action": "brace", "bridge_action_id": "vista_brace_ik_v1", "target_policy": "required" },
     { "action": "drag", "bridge_action_id": "vista_drag_ik_v1", "target_policy": "required" },
     { "action": "lift_foot", "bridge_action_id": "vista_lift_foot_ik_v1", "target_policy": "required" },

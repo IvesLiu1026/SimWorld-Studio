@@ -10,10 +10,11 @@ using VistaAnimation::StrictJson::Quote;
 using VistaAnimation::StrictJson::Sha256HexUtf8;
 
 const TCHAR *ProfileId = TEXT("vista_mmg040");
-const TCHAR *ProfileRevision = TEXT("mmg040_project_content_r1");
+const TCHAR *ProfileRevision = TEXT("mmg040_project_content_r2");
 const TCHAR *ContentBindingSchema = TEXT("vista-animation-content-binding/v1");
 const TCHAR *ReceiptSchema =
     TEXT("vista-animation-content-inspection-receipt/v1");
+const TCHAR *LegacyHandTraceCompletionSignal = TEXT("EndHandTrace");
 const TCHAR *ProjectName = TEXT("gym_citynav");
 const TCHAR *EngineVersion = TEXT("5.3.2");
 const TCHAR *VerificationStatus = TEXT("verified");
@@ -78,6 +79,8 @@ const TCHAR *ActionName(EVistaAnimationAction Action) {
   switch (Action) {
   case EVistaAnimationAction::LookAt:
     return TEXT("look_at");
+  case EVistaAnimationAction::PickUp:
+    return TEXT("pick_up");
   case EVistaAnimationAction::Brace:
     return TEXT("brace");
   case EVistaAnimationAction::Drag:
@@ -219,9 +222,12 @@ FindActionReceipt(const FVistaMmg040VerifiedProfileReceipt &Receipt,
 
 bool ExpectedBehaviorFlag(EVistaAnimationAction Action, const TCHAR *FlagName) {
   if (FCString::Strcmp(FlagName, TEXT("ik")) == 0)
-    return Action == EVistaAnimationAction::Brace ||
+    return Action == EVistaAnimationAction::PickUp ||
+           Action == EVistaAnimationAction::Brace ||
            Action == EVistaAnimationAction::Drag ||
            Action == EVistaAnimationAction::LiftFoot;
+  if (FCString::Strcmp(FlagName, TEXT("object_attachment")) == 0)
+    return Action == EVistaAnimationAction::PickUp;
   if (FCString::Strcmp(FlagName, TEXT("root_motion")) == 0)
     return Action == EVistaAnimationAction::Drag ||
            Action == EVistaAnimationAction::Fall ||
@@ -322,7 +328,7 @@ bool ValidateInspection(const FVistaMmg040AssetInspection &Observed,
 
 const FString &FVistaMmg040ContentDriver::SourceContractSha256() {
   static const FString Value =
-      TEXT("1b0aa6e48d251cb8dbeac4f34528ca8fa6084fb330fc2d150ef341f630528b1c");
+      TEXT("9772da93c1054a3e3dbf71d0c066e41e6f19740901cda72b258445124be4e5a4");
   return Value;
 }
 
@@ -381,6 +387,13 @@ FVistaMmg040ContentDriver::PinnedAssets() {
        TEXT("/Script/Engine.AnimMontage"),
        EVistaMmg040PinnedAsset::Skeleton,
        {TEXT("vista_look_at_completed")},
+       EVistaMmg040RootMotionPolicy::Forbidden},
+      {EVistaMmg040PinnedAsset::PickUpMontage,
+       TEXT("pick_up_montage"),
+       TEXT("/Game/VISTA/MMG040/Montages/AM_MMG040_PickUp.AM_MMG040_PickUp"),
+       TEXT("/Script/Engine.AnimMontage"),
+       EVistaMmg040PinnedAsset::Skeleton,
+       {TEXT("vista_pick_up_attached")},
        EVistaMmg040RootMotionPolicy::Forbidden},
       {EVistaMmg040PinnedAsset::BraceMontage,
        TEXT("brace_montage"),
@@ -447,6 +460,26 @@ FVistaMmg040ContentDriver::PinnedActions() {
        {TEXT("gaze_target")},
        {TOptional<int32>(1), {}, {}, {}, {}, {}},
        {TEXT("constrained_gaze"), TEXT("completion_notify")}},
+      {EVistaAnimationAction::PickUp,
+       TEXT("pick_up"),
+       TEXT("vista_pick_up_ik_v1"),
+       TEXT("vista_pick_up_ik_v1"),
+       EVistaMmg040PinnedAsset::PickUpMontage,
+       {EVistaMmg040PinnedAsset::AnimBlueprint,
+        EVistaMmg040PinnedAsset::ControlRig, EVistaMmg040PinnedAsset::IkRig},
+       TEXT("vista_pick_up_attached"),
+       8000,
+       {TEXT("upper_body_ik"), TEXT("object_attachment")},
+       {TEXT("pickupable"), TEXT("hand_contact_target")},
+       {TEXT("hand_contact")},
+       {TOptional<int32>(2),
+        {},
+        {},
+        TOptional<FString>(FString(TEXT("right"))),
+        {},
+        {}},
+       {TEXT("hand_contact"), TEXT("object_attached"),
+        TEXT("completion_notify")}},
       {EVistaAnimationAction::Brace,
        TEXT("brace"),
        TEXT("vista_brace_ik_v1"),
@@ -617,12 +650,15 @@ bool FVistaMmg040ContentDriver::ValidateReceipt(
     if (!Pin || Pin->ActionName != ActionName(Observed.Action) ||
         SeenActions.Contains(Observed.Action) ||
         Observed.ImplementationAsset != Pin->ImplementationAsset ||
+        Observed.CompletionSignal == LegacyHandTraceCompletionSignal ||
         Observed.CompletionSignal != Pin->CompletionSignal ||
         !IsLowerHex(Observed.BehaviorEvidenceSha256, 64) ||
         !Observed.bImplementationMatches || !Observed.bSkeletonMatches ||
         !Observed.bCompletionSignalObserved ||
         Observed.bIkContactVerified !=
             ExpectedBehaviorFlag(Observed.Action, TEXT("ik")) ||
+        Observed.bObjectAttachmentVerified !=
+            ExpectedBehaviorFlag(Observed.Action, TEXT("object_attachment")) ||
         Observed.bRootMotionVerified !=
             ExpectedBehaviorFlag(Observed.Action, TEXT("root_motion")) ||
         Observed.bCollisionVerified !=
@@ -707,6 +743,7 @@ bool FVistaMmg040ContentDriver::Preflight(
     SeenRequestedActions.Add(Action);
     bTargetRequired = bTargetRequired ||
                       Action == EVistaAnimationAction::LookAt ||
+                      Action == EVistaAnimationAction::PickUp ||
                       Action == EVistaAnimationAction::Brace ||
                       Action == EVistaAnimationAction::Drag ||
                       Action == EVistaAnimationAction::LiftFoot;
@@ -838,6 +875,7 @@ bool FVistaMmg040ContentDriver::IsPreflightBindingAllowed(
     return false;
   }
   const bool bTargetRequired = Action == EVistaAnimationAction::LookAt ||
+                               Action == EVistaAnimationAction::PickUp ||
                                Action == EVistaAnimationAction::Brace ||
                                Action == EVistaAnimationAction::Drag ||
                                Action == EVistaAnimationAction::LiftFoot;
@@ -918,6 +956,11 @@ bool FVistaMmg040ContentDriver::Start(
   switch (Action) {
   case EVistaAnimationAction::LookAt:
     bStarted = Backend->StartLookAt(ActorBindingId, TargetBindingId.GetValue(),
+                                    ActionHandle, Parameters, BackendOutput,
+                                    OutSafeErrorCode);
+    break;
+  case EVistaAnimationAction::PickUp:
+    bStarted = Backend->StartPickUp(ActorBindingId, TargetBindingId.GetValue(),
                                     ActionHandle, Parameters, BackendOutput,
                                     OutSafeErrorCode);
     break;
@@ -1086,6 +1129,7 @@ bool FVistaMmg040ContentDriver::CaptureEvidence(
                                              : EVistaAnimationAction::Pause;
     const bool bTargetRequired =
         Input.Action.IsSet() && (Action == EVistaAnimationAction::LookAt ||
+                                 Action == EVistaAnimationAction::PickUp ||
                                  Action == EVistaAnimationAction::Brace ||
                                  Action == EVistaAnimationAction::Drag ||
                                  Action == EVistaAnimationAction::LiftFoot);

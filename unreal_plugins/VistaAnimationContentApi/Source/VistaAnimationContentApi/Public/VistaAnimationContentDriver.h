@@ -9,7 +9,8 @@ enum class EVistaAnimationAction : uint8 {
   LiftFoot,
   Pause,
   Fall,
-  Recover
+  Recover,
+  PickUp
 };
 
 enum class EVistaAnimationEvidenceKind : uint8 {

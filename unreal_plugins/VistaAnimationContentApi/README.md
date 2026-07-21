@@ -1,12 +1,26 @@
 # VistaAnimationContentApi
 
-Status: **portable `1.1.0` source with a byte-pinned `mmg_040` content contract and concrete policy
-driver; not compiled or live/content ready.** The earlier `1.0.0` source passed an offline UE 5.7.3
+Status: **portable `1.2.0` candidate source with byte-pinned `mmg_040` r1/r2 content contracts and a
+concrete policy driver; not compiled, production-registered, or live/content ready.** The earlier `1.0.0` source passed an offline UE 5.7.3
 BuildPlugin package on 2026-07-21, but that binary/hash predates this driver and cannot attest this
-revision. `1.1.0` has not been rebuilt with the target UE 5.3.2, installed into the target project,
+revision. `1.2.0` has not been rebuilt with the target UE 5.3.2, installed into the target project,
 exact-dispatched by a project listener, loaded in a live UE process, or exercised with real character
 content. Installing this directory must not change Studio readiness until a live nonce challenge,
 verified content profile, root-owned binary manifest, and disposable-project run all pass.
+
+> **Quarantined WIP:** the current server compatibility helper treats an unknown
+> `vista_mmg040` profile revision as if no compatibility mismatch exists. Until
+> that missing-policy path is changed to fail closed and covered by a runtime
+> rejection test, this `r2` source must stay on its isolated candidate branch and
+> must not be merged, installed, or presented as a readiness gate.
+
+The legacy `mmg040_project_content_r1` contract remains immutable at 13 assets and seven actions, with
+its original receipt shape and source SHA-256 for preparation and inspection-tool compatibility. The
+`mmg040_project_content_r2` candidate adds one pinned
+pick-up montage and one typed action, for 14 assets and eight actions. No server production compatibility
+entry or source allowlist has been registered for r2; its source contract keeps
+`current_readiness.ready=false`, but that declaration does not compensate for
+the server missing-policy bug described above.
 
 ## What this plugin closes
 
@@ -52,6 +66,7 @@ The only action identifiers compiled into the module are:
 | Action | Trusted bridge ID | Target binding |
 | --- | --- | --- |
 | `look_at` | `vista_look_at_v1` | required |
+| `pick_up` | `vista_pick_up_ik_v1` | required |
 | `brace` | `vista_brace_ik_v1` | required |
 | `drag` | `vista_drag_ik_v1` | required |
 | `lift_foot` | `vista_lift_foot_ik_v1` | required |
@@ -61,10 +76,14 @@ The only action identifiers compiled into the module are:
 
 Wire JSON cannot name an AnimBP, montage, Control Rig, class, function, `/Game` asset, filesystem path,
 Python body, console command, or generic bridge operation. `FVistaMmg040ContentDriver` is the
-project-owned fixed mapping for the first VISTA profile. It accepts only a byte-pinned receipt for 13
-assets under `/Game/VISTA/MMG040/`, then delegates to seven separate typed
+project-owned fixed mapping for the r2 VISTA profile. It accepts only a byte-pinned receipt for 14
+assets/eight actions under `/Game/VISTA/MMG040/`, then delegates to separate typed
 `IVistaMmg040ProjectBackend::Start*` methods. Its action/evidence input contains no caller path, class,
 function, script, console command, or asset identifier.
+
+`prepare-content-profile.mjs` separately retains the exact r1 13/7 source and legacy receipt validation
+path so the established inspection-profile builder keeps working. That compatibility does not make the
+1.2 runtime driver, artifact, or server registry compatible with r1 or r2 production execution.
 
 The subsystem calls every driver's `ValidateTrustedProfile` before accepting trusted runtime
 configuration. The trusted action entry carries the fixed adapter ID, bridge ID, completion signal and
@@ -80,9 +99,11 @@ fall/recover montages, or animation notifies. Those are project content and must
 pinned namespace and executed by a reviewed typed project backend. Until the assets, backend and live
 receipt exist, construct no driver, configure no action and keep `start_allowed=false`.
 
-The driver must provide the following behavior before all seven actions can be declared verified:
+The driver must provide the following behavior before all eight r2 actions can be declared verified:
 
 - `look_at`: constrained head/eye gaze toward the slot-scoped target;
+- `pick_up`: right-hand contact IK followed by verified object attachment and the exact
+  `vista_pick_up_attached` completion signal; legacy `EndHandTrace` is not completion evidence;
 - `brace`: two-hand contact IK with planted feet and an observed contact assertion;
 - `drag`: hand IK plus bounded root motion and chair physics/caster preservation;
 - `lift_foot`: lower-body IK to a verified foot-contact anchor without penetration;
@@ -95,9 +116,9 @@ Completion must come from the registered notify/signal, not elapsed wall-clock t
 The backend `Wait` result must also identify the observed signal and an immutable completion evidence
 ID/SHA-256 that is present in its evidence list; the subsystem never substitutes the configured signal.
 
-This first profile intentionally accepts only the server defaults verified for `mmg_040`: look-at 1s,
-brace both hands for 2s, drag right hand 120cm for 2s, lift left foot 35cm for 2s, pause 3s, and forward
-fall/recover. Other values and fall directions fail closed until a later profile revision carries
+The r2 candidate intentionally accepts only the fixed `mmg_040` defaults: look-at 1s, pick-up with the
+right hand for 2s, brace both hands for 2s, drag right hand 120cm for 2s, lift left foot 35cm for 2s,
+pause 3s, and forward fall/recover. Other values and fall directions fail closed until a later profile revision carries
 variant-specific live evidence.
 
 ## Trusted host integration
@@ -176,9 +197,14 @@ command intentionally exits `3` with `ready=false` and `start_allowed=false`:
 
 ```bash
 node ./Scripts/prepare-content-profile.mjs \
-  --contract /absolute/path/to/ContentProfiles/vista-mmg040-project-profile-source-v1.json \
+  --contract /absolute/path/to/ContentProfiles/vista-mmg040-project-profile-source-v2.json \
   --mode preflight
 ```
+
+The same command continues to accept the immutable r1 file for legacy inspection workflows. r1 requires
+exactly 13 assets, seven legacy actions, and action receipts without `object_attachment_verified`; r2
+requires exactly 14 assets, eight actions, and `object_attachment_verified` on every action receipt.
+Mixed revision/count/receipt shapes fail closed.
 
 The complete authoring, digest, receipt and activation workflow is documented in
 `docs/specs/production-readiness/animation-mmg040-content-driver-runbook.md`.
@@ -199,7 +225,7 @@ git diff --check
 
 Still-required live gates:
 
-1. Build `1.1.0` with the exact target UE 5.3.2 patch/platform and run UnrealHeaderTool/compiler successfully.
+1. Build `1.2.0` with the exact target UE 5.3.2 patch/platform and run UnrealHeaderTool/compiler successfully.
 2. Author every pinned project asset, implement/review the typed project backend, and produce its immutable live content proof.
 3. Exact-dispatch all four reserved commands through a no-retry dedicated transport; prove unknown
    `vista_animation_*` commands cannot reach the generic bridge.

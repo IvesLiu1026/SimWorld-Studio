@@ -23,7 +23,7 @@ public class VistaAnimationContentApi : ModuleRules
             throw new BuildException("VISTA_ANIMATION_PLUGIN_BUILD_ID is not a safe opaque identifier");
         }
 
-        PublicDefinitions.Add("VISTA_ANIMATION_PLUGIN_VERSION=TEXT(\"1.1.0\")");
+        PublicDefinitions.Add("VISTA_ANIMATION_PLUGIN_VERSION=TEXT(\"1.2.0\")");
         PublicDefinitions.Add($"VISTA_ANIMATION_PLUGIN_BUILD_ID=TEXT(\"{BuildId}\")");
     }
 }

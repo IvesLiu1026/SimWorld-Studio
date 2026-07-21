@@ -13,7 +13,15 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const PINNED_SOURCE_CONTRACT_SHA256 = "1b0aa6e48d251cb8dbeac4f34528ca8fa6084fb330fc2d150ef341f630528b1c";
+export const PINNED_SOURCE_CONTRACT_SHA256_BY_REVISION = Object.freeze({
+  mmg040_project_content_r1: "1b0aa6e48d251cb8dbeac4f34528ca8fa6084fb330fc2d150ef341f630528b1c",
+  mmg040_project_content_r2: "9772da93c1054a3e3dbf71d0c066e41e6f19740901cda72b258445124be4e5a4",
+});
+
+// Backward-compatible export for the established r1 inspection-profile tool.
+// New callers must select the immutable pin by profile revision from the map.
+export const PINNED_SOURCE_CONTRACT_SHA256 =
+  PINNED_SOURCE_CONTRACT_SHA256_BY_REVISION.mmg040_project_content_r1;
 
 const SOURCE_SCHEMA = "vista-animation-project-profile-source/v1";
 const RECEIPT_SCHEMA = "vista-animation-content-inspection-receipt/v1";
@@ -29,6 +37,7 @@ const MAX_JSON_BYTES = 2 * 1024 * 1024;
 
 const ACTION_IDENTITIES = Object.freeze({
   look_at: ["vista_look_at_v1", "required"],
+  pick_up: ["vista_pick_up_ik_v1", "required"],
   brace: ["vista_brace_ik_v1", "required"],
   drag: ["vista_drag_ik_v1", "required"],
   lift_foot: ["vista_lift_foot_ik_v1", "required"],
@@ -39,12 +48,32 @@ const ACTION_IDENTITIES = Object.freeze({
 
 const ACTION_PARAMETER_CONTRACTS = Object.freeze({
   look_at: { duration_sec: 1, distance_cm: null, height_cm: null, hand: null, foot: null, direction: null },
+  pick_up: { duration_sec: 2, distance_cm: null, height_cm: null, hand: "right", foot: null, direction: null },
   brace: { duration_sec: 2, distance_cm: null, height_cm: null, hand: "both", foot: null, direction: null },
   drag: { duration_sec: 2, distance_cm: 120, height_cm: null, hand: "right", foot: null, direction: null },
   lift_foot: { duration_sec: 2, distance_cm: null, height_cm: 35, hand: null, foot: "left", direction: null },
   pause: { duration_sec: 3, distance_cm: null, height_cm: null, hand: null, foot: null, direction: null },
   fall: { duration_sec: null, distance_cm: null, height_cm: null, hand: null, foot: null, direction: "forward" },
   recover: { duration_sec: null, distance_cm: null, height_cm: null, hand: null, foot: null, direction: "forward" },
+});
+
+const SOURCE_REVISION_CONFIG = Object.freeze({
+  mmg040_project_content_r1: Object.freeze({
+    sourceSha256: PINNED_SOURCE_CONTRACT_SHA256_BY_REVISION.mmg040_project_content_r1,
+    assetCount: 13,
+    actionNames: Object.freeze([
+      "look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover",
+    ]),
+    requiresObjectAttachmentReceipt: false,
+  }),
+  mmg040_project_content_r2: Object.freeze({
+    sourceSha256: PINNED_SOURCE_CONTRACT_SHA256_BY_REVISION.mmg040_project_content_r2,
+    assetCount: 14,
+    actionNames: Object.freeze([
+      "look_at", "pick_up", "brace", "drag", "lift_foot", "pause", "fall", "recover",
+    ]),
+    requiresObjectAttachmentReceipt: true,
+  }),
 });
 
 const REQUIRED_CHECKS = Object.freeze([
@@ -350,11 +379,12 @@ export function validateSourceContract(contract, rawSha256) {
     "schema", "profile_id", "profile_revision", "sample_id", "target",
     "source_provenance", "current_readiness", "assets", "actions", "receipt_requirements",
   ], "source contract");
-  if (rawSha256 !== PINNED_SOURCE_CONTRACT_SHA256) {
+  const revision = SOURCE_REVISION_CONFIG[contract.profile_revision];
+  if (!revision || rawSha256 !== revision.sourceSha256) {
     fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Source contract bytes do not match the compiled pin");
   }
   if (contract.schema !== SOURCE_SCHEMA || contract.profile_id !== "vista_mmg040" ||
-      contract.profile_revision !== "mmg040_project_content_r1" || contract.sample_id !== "mmg_040") {
+      contract.sample_id !== "mmg_040") {
     fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Source contract identity is invalid");
   }
   exactKeys(contract.target, ["project_name", "engine_version", "content_namespace"], "source contract target");
@@ -365,7 +395,9 @@ export function validateSourceContract(contract, rawSha256) {
   exactKeys(contract.current_readiness, ["ready", "reason_codes"], "current_readiness");
   if (contract.current_readiness.ready !== false) fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Unchecked source contract cannot be ready");
   requireUniqueStrings(contract.current_readiness.reason_codes, /^ANIMATION_[A-Z0-9_]{1,119}$/, "current_readiness.reason_codes");
-  if (!Array.isArray(contract.assets) || contract.assets.length !== 13) fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Exactly thirteen pinned assets are required");
+  if (!Array.isArray(contract.assets) || contract.assets.length !== revision.assetCount) {
+    fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", `Exactly ${revision.assetCount} pinned assets are required for ${contract.profile_revision}`);
+  }
   const assetIds = new Set();
   for (const [index, asset] of contract.assets.entries()) {
     exactKeys(asset, ["asset_id", "role", "object_path", "expected_class", "skeleton_asset_id", "required_notifies", "root_motion_policy"], `assets[${index}]`);
@@ -388,7 +420,20 @@ export function validateSourceContract(contract, rawSha256) {
       fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Pinned skeleton reference is missing");
     }
   }
-  if (!Array.isArray(contract.actions) || contract.actions.length !== 7) fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Exactly seven fixed actions are required");
+  if (revision.requiresObjectAttachmentReceipt) {
+    const pickUpAsset = contract.assets.find((asset) => asset.asset_id === "pick_up_montage");
+    if (!pickUpAsset ||
+        pickUpAsset.object_path !== "/Game/VISTA/MMG040/Montages/AM_MMG040_PickUp.AM_MMG040_PickUp" ||
+        pickUpAsset.expected_class !== "/Script/Engine.AnimMontage" ||
+        pickUpAsset.skeleton_asset_id !== "skeleton" ||
+        !sameStringSet(pickUpAsset.required_notifies, ["vista_pick_up_attached"]) ||
+        pickUpAsset.root_motion_policy !== "forbidden") {
+      fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "PickUpMontage must use the attached completion notify and fixed project path");
+    }
+  }
+  if (!Array.isArray(contract.actions) || contract.actions.length !== revision.actionNames.length) {
+    fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", `Exactly ${revision.actionNames.length} fixed actions are required for ${contract.profile_revision}`);
+  }
   const actions = new Set();
   for (const [index, action] of contract.actions.entries()) {
     exactKeys(action, [
@@ -396,7 +441,9 @@ export function validateSourceContract(contract, rawSha256) {
       "completion_signal", "timeout_ms", "target_policy", "actor_capabilities", "target_capabilities",
       "anchor_kinds", "parameter_contract", "live_checks",
     ], `actions[${index}]`);
-    const identity = ACTION_IDENTITIES[action.action];
+    const identity = revision.actionNames.includes(action.action)
+      ? ACTION_IDENTITIES[action.action]
+      : null;
     if (!identity || actions.has(action.action) || action.adapter_id !== identity[0] ||
         action.bridge_action_id !== identity[0] || action.target_policy !== identity[1]) {
       fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Fixed action identity is invalid");
@@ -418,8 +465,20 @@ export function validateSourceContract(contract, rawSha256) {
     if (!Number.isInteger(action.timeout_ms) || action.timeout_ms < 100 || action.timeout_ms > 60000) {
       fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Action timeout is invalid");
     }
+    if (action.action === "pick_up" && (
+      action.implementation_asset_id !== "pick_up_montage" ||
+      action.completion_signal !== "vista_pick_up_attached" ||
+      action.timeout_ms !== 8000 ||
+      !sameStringSet(action.supporting_asset_ids, ["anim_blueprint", "control_rig", "ik_rig"]) ||
+      !sameStringSet(action.actor_capabilities, ["upper_body_ik", "object_attachment"]) ||
+      !sameStringSet(action.target_capabilities, ["pickupable", "hand_contact_target"]) ||
+      !sameStringSet(action.anchor_kinds, ["hand_contact"]) ||
+      !sameStringSet(action.live_checks, ["hand_contact", "object_attached", "completion_notify"])
+    )) {
+      fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Pick-up policy is not the exact attached hand-contact contract");
+    }
   }
-  if (!sameStringSet([...actions], Object.keys(ACTION_IDENTITIES))) fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Fixed action set is incomplete");
+  if (!sameStringSet([...actions], revision.actionNames)) fail("ANIMATION_MMG040_SOURCE_CONTRACT_MISMATCH", "Fixed action set is incomplete");
   exactKeys(contract.receipt_requirements, ["schema", "method", "required_checks"], "receipt_requirements");
   if (contract.receipt_requirements.schema !== RECEIPT_SCHEMA ||
       contract.receipt_requirements.method !== "ue53_disposable_live_inspection_v1" ||
@@ -460,11 +519,13 @@ export function validateInspectionReceipt(
   receipt,
   { requireContentDigest = true } = {},
 ) {
+  const revision = SOURCE_REVISION_CONFIG[contract?.profile_revision];
   exactKeys(receipt, [
     "schema", "source_contract_sha256", "profile_id", "profile_revision", "content_revision",
     "content_digest", "project", "verification", "assets", "actions", "checks",
   ], "inspection receipt");
-  if (receipt.schema !== RECEIPT_SCHEMA || receipt.source_contract_sha256 !== contractSha256 ||
+  if (!revision || contractSha256 !== revision.sourceSha256 ||
+      receipt.schema !== RECEIPT_SCHEMA || receipt.source_contract_sha256 !== contractSha256 ||
       receipt.profile_id !== contract.profile_id || receipt.profile_revision !== contract.profile_revision) {
     fail("ANIMATION_MMG040_RECEIPT_MISMATCH", "Inspection receipt identity does not match the pinned source contract");
   }
@@ -522,12 +583,16 @@ export function validateInspectionReceipt(
   }
   const receiptActions = new Map();
   for (const [index, action] of receipt.actions.entries()) {
-    exactKeys(action, [
+    const receiptActionKeys = [
       "action", "implementation_asset_id", "completion_signal", "implementation_matches", "skeleton_matches",
       "completion_signal_observed", "behavior_evidence_sha256", "ik_contact_verified", "root_motion_verified",
       "collision_verified", "recovery_alignment_verified", "observed_live_checks", "verified_parameters",
-    ], `receipt.actions[${index}]`);
-    if (!ACTION_IDENTITIES[action.action] || receiptActions.has(action.action)) {
+    ];
+    if (revision.requiresObjectAttachmentReceipt) {
+      receiptActionKeys.push("object_attachment_verified");
+    }
+    exactKeys(action, receiptActionKeys, `receipt.actions[${index}]`);
+    if (!revision.actionNames.includes(action.action) || receiptActions.has(action.action)) {
       fail("ANIMATION_MMG040_ACTION_RECEIPT_INCOMPLETE", "Inspection receipt has an unknown or duplicate action");
     }
     receiptActions.set(action.action, action);
@@ -551,11 +616,14 @@ export function validateInspectionReceipt(
       fail("ANIMATION_MMG040_BEHAVIOR_RECEIPT_MISMATCH", `Fixed action '${expected.action}' does not cover the exact live checks and parameter contract`);
     }
     const requirements = {
-      ik_contact_verified: ["brace", "drag", "lift_foot"].includes(expected.action),
+      ik_contact_verified: ["pick_up", "brace", "drag", "lift_foot"].includes(expected.action),
       root_motion_verified: ["drag", "fall", "recover"].includes(expected.action),
       collision_verified: expected.action === "fall",
       recovery_alignment_verified: expected.action === "recover",
     };
+    if (revision.requiresObjectAttachmentReceipt) {
+      requirements.object_attachment_verified = expected.action === "pick_up";
+    }
     for (const [field, required] of Object.entries(requirements)) {
       if (typeof observed[field] !== "boolean" || observed[field] !== required) {
         fail("ANIMATION_MMG040_BEHAVIOR_RECEIPT_MISMATCH", `Fixed action '${expected.action}' has invalid ${field}`);

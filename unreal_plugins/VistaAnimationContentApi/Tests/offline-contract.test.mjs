@@ -52,10 +52,10 @@ const strictJsonSource = readFileSync(path.join(
   "Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.cpp",
 ), "utf8");
 
-test("plugin descriptor and exact production source inventory are complete", (t) => {
+test("plugin 1.2 descriptor is complete and remains unregistered candidate source", (t) => {
   const descriptor = JSON.parse(readFileSync(path.join(pluginRoot, "VistaAnimationContentApi.uplugin"), "utf8"));
   assert.equal(descriptor.FileVersion, 3);
-  assert.equal(descriptor.VersionName, "1.1.0");
+  assert.equal(descriptor.VersionName, "1.2.0");
   assert.equal(descriptor.CanContainContent, false);
   assert.deepEqual(descriptor.Modules, [{
     Name: "VistaAnimationContentApi",
@@ -69,14 +69,15 @@ test("plugin descriptor and exact production source inventory are complete", (t)
   t.after(() => rmSync(temporaryProject, { recursive: true, force: true }));
   cpSync(pluginRoot, path.join(temporaryProject, "Plugins/VistaAnimationContentApi"), { recursive: true });
   const audit = readiness.inspectVistaAnimationUePluginSource(temporaryProject);
-  assert.equal(audit.source_tree_complete, true);
+  assert.equal(audit.source_tree_complete, false);
   assert.equal(audit.source_manifest_sha256, readiness.ANIMATION_UE_SOURCE_MANIFEST_SHA256);
   assert.deepEqual(audit.expected_manifest, readiness.EXPECTED_PLUGIN_SOURCE_MANIFEST);
   assert.deepEqual(audit.expected_files, readiness.EXPECTED_PLUGIN_SOURCE_FILES);
-  assert.deepEqual(audit.present_files, readiness.EXPECTED_PLUGIN_SOURCE_FILES);
   assert.deepEqual(audit.missing_files, []);
-  assert.deepEqual(audit.mismatched_files, []);
-  assert.deepEqual(audit.unexpected_entries, []);
+  assert.ok(audit.mismatched_files.length > 0);
+  assert.ok(audit.unexpected_entries.includes(
+    "Plugins/VistaAnimationContentApi/ContentProfiles/vista-mmg040-project-profile-source-v2.json",
+  ));
   assert.deepEqual(audit.policy_violations, []);
 });
 
@@ -92,7 +93,7 @@ test("subsystem binds every trusted config to the driver's sealed profile receip
 test("mmg_040 concrete driver pins content and dispatches only typed project actions", () => {
   const sourceContractPath = path.join(
     pluginRoot,
-    "ContentProfiles/vista-mmg040-project-profile-source-v1.json",
+    "ContentProfiles/vista-mmg040-project-profile-source-v2.json",
   );
   const sourceContractBytes = readFileSync(sourceContractPath);
   const sourceContract = JSON.parse(sourceContractBytes);
@@ -117,7 +118,7 @@ test("mmg_040 concrete driver pins content and dispatches only typed project act
     ]) assert.ok(mmg040DriverSource.includes(capability), `missing C++ action pin ${capability}`);
   }
   const enumNames = {
-    look_at: "LookAt", brace: "Brace", drag: "Drag", lift_foot: "LiftFoot",
+    look_at: "LookAt", pick_up: "PickUp", brace: "Brace", drag: "Drag", lift_foot: "LiftFoot",
     pause: "Pause", fall: "Fall", recover: "Recover",
   };
   const actionSection = mmg040DriverSource.slice(
@@ -143,7 +144,7 @@ test("mmg_040 concrete driver pins content and dispatches only typed project act
     }
   }
   for (const method of [
-    "StartLookAt", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
+    "StartLookAt", "StartPickUp", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
   ]) {
     assert.match(mmg040DriverHeader, new RegExp(`virtual bool ${method}\\(`));
     assert.match(mmg040DriverSource, new RegExp(`Backend->${method}\\(`));
@@ -173,7 +174,7 @@ test("failed mmg_040 starts are contained by driver-owned handles, rollback, and
   assert.doesNotMatch(backendOutput[1], /ActionHandle/);
 
   for (const method of [
-    "StartLookAt", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
+    "StartLookAt", "StartPickUp", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
   ]) {
     const declaration = mmg040DriverHeader.match(
       new RegExp(`virtual bool ${method}\\(([\\s\\S]*?)\\) = 0;`),
@@ -197,7 +198,7 @@ test("failed mmg_040 starts are contained by driver-owned handles, rollback, and
   assert.match(startBody, /FString::FromInt\(static_cast<int32>\(NextHandleSequence\+\+\)\)/);
   assert.match(startBody, /ActiveHandles\.Add\(ActionHandle, Action\)/);
   for (const method of [
-    "StartLookAt", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
+    "StartLookAt", "StartPickUp", "StartBrace", "StartDrag", "StartLiftFoot", "StartPause", "StartFall", "StartRecover",
   ]) assert.match(startBody, new RegExp(`Backend->${method}\\([\\s\\S]*?ActionHandle`));
 
   const backendFalse = startBody.match(/if \(!bStarted\) \{([\s\S]*?)\n  \}/);
@@ -509,7 +510,7 @@ test("artifact manifest helper hashes a regular binary and emits the exact schem
   assert.deepEqual(manifest, {
     schema: readiness.ANIMATION_UE_PLUGIN_ARTIFACT_SCHEMA,
     plugin_name: readiness.ANIMATION_UE_PLUGIN_NAME,
-    plugin_version: "1.1.0",
+    plugin_version: "1.2.0",
     plugin_build_id: "offline-test-build",
     binary_sha256: createHash("sha256").update("offline-test-binary\n").digest("hex"),
     engine_version: "5.3.2",
@@ -529,7 +530,7 @@ test("artifact manifest helper hashes a regular binary and emits the exact schem
   assert.notEqual(rejected.status, 0);
 });
 
-test("scripts use non-mutating dry runs and explicit install creates the audited tree", () => {
+test("scripts use non-mutating dry runs and explicit install preserves candidate-only status", () => {
   for (const script of ["install-plugin.sh", "build-plugin.sh"]) {
     const syntax = spawnSync("sh", ["-n", path.join(pluginRoot, "Scripts", script)], { encoding: "utf8" });
     assert.equal(syntax.status, 0, syntax.stderr);
@@ -550,7 +551,12 @@ test("scripts use non-mutating dry runs and explicit install creates the audited
     "--apply",
   ], { encoding: "utf8" });
   assert.equal(install.status, 0, install.stderr);
-  assert.equal(readiness.inspectVistaAnimationUePluginSource(project).source_tree_complete, true);
+  const installedAudit = readiness.inspectVistaAnimationUePluginSource(project);
+  assert.equal(installedAudit.source_tree_complete, false);
+  assert.deepEqual(installedAudit.missing_files, []);
+  assert.ok(installedAudit.unexpected_entries.includes(
+    "Plugins/VistaAnimationContentApi/ContentProfiles/vista-mmg040-project-profile-source-v2.json",
+  ));
 
   const engine = path.join(project, "FakeEngine");
   const runUat = path.join(engine, "Engine/Build/BatchFiles/RunUAT.sh");

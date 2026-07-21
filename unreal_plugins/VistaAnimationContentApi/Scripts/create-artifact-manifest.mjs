@@ -44,7 +44,7 @@ const binarySha = createHash("sha256").update(binaryBytes).digest("hex");
 process.stdout.write(`${JSON.stringify({
   schema: "vista-animation-ue-plugin-artifact/v1",
   plugin_name: "VistaAnimationContentApi",
-  plugin_version: "1.1.0",
+  plugin_version: "1.2.0",
   plugin_build_id: args.get("build-id"),
   binary_sha256: binarySha,
   engine_version: args.get("engine-version"),

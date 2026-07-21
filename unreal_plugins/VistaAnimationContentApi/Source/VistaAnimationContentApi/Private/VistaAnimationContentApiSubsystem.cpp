@@ -99,6 +99,8 @@ struct FActionContract {
 const FActionContract Actions[] = {
     {EVistaAnimationAction::LookAt, TEXT("look_at"), TEXT("vista_look_at_v1"),
      FActionContract::ETargetPolicy::Required},
+    {EVistaAnimationAction::PickUp, TEXT("pick_up"),
+     TEXT("vista_pick_up_ik_v1"), FActionContract::ETargetPolicy::Required},
     {EVistaAnimationAction::Brace, TEXT("brace"), TEXT("vista_brace_ik_v1"),
      FActionContract::ETargetPolicy::Required},
     {EVistaAnimationAction::Drag, TEXT("drag"), TEXT("vista_drag_ik_v1"),
@@ -1737,6 +1739,7 @@ bool UVistaAnimationContentApiSubsystem::FImplementation::HandleStart(
         !PositiveDuration(TypedParameters.DurationSec))
       goto InvalidParameters;
     break;
+  case EVistaAnimationAction::PickUp:
   case EVistaAnimationAction::Brace:
     if (!ExactKeys(*Parameters, {TEXT("hand"), TEXT("duration_sec")}, Error) ||
         !ReadRequiredString(*Parameters, TEXT("hand"), TypedParameters.Hand) ||

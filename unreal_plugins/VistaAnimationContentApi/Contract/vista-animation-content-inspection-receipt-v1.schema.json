@@ -21,7 +21,9 @@
     "schema": { "const": "vista-animation-content-inspection-receipt/v1" },
     "source_contract_sha256": { "$ref": "#/$defs/sha256" },
     "profile_id": { "$ref": "#/$defs/safeId" },
-    "profile_revision": { "$ref": "#/$defs/safeId" },
+    "profile_revision": {
+      "enum": ["mmg040_project_content_r1", "mmg040_project_content_r2"]
+    },
     "content_revision": { "$ref": "#/$defs/opaqueId" },
     "content_digest": { "$ref": "#/$defs/sha256" },
     "project": {
@@ -50,13 +52,13 @@
     "assets": {
       "type": "array",
       "minItems": 13,
-      "maxItems": 13,
+      "maxItems": 14,
       "items": { "$ref": "#/$defs/assetReceipt" }
     },
     "actions": {
       "type": "array",
       "minItems": 7,
-      "maxItems": 7,
+      "maxItems": 8,
       "items": { "$ref": "#/$defs/actionReceipt" }
     },
     "checks": {
@@ -84,6 +86,61 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile_revision": { "const": "mmg040_project_content_r1" }
+        },
+        "required": ["profile_revision"]
+      },
+      "then": {
+        "properties": {
+          "assets": { "minItems": 13, "maxItems": 13 },
+          "actions": {
+            "minItems": 7,
+            "maxItems": 7,
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/actionReceipt" },
+                {
+                  "properties": {
+                    "action": {
+                      "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+                    }
+                  }
+                },
+                { "not": { "required": ["object_attachment_verified"] } }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile_revision": { "const": "mmg040_project_content_r2" }
+        },
+        "required": ["profile_revision"]
+      },
+      "then": {
+        "properties": {
+          "assets": { "minItems": 14, "maxItems": 14 },
+          "actions": {
+            "minItems": 8,
+            "maxItems": 8,
+            "items": {
+              "allOf": [
+                { "$ref": "#/$defs/actionReceipt" },
+                { "required": ["object_attachment_verified"] }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "safeId": {
       "type": "string",
@@ -161,7 +218,7 @@
       ],
       "properties": {
         "action": {
-          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+          "enum": ["look_at", "pick_up", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
         },
         "implementation_asset_id": { "$ref": "#/$defs/safeId" },
         "completion_signal": { "$ref": "#/$defs/safeId" },
@@ -178,6 +235,7 @@
         },
         "verified_parameters": { "$ref": "#/$defs/exactParameters" },
         "ik_contact_verified": { "type": "boolean" },
+        "object_attachment_verified": { "type": "boolean" },
         "root_motion_verified": { "type": "boolean" },
         "collision_verified": { "type": "boolean" },
         "recovery_alignment_verified": { "type": "boolean" }

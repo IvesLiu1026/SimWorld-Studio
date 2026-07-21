@@ -16,7 +16,8 @@ enum class EVistaMmg040PinnedAsset : uint8 {
   LiftFootMontage,
   PauseMontage,
   FallMontage,
-  RecoverMontage
+  RecoverMontage,
+  PickUpMontage
 };
 
 enum class EVistaMmg040RootMotionPolicy : uint8 {
@@ -86,6 +87,7 @@ struct FVistaMmg040VerifiedActionReceipt {
   bool bSkeletonMatches = false;
   bool bCompletionSignalObserved = false;
   bool bIkContactVerified = false;
+  bool bObjectAttachmentVerified = false;
   bool bRootMotionVerified = false;
   bool bCollisionVerified = false;
   bool bRecoveryAlignmentVerified = false;
@@ -169,6 +171,12 @@ public:
                            const FVistaAnimationActionParameters &Parameters,
                            FVistaMmg040BackendStartOutput &Output,
                            FString &OutSafeErrorCode) = 0;
+  virtual bool StartPickUp(const FString &ActorBindingId,
+                           const FString &TargetBindingId,
+                           const FString &ActionHandle,
+                           const FVistaAnimationActionParameters &Parameters,
+                           FVistaMmg040BackendStartOutput &Output,
+                           FString &OutSafeErrorCode) = 0;
   virtual bool StartBrace(const FString &ActorBindingId,
                           const FString &TargetBindingId,
                           const FString &ActionHandle,
@@ -231,7 +239,7 @@ public:
 
 /**
  * Concrete mmg_040 policy/content driver. It cannot be constructed without an
- * exact inspection receipt for every pinned asset and all seven fixed actions.
+ * exact inspection receipt for every pinned asset and all eight fixed actions.
  */
 class VISTAANIMATIONCONTENTAPI_API FVistaMmg040ContentDriver final
     : public IVistaAnimationContentDriver {
