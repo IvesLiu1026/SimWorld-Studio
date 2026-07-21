@@ -92,7 +92,7 @@ The default is read-only. It writes one machine-readable result to stdout and
 does not create `--output-dir`:
 
 ```bash
-uv run --project tools python tools/stage_vista_import_bundle.py \
+uv run --project tools --frozen python tools/stage_vista_import_bundle.py \
   --dataset-root /data/VISTA_VERIFIED \
   --verified-source verified/round1.jsonl \
   --verified-format jsonl \
@@ -131,7 +131,7 @@ The tool creates a private temporary sibling, fsyncs it, and renames it into
 place while holding a private staging lock:
 
 ```bash
-uv run --project tools python tools/stage_vista_import_bundle.py \
+uv run --project tools --frozen python tools/stage_vista_import_bundle.py \
   ...same reviewed arguments... \
   --apply
 ```
@@ -188,7 +188,7 @@ attempt, and scenario type. They never receive a filesystem path.
 ## 6. Offline validation
 
 ```bash
-uv run --project tools python -m unittest \
+uv run --project tools --frozen python -m unittest \
   tools.tests.test_stage_vista_import_bundle -v
 ```
 

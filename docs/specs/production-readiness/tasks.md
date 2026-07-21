@@ -1,6 +1,6 @@
 # SimWorld Studio × VISTA Production Readiness Tasks
 
-狀態：Approved，Phase 1A／2 code-only slice完成，Phase 1B／3／4安全基礎進行中（使用者於 2026-07-14 核准）
+狀態：Approved；Phase 1A／2 與 Phase 1B／3／4 的可離線實作已大幅完成，正式資料、UE Content、provider 與 public network 仍受 live/admin gates 約束（使用者於 2026-07-14 核准）
 依賴：`requirements.md` → `design.md` → 本文件
 執行原則：每一 phase 是獨立可驗收 change set；不使用 `git add .`，不混入目前工作樹的既有 UI 變更。
 
@@ -9,13 +9,13 @@
 - [x] **T0.1** 唯讀確認目前 live path：Studio/UE/MCP/local Cirrus connected，remote path仍為Xpra/SSH。
 - [x] **T0.2** 唯讀確認baseline builder runtime為`claude-opus-4-8`、critic/summarizer當時仍為Sonnet；Phase 1A 現已將builder/critic安全預設統一為`claude-opus-4-8`。
 - [x] **T0.3** 盤點五大區域及extra Production gaps，保存本規格。
-- [ ] **T0.4** 在任何implementation前整理現有dirty worktree ownership；將既有Bearer/validator patch與其他UI work拆成可追蹤change set。
+- [x] **T0.4** 在任何implementation前整理現有dirty worktree ownership；將既有Bearer/validator patch與其他UI work拆成可追蹤change set。
 - [x] **T0.5** 新增run/correlation context與`/health/live`、`/health/ready`骨架，先以feature flags保持現行行為。
-- [ ] **T0.6** 新增process/port registry；startup偵測同一slot/GPU/port family的unmanaged duplicate stacks並拒絕或告警。
+- [x] **T0.6** 新增process/port registry；startup偵測同一slot/GPU/port family的unmanaged duplicate stacks並拒絕或告警。
 
 驗收：既有build仍可用；readiness能顯示asset/review/streaming為not-ready，不再只有整體`ok`。
 
-Implementation note（2026-07-14）：T0.6 的原子lease registry、slot/GPU/port conflict、PID start-token/PID reuse、stale cleanup、bounded listener probe與reject/warn policy已有16個unit tests；目前尚未接到startup-before-listen、heartbeat、shutdown release與readiness，因此保持未勾選。這一輪沒有掃描、終止或重啟任何實際process。
+Implementation note（2026-07-21）：所有工作已隔離到乾淨 integration branch/worktrees，原始 dirty checkouts 保持不動。T0.6 的原子 endpoint lease registry 已接到 slot spawn 前檢查、parent PID/start-token、heartbeat、失敗與 shutdown release；unmanaged listener、corrupt registry、重複 physical slot/port family 均 fail closed。離線測試不會掃描、終止或重啟實際 process。
 
 ## Phase 1A — Review pipeline correctness（P0，可與1B平行）
 
@@ -38,11 +38,11 @@ Implementation note（2026-07-21）：T1A.8 的 conversation/run cancellation、
 ## Phase 1B — Asset retrieval foundation（P0，需要asset snapshot/admin）
 
 - [ ] **T1B.1 [Admin/Data Gate]** 取得與目前UE Content revision一致的完整asset snapshot；若只有partial index，先決定是否重建及成本/時間上限。
-- [ ] **T1B.2** 實作snapshot manifest與只讀audit：catalog/Postgres/Qdrant count、checksums、vectors、embedding version一致。
+- [x] **T1B.2** 實作snapshot manifest與只讀audit：catalog/Postgres/Qdrant count、checksums、vectors、embedding version一致。
 - [ ] **T1B.3 [Admin]** Provision固定版本PostgreSQL、Qdrant與embedding service；persistent volumes、healthcheck、restart、backup/restore齊備。
 - [ ] **T1B.4 [State-change Gate]** 若無snapshot，依序套schema、catalog migration、Qdrant build；先dry-run/count，核准後才執行full job。
-- [ ] **T1B.5** 統一local compose、start script、systemd/AWS env與DB/collection names；加入embed service與catalog mount。
-- [ ] **T1B.6** 移除DSN echo、固定弱密碼、`qdrant:latest`及不存在的`/data/siddhant/...` default；改用secret-backed設定。
+- [x] **T1B.5** 統一local compose、start script、systemd/AWS env與DB/collection names；加入embed service與catalog mount。
+- [x] **T1B.6** 移除DSN echo、固定弱密碼、`qdrant:latest`及不存在的`/data/siddhant/...` default；改用secret-backed設定。
 - [x] **T1B.7** 修正`/api/chat`的`_amRaw` gate，使documented default `hybrid`真正生效。
 - [x] **T1B.8** 為Qdrant/embed/Postgres加bounded timeout與structured causes；保留成功fallback telemetry。
 - [x] **T1B.9** 實作`require_real_assets` fail-closed與顯式degraded policy；UI/artifact顯示retrieval revision及fallback。
@@ -52,7 +52,7 @@ Implementation note（2026-07-21）：T1A.8 的 conversation/run cancellation、
 
 驗收：全部服務健康時不再產生whitebox fallback；全掛時build在UE mutation前被阻止。
 
-Implementation note（2026-07-14）：T1B.7～11 的安全程式碼與 fake/contract coverage 已完成；`/health/ready` 在沒有 `simworld-asset-snapshot/v1`、一致 counts 與已驗證 revision 時會明確保持 not-ready。T1B.2 的 strict manifest schema與read-only audit程式碼已新增，可分別檢查catalog checksum、Postgres/Qdrant count、vector size、embedding與UE revision；但尚未取得目前UE Content對應的正式snapshot並執行audit，故任務保持未勾選。T1B.6 已移除兩條 index launcher、runner artifacts/config/events 與 Studio startup 的 DSN 洩漏，local compose 也改成 secret/pinned-image 必填與 loopback bind；但 AWS profile、embedding container、正式 secret store、舊 artifact scrub/credential rotation 尚未完成，因此 T1B.5～6 保持未勾選。T1B.1～4、12 仍受 Data/Admin/State-change Gate 約束，未連線 DB、未建立 index、未修改 UE scene。
+Implementation note（2026-07-21）：T1B.2 與 T1B.5～11 的 code-only contract 已完成。Local/AWS profiles 共用 pinned-image、loopback、file-secret、catalog/model mount 與 embedding service contract；offline preflight、model artifact manifest、backup bundle及 live-audit receipt 都 fail closed。`/health/ready` 在沒有正式 `simworld-asset-snapshot/v1`、一致 counts 與已驗證 revision 時仍明確 not-ready。T1B.1／3／4／12 受 Data/Admin/State-change Gate 約束：目前未取得 authoritative full catalog、未啟動 DB/index、未執行 live audit、未修改 UE scene。
 
 ## Phase 2 — VISTA importer與SceneSpec（依賴Phase 1B contract）
 
@@ -66,10 +66,12 @@ Implementation note（2026-07-14）：T1B.7～11 的安全程式碼與 fake/cont
 - [x] **T2.8** 實作preview/commit/status APIs、idempotency key、owner/session與artifact persistence。
 - [x] **T2.9** 增加UI preview：source、12秒beats、asset bindings、unsupported actions與commit確認。
 - [x] **T2.10** Golden/negative tests：missing render script、duration mismatch、duplicate timestamps、invalid attempt、oracle leakage與rerun idempotency。
+- [x] **T2.11** 建立 verified-source staging adapter：explicit sample/attempt、逐檔 checksum、MP4 metadata、no-oracle join、dry-run、atomic private apply與現有 importer 相容性。
+- [ ] **T2.12 [Data Gate]** 由 VISTA dataset owner 發佈 authoritative verified projection，並 stage 真實 `mmg_040` selected attempt bundle。
 
 驗收：`mmg_040` preview穩定產出12秒SceneSpec，包含0/2/5/9秒beats；重跑不重複artifact。
 
-Implementation note（2026-07-14）：Phase 2 的 code-only contract、API、artifact persistence、專業 workbench UI、golden/negative tests與fake semantic resolver E2E已完成。Sanitized media descriptor保存所選attempt的實際SHA-256、byte count、12秒與1280×720，但fixture刻意不含9 MB影片，故標記為`recorded_checksum`；正式media store的逐次binary re-verification仍是部署整合項。沒有asset snapshot/DB時所有entity明確維持`no_asset_match`，不會使用Cube；真實asset binding仍受Phase 1B Data/Admin Gate約束。Live server尚未重啟，這些source changes目前未部署。
+Implementation note（2026-07-21）：Phase 2 的 code-only contract、API、artifact persistence、專業 workbench UI、golden/negative tests與 fake semantic resolver E2E已完成。新增 staging adapter 會對管理員明確指定的 verified row、render script、no-oracle dialogue 與 MP4 做 exact identity/checksum/bytes/duration/dimensions 驗證，預設 dry-run，`--apply` 才以 0700/0600 atomic/idempotent bundle 落盤；oracle/review/seed/visible-evidence 欄位會被拒絕。尚未讀取 canonical/NAS 或建立 live bundle。沒有 asset snapshot/DB 時 entity 仍明確維持 `no_asset_match`，不使用 Cube。
 
 ## Phase 3 — Timeline compiler、animations與runtime（依賴Phase 2）
 
@@ -78,16 +80,16 @@ Implementation note（2026-07-14）：Phase 2 的 code-only contract、API、art
 - [x] **T3.3** 建立fixed action adapter interface：precondition、execute、completion、timeout、cancel、cleanup。
 - [ ] **T3.4** 將現有`agent_action` registry接入adapter層並補unit tests；不要讓LLM自由組合未驗證`vbp`命令。
 - [ ] **T3.5** 與UE content owner完成第一批必要Blueprint/montage functions。若`mmg_040`為P0，至少包含drag chair、brace、lift-foot/hesitate及look-at。
-- [ ] **T3.6** 將Start從browser硬編碼toolbar click搬到backend/UE runtime bridge；保留lease、nonce、state reconciliation與idempotent Stop。
+- [x] **T3.6** 將Start從browser硬編碼toolbar click搬到backend/UE runtime bridge；保留lease、nonce、state reconciliation與idempotent Stop。
 - [x] **T3.7** 實作server monotonic scheduler、drift measurement、UE engine-time sampling與bounded queue。
-- [ ] **T3.8** 實作Stop/Replay：清pending events、adapter cleanup、停止角色、結束PIE、確認state。
-- [ ] **T3.9** 建立timeline UI：preflight、elapsed time、event status、drift、Stop與artifact link。
+- [x] **T3.8** 實作Stop/Replay：清pending events、adapter cleanup、停止角色、結束PIE、確認state。
+- [x] **T3.9** 建立timeline UI：preflight、elapsed time、event status、drift、Stop與artifact link。
 - [ ] **T3.10** Disposable UE integration：正常完成、event timeout、stream disconnect、Stop race、server restart/reconcile。
 - [ ] **T3.11** `mmg_040` 0/2/5/9/12秒keyframe/state validation與visual evidence。
 
 驗收：browser不是clock authority；所有event可追溯，Stop後無PIE/pending action殘留。
 
-Implementation note（2026-07-14）：T3.1～3與T3.7的純程式契約已完成。`mmg_040` strict preflight會保留0／2／5／9秒beats，並在任何mutation前明確阻擋尚無adapter的`drag`與`brace`；lenient只會標記skip，不會偷換成generic walk。Scheduler以server monotonic clock記錄planned/actual/drift/engine time，具有bounded queue、timeout、AbortSignal、session/slot ACL、terminal Replay與顯式FSM。T3.8已有pending cancellation與adapter cleanup，但尚未接真實UE character stop、end PIE與stopped-state reconciliation，故保持未勾選。T3.4～6、9～11仍需要verified action registry、Blueprint/montage content、runtime routes/UI與disposable UE驗證；本輪未呼叫UE。
+Implementation note（2026-07-21）：Browser toolbar coordinates、synthetic Escape 與 iframe Play/Stop 已移除。Lease-bound backend Start/state/Stop、PIE/possession gate、live mesh/material/content receipt revalidation、monotonic scheduler、Stop/Replay、cleanup quarantine、restart recovery-required state及 timeline workbench 已完成離線驗證。`ended_pie` 只在 backend state 明確確認後記錄。T3.5／10／11仍需真實 UE：目前 plugin 只有 abstract content driver，沒有 skeleton/AnimBP/Control Rig、drag/brace/lift-foot/fall/recover montage、notify/contact proof，也尚未在 disposable scene 驗證 0／2／5／9／12 秒 keyframes。
 
 ## Phase 4 — Public WebRTC + Coturn（可先做程式碼，開網需Admin Gate）
 
