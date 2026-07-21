@@ -44,8 +44,24 @@ MAX_PROC_LIST_BYTES = 64 * 1024
 _PR_SET_CHILD_SUBREAPER = 36
 _PR_GET_CHILD_SUBREAPER = 37
 _PR_SET_NO_NEW_PRIVS = 38
+_SYS_PIDFD_SEND_SIGNAL = 424
+_SYS_PIDFD_OPEN = 434
+_PIDFD_SYSCALL_ARCHES = frozenset(
+    {
+        "aarch64",
+        "arm64",
+        "i386",
+        "i686",
+        "ppc64le",
+        "riscv64",
+        "s390x",
+        "x86_64",
+    }
+)
 _LIBC = ctypes.CDLL(None, use_errno=True)
 _LIBC.prctl.restype = ctypes.c_int
+if hasattr(_LIBC, "syscall"):
+    _LIBC.syscall.restype = ctypes.c_long
 
 _READY = b"R"
 _RESULT = b"V"
@@ -65,7 +81,7 @@ PUBLIC_ERROR_MESSAGES = {
 }
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(slots=True)
 class IsolatedExecutorError(Exception):
     """Fixed, bounded failure that never retains callback-controlled text."""
 
@@ -87,14 +103,81 @@ def _platform_supported() -> bool:
         "killpg",
         "waitpid",
         "WNOHANG",
-        "pidfd_open",
+    )
+    native_pidfd = hasattr(os, "pidfd_open") and hasattr(
+        signal,
+        "pidfd_send_signal",
+    )
+    syscall_pidfd = (
+        hasattr(_LIBC, "syscall")
+        and hasattr(os, "uname")
+        and os.uname().machine.lower() in _PIDFD_SYSCALL_ARCHES
     )
     return (
         os.name == "posix"
         and sys.platform.startswith("linux")
         and all(hasattr(os, name) for name in required)
-        and hasattr(signal, "pidfd_send_signal")
+        and (native_pidfd or syscall_pidfd)
     )
+
+
+def _pidfd_open(pid: int) -> int:
+    if hasattr(os, "pidfd_open"):
+        try:
+            return os.pidfd_open(pid, 0)
+        except ProcessLookupError:
+            raise
+        except (OSError, ValueError):
+            _fail("ISOLATED_EXECUTOR_REAP_FAILED")
+    if (
+        not hasattr(_LIBC, "syscall")
+        or not hasattr(os, "uname")
+        or os.uname().machine.lower() not in _PIDFD_SYSCALL_ARCHES
+    ):
+        _fail("ISOLATED_EXECUTOR_UNSUPPORTED")
+    ctypes.set_errno(0)
+    descriptor = _LIBC.syscall(
+        _SYS_PIDFD_OPEN,
+        ctypes.c_int(pid),
+        ctypes.c_uint(0),
+    )
+    if descriptor >= 0:
+        return int(descriptor)
+    error_number = ctypes.get_errno()
+    if error_number == errno.ESRCH:
+        raise ProcessLookupError(error_number, os.strerror(error_number), pid)
+    _fail("ISOLATED_EXECUTOR_REAP_FAILED")
+
+
+def _pidfd_send_kill(descriptor: int) -> None:
+    if hasattr(signal, "pidfd_send_signal"):
+        try:
+            signal.pidfd_send_signal(descriptor, signal.SIGKILL, None, 0)
+            return
+        except ProcessLookupError:
+            raise
+        except (OSError, ValueError):
+            _fail("ISOLATED_EXECUTOR_REAP_FAILED")
+    if (
+        not hasattr(_LIBC, "syscall")
+        or not hasattr(os, "uname")
+        or os.uname().machine.lower() not in _PIDFD_SYSCALL_ARCHES
+    ):
+        _fail("ISOLATED_EXECUTOR_UNSUPPORTED")
+    ctypes.set_errno(0)
+    result = _LIBC.syscall(
+        _SYS_PIDFD_SEND_SIGNAL,
+        ctypes.c_int(descriptor),
+        ctypes.c_int(signal.SIGKILL),
+        ctypes.c_void_p(),
+        ctypes.c_uint(0),
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.ESRCH:
+        raise ProcessLookupError(error_number, os.strerror(error_number))
+    _fail("ISOLATED_EXECUTOR_REAP_FAILED")
 
 
 def _prctl_set(option: int, value: int) -> None:
@@ -358,8 +441,8 @@ def _kill_group(pid: int) -> None:
 def _kill_pidfd(pid: int) -> None:
     descriptor = -1
     try:
-        descriptor = os.pidfd_open(pid, 0)
-        signal.pidfd_send_signal(descriptor, signal.SIGKILL, None, 0)
+        descriptor = _pidfd_open(pid)
+        _pidfd_send_kill(descriptor)
     except ProcessLookupError:
         return
     except (AttributeError, OSError, ValueError):
@@ -465,7 +548,9 @@ def execute_isolated(
     os.set_inheritable(child_fd, False)
     pid = -1
     reaped = False
+    previous_subreaper: int | None = None
     try:
+        previous_subreaper = _enable_subreaper()
         try:
             pid = os.fork()
         except OSError:
@@ -509,17 +594,22 @@ def execute_isolated(
             _fail("ISOLATED_EXECUTOR_RESULT_INVALID")
         return value
     finally:
-        if pid > 0 and not reaped:
-            # Lifecycle integrity is stronger than preserving an earlier
-            # callback/transport code: if the child cannot be reaped, surface
-            # that fixed failure instead of pretending the boundary closed.
-            _kill_and_reap(pid)
-        for descriptor in (parent_fd, child_fd):
-            if descriptor >= 0:
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
+        try:
+            if pid > 0 and not reaped:
+                # Lifecycle integrity is stronger than preserving an earlier
+                # callback/transport code: if the child cannot be reaped,
+                # surface that fixed failure instead of pretending the
+                # boundary closed.
+                _kill_and_reap(pid)
+        finally:
+            for descriptor in (parent_fd, child_fd):
+                if descriptor >= 0:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if previous_subreaper is not None:
+                _restore_subreaper(previous_subreaper)
 
 
 __all__ = [

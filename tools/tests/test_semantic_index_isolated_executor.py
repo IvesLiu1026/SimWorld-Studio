@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import resource
 import sys
 import tempfile
 import threading
@@ -199,6 +200,63 @@ class IsolatedExecutorTests(unittest.TestCase):
                 time.sleep(0.01)
             else:
                 self.fail("isolated descendant remained runnable after result")
+
+    def test_success_path_kills_descendant_that_escapes_process_group(self) -> None:
+        if not pathlib.Path("/proc").is_dir():
+            self.skipTest("Linux /proc is required for descendant liveness evidence")
+        with tempfile.TemporaryDirectory() as temporary:
+            pid_file = pathlib.Path(temporary) / "escaped-descendant.pid"
+
+            def spawn_escaped_descendant(_request, _capabilities):
+                child = os.fork()
+                if child == 0:
+                    os.setsid()
+                    time.sleep(60)
+                    os._exit(0)
+                pid_file.write_text(str(child), encoding="ascii")
+                return {"descendant_pid": child}
+
+            result = self.execute(spawn_escaped_descendant)
+            descendant = result["descendant_pid"]
+            self.assertEqual(str(descendant), pid_file.read_text(encoding="ascii"))
+            self.assertFalse(pathlib.Path(f"/proc/{descendant}").exists())
+
+    def test_child_closes_high_numbered_inherited_descriptor(self) -> None:
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        high_descriptor = min(4096, hard_limit - 1)
+        if high_descriptor < 2048:
+            self.skipTest("process descriptor hard limit is too low for high-fd coverage")
+        if soft_limit <= high_descriptor:
+            resource.setrlimit(
+                resource.RLIMIT_NOFILE,
+                (high_descriptor + 1, hard_limit),
+            )
+        inherited = os.open("/dev/null", os.O_RDONLY)
+        try:
+            os.dup2(inherited, high_descriptor, inheritable=True)
+
+            def inspect_descriptor(_request, _capabilities):
+                try:
+                    os.fstat(high_descriptor)
+                except OSError:
+                    return {"inherited": False}
+                return {"inherited": True}
+
+            self.assertEqual(
+                {"inherited": False},
+                self.execute(inspect_descriptor),
+            )
+        finally:
+            os.close(inherited)
+            try:
+                os.close(high_descriptor)
+            except OSError:
+                pass
+            if soft_limit <= high_descriptor:
+                resource.setrlimit(
+                    resource.RLIMIT_NOFILE,
+                    (soft_limit, hard_limit),
+                )
 
     def test_trailing_eagain_waits_boundedly_for_descendant_fd_close(self) -> None:
         poller = mock.Mock()
