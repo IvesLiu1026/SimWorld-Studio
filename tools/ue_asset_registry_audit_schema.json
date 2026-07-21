@@ -57,13 +57,13 @@
         "properties": {
           "package": {
             "type": "string",
-            "pattern": "^/Game(?:/[A-Za-z0-9_.+-]+)+$"
+            "pattern": "^/Game(?:/[A-Za-z0-9_+-]+)+$"
           },
           "name": {
             "type": "string",
             "minLength": 1,
             "maxLength": 240,
-            "pattern": "^[A-Za-z0-9_.+-]+$"
+            "pattern": "^[A-Za-z0-9_+-]+$"
           },
           "class": {
             "enum": [

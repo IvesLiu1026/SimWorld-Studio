@@ -182,6 +182,8 @@ class AssetRegistryBootstrapTests(unittest.TestCase):
         self.assertEqual(validated["repository"], "SimWorld-AI/SimWorld-Studio")
         self.assertNotIn("canonical_path", validated)
         self.assertRegex(validated["receipt_sha256"], r"^[a-f0-9]{64}$")
+        self.assertEqual(validated["expected_project_revision"], binding().project_revision)
+        self.assertEqual(validated["expected_content_revision"], binding().content_revision)
 
         for field, value in (
             ("actual_size_bytes", 1),
@@ -196,6 +198,44 @@ class AssetRegistryBootstrapTests(unittest.TestCase):
                 with self.assertRaises(builder.BootstrapError):
                     builder.validate_archive_receipt(invalid)
 
+        with self.assertRaisesRegex(builder.BootstrapError, "project revision"):
+            builder.SourceBinding(
+                project_name="gym_citynav",
+                project_revision="source-patch:" + "0" * 40,
+                content_revision=validated["expected_content_revision"],
+                archive=validated,
+            )
+        with self.assertRaisesRegex(builder.BootstrapError, "content revision"):
+            builder.SourceBinding(
+                project_name="gym_citynav",
+                project_revision=validated["expected_project_revision"],
+                content_revision="sha256:" + "0" * 64,
+                archive=validated,
+            )
+
+    def test_capability_signals_do_not_use_unsafe_substrings(self):
+        pickup = {
+            "package": "/Game/Human_Avatar/Animation/LiftSet",
+            "name": "A_Lift_Light_PickUp_0cm",
+            "class": "AnimSequence",
+        }
+        trigger = {
+            "package": "/Game/Props",
+            "name": "BP_OutputTrigger",
+            "class": "Blueprint",
+        }
+        self.assertIn("lift", builder._capability_signals(pickup))
+        self.assertNotIn("ik", builder._capability_signals(pickup))
+        self.assertNotIn("rig", builder._capability_signals(trigger))
+        self.assertNotIn("lift", builder._capability_signals(trigger))
+
+    def test_ambiguous_unreal_package_or_object_names_are_rejected(self):
+        audit = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        audit["assets"][0]["package"] = "/Game/Props/SM.Chair"
+        audit["assets"][0]["name"] = "SM.Chair"
+        with self.assertRaisesRegex(builder.BootstrapError, "not a /Game path"):
+            builder.validate_registry_audit(audit, expected_project_name="gym_citynav")
+
     def test_atomic_bundle_refuses_overwrite_and_receipt_hashes_match(self):
         audit = self.load_audit()
         manifest = builder.build_object_manifest(audit, binding())
@@ -208,7 +248,8 @@ class AssetRegistryBootstrapTests(unittest.TestCase):
                 manifest=manifest,
                 inventory=inventory,
             )
-            self.assertTrue(receipt["complete"])
+            self.assertTrue(receipt["bundle_complete"])
+            self.assertFalse(receipt["snapshot_complete"])
             self.assertTrue((output_dir / "bootstrap-receipt.json").is_file())
             for filename, descriptor in receipt["files"].items():
                 payload = (output_dir / filename).read_bytes()
@@ -224,6 +265,43 @@ class AssetRegistryBootstrapTests(unittest.TestCase):
                     inventory=inventory,
                 )
             self.assertEqual((output_dir / "object-manifest.json").read_bytes(), original_manifest)
+
+    def test_json_inputs_reject_duplicate_keys_and_symlink_components(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            duplicate = root / "duplicate.json"
+            duplicate.write_text('{"schema":"first","schema":"second"}', encoding="utf-8")
+            with self.assertRaisesRegex(builder.BootstrapError, "duplicate key"):
+                builder._read_regular_json(duplicate, max_bytes=1024, label="fixture")
+
+            real = root / "real"
+            real.mkdir()
+            linked = root / "linked"
+            linked.symlink_to(real, target_is_directory=True)
+            nested = real / "audit.json"
+            nested.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(builder.BootstrapError, "traverse symlinks"):
+                builder._read_regular_json(
+                    linked / "audit.json", max_bytes=1024, label="fixture"
+                )
+
+    def test_publication_requires_private_owned_parent(self):
+        audit = self.load_audit()
+        manifest = builder.build_object_manifest(audit, binding())
+        inventory = builder.build_capability_inventory(audit, binding(), limit_per_group=20)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            public_parent = root / "public"
+            public_parent.mkdir(mode=0o755)
+            public_parent.chmod(0o755)
+            with self.assertRaisesRegex(builder.BootstrapError, "private current-user-owned"):
+                builder.publish_bundle(
+                    public_parent / "bundle",
+                    audit=audit,
+                    manifest=manifest,
+                    inventory=inventory,
+                )
+            self.assertFalse((public_parent / "bundle").exists())
 
     def test_offline_dry_run_never_calls_bridge_or_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -295,7 +373,8 @@ class AssetRegistryBootstrapTests(unittest.TestCase):
         call = sender.call_args.kwargs
         self.assertEqual(call["host"], "ue-operator.internal")
         self.assertEqual(call["port"], 55557)
-        self.assertIn(builder.LIVE_RESULT_TAG, call["script"])
+        self.assertEqual(call["max_rows"], 1000)
+        self.assertNotIn("script", call)
 
     def test_live_and_offline_modes_require_safe_explicit_arguments(self):
         common = [

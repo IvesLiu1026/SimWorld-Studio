@@ -68,8 +68,16 @@ Every publication requires all three immutable bindings:
   expected/actual bytes and hash, strips host-local paths from outputs, and
   records a canonical receipt digest.
 
-Output publication is non-overwriting. The tool creates a new mode-`0700`
-directory, writes mode-`0600` JSON files atomically, and writes
+These are not free-form labels: `--project-revision` must equal the verified
+receipt's `source-patch:<commit>` binding (or its archive-revision binding when
+no source patch exists), and `--content-revision` must equal
+`sha256:<verified-archive-sha256>`. A same-named project or audit cannot be
+relabelled as the official content by supplying different revision strings.
+
+Output publication is non-overwriting. Its existing parent must be owned by
+the current user, have no group/other permissions, and contain no symlink path
+component. The tool creates a new mode-`0700` directory, writes mode-`0600`
+JSON files atomically, and writes
 `bootstrap-receipt.json` last. An existing output directory is an error; use a
 new revisioned directory instead of deleting evidence.
 
@@ -151,8 +159,9 @@ this tool to accommodate a bridge.
 
 ## Review before any semantic indexing
 
-Treat a bundle as complete only when `bootstrap-receipt.json` exists and its
-file hashes match. Then review:
+Treat a bundle as complete only when `bootstrap-receipt.json` exists, its file
+hashes match, `bundle_complete` is `true`, and `snapshot_complete` remains
+`false`. Then review:
 
 - `registry-audit.json` has the expected project and archive/content binding;
 - `object-manifest.json` contains only `StaticMesh`/`Blueprint` candidates;

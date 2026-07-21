@@ -238,9 +238,10 @@ SAFE_PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$")
 SAFE_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-/]{0,239}$")
 SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,239}$")
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
-PACKAGE_RE = re.compile(r"^/Game(?:/[A-Za-z0-9_.+\-]+)+$")
-ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9_.+\-]{1,240}$")
+PACKAGE_RE = re.compile(r"^/Game(?:/[A-Za-z0-9_+\-]+)+$")
+ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9_+\-]{1,240}$")
 CLASS_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+GIT_COMMIT_RE = re.compile(r"^[a-f0-9]{40,64}$")
 FLOATING_REVISIONS = frozenset({"dev", "head", "latest", "main", "master", "trunk"})
 
 
@@ -254,6 +255,18 @@ class SourceBinding:
     project_revision: str
     content_revision: str
     archive: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        expected_project_revision = self.archive.get("expected_project_revision")
+        expected_content_revision = self.archive.get("expected_content_revision")
+        if self.project_revision != expected_project_revision:
+            raise BootstrapError(
+                "project revision does not match the verified archive receipt"
+            )
+        if self.content_revision != expected_content_revision:
+            raise BootstrapError(
+                "content revision does not match the verified archive receipt"
+            )
 
 
 def canonical_json_bytes(value: Any, *, pretty: bool = False) -> bytes:
@@ -271,6 +284,24 @@ def canonical_json_bytes(value: Any, *, pretty: bool = False) -> bytes:
 
 def sha256_json(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _reject_duplicate_pairs(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise BootstrapError(f"JSON contains a duplicate key: {key!r}")
+        value[key] = item
+    return value
+
+
+def _strict_json_loads(raw: str, label: str) -> Any:
+    try:
+        return json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+    except BootstrapError:
+        raise
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise BootstrapError(f"{label} is not valid JSON") from exc
 
 
 def _require_plain_mapping(value: Any, label: str) -> dict[str, Any]:
@@ -314,8 +345,17 @@ def _parse_utc_timestamp(value: Any, label: str) -> str:
 
 
 def _read_regular_json(path: pathlib.Path, *, max_bytes: int, label: str) -> Any:
-    if not path.is_absolute():
+    if not path.is_absolute() or path != pathlib.Path(os.path.abspath(path)):
         raise BootstrapError(f"{label} path must be absolute: {path}")
+    current = pathlib.Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        try:
+            component_metadata = current.lstat()
+        except OSError as exc:
+            raise BootstrapError(f"cannot stat {label}: {path}: {exc}") from exc
+        if stat.S_ISLNK(component_metadata.st_mode):
+            raise BootstrapError(f"{label} path must not traverse symlinks: {path}")
     try:
         metadata = path.lstat()
     except OSError as exc:
@@ -345,9 +385,10 @@ def _read_regular_json(path: pathlib.Path, *, max_bytes: int, label: str) -> Any
     if len(raw) > max_bytes:
         raise BootstrapError(f"{label} exceeds the {max_bytes}-byte bound: {path}")
     try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
         raise BootstrapError(f"{label} is not valid UTF-8 JSON: {path}") from exc
+    return _strict_json_loads(decoded, label)
 
 
 def validate_archive_receipt(raw: Any) -> dict[str, Any]:
@@ -407,6 +448,15 @@ def validate_archive_receipt(raw: Any) -> dict[str, Any]:
         raise BootstrapError("archive receipt SHA-256 verification is invalid")
     if receipt["verified"] is not True:
         raise BootstrapError("archive receipt must be verified")
+    source_patch_commit = receipt.get("source_patch_commit")
+    if source_patch_commit is not None:
+        if not isinstance(source_patch_commit, str) or not GIT_COMMIT_RE.fullmatch(
+            source_patch_commit
+        ):
+            raise BootstrapError("archive receipt source_patch_commit is invalid")
+        expected_project_revision = f"source-patch:{source_patch_commit}"
+    else:
+        expected_project_revision = f"archive-revision:{revision}"
     return {
         "receipt_schema": ARCHIVE_RECEIPT_SCHEMA,
         "receipt_sha256": sha256_json(receipt),
@@ -417,6 +467,8 @@ def validate_archive_receipt(raw: Any) -> dict[str, Any]:
         "size_bytes": expected_size,
         "sha256": expected_sha,
         "verified": True,
+        "expected_project_revision": expected_project_revision,
+        "expected_content_revision": f"sha256:{expected_sha}",
     }
 
 
@@ -685,10 +737,17 @@ def build_object_manifest(audit: Mapping[str, Any], binding: SourceBinding) -> d
 def _capability_signals(row: Mapping[str, str]) -> list[str]:
     identity = f"{row['package']}/{row['name']}"
     tokens = set(tokenize(identity))
-    compact = re.sub(r"[^a-z0-9]", "", identity.lower())
+    ordered_tokens = re.findall(
+        r"[a-z0-9]+",
+        re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", identity).lower(),
+    )
+    terms = set(tokens)
+    for width in (2, 3):
+        for index in range(0, len(ordered_tokens) - width + 1):
+            terms.add("".join(ordered_tokens[index : index + width]))
     signals: list[str] = []
     for signal, candidates in CAPABILITY_SIGNAL_TOKENS.items():
-        if tokens.intersection(candidates) or any(candidate in compact for candidate in candidates):
+        if terms.intersection(candidates):
             signals.append(signal)
     return sorted(signals)
 
@@ -896,7 +955,7 @@ def _validate_host(host: Any) -> str:
 
 
 def send_bridge_request(
-    *, host: str, port: int, script: str, timeout: int, max_response_bytes: int
+    *, host: str, port: int, max_rows: int, timeout: int, max_response_bytes: int
 ) -> dict[str, Any]:
     host = _validate_host(host)
     if not isinstance(port, int) or not 1 <= port <= 65535:
@@ -905,7 +964,10 @@ def send_bridge_request(
         raise BootstrapError("live bridge timeout must be between 1 and 600 seconds")
     if not 1024 <= max_response_bytes <= MAX_RESPONSE_BYTES:
         raise BootstrapError(f"max response bytes must be between 1024 and {MAX_RESPONSE_BYTES}")
-    payload = {"type": "execute_python_script", "params": {"script": script}}
+    payload = {
+        "type": "execute_python_script",
+        "params": {"script": build_ue_registry_script(max_rows=max_rows)},
+    }
     try:
         with socket.create_connection((host, port), timeout=min(timeout, 10)) as connection:
             connection.settimeout(timeout)
@@ -919,9 +981,17 @@ def send_bridge_request(
                 if len(response) > max_response_bytes:
                     raise BootstrapError("live bridge response exceeds its fixed byte bound")
                 try:
-                    decoded = json.loads(response.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError):
+                    decoded_text = response.decode("utf-8")
+                except UnicodeDecodeError:
                     continue
+                try:
+                    decoded = json.loads(
+                        decoded_text, object_pairs_hook=_reject_duplicate_pairs
+                    )
+                except json.JSONDecodeError:
+                    continue
+                except RecursionError as exc:
+                    raise BootstrapError("live bridge response is too deeply nested") from exc
                 if not isinstance(decoded, dict):
                     raise BootstrapError("live bridge response must be a JSON object")
                 return decoded
@@ -957,10 +1027,7 @@ def extract_live_audit(response: Any, *, expected_project_name: str) -> dict[str
         if LIVE_RESULT_TAG not in line:
             continue
         encoded = line.split(LIVE_RESULT_TAG, 1)[1]
-        try:
-            raw = json.loads(encoded)
-        except json.JSONDecodeError as exc:
-            raise BootstrapError("live registry audit log contains invalid JSON") from exc
+        raw = _strict_json_loads(encoded, "live registry audit log")
         return validate_registry_audit(raw, expected_project_name=expected_project_name)
     raise BootstrapError("live bridge response did not contain the registry audit marker")
 
@@ -980,7 +1047,7 @@ def query_live_registry(
     response = send_bridge_request(
         host=host,
         port=port,
-        script=build_ue_registry_script(max_rows=max_rows),
+        max_rows=max_rows,
         timeout=timeout,
         max_response_bytes=max_response_bytes,
     )
@@ -991,9 +1058,17 @@ def _write_atomic_new(path: pathlib.Path, payload: bytes) -> None:
     if path.exists() or path.is_symlink():
         raise BootstrapError(f"refusing to overwrite existing output: {path}")
     temp = path.parent / f".{path.name}.{os.getpid()}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    owns_temp = False
     try:
         fd = os.open(temp, flags, 0o600)
+        owns_temp = True
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()
@@ -1003,10 +1078,11 @@ def _write_atomic_new(path: pathlib.Path, payload: bytes) -> None:
     except FileExistsError as exc:
         raise BootstrapError(f"refusing to overwrite existing output: {path}") from exc
     finally:
-        try:
-            temp.unlink()
-        except FileNotFoundError:
-            pass
+        if owns_temp:
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def publish_bundle(
@@ -1016,21 +1092,50 @@ def publish_bundle(
     manifest: Mapping[str, Any],
     inventory: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if not output_dir.is_absolute():
+    if not output_dir.is_absolute() or output_dir != pathlib.Path(os.path.abspath(output_dir)):
         raise BootstrapError(f"output directory must be absolute: {output_dir}")
     parent = output_dir.parent
+    current = pathlib.Path(parent.anchor)
+    for component in parent.parts[1:]:
+        current /= component
+        try:
+            component_metadata = current.lstat()
+        except OSError as exc:
+            raise BootstrapError(f"output parent must already exist: {parent}") from exc
+        if stat.S_ISLNK(component_metadata.st_mode):
+            raise BootstrapError(f"output parent must not traverse symlinks: {parent}")
     try:
         parent_stat = parent.lstat()
     except OSError as exc:
         raise BootstrapError(f"output parent must already exist: {parent}") from exc
-    if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
-        raise BootstrapError(f"output parent must be a non-symlink directory: {parent}")
+    if (
+        not stat.S_ISDIR(parent_stat.st_mode)
+        or stat.S_ISLNK(parent_stat.st_mode)
+        or parent_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_stat.st_mode) & 0o077
+    ):
+        raise BootstrapError(
+            f"output parent must be a private current-user-owned directory: {parent}"
+        )
     try:
         output_dir.mkdir(mode=0o700)
     except FileExistsError as exc:
         raise BootstrapError(f"refusing to overwrite existing output directory: {output_dir}") from exc
     except OSError as exc:
         raise BootstrapError(f"cannot create output directory {output_dir}: {exc}") from exc
+
+    created_stat = output_dir.lstat()
+    if (
+        not stat.S_ISDIR(created_stat.st_mode)
+        or stat.S_ISLNK(created_stat.st_mode)
+        or created_stat.st_uid != os.geteuid()
+        or stat.S_IMODE(created_stat.st_mode) != 0o700
+    ):
+        try:
+            output_dir.rmdir()
+        except OSError:
+            pass
+        raise BootstrapError(f"output directory was not created privately: {output_dir}")
 
     try:
         files = {
@@ -1056,7 +1161,8 @@ def publish_bundle(
                 name: group["total_count"] for name, group in inventory["groups"].items()
             },
             "files": descriptors,
-            "complete": True,
+            "bundle_complete": True,
+            "snapshot_complete": False,
         }
         receipt = dict(receipt_basis)
         receipt["bundle_revision"] = f"sha256:{sha256_json(receipt_basis)}"
