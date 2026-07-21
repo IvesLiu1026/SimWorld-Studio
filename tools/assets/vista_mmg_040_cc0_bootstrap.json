@@ -1,0 +1,105 @@
+{
+  "schema": "simworld-external-asset-source/v1",
+  "revision": "vista-mmg-040-polyhaven-2026-07-21-v1",
+  "provider": "Poly Haven",
+  "provider_url": "https://polyhaven.com/",
+  "license": "CC0-1.0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution": "3D assets sourced from Poly Haven",
+  "assets": [
+    {
+      "asset_id": "polyhaven_painted_wooden_stool",
+      "source_asset_id": "painted_wooden_stool",
+      "source_page": "https://polyhaven.com/a/painted_wooden_stool",
+      "semantic_roles": [
+        "stable_step_stool",
+        "indoor_seating"
+      ],
+      "format": "gltf-2.0",
+      "files": [
+        {
+          "path": "painted_wooden_stool/painted_wooden_stool_1k.gltf",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/painted_wooden_stool/painted_wooden_stool_1k.gltf",
+          "bytes": 2848,
+          "md5": "d234ba7a3ce1cc2a68847cea4e405b34",
+          "sha256": "f9a9a4a7c38b3421c30dac35d91c41c8864452d6dbb398911494b8324d312ef9"
+        },
+        {
+          "path": "painted_wooden_stool/painted_wooden_stool.bin",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/painted_wooden_stool/painted_wooden_stool.bin",
+          "bytes": 23384,
+          "md5": "cf312e0df28055cbbf174584a01943c5",
+          "sha256": "d336c1eb8832e4441f69bb5618e2289703a7ca71d3884a9087d658051eee0b66"
+        },
+        {
+          "path": "painted_wooden_stool/textures/painted_wooden_stool_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/painted_wooden_stool/painted_wooden_stool_nor_gl_1k.jpg",
+          "bytes": 489911,
+          "md5": "4518ff0d1d7dbf0c5cc2d06777e92a97",
+          "sha256": "39fed6e0a14b464bf5b9555d4ac02df0f85b0bfc89d383e4b8e00c343598384e"
+        },
+        {
+          "path": "painted_wooden_stool/textures/painted_wooden_stool_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/painted_wooden_stool/painted_wooden_stool_arm_1k.jpg",
+          "bytes": 751171,
+          "md5": "9ffee9bb29a95f4ef24efb415b14f0b6",
+          "sha256": "2088f99a25050d6666348388d279b65993fdd50ad8c14d3419a64f1caea6472d"
+        },
+        {
+          "path": "painted_wooden_stool/textures/painted_wooden_stool_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/painted_wooden_stool/painted_wooden_stool_diff_1k.jpg",
+          "bytes": 607519,
+          "md5": "3118c86c770a6907d0347276deebd96c",
+          "sha256": "db0322de5e3c588465d0894515a7c1bdacde9e2a469a9ac154206bfe96746d3f"
+        }
+      ]
+    },
+    {
+      "asset_id": "polyhaven_shelf_01",
+      "source_asset_id": "Shelf_01",
+      "source_page": "https://polyhaven.com/a/Shelf_01",
+      "semantic_roles": [
+        "high_storage_shelf",
+        "indoor_storage"
+      ],
+      "format": "gltf-2.0",
+      "files": [
+        {
+          "path": "Shelf_01/Shelf_01_1k.gltf",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/Shelf_01/Shelf_01_1k.gltf",
+          "bytes": 2617,
+          "md5": "9e852782eeae96108206c888d2b68df1",
+          "sha256": "715bce6ff1886eccdd43d558f5cf9242a24396e0eb9e8ae391905186bb339e52"
+        },
+        {
+          "path": "Shelf_01/Shelf_01.bin",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/Shelf_01/Shelf_01.bin",
+          "bytes": 12676,
+          "md5": "bf2ff8bef60025c079565fd1926b8476",
+          "sha256": "21ee76dda6320ba423e76d192cfd38885e334ae394c03978d092f96b508f175b"
+        },
+        {
+          "path": "Shelf_01/textures/Shelf_01_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Shelf_01/Shelf_01_diff_1k.jpg",
+          "bytes": 153220,
+          "md5": "965ce260ce114308026fe98260cd482a",
+          "sha256": "875bb8110dec4f409d9127cba95f7c0ead02bdfeef6dd47232df939e4de35a5c"
+        },
+        {
+          "path": "Shelf_01/textures/Shelf_01_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Shelf_01/Shelf_01_nor_gl_1k.jpg",
+          "bytes": 231393,
+          "md5": "3ccf77ba277b06f29e3e68233a83bae7",
+          "sha256": "c817d7966974be2da13e4b0a57918e8e142edc50eb41d438229c3bad70df0f91"
+        },
+        {
+          "path": "Shelf_01/textures/Shelf_01_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/Shelf_01/Shelf_01_arm_1k.jpg",
+          "bytes": 205542,
+          "md5": "b0044e2cc568cd2a7f906ca56f473542",
+          "sha256": "d5d180b15c48ed6ab7b27a663de8f399f813ed0c32ff2706520d677a1e387cdc"
+        }
+      ]
+    }
+  ]
+}
