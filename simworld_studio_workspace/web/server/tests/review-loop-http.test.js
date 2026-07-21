@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -15,6 +16,15 @@ const {
 const { handleSceneLoop, runSceneLoop } = require("../scene-loop");
 const { createReviewBudget } = require("../review-budget");
 const {
+  cleanupEvidenceForPath,
+  cleanupPrivateEvidenceRun,
+  createPrivateEvidenceRun,
+  createReviewEvidenceReadinessProbe,
+  reserveEvidenceFile,
+  screenshotEvidence,
+  sealManagedScreenshot,
+} = require("../scene-critic");
+const {
   getActorsSnapshot,
   handleVisualSceneLoop,
   multiViewScreenshot,
@@ -23,6 +33,15 @@ const {
 } = require("../scene-loop-visual");
 
 const TOKEN = "test-studio-access-token-0123456789abcdef";
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+
+async function certifyEvidenceRoots(...roots) {
+  const report = await createReviewEvidenceReadinessProbe({
+    roots,
+    deadlineMs: 1_000,
+  })();
+  assert.equal(report.status, "ready", JSON.stringify(report));
+}
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -332,6 +351,93 @@ test("text loop propagates canonical builder and correlation contract", async (t
   assert.equal(criticVerdict.budget.spent_usd, 0.15);
 });
 
+test("Text Review relays only allowlisted inner fields and never exposes builder host paths", async () => {
+  const res = mockResponse();
+  await handleSceneLoop({
+    body: {
+      message: "build",
+      sessionId: "studio-public-text",
+      conversationId: "conversation-public-text",
+      agent: "claude",
+    },
+  }, res, {
+    STUDIO_SESSION: "studio-default",
+    runId: "run-public-text",
+    accessToken: TOKEN,
+    env: { SCENE_LOOP_MAX_ROUNDS: "1" },
+    intentStore: new Map(),
+    updateIntentSummary: async () => "intent",
+    requestInternalSse: async ({ onEvent }) => {
+      onEvent("text", {
+        delta: "working from /data/secret, /workspace/x, /a/b/c, "
+          + "`/home/yhliu/secret.txt`, path:/srv/private, //home/yhliu/double.txt, "
+          + "///srv/private/triple.txt, https://example.com/review "
+          + "https://[::1]/review https://例え.テスト/review https://example.com./review "
+          + "and %2Fcustom%2Fencoded.png",
+      });
+      onEvent("tool_input", { id: "tool-1", delta: '{"path":"/scratch/private"}' });
+      onEvent("screenshot", {
+        toolUseId: "shot-1",
+        filepath: "/api/screenshot/file?path=%2Fcustom%2Fsecret.png",
+      });
+      onEvent("tool_details", {
+        id: "tool-1",
+        name: "mcp__simworld__take_screenshot",
+        displayName: "take_screenshot",
+        input: { filepath: "/workspace/private-input.png" },
+      });
+      onEvent("tool_result", {
+        toolUseId: "tool-1",
+        result: '{"filepath":"/data/private-result.png","status":"success"}',
+        isError: false,
+        privileged: { path: "/root/private" },
+      });
+      onEvent("unreviewed_future_event", { path: "/var/private" });
+      return {
+        done: {
+          isError: false,
+          costUsd: 0,
+          latestScreenshot: "/api/screenshot/file?path=%2Fcustom%2Fsecret.png",
+          filepath: "/home/yhliu/private.scene",
+        },
+      };
+    },
+    criticRunner: async () => ({
+      status: "PASS",
+      issues: [],
+      suggestions: [],
+      cost_usd: 0,
+    }),
+  });
+
+  const raw = res.text();
+  const events = parseEvents(raw);
+  assert.doesNotMatch(
+    raw,
+    /\/data\/secret|\/workspace\/x|\/a\/b\/c|\/home\/yhliu|\/srv\/private|\/root\/private|\/var\/private/,
+  );
+  assert.doesNotMatch(raw, /%2Fcustom%2Fsecret/i);
+  assert.doesNotMatch(raw, /screenshot\/file\?path=/);
+  assert.doesNotMatch(raw, /filepath|\/scratch\/private/);
+  assert.match(raw, /https:\/\/example\.com\/review/);
+  assert.match(raw, /https:\/\/\[::1\]\/review/);
+  assert.match(raw, /https:\/\/例え\.テスト\/review/);
+  assert.match(raw, /https:\/\/example\.com\.\/review/);
+  assert.equal(events.some((event) => event.name === "screenshot"), false);
+  assert.equal(events.some((event) => event.name === "unreviewed_future_event"), false);
+  const details = events.find((event) => event.name === "tool_details").data;
+  assert.deepEqual(details, {
+    id: "tool-1",
+    name: "mcp__simworld__take_screenshot",
+    displayName: "take_screenshot",
+  });
+  assert.equal(events.some((event) => event.name === "tool_input"), false);
+  const toolResult = events.find((event) => event.name === "tool_result").data;
+  assert.deepEqual(toolResult, { toolUseId: "tool-1", isError: false });
+  const loopDone = events.find((event) => event.name === "loop_done").data;
+  assert.deepEqual(loopDone.builderResult, { isError: false, retryable: false, costUsd: 0 });
+});
+
 test("aggregate text-loop budget stops before another mutating round", async () => {
   const emitted = [];
   const builderCaps = [];
@@ -539,6 +645,41 @@ test("critic failures expose typed error fields and never become PASS", async ()
   assert.notEqual(result.finalStatus, "PASS");
 });
 
+test("Text Review binds critic evidence to the server scope and emits only opaque refs", async () => {
+  const emitted = [];
+  const reference = {
+    schema: "simworld-review-evidence-ref/v1",
+    scope_digest: "c".repeat(64),
+    evidence_id: `sha256:${"d".repeat(64)}`,
+    handle: `evidence-${"e".repeat(48)}`,
+  };
+  await runSceneLoop({
+    prompt: "build",
+    intentSummary: "build",
+    sessionId: "internal-session",
+    scopeId: "server-owned-review-scope",
+    maxRounds: 1,
+    builderRunner: async () => ({ isError: false }),
+    criticRunner: async (options) => {
+      assert.equal(options.scopeId, "server-owned-review-scope");
+      return {
+        status: "PASS",
+        issues: [],
+        suggestions: [],
+        screenshot: "/private/review-evidence/critic.png",
+        screenshotRef: reference,
+      };
+    },
+    emit: (name, data) => emitted.push({ name, data }),
+  });
+
+  const serialized = JSON.stringify(emitted);
+  assert.doesNotMatch(serialized, /private\/review-evidence/);
+  assert.doesNotMatch(serialized, /screenshot\/file\?path=/);
+  assert.deepEqual(emitted.find((event) => event.name === "critic_verdict").data.screenshotRef, reference);
+  assert.deepEqual(emitted.find((event) => event.name === "loop_done").data.latestScreenshotRef, reference);
+});
+
 test("visual critic verdict and loop_done expose review metadata", async () => {
   const emitted = [];
   const result = await runVisualSceneLoop({
@@ -556,7 +697,7 @@ test("visual critic verdict and loop_done expose review metadata", async () => {
       screenshots,
       provider: "claude",
       model: "claude-opus-4-8",
-      evidence_ids: ["visual:evidence.png"],
+      evidence_ids: [`sha256:${"a".repeat(64)}`],
       usage: { input_tokens: 10 },
       latency_ms: 25,
     }),
@@ -565,7 +706,7 @@ test("visual critic verdict and loop_done expose review metadata", async () => {
   const verdict = emitted.find((event) => event.name === "critic_verdict").data;
   assert.equal(verdict.provider, "claude");
   assert.equal(verdict.model, "claude-opus-4-8");
-  assert.deepEqual(verdict.evidence_ids, ["visual:evidence.png"]);
+  assert.deepEqual(verdict.evidence_ids, [`sha256:${"a".repeat(64)}`]);
   assert.deepEqual(verdict.usage, { input_tokens: 10 });
   assert.equal(verdict.latency_ms, 25);
   const loopDone = emitted.find((event) => event.name === "loop_done").data;
@@ -574,16 +715,66 @@ test("visual critic verdict and loop_done expose review metadata", async () => {
   assert.equal(result.reason, "pass");
 });
 
+test("Visual Review loop_done summarizes builder output without exposing private fields", async () => {
+  const emitted = [];
+  await runVisualSceneLoop({
+    prompt: "build",
+    intentSummary: "build",
+    maxRounds: 1,
+    builderRunner: async () => ({
+      isError: false,
+      latestScreenshot: "/api/screenshot/file?path=%2Ftmp%2Fvisual-secret.png",
+      filepath: "/home/yhliu/visual.scene",
+      costUsd: 0,
+    }),
+    captureRunner: async () => [{ name: "current", path: "/tmp/evidence.png" }],
+    criticRunner: async ({ screenshots }) => ({
+      status: "PASS",
+      issues: [],
+      suggestions: [],
+      screenshots,
+    }),
+    emit: (name, data) => emitted.push({ name, data }),
+  });
+  const serialized = JSON.stringify(emitted);
+  assert.doesNotMatch(serialized, /screenshot\/file\?path=|\/tmp\/|\/home\/yhliu/);
+  const loopDone = emitted.find((event) => event.name === "loop_done").data;
+  assert.deepEqual(loopDone.builderResult, { isError: false, costUsd: 0 });
+});
+
+test("Visual Review treats an empty successful capture as typed VISUAL_CAPTURE_FAILED", async () => {
+  const emitted = [];
+  const result = await runVisualSceneLoop({
+    prompt: "build",
+    intentSummary: "build",
+    maxRounds: 1,
+    builderRunner: async () => ({ isError: false }),
+    captureRunner: async () => [],
+    criticRunner: async () => {
+      assert.fail("critic must not run without visual evidence");
+    },
+    emit: (name, data) => emitted.push({ name, data }),
+  });
+  const verdict = emitted.find((event) => event.name === "critic_verdict").data;
+  assert.equal(verdict.code, "VISUAL_CAPTURE_FAILED");
+  assert.equal(verdict.errorDetails.code, "VISUAL_CAPTURE_FAILED");
+  assert.match(verdict.message, /returned no evidence/);
+  assert.equal(result.reason, "critic_error");
+  assert.equal(result.finalStatus, "FAIL");
+  const loopDone = emitted.find((event) => event.name === "loop_done").data;
+  assert.equal(loopDone.finalStatus, "FAIL");
+});
+
 test("visual evidence reads only through the shared UE broker and shared provider", async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-loop-"));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  await certifyEvidenceRoots(tmp);
   const calls = [];
   const ueBroker = {
     async send(type, params, options) {
       calls.push({ type, params, options });
       if (type === "take_screenshot") {
-        fs.mkdirSync(path.dirname(params.filepath), { recursive: true });
-        fs.writeFileSync(params.filepath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+        fs.writeFileSync(params.filepath, PNG_BYTES);
         return { status: "success" };
       }
       if (type === "get_actors_in_level") {
@@ -593,7 +784,10 @@ test("visual evidence reads only through the shared UE broker and shared provide
     },
   };
   const shots = await multiViewScreenshot({ round: 1, destDir: tmp, ueBroker });
+  t.after(() => cleanupEvidenceForPath(shots[0].path));
   assert.equal(shots.length, 1);
+  assert.match(shots[0].evidenceRef.scope_digest, /^[a-f0-9]{64}$/);
+  assert.equal(shots[0].evidenceRef.evidence_id, shots[0].evidenceId);
   assert.equal(calls[0].type, "take_screenshot");
   assert.equal(calls[0].options.signal, undefined);
 
@@ -624,7 +818,9 @@ test("visual evidence reads only through the shared UE broker and shared provide
   assert.equal(calls[2].type, "get_actors_in_level");
   assert.equal(providerInput.images.length, 1);
   assert.equal(providerInput.images[0].mediaType, "image/png");
-  assert.deepEqual(providerInput.evidenceIds, [`visual:${path.basename(shots[0].path)}`]);
+  assert.deepEqual(providerInput.evidenceIds, [
+    `sha256:${crypto.createHash("sha256").update(PNG_BYTES).digest("hex")}`,
+  ]);
   assert.equal(verdict.status, "PASS");
   assert.equal(verdict.actorsCount, 1);
   assert.deepEqual(
@@ -633,9 +829,191 @@ test("visual evidence reads only through the shared UE broker and shared provide
   );
 });
 
+test("parallel Visual captures isolate colon/underscore scopes and expose no raw path as authority", async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-isolation-"));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  await certifyEvidenceRoots(tmp);
+  const broker = (suffix) => ({
+    async send(type, params) {
+      assert.equal(type, "take_screenshot");
+      fs.writeFileSync(params.filepath, Buffer.concat([PNG_BYTES, Buffer.from(suffix)]));
+      return { status: "success" };
+    },
+  });
+  const [colon, underscore] = await Promise.all([
+    multiViewScreenshot({
+      round: 1,
+      destDir: tmp,
+      scopeId: "review:lease",
+      ueBroker: broker("colon"),
+    }),
+    multiViewScreenshot({
+      round: 1,
+      destDir: tmp,
+      scopeId: "review_lease",
+      ueBroker: broker("underscore"),
+    }),
+  ]);
+  t.after(() => Promise.all([
+    cleanupEvidenceForPath(colon[0].path),
+    cleanupEvidenceForPath(underscore[0].path),
+  ]));
+
+  assert.notEqual(path.dirname(colon[0].path), path.dirname(underscore[0].path));
+  assert.notEqual(colon[0].evidenceRef.scope_digest, underscore[0].evidenceRef.scope_digest);
+  assert.notEqual(colon[0].evidenceId, underscore[0].evidenceId);
+  assert.doesNotMatch(colon[0].path, /review[:_]lease/);
+  assert.doesNotMatch(underscore[0].path, /review[:_]lease/);
+});
+
+test("Visual loader rejects tamper, symlink replacement, oversized files, and aggregate overflow before provider", async (t) => {
+  const wrongRoot = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-wrong-"));
+  const symlinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-symlink-"));
+  const oversizedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-oversized-"));
+  const totalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-total-"));
+  const outside = path.join(os.tmpdir(), `simworld-review-outside-${process.pid}-${Date.now()}.png`);
+  t.after(() => {
+    for (const root of [wrongRoot, symlinkRoot, oversizedRoot, totalRoot]) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    fs.rmSync(outside, { force: true });
+  });
+  await certifyEvidenceRoots(wrongRoot, symlinkRoot, oversizedRoot, totalRoot);
+  let providerCalls = 0;
+  let actorCalls = 0;
+  const ueBroker = {
+    async send(type) {
+      assert.equal(type, "get_actors_in_level");
+      actorCalls += 1;
+      return { result: { actors: [] } };
+    },
+  };
+  const reviewProvider = async () => {
+    providerCalls += 1;
+    return { status: "PASS", issues: [], suggestions: [] };
+  };
+
+  const wrongRun = await createPrivateEvidenceRun({ root: wrongRoot, scopeId: "visual-wrong" });
+  const wrong = await reserveEvidenceFile(wrongRun, "wrong");
+  fs.writeFileSync(wrong, PNG_BYTES);
+  await sealManagedScreenshot(wrong);
+  fs.writeFileSync(wrong, Buffer.from("wrong-magic"));
+  await assert.rejects(
+    visualCritique({
+      screenshots: [{ name: "wrong", path: wrong }],
+      ueBroker,
+      reviewProvider,
+    }),
+    (error) => error.code === "REVIEW_EVIDENCE_INVALID",
+  );
+  await cleanupPrivateEvidenceRun(wrongRun);
+
+  fs.writeFileSync(outside, PNG_BYTES, { mode: 0o600 });
+  const symlinkRun = await createPrivateEvidenceRun({ root: symlinkRoot, scopeId: "visual-symlink" });
+  const symlink = await reserveEvidenceFile(symlinkRun, "symlink");
+  fs.writeFileSync(symlink, PNG_BYTES);
+  await sealManagedScreenshot(symlink);
+  fs.unlinkSync(symlink);
+  fs.symlinkSync(outside, symlink);
+  await assert.rejects(
+    visualCritique({
+      screenshots: [{ name: "symlink", path: symlink }],
+      ueBroker,
+      reviewProvider,
+    }),
+    (error) => error.code === "REVIEW_EVIDENCE_INVALID",
+  );
+  await cleanupPrivateEvidenceRun(symlinkRun);
+  assert.equal(fs.readFileSync(outside).equals(PNG_BYTES), true);
+
+  await assert.rejects(
+    multiViewScreenshot({
+      round: 1,
+      destDir: oversizedRoot,
+      scopeId: "visual-oversized",
+      ueBroker: {
+        async send(_type, params) {
+          const descriptor = fs.openSync(params.filepath, "r+");
+          try {
+            fs.writeSync(descriptor, PNG_BYTES, 0, PNG_BYTES.length, 0);
+            fs.ftruncateSync(descriptor, 25 * 1024 * 1024 + 1);
+          } finally {
+            fs.closeSync(descriptor);
+          }
+          return { status: "success" };
+        },
+      },
+    }),
+    (error) => error.code === "REVIEW_EVIDENCE_INVALID",
+  );
+
+  const totalRun = await createPrivateEvidenceRun({ root: totalRoot, scopeId: "visual-total" });
+  const totalShots = [];
+  for (let index = 0; index < 3; index += 1) {
+    const filepath = await reserveEvidenceFile(totalRun, `total-${index}`);
+    const descriptor = fs.openSync(filepath, "r+");
+    try {
+      fs.writeSync(descriptor, PNG_BYTES, 0, PNG_BYTES.length, 0);
+      fs.ftruncateSync(descriptor, 22 * 1024 * 1024);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    await sealManagedScreenshot(filepath);
+    totalShots.push({ name: `total-${index}`, path: filepath });
+  }
+  await assert.rejects(
+    visualCritique({ screenshots: totalShots, ueBroker, reviewProvider }),
+    (error) => error.code === "REVIEW_EVIDENCE_INVALID",
+  );
+  await cleanupPrivateEvidenceRun(totalRun);
+  assert.equal(actorCalls, 0, "unsafe evidence must fail before actor/provider work");
+  assert.equal(providerCalls, 0, "unsafe evidence must fail before provider work");
+});
+
+test("Visual SSE emits opaque evidence refs without leaking managed server paths", async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-public-ref-"));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  await certifyEvidenceRoots(tmp);
+  const emitted = [];
+  const result = await runVisualSceneLoop({
+    prompt: "build",
+    intentSummary: "build",
+    sessionId: "server-authoritative-scope",
+    maxRounds: 1,
+    destDir: tmp,
+    ueBroker: {
+      async send(type, params) {
+        assert.equal(type, "take_screenshot");
+        fs.writeFileSync(params.filepath, PNG_BYTES);
+        return { status: "success" };
+      },
+    },
+    builderRunner: async () => ({ isError: false }),
+    criticRunner: async ({ screenshots }) => ({
+      status: "PASS",
+      issues: [],
+      suggestions: [],
+      screenshots,
+      evidence_ids: screenshots.map((shot) => shot.evidenceId),
+    }),
+    emit: (name, data) => emitted.push({ name, data }),
+  });
+  t.after(() => cleanupEvidenceForPath(result.latestScreenshots[0].path));
+
+  const serialized = JSON.stringify(emitted);
+  assert.doesNotMatch(serialized, new RegExp(tmp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const shots = emitted.find((event) => event.name === "multi_shots").data;
+  assert.equal(shots.evidence.length, 1);
+  assert.match(shots.evidence[0].scope_digest, /^[a-f0-9]{64}$/);
+  assert.match(shots.evidence[0].handle, /^evidence-[a-f0-9]{48}$/);
+  const loopDone = emitted.find((event) => event.name === "loop_done").data;
+  assert.equal(Object.hasOwn(loopDone.latestScreenshots[0], "path"), false);
+});
+
 test("visual capture aborts while waiting for the screenshot file", async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-review-abort-"));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  await certifyEvidenceRoots(tmp);
   const controller = new AbortController();
   let brokerSignal = null;
   const started = Date.now();

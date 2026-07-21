@@ -391,7 +391,7 @@ export default function ToolsPage({ icons, newlyAddedToolIds = [], onMarkToolSee
       <PageHeader
         icon={icons?.wrench?.(22)}
         title="Tools"
-        subtitle="Static MCP tools for reference + learned tools you can manage"
+        subtitle="Curated MCP reference plus learned tools you can manage; runtime availability is server-authoritative"
       />
 
       {error && (
@@ -404,8 +404,10 @@ export default function ToolsPage({ icons, newlyAddedToolIds = [], onMarkToolSee
         <div style={{ border: "1px solid var(--line)", borderRadius: 10, marginBottom: 16, overflow: "hidden", background: "var(--bg)" }}>
           <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8, background: "var(--panel)" }}>
             <span style={{ fontSize: 14, display: "inline-flex", alignItems: "center" }}>{icons?.book?.(14)}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>Static MCP Tools (Reference)</span>
-            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-3)" }}>{STATIC_MCP_TOOL_DEFS.length} tools</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>Curated MCP Tool Reference</span>
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-3)" }}>
+              {STATIC_MCP_TOOL_DEFS.length} examples · runtime catalog is server-authoritative
+            </span>
           </div>
           <div style={{ padding: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
             {STATIC_MCP_TOOL_DEFS.map((tool) => (

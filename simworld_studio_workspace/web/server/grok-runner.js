@@ -150,7 +150,6 @@ function runGrokChat({ req, res, body, systemPrompt, ctx }) {
   let gotResult      = false;
   let lastOutputTime = Date.now();
   const startedTools = new Set(); // tool id → tool_start emitted
-  const verifierTools= new Set();
   const toolInputs   = new Map(); // tool id → {name, input} for ctx tracking
   const toolNames    = new Map(); // tool id → raw tool name (from _x.ai delta chunks)
 
@@ -224,7 +223,6 @@ function runGrokChat({ req, res, body, systemPrompt, ctx }) {
     emit("tool_start",  { id: toolId, name: fullName, displayName: bare });
     emit("tool_details",{ id: toolId, name: fullName, displayName: bare, input: input || {} });
     logToFile("tool", `Starting (grok): ${fullName}`);
-    if (bare === "verify_scene") { verifierTools.add(toolId); emit("verifier_start", { toolUseId: toolId }); }
     recordToolUseForCtx(toolId, bare, input || {});
   }
 
@@ -236,16 +234,6 @@ function runGrokChat({ req, res, body, systemPrompt, ctx }) {
     }
     emit("tool_result", { toolUseId: toolId, result: resultText.slice(0, 2000), isError });
     applyCtxOnToolResult(toolId, resultText, isError);
-    if (verifierTools.has(toolId)) {
-      let fb = "", ss = "";
-      try { const r2 = JSON.parse(resultText); fb = r2.feedback || ""; ss = r2.screenshot || ""; } catch {}
-      emit("verifier_result", {
-        toolUseId: toolId,
-        feedback: fb,
-        screenshot: ss ? `/api/screenshot/file?path=${encodeURIComponent(ss)}` : "",
-      });
-      verifierTools.delete(toolId);
-    }
   }
 
   // ---- ACP session/update notification → Studio SSE events -----------------

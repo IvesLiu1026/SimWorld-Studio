@@ -274,7 +274,7 @@ simworld-studio start \
 - **17 marketplace packs** discoverable via `list_assets()` (allow-AI licensed)
 - **Asset retrieval pipeline** — semantic retrieval over the full asset library injects a setting-appropriate palette into the build and exposes a `search_assets` tool for on-demand lookups (default `hybrid` mode); see [Asset Retrieval & Scene Generation](docs/asset-retrieval/README.md)
 - Auto session-suffix on actor names prevents cross-map name collision crashes
-- `verify_scene` tool: the agent evaluates a screenshot and returns PASS/NEEDS_IMPROVEMENT/FAIL
+- Managed Text and Visual Review: select a Review mode in Chat; the server-owned coordinator captures evidence, invokes the critic, and returns PASS/NEEDS_IMPROVEMENT/FAIL without exposing a verifier tool to the builder
 
 ### 🔁 Build-Critic Loop & Asset Retrieval
 - **Build-critic loop**: an iterative builder → critic → refine loop (text or multi-view *visual* critic) with a rolling intent summary, streaming `round_start` / `critic_verdict` / `loop_done` cards to the chat. Toggle from the chat status bar (**Loop: off → text → visual**) or `POST /api/scene-loop {"mode":"text_loop"}`. **Default off** — vanilla single-shot generation is unchanged.
@@ -303,7 +303,7 @@ simworld-studio start \
 
 ### 📊 Statistics Panels
 - **Embodied Agent Statistics**: aggregate map (2D top-down, all agents), collision/speed time-series charts
-- **Coding Agent Verifier**: rule-based (scene collision count) + VLM-based (Claude reads screenshot, scores 1–10)
+- **Geometry Validation**: deterministic collision, grounding, and actor-count checks; qualitative Text/Visual Review is initiated explicitly from Chat
 - **MetricsHub**: server-side 5s sampling → real-time SVG `LineChart` / `MultiLineChart`
 
 ### 📁 Asset Content Drawer
@@ -384,7 +384,7 @@ The UnrealCV plugin has been extended with:
 | Pixel Streaming black screen | Wait 60s after UE launch; check `logs/cirrus.log` for `Streamer connected` |
 | `Cannot generate unique name for X` | Fixed — actor names now include session suffix automatically |
 | Agent not detected after PIE | Auto-discovery runs every 5s; or use **↻ Sync** button in Agent panel |
-| VLM Scoring fails | Ensure Claude Code is authenticated: `claude` |
+| Text/Visual Review unavailable | Select Text or Visual in the Chat Review control, then inspect `/health/ready` for Review evidence, journal, and provider readiness |
 | Camera tab black | Recompile UE plugin for `vget /camera/actor/{name}/lit` |
 | `Vulkan memory crash` (Linux) | Use `--gpu 0` flag; install `vulkan-tools mesa-vulkan-drivers` |
 | `MCP port not opening` (Linux) | Wait 60s more; check GPU drivers with `nvidia-smi` |

@@ -4,7 +4,7 @@
 // drop-in coding agent for /api/chat, mirroring gemini-runner.js / codex-runner.js.
 //
 // The frontend talks SSE to /api/chat and expects Claude-shaped events
-// (system/text/tool_start/tool_details/tool_result/screenshot/verifier_*/done). This
+// (system/text/tool_start/tool_details/tool_result/screenshot/done). This
 // module spawns `opencode run --format json --dangerously-skip-permissions` and
 // translates OpenCode's part-event vocabulary into that shape.
 //
@@ -140,7 +140,6 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
   let lastOutputTime = Date.now();
   const textEmitted  = new Map();   // text part id → chars already emitted (dedupe streaming)
   const startedTools = new Set();   // tool callID → tool_start emitted
-  const verifierTools= new Set();
   const toolInputs   = new Map();   // callID → {name, input} for ctx tracking
 
   let knownMcpServers = [];
@@ -231,7 +230,6 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
         emit("tool_start",  { id: callId, name: fullName, displayName: bare });
         emit("tool_details",{ id: callId, name: fullName, displayName: bare, input });
         logToFile("tool", `Starting (opencode): ${fullName}`);
-        if (bare === "verify_scene") { verifierTools.add(callId); emit("verifier_start", { toolUseId: callId }); }
         recordToolUseForCtx(callId, bare, input);
       }
 
@@ -251,16 +249,6 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
         logToFile("tool_result", `${callId} (opencode ${bare}) → ${resultText.slice(0, 200)}`);
         applyCtxOnToolResult(callId, resultText, isError);
 
-        if (verifierTools.has(callId)) {
-          let fb = "", ss = "";
-          try { const r2 = JSON.parse(resultText); fb = r2.feedback || ""; ss = r2.screenshot || ""; } catch {}
-          emit("verifier_result", {
-            toolUseId: callId,
-            feedback: fb,
-            screenshot: ss ? `/api/screenshot/file?path=${encodeURIComponent(ss)}` : "",
-          });
-          verifierTools.delete(callId);
-        }
       }
       return;
     }

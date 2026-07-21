@@ -46,8 +46,15 @@ function productionExecutionLocked(env = process.env) {
 }
 
 function productionMcpToolDecision(name, env = process.env) {
-  if (!productionExecutionLocked(env)) return Object.freeze({ allowed: true });
   const toolName = String(name || "");
+  if (toolName === "verify_scene") {
+    return Object.freeze({
+      allowed: false,
+      code: "REVIEW_COORDINATOR_REQUIRED",
+      message: "verify_scene is retired; use the coordinator-managed Text or Visual Review mode.",
+    });
+  }
+  if (!productionExecutionLocked(env)) return Object.freeze({ allowed: true });
   if (PRODUCTION_NLP_MUTATION_TOOLS.has(toolName)) {
     return Object.freeze({
       allowed: false,

@@ -15,6 +15,12 @@ const {
   resolveReviewContract,
   throwIfAborted,
 } = require("./internal-http");
+const {
+  createInnerReviewRelay,
+  sanitizePublicString,
+  summarizeBuilderResult,
+  wrapPublicReviewEmitter,
+} = require("./review-public-events");
 
 // Format the critic's verdict into a "USER FEEDBACK" string that the builder's existing refine prompt
 // already knows how to consume ("modify what exists, don't start from scratch").
@@ -34,7 +40,7 @@ function failureDetails(error, fallbackCode, fallbackMessage) {
     ? rawCode
     : fallbackCode;
   const rawMessage = error && (error.message || error.error);
-  const message = String(rawMessage || fallbackMessage || "Review operation failed").slice(0, 500);
+  const message = sanitizePublicString(rawMessage || fallbackMessage || "Review operation failed", 500);
   return { code, message, retryable: Boolean(error && error.retryable) };
 }
 
@@ -56,6 +62,7 @@ async function runSceneLoop({
   prompt,
   intentSummary,
   sessionId,
+  scopeId,
   maxRounds = 5,
   criticModel,
   criticTimeoutMs = 120000,
@@ -66,14 +73,16 @@ async function runSceneLoop({
   emit,
   signal,
   ueBroker,
+  evidenceAdmission,
   reviewBudget,
 }) {
   if (typeof builderRunner !== "function") throw new Error("builderRunner is required");
   if (typeof criticRunner !== "function") throw new Error("criticRunner is required");
+  emit = wrapPublicReviewEmitter(emit);
   let lastStatus = "NEEDS_IMPROVEMENT";
   let lastIssues = [];
   let lastSuggestions = [];
-  let lastScreenshot = null;
+  let lastScreenshotRef = null;
   let lastBuilderResult = null;
   let lastError = null;
   let reason = "max_iterations";
@@ -132,7 +141,7 @@ async function runSceneLoop({
       reason = signal && signal.aborted ? "cancelled" : "builder_error";
       break;
     }
-    lastBuilderResult = builderResult;
+    lastBuilderResult = summarizeBuilderResult(builderResult);
     // A builder result without an explicit boolean success marker is malformed and unsafe to review.
     let builderErr = !builderResult || builderResult.isError !== false;
     let builderFailure = builderErr
@@ -189,6 +198,8 @@ async function runSceneLoop({
         maxBudgetUsd: criticStageBudgetUsd,
         signal,
         ueBroker,
+        scopeId: scopeId || sessionId,
+        evidenceAdmission,
       });
       if (
         !critic
@@ -229,13 +240,13 @@ async function runSceneLoop({
     lastStatus = critic.status;
     lastIssues = critic.issues || [];
     lastSuggestions = critic.suggestions || [];
-    lastScreenshot = critic.screenshot;
+    lastScreenshotRef = critic.screenshotRef || null;
     if (emit) emit("critic_verdict", {
       round,
       status: critic.status,
       issues: lastIssues,
       suggestions: lastSuggestions,
-      screenshotUrl: critic.screenshot ? `/api/screenshot/file?path=${encodeURIComponent(critic.screenshot)}` : null,
+      screenshotRef: lastScreenshotRef,
       actorsCount: critic.actorsCount || 0,
       provider: critic.provider || criticProvider || null,
       model: critic.model || criticModel || null,
@@ -267,7 +278,8 @@ async function runSceneLoop({
     reason,
     issues: lastIssues,
     suggestions: lastSuggestions,
-    latestScreenshot: lastScreenshot,
+    latestScreenshot: null,
+    latestScreenshotRef: lastScreenshotRef,
     builderResult: lastBuilderResult, // for the caller to thread into the final `done` event
     failureReason: ["builder_error", "critic_error", "budget_exhausted", "cancelled"].includes(reason) ? reason : null,
     error: lastError,
@@ -328,7 +340,9 @@ async function handleSceneLoop(req, res, deps) {
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
-  const emit = (name, data) => { if (!res.writableEnded) res.write(`event: ${name}\ndata: ${JSON.stringify(data || {})}\n\n`); };
+  const emit = wrapPublicReviewEmitter((name, data) => {
+    if (!res.writableEnded) res.write(`event: ${name}\ndata: ${JSON.stringify(data || {})}\n\n`);
+  });
   const ping = setInterval(() => { if (!res.writableEnded) res.write(`: ping\n\n`); }, 5000);
 
   const STUDIO_SESSION = String(sessionId || deps.STUDIO_SESSION);
@@ -404,11 +418,10 @@ async function handleSceneLoop(req, res, deps) {
       token: accessToken,
       timeoutMs: internalTimeoutMs,
       signal: deps.signal,
-      onEvent: emit,
+      onEvent: createInnerReviewRelay(emit),
     });
     return {
       isError: result.done.isError,
-      latestScreenshot: result.done.latestScreenshot || null,
       error: result.done.error || null,
       errorCode: result.done.errorCode || result.done.code || null,
       retryable: Boolean(result.done.retryable),
@@ -419,6 +432,7 @@ async function handleSceneLoop(req, res, deps) {
   // 3. Run the loop.
   const result = await runSceneLoop({
     prompt: message, intentSummary, sessionId: scopeId,
+    scopeId,
     maxRounds: parseInt((deps.env || process.env).SCENE_LOOP_MAX_ROUNDS || "5", 10),
     criticModel: contract.criticModel,
     criticProvider: contract.criticProvider,
@@ -429,6 +443,7 @@ async function handleSceneLoop(req, res, deps) {
     emit,
     signal: deps.signal,
     ueBroker: deps.ueBroker || getUeBroker(),
+    evidenceAdmission: deps.evidenceAdmission,
     reviewBudget,
   });
 
@@ -451,7 +466,8 @@ async function handleSceneLoop(req, res, deps) {
       budget: result.budget,
     },
     budget: result.budget,
-    latestScreenshot: result.latestScreenshot ? `/api/screenshot/file?path=${encodeURIComponent(result.latestScreenshot)}` : null,
+    latestScreenshot: null,
+    latestScreenshotRef: result.latestScreenshotRef || null,
   });
   res.end();
 }

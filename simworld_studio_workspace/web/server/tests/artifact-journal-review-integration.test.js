@@ -313,6 +313,108 @@ test("Review evidence preflight exposes only allowlisted public cause codes", as
   assert.equal(dependencyCalls, 0);
 });
 
+test("Review evidence admission completes before builder execution", async () => {
+  const order = [];
+  let handlerCalls = 0;
+  let finalizeCalls = 0;
+  const coordinator = createReviewLoopCoordinator({
+    transportProfile: "trusted_proxy",
+    resolveActiveSession: () => ACTIVE_LEASE,
+    isActiveSessionBinding: () => true,
+    loopbackSessionId: "loopback-session",
+    textHandler: async () => { handlerCalls += 1; },
+    visualHandler: async () => { handlerCalls += 1; },
+    reviewEvidenceLifecycle: {
+      async admit() {
+        order.push("admit");
+        throw Object.assign(new Error("root quarantined"), {
+          code: "REVIEW_EVIDENCE_ROOT_QUARANTINED",
+          statusCode: 503,
+        });
+      },
+      async finalize() { finalizeCalls += 1; return true; },
+    },
+  });
+  const response = responseFixture();
+
+  await coordinator.handleChat(request("text_loop"), response, () => {});
+
+  assert.deepEqual(order, ["admit"]);
+  assert.equal(handlerCalls, 0);
+  assert.equal(finalizeCalls, 0);
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.jsonBody.code, "REVIEW_EVIDENCE_ROOT_QUARANTINED");
+  assert.equal(response.jsonBody.providerAttempted, false);
+});
+
+for (const scenario of [
+  { name: "success", retain: true, handler: terminalHandler("text_loop"), statusCode: 200 },
+  {
+    name: "handler error",
+    retain: false,
+    statusCode: 400,
+    handler: async (_request, response) => response.status(400).json({ error: "invalid" }),
+  },
+]) {
+  test(`Review evidence ${scenario.name} finalizes exactly once before terminal transport`, async () => {
+    const order = [];
+    const admission = Object.freeze({ test: scenario.name });
+    let finalizeCalls = 0;
+    let releaseFinalization;
+    let markFinalizationStarted;
+    const finalizationStarted = new Promise((resolve) => { markFinalizationStarted = resolve; });
+    const finalizationGate = new Promise((resolve) => { releaseFinalization = resolve; });
+    const handler = async (...args) => {
+      order.push("handler");
+      return scenario.handler(...args);
+    };
+    const coordinator = createReviewLoopCoordinator({
+      transportProfile: "trusted_proxy",
+      resolveActiveSession: () => ACTIVE_LEASE,
+      isActiveSessionBinding: () => true,
+      loopbackSessionId: "loopback-session",
+      textHandler: handler,
+      visualHandler: handler,
+      reviewEvidenceLifecycle: {
+        async admit() {
+          order.push("admit");
+          return admission;
+        },
+        async finalize(received, options) {
+          finalizeCalls += 1;
+          order.push("finalize-start");
+          assert.equal(received, admission);
+          assert.equal(options.retain, scenario.retain);
+          markFinalizationStarted();
+          await finalizationGate;
+          order.push("finalize-done");
+          return true;
+        },
+      },
+    });
+    const response = responseFixture();
+    const originalEnd = response.end;
+    response.end = function transportEnd(...args) {
+      order.push("transport-end");
+      return originalEnd.apply(this, args);
+    };
+
+    const pending = coordinator.handleChat(request("text_loop"), response, () => {});
+    await finalizationStarted;
+    assert.deepEqual(order.slice(0, 3), ["admit", "handler", "finalize-start"]);
+    assert.equal(response.headersSent, false);
+    assert.equal(response.writableEnded, false);
+    assert.equal(order.includes("transport-end"), false);
+    releaseFinalization();
+    await pending;
+
+    assert.equal(finalizeCalls, 1);
+    assert.equal(response.statusCode, scenario.statusCode);
+    assert.equal(order.filter((entry) => entry === "transport-end").length, 1);
+    assert.ok(order.indexOf("finalize-done") < order.indexOf("transport-end"));
+  });
+}
+
 test("registry conflict never claims that an existing Review provider was not attempted", async () => {
   let handlerCalls = 0;
   let recorderCalls = 0;

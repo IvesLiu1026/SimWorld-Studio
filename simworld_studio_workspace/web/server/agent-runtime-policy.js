@@ -59,7 +59,7 @@ const OPTIONAL_HARNESS_BEHAVIORS = [
     label: 'Verifier loop after batches',
     enabledByDefault: false,
     prompt:
-      'When enabled, run verify_scene after substantial construction batches and use verifier feedback to decide the next batch.',
+      'When enabled by the server, use only coordinator-delivered Text or Visual Review feedback; the legacy verify_scene MCP tool is retired.',
   },
   {
     id: 'context_snapshot_before_replan',

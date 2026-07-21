@@ -5,7 +5,7 @@
 // codex-runner.js / opencode-runner.js.
 //
 // The frontend talks SSE to /api/chat and expects Claude Code-shaped events
-// (system/text/tool_start/tool_details/tool_result/screenshot/verifier_*/done). Cursor's
+// (system/text/tool_start/tool_details/tool_result/screenshot/done). Cursor's
 // `--output-format stream-json` is deliberately Claude-Code-compatible: newline-delimited
 // JSON with `{type:"system",subtype:"init",...}`, `{type:"assistant",message:{content:[...]}}`,
 // `{type:"user",message:{content:[tool_result...]}}`, and `{type:"result",...}`. Assistant
@@ -142,7 +142,6 @@ function runCursorChat({ req, res, body, systemPrompt, ctx }) {
   let gotResult      = false;
   let lastOutputTime = Date.now();
   const startedTools = new Set(); // tool id → tool_start emitted
-  const verifierTools= new Set();
   const toolInputs   = new Map(); // tool id → {name, input} for ctx tracking
 
   let knownMcpServers = [];
@@ -215,7 +214,6 @@ function runCursorChat({ req, res, body, systemPrompt, ctx }) {
     emit("tool_start",  { id: toolId, name: fullName, displayName: bare });
     emit("tool_details",{ id: toolId, name: fullName, displayName: bare, input: input || {} });
     logToFile("tool", `Starting (cursor): ${fullName}`);
-    if (bare === "verify_scene") { verifierTools.add(toolId); emit("verifier_start", { toolUseId: toolId }); }
     recordToolUseForCtx(toolId, bare, input || {});
   }
 
@@ -227,16 +225,6 @@ function runCursorChat({ req, res, body, systemPrompt, ctx }) {
     }
     emit("tool_result", { toolUseId: toolId, result: resultText.slice(0, 2000), isError });
     applyCtxOnToolResult(toolId, resultText, isError);
-    if (verifierTools.has(toolId)) {
-      let fb = "", ss = "";
-      try { const r2 = JSON.parse(resultText); fb = r2.feedback || ""; ss = r2.screenshot || ""; } catch {}
-      emit("verifier_result", {
-        toolUseId: toolId,
-        feedback: fb,
-        screenshot: ss ? `/api/screenshot/file?path=${encodeURIComponent(ss)}` : "",
-      });
-      verifierTools.delete(toolId);
-    }
   }
 
   // Normalize a Cursor assistant content block (text only — Cursor delivers tool calls as

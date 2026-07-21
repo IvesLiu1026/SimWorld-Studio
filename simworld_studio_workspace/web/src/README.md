@@ -17,7 +17,7 @@ App.jsx (root ~9000 lines)
 └── App (3-column resizable layout)
     ├── Left column
     │   ├── ChatPanel            Coding agent chat + streaming
-    │   └── CodingVerifierPanel  Collision check + VLM scoring
+    │   └── CodingVerifierPanel  Deterministic geometry validation
     ├── Center column
     │   ├── ViewportPanel        Pixel Streaming iframe + screenshot fallback
     │   └── Drawer               Assets / Scenes / Context (collapsible, resizable)
@@ -38,7 +38,7 @@ App.jsx (root ~9000 lines)
 ### `ChatPanel`
 - Streams Claude's response via SSE (`/api/chat`)
 - Renders `tool_start` / `tool_result` / `text` / `screenshot` events
-- `verify_scene` results show PASS/FAIL badge inline
+- Coordinator-managed Text/Visual Review results show PASS/FAIL status inline
 - Ref-based API (`chatRef`) for programmatic insertion from Asset Drawer
 
 ### `ViewportPanel`
@@ -76,10 +76,10 @@ App.jsx (root ~9000 lines)
 - `LineChart`: speed over time per agent
 
 ### `CodingVerifierPanel` (Statistics bottom-left)
-- **Collision tab**: calls `vget /scene/collisions` → counts + pairs + history chart
+- Runs deterministic scene geometry validation → collision, grounding, and actor counts plus history chart
   - **Auto-triggers** when `latestScreenshot` prop changes (new scene = coding agent just built)
   - Records to MetricsHub via `POST /api/metrics/scene-collision`
-- **VLM tab**: uploads screenshot → `POST /api/vlm-score` → Claude reads image, returns JSON score
+- Qualitative review is not launched from this panel. Select Text or Visual in Chat's Review control and send an explicit review request through the managed coordinator.
 
 ### `MultiAgentTestbed`
 - Configurable agent count + goal text

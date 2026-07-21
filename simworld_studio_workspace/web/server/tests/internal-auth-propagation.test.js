@@ -280,10 +280,11 @@ test('safe scene presentation tools are registered without exposing arbitrary co
   assert.match(source, /create_dynamic_material_instance\(0, base\)/);
 });
 
-test('MCP scene verification uses the shared strict critic without legacy agent bypass', () => {
+test('legacy MCP scene verification is not advertised and cannot bypass Review coordination', () => {
   const source = fs.readFileSync(MCP_SERVER, 'utf8');
-  assert.match(source, /verify_scene:toolVerifySceneUnified/);
-  assert.match(source, /const\{runCritic\}=require\("\.\/scene-critic"\)/);
-  assert.doesNotMatch(source, /async function toolVerifyScene\(/);
+  assert.doesNotMatch(source, /name:"verify_scene"/);
+  assert.doesNotMatch(source, /verify_scene:toolVerifyScene/);
+  assert.doesNotMatch(source, /const\{runCritic\}=require\("\.\/scene-critic"\)/);
+  assert.doesNotMatch(source, /toolVerifyScene/);
   assert.doesNotMatch(source, /dangerously-(?:skip-permissions|bypass-approvals-and-sandbox)/);
 });

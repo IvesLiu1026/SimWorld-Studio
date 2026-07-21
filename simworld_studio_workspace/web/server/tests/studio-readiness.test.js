@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const {
+  combineReviewReadinessProbes,
   createNlpGenerationReadinessProbe,
   createRetrievalReadinessProbe,
   createReviewReadinessProbe,
@@ -373,6 +374,35 @@ test("unsafe critic providers fail readiness before process execution", async ()
   })();
   assert.equal(report.status, "not_ready");
   assert.equal(report.causes[0].code, "REVIEW_CONFIG_INVALID");
+});
+
+test("Review readiness requires both provider receipts and durable evidence storage", async () => {
+  const providerReady = async () => ({
+    status: "ready",
+    revision: { provider: "claude", model: "claude-opus-4-8" },
+    causes: [],
+  });
+  const evidenceBlocked = async () => ({
+    status: "not_ready",
+    revision: {
+      schema: "simworld-review-evidence-readiness/v1",
+      roots_checked: 2,
+      orphan_backlog: 1,
+      durability_fault_roots: 0,
+    },
+    causes: [{
+      code: "REVIEW_EVIDENCE_ORPHAN_BACKLOG",
+      message: "Review evidence storage has an unresolved cleanup backlog.",
+      retryable: false,
+      dependency: "review_evidence",
+    }],
+  });
+
+  const report = await combineReviewReadinessProbes(providerReady, evidenceBlocked)();
+  assert.equal(report.status, "not_ready");
+  assert.equal(report.revision.provider, "claude");
+  assert.equal(report.revision.evidence.orphan_backlog, 1);
+  assert.equal(report.causes[0].code, "REVIEW_EVIDENCE_ORPHAN_BACKLOG");
 });
 
 test("retrieval readiness reports all missing required foundations", async () => {

@@ -21,20 +21,20 @@ All HTTP endpoints. Key groups:
 
 | Prefix | Description |
 |---|---|
-| `/api/chat` | SSE stream: spawns Claude Code subprocess, pipes events to browser |
+| `/api/chat` | SSE stream for vanilla generation and coordinator-managed `text_loop` / `visual_loop` Review |
 | `/api/agent-*` | Agent control: run, stop, broadcast, discover, track, camera, state |
 | `/api/assets`, `/api/asset-tree` | Asset catalog (path-browsing, UE Python scan) |
 | `/api/pie-start`, `/api/pie-status` | PIE mode control |
 | `/api/context-snapshot` | Force re-sync scene state from UE |
 | `/api/metrics`, `/api/metrics/scene-collision` | Time-series data |
-| `/api/vlm-score` | VLM scene scoring via Claude Code CLI (reads image file) |
+| `/api/vlm-score` | Retired compatibility route; returns `410 REVIEW_COORDINATOR_REQUIRED` and points clients to `/api/chat` Review modes |
 | `/api/ue-command` | UE console command passthrough |
 | `/api/camera` | Set/get viewport camera |
 | `/api/screenshot/latest` | Latest PNG from screenshot dir |
 
 ### `mcp-server.js` — MCP Tool Bridge
 
-Runs as a subprocess spawned by Claude Code (via `--mcp-config mcp.json`). Implements all MCP tools:
+Runs as a subprocess spawned by Claude Code (via `--mcp-config mcp.json`). Advertised tools include:
 
 | Tool | Description |
 |---|---|
@@ -47,9 +47,10 @@ Runs as a subprocess spawned by Claude Code (via `--mcp-config mcp.json`). Imple
 | `take_screenshot` | Capture viewport PNG |
 | `execute_python_script` | Run arbitrary UE Python |
 | `list_assets` | Browse asset catalog by category |
-| `verify_scene` | Claude evaluates scene placement quality |
 | `agent_action` / `agent_rotate` / `agent_stop` | Agent control via UnrealCV |
 | `get_agent_state` | Query agent position + rotation |
+
+The legacy `verify_scene` definition and handler are absent from the MCP registry. Direct calls remain fail-closed through execution policy; qualitative review is owned by the `/api/chat` Text/Visual Review coordinator.
 
 **Name collision prevention**: all spawned actor names get a `_SID` suffix (4-char session hex) so cross-map restarts never produce duplicate name crashes.
 

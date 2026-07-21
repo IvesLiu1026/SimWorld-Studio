@@ -342,6 +342,32 @@ function createReviewReadinessProbe({
   };
 }
 
+function combineReviewReadinessProbes(providerProbe, evidenceProbe) {
+  if (typeof providerProbe !== "function") throw new TypeError("providerProbe must be a function");
+  if (typeof evidenceProbe !== "function") return providerProbe;
+  return async function probeReviewWithEvidence(options = {}) {
+    const provider = await providerProbe(options);
+    const evidence = await evidenceProbe(options);
+    const statuses = [provider && provider.status, evidence && evidence.status];
+    const status = statuses.includes("not_ready")
+      ? "not_ready"
+      : (statuses.includes("degraded") ? "degraded" : "ready");
+    return {
+      status,
+      revision: {
+        ...(provider && provider.revision && typeof provider.revision === "object"
+          ? provider.revision
+          : {}),
+        evidence: evidence && evidence.revision || null,
+      },
+      causes: [
+        ...(provider && Array.isArray(provider.causes) ? provider.causes : []),
+        ...(evidence && Array.isArray(evidence.causes) ? evidence.causes : []),
+      ],
+    };
+  };
+}
+
 function safeReadBytes(file, fsImpl, maximum = 1024 * 1024) {
   const value = fsImpl.readFileSync(file);
   const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8");
@@ -742,6 +768,7 @@ function createStudioReadiness({
   connect,
   animationUeProbe,
   artifactJournalProbe,
+  reviewEvidenceProbe,
   probeOverrides = {},
 } = {}) {
   for (const name of Object.keys(probeOverrides)) {
@@ -752,6 +779,12 @@ function createStudioReadiness({
   const buildRevision = revision && revision.build
     ? revision.build
     : (env.SIMWORLD_BUILD_REVISION || "working-tree");
+  const reviewProviderProbe = createReviewReadinessProbe({
+    env,
+    claudeBin,
+    fsImpl,
+    sourceRevision: buildRevision,
+  });
   const probes = {
     artifact_journal: {
       probe: probeOverrides.artifact_journal || artifactJournalProbe || (async () => ({
@@ -765,12 +798,10 @@ function createStudioReadiness({
       })),
       timeoutMs: 10_000,
     },
-    review: probeOverrides.review || createReviewReadinessProbe({
-      env,
-      claudeBin,
-      fsImpl,
-      sourceRevision: buildRevision,
-    }),
+    review: probeOverrides.review || combineReviewReadinessProbes(
+      reviewProviderProbe,
+      reviewEvidenceProbe,
+    ),
     retrieval: probeOverrides.retrieval || createRetrievalReadinessProbe({ env, fsImpl }),
     streaming: probeOverrides.streaming || createStreamingReadinessProbe({
       env,
@@ -791,6 +822,7 @@ function createStudioReadiness({
 }
 
 module.exports = {
+  combineReviewReadinessProbes,
   createNlpGenerationReadinessProbe,
   createRetrievalReadinessProbe,
   createReviewReadinessProbe,

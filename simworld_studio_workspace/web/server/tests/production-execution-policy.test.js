@@ -130,6 +130,14 @@ test("development behavior remains compatible while the explicit safety gate is 
     productionMcpToolAllowed("get_actors_in_level", { NODE_ENV: "development", SIMWORLD_PRODUCTION_SAFETY: "1" }),
     true,
   );
+  assert.deepEqual(
+    productionMcpToolDecision("verify_scene", { NODE_ENV: "development" }),
+    {
+      allowed: false,
+      code: "REVIEW_COORDINATOR_REQUIRED",
+      message: "verify_scene is retired; use the coordinator-managed Text or Visual Review mode.",
+    },
+  );
   assert.throws(
     () => productionExecutionLocked({ NODE_ENV: "development", SIMWORLD_PRODUCTION_SAFETY: "maybe" }),
     /SIMWORLD_PRODUCTION_SAFETY/,

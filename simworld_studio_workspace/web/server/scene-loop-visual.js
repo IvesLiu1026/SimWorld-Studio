@@ -2,9 +2,18 @@
 // VISUAL scene-critic loop. Per round it captures read-only visual evidence, asks a VLM critic for
 // a verdict, and threads the verdict + evidence path to the next builder round. Capture must never
 // modify actors, lighting, ground, or the editor camera merely to improve the review image.
-const fs = require("fs");
 const path = require("path");
 const { getUeBroker } = require("./unreal-bridge");
+const {
+  cleanupPrivateEvidenceRun,
+  createPrivateEvidenceRun,
+  openReviewEvidenceAdmission,
+  managedEvidenceStat,
+  reserveEvidenceFile,
+  retainPrivateEvidenceRun,
+  screenshotEvidence,
+  sealManagedScreenshot,
+} = require("./scene-critic");
 const { createRequestReviewBudget } = require("./review-budget");
 const { review: reviewWithProvider, validateMaxBudgetUsd } = require("./review-provider");
 const {
@@ -13,9 +22,17 @@ const {
   resolveReviewContract,
   throwIfAborted,
 } = require("./internal-http");
+const {
+  createInnerReviewRelay,
+  sanitizePublicString,
+  summarizeBuilderResult,
+  wrapPublicReviewEmitter,
+} = require("./review-public-events");
 
 const ARENA_ROOT = path.resolve(__dirname, "..", "..");
-const VISUAL_DIR = path.join(ARENA_ROOT, "tmp", "visual_loop");
+const VISUAL_DIR = path.join(ARENA_ROOT, "tmp", "review-evidence", "visual");
+const MAX_VISUAL_SCREENSHOTS = 8;
+const MAX_VISUAL_EVIDENCE_BYTES = 64 * 1024 * 1024;
 
 const CRITIC_SYSTEM_PROMPT_MULTI = `You are a 3D scene verification expert for SimWorld Studio (Unreal Engine 5).
 You will be shown one or more read-only screenshots of the SAME scene. Use all provided visual evidence and the actor snapshot to evaluate the scene.
@@ -62,41 +79,83 @@ function abortableDelay(delayMs, signal) {
 }
 
 async function waitForFileStable(file, timeoutMs = 45000, signal) {
-  const start = Date.now();
+  const start = process.hrtime.bigint();
   let last = -1;
   let same = 0;
-  while (Date.now() - start < timeoutMs) {
+  while (Number(process.hrtime.bigint() - start) / 1e6 < timeoutMs) {
     throwIfAborted(signal, "Visual capture");
-    try {
-      const st = fs.statSync(file);
-      if (st.size > 0) {
-        if (st.size === last) same += 1;
-        else { last = st.size; same = 0; }
-        if (same >= 2) return true;
-      }
-    } catch (_e) {}
+    const st = await managedEvidenceStat(file, { allowEmpty: true, signal });
+    if (st.size > 0) {
+      if (st.size === last) same += 1;
+      else { last = st.size; same = 0; }
+      if (same >= 2) return true;
+    }
     await abortableDelay(500, signal);
   }
   return false;
 }
 
-async function multiViewScreenshot({ round, destDir, ueBroker, signal }) {
-  if (signal && signal.aborted) throw new Error("Visual capture aborted");
-  try { fs.mkdirSync(destDir, { recursive: true }); } catch (_e) {}
+async function multiViewScreenshot({
+  round,
+  destDir,
+  evidenceRun,
+  evidenceAdmission,
+  scopeId,
+  ueBroker,
+  signal,
+}) {
+  throwIfAborted(signal, "Visual capture");
   const broker = ueBroker || getUeBroker();
   if (!broker || typeof broker.send !== "function") throw new Error("Shared UE broker is unavailable");
-  const view = VIEW_CONFIGS[0];
-  const filepath = path.join(destDir, `round${round}_${view.name}.png`);
-  try { fs.rmSync(filepath, { force: true }); } catch (_error) {}
-  await broker.send(
-    "take_screenshot",
-    { filepath },
-    { timeoutMs: 30000, queueDeadlineMs: 45000, signal },
-  );
-  const stable = await waitForFileStable(filepath, 45000, signal);
-  if (!stable) throw new Error("Read-only viewport screenshot was not created");
-  if (signal && signal.aborted) throw new Error("Visual capture aborted");
-  return [{ name: view.name, path: filepath }];
+  const ownsRun = !evidenceRun && !evidenceAdmission;
+  const run = evidenceRun || (evidenceAdmission
+    ? await openReviewEvidenceAdmission(evidenceAdmission, { signal })
+    : await createPrivateEvidenceRun({
+      root: destDir || VISUAL_DIR,
+      scopeId,
+      ueBroker: broker,
+      signal,
+    }));
+  try {
+    const view = VIEW_CONFIGS[0];
+    const roundNumber = Number(round);
+    if (!Number.isSafeInteger(roundNumber) || roundNumber < 1 || roundNumber > 100) {
+      throw new Error("Visual capture round is invalid");
+    }
+    const filepath = await reserveEvidenceFile(
+      run,
+      `round${roundNumber}-${view.name}`,
+      { signal },
+    );
+    await broker.send(
+      "take_screenshot",
+      { filepath },
+      { timeoutMs: 30000, queueDeadlineMs: 45000, signal },
+    );
+    const stable = await waitForFileStable(filepath, 45000, signal);
+    if (!stable) throw new Error("Read-only viewport screenshot was not created");
+    throwIfAborted(signal, "Visual capture");
+    const evidence = await sealManagedScreenshot(filepath, { signal });
+    return [{
+      name: view.name,
+      path: filepath,
+      evidenceId: evidence.evidenceId,
+      evidenceRef: evidence.reference,
+    }];
+  } catch (error) {
+    // Preserve the capture failure if best-effort cleanup also fails. Once an
+    // abort has reached this transport boundary, expose the stable transport
+    // code rather than an evidence-probe implementation detail.
+    if (ownsRun) {
+      try {
+        await cleanupPrivateEvidenceRun(run);
+      } catch (_cleanupError) {
+        // The original failure remains authoritative.
+      }
+    }
+    throwIfAborted(signal, "Visual capture");
+    throw error;
+  }
 }
 
 // ── Multi-image critic ─────────────────────────────────────────────────────
@@ -126,16 +185,26 @@ async function visualCritique({
   signal,
   reviewProvider = reviewWithProvider,
 }) {
-  const validScreens = (screenshots || []).filter((shot) => (
-    shot && shot.path && fs.existsSync(shot.path)
-  ));
-  if (!validScreens.length) throw new Error("Visual review has no readable screenshots");
+  const validScreens = (screenshots || []).filter((shot) => shot && shot.path);
+  if (!validScreens.length || validScreens.length !== (screenshots || []).length
+      || validScreens.length > MAX_VISUAL_SCREENSHOTS) {
+    throw new Error("Visual review has no complete managed screenshot set");
+  }
+  const evidence = [];
+  let totalEvidenceBytes = 0;
+  for (const shot of validScreens) {
+    const item = await screenshotEvidence(shot.path, { signal });
+    totalEvidenceBytes += item.data.length;
+    if (totalEvidenceBytes > MAX_VISUAL_EVIDENCE_BYTES) {
+      const error = new Error("Visual review evidence exceeds the total byte limit");
+      error.code = "REVIEW_EVIDENCE_INVALID";
+      throw error;
+    }
+    evidence.push(item);
+  }
   const actors = await getActorsSnapshot({ ueBroker, signal });
-  const images = validScreens.map((shot) => {
-    const data = fs.readFileSync(shot.path);
-    const isJpeg = data[0] === 0xff && data[1] === 0xd8;
-    return { mediaType: isJpeg ? "image/jpeg" : "image/png", data };
-  });
+  const evidenceIds = evidence.map((item) => item.evidenceId);
+  const images = evidence.map((item) => ({ mediaType: item.mediaType, data: item.data }));
   const prompt = [
     `Review ${validScreens.length} read-only screenshot(s) of the same current Unreal scene.`,
     originalPrompt ? `Original scene request: "${originalPrompt}"` : "",
@@ -152,7 +221,7 @@ async function visualCritique({
     systemPrompt: CRITIC_SYSTEM_PROMPT_MULTI,
     prompt,
     images,
-    evidenceIds: validScreens.map((shot) => `visual:${path.basename(shot.path)}`),
+    evidenceIds,
     timeoutMs,
     signal,
   });
@@ -161,7 +230,9 @@ async function visualCritique({
 }
 
 // ── Build the feedback string sent to the next round's builder ─────────────
-// Contains critic's text feedback + paths the agent should Read to view current scene.
+// The VLM critic consumes managed image bytes. The builder receives only the
+// resulting text until an audited opaque byte transport is installed; private
+// host paths must never cross into the sandboxed builder process.
 function formatVisualFeedback({ issues, suggestions, screenshots }) {
   const i = (issues || []).filter(Boolean);
   const s = (suggestions || []).filter(Boolean);
@@ -170,10 +241,9 @@ function formatVisualFeedback({ issues, suggestions, screenshots }) {
   if (s.length) parts.push("Suggested fixes:\n" + s.map((x) => "- " + x).join("\n"));
   if (screenshots && screenshots.length) {
     parts.push(
-      "VISUAL CONTEXT — to see the current state of the scene yourself before making changes, " +
-      "use the Read tool on each of these screenshot files:\n" +
-      screenshots.map((s) => `- ${s.path}  (view: ${s.name})`).join("\n") +
-      "\n\nLook at these images first, then refine the existing scene to address the critic's notes. " +
+      `The visual critic inspected ${screenshots.length} server-managed scene capture(s). ` +
+      "Their private files are intentionally unavailable to the builder. " +
+      "Use the grounded issues and suggestions above to refine the existing scene. " +
       "Do NOT start from scratch — modify what already exists."
     );
   } else {
@@ -188,7 +258,7 @@ function failureDetails(error, fallbackCode, fallbackMessage) {
     ? rawCode
     : fallbackCode;
   const rawMessage = error && (error.message || error.error);
-  const message = String(rawMessage || fallbackMessage || "Review operation failed").slice(0, 500);
+  const message = sanitizePublicString(rawMessage || fallbackMessage || "Review operation failed", 500);
   return { code, message, retryable: Boolean(error && error.retryable) };
 }
 
@@ -221,6 +291,8 @@ async function runVisualSceneLoop({
   builderRunner,
   emit,
   destDir,
+  evidenceRun,
+  evidenceAdmission,
   ueBroker,
   signal,
   reviewBudget,
@@ -228,6 +300,7 @@ async function runVisualSceneLoop({
   if (typeof builderRunner !== "function") throw new Error("builderRunner is required");
   if (typeof criticRunner !== "function") throw new Error("criticRunner is required");
   if (typeof captureRunner !== "function") throw new Error("captureRunner is required");
+  emit = wrapPublicReviewEmitter(emit);
   let lastStatus = "NEEDS_IMPROVEMENT";
   let lastIssues = [];
   let lastSuggestions = [];
@@ -236,7 +309,11 @@ async function runVisualSceneLoop({
   let lastError = null;
   let reason = "max_iterations";
   let actualRound = 0;
+  let managedRun = evidenceRun || null;
+  let ownsManagedRun = false;
+  let retainedManagedRun = false;
 
+  try {
   for (let round = 1; round <= maxRounds; round++) {
     if (signal && signal.aborted) {
       reason = "cancelled";
@@ -272,7 +349,7 @@ async function runVisualSceneLoop({
       feedback: round === 1
         ? null
         : formatVisualFeedback({ issues: lastIssues, suggestions: lastSuggestions, screenshots: lastScreenshots }),
-      visualFeedbackImages: round === 1 ? [] : lastScreenshots.map(s => s.path).filter(Boolean),
+      visualFeedbackImages: [],
       round,
       maxRounds,
       signal,
@@ -293,7 +370,7 @@ async function runVisualSceneLoop({
       reason = signal && signal.aborted ? "cancelled" : "builder_error";
       break;
     }
-    lastBuilderResult = builderResult;
+    lastBuilderResult = summarizeBuilderResult(builderResult);
     let builderErr = !builderResult || builderResult.isError !== false;
     let builderFailure = builderErr
       ? failureDetails(
@@ -330,19 +407,50 @@ async function runVisualSceneLoop({
     }
 
     // ---- Multi-view capture ----
-    const roundDir = path.join(destDir || VISUAL_DIR, `round${round}`);
     let shots;
     let captureError = null;
     try {
       throwIfAborted(signal, "Visual capture");
-      shots = await captureRunner({ round, destDir: roundDir, ueBroker, signal });
+      if (!managedRun && captureRunner === multiViewScreenshot) {
+        managedRun = evidenceAdmission
+          ? await openReviewEvidenceAdmission(evidenceAdmission, { signal })
+          : await createPrivateEvidenceRun({
+            root: destDir || VISUAL_DIR,
+            scopeId: sessionId,
+            ueBroker: ueBroker || getUeBroker(),
+            signal,
+          });
+        ownsManagedRun = !evidenceAdmission;
+      }
+      shots = await captureRunner({
+        round,
+        destDir,
+        evidenceRun: managedRun,
+        evidenceAdmission,
+        scopeId: sessionId,
+        ueBroker,
+        signal,
+      });
+      if (!Array.isArray(shots)) shots = [];
     } catch (e) {
       shots = [];
       captureError = String(e && e.message || e);
       lastError = failureDetails(e, "VISUAL_CAPTURE_FAILED", "Read-only visual capture failed");
     }
-    if (emit) emit("multi_shots", { round, count: shots.length, paths: shots.map((s) => s.path) });
+    if (emit) emit("multi_shots", {
+      round,
+      count: shots.length,
+      evidence: shots.map((shot) => shot.evidenceRef).filter(Boolean),
+    });
     if (!shots.length) {
+      lastStatus = "FAIL";
+      if (!lastError) {
+        lastError = failureDetails(
+          { code: "VISUAL_CAPTURE_FAILED", message: "Read-only visual capture returned no evidence" },
+          "VISUAL_CAPTURE_FAILED",
+          "Read-only visual capture returned no evidence",
+        );
+      }
       if (emit) emit("critic_verdict", {
         round,
         status: "FAIL",
@@ -431,7 +539,7 @@ async function runVisualSceneLoop({
       status: critic.status,
       issues: lastIssues,
       suggestions: lastSuggestions,
-      screenshotUrls: lastScreenshots.map((s) => `/api/screenshot/file?path=${encodeURIComponent(s.path)}`),
+      screenshotRefs: lastScreenshots.map((shot) => shot.evidenceRef).filter(Boolean),
       actorsCount: critic.actorsCount || 0,
       provider: critic.provider || criticProvider || null,
       model: critic.model || criticModel || null,
@@ -468,8 +576,25 @@ async function runVisualSceneLoop({
     error: lastError,
     budget: budgetSnapshot(reviewBudget),
   };
-  if (emit) emit("loop_done", payload);
+  if (emit) emit("loop_done", {
+    ...payload,
+    latestScreenshots: lastScreenshots.map((shot) => ({
+      name: shot.name,
+      evidenceId: shot.evidenceId || null,
+      evidenceRef: shot.evidenceRef || null,
+    })),
+  });
+  if (managedRun && ownsManagedRun
+      && lastScreenshots.some((shot) => shot && shot.evidenceRef)) {
+    await retainPrivateEvidenceRun(managedRun);
+    retainedManagedRun = true;
+  }
   return payload;
+  } finally {
+    if (managedRun && ownsManagedRun && !retainedManagedRun) {
+      await cleanupPrivateEvidenceRun(managedRun);
+    }
+  }
 }
 
 // ── /api/chat handler for visual_loop mode ────────────────────────────────
@@ -519,7 +644,9 @@ async function handleVisualSceneLoop(req, res, deps) {
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
-  const emit = (name, data) => { if (!res.writableEnded) res.write(`event: ${name}\ndata: ${JSON.stringify(data || {})}\n\n`); };
+  const emit = wrapPublicReviewEmitter((name, data) => {
+    if (!res.writableEnded) res.write(`event: ${name}\ndata: ${JSON.stringify(data || {})}\n\n`);
+  });
   const ping = setInterval(() => { if (!res.writableEnded) res.write(`: ping\n\n`); }, 5000);
 
   const STUDIO_SESSION = String(sessionId || deps.STUDIO_SESSION);
@@ -592,11 +719,10 @@ async function handleVisualSceneLoop(req, res, deps) {
       token: accessToken,
       timeoutMs: internalTimeoutMs,
       signal: deps.signal,
-      onEvent: emit,
+      onEvent: createInnerReviewRelay(emit),
     });
     return {
       isError: result.done.isError,
-      latestScreenshot: result.done.latestScreenshot || null,
       error: result.done.error || null,
       errorCode: result.done.errorCode || result.done.code || null,
       retryable: Boolean(result.done.retryable),
@@ -604,8 +730,6 @@ async function handleVisualSceneLoop(req, res, deps) {
     };
   }
 
-  const safeRunId = runId.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 120) || "review";
-  const destDir = path.join(VISUAL_DIR, `${safeRunId}_${Date.now()}`);
   const result = await runVisualSceneLoop({
     prompt: message,
     intentSummary,
@@ -619,9 +743,9 @@ async function handleVisualSceneLoop(req, res, deps) {
     captureRunner: deps.captureRunner || multiViewScreenshot,
     builderRunner,
     emit,
-    destDir,
     ueBroker: deps.ueBroker || getUeBroker(),
     signal: deps.signal,
+    evidenceAdmission: deps.evidenceAdmission,
     reviewBudget,
   });
 
@@ -649,8 +773,9 @@ async function handleVisualSceneLoop(req, res, deps) {
       budget: result.budget,
     },
     budget: result.budget,
-    latestScreenshot: (result.latestScreenshots && result.latestScreenshots[0])
-      ? `/api/screenshot/file?path=${encodeURIComponent(result.latestScreenshots[0].path)}`
+    latestScreenshot: null,
+    latestScreenshotRef: (result.latestScreenshots && result.latestScreenshots[0])
+      ? result.latestScreenshots[0].evidenceRef || null
       : null,
   });
   res.end();

@@ -27,6 +27,7 @@ const REVIEW_EVIDENCE_PREFLIGHT_CODES = new Set([
   "REVIEW_EVIDENCE_PLATFORM_UNSUPPORTED",
   "REVIEW_EVIDENCE_PROBE_ABORTED",
   "REVIEW_EVIDENCE_PROBE_FAILED",
+  "REVIEW_EVIDENCE_ROOT_QUARANTINED",
   "REVIEW_EVIDENCE_SWEEP_BUDGET_EXHAUSTED",
   "REVIEW_EVIDENCE_SWEEP_DEADLINE",
   "REVIEW_EVIDENCE_SWEEP_UNSTABLE",
@@ -659,6 +660,7 @@ function createReviewLoopCoordinator({
   captureReviewBinding = null,
   mutationArbiter = null,
   reviewPreflight = null,
+  reviewEvidenceLifecycle = null,
   handlerDependencies = () => ({}),
   logger = () => {},
 } = {}) {
@@ -684,6 +686,12 @@ function createReviewLoopCoordinator({
   if (reviewPreflight !== null && reviewPreflight !== undefined
       && typeof reviewPreflight !== "function") {
     throw new TypeError("reviewPreflight must be a function");
+  }
+  if (reviewEvidenceLifecycle !== null && reviewEvidenceLifecycle !== undefined
+      && (!reviewEvidenceLifecycle
+        || typeof reviewEvidenceLifecycle.admit !== "function"
+        || typeof reviewEvidenceLifecycle.finalize !== "function")) {
+    throw new TypeError("reviewEvidenceLifecycle must expose admit and finalize");
   }
   const bindingCapture = typeof captureReviewBinding === "function"
     ? captureReviewBinding
@@ -747,6 +755,8 @@ function createReviewLoopCoordinator({
     let requestDigest = null;
     let inputDigest = null;
     let mutationToken = null;
+    let evidenceAdmission = null;
+    let evidenceLifecycleFailed = false;
     let requestedReviewRunId = null;
     let providerExecutionState = "proven_not_started";
     const durableReview = Boolean(artifactRecorder && artifactRecorder.enabled !== false);
@@ -826,17 +836,40 @@ function createReviewLoopCoordinator({
         scopeId: scope.scopeId,
         ...(safeRequestedRunId ? { runId: safeRequestedRunId } : {}),
       });
+      providerExecutionState = "proven_not_started";
       if (scope.leaseBound) {
         activeRunScopes.set(activeRunKey(scope.scopeId, run.runId), { scope, mutationToken });
       }
-      if (durableReview) {
-        bindingBefore = await captureBinding({ request, scope, mode, run, phase: "before" });
+      if (reviewEvidenceLifecycle) {
+        evidenceAdmission = await reviewEvidenceLifecycle.admit({
+          request,
+          scope,
+          mode,
+          run,
+          signal: run.signal,
+          dependencies: resolvedHandlerDependencies,
+        });
+        if (!evidenceAdmission) {
+          fail(
+            "REVIEW_EVIDENCE_ADMISSION_FAILED",
+            "Review evidence capacity could not be admitted before builder execution.",
+            503,
+          );
+        }
       }
+      // Once evidence capacity has been admitted, every terminal byte must stay
+      // behind the gate until the admission is either durably retained or
+      // cleaned up.  Binding/journal setup can fail before the provider starts,
+      // so installing the gate after those awaits would release an error while
+      // the admission was still live.
       responseGate = createTerminalResponseGate(response, {
         sessionId: scope.scopeId,
         conversationId: scope.conversationId,
         runId: run.runId,
       });
+      if (durableReview) {
+        bindingBefore = await captureBinding({ request, scope, mode, run, phase: "before" });
+      }
       if (durableReview) {
         try {
           reviewTicket = await artifactRecorder.prepareReviewTerminal({
@@ -903,6 +936,7 @@ function createReviewLoopCoordinator({
             internalConversationId: scope.scopeId,
             runId: run.runId,
             signal: run.signal,
+            evidenceAdmission,
           });
         }
       } else {
@@ -916,6 +950,7 @@ function createReviewLoopCoordinator({
           internalConversationId: scope.scopeId,
           runId: run.runId,
           signal: run.signal,
+          evidenceAdmission,
         });
       }
     } catch (error) {
@@ -1032,6 +1067,35 @@ function createReviewLoopCoordinator({
             };
           }
         }
+        if (reviewEvidenceLifecycle && evidenceAdmission) {
+          try {
+            const retainEvidence = Boolean(
+              !terminalGateFailed
+              && gateEvidence
+              && Array.isArray(gateEvidence.evidenceIds)
+              && gateEvidence.evidenceIds.length > 0,
+            );
+            const finalized = await reviewEvidenceLifecycle.finalize(evidenceAdmission, {
+              retain: retainEvidence,
+              terminal,
+              evidence: gateEvidence,
+            });
+            if (finalized !== true) throw new Error("Review evidence finalization was not durable");
+          } catch (_evidenceError) {
+            evidenceLifecycleFailed = true;
+            terminal = {
+              outcome: "failed",
+              reason: "handler_error",
+              finalVerdict: "UNKNOWN",
+              rounds: terminal && Number.isSafeInteger(terminal.rounds) ? terminal.rounds : 0,
+              errorCode: "REVIEW_EVIDENCE_FINALIZATION_FAILED",
+              provider: gateEvidence && gateEvidence.provider,
+              model: gateEvidence && gateEvidence.model,
+              evidenceIds: [],
+              bindingAfter: terminal && terminal.bindingAfter || null,
+            };
+          }
+        }
         try {
           if (durableReview && reviewTicket && !recoveryBlocked) {
             await artifactRecorder.ensureReviewTerminal({ ticket: reviewTicket, terminal });
@@ -1057,6 +1121,11 @@ function createReviewLoopCoordinator({
           else if (sceneBindingFailed) responseGate.failClosed({
             code: "REVIEW_SCENE_BINDING_UNAVAILABLE",
             message: "Review scene binding capture failed.",
+            runId: run.runId,
+          });
+          else if (evidenceLifecycleFailed) responseGate.failClosed({
+            code: "REVIEW_EVIDENCE_FINALIZATION_FAILED",
+            message: "Review evidence could not be finalized durably.",
             runId: run.runId,
           });
           else responseGate.release();

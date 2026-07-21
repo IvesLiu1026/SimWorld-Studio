@@ -434,38 +434,6 @@ export async function runSceneCheck() {
   return response.json();
 }
 
-export async function fetchLatestScreenshotDataUrl() {
-  const response = await fetch(`${API_BASE}/screenshot/latest?t=${Date.now()}`);
-  if (!response.ok) throw new Error("No screenshot");
-  const blob = await response.blob();
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.readAsDataURL(blob);
-  });
-}
-
-export async function scoreSceneWithVlm(imageDataUrl, sessionId) {
-  const response = await fetch(`${API_BASE}/vlm-score`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ imageDataUrl, sessionId }),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(result.error || `VLM review failed (${response.status})`);
-    error.code = result.code || "REVIEW_PROVIDER_ERROR";
-    throw error;
-  }
-  return result;
-}
-
-export async function scoreLatestScreenshot(sessionId) {
-  const imageDataUrl = await fetchLatestScreenshotDataUrl();
-  const result = await scoreSceneWithVlm(imageDataUrl, sessionId);
-  return { ...result, imageDataUrl };
-}
-
 export async function runArena(prompt, skills, onEvent, signal) {
   const response = await fetch(`${API_BASE}/arena/run`, {
     method: "POST",

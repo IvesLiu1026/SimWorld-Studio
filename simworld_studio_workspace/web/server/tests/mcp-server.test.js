@@ -161,8 +161,27 @@ test('tools/list keeps static tools and ignores caller-selected learned tool fil
 
     assert.equal(names.includes('delete_all_spawned'), true);
     assert.equal(names.includes('spawn_blueprint_actor'), true);
+    assert.equal(names.includes('verify_scene'), false);
     assert.equal(names.includes('learned__bad_schema_tool'), false);
     assert.equal(names.includes('learned__good_schema_tool'), false);
+
+    send({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'verify_scene', arguments: {} },
+    });
+    const callStart = Date.now();
+    while (!responses.has(2) && Date.now() - callStart < 4000) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(responses.has(2), `Expected retired verify_scene response. stderr=${stderrBuf}`);
+    const retired = responses.get(2);
+    assert.equal(retired.result.isError, true);
+    assert.equal(
+      JSON.parse(retired.result.content[0].text).code,
+      'REVIEW_COORDINATOR_REQUIRED',
+    );
 
     const after = JSON.parse(fs.readFileSync(learnedFile, 'utf-8'));
     assert.equal(Array.isArray(after), true);

@@ -4,7 +4,7 @@
 //
 // The frontend talks SSE to /api/chat and expects events shaped like Claude Code's
 // stream-json (system/text/tool_start/tool_details/tool_input/tool_result/screenshot/
-// verifier_*/done). This module spawns `gemini -p ... --output-format stream-json
+// done). This module spawns `gemini -p ... --output-format stream-json
 // --approval-mode yolo` and translates its event vocabulary
 // (init/message/tool_use/tool_result/error/result) into that shape so nothing on the
 // React side has to change.
@@ -195,7 +195,6 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
   let session         = sessionId || null;
   let latestShot      = null;             // last screenshot path detected in tool results
   const startedTools  = new Set();        // tool_id → started (avoid duplicate tool_start)
-  const verifierTools = new Set();        // tool_id of verify_scene calls
   const toolInputs    = new Map();        // tool_id → {name, input} for ctx tracking
   let gotResult       = false;
   let lastOutputTime  = Date.now();
@@ -305,10 +304,6 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
         emit("tool_start",  { id: toolId, name: fullName, displayName: bare });
         emit("tool_details",{ id: toolId, name: fullName, displayName: bare, input });
         logToFile("tool", `Starting (gemini): ${fullName}`);
-        if (bare === "verify_scene") {
-          verifierTools.add(toolId);
-          emit("verifier_start", { toolUseId: toolId });
-        }
       }
       recordToolUseForCtx(toolId, bare, input);
       return;
@@ -336,16 +331,6 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
 
       applyCtxOnToolResult(toolId, resultText, isError);
 
-      if (verifierTools.has(toolId)) {
-        let fb = "", ss = "";
-        try { const r2 = JSON.parse(resultText); fb = r2.feedback || ""; ss = r2.screenshot || ""; } catch {}
-        emit("verifier_result", {
-          toolUseId: toolId,
-          feedback: fb,
-          screenshot: ss ? `/api/screenshot/file?path=${encodeURIComponent(ss)}` : "",
-        });
-        verifierTools.delete(toolId);
-      }
       return;
     }
 

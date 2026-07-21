@@ -38,7 +38,6 @@ test("review remains opt-in and preserves visual evidence plus request identity"
   const chatBodies = [];
   let chatCall = 0;
   let sceneCheckCalls = 0;
-  let vlmCalls = 0;
 
   // Keep this test entirely local to the browser: every unlisted API is a
   // deterministic stub, so no live Studio, UE, or model service is touched.
@@ -65,22 +64,6 @@ test("review remains opt-in and preserves visual evidence plus request identity"
         collision_pairs: [],
         floating_actors: [],
         floating_count: 0,
-      },
-    });
-  });
-  await page.route("**/api/vlm-score", async (route) => {
-    vlmCalls += 1;
-    const body = route.request().postDataJSON();
-    expect(body.sessionId).toBe("studio-session-test");
-    expect(body.imageDataUrl).toMatch(/^data:image\/png;base64,/);
-    return route.fulfill({
-      contentType: "application/json",
-      json: {
-        feedback: "Scene composition is consistent.",
-        label: "ready",
-        model: "fake-review-model",
-        provider: "fake",
-        score: 8,
       },
     });
   });
@@ -207,7 +190,6 @@ test("review remains opt-in and preserves visual evidence plus request identity"
   await command.fill("Create a review fixture");
   await page.locator(".chat-command-submit").click();
   await expect.poll(() => sceneCheckCalls).toBeGreaterThan(0);
-  expect(vlmCalls).toBe(0);
   expect(chatBodies[0].loopMode).toBe("vanilla");
   expect(chatBodies[0].agent).toBeTruthy();
   expect(chatBodies[0]).toHaveProperty("model");
@@ -217,11 +199,12 @@ test("review remains opt-in and preserves visual evidence plus request identity"
   expect(chatBodies[0]).not.toHaveProperty("runId");
   await expect(page.getByText("Asset source: ready", { exact: true })).toBeVisible();
   await expect(page.getByText("mode hybrid · snapshot fixture-snapshot-1", { exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "Visual Review" }).click();
-  await page.getByRole("button", { name: "Run Review" }).click();
-  await expect.poll(() => vlmCalls).toBe(1);
-  await expect(page.locator(".scene-verifier-score")).toContainText("8/10");
+  await expect(page.getByText("Geometry validation", { exact: true })).toBeVisible();
+  await expect(page.getByText(
+    "Choose Text or Visual in the Chat Review control, then send a review request.",
+    { exact: true },
+  )).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run Review" })).toHaveCount(0);
 
   await page.getByText("Review: Off", { exact: true }).click();
   await page.getByText("Review: Text", { exact: true }).click();
@@ -248,7 +231,6 @@ test("review remains opt-in and preserves visual evidence plus request identity"
   await expect(page.getByLabel("Review budget")).toHaveCount(1);
   await expect(page.getByLabel("Review budget")).toContainText("Review cost $0.15 / $2.00 · $1.85 remaining");
   await expect(page.getByLabel("Review budget")).toContainText("Builder $0.12 · Critic $0.03");
-  expect(vlmCalls).toBe(1);
 
   await expect.poll(() => page.evaluate(() => {
     const conversations = JSON.parse(localStorage.getItem("simworld.chat.conversations.v1") || "[]");
@@ -291,7 +273,6 @@ test("review remains opt-in and preserves visual evidence plus request identity"
   expect(chatBodies[2].runId).toBe(chatBodies[1].runId);
   expect(chatBodies[2].loopMode).toBe(chatBodies[1].loopMode);
   expect(chatBodies[2].conversationId).toBe(chatBodies[1].conversationId);
-  expect(vlmCalls).toBe(1);
   await expect.poll(() => page.evaluate(() => {
     const pending = JSON.parse(localStorage.getItem("simworld.review.pending.v2") || "null");
     return pending?.generation || null;

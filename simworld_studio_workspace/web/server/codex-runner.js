@@ -4,7 +4,7 @@
 // agent for /api/chat, mirroring gemini-runner.js.
 //
 // The frontend talks SSE to /api/chat and expects Claude-shaped events
-// (system/text/tool_start/tool_details/tool_result/screenshot/verifier_*/done). This
+// (system/text/tool_start/tool_details/tool_result/screenshot/done). This
 // module spawns `codex exec --json ...` and translates Codex's thread-event vocabulary
 // into that shape so nothing on the React side changes.
 //
@@ -158,7 +158,6 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
   let sawTurnDone    = false;     // clean finish seen (turn.completed)
   let lastOutputTime = Date.now();
   const startedTools = new Set(); // item id → tool_start emitted
-  const verifierTools= new Set();
   const toolInputs   = new Map(); // item id → {name, input} for ctx tracking
 
   let knownMcpServers = [];
@@ -233,16 +232,6 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     }
     emit("tool_result", { toolUseId: itemId, result: resultText.slice(0, 2000), isError });
     applyCtxOnToolResult(itemId, resultText, isError);
-    if (verifierTools.has(itemId)) {
-      let fb = "", ss = "";
-      try { const r2 = JSON.parse(resultText); fb = r2.feedback || ""; ss = r2.screenshot || ""; } catch {}
-      emit("verifier_result", {
-        toolUseId: itemId,
-        feedback: fb,
-        screenshot: ss ? `/api/screenshot/file?path=${encodeURIComponent(ss)}` : "",
-      });
-      verifierTools.delete(itemId);
-    }
   }
 
   // ---- item handling -------------------------------------------------------
@@ -294,7 +283,6 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
         emit("tool_start",  { id: itemId, name: fullName, displayName: bare });
         emit("tool_details",{ id: itemId, name: fullName, displayName: bare, input });
         logToFile("tool", `Starting (codex mcp): ${fullName}`);
-        if (bare === "verify_scene") { verifierTools.add(itemId); emit("verifier_start", { toolUseId: itemId }); }
         recordToolUseForCtx(itemId, bare, input);
       }
       if (phase === "completed") {
