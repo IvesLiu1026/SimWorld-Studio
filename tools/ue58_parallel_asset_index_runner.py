@@ -26,8 +26,8 @@ import full_asset_index_runner as runner
 import ue_multi_instance_smoke as smoke
 
 
-DEFAULT_ASSET_DB_DIR = pathlib.Path("/data/siddhant/asset_db_ue58_qwen")
-DEFAULT_MANIFEST = pathlib.Path("/data/siddhant/asset_db/ue58_object_manifest.json")
+DEFAULT_ASSET_DB_DIR = runner.DEFAULT_DATA_ROOT / "simworld-studio" / "asset-db-ue58-qwen"
+DEFAULT_MANIFEST = DEFAULT_ASSET_DB_DIR / "manifest_ue58_object.json"
 DEFAULT_RUN_ROOT = DEFAULT_ASSET_DB_DIR / "runs"
 DEFAULT_QDRANT_COLLECTION = "assets_ue58_qwen"
 DEFAULT_MIN_INOTIFY_WATCHES = 524288
@@ -61,6 +61,51 @@ def ensure_asset_db_layout(asset_db_dir: pathlib.Path, manifest: pathlib.Path) -
         shutil.copy2(categories_src, asset_db_dir / "categories.json")
     if manifest.exists():
         shutil.copy2(manifest, asset_db_dir / "manifest_ue58_object.json")
+
+
+def validate_ue_runtime_paths(args: argparse.Namespace) -> None:
+    """Reject missing, relative, or type-incompatible UE runtime paths.
+
+    Production launchers must never inherit a workstation-specific UE install or
+    content checkout.  Output roots may be created by the runner, while all
+    executable/input paths must already exist.
+    """
+
+    path_contracts = (
+        ("ue_editor", "file", True),
+        ("source_project", "directory", True),
+        ("content_root", "directory", True),
+        ("worker_project_root", "directory", False),
+        ("bridge_script", "file", True),
+    )
+    if args.ddc_mode == "local":
+        path_contracts += (("ddc_root", "directory", False),)
+
+    env_names = {
+        "ue_editor": "UE58_EDITOR",
+        "source_project": "UE58_SOURCE_PROJECT",
+        "content_root": "UE58_CONTENT_ROOT",
+        "worker_project_root": "UE58_WORKER_PROJECT_ROOT",
+        "bridge_script": "UE58_BRIDGE_SCRIPT",
+        "ddc_root": "UE58_DDC_ROOT",
+    }
+    for field, expected_type, must_exist in path_contracts:
+        raw = str(getattr(args, field, "") or "").strip()
+        env_name = env_names[field]
+        if not raw:
+            raise RuntimeError(
+                f"{env_name} (or --{field.replace('_', '-')}) is required; "
+                "no developer-specific fallback is allowed"
+            )
+        path = pathlib.Path(raw)
+        if not path.is_absolute():
+            raise RuntimeError(f"{env_name} must be an absolute path: {path}")
+        if must_exist and not path.exists():
+            raise RuntimeError(f"{env_name} does not exist: {path}")
+        if must_exist and expected_type == "file" and not path.is_file():
+            raise RuntimeError(f"{env_name} must be a file: {path}")
+        if must_exist and expected_type == "directory" and not path.is_dir():
+            raise RuntimeError(f"{env_name} must be a directory: {path}")
 
 
 def run_parallel_preflight(args: argparse.Namespace, schema: pathlib.Path) -> None:
@@ -109,8 +154,12 @@ def select_assets_for_parallel(args: argparse.Namespace, run_dir: pathlib.Path) 
 
 
 def check_parallel_config(args: argparse.Namespace) -> int:
+    runner.configure_postgres_secret(
+        args, required=not args.skip_service_checks and not args.no_db_sync
+    )
     args.asset_db_dir = pathlib.Path(args.asset_db_dir)
     args.manifest = pathlib.Path(args.manifest)
+    validate_ue_runtime_paths(args)
     ensure_asset_db_layout(args.asset_db_dir, args.manifest)
     run_dir = pathlib.Path(args.run_dir) if args.run_dir else DEFAULT_RUN_ROOT / "preflight"
     assets = select_assets_for_parallel(args, run_dir)
@@ -137,7 +186,7 @@ def check_parallel_config(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    if not args.skip_service_checks:
+    if not args.skip_service_checks and not args.no_db_sync:
         if not args.postgres_url:
             raise RuntimeError(
                 "POSTGRES_URL is required for DB checks; inject it through the service environment"
@@ -403,10 +452,14 @@ def write_failure(args: argparse.Namespace, run_dir: pathlib.Path, state: dict[s
 
 
 def run_parallel(args: argparse.Namespace) -> int:
+    runner.configure_postgres_secret(
+        args, required=not args.dry_run and not args.no_db_sync
+    )
     args.asset_db_dir = pathlib.Path(args.asset_db_dir)
     args.manifest = pathlib.Path(args.manifest)
-    args.ue_editor = args.ue_editor or str(smoke.DEFAULT_UE58_EDITOR)
     args.map = args.map or "/Game/Maps/empty"
+    if not args.dry_run:
+        validate_ue_runtime_paths(args)
     schema = runner.resolve_schema(args.asset_db_dir, args.schema)
     if not args.run_dir:
         provider_label = "qwen36" if args.caption_provider == "qwen" else "gpt55"
@@ -712,13 +765,13 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-dir", default=os.environ.get("RUN_DIR", ""))
     parser.add_argument("--workers", type=int, default=int(os.environ.get("UE58_WORKERS", "6")))
     parser.add_argument("--gpu", type=int, default=int(os.environ.get("SIMWORLD_GPU", "3")))
-    parser.add_argument("--ue-editor", default=os.environ.get("UE58_EDITOR", str(smoke.DEFAULT_UE58_EDITOR)))
-    parser.add_argument("--source-project", default=os.environ.get("UE58_SOURCE_PROJECT", str(smoke.DEFAULT_UE58_SOURCE_PROJECT)))
-    parser.add_argument("--content-root", default=os.environ.get("UE58_CONTENT_ROOT", str(smoke.DEFAULT_UE58_CONTENT_ROOT)))
-    parser.add_argument("--worker-project-root", default=os.environ.get("UE58_WORKER_PROJECT_ROOT", str(smoke.DEFAULT_UE58_PROJECT_ROOT)))
-    parser.add_argument("--bridge-script", default=os.environ.get("UE58_BRIDGE_SCRIPT", str(smoke.DEFAULT_UE58_BRIDGE_SCRIPT)))
+    parser.add_argument("--ue-editor", default=os.environ.get("UE58_EDITOR", ""))
+    parser.add_argument("--source-project", default=os.environ.get("UE58_SOURCE_PROJECT", ""))
+    parser.add_argument("--content-root", default=os.environ.get("UE58_CONTENT_ROOT", ""))
+    parser.add_argument("--worker-project-root", default=os.environ.get("UE58_WORKER_PROJECT_ROOT", ""))
+    parser.add_argument("--bridge-script", default=os.environ.get("UE58_BRIDGE_SCRIPT", ""))
     parser.add_argument("--ddc-mode", choices=["default", "local"], default=os.environ.get("UE58_DDC_MODE", "default"))
-    parser.add_argument("--ddc-root", default=os.environ.get("UE58_DDC_ROOT", str(smoke.DEFAULT_UE58_DDC_ROOT)))
+    parser.add_argument("--ddc-root", default=os.environ.get("UE58_DDC_ROOT", ""))
     parser.add_argument("--base-mcp-port", type=int, default=int(os.environ.get("UE58_BASE_MCP_PORT", "55680")))
     parser.add_argument("--base-official-mcp-port", type=int, default=int(os.environ.get("UE58_BASE_OFFICIAL_MCP_PORT", "8080")))
     parser.add_argument("--base-ucv-port", type=int, default=int(os.environ.get("UE58_BASE_UCV_PORT", "10080")))

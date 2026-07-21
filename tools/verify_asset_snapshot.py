@@ -7,9 +7,10 @@ short-lived live-audit receipt only after every dependency agrees. ``verify``
 compares fresh observations to the manifest and atomically writes a new
 short-lived receipt.
 
-POSTGRES_URL, QDRANT_URL, EMBED_SERVICE_URL, ASSET_SNAPSHOT_REVISION, and
-optional service credentials are accepted from the environment so secrets
-cannot leak through argv and every dependency is pinned to one revision.
+POSTGRES_URL/POSTGRES_URL_FILE, QDRANT_URL, EMBED_SERVICE_URL,
+ASSET_SNAPSHOT_REVISION, and optional file-backed service credentials are
+accepted from the environment so secrets cannot leak through argv and every
+dependency is pinned to one revision.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+
+from asset_stack_config import AssetStackConfigError, load_secret
 
 
 SNAPSHOT_SCHEMA = "simworld-asset-snapshot/v1"
@@ -1164,6 +1167,25 @@ def _required_env(name: str, dependency: str) -> str:
     return value
 
 
+def _secret_env(
+    value_name: str,
+    file_name: str,
+    dependency: str,
+    *,
+    required: bool,
+) -> str:
+    try:
+        value, _source = load_secret(
+            os.environ,
+            value_name,
+            file_name,
+            required=required,
+        )
+        return value
+    except AssetStackConfigError as error:
+        fail(error.code, dependency, str(error))
+
+
 def build_config(
     args: argparse.Namespace, expected: dict[str, Any] | None = None
 ) -> ProbeConfig:
@@ -1205,17 +1227,30 @@ def build_config(
         category_index=pathlib.Path(args.category_index).expanduser()
         if args.category_index
         else asset_db_dir / "category_index.json",
-        postgres_url=_required_env("POSTGRES_URL", "postgres"),
+        postgres_url=_secret_env(
+            "POSTGRES_URL", "POSTGRES_URL_FILE", "postgres", required=True
+        ),
         qdrant_url=_required_env("QDRANT_URL", "qdrant"),
-        qdrant_api_key=os.environ.get("QDRANT_API_KEY", ""),
+        qdrant_api_key=_secret_env(
+            "QDRANT_API_KEY",
+            "QDRANT_API_KEY_FILE",
+            "qdrant",
+            required=False,
+        ),
         embedding_url=_required_env("EMBED_SERVICE_URL", "embedding"),
-        embedding_token=os.environ.get("EMBED_SERVICE_TOKEN", ""),
+        embedding_token=_secret_env(
+            "EMBED_SERVICE_TOKEN",
+            "EMBED_SERVICE_TOKEN_FILE",
+            "embedding",
+            required=False,
+        ),
         qdrant_collection=collection,
         dense_name=dense_name,
         sparse_name=sparse_name,
         asset_snapshot_revision=asset_snapshot_revision,
         ue_content_revision=args.ue_content_revision
-        or _required_env("UE_CONTENT_REVISION", "unreal"),
+        or os.environ.get("UE_CONTENT_REVISION", "").strip()
+        or _required_env("VISTA_UE_CONTENT_REVISION", "unreal"),
         timeout_sec=args.timeout,
     )
 

@@ -3,14 +3,25 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-ASSET_DB_DIR="${ASSET_DB_DIR:-/data/siddhant/asset_db_ue58_qwen}"
-MANIFEST="${MANIFEST:-/data/siddhant/asset_db/ue58_object_manifest.json}"
+: "${ASSET_DB_DIR:?Set ASSET_DB_DIR to the approved writable asset database root}"
+: "${MANIFEST:?Set MANIFEST to the approved immutable UE object manifest}"
+: "${UE58_EDITOR:?Set UE58_EDITOR to the approved absolute SimWorldEditor path}"
+: "${UE58_SOURCE_PROJECT:?Set UE58_SOURCE_PROJECT to the approved absolute UE project root}"
+: "${UE58_CONTENT_ROOT:?Set UE58_CONTENT_ROOT to the approved immutable Content root}"
+: "${UE58_WORKER_PROJECT_ROOT:?Set UE58_WORKER_PROJECT_ROOT to the approved absolute worker output root}"
+: "${UE58_BRIDGE_SCRIPT:?Set UE58_BRIDGE_SCRIPT to the approved absolute MCP bridge script}"
 RUN_ROOT="${RUN_ROOT:-${ASSET_DB_DIR}/runs}"
 RUN_ID="${RUN_ID:-ue58_parallel_qwen36_$(date -u +%Y%m%d_%H%M%S)}"
 RUN_DIR="${RUN_DIR:-${RUN_ROOT}/${RUN_ID}}"
 # The DSN is environment-only so it cannot leak through argv or run metadata.
 POSTGRES_URL="${POSTGRES_URL:-}"
 export POSTGRES_URL
+POSTGRES_URL_FILE="${POSTGRES_URL_FILE:-}"
+export POSTGRES_URL_FILE
+if [[ -n "$POSTGRES_URL" && -n "$POSTGRES_URL_FILE" ]]; then
+  echo "Set exactly one of POSTGRES_URL or POSTGRES_URL_FILE." >&2
+  exit 2
+fi
 QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
 QDRANT_COLLECTION="${QDRANT_COLLECTION:-assets_ue58_qwen}"
 CAPTION_PROVIDER="${CAPTION_PROVIDER:-qwen}"
@@ -21,6 +32,12 @@ QWEN_MAX_TOKENS="${QWEN_MAX_TOKENS:-1200}"
 QWEN_TEMPERATURE="${QWEN_TEMPERATURE:-0.0}"
 QWEN_TIMEOUT="${QWEN_TIMEOUT:-240}"
 UE58_WORKERS="${UE58_WORKERS:-6}"
+UE58_DDC_MODE="${UE58_DDC_MODE:-default}"
+UE58_DDC_ROOT="${UE58_DDC_ROOT:-}"
+if [[ "$UE58_DDC_MODE" == "local" && -z "$UE58_DDC_ROOT" ]]; then
+  echo "UE58_DDC_ROOT is required when UE58_DDC_MODE=local." >&2
+  exit 2
+fi
 SIMWORLD_GPU="${SIMWORLD_GPU:-3}"
 N_VIEWS="${N_VIEWS:-8}"
 MIN_VIEWS="${MIN_VIEWS:-4}"
@@ -40,15 +57,15 @@ mkdir -p "$RUN_DIR"
 LOG="${RUN_DIR}/runner.log"
 
 if [[ "$ENSURE_POSTGRES_DB" == "1" || "$ENSURE_POSTGRES_DB" == "true" ]]; then
-  if [[ -z "${POSTGRES_URL}" ]]; then
-    echo "POSTGRES_URL is required when ENSURE_POSTGRES_DB is enabled; inject it through the service environment." >&2
+  if [[ -z "${POSTGRES_URL}" && -z "${POSTGRES_URL_FILE}" ]]; then
+    echo "POSTGRES_URL_FILE or POSTGRES_URL is required when ENSURE_POSTGRES_DB is enabled." >&2
     exit 2
   fi
-  python3 "${REPO_ROOT}/tools/ensure_postgres_database.py"
+  uv run --project "${REPO_ROOT}/tools" --frozen python "${REPO_ROOT}/tools/ensure_postgres_database.py"
 fi
 
 CMD=(
-  python3 "${REPO_ROOT}/tools/ue58_parallel_asset_index_runner.py" run
+  uv run --project "${REPO_ROOT}/tools" --frozen python "${REPO_ROOT}/tools/ue58_parallel_asset_index_runner.py" run
   --asset-db-dir "$ASSET_DB_DIR"
   --manifest "$MANIFEST"
   --run-root "$RUN_ROOT"
@@ -62,11 +79,21 @@ CMD=(
   --qwen-temperature "$QWEN_TEMPERATURE"
   --qwen-timeout "$QWEN_TIMEOUT"
   --workers "$UE58_WORKERS"
+  --ue-editor "$UE58_EDITOR"
+  --source-project "$UE58_SOURCE_PROJECT"
+  --content-root "$UE58_CONTENT_ROOT"
+  --worker-project-root "$UE58_WORKER_PROJECT_ROOT"
+  --bridge-script "$UE58_BRIDGE_SCRIPT"
+  --ddc-mode "$UE58_DDC_MODE"
   --gpu "$SIMWORLD_GPU"
   --n-views "$N_VIEWS"
   --min-views "$MIN_VIEWS"
   --res "$RES"
 )
+
+if [[ -n "$UE58_DDC_ROOT" ]]; then
+  CMD+=(--ddc-root "$UE58_DDC_ROOT")
+fi
 
 case "$(printf '%s' "$QWEN_ENABLE_THINKING" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) CMD+=(--qwen-enable-thinking) ;;
@@ -77,12 +104,16 @@ esac
   echo "asset_db_dir=${ASSET_DB_DIR}"
   echo "manifest=${MANIFEST}"
   echo "run_dir=${RUN_DIR}"
-  if [[ -n "${POSTGRES_URL}" ]]; then
+  if [[ -n "${POSTGRES_URL}" || -n "${POSTGRES_URL_FILE}" ]]; then
     echo "postgres_url_configured=true"
   else
     echo "postgres_url_configured=false"
   fi
-  echo "postgres_url_source=POSTGRES_URL_environment"
+  if [[ -n "${POSTGRES_URL_FILE}" ]]; then
+    echo "postgres_url_source=POSTGRES_URL_FILE"
+  else
+    echo "postgres_url_source=POSTGRES_URL_environment"
+  fi
   echo "qdrant_url=${QDRANT_URL}"
   echo "qdrant_collection=${QDRANT_COLLECTION}"
   echo "caption_provider=${CAPTION_PROVIDER}"
@@ -117,4 +148,4 @@ echo "Launched UE 5.8 parallel asset index run."
 echo "  pid: ${PID}"
 echo "  run_dir: ${RUN_DIR}"
 echo "  log: ${LOG}"
-echo "  status: python3 ${REPO_ROOT}/tools/full_asset_index_runner.py status --asset-db-dir ${ASSET_DB_DIR} --run-dir ${RUN_DIR}"
+echo "  status: uv run --project ${REPO_ROOT}/tools --frozen python ${REPO_ROOT}/tools/full_asset_index_runner.py status --asset-db-dir ${ASSET_DB_DIR} --run-dir ${RUN_DIR}"

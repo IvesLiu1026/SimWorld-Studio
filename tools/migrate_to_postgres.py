@@ -2,8 +2,8 @@
 """Import asset_db/catalog JSON records into Postgres.
 
 Usage:
-  ASSET_DB_DIR=/data/siddhant/asset_db \
-  POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db \
+  ASSET_DB_DIR=/srv/simworld/asset-db \
+  POSTGRES_URL_FILE=/run/secrets/postgres_url \
   ASSET_SNAPSHOT_REVISION=asset-snapshot-IMMUTABLE \
   uv run --project tools --frozen python tools/migrate_to_postgres.py
 """
@@ -18,6 +18,11 @@ import uuid
 
 import psycopg2
 from psycopg2.extras import Json
+
+try:
+    from asset_stack_config import load_secret
+except ModuleNotFoundError:  # Loaded by path in focused unit tests.
+    from tools.asset_stack_config import load_secret
 
 
 SAFE_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}$")
@@ -77,7 +82,8 @@ def arr(value):
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--asset-db-dir", default=os.environ.get("ASSET_DB_DIR"))
-    p.add_argument("--postgres-url", default=os.environ.get("POSTGRES_URL"))
+    # The DSN is environment/file-only so it cannot leak through argv.
+    p.set_defaults(postgres_url="")
     p.add_argument(
         "--snapshot-revision",
         default=os.environ.get("ASSET_SNAPSHOT_REVISION", ""),
@@ -276,9 +282,10 @@ def main():
     if not args.asset_db_dir:
         print("ERROR: ASSET_DB_DIR is required", file=sys.stderr)
         sys.exit(2)
-    if not args.postgres_url and not args.dry_run:
-        print("ERROR: POSTGRES_URL is required", file=sys.stderr)
-        sys.exit(2)
+    if not args.dry_run:
+        args.postgres_url, _source = load_secret(
+            os.environ, "POSTGRES_URL", "POSTGRES_URL_FILE", required=True
+        )
 
     asset_ids = read_asset_ids(args.asset_ids, args.asset_id_file)
     catalog_files = resolve_catalog_files(args.asset_db_dir, asset_ids)
@@ -304,7 +311,11 @@ def main():
             print(f"  ... {len(catalog_files) - 20} more")
         return
 
-    conn = psycopg2.connect(args.postgres_url)
+    conn = psycopg2.connect(
+        args.postgres_url,
+        connect_timeout=10,
+        application_name="simworld_asset_catalog_migration",
+    )
     cur = conn.cursor()
     cur.execute(
         "SELECT schema_version FROM simworld_schema_metadata WHERE component = %s",

@@ -13,7 +13,7 @@ WORKDIR /opt/simworld
 COPY tools/pyproject.toml tools/uv.lock ./tools/
 RUN uv sync --project tools --frozen --no-dev
 
-COPY tools/embed_service.py ./tools/embed_service.py
+COPY tools/embed_service.py tools/asset_stack_config.py ./tools/
 ENV PATH="/opt/asset-tools-venv/bin:${PATH}"
 EXPOSE 7777
 CMD ["python", "tools/embed_service.py"]

@@ -37,6 +37,8 @@ services:
       - ${STUDIO_PIXEL_STREAMING_HMAC_KEY_FILE_HOST:?Set STUDIO_PIXEL_STREAMING_HMAC_KEY_FILE_HOST}:/run/secrets/pixel_streaming_hmac:ro
       - ${TURN_SHARED_SECRET_FILE_HOST:?Set TURN_SHARED_SECRET_FILE_HOST}:/run/secrets/turn_shared_secret:ro
       - ${POSTGRES_URL_FILE_HOST:?Set POSTGRES_URL_FILE_HOST}:/run/secrets/postgres_url:ro
+      - ${QDRANT_API_KEY_FILE_HOST:?Set QDRANT_API_KEY_FILE_HOST}:/run/secrets/qdrant_api_key:ro
+      - ${EMBED_SERVICE_TOKEN_FILE_HOST:?Set EMBED_SERVICE_TOKEN_FILE_HOST}:/run/secrets/embed_service_token:ro
       - ${ASSET_DB_DIR_HOST:?Set ASSET_DB_DIR_HOST}:/srv/simworld/asset-db:ro
       - ${VISTA_IMPORT_BUNDLE_ROOT_HOST:?Set VISTA_IMPORT_BUNDLE_ROOT_HOST}:/srv/simworld/vista-import:ro
       - ${VISTA_SCENE_LAYOUT_PROFILE_FILE_HOST:?Set VISTA_SCENE_LAYOUT_PROFILE_FILE_HOST}:/run/simworld/config/vista-scene-layout.json:ro
@@ -115,7 +117,9 @@ services:
       - POSTGRES_URL_FILE=/run/secrets/postgres_url
       - QDRANT_URL=${QDRANT_URL:-http://127.0.0.1:6333}
       - QDRANT_COLLECTION=${QDRANT_COLLECTION:?Set the snapshot Qdrant collection}
+      - QDRANT_API_KEY_FILE=/run/secrets/qdrant_api_key
       - EMBED_SERVICE_URL=${EMBED_SERVICE_URL:-http://127.0.0.1:7777}
+      - EMBED_SERVICE_TOKEN_FILE=/run/secrets/embed_service_token
       - EMBED_VERSION=${EMBED_VERSION:?Set the pinned embedding version}
       - VISTA_IMPORT_DATASET_REVISION=${VISTA_IMPORT_DATASET_REVISION:?Set the immutable VISTA dataset revision}
       - VISTA_IMPORT_BUNDLE_ROOT=/srv/simworld/vista-import
@@ -134,6 +138,94 @@ services:
       - VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_FILE=/run/simworld/config/vista-animation-plugin-artifact.json
       - VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_SHA256=${VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_SHA256:?Pin the exact loaded plugin artifact manifest bytes}
       - VISTA_ANIMATION_RECORD_ROOT=/var/lib/simworld/vista-animation-runs
+
+  # ── Loopback semantic asset stack ────────────────────────────────────────
+  # These services use host networking so the web runtime reaches the same
+  # loopback-only endpoints in local and AWS profiles. Enable explicitly with
+  # `--profile asset-stack`; provisioning remains an administrator gate.
+  postgres:
+    profiles: ["asset-stack"]
+    image: ${POSTGRES_IMAGE:?Set the reviewed immutable Postgres image digest}
+    container_name: simworld-asset-postgres
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - postgres
+      - -p
+      - ${POSTGRES_HOST_PORT:-55432}
+      - -c
+      - listen_addresses=127.0.0.1
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set the snapshot database name}
+      POSTGRES_USER: ${POSTGRES_USER:?Set the snapshot database user}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - ${POSTGRES_DATA_DIR_HOST:?Set the persistent Postgres directory}:/var/lib/postgresql/data
+      - ${POSTGRES_PASSWORD_FILE_HOST:?Set the root-managed Postgres password file}:/run/secrets/postgres_password:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -h 127.0.0.1 -p ${POSTGRES_HOST_PORT:-55432} -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  qdrant:
+    profiles: ["asset-stack"]
+    image: ${QDRANT_IMAGE:?Set the reviewed immutable Qdrant image digest}
+    container_name: simworld-asset-qdrant
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      QDRANT__SERVICE__HOST: 127.0.0.1
+      QDRANT__SERVICE__HTTP_PORT: ${QDRANT_HTTP_PORT:-6333}
+      QDRANT__SERVICE__GRPC_PORT: ${QDRANT_GRPC_PORT:-6334}
+    volumes:
+      - ${QDRANT_DATA_DIR_HOST:?Set the persistent Qdrant directory}:/qdrant/storage
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/${QDRANT_HTTP_PORT:-6333}; printf \"GET /readyz HTTP/1.0\\r\\nHost: 127.0.0.1\\r\\n\\r\\n\" >&3; IFS= read -r status <&3; [[ $$status == *\" 200 \"* ]]'"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  embedding:
+    profiles: ["asset-stack"]
+    image: ${EMBED_SERVICE_IMAGE:?Set the reviewed immutable embedding image digest}
+    container_name: simworld-asset-embedding
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: ${EMBED_HOST_PORT:-7777}
+      EMBED_DENSE_MODEL: ${EMBED_DENSE_MODEL:?Set the dense model ID}
+      EMBED_DENSE_REVISION: ${EMBED_DENSE_REVISION:?Set its immutable artifact revision}
+      EMBED_DENSE_MODEL_PATH: /opt/models/dense
+      EMBED_SPARSE_MODEL: ${EMBED_SPARSE_MODEL:?Set the sparse model ID}
+      EMBED_SPARSE_REVISION: ${EMBED_SPARSE_REVISION:?Set its immutable artifact revision}
+      EMBED_SPARSE_MODEL_PATH: /opt/models/sparse
+      EMBED_DENSE_SIZE: ${EMBED_DENSE_SIZE:?Set the exact dense vector size}
+      EMBED_VERSION: ${EMBED_VERSION:?Set the immutable embedding recipe}
+      EMBED_PRELOAD: "1"
+      EMBED_SERVICE_TOKEN_FILE: /run/secrets/embed_service_token
+      FASTEMBED_CACHE_PATH: /var/cache/fastembed
+    volumes:
+      - ${EMBEDDING_MODEL_CACHE_DIR_HOST:?Set the persistent model cache directory}:/var/cache/fastembed
+      - ${EMBED_DENSE_MODEL_DIR_HOST:?Set the verified dense model artifact directory}:/opt/models/dense:ro
+      - ${EMBED_SPARSE_MODEL_DIR_HOST:?Set the verified sparse model artifact directory}:/opt/models/sparse:ro
+      - ${EMBED_SERVICE_TOKEN_FILE_HOST:?Set the mode-0600 embedding bearer token file}:/run/secrets/embed_service_token:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:7777/health', timeout=3)); raise SystemExit(0 if r.get('status') == 'ready' and r.get('models_loaded') is True else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
   # ── Reverse proxy ──────────────────────────────────────────────────────────
   nginx:

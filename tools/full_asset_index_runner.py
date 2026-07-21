@@ -35,9 +35,17 @@ import urllib.request
 import uuid
 from typing import Any
 
+try:
+    from asset_stack_config import load_secret
+except ModuleNotFoundError:  # Imported as tools.full_asset_index_runner.
+    from tools.asset_stack_config import load_secret
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_ASSET_DB_DIR = pathlib.Path("/data/siddhant/asset_db")
+DEFAULT_DATA_ROOT = pathlib.Path(
+    os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local" / "share")
+)
+DEFAULT_ASSET_DB_DIR = DEFAULT_DATA_ROOT / "simworld-studio" / "asset-db"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 DEFAULT_COLLECTION = "assets"
 DEFAULT_QWEN_BASE_URL = "http://137.110.161.132:8005/v1"
@@ -334,9 +342,31 @@ def serialize_run_config(args: argparse.Namespace, schema: pathlib.Path) -> dict
     """Build the durable run config without storing the database DSN."""
     config = jsonable(vars(args) | {"schema": str(schema)})
     postgres_url = config.pop("postgres_url", "")
-    config["postgres_url_configured"] = bool(postgres_url)
-    config["postgres_url_source"] = "POSTGRES_URL environment"
+    postgres_url_file = config.pop("postgres_url_file", "")
+    source = config.pop("postgres_url_source", "")
+    config["postgres_url_configured"] = bool(postgres_url or postgres_url_file)
+    config["postgres_url_source"] = source or (
+        "POSTGRES_URL_FILE" if postgres_url_file else "POSTGRES_URL environment"
+    )
     return redact_for_serialization(config)
+
+
+def configure_postgres_secret(args: argparse.Namespace, *, required: bool) -> None:
+    env = dict(os.environ)
+    inline = str(getattr(args, "postgres_url", "") or "").strip()
+    secret_file = str(getattr(args, "postgres_url_file", "") or "").strip()
+    if inline:
+        env["POSTGRES_URL"] = inline
+    if secret_file:
+        env["POSTGRES_URL_FILE"] = secret_file
+    value, source = load_secret(
+        env,
+        "POSTGRES_URL",
+        "POSTGRES_URL_FILE",
+        required=required,
+    )
+    args.postgres_url = value
+    args.postgres_url_source = source or "not configured"
 
 
 def append_jsonl(path: pathlib.Path, obj: dict[str, Any]) -> None:
@@ -1861,6 +1891,9 @@ def finish_aborted_run(
 
 
 def run_index(args: argparse.Namespace) -> int:
+    configure_postgres_secret(
+        args, required=not args.dry_run and not args.no_db_sync
+    )
     args.asset_db_dir = pathlib.Path(args.asset_db_dir)
     args.manifest = pathlib.Path(args.manifest)
     schema = resolve_schema(args.asset_db_dir, args.schema)
@@ -2337,6 +2370,9 @@ def run_index(args: argparse.Namespace) -> int:
 
 
 def check_command(args: argparse.Namespace) -> int:
+    configure_postgres_secret(
+        args, required=not args.skip_service_checks and not args.no_db_sync
+    )
     args.asset_db_dir = pathlib.Path(args.asset_db_dir)
     args.manifest = pathlib.Path(args.manifest)
     schema = resolve_schema(args.asset_db_dir, args.schema)
@@ -2581,7 +2617,10 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--limit", type=int)
     # Environment-only by design: accepting a DSN option would expose it in
     # process listings and shell history.
-    p.set_defaults(postgres_url=os.environ.get("POSTGRES_URL", ""))
+    p.set_defaults(
+        postgres_url=os.environ.get("POSTGRES_URL", ""),
+        postgres_url_file=os.environ.get("POSTGRES_URL_FILE", ""),
+    )
     p.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL", DEFAULT_QDRANT_URL))
     p.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", DEFAULT_COLLECTION))
     p.add_argument("--no-db-sync", action="store_true")

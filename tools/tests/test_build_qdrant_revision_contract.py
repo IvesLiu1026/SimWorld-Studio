@@ -35,6 +35,18 @@ def asset_row():
 
 
 class QdrantRevisionContractTests(unittest.TestCase):
+    def test_model_artifacts_are_verified_before_any_qdrant_mutation(self):
+        source = (TOOLS_DIR / "build_qdrant_index.py").read_text(encoding="utf-8")
+        main_start = source.index("def main()")
+        verify_call = source.index("    verify_embedding_model_artifact(", main_start)
+        client_call = source.index("    qd = QdrantClient", main_start)
+        ensure_call = source.index("        ensure_collection", main_start)
+        self.assertLess(verify_call, client_call)
+        self.assertLess(verify_call, ensure_call)
+        self.assertIn("specific_model_path=args.dense_model_path", source)
+        self.assertIn("specific_model_path=args.sparse_model_path", source)
+        self.assertGreaterEqual(source.count("local_files_only=True"), 2)
+
     def test_payload_records_both_immutable_model_revisions(self):
         payload = builder.payload_for_row(
             asset_row(),

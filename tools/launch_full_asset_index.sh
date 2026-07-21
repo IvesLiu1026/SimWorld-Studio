@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ASSET_DB_DIR="${ASSET_DB_DIR:-/data/siddhant/asset_db}"
+: "${ASSET_DB_DIR:?Set ASSET_DB_DIR to the approved writable asset database root}"
 MANIFEST="${MANIFEST:-${ASSET_DB_DIR}/manifest_full.json}"
 RUN_ROOT="${RUN_ROOT:-${ASSET_DB_DIR}/runs}"
 RUN_ID="${RUN_ID:-full_index_gpt55_$(date -u +%Y%m%d_%H%M%S)}"
@@ -11,6 +11,12 @@ RUN_DIR="${RUN_DIR:-${RUN_ROOT}/${RUN_ID}}"
 # the runner argv or the run's launch metadata.
 POSTGRES_URL="${POSTGRES_URL:-}"
 export POSTGRES_URL
+POSTGRES_URL_FILE="${POSTGRES_URL_FILE:-}"
+export POSTGRES_URL_FILE
+if [[ -n "$POSTGRES_URL" && -n "$POSTGRES_URL_FILE" ]]; then
+  echo "Set exactly one of POSTGRES_URL or POSTGRES_URL_FILE." >&2
+  exit 2
+fi
 QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
 QDRANT_COLLECTION="${QDRANT_COLLECTION:-assets}"
 CAPTION_PROVIDER="${CAPTION_PROVIDER:-codex}"
@@ -21,7 +27,7 @@ QWEN_ENABLE_THINKING="${QWEN_ENABLE_THINKING:-0}"
 QWEN_MAX_TOKENS="${QWEN_MAX_TOKENS:-1200}"
 QWEN_TEMPERATURE="${QWEN_TEMPERATURE:-0.0}"
 QWEN_TIMEOUT="${QWEN_TIMEOUT:-240}"
-UE_PROJECT="${UE_PROJECT:-/data/siddhant/simworld_studio_projects}"
+UE_PROJECT="${UE_PROJECT:-}"
 MCP_PORT="${MCP_PORT:-55571}"
 
 for arg in "$@"; do
@@ -37,7 +43,7 @@ mkdir -p "$RUN_DIR"
 LOG="${RUN_DIR}/runner.log"
 
 CMD=(
-  python3 "${REPO_ROOT}/tools/full_asset_index_runner.py" run
+  uv run --project "${REPO_ROOT}/tools" --frozen python "${REPO_ROOT}/tools/full_asset_index_runner.py" run
   --asset-db-dir "$ASSET_DB_DIR"
   --manifest "$MANIFEST"
   --run-dir "$RUN_DIR"
@@ -63,12 +69,16 @@ esac
   echo "asset_db_dir=${ASSET_DB_DIR}"
   echo "manifest=${MANIFEST}"
   echo "run_dir=${RUN_DIR}"
-  if [[ -n "${POSTGRES_URL}" ]]; then
+  if [[ -n "${POSTGRES_URL}" || -n "${POSTGRES_URL_FILE}" ]]; then
     echo "postgres_url_configured=true"
   else
     echo "postgres_url_configured=false"
   fi
-  echo "postgres_url_source=POSTGRES_URL_environment"
+  if [[ -n "${POSTGRES_URL_FILE}" ]]; then
+    echo "postgres_url_source=POSTGRES_URL_FILE"
+  else
+    echo "postgres_url_source=POSTGRES_URL_environment"
+  fi
   echo "qdrant_url=${QDRANT_URL}"
   echo "qdrant_collection=${QDRANT_COLLECTION}"
   echo "caption_provider=${CAPTION_PROVIDER}"
@@ -105,4 +115,4 @@ echo "Launched full asset index run."
 echo "  pid: ${PID}"
 echo "  run_dir: ${RUN_DIR}"
 echo "  log: ${LOG}"
-echo "  status: python3 ${REPO_ROOT}/tools/full_asset_index_runner.py status --run-dir ${RUN_DIR}"
+echo "  status: uv run --project ${REPO_ROOT}/tools --frozen python ${REPO_ROOT}/tools/full_asset_index_runner.py status --run-dir ${RUN_DIR}"

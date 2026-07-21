@@ -121,6 +121,58 @@ class AssetIndexSecretHardeningTests(unittest.TestCase):
         self.assertNotIn("DEFAULT_POSTGRES_URL", parallel_runner)
         self.assertIn("runner.serialize_run_config(args, schema)", parallel_runner)
 
+    def test_admin_db_tools_have_no_dsn_argv_surface(self) -> None:
+        for name in (
+            "migrate_to_postgres.py",
+            "build_qdrant_index.py",
+            "ensure_postgres_database.py",
+        ):
+            with self.subTest(name=name):
+                source = (REPO_ROOT / "tools" / name).read_text(encoding="utf-8")
+                self.assertNotIn('add_argument("--postgres-url"', source)
+                self.assertIn("POSTGRES_URL_FILE", source)
+
+    def test_production_launchers_have_no_developer_specific_path_defaults(self) -> None:
+        sources = [
+            RUNNER_PATH.read_text(encoding="utf-8"),
+            (REPO_ROOT / "tools" / "ue58_parallel_asset_index_runner.py").read_text(
+                encoding="utf-8"
+            ),
+            (REPO_ROOT / "tools" / "launch_full_asset_index.sh").read_text(
+                encoding="utf-8"
+            ),
+            (REPO_ROOT / "tools" / "launch_ue58_parallel_asset_index.sh").read_text(
+                encoding="utf-8"
+            ),
+        ]
+        for source in sources:
+            self.assertNotIn("/data/siddhant", source)
+        self.assertNotIn("smoke.DEFAULT_UE58", sources[1])
+        self.assertIn("runner.configure_postgres_secret", sources[1])
+        for launcher in sources[2:]:
+            self.assertIn("uv run --project", launcher)
+            self.assertNotIn('CMD=(\n  python3 ', launcher)
+
+    def test_runner_loads_file_secret_but_never_serializes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            secret_path = pathlib.Path(tmp) / "postgres_url"
+            secret_path.write_text(self.dsn + "\n", encoding="utf-8")
+            secret_path.chmod(0o600)
+            args = argparse.Namespace(
+                postgres_url="",
+                postgres_url_file=str(secret_path),
+                asset_db_dir=pathlib.Path("/tmp/assets"),
+            )
+            with mock.patch.dict(os.environ, {}, clear=True):
+                runner.configure_postgres_secret(args, required=True)
+            config = runner.serialize_run_config(args, pathlib.Path("schema.json"))
+
+        self.assertEqual(args.postgres_url, self.dsn)
+        self.assertEqual(config["postgres_url_source"], "POSTGRES_URL_FILE")
+        encoded = json.dumps(config)
+        self.assertNotIn(self.dsn, encoded)
+        self.assertNotIn(str(secret_path), encoded)
+
 
 if __name__ == "__main__":
     unittest.main()

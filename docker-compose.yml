@@ -1,15 +1,17 @@
 services:
   postgres:
+    profiles: ["asset-stack"]
     image: "${POSTGRES_IMAGE:?Set POSTGRES_IMAGE to an approved pinned tag or digest}"
     restart: unless-stopped
     environment:
       POSTGRES_DB: "${POSTGRES_DB:-asset_db}"
       POSTGRES_USER: "${POSTGRES_USER:-simworld}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD through an environment file or secret store}"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/postgres_password"
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ${POSTGRES_PASSWORD_FILE_HOST:?Set POSTGRES_PASSWORD_FILE_HOST to a mode-0600 secret}:/run/secrets/postgres_password:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -17,6 +19,7 @@ services:
       retries: 5
 
   qdrant:
+    profiles: ["asset-stack"]
     image: "${QDRANT_IMAGE:?Set QDRANT_IMAGE to an approved pinned tag or digest}"
     restart: unless-stopped
     ports:
@@ -24,31 +27,39 @@ services:
       - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/6333; printf \"GET /readyz HTTP/1.0\\r\\nHost: 127.0.0.1\\r\\n\\r\\n\" >&3; IFS= read -r status <&3; [[ $$status == *\" 200 \"* ]]'"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   embedding:
     profiles: ["asset-stack"]
-    build:
-      context: .
-      dockerfile: tools/Dockerfile.embedding
-      args:
-        PYTHON_IMAGE: "${ASSET_TOOLS_PYTHON_IMAGE:?Set ASSET_TOOLS_PYTHON_IMAGE to an approved pinned tag or digest}"
-        UV_IMAGE: "${ASSET_TOOLS_UV_IMAGE:?Set ASSET_TOOLS_UV_IMAGE to an approved pinned tag or digest}"
-    image: "${EMBED_SERVICE_IMAGE:-simworld-asset-embedding:local}"
+    image: "${EMBED_SERVICE_IMAGE:?Set EMBED_SERVICE_IMAGE to the reviewed immutable image digest}"
     restart: unless-stopped
     environment:
       PORT: "7777"
       EMBED_DENSE_MODEL: "${EMBED_DENSE_MODEL:?Set EMBED_DENSE_MODEL}"
       EMBED_DENSE_REVISION: "${EMBED_DENSE_REVISION:?Set EMBED_DENSE_REVISION to the deployed model artifact revision}"
+      EMBED_DENSE_MODEL_PATH: "/opt/models/dense"
       EMBED_SPARSE_MODEL: "${EMBED_SPARSE_MODEL:?Set EMBED_SPARSE_MODEL}"
       EMBED_SPARSE_REVISION: "${EMBED_SPARSE_REVISION:?Set EMBED_SPARSE_REVISION to the deployed model artifact revision}"
+      EMBED_SPARSE_MODEL_PATH: "/opt/models/sparse"
       EMBED_DENSE_SIZE: "${EMBED_DENSE_SIZE:?Set EMBED_DENSE_SIZE}"
       EMBED_VERSION: "${EMBED_VERSION:?Set EMBED_VERSION to the index recipe revision}"
       EMBED_PRELOAD: "1"
+      EMBED_SERVICE_TOKEN_FILE: "/run/secrets/embed_service_token"
       FASTEMBED_CACHE_PATH: "/var/cache/fastembed"
     ports:
       - "127.0.0.1:${EMBED_HOST_PORT:-7777}:7777"
     volumes:
       - embedding_model_cache:/var/cache/fastembed
+      - ${EMBED_DENSE_MODEL_DIR_HOST:?Set the verified dense model artifact directory}:/opt/models/dense:ro
+      - ${EMBED_SPARSE_MODEL_DIR_HOST:?Set the verified sparse model artifact directory}:/opt/models/sparse:ro
+      - ${EMBED_SERVICE_TOKEN_FILE_HOST:?Set the mode-0600 embedding bearer token file}:/run/secrets/embed_service_token:ro
     healthcheck:
       test:
         - CMD

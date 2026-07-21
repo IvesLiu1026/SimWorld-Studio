@@ -6,6 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from fastapi import HTTPException
+
 
 TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOLS_DIR))
@@ -40,6 +42,8 @@ class EmbedServiceContractTests(unittest.TestCase):
         embed_service._dense = None
         embed_service._sparse = None
         embed_service._observed_dense_size = None
+        embed_service._dense_artifact = None
+        embed_service._sparse_artifact = None
 
     def test_health_is_not_ready_until_both_models_are_loaded(self):
         starting = embed_service.health()
@@ -50,6 +54,8 @@ class EmbedServiceContractTests(unittest.TestCase):
         embed_service._dense = object()
         embed_service._sparse = object()
         embed_service._observed_dense_size = embed_service.DENSE_SIZE
+        embed_service._dense_artifact = {"manifest_sha256": "a" * 64}
+        embed_service._sparse_artifact = {"manifest_sha256": "b" * 64}
         ready = embed_service.health()
         self.assertEqual(ready["status"], "ready")
         self.assertTrue(ready["models_loaded"])
@@ -60,6 +66,10 @@ class EmbedServiceContractTests(unittest.TestCase):
             embed_service,
             "TextEmbedding",
             return_value=FakeDense(embed_service.DENSE_SIZE - 1),
+        ), mock.patch.object(
+            embed_service,
+            "verify_embedding_model_artifact",
+            return_value={"manifest_sha256": "a" * 64},
         ):
             with self.assertRaisesRegex(RuntimeError, "does not match model size"):
                 embed_service.models()
@@ -77,16 +87,46 @@ class EmbedServiceContractTests(unittest.TestCase):
             mock.patch.object(
                 embed_service, "SparseTextEmbedding", return_value=sparse
             ) as sparse_loader,
+            mock.patch.object(
+                embed_service,
+                "verify_embedding_model_artifact",
+                side_effect=[
+                    {"manifest_sha256": "a" * 64},
+                    {"manifest_sha256": "b" * 64},
+                ],
+            ),
         ):
             self.assertEqual(embed_service.models(), (dense, sparse))
 
         dense_loader.assert_called_once_with(
-            embed_service.DENSE_MODEL, cache_dir="/model-cache"
+            embed_service.DENSE_MODEL,
+            cache_dir="/model-cache",
+            specific_model_path=embed_service.DENSE_MODEL_PATH,
+            local_files_only=True,
         )
         sparse_loader.assert_called_once_with(
-            embed_service.SPARSE_MODEL, cache_dir="/model-cache"
+            embed_service.SPARSE_MODEL,
+            cache_dir="/model-cache",
+            specific_model_path=embed_service.SPARSE_MODEL_PATH,
+            local_files_only=True,
         )
         self.assertEqual(embed_service.health()["status"], "ready")
+
+    def test_unverified_artifact_prevents_any_model_loader_call(self):
+        error = RuntimeError("artifact mismatch")
+        with (
+            mock.patch.object(
+                embed_service,
+                "verify_embedding_model_artifact",
+                side_effect=error,
+            ),
+            mock.patch.object(embed_service, "TextEmbedding") as dense_loader,
+            mock.patch.object(embed_service, "SparseTextEmbedding") as sparse_loader,
+            self.assertRaisesRegex(RuntimeError, "artifact mismatch"),
+        ):
+            embed_service.models()
+        dense_loader.assert_not_called()
+        sparse_loader.assert_not_called()
 
     def test_embed_response_carries_the_same_revision_contract(self):
         embed_service._dense = FakeDenseRuntime()
@@ -102,6 +142,15 @@ class EmbedServiceContractTests(unittest.TestCase):
         self.assertEqual(response["dense_revision"], embed_service.DENSE_REVISION)
         self.assertEqual(response["sparse_revision"], embed_service.SPARSE_REVISION)
         self.assertEqual(response["dense_size"], 2)
+
+    def test_configured_bearer_token_is_required_without_leaking_it(self):
+        token = "embed-token-that-must-never-appear-in-errors"
+        with mock.patch.object(embed_service, "EMBED_SERVICE_TOKEN", token):
+            with self.assertRaises(HTTPException) as denied:
+                embed_service.require_embed_authorization("Bearer wrong")
+            self.assertEqual(denied.exception.status_code, 401)
+            self.assertNotIn(token, str(denied.exception.detail))
+            embed_service.require_embed_authorization(f"Bearer {token}")
 
 
 if __name__ == "__main__":

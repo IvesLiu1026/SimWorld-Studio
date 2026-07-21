@@ -72,43 +72,151 @@ Do not use system `pip`. The complete asset-tool dependency graph is locked in
 
 ```bash
 uv sync --project tools --frozen
-uv run --project tools python tools/verify_asset_snapshot.py --help
+uv run --project tools --frozen python tools/verify_asset_snapshot.py --help
 ```
 
 Updating dependencies is a separate reviewed change: edit
 `tools/pyproject.toml`, run `uv lock --project tools`, inspect the diff, and
 rerun all tool tests. A snapshot operation must use `--frozen`.
 
+### 2.1 Deterministic offline deployment preflight
+
+Before any container, database, model, or index operation, run the production
+preflight. It reuses the exact catalog validator from
+`verify_asset_snapshot.py`, but it does **not** open a socket, import rows,
+load a model, write catalog state, or mutate a service (an explicit `--output`
+only writes the result). It rejects unpinned
+images, generic revisions/collection names, non-loopback URLs, a DSN in the
+environment, symlinked or group-readable secret files, UE revision drift, an
+incomplete category index, and an incomplete backup policy.
+
+The following variables are required in addition to the service variables in
+the next section:
+
+```bash
+export ASSET_STACK_PROFILE=local        # or aws
+export POSTGRES_DB=asset_db
+export POSTGRES_USER=simworld
+export POSTGRES_URL_FILE=/run/secrets/postgres_url
+export QDRANT_API_KEY_FILE=/run/secrets/qdrant_api_key
+export EMBED_SERVICE_TOKEN_FILE=/run/secrets/embed_service_token
+export ASSET_BACKUP_ROOT=/srv/backups/simworld/asset-stack
+export ASSET_BACKUP_RETENTION_DAYS=30
+export ASSET_BACKUP_MIN_FREE_BYTES=107374182400
+export VISTA_UE_CONTENT_REVISION="$UE_CONTENT_REVISION"
+```
+
+All three credential files must be root/service-owned regular files with mode
+`0600` and exactly one line. The preflight reads the DSN only to verify its
+loopback host and database and validates that the Qdrant/embedding credentials
+contain at least 32 bytes. No credential value or digest is written to the
+result.
+
+```bash
+uv run --project tools --frozen python tools/asset_stack_preflight.py \
+  --output /srv/simworld/asset-db/deployment-preflight.json
+```
+
+The output is deterministic: the same safe configuration and catalog bytes
+produce the same `config_sha256` and plan. `ready_for_admin_gates` means only
+that offline inputs are coherent. It does not mean PostgreSQL, Qdrant,
+embedding, UE Content, backups, or restore have been observed live.
+
 ## 3. Loopback service profile
 
 PostgreSQL, Qdrant, and embedding ports remain bound to `127.0.0.1`. The
 embedding container is enabled by the `asset-stack` Compose profile and uses
-the frozen uv lock. Supply approved pinned image tags or digests and exact
+the frozen uv lock. Supply reviewed image content digests and exact
 model revisions through an admin-managed environment/secret store:
 
 ```bash
-export POSTGRES_IMAGE='<approved postgres tag or digest>'
-export QDRANT_IMAGE='<approved qdrant tag or digest>'
-export ASSET_TOOLS_PYTHON_IMAGE='<approved python tag or digest>'
-export ASSET_TOOLS_UV_IMAGE='<approved uv tag or digest>'
+export POSTGRES_IMAGE='postgres@sha256:<approved-digest>'
+export QDRANT_IMAGE='qdrant/qdrant@sha256:<approved-digest>'
+export ASSET_TOOLS_PYTHON_IMAGE='python@sha256:<approved-digest>'
+export ASSET_TOOLS_UV_IMAGE='ghcr.io/astral-sh/uv@sha256:<approved-digest>'
+export EMBED_SERVICE_IMAGE='<published embedding image@sha256:digest>'
 
-export POSTGRES_PASSWORD='<secret-store value>'
 export EMBED_DENSE_MODEL='BAAI/bge-large-en-v1.5'
-export EMBED_DENSE_REVISION='<verified model artifact revision>'
+export EMBED_DENSE_MODEL_DIR_HOST='/opt/simworld-models/dense/<revision>'
+export EMBED_DENSE_REVISION='sha256:<artifact-manifest-digest>'
 export EMBED_SPARSE_MODEL='Qdrant/bm25'
-export EMBED_SPARSE_REVISION='<verified model artifact revision>'
+export EMBED_SPARSE_MODEL_DIR_HOST='/opt/simworld-models/sparse/<revision>'
+export EMBED_SPARSE_REVISION='sha256:<artifact-manifest-digest>'
 export EMBED_DENSE_SIZE='1024'
 export EMBED_VERSION='bge-large-en-v1.5-bm25-v1'
 export ASSET_SNAPSHOT_REVISION='asset-snapshot-<immutable-operator-revision>'
+export UE_CONTENT_REVISION='ue-content-<immutable-revision>'
+export VISTA_UE_CONTENT_REVISION="$UE_CONTENT_REVISION"
+
+export POSTGRES_PASSWORD_FILE_HOST='/etc/simworld/secrets/postgres_password'
+export POSTGRES_URL_FILE='/etc/simworld/secrets/postgres_url'
+export QDRANT_API_KEY_FILE='/etc/simworld/secrets/qdrant_api_key'
+export EMBED_SERVICE_TOKEN_FILE_HOST='/etc/simworld/secrets/embed_service_token'
+export EMBED_SERVICE_TOKEN_FILE="$EMBED_SERVICE_TOKEN_FILE_HOST"
 
 docker compose --profile asset-stack config --quiet
 ```
 
-`docker compose ... config` is read-only. Running `build` or `up` can pull
-images, download/preload models, create persistent volumes, and change service
-state; obtain the corresponding approval first. The Compose healthcheck becomes
-healthy only after both embedding models load successfully. The model cache is
-kept in the `embedding_model_cache` volume.
+The two model revisions are not operator labels. Each must be the raw SHA-256
+of a local `artifact-manifest.json` that enumerates every model/tokenizer file,
+size, and checksum. After an approved model download into an isolated
+directory, capture and re-verify it offline:
+
+```bash
+uv run --project tools --frozen python tools/embedding_model_artifact.py capture \
+  --model-dir "$EMBED_DENSE_MODEL_DIR_HOST" \
+  --kind dense --model-id "$EMBED_DENSE_MODEL" \
+  --dense-size "$EMBED_DENSE_SIZE"
+
+uv run --project tools --frozen python tools/embedding_model_artifact.py capture \
+  --model-dir "$EMBED_SPARSE_MODEL_DIR_HOST" \
+  --kind sparse --model-id "$EMBED_SPARSE_MODEL"
+```
+
+Set each `EMBED_*_REVISION` to the returned `sha256:...` value. The preflight,
+embedding service, and Qdrant indexer all re-hash the exact file set and reject
+symlinks, extras, missing files, wrong dimensions, or checksum drift. FastEmbed
+is invoked with `specific_model_path` and `local_files_only=True`; a production
+query or index build cannot silently download a newer artifact by model ID.
+When running the Qdrant indexer directly on the host, also set
+`EMBED_DENSE_MODEL_PATH="$EMBED_DENSE_MODEL_DIR_HOST"` and the corresponding
+sparse path. Compose maps the reviewed host directories read-only to fixed
+container paths.
+
+`docker compose ... config` is read-only. The local file and the AWS compose
+profile use the same loopback defaults: PostgreSQL `55432`, Qdrant HTTP/gRPC
+`6333/6334`, and embedding `7777`. PostgreSQL consumes a mounted password file,
+not `POSTGRES_PASSWORD`; Qdrant has an HTTP `/readyz` healthcheck; embedding is
+healthy only after both exact model artifacts load and the dense dimension
+matches. The embedding `/embed` endpoint requires the same file-backed bearer
+token used by the Web retrieval client. All three services have persistent
+storage and `unless-stopped` restart policy.
+
+The Qdrant Web client sends the file-backed API key, but the exact pinned
+Qdrant image must also be configured by the administrator to enforce that same
+key. Do not mark the stack ready merely because the client credential is
+mounted: record an unauthorized `401/403` probe and an authorized `/readyz`
+and query probe against the pinned image. How the server consumes its key is
+image/version-specific and remains an explicit Admin Gate; do not copy the key
+into Compose interpolation, argv, or a committed YAML file.
+
+The production compose files consume a pre-built immutable embedding image.
+Building `tools/Dockerfile.embedding`, pulling base images, populating the
+model cache, or starting containers is state-changing and requires approval.
+After an approved build, publish the image and set
+`EMBED_SERVICE_IMAGE=name@sha256:<content-digest>`; do not deploy a local
+mutable tag.
+
+For AWS, first populate the host paths and secrets documented in
+`deploy/aws/templates/simworld.env`, then validate the combined profile:
+
+```bash
+docker compose -f deploy/aws/docker/docker-compose.yml \
+  --profile asset-stack config --quiet
+```
+
+Running either `up` command can pull images, create storage, and download
+models. It remains an Admin/State-change Gate.
 
 ## 4. Provisioning order (state-changing gate)
 
@@ -129,16 +237,16 @@ window are approved:
 Representative commands (do not run them before the gate):
 
 ```bash
-POSTGRES_URL='<secret-store injected>' \
+POSTGRES_URL_FILE='/run/secrets/postgres_url' \
+QDRANT_API_KEY_FILE='/run/secrets/qdrant_api_key' \
 ASSET_SNAPSHOT_REVISION='asset-snapshot-<immutable-operator-revision>' \
   uv run --project tools --frozen python tools/apply_schema.py
 
 ASSET_DB_DIR=/srv/simworld/asset-db \
-POSTGRES_URL='<secret-store injected>' \
 ASSET_SNAPSHOT_REVISION='asset-snapshot-<immutable-operator-revision>' \
   uv run --project tools --frozen python tools/migrate_to_postgres.py --dry-run
 
-POSTGRES_URL='<secret-store injected>' \
+POSTGRES_URL_FILE='/run/secrets/postgres_url' \
 QDRANT_URL=http://127.0.0.1:6333 \
 ASSET_SNAPSHOT_REVISION='asset-snapshot-<immutable-operator-revision>' \
   uv run --project tools --frozen python tools/build_qdrant_index.py --dry-run
@@ -159,8 +267,13 @@ PostgreSQL rows from another revision and will not reuse a Qdrant point whose
 part of the embedding hash and therefore forces an upsert.
 
 Never put `POSTGRES_URL`, Qdrant API keys, or embedding bearer tokens in argv,
-logs, receipts, or shell history. The verifier accepts them only from its
-process environment.
+logs, receipts, or shell history. Production tooling supports
+`POSTGRES_URL_FILE`, `QDRANT_API_KEY_FILE`, and
+`EMBED_SERVICE_TOKEN_FILE`, rejects conflicting inline/file sources, opens
+files with `O_NOFOLLOW`, and requires mode `0600`. Direct environment values
+remain supported only for a bounded administrator invocation where a secret
+delivery agent cannot mount a file. The migration, database-provision, and
+Qdrant-builder CLIs no longer accept `--postgres-url`.
 
 ## 5. Capture and verify
 
@@ -170,10 +283,12 @@ not sufficient.
 
 ```bash
 export ASSET_DB_DIR=/srv/simworld/asset-db
-export POSTGRES_URL='<secret-store injected>'
+export POSTGRES_URL_FILE='/run/secrets/postgres_url'
+export QDRANT_API_KEY_FILE='/run/secrets/qdrant_api_key'
 export QDRANT_URL=http://127.0.0.1:6333
 export QDRANT_COLLECTION=assets-v1
 export EMBED_SERVICE_URL=http://127.0.0.1:7777
+export EMBED_SERVICE_TOKEN_FILE='/run/secrets/embed_service_token'
 export UE_CONTENT_REVISION='ue-content-<immutable-revision>'
 export ASSET_SNAPSHOT_REVISION='asset-snapshot-<immutable-operator-revision>'
 
@@ -200,13 +315,19 @@ export ASSET_READINESS_VERIFIED_REVISION='<verified snapshot_id>'
 export ASSET_LIVE_AUDIT_RECEIPT="$ASSET_DB_DIR/snapshot-live-audit.json"
 export ASSET_LIVE_AUDIT_RECEIPT_SHA256='<live_audit_receipt_sha256>'
 export POSTGRES_URL_FILE='/run/secrets/postgres_url'
+export QDRANT_API_KEY_FILE='/run/secrets/qdrant_api_key'
+export EMBED_SERVICE_TOKEN_FILE='/run/secrets/embed_service_token'
 ```
 
-For the long-running Web/MCP service, prefer the root-managed `0600`
-`POSTGRES_URL_FILE`; do not set it together with `POSTGRES_URL`. The DSN is read
-with `O_NOFOLLOW` and passed in memory to the PostgreSQL client. Bounded admin
-CLI invocations above may receive `POSTGRES_URL` directly from the secret store,
-but it must never be placed in an MCP config or process argv.
+For the long-running Web/MCP service, use root-managed mode-`0600`
+`POSTGRES_URL_FILE`, `QDRANT_API_KEY_FILE`, and
+`EMBED_SERVICE_TOKEN_FILE`; never set a direct value together with its file
+source. The runtime opens each with `O_NOFOLLOW`, checks regular-file type,
+owner, permissions, stable size/metadata, bounded UTF-8, and exactly one line.
+It keeps values non-enumerable in verified runtime config and passes them only
+in memory to the PostgreSQL pool, Qdrant client, and embedding Authorization
+header. Readiness and startup status expose only source names, never a value or
+path. Bounded admin CLI invocations use the same file-backed sources.
 
 The live receipt is deliberately short-lived. Runtime/startup integration must
 validate its exact schema, raw-file SHA-256, manifest binding, snapshot binding,
@@ -227,17 +348,82 @@ dense/sparse immutable revisions, and dense size in every point payload. A
 revision change invalidates its embedding hash and forces an upsert; legacy
 points without these fields cannot pass snapshot verification.
 
-## 6. Remaining administrator/data gates
+## 6. Backup bundle and disposable restore drill
+
+Provisioning is not complete until PostgreSQL and Qdrant backups have been
+restored into disposable targets and the restored stack passes the same live
+snapshot audit. During an approved backup window, create one directory beneath
+`ASSET_BACKUP_ROOT` containing exactly these roles:
+
+- `postgres_dump`: custom-format `pg_dump`, using `PGPASSFILE` and separate
+  `PGHOST`, `PGPORT`, `PGUSER`, and `PGDATABASE` variables so no DSN is argv;
+- `qdrant_snapshot`: downloaded snapshot of the exact pinned collection;
+- `asset_snapshot_manifest`: the verified static snapshot manifest;
+- `embedding_cache_manifest`: checksums/model revisions for the deployed model
+  artifacts (not an unbounded cache directory claim);
+- `ue_content_manifest`: immutable UE Content build/revision receipt.
+
+PostgreSQL dump, Qdrant snapshot creation/download, cache inventory, and UE
+inventory are live/storage operations and require the Admin/Data Gate. Once
+those files exist, manifest capture and verification are offline:
+
+```bash
+BUNDLE=/srv/backups/simworld/asset-stack/asset-backup-<immutable-id>
+
+uv run --project tools --frozen python tools/asset_stack_backup_bundle.py capture \
+  --bundle-dir "$BUNDLE" \
+  --backup-id asset-backup-<immutable-id> \
+  --snapshot-revision "$ASSET_SNAPSHOT_REVISION" \
+  --preflight-sha256 '<deployment-preflight config_sha256>' \
+  --postgres-dump "$BUNDLE/postgres.dump" \
+  --qdrant-snapshot "$BUNDLE/qdrant.snapshot" \
+  --asset-snapshot-manifest "$BUNDLE/snapshot-manifest.json" \
+  --embedding-cache-manifest "$BUNDLE/embedding-cache-manifest.json" \
+  --ue-content-manifest "$BUNDLE/ue-content-manifest.json" \
+  --output "$BUNDLE/backup-manifest.json"
+
+uv run --project tools --frozen python tools/asset_stack_backup_bundle.py verify \
+  --manifest "$BUNDLE/backup-manifest.json"
+
+uv run --project tools --frozen python tools/asset_stack_backup_bundle.py restore-plan \
+  --manifest "$BUNDLE/backup-manifest.json"
+```
+
+The bundle manifest contains relative paths, sizes, and SHA-256 digests. It
+rejects symlinks, path escape, changed files, missing roles, and a mismatch to
+the exact deployment preflight. `restore-plan` deliberately does not perform a
+restore. An administrator must approve and execute its ordered steps against
+empty disposable PostgreSQL/Qdrant targets, then run:
+
+```bash
+uv run --project tools --frozen python tools/verify_asset_snapshot.py capture \
+  --output "$BUNDLE/restored-snapshot-manifest.json" \
+  --receipt-output "$BUNDLE/restored-live-audit.json"
+```
+
+The drill passes only when the restored catalog/PostgreSQL/Qdrant/model counts,
+revisions, vectors and checksums match, representative Chinese/English shadow
+queries pass, and the disposable UE Blueprint + StaticMesh PBR smoke passes.
+Record RTO/RPO, commands, service/image digests, and cleanup evidence. Merely
+capturing or verifying a backup bundle does not satisfy the restore gate.
+
+## 7. Remaining administrator/data gates
 
 - provide the authoritative, complete catalog and its matching UE Content
   revision; partial indexes cannot be marked ready;
 - approve persistent storage, backup/restore policy, retention, and rollback;
 - provide pinned container image references and model artifact revisions;
+- provide complete local dense/sparse artifact directories, capture their
+  immutable manifests, and approve the one-time model download/cache budget;
 - inject PostgreSQL/Qdrant/embedding credentials through the service secret
-  mechanism and rotate any historical credentials that appeared in logs;
+  mechanism, configure the pinned Qdrant server to enforce its key, prove
+  unauthorized access is denied, and rotate any historical credentials that
+  appeared in logs;
 - approve model cache population and the full embedding/index build budget;
 - approve and execute Blueprint + StaticMesh material/PBR spawn smoke in a
   disposable writable UE scene.
+- execute and record one disposable PostgreSQL/Qdrant restore drill using the
+  exact backup manifest and re-run the live snapshot audit.
 
 Until these gates pass, the correct production state is `not_ready`; the scene
 builder must not silently fall back to Cube or other basic geometry.

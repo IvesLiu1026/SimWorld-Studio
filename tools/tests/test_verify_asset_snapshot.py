@@ -414,6 +414,42 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
             mismatch.exception.code, "ASSET_SNAPSHOT_REVISION_MISMATCH"
         )
 
+    def test_config_accepts_mode_0600_secret_files_and_runtime_ue_alias(self):
+        args = argparse.Namespace(
+            asset_db_dir=str(self.fixture.asset_db),
+            catalog_dir="",
+            category_index="",
+            collection="assets-v1",
+            dense_name="text_dense",
+            sparse_name="text_sparse",
+            ue_content_revision="",
+            timeout=3,
+        )
+        secret_values = {
+            "POSTGRES_URL_FILE": "postgresql://user:secret@db/assets",
+            "QDRANT_API_KEY_FILE": "qdrant-key",
+            "EMBED_SERVICE_TOKEN_FILE": "embed-token",
+        }
+        environment = {
+            "QDRANT_URL": "http://qdrant:6333",
+            "EMBED_SERVICE_URL": "http://embed:7777",
+            "ASSET_SNAPSHOT_REVISION": "asset-snapshot-20260721-r1",
+            "VISTA_UE_CONTENT_REVISION": "ue-content-abc123",
+        }
+        for name, value in secret_values.items():
+            path = self.root / name.casefold()
+            path.write_text(value + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            environment[name] = str(path)
+
+        with mock.patch.dict(os.environ, environment, clear=True):
+            config = verifier.build_config(args)
+
+        self.assertEqual(config.postgres_url, secret_values["POSTGRES_URL_FILE"])
+        self.assertEqual(config.qdrant_api_key, "qdrant-key")
+        self.assertEqual(config.embedding_token, "embed-token")
+        self.assertEqual(config.ue_content_revision, "ue-content-abc123")
+
     def test_failed_capture_does_not_create_or_replace_receipt(self):
         output = self.root / "snapshot-manifest.json"
         receipt_output = self.root / "snapshot-live-audit.json"

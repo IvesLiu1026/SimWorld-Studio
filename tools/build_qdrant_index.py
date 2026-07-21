@@ -20,8 +20,12 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+try:
+    from asset_stack_config import load_secret, verify_embedding_model_artifact
+except ModuleNotFoundError:  # Imported as tools.build_qdrant_index in tests.
+    from tools.asset_stack_config import load_secret, verify_embedding_model_artifact
 
-POSTGRES_URL = os.environ.get("POSTGRES_URL")
+
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6333")
 COLLECTION = os.environ.get("QDRANT_COLLECTION", "assets")
 DENSE_MODEL = os.environ.get("EMBED_DENSE_MODEL", os.environ.get("EMBED_MODEL", "BAAI/bge-large-en-v1.5"))
@@ -32,6 +36,8 @@ DENSE_SIZE = int(os.environ.get("EMBED_DENSE_SIZE", "1024"))
 EMBED_VER = os.environ.get("EMBED_VERSION", "bge-large-en-v1.5-bm25-v1")
 BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "32"))
 EMBED_CACHE_DIR = os.environ.get("FASTEMBED_CACHE_PATH") or None
+DENSE_MODEL_PATH = os.environ.get("EMBED_DENSE_MODEL_PATH", "")
+SPARSE_MODEL_PATH = os.environ.get("EMBED_SPARSE_MODEL_PATH", "")
 ASSET_SNAPSHOT_REVISION = os.environ.get("ASSET_SNAPSHOT_REVISION", "")
 SAFE_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}$")
 UNPINNED_REVISIONS = {"dev", "latest", "main", "master", "unknown", "unversioned"}
@@ -52,13 +58,16 @@ def require_snapshot_revision(value: str | None) -> str:
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--postgres-url", default=POSTGRES_URL)
+    # Database and optional Qdrant credentials are environment/file-only.
+    p.set_defaults(postgres_url="", qdrant_api_key="")
     p.add_argument("--qdrant-url", default=QDRANT_URL)
     p.add_argument("--collection", default=COLLECTION)
     p.add_argument("--dense-model", default=DENSE_MODEL)
     p.add_argument("--sparse-model", default=SPARSE_MODEL)
     p.add_argument("--dense-revision", default=DENSE_REVISION)
     p.add_argument("--sparse-revision", default=SPARSE_REVISION)
+    p.add_argument("--dense-model-path", default=DENSE_MODEL_PATH)
+    p.add_argument("--sparse-model-path", default=SPARSE_MODEL_PATH)
     p.add_argument("--dense-size", type=int, default=DENSE_SIZE)
     p.add_argument("--embed-version", default=EMBED_VER)
     p.add_argument(
@@ -277,9 +286,15 @@ def main():
     except ValueError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(2)
-    if not args.postgres_url:
-        print("ERROR: POSTGRES_URL is required", file=sys.stderr)
-        sys.exit(2)
+    args.postgres_url, _postgres_source = load_secret(
+        os.environ, "POSTGRES_URL", "POSTGRES_URL_FILE", required=True
+    )
+    args.qdrant_api_key, _qdrant_source = load_secret(
+        os.environ,
+        "QDRANT_API_KEY",
+        "QDRANT_API_KEY_FILE",
+        required=False,
+    )
     if not args.dense_revision or args.dense_revision.casefold() in {"dev", "latest", "main", "master", "unknown", "unversioned"}:
         print("ERROR: EMBED_DENSE_REVISION must identify an immutable model artifact revision", file=sys.stderr)
         sys.exit(2)
@@ -295,8 +310,24 @@ def main():
     EMBED_VER = args.embed_version
     print(f"Asset snapshot revision: {snapshot_revision}")
 
+    # Verify every local model byte before any collection/index mutation.  The
+    # revision is the SHA-256 of artifact-manifest.json, not a metadata label.
+    verify_embedding_model_artifact(
+        pathlib.Path(args.dense_model_path),
+        model_id=args.dense_model,
+        revision=args.dense_revision,
+        kind="dense",
+        dense_size=args.dense_size,
+    )
+    verify_embedding_model_artifact(
+        pathlib.Path(args.sparse_model_path),
+        model_id=args.sparse_model,
+        revision=args.sparse_revision,
+        kind="sparse",
+    )
+
     asset_ids = read_asset_ids(args.asset_ids, args.asset_id_file)
-    qd = QdrantClient(url=args.qdrant_url)
+    qd = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key or None)
     collections = [c.name for c in qd.get_collections().collections]
     collection_exists = args.collection in collections
     if args.dry_run:
@@ -305,7 +336,11 @@ def main():
         ensure_collection(qd, args.collection, args.dense_size)
         collection_exists = True
 
-    conn = psycopg2.connect(args.postgres_url)
+    conn = psycopg2.connect(
+        args.postgres_url,
+        connect_timeout=10,
+        application_name="simworld_asset_qdrant_index",
+    )
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     if asset_ids:
         cur.execute("SELECT * FROM assets WHERE asset_id = ANY(%s) ORDER BY asset_id", (asset_ids,))
@@ -386,7 +421,12 @@ def main():
     print(f"Loading dense embedding model {args.dense_model}...")
     from fastembed import SparseTextEmbedding, TextEmbedding
 
-    dense_model = TextEmbedding(args.dense_model, cache_dir=EMBED_CACHE_DIR)
+    dense_model = TextEmbedding(
+        args.dense_model,
+        cache_dir=EMBED_CACHE_DIR,
+        specific_model_path=args.dense_model_path,
+        local_files_only=True,
+    )
     observed_dense_size = int(dense_model.embedding_size)
     if observed_dense_size != args.dense_size:
         print(
@@ -395,7 +435,12 @@ def main():
         )
         sys.exit(2)
     print(f"Loading sparse embedding model {args.sparse_model}...")
-    sparse_model = SparseTextEmbedding(args.sparse_model, cache_dir=EMBED_CACHE_DIR)
+    sparse_model = SparseTextEmbedding(
+        args.sparse_model,
+        cache_dir=EMBED_CACHE_DIR,
+        specific_model_path=args.sparse_model_path,
+        local_files_only=True,
+    )
     print("Embedding models loaded.")
 
     batch_size = max(1, args.batch_size)
