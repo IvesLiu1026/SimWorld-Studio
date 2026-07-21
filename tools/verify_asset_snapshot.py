@@ -2,12 +2,14 @@
 """Capture or verify a fail-closed SimWorld semantic asset snapshot.
 
 This command is intentionally read-only with respect to catalog, PostgreSQL,
-Qdrant, and the embedding service.  ``capture`` writes a receipt atomically
-only after every dependency agrees.  ``verify`` compares live observations to
-an existing receipt and never rewrites it.
+Qdrant, and the embedding service. ``capture`` writes a static manifest plus a
+short-lived live-audit receipt only after every dependency agrees. ``verify``
+compares fresh observations to the manifest and atomically writes a new
+short-lived receipt.
 
-POSTGRES_URL, QDRANT_URL, EMBED_SERVICE_URL, and optional service credentials
-are accepted from the environment only so secrets cannot leak through argv.
+POSTGRES_URL, QDRANT_URL, EMBED_SERVICE_URL, ASSET_SNAPSHOT_REVISION, and
+optional service credentials are accepted from the environment so secrets
+cannot leak through argv and every dependency is pinned to one revision.
 """
 
 from __future__ import annotations
@@ -18,16 +20,19 @@ import json
 import os
 import pathlib
 import re
+import stat
 import sys
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 
 SNAPSHOT_SCHEMA = "simworld-asset-snapshot/v1"
+LIVE_AUDIT_SCHEMA = "simworld-asset-live-audit/v1"
 HEALTH_SCHEMA = "simworld-embedding-health/v1"
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
@@ -35,6 +40,11 @@ POSTGRES_DSN = re.compile(r"\bpostgres(?:ql)?://[^\s\"'<>]+", re.IGNORECASE)
 SCHEMA_COMPONENT = "asset_catalog"
 CATALOG_DIGEST_DOMAIN = b"simworld-catalog-canonical-json/v1\0"
 UNPINNED_REVISIONS = {"dev", "latest", "main", "master", "unknown", "unversioned"}
+ASSET_SCHEMA_VERSION = 2
+DEFAULT_RECEIPT_TTL_SEC = 300
+MAX_RECEIPT_TTL_SEC = 900
+MAX_CLOCK_SKEW_SEC = 5
+MAX_JSON_BYTES = 1_000_000
 
 
 class SnapshotAuditError(RuntimeError):
@@ -59,6 +69,7 @@ class ProbeConfig:
     qdrant_collection: str
     dense_name: str
     sparse_name: str
+    asset_snapshot_revision: str
     ue_content_revision: str
     timeout_sec: float
 
@@ -445,8 +456,14 @@ def collect_postgres(
         )
         schema_row = cursor.fetchone()
         cursor.execute(
-            "SELECT count(*), count(*) FILTER (WHERE embedding_version = %s) FROM assets",
-            (embedding_version,),
+            """
+            SELECT
+              count(*),
+              count(*) FILTER (WHERE embedding_version = %s),
+              count(*) FILTER (WHERE asset_snapshot_revision = %s)
+            FROM assets
+            """,
+            (embedding_version, config.asset_snapshot_revision),
         )
         count_row = cursor.fetchone()
     except Exception:
@@ -467,7 +484,7 @@ def collect_postgres(
             "postgres",
             "The asset catalog schema version is not recorded.",
         )
-    if not count_row or len(count_row) < 2:
+    if not count_row or len(count_row) < 3:
         fail(
             "ASSET_POSTGRES_RESPONSE_INVALID",
             "postgres",
@@ -476,15 +493,30 @@ def collect_postgres(
     schema_version = require_positive_int(
         schema_row[0], "postgres.schema_version", "postgres", 1_000_000
     )
+    if schema_version != ASSET_SCHEMA_VERSION:
+        fail(
+            "ASSET_POSTGRES_SCHEMA_REVISION_MISMATCH",
+            "postgres",
+            "PostgreSQL does not use the exact asset catalog schema revision required by this verifier.",
+        )
     row_count = require_positive_int(count_row[0], "postgres.row_count", "postgres")
     matching_embedding_rows = require_nonnegative_int(
         count_row[1], "postgres.matching_embedding_rows", "postgres"
+    )
+    matching_snapshot_rows = require_nonnegative_int(
+        count_row[2], "postgres.matching_snapshot_rows", "postgres"
     )
     if matching_embedding_rows != row_count:
         fail(
             "ASSET_POSTGRES_EMBEDDING_REVISION_MISMATCH",
             "postgres",
             "Not every PostgreSQL asset row uses the live embedding revision.",
+        )
+    if matching_snapshot_rows != row_count:
+        fail(
+            "ASSET_POSTGRES_SNAPSHOT_REVISION_MISMATCH",
+            "postgres",
+            "Not every PostgreSQL asset row uses ASSET_SNAPSHOT_REVISION.",
         )
     return {"schema_version": schema_version, "row_count": row_count}
 
@@ -542,6 +574,10 @@ def collect_qdrant(
     revision_filter = {
         "filter": {
             "must": [
+                {
+                    "key": "asset_snapshot_revision",
+                    "match": {"value": config.asset_snapshot_revision},
+                },
                 {"key": "embedding_version", "match": {"value": embedding["version"]}},
                 {"key": "dense_model", "match": {"value": embedding["dense_model_id"]}},
                 {
@@ -588,9 +624,9 @@ def collect_qdrant(
     )
     if matching_revision_count != point_count:
         fail(
-            "ASSET_QDRANT_EMBEDDING_REVISION_MISMATCH",
+            "ASSET_QDRANT_SNAPSHOT_REVISION_MISMATCH",
             "qdrant",
-            "Not every Qdrant point uses the live embedding model revisions.",
+            "Not every Qdrant point uses ASSET_SNAPSHOT_REVISION and the live embedding model revisions.",
         )
     return {
         "collection": collection,
@@ -603,11 +639,6 @@ def collect_qdrant(
     }
 
 
-def deterministic_snapshot_id(fields: dict[str, Any]) -> str:
-    digest = hashlib.sha256(canonical_json(fields)).hexdigest()[:24]
-    return f"asset-{digest}"
-
-
 def collect_manifest(
     config: ProbeConfig,
     *,
@@ -615,6 +646,19 @@ def collect_manifest(
     opener: Callable[..., Any] = urllib.request.urlopen,
     db_connect: Callable[..., Any] = default_db_connect,
 ) -> dict[str, Any]:
+    asset_snapshot_revision = require_immutable_revision(
+        config.asset_snapshot_revision,
+        "asset_snapshot_revision",
+        "asset_stack",
+    )
+    if snapshot_id is not None and require_immutable_revision(
+        snapshot_id, "snapshot_id", "snapshot"
+    ) != asset_snapshot_revision:
+        fail(
+            "ASSET_SNAPSHOT_REVISION_MISMATCH",
+            "snapshot",
+            "snapshot_id must exactly match ASSET_SNAPSHOT_REVISION.",
+        )
     ue_revision = require_immutable_revision(
         config.ue_content_revision, "ue_content_revision", "unreal"
     )
@@ -651,14 +695,9 @@ def collect_manifest(
             "sparse_model": embedding_observed["sparse_model"],
         },
     }
-    receipt_id = (
-        require_safe_id(snapshot_id, "snapshot_id", "snapshot")
-        if snapshot_id
-        else deterministic_snapshot_id(fields)
-    )
     return {
         "schema": SNAPSHOT_SCHEMA,
-        "snapshot_id": receipt_id,
+        "snapshot_id": asset_snapshot_revision,
         **{key: value for key, value in fields.items() if key != "schema"},
     }
 
@@ -685,8 +724,10 @@ def validate_manifest(value: Any) -> dict[str, Any]:
             "snapshot",
             "The asset snapshot has an unsupported shape or schema.",
         )
-    require_safe_id(value.get("snapshot_id"), "snapshot_id", "snapshot")
-    require_safe_id(value.get("ue_content_revision"), "ue_content_revision", "snapshot")
+    require_immutable_revision(value.get("snapshot_id"), "snapshot_id", "snapshot")
+    require_immutable_revision(
+        value.get("ue_content_revision"), "ue_content_revision", "snapshot"
+    )
     catalog = value.get("catalog")
     if not isinstance(catalog, dict) or set(catalog) != {"count", "sha256"}:
         fail("ASSET_SNAPSHOT_INVALID", "snapshot", "snapshot.catalog is invalid.")
@@ -704,6 +745,12 @@ def validate_manifest(value: Any) -> dict[str, Any]:
     require_positive_int(
         postgres.get("schema_version"), "postgres.schema_version", "snapshot", 1_000_000
     )
+    if postgres.get("schema_version") != ASSET_SCHEMA_VERSION:
+        fail(
+            "ASSET_SNAPSHOT_INVALID",
+            "snapshot",
+            "snapshot.postgres.schema_version is unsupported.",
+        )
     require_positive_int(postgres.get("row_count"), "postgres.row_count", "snapshot")
     qdrant = value.get("qdrant")
     qdrant_keys = {
@@ -735,6 +782,246 @@ def validate_manifest(value: Any) -> dict[str, Any]:
     return value
 
 
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def validate_manifest_bytes(
+    manifest: dict[str, Any], manifest_bytes: bytes
+) -> dict[str, Any]:
+    manifest = validate_manifest(manifest)
+    if (
+        not isinstance(manifest_bytes, bytes)
+        or not manifest_bytes
+        or len(manifest_bytes) > MAX_JSON_BYTES
+    ):
+        fail(
+            "ASSET_SNAPSHOT_INVALID",
+            "snapshot",
+            "The asset snapshot bytes are invalid.",
+        )
+    try:
+        parsed_manifest = validate_manifest(json.loads(manifest_bytes.decode("utf-8")))
+    except SnapshotAuditError:
+        raise
+    except (UnicodeError, json.JSONDecodeError):
+        fail("ASSET_SNAPSHOT_INVALID", "snapshot", "The asset snapshot bytes are invalid.")
+    if canonical_json(parsed_manifest) != canonical_json(manifest):
+        fail(
+            "ASSET_SNAPSHOT_INVALID",
+            "snapshot",
+            "The asset snapshot bytes do not match the audited manifest.",
+        )
+    return parsed_manifest
+
+
+def manifest_observations(manifest: dict[str, Any]) -> dict[str, Any]:
+    manifest = validate_manifest(manifest)
+    return {
+        "asset_snapshot_revision": manifest["snapshot_id"],
+        "ue_content_revision": manifest["ue_content_revision"],
+        "catalog": manifest["catalog"],
+        "postgres": manifest["postgres"],
+        "qdrant": manifest["qdrant"],
+        "embedding": manifest["embedding"],
+    }
+
+
+def _utc_timestamp(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        fail(
+            "ASSET_AUDIT_CLOCK_INVALID",
+            "audit",
+            "The live-audit clock must be timezone-aware.",
+        )
+    normalized = value.astimezone(timezone.utc).replace(microsecond=0)
+    return normalized.isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc_timestamp(value: Any, field: str) -> datetime:
+    text = require_nonempty(value, field, "receipt")
+    if not text.endswith("Z"):
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            f"{field} must be a UTC timestamp.",
+        )
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00")
+    except ValueError:
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            f"{field} is invalid.",
+        )
+    if parsed.microsecond != 0:
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            f"{field} must use whole seconds.",
+        )
+    return parsed.astimezone(timezone.utc)
+
+
+def _now(clock: Callable[[], datetime]) -> datetime:
+    try:
+        value = clock()
+    except Exception:
+        fail(
+            "ASSET_AUDIT_CLOCK_INVALID",
+            "audit",
+            "The live-audit clock is unavailable.",
+        )
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        fail(
+            "ASSET_AUDIT_CLOCK_INVALID",
+            "audit",
+            "The live-audit clock must return a timezone-aware datetime.",
+        )
+    return value.astimezone(timezone.utc).replace(microsecond=0)
+
+
+def require_receipt_ttl(value: Any) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 1
+        or value > MAX_RECEIPT_TTL_SEC
+    ):
+        fail(
+            "ASSET_LIVE_AUDIT_TTL_INVALID",
+            "configuration",
+            f"Receipt TTL must be between 1 and {MAX_RECEIPT_TTL_SEC} seconds.",
+        )
+    return value
+
+
+def make_live_audit_receipt(
+    manifest: dict[str, Any],
+    manifest_bytes: bytes,
+    *,
+    ttl_sec: int = DEFAULT_RECEIPT_TTL_SEC,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> dict[str, Any]:
+    manifest = validate_manifest(manifest)
+    ttl_sec = require_receipt_ttl(ttl_sec)
+    validate_manifest_bytes(manifest, manifest_bytes)
+    issued_at = _now(clock)
+    expires_at = issued_at + timedelta(seconds=ttl_sec)
+    observations = manifest_observations(manifest)
+    return {
+        "schema": LIVE_AUDIT_SCHEMA,
+        "snapshot_id": manifest["snapshot_id"],
+        "manifest_sha256": sha256_bytes(manifest_bytes),
+        "observations_sha256": sha256_bytes(canonical_json(observations)),
+        "issued_at": _utc_timestamp(issued_at),
+        "expires_at": _utc_timestamp(expires_at),
+        "ttl_seconds": ttl_sec,
+        "observations": observations,
+    }
+
+
+def validate_live_audit_receipt(
+    value: Any,
+    manifest: dict[str, Any],
+    manifest_bytes: bytes,
+    *,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> dict[str, Any]:
+    manifest = validate_manifest(manifest)
+    validate_manifest_bytes(manifest, manifest_bytes)
+    expected_keys = {
+        "schema",
+        "snapshot_id",
+        "manifest_sha256",
+        "observations_sha256",
+        "issued_at",
+        "expires_at",
+        "ttl_seconds",
+        "observations",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            "The live-audit receipt has an unsupported shape.",
+        )
+    if value.get("schema") != LIVE_AUDIT_SCHEMA:
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            "The live-audit receipt schema is unsupported.",
+        )
+    if value.get("snapshot_id") != manifest["snapshot_id"]:
+        fail(
+            "ASSET_LIVE_AUDIT_SNAPSHOT_MISMATCH",
+            "receipt",
+            "The live-audit receipt is bound to a different snapshot.",
+        )
+    manifest_digest = value.get("manifest_sha256")
+    if not isinstance(manifest_digest, str) or not SHA256.fullmatch(manifest_digest):
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            "manifest_sha256 is invalid.",
+        )
+    if manifest_digest != sha256_bytes(manifest_bytes):
+        fail(
+            "ASSET_LIVE_AUDIT_MANIFEST_MISMATCH",
+            "receipt",
+            "The live-audit receipt does not match the exact manifest file.",
+        )
+    observations = manifest_observations(manifest)
+    receipt_observations = value.get("observations")
+    if not isinstance(receipt_observations, dict) or canonical_json(
+        receipt_observations
+    ) != canonical_json(observations):
+        fail(
+            "ASSET_LIVE_AUDIT_OBSERVATIONS_MISMATCH",
+            "receipt",
+            "The live-audit receipt facts do not match the snapshot manifest.",
+        )
+    observations_digest = value.get("observations_sha256")
+    if (
+        not isinstance(observations_digest, str)
+        or not SHA256.fullmatch(observations_digest)
+        or observations_digest != sha256_bytes(canonical_json(observations))
+    ):
+        fail(
+            "ASSET_LIVE_AUDIT_OBSERVATIONS_MISMATCH",
+            "receipt",
+            "The live-audit receipt facts digest is invalid.",
+        )
+    ttl_sec = require_positive_int(
+        value.get("ttl_seconds"),
+        "receipt.ttl_seconds",
+        "receipt",
+        MAX_RECEIPT_TTL_SEC,
+    )
+    issued_at = _parse_utc_timestamp(value.get("issued_at"), "receipt.issued_at")
+    expires_at = _parse_utc_timestamp(value.get("expires_at"), "receipt.expires_at")
+    if expires_at - issued_at != timedelta(seconds=ttl_sec):
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            "The live-audit receipt validity window is inconsistent.",
+        )
+    now = _now(clock)
+    if issued_at > now + timedelta(seconds=MAX_CLOCK_SKEW_SEC):
+        fail(
+            "ASSET_LIVE_AUDIT_NOT_YET_VALID",
+            "receipt",
+            "The live-audit receipt was issued in the future.",
+        )
+    if expires_at <= now:
+        fail(
+            "ASSET_LIVE_AUDIT_EXPIRED",
+            "receipt",
+            "The live-audit receipt has expired.",
+        )
+    return value
+
+
 def atomic_write_json(
     path: pathlib.Path, value: dict[str, Any], *, replace: bool = False
 ) -> None:
@@ -755,7 +1042,23 @@ def atomic_write_json(
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o644)
-        os.replace(temporary, path)
+        if replace:
+            os.replace(temporary, path)
+        else:
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                fail(
+                    "ASSET_SNAPSHOT_OUTPUT_EXISTS",
+                    "filesystem",
+                    "The output already exists; use --replace to update it explicitly.",
+                )
+            os.unlink(temporary)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         try:
             os.unlink(temporary)
@@ -763,17 +1066,91 @@ def atomic_write_json(
             pass
 
 
-def _read_manifest(path: pathlib.Path) -> dict[str, Any]:
+def _read_json_file(path: pathlib.Path, dependency: str) -> bytes:
+    descriptor = None
     try:
-        return validate_manifest(json.loads(path.read_text(encoding="utf-8")))
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_JSON_BYTES:
+            raise OSError("not a bounded regular file")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            value = handle.read(MAX_JSON_BYTES + 1)
+        if len(value) > MAX_JSON_BYTES:
+            raise OSError("file grew beyond the audit limit")
+    except OSError:
+        code = (
+            "ASSET_SNAPSHOT_INVALID"
+            if dependency == "snapshot"
+            else "ASSET_LIVE_AUDIT_RECEIPT_INVALID"
+        )
+        fail(
+            code,
+            dependency,
+            f"The {dependency} file is missing or invalid.",
+        )
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return value
+
+
+def _read_manifest_with_bytes(path: pathlib.Path) -> tuple[dict[str, Any], bytes]:
+    raw = _read_json_file(path, "snapshot")
+    try:
+        return validate_manifest(json.loads(raw.decode("utf-8"))), raw
     except SnapshotAuditError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (UnicodeError, json.JSONDecodeError):
         fail(
             "ASSET_SNAPSHOT_INVALID",
             "snapshot",
             "The asset snapshot is missing or invalid JSON.",
         )
+
+
+def _read_manifest(path: pathlib.Path) -> dict[str, Any]:
+    manifest, _raw = _read_manifest_with_bytes(path)
+    return manifest
+
+
+def write_live_audit_receipt(
+    path: pathlib.Path,
+    manifest: dict[str, Any],
+    manifest_bytes: bytes,
+    *,
+    ttl_sec: int,
+    replace: bool,
+    clock: Callable[[], datetime],
+) -> tuple[dict[str, Any], str]:
+    issued_at = _now(clock)
+
+    def fixed_clock() -> datetime:
+        return issued_at
+
+    receipt = make_live_audit_receipt(
+        manifest,
+        manifest_bytes,
+        ttl_sec=ttl_sec,
+        clock=fixed_clock,
+    )
+    atomic_write_json(path, receipt, replace=replace)
+    persisted = _read_json_file(path, "receipt")
+    try:
+        persisted_receipt = json.loads(persisted.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        fail(
+            "ASSET_LIVE_AUDIT_RECEIPT_INVALID",
+            "receipt",
+            "The persisted live-audit receipt is invalid.",
+        )
+    validate_live_audit_receipt(
+        persisted_receipt,
+        manifest,
+        manifest_bytes,
+        clock=fixed_clock,
+    )
+    return persisted_receipt, sha256_bytes(persisted)
 
 
 def _required_env(name: str, dependency: str) -> str:
@@ -810,6 +1187,17 @@ def build_config(
     collection = configured_collection or expected_qdrant.get("collection", "")
     dense_name = args.dense_name or expected_qdrant.get("dense_name", "text_dense")
     sparse_name = args.sparse_name or expected_qdrant.get("sparse_name", "text_sparse")
+    asset_snapshot_revision = require_immutable_revision(
+        _required_env("ASSET_SNAPSHOT_REVISION", "asset_stack"),
+        "ASSET_SNAPSHOT_REVISION",
+        "asset_stack",
+    )
+    if expected and asset_snapshot_revision != expected.get("snapshot_id"):
+        fail(
+            "ASSET_SNAPSHOT_REVISION_MISMATCH",
+            "asset_stack",
+            "ASSET_SNAPSHOT_REVISION does not match the snapshot manifest.",
+        )
     return ProbeConfig(
         catalog_dir=pathlib.Path(args.catalog_dir).expanduser()
         if args.catalog_dir
@@ -825,6 +1213,7 @@ def build_config(
         qdrant_collection=collection,
         dense_name=dense_name,
         sparse_name=sparse_name,
+        asset_snapshot_revision=asset_snapshot_revision,
         ue_content_revision=args.ue_content_revision
         or _required_env("UE_CONTENT_REVISION", "unreal"),
         timeout_sec=args.timeout,
@@ -881,13 +1270,25 @@ def make_parser() -> argparse.ArgumentParser:
     capture.add_argument(
         "--snapshot-id",
         default="",
-        help="Explicit safe snapshot id (default: deterministic content id)",
+        help="Optional assertion; must exactly equal ASSET_SNAPSHOT_REVISION",
     )
     capture.add_argument(
         "--output",
         type=pathlib.Path,
         required=True,
-        help="Atomic snapshot receipt output",
+        help="Atomic simworld-asset-snapshot/v1 manifest output",
+    )
+    capture.add_argument(
+        "--receipt-output",
+        type=pathlib.Path,
+        required=True,
+        help="Atomic short-lived live-audit receipt output",
+    )
+    capture.add_argument(
+        "--receipt-ttl-seconds",
+        type=int,
+        default=DEFAULT_RECEIPT_TTL_SEC,
+        help=f"Live-audit receipt TTL (1-{MAX_RECEIPT_TTL_SEC} seconds)",
     )
     capture.add_argument(
         "--replace",
@@ -901,35 +1302,100 @@ def make_parser() -> argparse.ArgumentParser:
         required=True,
         help="Existing simworld-asset-snapshot/v1 receipt",
     )
+    verify.add_argument(
+        "--receipt-output",
+        type=pathlib.Path,
+        required=True,
+        help="Atomic short-lived live-audit receipt output",
+    )
+    verify.add_argument(
+        "--receipt-ttl-seconds",
+        type=int,
+        default=DEFAULT_RECEIPT_TTL_SEC,
+        help=f"Live-audit receipt TTL (1-{MAX_RECEIPT_TTL_SEC} seconds)",
+    )
+    verify.add_argument(
+        "--replace",
+        action="store_true",
+        help="Explicitly replace an existing live-audit receipt after successful verification",
+    )
     return parser
 
 
-def run(args: argparse.Namespace) -> dict[str, Any]:
+def run(
+    args: argparse.Namespace,
+    *,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> dict[str, Any]:
     if args.timeout <= 0 or args.timeout > 60:
         fail(
             "ASSET_AUDIT_CONFIG_INVALID",
             "configuration",
             "--timeout must be greater than zero and at most 60 seconds.",
         )
+    receipt_ttl_seconds = require_receipt_ttl(args.receipt_ttl_seconds)
     if args.command == "capture":
+        if args.output.resolve() == args.receipt_output.resolve():
+            fail(
+                "ASSET_AUDIT_CONFIG_INVALID",
+                "filesystem",
+                "Snapshot manifest and live-audit receipt outputs must be different files.",
+            )
         if args.output.exists() and not args.replace:
             fail(
                 "ASSET_SNAPSHOT_OUTPUT_EXISTS",
                 "filesystem",
                 "The output already exists; use --replace to update it explicitly.",
             )
+        if args.receipt_output.exists() and not args.replace:
+            fail(
+                "ASSET_SNAPSHOT_OUTPUT_EXISTS",
+                "filesystem",
+                "The live-audit receipt output already exists; use --replace to update it explicitly.",
+            )
         config = build_config(args)
         manifest = validate_manifest(
             collect_manifest(config, snapshot_id=args.snapshot_id or None)
         )
         atomic_write_json(args.output, manifest, replace=args.replace)
+        persisted_manifest, manifest_bytes = _read_manifest_with_bytes(args.output)
+        if canonical_json(persisted_manifest) != canonical_json(manifest):
+            fail(
+                "ASSET_SNAPSHOT_WRITE_FAILED",
+                "filesystem",
+                "The persisted snapshot manifest does not match the live audit.",
+            )
+        receipt, receipt_sha256 = write_live_audit_receipt(
+            args.receipt_output,
+            persisted_manifest,
+            manifest_bytes,
+            ttl_sec=receipt_ttl_seconds,
+            replace=args.replace,
+            clock=clock,
+        )
         return {
             "schema": "simworld-asset-snapshot-audit/v1",
             "status": "ready",
             "snapshot_id": manifest["snapshot_id"],
-            "receipt": str(args.output),
+            "manifest": str(args.output),
+            "manifest_sha256": sha256_bytes(manifest_bytes),
+            "live_audit_receipt": str(args.receipt_output),
+            "live_audit_receipt_sha256": receipt_sha256,
+            "expires_at": receipt["expires_at"],
         }
-    expected = _read_manifest(args.manifest)
+    if args.manifest.resolve() == args.receipt_output.resolve():
+        fail(
+            "ASSET_AUDIT_CONFIG_INVALID",
+            "filesystem",
+            "Snapshot manifest and live-audit receipt outputs must be different files.",
+        )
+    if args.receipt_output.exists() and not args.replace:
+        fail(
+            "ASSET_SNAPSHOT_OUTPUT_EXISTS",
+            "filesystem",
+            "The live-audit receipt output already exists; use --replace to update it explicitly.",
+        )
+    expected, manifest_bytes = _read_manifest_with_bytes(args.manifest)
     config = build_config(args, expected)
     observed = validate_manifest(
         collect_manifest(config, snapshot_id=expected["snapshot_id"])
@@ -940,11 +1406,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "asset_stack",
             "Live asset dependencies do not exactly match the snapshot receipt.",
         )
+    receipt, receipt_sha256 = write_live_audit_receipt(
+        args.receipt_output,
+        expected,
+        manifest_bytes,
+        ttl_sec=receipt_ttl_seconds,
+        replace=args.replace,
+        clock=clock,
+    )
     return {
         "schema": "simworld-asset-snapshot-audit/v1",
         "status": "ready",
         "snapshot_id": expected["snapshot_id"],
-        "receipt": str(args.manifest),
+        "manifest": str(args.manifest),
+        "manifest_sha256": sha256_bytes(manifest_bytes),
+        "live_audit_receipt": str(args.receipt_output),
+        "live_audit_receipt_sha256": receipt_sha256,
+        "expires_at": receipt["expires_at"],
     }
 
 

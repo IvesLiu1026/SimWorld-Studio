@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 
@@ -32,8 +33,17 @@ class FakeResponse:
 
 
 class FakeCursor:
-    def __init__(self, schema_version=1, row_count=2, matching_count=2):
-        self.rows = [(schema_version,), (row_count, matching_count)]
+    def __init__(
+        self,
+        schema_version=2,
+        row_count=2,
+        matching_count=2,
+        matching_snapshot_count=2,
+    ):
+        self.rows = [
+            (schema_version,),
+            (row_count, matching_count, matching_snapshot_count),
+        ]
         self.calls = []
 
     def execute(self, query, parameters):
@@ -108,6 +118,7 @@ class SnapshotFixture:
             qdrant_collection="assets-v1",
             dense_name="text_dense",
             sparse_name="text_sparse",
+            asset_snapshot_revision="asset-snapshot-20260721-r1",
             ue_content_revision="ue-content-abc123",
             timeout_sec=3,
         )
@@ -172,11 +183,21 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def db_connector(
-        self, schema_version=1, row_count=2, matching_count=2, holder=None
+        self,
+        schema_version=2,
+        row_count=2,
+        matching_count=2,
+        matching_snapshot_count=2,
+        holder=None,
     ):
         def connect(dsn, **kwargs):
             connection = FakeConnection(
-                FakeCursor(schema_version, row_count, matching_count)
+                FakeCursor(
+                    schema_version,
+                    row_count,
+                    matching_count,
+                    matching_snapshot_count,
+                )
             )
             if holder is not None:
                 holder.append((dsn, kwargs, connection))
@@ -194,9 +215,9 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
         )
 
         self.assertEqual(manifest["schema"], "simworld-asset-snapshot/v1")
-        self.assertRegex(manifest["snapshot_id"], r"^asset-[a-f0-9]{24}$")
+        self.assertEqual(manifest["snapshot_id"], "asset-snapshot-20260721-r1")
         self.assertEqual(manifest["catalog"]["count"], 2)
-        self.assertEqual(manifest["postgres"], {"schema_version": 1, "row_count": 2})
+        self.assertEqual(manifest["postgres"], {"schema_version": 2, "row_count": 2})
         self.assertEqual(manifest["qdrant"]["point_count"], 2)
         self.assertEqual(manifest["embedding"]["version"], "embed-v1")
         self.assertEqual(
@@ -215,6 +236,14 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
         }
         self.assertEqual(filter_values["dense_revision"], "dense-sha256-abc")
         self.assertEqual(filter_values["sparse_revision"], "sparse-sha256-def")
+        self.assertEqual(
+            filter_values["asset_snapshot_revision"],
+            "asset-snapshot-20260721-r1",
+        )
+        self.assertEqual(
+            connections[0][2]._cursor.calls[1][1],
+            ("embed-v1", "asset-snapshot-20260721-r1"),
+        )
         self.assertEqual(
             connections[0][1]["application_name"], "simworld_asset_snapshot_audit"
         )
@@ -265,7 +294,7 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
                 db_connect=self.db_connector(),
             )
         self.assertEqual(
-            stale_qdrant.exception.code, "ASSET_QDRANT_EMBEDDING_REVISION_MISMATCH"
+            stale_qdrant.exception.code, "ASSET_QDRANT_SNAPSHOT_REVISION_MISMATCH"
         )
 
     def test_embedding_health_and_postgres_revision_are_required(self):
@@ -300,6 +329,28 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
             "ASSET_POSTGRES_EMBEDDING_REVISION_MISMATCH",
         )
 
+        with self.assertRaises(verifier.SnapshotAuditError) as stale_snapshot_rows:
+            verifier.collect_manifest(
+                self.fixture.config(),
+                opener=fake_opener_factory(),
+                db_connect=self.db_connector(matching_snapshot_count=1),
+            )
+        self.assertEqual(
+            stale_snapshot_rows.exception.code,
+            "ASSET_POSTGRES_SNAPSHOT_REVISION_MISMATCH",
+        )
+
+        with self.assertRaises(verifier.SnapshotAuditError) as stale_schema:
+            verifier.collect_manifest(
+                self.fixture.config(),
+                opener=fake_opener_factory(),
+                db_connect=self.db_connector(schema_version=1),
+            )
+        self.assertEqual(
+            stale_schema.exception.code,
+            "ASSET_POSTGRES_SCHEMA_REVISION_MISMATCH",
+        )
+
         with self.assertRaises(verifier.SnapshotAuditError) as unpinned_model:
             verifier.collect_manifest(
                 self.fixture.config(),
@@ -332,8 +383,40 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
             verifier.collect_catalog(self.fixture.asset_db / "catalog", index_path)
         self.assertEqual(error.exception.code, "ASSET_CATEGORY_INDEX_CATALOG_MISMATCH")
 
+    def test_configured_snapshot_revision_must_exactly_match_manifest(self):
+        manifest = verifier.collect_manifest(
+            self.fixture.config(),
+            opener=fake_opener_factory(),
+            db_connect=self.db_connector(),
+        )
+        args = argparse.Namespace(
+            asset_db_dir=str(self.fixture.asset_db),
+            catalog_dir="",
+            category_index="",
+            collection="assets-v1",
+            dense_name="text_dense",
+            sparse_name="text_sparse",
+            ue_content_revision="ue-content-abc123",
+            timeout=3,
+        )
+        environment = {
+            "POSTGRES_URL": "postgresql://user:secret@db/assets",
+            "QDRANT_URL": "http://qdrant:6333",
+            "EMBED_SERVICE_URL": "http://embed:7777",
+            "ASSET_SNAPSHOT_REVISION": "asset-snapshot-20260721-r0",
+        }
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            self.assertRaises(verifier.SnapshotAuditError) as mismatch,
+        ):
+            verifier.build_config(args, manifest)
+        self.assertEqual(
+            mismatch.exception.code, "ASSET_SNAPSHOT_REVISION_MISMATCH"
+        )
+
     def test_failed_capture_does_not_create_or_replace_receipt(self):
         output = self.root / "snapshot-manifest.json"
+        receipt_output = self.root / "snapshot-live-audit.json"
         args = argparse.Namespace(
             command="capture",
             timeout=3,
@@ -346,12 +429,15 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
             ue_content_revision="ue-content-abc123",
             snapshot_id="",
             output=output,
+            receipt_output=receipt_output,
+            receipt_ttl_seconds=300,
             replace=False,
         )
         environment = {
             "POSTGRES_URL": "postgresql://user:secret@db/assets",
             "QDRANT_URL": "http://qdrant:6333",
             "EMBED_SERVICE_URL": "http://embed:7777",
+            "ASSET_SNAPSHOT_REVISION": "asset-snapshot-20260721-r1",
         }
         failure = verifier.SnapshotAuditError(
             "ASSET_SNAPSHOT_COUNT_MISMATCH", "asset_stack", "Counts differ."
@@ -363,6 +449,7 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
             with self.assertRaises(verifier.SnapshotAuditError):
                 verifier.run(args)
         self.assertFalse(output.exists())
+        self.assertFalse(receipt_output.exists())
 
         original = b'{"do_not_replace":true}\n'
         output.write_bytes(original)
@@ -390,6 +477,155 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
             verifier.canonical_json(expected), verifier.canonical_json(changed)
         )
 
+    def test_live_audit_receipt_binds_manifest_facts_and_expires(self):
+        manifest = verifier.collect_manifest(
+            self.fixture.config(),
+            opener=fake_opener_factory(),
+            db_connect=self.db_connector(),
+        )
+        manifest_bytes = (
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        ).encode("utf-8")
+        issued = datetime(2026, 7, 21, 12, 0, 0, tzinfo=timezone.utc)
+        receipt = verifier.make_live_audit_receipt(
+            manifest,
+            manifest_bytes,
+            ttl_sec=300,
+            clock=lambda: issued,
+        )
+
+        self.assertEqual(receipt["schema"], "simworld-asset-live-audit/v1")
+        self.assertEqual(receipt["snapshot_id"], manifest["snapshot_id"])
+        self.assertEqual(
+            receipt["manifest_sha256"], verifier.sha256_bytes(manifest_bytes)
+        )
+        self.assertEqual(receipt["issued_at"], "2026-07-21T12:00:00Z")
+        self.assertEqual(receipt["expires_at"], "2026-07-21T12:05:00Z")
+        self.assertEqual(
+            receipt["observations"]["asset_snapshot_revision"],
+            "asset-snapshot-20260721-r1",
+        )
+        self.assertEqual(receipt["observations"]["postgres"]["schema_version"], 2)
+        self.assertEqual(
+            verifier.validate_live_audit_receipt(
+                receipt,
+                manifest,
+                manifest_bytes,
+                clock=lambda: issued + timedelta(seconds=299),
+            ),
+            receipt,
+        )
+
+        with self.assertRaises(verifier.SnapshotAuditError) as expired:
+            verifier.validate_live_audit_receipt(
+                receipt,
+                manifest,
+                manifest_bytes,
+                clock=lambda: issued + timedelta(seconds=300),
+            )
+        self.assertEqual(expired.exception.code, "ASSET_LIVE_AUDIT_EXPIRED")
+
+        changed_bytes = manifest_bytes + b" "
+        with self.assertRaises(verifier.SnapshotAuditError) as changed_manifest:
+            verifier.validate_live_audit_receipt(
+                receipt,
+                manifest,
+                changed_bytes,
+                clock=lambda: issued,
+            )
+        self.assertEqual(
+            changed_manifest.exception.code, "ASSET_LIVE_AUDIT_MANIFEST_MISMATCH"
+        )
+
+        tampered = json.loads(json.dumps(receipt))
+        tampered["observations"]["postgres"]["row_count"] = 1
+        with self.assertRaises(verifier.SnapshotAuditError) as changed_facts:
+            verifier.validate_live_audit_receipt(
+                tampered,
+                manifest,
+                manifest_bytes,
+                clock=lambda: issued,
+            )
+        self.assertEqual(
+            changed_facts.exception.code,
+            "ASSET_LIVE_AUDIT_OBSERVATIONS_MISMATCH",
+        )
+
+    def test_capture_and_verify_atomically_emit_digest_bound_receipts(self):
+        manifest = verifier.collect_manifest(
+            self.fixture.config(),
+            opener=fake_opener_factory(),
+            db_connect=self.db_connector(),
+        )
+        issued = datetime(2026, 7, 21, 12, 0, 0, tzinfo=timezone.utc)
+        manifest_path = self.root / "snapshot-manifest.json"
+        capture_receipt = self.root / "capture-live-audit.json"
+        capture_args = argparse.Namespace(
+            command="capture",
+            timeout=3,
+            asset_db_dir=str(self.fixture.asset_db),
+            catalog_dir="",
+            category_index="",
+            collection="assets-v1",
+            dense_name="text_dense",
+            sparse_name="text_sparse",
+            ue_content_revision="ue-content-abc123",
+            snapshot_id="",
+            output=manifest_path,
+            receipt_output=capture_receipt,
+            receipt_ttl_seconds=300,
+            replace=False,
+        )
+        with (
+            mock.patch.object(verifier, "build_config", return_value=self.fixture.config()),
+            mock.patch.object(verifier, "collect_manifest", return_value=manifest),
+        ):
+            captured = verifier.run(capture_args, clock=lambda: issued)
+
+        self.assertEqual(
+            captured["manifest_sha256"],
+            verifier.sha256_bytes(manifest_path.read_bytes()),
+        )
+        self.assertEqual(
+            captured["live_audit_receipt_sha256"],
+            verifier.sha256_bytes(capture_receipt.read_bytes()),
+        )
+        persisted_capture = json.loads(capture_receipt.read_text(encoding="utf-8"))
+        self.assertNotIn("postgresql://", json.dumps(persisted_capture))
+        self.assertNotIn("secret", json.dumps(persisted_capture))
+
+        verify_receipt = self.root / "verify-live-audit.json"
+        verify_args = argparse.Namespace(
+            command="verify",
+            timeout=3,
+            asset_db_dir=str(self.fixture.asset_db),
+            catalog_dir="",
+            category_index="",
+            collection="assets-v1",
+            dense_name="text_dense",
+            sparse_name="text_sparse",
+            ue_content_revision="ue-content-abc123",
+            manifest=manifest_path,
+            receipt_output=verify_receipt,
+            receipt_ttl_seconds=120,
+            replace=False,
+        )
+        with (
+            mock.patch.object(verifier, "build_config", return_value=self.fixture.config()),
+            mock.patch.object(verifier, "collect_manifest", return_value=manifest),
+        ):
+            verified = verifier.run(verify_args, clock=lambda: issued)
+
+        self.assertEqual(verified["snapshot_id"], manifest["snapshot_id"])
+        self.assertEqual(
+            verified["live_audit_receipt_sha256"],
+            verifier.sha256_bytes(verify_receipt.read_bytes()),
+        )
+        self.assertEqual(
+            json.loads(verify_receipt.read_text(encoding="utf-8"))["ttl_seconds"],
+            120,
+        )
+
     def test_secret_bearing_dependency_errors_are_publicly_redacted(self):
         secret_dsn = "postgresql://asset_user:do-not-print@db.internal/assets"
 
@@ -409,6 +645,7 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
 
     def test_cli_subprocess_fails_without_leaking_environment_secret(self):
         output = self.root / "must-not-exist.json"
+        receipt = self.root / "must-not-exist-receipt.json"
         environment = {
             **os.environ,
             "ASSET_DB_DIR": str(self.root / "missing-assets"),
@@ -416,6 +653,7 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
             "QDRANT_URL": "http://127.0.0.1:6333",
             "EMBED_SERVICE_URL": "http://127.0.0.1:7777",
             "QDRANT_COLLECTION": "assets-v1",
+            "ASSET_SNAPSHOT_REVISION": "asset-snapshot-20260721-r1",
             "UE_CONTENT_REVISION": "ue-content-abc123",
         }
         completed = subprocess.run(
@@ -425,6 +663,8 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
                 "capture",
                 "--output",
                 str(output),
+                "--receipt-output",
+                str(receipt),
             ],
             env=environment,
             text=True,
@@ -434,6 +674,7 @@ class VerifyAssetSnapshotTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 1)
         self.assertFalse(output.exists())
+        self.assertFalse(receipt.exists())
         self.assertNotIn("subprocess-secret", completed.stderr)
         payload = json.loads(completed.stderr)
         self.assertEqual(payload["status"], "not_ready")

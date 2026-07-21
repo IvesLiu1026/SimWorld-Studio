@@ -13,6 +13,8 @@ import build_qdrant_index as builder  # noqa: E402
 def asset_row():
     return {
         "asset_id": "chair",
+        "qdrant_point_id": "9a511b8a-d781-5f51-8867-d90171d8e999",
+        "asset_snapshot_revision": "asset-snapshot-20260721-r1",
         "name": "Office chair",
         "category": "office",
         "subcategory": "chair",
@@ -36,6 +38,7 @@ class QdrantRevisionContractTests(unittest.TestCase):
     def test_payload_records_both_immutable_model_revisions(self):
         payload = builder.payload_for_row(
             asset_row(),
+            "asset-snapshot-20260721-r1",
             "embed-v1",
             "BAAI/bge-large-en-v1.5",
             "dense-sha256-abc",
@@ -44,6 +47,9 @@ class QdrantRevisionContractTests(unittest.TestCase):
             1024,
         )
         self.assertEqual(payload["embedding_version"], "embed-v1")
+        self.assertEqual(
+            payload["asset_snapshot_revision"], "asset-snapshot-20260721-r1"
+        )
         self.assertEqual(payload["dense_revision"], "dense-sha256-abc")
         self.assertEqual(payload["sparse_revision"], "sparse-sha256-def")
         self.assertEqual(payload["dense_size"], 1024)
@@ -51,14 +57,29 @@ class QdrantRevisionContractTests(unittest.TestCase):
     def test_revision_change_invalidates_embedding_hash(self):
         row = asset_row()
         payload_a = builder.payload_for_row(
-            row, "embed-v1", "dense", "revision-a", "sparse", "revision-a", 1024
+            row,
+            "asset-snapshot-20260721-r1",
+            "embed-v1",
+            "dense",
+            "revision-a",
+            "sparse",
+            "revision-a",
+            1024,
         )
         payload_b = builder.payload_for_row(
-            row, "embed-v1", "dense", "revision-b", "sparse", "revision-a", 1024
+            row,
+            "asset-snapshot-20260721-r1",
+            "embed-v1",
+            "dense",
+            "revision-b",
+            "sparse",
+            "revision-a",
+            1024,
         )
         hash_a = builder.embedding_hash(
             "chair",
             payload_a,
+            "asset-snapshot-20260721-r1",
             "embed-v1",
             "dense",
             "revision-a",
@@ -69,6 +90,7 @@ class QdrantRevisionContractTests(unittest.TestCase):
         hash_b = builder.embedding_hash(
             "chair",
             payload_b,
+            "asset-snapshot-20260721-r1",
             "embed-v1",
             "dense",
             "revision-b",
@@ -77,6 +99,104 @@ class QdrantRevisionContractTests(unittest.TestCase):
             1024,
         )
         self.assertNotEqual(hash_a, hash_b)
+
+    def test_snapshot_revision_change_invalidates_payload_and_hash(self):
+        row_a = asset_row()
+        payload_a = builder.payload_for_row(
+            row_a,
+            "asset-snapshot-20260721-r1",
+            "embed-v1",
+            "dense",
+            "revision-a",
+            "sparse",
+            "revision-a",
+            1024,
+        )
+        row_b = {**row_a, "asset_snapshot_revision": "asset-snapshot-20260721-r2"}
+        payload_b = builder.payload_for_row(
+            row_b,
+            "asset-snapshot-20260721-r2",
+            "embed-v1",
+            "dense",
+            "revision-a",
+            "sparse",
+            "revision-a",
+            1024,
+        )
+        hash_a = builder.embedding_hash(
+            "chair",
+            payload_a,
+            "asset-snapshot-20260721-r1",
+            "embed-v1",
+            "dense",
+            "revision-a",
+            "sparse",
+            "revision-a",
+            1024,
+        )
+        hash_b = builder.embedding_hash(
+            "chair",
+            payload_b,
+            "asset-snapshot-20260721-r2",
+            "embed-v1",
+            "dense",
+            "revision-a",
+            "sparse",
+            "revision-a",
+            1024,
+        )
+        self.assertNotEqual(hash_a, hash_b)
+
+    def test_postgres_or_qdrant_revision_mismatch_is_not_reused(self):
+        row = asset_row()
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            builder.payload_for_row(
+                row,
+                "asset-snapshot-20260721-r2",
+                "embed-v1",
+                "dense",
+                "revision-a",
+                "sparse",
+                "revision-a",
+                1024,
+            )
+
+        class Point:
+            def __init__(self, payload):
+                self.id = row["qdrant_point_id"]
+                self.payload = payload
+
+        class Client:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def retrieve(self, **_kwargs):
+                return [Point(self.payload)]
+
+        matching = builder.existing_qdrant_ids(
+            Client(
+                {
+                    "asset_id": "chair",
+                    "asset_snapshot_revision": "asset-snapshot-20260721-r1",
+                }
+            ),
+            "assets",
+            [row],
+            "asset-snapshot-20260721-r1",
+        )
+        stale = builder.existing_qdrant_ids(
+            Client(
+                {
+                    "asset_id": "chair",
+                    "asset_snapshot_revision": "asset-snapshot-20260721-r0",
+                }
+            ),
+            "assets",
+            [row],
+            "asset-snapshot-20260721-r1",
+        )
+        self.assertEqual(matching, {row["qdrant_point_id"]})
+        self.assertEqual(stale, set())
 
 
 if __name__ == "__main__":

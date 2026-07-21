@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build or update the Qdrant asset text index from Postgres using local FastEmbed models."""
+"""Build a snapshot-bound Qdrant asset index from Postgres with FastEmbed."""
 import argparse
 import hashlib
 import json
 import os
 import pathlib
+import re
 import sys
 
 import psycopg2
@@ -31,6 +32,22 @@ DENSE_SIZE = int(os.environ.get("EMBED_DENSE_SIZE", "1024"))
 EMBED_VER = os.environ.get("EMBED_VERSION", "bge-large-en-v1.5-bm25-v1")
 BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "32"))
 EMBED_CACHE_DIR = os.environ.get("FASTEMBED_CACHE_PATH") or None
+ASSET_SNAPSHOT_REVISION = os.environ.get("ASSET_SNAPSHOT_REVISION", "")
+SAFE_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}$")
+UNPINNED_REVISIONS = {"dev", "latest", "main", "master", "unknown", "unversioned"}
+
+
+def require_snapshot_revision(value: str | None) -> str:
+    revision = str(value or "").strip()
+    if not SAFE_REVISION.fullmatch(revision):
+        raise ValueError(
+            "ASSET_SNAPSHOT_REVISION must be a safe immutable revision identifier"
+        )
+    if revision.casefold() in UNPINNED_REVISIONS:
+        raise ValueError(
+            "ASSET_SNAPSHOT_REVISION must identify an immutable snapshot"
+        )
+    return revision
 
 
 def parse_args():
@@ -44,6 +61,11 @@ def parse_args():
     p.add_argument("--sparse-revision", default=SPARSE_REVISION)
     p.add_argument("--dense-size", type=int, default=DENSE_SIZE)
     p.add_argument("--embed-version", default=EMBED_VER)
+    p.add_argument(
+        "--snapshot-revision",
+        default=ASSET_SNAPSHOT_REVISION,
+        help="Immutable revision required on every Postgres row and Qdrant payload (default: ASSET_SNAPSHOT_REVISION)",
+    )
     p.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     p.add_argument("--asset-ids", default="", help="Comma/newline-separated asset ids to upsert")
     p.add_argument("--asset-id-file", default="", help="Text/JSON file of asset ids to upsert")
@@ -109,6 +131,7 @@ def build_embedding_text(row):
 
 def payload_for_row(
     row,
+    snapshot_revision: str,
     embed_version: str,
     dense_model: str,
     dense_revision: str,
@@ -116,8 +139,14 @@ def payload_for_row(
     sparse_revision: str,
     dense_size: int,
 ):
+    snapshot_revision = require_snapshot_revision(snapshot_revision)
+    if row.get("asset_snapshot_revision") != snapshot_revision:
+        raise ValueError(
+            "PostgreSQL row does not match ASSET_SNAPSHOT_REVISION"
+        )
     return {
         "asset_id": row["asset_id"],
+        "asset_snapshot_revision": snapshot_revision,
         "name": row["name"],
         "category": row["category"],
         "subcategory": row["subcategory"] or "",
@@ -146,6 +175,7 @@ def payload_for_row(
 def embedding_hash(
     text,
     payload,
+    snapshot_revision: str,
     embed_version: str,
     dense_model: str,
     dense_revision: str,
@@ -153,9 +183,11 @@ def embedding_hash(
     sparse_revision: str,
     dense_size: int,
 ):
+    snapshot_revision = require_snapshot_revision(snapshot_revision)
     material = {
         "text": text,
         "payload": payload,
+        "asset_snapshot_revision": snapshot_revision,
         "embed_version": embed_version,
         "dense_model": dense_model,
         "dense_revision": dense_revision,
@@ -166,19 +198,31 @@ def embedding_hash(
     return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-def existing_qdrant_ids(qd, collection: str, rows) -> set[str]:
+def existing_qdrant_ids(
+    qd, collection: str, rows, snapshot_revision: str
+) -> set[str]:
+    snapshot_revision = require_snapshot_revision(snapshot_revision)
     ids = [str(row["qdrant_point_id"]) for row in rows]
+    expected_assets = {
+        str(row["qdrant_point_id"]): row["asset_id"] for row in rows
+    }
     found: set[str] = set()
     for i in range(0, len(ids), 256):
         batch = ids[i : i + 256]
         points = qd.retrieve(
             collection_name=collection,
             ids=batch,
-            with_payload=False,
+            with_payload=["asset_id", "asset_snapshot_revision"],
             with_vectors=False,
         )
         for point in points:
-            found.add(str(point.id))
+            point_id = str(point.id)
+            payload = point.payload if isinstance(point.payload, dict) else {}
+            if (
+                payload.get("asset_snapshot_revision") == snapshot_revision
+                and payload.get("asset_id") == expected_assets.get(point_id)
+            ):
+                found.add(point_id)
     return found
 
 
@@ -192,8 +236,11 @@ def ensure_collection(qd, collection: str, dense_size: int):
         )
         print(f"Created Qdrant collection: {collection}")
 
+    collection_info = qd.get_collection(collection)
+    payload_schema = getattr(collection_info, "payload_schema", None) or {}
     indexes = [
         ("asset_id", PayloadSchemaType.KEYWORD),
+        ("asset_snapshot_revision", PayloadSchemaType.KEYWORD),
         ("category", PayloadSchemaType.KEYWORD),
         ("setting", PayloadSchemaType.KEYWORD),
         ("asset_type", PayloadSchemaType.KEYWORD),
@@ -212,15 +259,24 @@ def ensure_collection(qd, collection: str, dense_size: int):
         ("dense_size", PayloadSchemaType.INTEGER),
     ]
     for field, schema in indexes:
-        try:
-            qd.create_payload_index(collection, field_name=field, field_schema=schema)
-        except Exception:
-            pass
+        if field in payload_schema:
+            continue
+        qd.create_payload_index(
+            collection,
+            field_name=field,
+            field_schema=schema,
+            wait=True,
+        )
 
 
 def main():
     global EMBED_VER
     args = parse_args()
+    try:
+        snapshot_revision = require_snapshot_revision(args.snapshot_revision)
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        sys.exit(2)
     if not args.postgres_url:
         print("ERROR: POSTGRES_URL is required", file=sys.stderr)
         sys.exit(2)
@@ -230,7 +286,14 @@ def main():
     if not args.sparse_revision or args.sparse_revision.casefold() in {"dev", "latest", "main", "master", "unknown", "unversioned"}:
         print("ERROR: EMBED_SPARSE_REVISION must identify an immutable model artifact revision", file=sys.stderr)
         sys.exit(2)
+    if args.skip_point_check and not args.force:
+        print(
+            "ERROR: --skip-point-check requires --force so stale snapshot payloads cannot be skipped",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     EMBED_VER = args.embed_version
+    print(f"Asset snapshot revision: {snapshot_revision}")
 
     asset_ids = read_asset_ids(args.asset_ids, args.asset_id_file)
     qd = QdrantClient(url=args.qdrant_url)
@@ -250,6 +313,23 @@ def main():
         cur.execute("SELECT * FROM assets ORDER BY asset_id")
     rows = cur.fetchall()
     print(f"Processing {len(rows)} assets...")
+    if not rows:
+        print("ERROR: no PostgreSQL asset rows were selected", file=sys.stderr)
+        sys.exit(1)
+    stale_rows = [
+        row["asset_id"]
+        for row in rows
+        if row.get("asset_snapshot_revision") != snapshot_revision
+    ]
+    if stale_rows:
+        print(
+            "ERROR: PostgreSQL rows do not exactly match ASSET_SNAPSHOT_REVISION "
+            f"{snapshot_revision}: mismatched={len(stale_rows)}, selected={len(rows)}",
+            file=sys.stderr,
+        )
+        for asset_id in stale_rows[:20]:
+            print(f"  mismatched: {asset_id}", file=sys.stderr)
+        sys.exit(1)
     if asset_ids and len(rows) != len(asset_ids):
         found = {row["asset_id"] for row in rows}
         missing = [asset_id for asset_id in asset_ids if asset_id not in found]
@@ -260,7 +340,9 @@ def main():
 
     qdrant_ids = set()
     if collection_exists and not args.skip_point_check:
-        qdrant_ids = existing_qdrant_ids(qd, args.collection, rows)
+        qdrant_ids = existing_qdrant_ids(
+            qd, args.collection, rows, snapshot_revision
+        )
         print(f"Qdrant point check: found={len(qdrant_ids)}/{len(rows)} selected rows")
     elif not collection_exists:
         print("Qdrant point check: collection missing; all selected rows need upsert")
@@ -272,6 +354,7 @@ def main():
         text = build_embedding_text(row)
         payload = payload_for_row(
             row,
+            snapshot_revision,
             args.embed_version,
             args.dense_model,
             args.dense_revision,
@@ -282,6 +365,7 @@ def main():
         h = embedding_hash(
             text,
             payload,
+            snapshot_revision,
             args.embed_version,
             args.dense_model,
             args.dense_revision,
@@ -341,9 +425,18 @@ def main():
         upd = conn.cursor()
         for row, _, h, _ in batch:
             upd.execute(
-                "UPDATE assets SET embedding_hash=%s, embedding_version=%s, updated_at=now() WHERE asset_id=%s",
-                (h, args.embed_version, row["asset_id"]),
+                """
+                UPDATE assets
+                SET embedding_hash=%s, embedding_version=%s, updated_at=now()
+                WHERE asset_id=%s AND asset_snapshot_revision=%s
+                """,
+                (h, args.embed_version, row["asset_id"], snapshot_revision),
             )
+            if upd.rowcount != 1:
+                conn.rollback()
+                raise RuntimeError(
+                    "PostgreSQL snapshot revision changed during Qdrant upsert"
+                )
         conn.commit()
         print(f"Upserted {min(i + len(batch), len(pending))}/{len(pending)}")
 

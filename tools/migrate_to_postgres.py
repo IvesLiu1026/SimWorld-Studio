@@ -4,7 +4,8 @@
 Usage:
   ASSET_DB_DIR=/data/siddhant/asset_db \
   POSTGRES_URL=postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db \
-  python3 tools/migrate_to_postgres.py
+  ASSET_SNAPSHOT_REVISION=asset-snapshot-IMMUTABLE \
+  uv run --project tools --frozen python tools/migrate_to_postgres.py
 """
 import argparse
 import glob
@@ -19,8 +20,25 @@ import psycopg2
 from psycopg2.extras import Json
 
 
+SAFE_REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}$")
+UNPINNED_REVISIONS = {"dev", "latest", "main", "master", "unknown", "unversioned"}
+
+
 def point_id(asset_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"simworld-asset:{asset_id}"))
+
+
+def require_snapshot_revision(value: str | None) -> str:
+    revision = str(value or "").strip()
+    if not SAFE_REVISION.fullmatch(revision):
+        raise ValueError(
+            "ASSET_SNAPSHOT_REVISION must be a safe immutable revision identifier"
+        )
+    if revision.casefold() in UNPINNED_REVISIONS:
+        raise ValueError(
+            "ASSET_SNAPSHOT_REVISION must identify an immutable snapshot"
+        )
+    return revision
 
 
 def arr(value):
@@ -60,6 +78,11 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--asset-db-dir", default=os.environ.get("ASSET_DB_DIR"))
     p.add_argument("--postgres-url", default=os.environ.get("POSTGRES_URL"))
+    p.add_argument(
+        "--snapshot-revision",
+        default=os.environ.get("ASSET_SNAPSHOT_REVISION", ""),
+        help="Immutable snapshot revision stamped on every row (default: ASSET_SNAPSHOT_REVISION)",
+    )
     p.add_argument("--asset-ids", default="", help="Comma/newline-separated asset ids to import")
     p.add_argument("--asset-id-file", default="", help="Text/JSON file of asset ids to import")
     p.add_argument("--commit-every", type=int, default=100, help="Commit after this many successful rows")
@@ -124,8 +147,9 @@ def resolve_catalog_files(asset_db_dir: str, asset_ids: list[str]) -> list[str]:
     return files
 
 
-def upsert_record(cur, fp: str):
-    rec = json.load(open(fp, encoding="utf-8"))
+def upsert_record(cur, fp: str, snapshot_revision: str):
+    snapshot_revision = require_snapshot_revision(snapshot_revision)
+    rec = json.loads(pathlib.Path(fp).read_text(encoding="utf-8"))
     ident = rec.get("identity", {})
     sem = rec.get("semantic", {})
     geo = rec.get("geometry", {})
@@ -138,7 +162,8 @@ def upsert_record(cur, fp: str):
     cur.execute(
         """
         INSERT INTO assets (
-          asset_id, qdrant_point_id, name, category, subcategory, source_pack,
+          asset_id, qdrant_point_id, asset_snapshot_revision,
+          name, category, subcategory, source_pack,
           setting, style, condition, short_description, description, "function",
           scene_types, tags, materials, mood, typical_placement, affordances, color_palette,
           width_m, depth_m, height_m, footprint_w_m, footprint_d_m, bounding_radius_m, is_symmetric,
@@ -146,7 +171,8 @@ def upsert_record(cur, fp: str):
           triangle_count, lod_count, material_slots,
           caption_model, render_views, view_count, schema_version, raw_metadata
         ) VALUES (
-          %s,%s,%s,%s,%s,%s,
+          %s,%s,%s,
+          %s,%s,%s,%s,
           %s,%s,%s,%s,%s,%s,
           %s,%s,%s,%s,%s,%s,%s,
           %s,%s,%s,%s,%s,%s,%s,
@@ -156,6 +182,7 @@ def upsert_record(cur, fp: str):
         )
         ON CONFLICT (asset_id) DO UPDATE SET
           qdrant_point_id=EXCLUDED.qdrant_point_id,
+          asset_snapshot_revision=EXCLUDED.asset_snapshot_revision,
           name=EXCLUDED.name,
           category=EXCLUDED.category,
           subcategory=EXCLUDED.subcategory,
@@ -197,6 +224,7 @@ def upsert_record(cur, fp: str):
         (
             asset_id,
             point_id(asset_id),
+            snapshot_revision,
             ident.get("name") or asset_id,
             ident.get("category"),
             ident.get("subcategory"),
@@ -240,6 +268,11 @@ def upsert_record(cur, fp: str):
 
 def main():
     args = parse_args()
+    try:
+        snapshot_revision = require_snapshot_revision(args.snapshot_revision)
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        sys.exit(2)
     if not args.asset_db_dir:
         print("ERROR: ASSET_DB_DIR is required", file=sys.stderr)
         sys.exit(2)
@@ -249,12 +282,22 @@ def main():
 
     asset_ids = read_asset_ids(args.asset_ids, args.asset_id_file)
     catalog_files = resolve_catalog_files(args.asset_db_dir, asset_ids)
+    if not catalog_files:
+        print("ERROR: no catalog JSON records were selected", file=sys.stderr)
+        sys.exit(2)
+    if asset_ids and len(catalog_files) != len(asset_ids):
+        print(
+            "ERROR: every requested asset id must resolve before migration",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     print(f"Found {len(catalog_files)} asset JSONs")
+    print(f"Asset snapshot revision: {snapshot_revision}")
     if asset_ids:
         print(f"Requested {len(asset_ids)} asset ids")
     if args.dry_run:
         for fp in catalog_files[:20]:
-            rec = json.load(open(fp, encoding="utf-8"))
+            rec = json.loads(pathlib.Path(fp).read_text(encoding="utf-8"))
             ident = rec.get("identity", {})
             print(f"  {ident.get('asset_id') or pathlib.Path(fp).stem}: {ident.get('category')}")
         if len(catalog_files) > 20:
@@ -263,6 +306,18 @@ def main():
 
     conn = psycopg2.connect(args.postgres_url)
     cur = conn.cursor()
+    cur.execute(
+        "SELECT schema_version FROM simworld_schema_metadata WHERE component = %s",
+        ("asset_catalog",),
+    )
+    schema_row = cur.fetchone()
+    if not schema_row or schema_row[0] != 2:
+        conn.rollback()
+        print(
+            "ERROR: tools/schema.sql schema version 2 must be applied before migration",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     ok = 0
     failed = 0
@@ -271,7 +326,7 @@ def main():
     for fp in catalog_files:
         cur.execute("SAVEPOINT asset_import")
         try:
-            upsert_record(cur, fp)
+            upsert_record(cur, fp, snapshot_revision)
             cur.execute("RELEASE SAVEPOINT asset_import")
             ok += 1
             since_commit += 1
@@ -288,12 +343,48 @@ def main():
                 raise
             continue
 
-    conn.commit()
-    cur.execute("SELECT count(*), count(DISTINCT category) FROM assets")
-    count, cats = cur.fetchone()
-    print(f"Import complete: processed={ok}, failed={failed}, table_assets={count}, categories={cats}")
     if failed:
+        conn.commit()
         sys.exit(1)
+
+    cur.execute(
+        """
+        SELECT
+          count(*),
+          count(DISTINCT category),
+          count(*) FILTER (WHERE asset_snapshot_revision = %s)
+        FROM assets
+        """,
+        (snapshot_revision,),
+    )
+    count, cats, matching_snapshot_rows = cur.fetchone()
+    if not asset_ids and count != len(catalog_files):
+        conn.commit()
+        print(
+            "ERROR: PostgreSQL row count does not exactly match the full catalog: "
+            f"table={count}, catalog={len(catalog_files)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if matching_snapshot_rows != count:
+        conn.commit()
+        print(
+            "ERROR: PostgreSQL contains rows outside ASSET_SNAPSHOT_REVISION "
+            f"{snapshot_revision}: matching={matching_snapshot_rows}, total={count}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Finalize the staged v1 -> v2 transition only after the whole live table
+    # proves it belongs to exactly one immutable snapshot.
+    cur.execute("ALTER TABLE assets VALIDATE CONSTRAINT assets_snapshot_revision_present")
+    cur.execute("ALTER TABLE assets ALTER COLUMN asset_snapshot_revision SET NOT NULL")
+    conn.commit()
+    print(
+        "Import complete: "
+        f"processed={ok}, failed={failed}, table_assets={count}, categories={cats}, "
+        f"snapshot_rows={matching_snapshot_rows}"
+    )
 
 
 if __name__ == "__main__":
