@@ -39,6 +39,16 @@ Set the public origin, TURN DNS/IP, exact Git revision, and secret-file paths in
 
 The reviewed template uses Coturn REST auth. The same shared-secret file is read
 by the per-slot Cirrus config builder to produce short-lived HMAC credentials.
+`build-cirrus-config.js` refuses to create a config unless this invariant holds:
+
+```text
+TURN_CREDENTIAL_TTL_SECONDS >=
+  (SESSION_HARD_MAX_MS / 1000) + TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS
+```
+
+The checked-in service default reserves a 600-second reconnect grace. Set the
+hard session maximum and grace explicitly in production rather than reducing
+the credential TTL to make an otherwise-invalid deployment start.
 
 ```bash
 cd /opt/simworld-studio
@@ -81,6 +91,28 @@ No response or browser storage may contain the Studio session bearer, raw slot
 number, raw Cirrus port, TURN shared secret, or UE control port. Session state is
 an HttpOnly, Secure, SameSite=Strict cookie.
 
+The player reports a bounded operational snapshot through the same-origin
+gateway:
+
+```text
+POST /api/pixel-streaming-telemetry
+GET  /api/pixel-streaming-telemetry
+```
+
+Both routes require the active Studio session cookie and bind storage to the
+server-side owner/session/slot/lease identity. POST accepts only connection and
+ICE enums, data-channel state, bounded decoded-frame counters, an advancing
+flag, and a selected-candidate type/protocol/TURN-transport tuple. Candidate
+addresses are reduced in the browser and must carry `address_redacted: true`;
+SDP, IP addresses, ports, URLs, credentials, unknown fields, and replayed
+sequences are rejected. GET omits the candidate fingerprint and all endpoint
+material. `/api/health` contains only aggregate counts.
+
+This browser-originated, short-lived telemetry is operational evidence only.
+It is not trusted release evidence and never makes `/health/ready` pass. Public
+readiness still requires the deployment-pinned external receipt described in
+`webrtc-readiness-receipt.md`.
+
 ## 5. Firewall and listener audit
 
 From the server, archive `ss -lntup` and the firewall/security-group export.
@@ -113,7 +145,39 @@ and successful reconnect without exposing a raw Cirrus URL. Record browser,
 Coturn, Cirrus, UE, and Git revisions in
 `runs/production-readiness/webrtc/<timestamp>/receipt.json`.
 
-## 7. Failure drills and rollback
+## 7. TURN credential rotation
+
+The current deployment has one active Coturn REST shared secret and each
+running Cirrus slot has a generated short-lived credential. It does not support
+zero-downtime hot overlap of old and new Coturn secrets. The administrator must
+choose one reviewed operating mode before a live rotation:
+
+1. **Maintenance drain:** block new Studio lease acquisition, wait for every
+   active lease to end (or obtain explicit approval to terminate it), rotate
+   the secret file atomically, rematerialize and validate Coturn config, then
+   restart Coturn and Cirrus in a coordinated maintenance window.
+2. **Blue/green Coturn:** provision a separately addressed, fully tested TURN
+   service and move newly generated Cirrus configs to it. Retire the old TURN
+   service only after its maximum credential TTL plus reconnect grace has
+   elapsed and no old allocation remains.
+
+For a maintenance rotation, save the pinned Git/image/config fingerprints and
+the old secret file as a root-readable rollback generation; never print either
+secret. Generate the replacement into a `0600` temporary file on the same
+filesystem, atomically rename it over the configured secret path, rerun
+`materialize-coturn-config.js` and `build-cirrus-config.js` validation, and
+verify listeners remain loopback/public exactly as designed. After the
+coordinated restart, run the full external UDP/TCP/TLS forced-relay matrix,
+issue a new deployment fingerprint and readiness receipt, then remove the old
+generation under the secret-retention policy.
+
+If validation or any external row fails, restore the prior pinned config and
+secret generation, restart the same coordinated service set, and repeat the
+listener and forced-relay probes. An offline test proving that old and new
+secrets generate distinct redacted Cirrus credentials is only a contract test;
+it is not evidence that a live rotation occurred.
+
+## 8. Failure drills and rollback
 
 - Expire a TURN credential and verify only new allocations fail; no secret is
   printed.
@@ -126,3 +190,28 @@ Coturn, Cirrus, UE, and Git revisions in
 - Roll back by restoring the prior pinned image digests and Git revision,
   restarting Node/Cirrus/Nginx/Coturn, and repeating the listener audit. Never
   re-enable the legacy `/cirrus/<slot>` or `/ws/cirrus/<slot>` routes.
+
+## 9. External and administrator gates
+
+The code-only gate is complete, but all of the following remain mandatory
+before declaring public WebRTC production-ready:
+
+- an administrator decision for Studio/TURN DNS, the existing `80/443` ingress
+  owner, TLS termination, certificate renewal, and (if needed) TURN/TLS `443`;
+- Coturn installation, service ownership, realm, public/private IP mapping,
+  quota, monitoring, and persistent secret placement;
+- approved firewall, ACL, security-group, and NAT rules for HTTPS/WSS, TURN
+  UDP/TCP/TLS, and the bounded relay range, plus an archived listener audit;
+- a live Cirrus/UE run proving WSS `101`, streamer registration, advancing
+  decoded video, keyboard/mouse data channel, disconnect/reconnect, and
+  unauthenticated/cross-slot denial;
+- normal ICE and forced UDP/TCP/TLS relay tests from at least two independent
+  external network classes, including one restricted network where possible;
+- an administrator-approved maintenance-drain or blue/green rotation followed
+  by an actually executed live credential-rotation drill; and
+- a signed deployment manifest, external probe bundle, and readiness receipt
+  bound to the exact Git revision, image/config fingerprints, DNS, certificate,
+  and evidence TTL.
+
+No DNS, firewall, listener, Coturn, provider, UE, or live service state is
+changed by the offline implementation and tests documented here.

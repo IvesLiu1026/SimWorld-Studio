@@ -10,6 +10,9 @@ const {
 const {
   createPixelStreamingEndpointRegistry,
 } = require("./pixel-streaming-endpoint-registry");
+const {
+  createPixelStreamingTelemetryRegistry,
+} = require("./pixel-streaming-telemetry");
 
 const SESSION_COOKIE = "vista_stream_session";
 const PRINCIPAL_COOKIE = "vista_browser_principal";
@@ -370,6 +373,7 @@ function createStudioStreamingRuntime({
   webRtcFps = 60,
   logger = () => {},
   registryOptions = {},
+  telemetryOptions = {},
 } = {}) {
   if (!sessionManager || typeof sessionManager.acquire !== "function" ||
       typeof sessionManager.touch !== "function" || typeof sessionManager.release !== "function" ||
@@ -418,6 +422,11 @@ function createStudioStreamingRuntime({
     ttlMs: endpointTtlMs,
     pathPrefix: transport.streamingPathPrefix,
     ...registryOptions,
+  });
+  const telemetryRegistry = createPixelStreamingTelemetryRegistry({
+    requireRelay: transport.profile === "trusted_proxy"
+      && String(env.TURN_TRANSPORT_POLICY || "relay").trim().toLowerCase() === "relay",
+    ...telemetryOptions,
   });
   const endpointBySessionToken = new Map();
 
@@ -516,6 +525,7 @@ function createStudioStreamingRuntime({
     const remembered = endpointBySessionToken.get(token);
     endpointBySessionToken.delete(token);
     if (!remembered) return;
+    telemetryRegistry.remove(remembered.binding);
     try {
       registry.revoke(remembered.endpoint.path, remembered.binding);
     } catch {
@@ -591,6 +601,7 @@ function createStudioStreamingRuntime({
   function releaseSession(request, response) {
     const context = activeContextForRequest(request);
     if (context) {
+      telemetryRegistry.remove(context.binding);
       revokeToken(context.record.token);
       sessionManager.release(context.record.token);
     }
@@ -626,6 +637,46 @@ function createStudioStreamingRuntime({
         error: "Pixel Streaming endpoint is unavailable",
       });
     }
+  }
+
+  function reportTelemetry(request, response) {
+    const context = activeContextForRequest(request);
+    if (!context) {
+      return response.status(401).json({
+        code: "STREAMING_SESSION_REQUIRED",
+        error: "An active Studio session is required",
+      });
+    }
+    try {
+      const status = telemetryRegistry.record(context.binding, request.body);
+      response.setHeader("Cache-Control", "no-store");
+      return response.status(202).json({
+        schema: "pixel-streaming-telemetry-ack/v1",
+        accepted: true,
+        ready: status.ready,
+      });
+    } catch (error) {
+      const code = error && /^[A-Z][A-Z0-9_]{1,79}$/.test(String(error.code || ""))
+        ? error.code
+        : "PIXEL_STREAMING_TELEMETRY_INVALID";
+      logger("streaming-telemetry", code);
+      return response.status(error.statusCode || 400).json({
+        code,
+        error: "Pixel Streaming telemetry was rejected",
+      });
+    }
+  }
+
+  function readTelemetry(request, response) {
+    const context = activeContextForRequest(request);
+    if (!context) {
+      return response.status(401).json({
+        code: "STREAMING_SESSION_REQUIRED",
+        error: "An active Studio session is required",
+      });
+    }
+    response.setHeader("Cache-Control", "no-store");
+    return response.json(telemetryRegistry.status(context.binding));
   }
 
   function handleUpgrade(request, socket, head = Buffer.alloc(0)) {
@@ -681,10 +732,14 @@ function createStudioStreamingRuntime({
   return Object.freeze({
     transport,
     registry,
+    telemetryRegistry,
     acquireSession,
     heartbeatSession,
     releaseSession,
     issueEndpoint,
+    reportTelemetry,
+    readTelemetry,
+    getTelemetrySummary: () => telemetryRegistry.summary(),
     resolveActiveSession,
     isActiveSessionBinding,
     handleUpgrade,
@@ -698,6 +753,7 @@ function createStudioStreamingRuntime({
     destroy() {
       if (typeof sessionManager.off === "function") sessionManager.off("released", releasedListener);
       endpointBySessionToken.clear();
+      telemetryRegistry.clear();
     },
     playerSignallingUrl(pathname, host) {
       if (!isStreamingEndpointPath(pathname, transport.streamingPathPrefix)) return null;

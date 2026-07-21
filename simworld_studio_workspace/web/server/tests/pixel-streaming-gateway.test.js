@@ -470,6 +470,70 @@ test("server-internal binding revalidation rejects stale, altered, and reacquire
   }
 });
 
+test("client WebRTC telemetry is lease-bound, redacted, and removed on release", async () => {
+  let now = 1_000;
+  const manager = new FakeSessionManager();
+  const runtime = createStudioStreamingRuntime({
+    env: env(),
+    sessionManager: manager,
+    telemetryOptions: { clock: () => now, ttlMs: 5_000, requireRelay: true },
+  });
+  try {
+    const acquired = await acquireCookies(runtime);
+    const cookies = cookieHeader(acquired.principal, acquired.session);
+    const missing = responseHarness();
+    runtime.reportTelemetry(cookieRequest(), missing);
+    assert.equal(missing.statusCode, 401);
+
+    const telemetryRequest = cookieRequest(cookies);
+    telemetryRequest.body = {
+      schema: "pixel-streaming-client-telemetry/v1",
+      connection_id: "1".repeat(32),
+      sequence: 1,
+      connection_state: "connected",
+      ice_connection_state: "completed",
+      ice_gathering_state: "complete",
+      data_channel_open: true,
+      video: { decoded_frames: 120, frames_advancing: true },
+      selected_candidate: {
+        type: "relay",
+        protocol: "udp",
+        turn_transport: "udp",
+        candidate_fingerprint: "c".repeat(64),
+        address_redacted: true,
+      },
+    };
+    const accepted = responseHarness();
+    runtime.reportTelemetry(telemetryRequest, accepted);
+    assert.equal(accepted.statusCode, 202);
+    assert.deepEqual(accepted.body, {
+      schema: "pixel-streaming-telemetry-ack/v1",
+      accepted: true,
+      ready: true,
+    });
+
+    const statusResponse = responseHarness();
+    runtime.readTelemetry(cookieRequest(cookies), statusResponse);
+    assert.equal(statusResponse.body.ready, true);
+    assert.deepEqual(statusResponse.body.selected_candidate, {
+      type: "relay",
+      protocol: "udp",
+      turn_transport: "udp",
+      address_redacted: true,
+    });
+    assert.doesNotMatch(JSON.stringify(statusResponse.body), /candidate_fingerprint|credential|username|raw_port/);
+    assert.equal(runtime.getTelemetrySummary().relay_sessions, 1);
+
+    const released = responseHarness();
+    runtime.releaseSession(cookieRequest(cookies), released);
+    assert.equal(runtime.getTelemetrySummary().active_reports, 0);
+    now += 5_001;
+    assert.equal(runtime.getTelemetrySummary().active_reports, 0);
+  } finally {
+    runtime.destroy();
+  }
+});
+
 test("principal signatures are scoped to the configured persistent HMAC key", async () => {
   const firstEnv = env({ STUDIO_PIXEL_STREAMING_HMAC_KEY: "gateway-hmac-key-alpha-".repeat(3) });
   const secondEnv = env({ STUDIO_PIXEL_STREAMING_HMAC_KEY: "gateway-hmac-key-bravo-".repeat(3) });

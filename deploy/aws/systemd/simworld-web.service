@@ -31,6 +31,7 @@ Environment=UE_PROJECT_DIR_SHARED=/opt/simworld-project
 Environment=SLOTS_ROOT=/var/lib/simworld/slots
 Environment=SESSION_TTL_MS=1800000
 Environment=SESSION_HARD_MAX_MS=10800000
+Environment=TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS=600
 # Claude OAuth is stored in a per-deploy HOME owned by the simworld user.
 Environment=HOME=/var/lib/simworld/claude-home
 # Per-session port routing shim

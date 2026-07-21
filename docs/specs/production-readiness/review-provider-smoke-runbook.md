@@ -5,6 +5,14 @@ Status: code-ready; no provider call has been made by this change.
 This runbook covers the cost-gated production proof required by `T1A.11`.
 It does not authorize a model call, a UE mutation, or a production deploy.
 
+The offline `T1A.10` gate is complete: a real HTTP coordinator harness covers
+Text and Visual success, independent cost budgets, 401/429/500/timeout and
+malformed-SSE failures, exact cancellation, and cross-lease isolation. In a
+trusted-proxy deployment the coordinator derives its internal Review scope
+from the server-validated active Studio lease; caller-provided session IDs do
+not grant cancellation or state access. This fake-provider evidence does not
+replace the two approved live calls below.
+
 ## What the runner proves
 
 `server/review-provider-smoke-cli.js` invokes the existing Claude review

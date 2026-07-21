@@ -1,6 +1,7 @@
 "use strict";const{spawn}=require("child_process"),express=require("express"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=require("./mcp-runtime-config").ensureMcpRuntimeConfig({env:process.env,baseDir:__dirname}).path,ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");function normalizeUnrealVersion(v){const s=String(v||"").trim();if(!s)return null;const m=s.match(/(?:UE\s*)?(\d+(?:\.\d+){1,2})/i);return m?m[1]:s}function versionFromPath(v){const s=String(v||"");const m=s.match(/(?:UE|Unreal(?:[_-]?Engine)?|Linux[_-]?Unreal[_-]?Engine)[_-]?(\d+(?:\.\d+){1,2})/i)||s.match(/(\d+\.\d+(?:\.\d+)?)/);return m?m[1]:null}function versionFromLog(){try{const p=path.join(LOG_DIR,"ue.log");if(!fs.existsSync(p))return null;const text=fs.readFileSync(p,"utf8").slice(-250000);const m=text.match(/Engine Version:\s*(\d+(?:\.\d+){1,2})/i)||text.match(/engineversion="(\d+(?:\.\d+){1,2})/i);return m?m[1]:null}catch{return null}}function getUnrealEngineVersion(){return normalizeUnrealVersion(process.env.UE_VERSION||process.env.UNREAL_VERSION||process.env.UNREAL_ENGINE_VERSION)||versionFromPath(process.env.UE_ROOT)||versionFromPath(process.env.UNREAL_ENGINE_ROOT)||versionFromPath(process.env.UE_EDITOR)||versionFromPath(process.env.UNREAL_EDITOR)||versionFromLog()}function getUnrealEngineHealthMeta(){const engineVersion=getUnrealEngineVersion();return{engineVersion,engineLabel:engineVersion?`UE ${engineVersion}`:"Unreal Engine"}}let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker,getUeBroker:_getUeBroker}=require("./unreal-bridge");const{createVistaRuntimeBroker}=require("./vista-runtime-broker");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const ueBroker=_getUeBroker();const vistaRuntimeBroker=createVistaRuntimeBroker({ueBroker});const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);const {SessionSkillManager}=require("./session-skills");const {generateSkills}=require("./skill-maker");const sessionSkillManager=new SessionSkillManager();const {handleSceneLoop}=require("./scene-loop");const {handleVisualSceneLoop}=require("./scene-loop-visual");const {handleCodexChat}=require("./chat-codex");const intentStore=new Map();
 const { UeMcpBroker } = require("./unreal-bridge");
 const { ReviewRunRegistry } = require("./review-run-registry");
+const { createReviewLoopCoordinator, normalizeReviewMode } = require("./review-loop-coordinator");
 const reviewRunRegistry = new ReviewRunRegistry();
 const { readinessHttpStatus } = require("./readiness-registry");
 const { createStudioReadiness } = require("./studio-readiness");
@@ -68,11 +69,28 @@ const demoVideos=require("./demo-videos");
 const ASSET_PREVIEW_DIR=path.join(ARENA_ROOT,"tmp","asset-previews");
 const STUDIO_SESSION=crypto.randomUUID();
 function _normalizeRunner(v){const s=String(v||"").toLowerCase();if(s==="codex"||s==="gpt-5.5"||s==="openai")return "codex";if(s==="claude"||s==="anthropic")return "claude";return null;}
-function _normalizeMode(v){const s=String(v||"").toLowerCase();if(s==="vanilla"||s==="off"||s==="none")return "vanilla";if(s==="text_loop"||s==="loop"||s==="text")return "text_loop";if(s==="visual_loop"||s==="visual"||s==="multi_view")return "visual_loop";return null;}
+function _normalizeMode(v){return normalizeReviewMode(v);}
 const _DEFAULT_RUNNER=(process.env.LLM_PROVIDER==="codex"||process.env.LLM_PROVIDER==="gpt-5.5")?"codex":"claude";
 let DYNAMIC_SKILLS=(process.env.DYNAMIC_SKILLS==="1");
 let sceneLoopMode=_normalizeMode(process.env.SCENE_LOOP_MODE)||((process.env.SCENE_LOOP_ENABLED==="1")?"text_loop":"vanilla");
 let sceneLoopEnabled=(sceneLoopMode!=="vanilla");
+const reviewLoopCoordinator=createReviewLoopCoordinator({
+  registry:reviewRunRegistry,
+  transportProfile:STUDIO_TRANSPORT.profile,
+  resolveActiveSession:(request)=>studioStreaming.resolveActiveSession(request),
+  loopbackSessionId:STUDIO_SESSION,
+  defaultMode:()=>sceneLoopMode,
+  textHandler:handleSceneLoop,
+  visualHandler:handleVisualSceneLoop,
+  handlerDependencies:()=>({
+    STUDIO_SESSION,
+    logToFile,
+    intentStore,
+    ueBroker,
+    accessToken:STUDIO_ACCESS_TOKEN,
+  }),
+  logger:logToFile,
+});
 logToFile("init",`Studio session: ${STUDIO_SESSION}`);async function snapshotScene(sid){return new Promise(resolve=>{const sock=new(require("net").Socket)(),timer=setTimeout(()=>{sock.destroy();resolve(null)},5000);sock.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{sock.write(JSON.stringify({type:"get_actors_in_level",params:{}})+"\n")});let buf="";sock.on("data",d=>{buf+=d.toString();try{const res=JSON.parse(buf);clearTimeout(timer);sock.destroy();ctxManager.updateFromSnapshot(sid,res);resolve(res)}catch(_){}});sock.on("error",()=>{clearTimeout(timer);sock.destroy();resolve(null)})})}const{TaskSetManager}=require("./tasksets"),{selectSkillsWithClaude}=require("./skill-selector");let skillRegistry=new SkillRegistry,sceneManager=new SceneManager,checkpointManager=new CheckpointManager(),arenaManager=new ArenaManager,agentManager=new AgentManager,taskSetManager=new TaskSetManager(),SCREENSHOT_SEARCH_DIRS=[SCREENSHOT_DIR];fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0}),fs.mkdirSync(LOG_DIR,{recursive:!0}),fs.mkdirSync(ASSET_PREVIEW_DIR,{recursive:!0});function getLogFilePath(){const e=new Date().toISOString().slice(0,10);return path.join(LOG_DIR,`chat_${e}.log`)}function logToFile(s,e){const n=`[${new Date().toISOString()}] [${s}] ${e}
 `;const safeN=redactLogLine(n);try{fs.appendFileSync(getLogFilePath(),safeN)}catch{}console.log(safeN.trimEnd())}const ARENA_SYSTEM_PROMPT=`You are the SimWorld Studio scene-generation agent.
 You build city scenes in Unreal Engine 5 using MCP tools. The user sees a live viewport on the right.
@@ -207,7 +225,7 @@ location.replace('/ue-player.html?'+p.toString());})
 .catch(function(){document.body.textContent='Pixel Streaming endpoint unavailable';});})();
 </script>
 <script defer src="/ue-assets/player.js"></script>
-</head><body style="width:100vw;height:100vh"></body></html>`)}),app.get("/api/pixel-streaming-url",studioStreaming.issueEndpoint),app.get("/api/health",(s,e)=>{const t=require("net");let n=!1;const o=new t.Socket,i=setTimeout(()=>{o.destroy(),a()},2e3);o.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{n=!0,o.destroy(),clearTimeout(i),a()}),o.on("error",()=>{clearTimeout(i),a()});function a(){e.json({status:"ok",ueConnected:n,mcpConnected:n,pixelStreamingProfile:STUDIO_TRANSPORT.profile,pixelStreamingPathPrefix:STUDIO_TRANSPORT.streamingPathPrefix,vistaDemoFps:VISTA_DEMO_FPS,...getUnrealEngineHealthMeta()})}}),app.get("/api/screenshot/latest",(s,e)=>{let t=null;for(const n of SCREENSHOT_SEARCH_DIRS)if(fs.existsSync(n))try{const o=fs.readdirSync(n).filter(i=>i.endsWith(".png")).map(i=>({filepath:path.join(n,i),time:fs.statSync(path.join(n,i)).mtimeMs})).filter(({time:i})=>Date.now()-i<18e5);for(const i of o)(!t||i.time>t.time)&&(t=i)}catch{}if(!t)return e.status(404).json({error:"No screenshots found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t.filepath)}),app.get("/api/screenshot/file",(s,e)=>{const t=resolveContainedFile(s.query.path,SCREENSHOT_SEARCH_DIRS);if(!t)return e.status(404).json({error:"Not found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t)}),app.post("/api/camera",(s,e)=>{const{cmd:t,args:n=[]}=s.body;if(!["set_camera","get_camera"].includes(t))return e.status(400).json({error:"Unknown camera command"});const i=require("net"),a=new i.Socket,c=setTimeout(()=>{a.destroy(),e.status(504).json({error:"Timeout"})},1e4);let m={};if(t==="set_camera"&&n.length>=6)m={script:`
+</head><body style="width:100vw;height:100vh"></body></html>`)}),app.get("/api/pixel-streaming-url",studioStreaming.issueEndpoint),app.get("/api/pixel-streaming-telemetry",studioStreaming.readTelemetry),app.post("/api/pixel-streaming-telemetry",studioStreaming.reportTelemetry),app.get("/api/health",(s,e)=>{const t=require("net");let n=!1;const o=new t.Socket,i=setTimeout(()=>{o.destroy(),a()},2e3);o.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{n=!0,o.destroy(),clearTimeout(i),a()}),o.on("error",()=>{clearTimeout(i),a()});function a(){e.json({status:"ok",ueConnected:n,mcpConnected:n,pixelStreamingProfile:STUDIO_TRANSPORT.profile,pixelStreamingPathPrefix:STUDIO_TRANSPORT.streamingPathPrefix,pixelStreamingTelemetry:studioStreaming.getTelemetrySummary(),vistaDemoFps:VISTA_DEMO_FPS,...getUnrealEngineHealthMeta()})}}),app.get("/api/screenshot/latest",(s,e)=>{let t=null;for(const n of SCREENSHOT_SEARCH_DIRS)if(fs.existsSync(n))try{const o=fs.readdirSync(n).filter(i=>i.endsWith(".png")).map(i=>({filepath:path.join(n,i),time:fs.statSync(path.join(n,i)).mtimeMs})).filter(({time:i})=>Date.now()-i<18e5);for(const i of o)(!t||i.time>t.time)&&(t=i)}catch{}if(!t)return e.status(404).json({error:"No screenshots found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t.filepath)}),app.get("/api/screenshot/file",(s,e)=>{const t=resolveContainedFile(s.query.path,SCREENSHOT_SEARCH_DIRS);if(!t)return e.status(404).json({error:"Not found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t)}),app.post("/api/camera",(s,e)=>{const{cmd:t,args:n=[]}=s.body;if(!["set_camera","get_camera"].includes(t))return e.status(400).json({error:"Unknown camera command"});const i=require("net"),a=new i.Socket,c=setTimeout(()=>{a.destroy(),e.status(504).json({error:"Timeout"})},1e4);let m={};if(t==="set_camera"&&n.length>=6)m={script:`
 import unreal
 subsys = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 loc = unreal.Vector(${n[0]}, ${n[1]}, ${n[2]})
@@ -289,11 +307,17 @@ const _chatProcs=new Map();
 app.post("/api/chat-stop",(req,res)=>{
   const body=req.body||{};
   const sid=body.sessionId||(req.query&&req.query.sessionId)||"_global";
-  const scopeId=body.conversationId||sid;
-  const cancelled=reviewRunRegistry.cancel({scopeId,runId:body.runId,reason:"user_stop"});
-  const p=_chatProcs.get(sid);
+  let cancellation;
+  try{cancellation=reviewLoopCoordinator.cancel(req,"user_stop");}
+  catch(error){return res.status(error.statusCode||400).json({error:error.message,code:error.code||"REVIEW_SCOPE_INVALID"});}
+  const cancelled=cancellation.record;
   let subprocessStopped=false;
-  if(p&&!p.killed){try{p.kill("SIGTERM");subprocessStopped=true}catch{};_chatProcs.delete(sid);}
+  const processKeys=[cancellation.scope.scopeId];
+  if(STUDIO_TRANSPORT.profile==="loopback")processKeys.push(sid);
+  for(const processKey of new Set(processKeys)){
+    const p=_chatProcs.get(processKey);
+    if(p&&!p.killed){try{p.kill("SIGTERM");subprocessStopped=true}catch{};_chatProcs.delete(processKey);}
+  }
   res.json({stopped:!!cancelled||subprocessStopped,runId:cancelled&&cancelled.runId,loopAborted:!!cancelled,subprocessStopped});
 });
 
@@ -846,7 +870,7 @@ data: ${JSON.stringify(i)}
 data: ${JSON.stringify(c)}
 
 `)}i("battle_created",{battleId:o.id,prompt:t});try{const a=await agentManager.runBattle(t,n||[],ARENA_SYSTEM_PROMPT,(m,_)=>i("progress",{phase:m,..._}));arenaManager.submitSceneForBattle(o.id,"a",a.side_a),arenaManager.submitSceneForBattle(o.id,"b",a.side_b);const c=arenaManager.getBattle(o.id);i("complete",c)}catch(a){i("error",{message:a.message})}e.end()}),app.get("/api/assets",(s,e)=>{try{const t=JSON.parse(fs.readFileSync(path.join(__dirname,"assets.json"),"utf-8")),n={};for(const[o,i]of Object.entries(t)){const a={description:i.description||"",items:[]};o==="buildings"&&i.ids?(a.items=i.ids.map(c=>{const _=`BP_Building_${String(c).padStart(2,"0")}`;return{id:_,path:`/Game/CityDatabase/blueprints/${_}.${_}_C`}}),i.notes&&(a.description+=" "+i.notes)):i.items&&(a.items=i.items.map(c=>{if(typeof c=="string"){const m=c.split("/");return{id:m[m.length-1].split(".")[0],path:c}}return c})),n[o]=a}e.json(n)}catch(t){e.status(500).json({error:t.message})}}),app.get("/api/mock/next-input",(s,e)=>{if(!MOCK_MODE||!mockReplay)return e.json({input:null,hasMore:false});e.json({input:mockReplay.peekNextInput(),hasMore:mockReplay.hasMore(),index:mockReplay.currentIndex})});app.get("/api/coding-agents",(s,e)=>{try{const reg=JSON.parse(fs.readFileSync(path.join(__dirname,"coding-agents.json"),"utf-8")),agents=reg.agents||{},out={};for(const[id,a]of Object.entries(agents))out[id]={label:a.label||id,defaultModel:a.defaultModel||"",models:Array.isArray(a.models)?a.models:[]};e.set("Cache-Control","no-store");e.json({default:reg.default||"claude",agents:out})}catch(err){e.status(500).json({error:err.message})}});
-function _reviewScopeId(req){const body=req.body||{},query=req.query||{};return body.conversationId||body.sessionId||query.conversationId||query.sessionId||STUDIO_SESSION;}
+function _reviewScopeId(req){return reviewLoopCoordinator.resolveScope(req).scopeId;}
 app.get("/health/live",(_req,res)=>{
   res.set("Cache-Control","no-store");
   res.status(200).json(studioReadiness.getLiveness());
@@ -877,54 +901,16 @@ app.get("/health/ready",async(req,res)=>{
     req.removeListener("aborted",abort);
   }
 });
-app.get("/api/scene-loop",(req,res)=>{res.json({enabled:sceneLoopEnabled,mode:sceneLoopMode,intentSummary:intentStore.get(_reviewScopeId(req))||null});});
+app.get("/api/scene-loop",(req,res)=>{try{res.json({enabled:sceneLoopEnabled,mode:sceneLoopMode,intentSummary:intentStore.get(_reviewScopeId(req))||null});}catch(error){res.status(error.statusCode||400).json({error:error.message,code:error.code||"REVIEW_SCOPE_INVALID"});}});
 app.post("/api/scene-loop",(req,res)=>{const b=req.body||{};let md=_normalizeMode(b.mode);if(md===null&&typeof b.enabled==="boolean")md=b.enabled?"text_loop":"vanilla";if(md===null)return res.status(400).json({error:"mode required: vanilla|text_loop|visual_loop"});sceneLoopMode=md;sceneLoopEnabled=(md!=="vanilla");logToFile("scene-loop","mode set to "+md);res.json({enabled:sceneLoopEnabled,mode:sceneLoopMode});});
-app.delete("/api/scene-loop",(req,res)=>{intentStore.delete(_reviewScopeId(req));res.json({ok:true});});
+app.delete("/api/scene-loop",(req,res)=>{try{intentStore.delete(_reviewScopeId(req));res.json({ok:true});}catch(error){res.status(error.statusCode||400).json({error:error.message,code:error.code||"REVIEW_SCOPE_INVALID"});}});
 app.get("/api/dynamic-skills",(req,res)=>{res.json({enabled:DYNAMIC_SKILLS});});
 app.post("/api/dynamic-skills",(req,res)=>{const b=req.body||{};if(typeof b.enabled==="boolean")DYNAMIC_SKILLS=b.enabled;res.json({enabled:DYNAMIC_SKILLS});});
 app.delete("/api/dynamic-skills",(req,res)=>{try{sessionSkillManager.clearSession(STUDIO_SESSION)}catch(_){}res.json({ok:true});});
 // Review loops own a cancellable run scope before the legacy single-turn chat route.
 // Vanilla requests fall through unchanged; loop handlers receive one AbortSignal that
 // covers summarization, inner builder HTTP, capture, critic, and subsequent rounds.
-app.post("/api/chat",async(req,res,next)=>{
-  const body=req.body||{};
-  const mode=_normalizeMode(body.loopMode)||((body.useLoop===false)?"vanilla":((body.useLoop===true)?"text_loop":sceneLoopMode));
-  if(mode!=="text_loop"&&mode!=="visual_loop")return next();
-
-  const scopeId=body.conversationId||body.sessionId||"_global";
-  let run=null;
-  try{
-    run=reviewRunRegistry.start({scopeId,runId:body.runId});
-    const handler=mode==="visual_loop"?handleVisualSceneLoop:handleSceneLoop;
-    await handler(req,res,{
-      STUDIO_SESSION,
-      logToFile,
-      intentStore,
-      ueBroker,
-      accessToken:STUDIO_ACCESS_TOKEN,
-      scopeId,
-      runId:run.runId,
-      signal:run.signal,
-    });
-  }catch(error){
-    const aborted=!!(run&&run.signal.aborted)||(error&&error.name==="AbortError");
-    const message=aborted?"Review run cancelled":String((error&&error.message)||error||"Review loop failed");
-    logToFile("scene-loop",`${mode} dispatch ${aborted?"cancelled":"error"}: ${message}`);
-    if(!res.headersSent){
-      res.status(aborted?409:(error&&error.code==="REVIEW_RUN_CONFLICT"?409:500)).json({
-        error:message,
-        code:aborted?"REVIEW_RUN_CANCELLED":((error&&error.code)||"REVIEW_LOOP_ERROR"),
-        runId:run&&run.runId,
-      });
-    }else if(!res.writableEnded){
-      const payload={sessionId:scopeId,runId:run&&run.runId,isError:true,cancelled:aborted,error:message};
-      try{res.write(`event: done\ndata: ${JSON.stringify(payload)}\n\n`)}catch(_error){}
-      try{res.end()}catch(_error){}
-    }
-  }finally{
-    if(run)reviewRunRegistry.complete({scopeId,runId:run.runId});
-  }
-});
+app.post("/api/chat",reviewLoopCoordinator.handleChat);
 app.post("/api/chat",async(s,e)=>{const{message:t,sessionId:n,skills:o,feedback:i}=s.body;if(!t)return e.status(400).json({error:"message required"});e.setHeader("Content-Type","text/event-stream"),e.setHeader("Cache-Control","no-cache"),e.setHeader("Connection","keep-alive"),e.setHeader("X-Accel-Buffering","no"),e.flushHeaders();if(MOCK_MODE&&mockReplay){const m=mockReplay.getNextMessage();if(!m)return e.status(500).json({error:"No more mock messages"});logToFile("chat",`[MOCK] User: "${t.slice(0,200)}"`);function s(d,r){e.writableEnded||e.write(`event: ${d}\ndata: ${JSON.stringify(r)}\n\n`)}s("system",{sessionId:n||"mock-session",mcpServers:[{name:"simworld",status:"connected"}]});(async()=>{await new Promise(r=>setTimeout(r,300));let _tidx=0;for(const _step of(m.steps||[])){if(_step.type==="thinking"){for(const _c of _step.text){s("text",{delta:_c});await new Promise(_p=>setTimeout(_p,12))}s("text",{delta:"\n"})}else if(_step.type==="tool"){await new Promise(_p=>setTimeout(_p,600));const _tid=`mock-${_tidx++}-${Date.now()}`;const _dn=_step.name.replace(/^mcp__[a-zA-Z0-9_]+__/,"");s("tool_start",{id:_tid,name:_step.name,displayName:_dn});_step.input&&s("tool_input",{id:_tid,delta:typeof _step.input=="string"?_step.input:JSON.stringify(_step.input)});let _rr;try{_rr=await mockExecutor.execute(_step.name,_step.input)}catch(_e){_rr=null}if(!_rr||_rr.status==="error"){_rr=_step.result||{}}s("tool_result",{toolUseId:_tid,result:typeof _rr=="string"?_rr:JSON.stringify(_rr),isError:!1});if(_dn==="verify_scene"){let _mfb="",_mss="";try{const _mro=typeof _step.result=="string"?JSON.parse(_step.result):(_step.result||{});_mfb=_mro.feedback||""}catch(_me){}try{await mockExecutor.execute("take_screenshot",{});if(fs.existsSync(SCREENSHOT_DIR)){const _fs=fs.readdirSync(SCREENSHOT_DIR).filter(f=>f.endsWith(".png")).map(f=>({fp:path.join(SCREENSHOT_DIR,f),t:fs.statSync(path.join(SCREENSHOT_DIR,f)).mtimeMs})).sort((a,b)=>b.t-a.t);if(_fs.length)_mss=`/api/screenshot/file?path=${encodeURIComponent(_fs[0].fp)}`}}catch(_e){}s("verifier_start",{toolUseId:_tid,screenshot:_mss});await new Promise(_p=>setTimeout(_p,1800));s("verifier_result",{toolUseId:_tid,feedback:_mfb,screenshot:_mss})}await new Promise(_p=>setTimeout(_p,250))}else if(_step.type==="text"){for(const _c of _step.content){s("text",{delta:_c});await new Promise(_p=>setTimeout(_p,18))}s("text",{delta:"\n"})}}s("done",{sessionId:n||"mock-session",isError:!1,costUsd:0,latestScreenshot:null});e.end()})().catch(err=>{console.error("[mock] error:",err.message);e.writableEnded||e.end()});return}function a(d,r){e.writableEnded||e.write(`event: ${d}
 data: ${JSON.stringify(r)}
 

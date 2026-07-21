@@ -38,6 +38,22 @@ test("browser source has no remote font import and binds signalling to an opaque
   assert.doesNotMatch(player, /swSendImmersiveKey|keyCode[^\n]*122|['"]F11['"]/);
 });
 
+test("selected-candidate telemetry is guarded, lease-bound, and redacted before upload", () => {
+  const index = fs.readFileSync(path.resolve(__dirname, "../index.js"), "utf8");
+  const player = fs.readFileSync(path.resolve(__dirname, "../../public/ue-player.html"), "utf8");
+  const accessGuard = index.indexOf("app.use(createAccessGuard(STUDIO_ACCESS_TOKEN,{transport:STUDIO_TRANSPORT}))");
+  const telemetryGet = index.indexOf('app.get("/api/pixel-streaming-telemetry",studioStreaming.readTelemetry)');
+  const telemetryPost = index.indexOf('app.post("/api/pixel-streaming-telemetry",studioStreaming.reportTelemetry)');
+  assert.ok(accessGuard >= 0 && accessGuard < telemetryGet);
+  assert.ok(accessGuard < telemetryPost);
+  assert.match(player, /crypto\.subtle\.digest\('SHA-256'/);
+  assert.match(player, /candidate_fingerprint: fingerprint/);
+  assert.match(player, /address_redacted: true/);
+  assert.match(player, /fetch\('\/api\/pixel-streaming-telemetry'/);
+  assert.doesNotMatch(player, /candidate_sdp|local\.(?:address|ip|port)|remote\.(?:address|ip|port)/i);
+  assert.doesNotMatch(player, /console\.(?:log|warn|error)\([^\n]*(?:candidate|credential|turnTransport)/i);
+});
+
 test("fixed VISTA routes stay behind the shared guards with no dynamic command route", () => {
   const indexPath = path.resolve(__dirname, "../index.js");
   const source = fs.readFileSync(indexPath, "utf8");

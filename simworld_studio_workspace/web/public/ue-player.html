@@ -163,6 +163,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
   if (!OriginalPeerConnection) return;
   window._swInputDataChannelOpen = false;
   window._swOpenDataChannelCount = 0;
+  window._swObservedPeerConnections = [];
 
   function watchChannel(channel) {
     if (!channel || channel._swObserved) return;
@@ -200,6 +201,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 
   function ObservedPeerConnection() {
     var connection = new OriginalPeerConnection(...arguments);
+    window._swObservedPeerConnections.push(connection);
     connection.addEventListener('datachannel', function(event) { watchChannel(event.channel); });
     connection.addEventListener('connectionstatechange', function() {
       if (connection.connectionState === 'failed' ||
@@ -210,6 +212,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
         if (typeof window.swMarkStreamDisconnected === 'function') window.swMarkStreamDisconnected();
       }
     });
+    if (typeof window.swObservePeerConnection === 'function') window.swObservePeerConnection(connection);
     return connection;
   }
   Object.setPrototypeOf(ObservedPeerConnection, OriginalPeerConnection);
@@ -255,6 +258,141 @@ var _readyPosted = false;
 var _lastVideoFrameAt = 0;
 var _disconnectPosted = false;
 var _vistaPlayClickInFlight = false;
+
+function swConnectionId() {
+  var bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, function(value) { return value.toString(16).padStart(2, '0'); }).join('');
+}
+
+async function swSha256(value) {
+  if (!crypto.subtle || typeof TextEncoder !== 'function') return null;
+  var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(bytes), function(item) {
+    return item.toString(16).padStart(2, '0');
+  }).join('');
+}
+
+function swDecodedVideoFrames() {
+  var video = document.getElementById('streamingVideo');
+  if (!video) return 0;
+  var frames = 0;
+  try {
+    if (typeof video.getVideoPlaybackQuality === 'function') {
+      frames = Number(video.getVideoPlaybackQuality().totalVideoFrames) || 0;
+    } else {
+      frames = Number(video.webkitDecodedFrameCount) || 0;
+    }
+  } catch (_error) {}
+  return Math.max(0, Math.min(1000000000, Math.floor(frames)));
+}
+
+function swTurnTransport(candidate) {
+  var url = String(candidate && candidate.url || '').toLowerCase();
+  if (url.indexOf('turns:') === 0) return 'tls';
+  var relayProtocol = String(candidate && candidate.relayProtocol || '').toLowerCase();
+  if (relayProtocol === 'tcp' || relayProtocol === 'udp') return relayProtocol;
+  var protocol = String(candidate && candidate.protocol || '').toLowerCase();
+  return protocol === 'tcp' || protocol === 'udp' ? protocol : null;
+}
+
+async function swSelectedCandidate(stats) {
+  var pair = null;
+  stats.forEach(function(item) {
+    if (!pair && item.type === 'transport' && item.selectedCandidatePairId) {
+      pair = stats.get(item.selectedCandidatePairId) || null;
+    }
+  });
+  if (!pair) {
+    stats.forEach(function(item) {
+      if (!pair && item.type === 'candidate-pair' && item.nominated === true && item.state === 'succeeded') {
+        pair = item;
+      }
+    });
+  }
+  if (!pair || !pair.localCandidateId) return null;
+  var local = stats.get(pair.localCandidateId);
+  var remote = pair.remoteCandidateId ? stats.get(pair.remoteCandidateId) : null;
+  var type = String(local && local.candidateType || '').toLowerCase();
+  var protocol = String(local && local.protocol || '').toLowerCase();
+  if (['host', 'prflx', 'relay', 'srflx'].indexOf(type) < 0 || ['tcp', 'udp'].indexOf(protocol) < 0) {
+    return null;
+  }
+  var turnTransport = type === 'relay' ? swTurnTransport(local) : null;
+  if (type === 'relay' && !turnTransport) return null;
+  var fingerprint = await swSha256(JSON.stringify([
+    String(pair.id || ''),
+    String(local.id || pair.localCandidateId || ''),
+    String(remote && remote.id || pair.remoteCandidateId || ''),
+    type,
+    protocol,
+    turnTransport,
+  ]));
+  if (!fingerprint) return null;
+  return {
+    type: type,
+    protocol: protocol,
+    turn_transport: turnTransport,
+    candidate_fingerprint: fingerprint,
+    address_redacted: true,
+  };
+}
+
+async function swReportPeerConnectionTelemetry(connection) {
+  if (!connection || typeof connection.getStats !== 'function') return;
+  if (!connection._swTelemetryConnectionId) connection._swTelemetryConnectionId = swConnectionId();
+  connection._swTelemetrySequence = Number(connection._swTelemetrySequence || 0) + 1;
+  try {
+    var stats = await connection.getStats();
+    var selectedCandidate = await swSelectedCandidate(stats);
+    var frames = swDecodedVideoFrames();
+    var report = {
+      schema: 'pixel-streaming-client-telemetry/v1',
+      connection_id: connection._swTelemetryConnectionId,
+      sequence: connection._swTelemetrySequence,
+      connection_state: String(connection.connectionState || 'new'),
+      ice_connection_state: String(connection.iceConnectionState || 'new'),
+      ice_gathering_state: String(connection.iceGatheringState || 'new'),
+      data_channel_open: window._swInputDataChannelOpen === true,
+      video: {
+        decoded_frames: frames,
+        frames_advancing: frames > 0 && _lastVideoFrameAt > 0 && Date.now() - _lastVideoFrameAt <= 15000,
+      },
+      selected_candidate: selectedCandidate,
+    };
+    await fetch('/api/pixel-streaming-telemetry', {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report),
+    });
+  } catch (_error) {}
+}
+
+function swObservePeerConnection(connection) {
+  if (!connection || connection._swTelemetryObserved) return;
+  connection._swTelemetryObserved = true;
+  var timer = null;
+  var interval = null;
+  function schedule() {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function() { swReportPeerConnectionTelemetry(connection); }, 100);
+  }
+  ['connectionstatechange', 'iceconnectionstatechange', 'icegatheringstatechange'].forEach(function(name) {
+    connection.addEventListener(name, schedule);
+  });
+  interval = setInterval(function() {
+    swReportPeerConnectionTelemetry(connection);
+    if (connection.connectionState === 'closed') clearInterval(interval);
+  }, 5000);
+  schedule();
+}
+window.swObservePeerConnection = swObservePeerConnection;
+for (var _swPcIndex = 0; _swPcIndex < (window._swObservedPeerConnections || []).length; _swPcIndex += 1) {
+  swObservePeerConnection(window._swObservedPeerConnections[_swPcIndex]);
+}
 
 function swDispatchPixelStreamingKey(type, key, code, keyCode, altKey) {
   var target = document.getElementById('streamingVideo') || document.body;

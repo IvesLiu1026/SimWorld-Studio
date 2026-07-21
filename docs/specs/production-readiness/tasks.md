@@ -28,12 +28,12 @@ Implementation note（2026-07-14）：T0.6 的原子lease registry、slot/GPU/po
 - [x] **T1A.7** 實作或移除`/api/verifier-update`；新增真實HTTP contract test，不再只做source regex。
 - [x] **T1A.8** 以conversation/run id實作完整cancel；隔離intent summary、round state與budget。
 - [x] **T1A.9** 修正UI stale `loopMode`、conversation persistence、visual evidence/multi-shot顯示；Review Off關閉所有自動VLM。
-- [ ] **T1A.10** Fake-provider E2E涵蓋Text/Visual成功、所有failure classes、cancel、跨session isolation與cost budget。
+- [x] **T1A.10** Fake-provider E2E涵蓋Text/Visual成功、所有failure classes、cancel、跨session isolation與cost budget。
 - [ ] **T1A.11** 經使用者核准後，在disposable scene各執行一次真實Text與read-only Visual smoke，保存provider/model/usage/verdict與scene diff。
 
 驗收：`requirements.md` REVIEW-001～010全部通過；Visual前後scene snapshot零差異。
 
-Implementation note（2026-07-14）：T1A.8 的 conversation/run cancellation、builder/critic/summarizer/capture abort、intent、round 與 aggregate dollar budget isolation 已完成；builder 與 critic 都受 run 剩餘額度約束，budget 耗盡會在下一個 mutation 前停止。T1A.10 已有 fake/contract coverage 與 1 個 mock browser E2E，包含 Text/Visual 成本、跨 run 隔離與 UI accounting；仍缺以完整 Studio coordinator 啟動的跨 session/cost E2E，因此保持未勾選。T1A.11 依 cost/state gate 刻意未執行。
+Implementation note（2026-07-21）：T1A.8 的 conversation/run cancellation、builder/critic/summarizer/capture abort、intent、round 與 aggregate dollar budget isolation 已完成；builder 與 critic 都受 run 剩餘額度約束，budget 耗盡會在下一個 mutation 前停止。T1A.10 現由實際 HTTP `/api/chat` coordinator harness 覆蓋 Text/Visual success、401、429、500、timeout、malformed SSE、builder failure 不叫 critic、Visual-only capture、exact cancel、獨立 cost budget 與跨 lease isolation。Production review scope 已改由 server-side active Studio lease 權限衍生，不再信任 caller 提供的 session id；loopback 則保留可預期的開發相容行為。T1A.11 仍依 cost/state gate 刻意未執行。
 
 ## Phase 1B — Asset retrieval foundation（P0，需要asset snapshot/admin）
 
@@ -100,13 +100,13 @@ Implementation note（2026-07-14）：T3.1～3與T3.7的純程式契約已完成
 - [x] **T4.7** 修正ingress WebSocket proxy到Cirrus HttpPort；StreamerPort/SFU/MCP保持外部不可達。
 - [ ] **T4.8 [Admin]** 安裝/營運Coturn，設定external IP、realm、REST/HMAC或secret credential、quota、relay range與監控。
 - [ ] **T4.9 [Admin]** 開放經核准的HTTPS/WSS、TURN與受控relay ports，建立ACL/NAT規則。
-- [ ] **T4.10** 增加Cirrus/streamer/WSS/ICE/TURN readiness及selected candidate telemetry。
+- [x] **T4.10** 增加Cirrus/streamer/WSS/ICE/TURN readiness及selected candidate telemetry。
 - [ ] **T4.11** E2E：unauthenticated/cross-slot denial、WSS 101、decoded frames、data channel control、reconnect、credential rotation。
 - [ ] **T4.12 [External Test]** 從至少兩個外部網路執行normal ICE與forced relay；確認不需SSH/Xpra且DevTools無loopback/raw port/mixed content。
 
 驗收：RTC-001～009通過；Xpra只保留admin recovery。
 
-Implementation note（2026-07-21）：T4.2～7已接入production source。`/api/pixel-streaming-url`只回傳session/slot/lease-bound opaque path；browser bearer已由`sessionStorage`移到Secure/HttpOnly cookie，Node upgrade gateway驗證Origin/Host/session後只代理到loopback Cirrus `HttpPort`。Player、frontend、per-session port router與Nginx均不再接受raw Cirrus port；Cirrus launcher以原子config builder注入短效Coturn REST/HMAC credential、forced-relay policy與loopback listeners。274個Node/deploy contracts、frontend build與loopback HTTP smoke通過。T4.1／8／9仍需要管理員DNS/TLS/Coturn/firewall決策；T4.10～12仍需真Cirrus/UE、外部瀏覽器與forced-relay evidence，因此尚未宣稱公開WebRTC ready，也未開任何public port。
+Implementation note（2026-07-21）：T4.2～7已接入production source。`/api/pixel-streaming-url`只回傳session/slot/lease-bound opaque path；browser bearer已由`sessionStorage`移到Secure/HttpOnly cookie，Node upgrade gateway驗證Origin/Host/session後只代理到loopback Cirrus `HttpPort`。Player、frontend、per-session port router與Nginx均不再接受raw Cirrus port；Cirrus launcher以原子config builder注入短效Coturn REST/HMAC credential、forced-relay policy與loopback listeners。T4.10 的程式能力已完成：production readiness 必須驗證並綁定 external receipt，browser 同時以嚴格、租約綁定、去識別化 schema 回報 WSS/ICE、decoded frames、data channel 及 selected candidate type/protocol/TURN transport，並拒絕 SDP、IP、port、credential 等欄位。Browser telemetry 僅供營運觀測，不取代簽署的 external readiness receipt。TURN credential TTL 也必須覆蓋 hard session max 加 reconnect grace；rotation contract 有離線驗證。T4.1／8／9仍需要管理員DNS/TLS/Coturn/firewall決策；T4.11～12仍需真Cirrus/UE、外部瀏覽器、live rotation 與 forced-relay evidence，因此尚未宣稱公開WebRTC ready，也未開任何public port。
 
 ## Phase 5 — Persistence、operations與release gate
 

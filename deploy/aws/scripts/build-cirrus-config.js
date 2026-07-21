@@ -55,6 +55,14 @@ function commaList(value) {
   return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+function boundedInteger(value, fallback, minimum, maximum, field) {
+  const number = Number(value === undefined || value === "" ? fallback : value);
+  if (!Number.isSafeInteger(number) || number < minimum || number > maximum) {
+    die(`${field} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return number;
+}
+
 function writeAtomic(filename, value) {
   const target = path.resolve(filename);
   const directory = path.dirname(target);
@@ -78,7 +86,31 @@ const publicHost = String(process.env.TURN_PUBLIC_HOST || "").trim();
 if (!/^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(publicHost)) {
   die("TURN_PUBLIC_HOST must be a public DNS hostname");
 }
-const ttlSeconds = Number(process.env.TURN_CREDENTIAL_TTL_SECONDS || "14400");
+const ttlSeconds = boundedInteger(
+  process.env.TURN_CREDENTIAL_TTL_SECONDS,
+  14400,
+  300,
+  86400,
+  "TURN_CREDENTIAL_TTL_SECONDS",
+);
+const sessionHardMaxMs = boundedInteger(
+  process.env.SESSION_HARD_MAX_MS,
+  60 * 60 * 1000,
+  10_000,
+  24 * 60 * 60 * 1000,
+  "SESSION_HARD_MAX_MS",
+);
+const reconnectGraceSeconds = boundedInteger(
+  process.env.TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS,
+  600,
+  60,
+  3600,
+  "TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS",
+);
+const minimumCredentialLifetimeSeconds = Math.ceil(sessionHardMaxMs / 1000) + reconnectGraceSeconds;
+if (ttlSeconds < minimumCredentialLifetimeSeconds) {
+  die("TURN credential lifetime must cover SESSION_HARD_MAX_MS plus reconnect grace");
+}
 const credentials = createTurnRestCredentials({
   sessionId: args["--session"],
   ttlSeconds,
@@ -110,5 +142,7 @@ process.stdout.write(`${JSON.stringify({
   ok: true,
   output: path.resolve(args["--output"]),
   turnCredentialExpiresAt: credentials.expiresAt,
+  reconnectGraceSeconds,
+  sessionHardMaxMs,
   config: redactCirrusConfig(config),
 })}\n`);

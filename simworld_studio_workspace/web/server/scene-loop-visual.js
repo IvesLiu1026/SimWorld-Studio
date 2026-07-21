@@ -523,7 +523,11 @@ async function handleVisualSceneLoop(req, res, deps) {
   const ping = setInterval(() => { if (!res.writableEnded) res.write(`: ping\n\n`); }, 5000);
 
   const STUDIO_SESSION = String(sessionId || deps.STUDIO_SESSION);
-  const scopeId = String(conversationId || STUDIO_SESSION);
+  // Public ids are display metadata only. The production coordinator injects
+  // a server-derived active-lease scope for cancellation and all inner state.
+  const scopeId = String(deps.scopeId || conversationId || STUDIO_SESSION);
+  const internalSessionId = String(deps.internalSessionId || STUDIO_SESSION);
+  const internalConversationId = String(deps.internalConversationId || conversationId || scopeId);
   const runId = String(deps.runId || (req.body && req.body.runId) || scopeId);
   const port = deps.internalPort || parseInt((deps.env || process.env).PORT || "3004", 10);
   const internalTimeoutMs = deps.internalChatTimeoutMs
@@ -566,8 +570,8 @@ async function handleVisualSceneLoop(req, res, deps) {
     const combinedFeedback = feedback || userFeedback || undefined;
     const body = {
       message: combinedPrompt,
-      sessionId: STUDIO_SESSION,
-      conversationId: conversationId || scopeId,
+      sessionId: internalSessionId,
+      conversationId: internalConversationId,
       runId,
       skills: skills || [],
       feedback: combinedFeedback,

@@ -332,7 +332,12 @@ async function handleSceneLoop(req, res, deps) {
   const ping = setInterval(() => { if (!res.writableEnded) res.write(`: ping\n\n`); }, 5000);
 
   const STUDIO_SESSION = String(sessionId || deps.STUDIO_SESSION);
-  const scopeId = String(conversationId || STUDIO_SESSION);
+  // Public conversation/session ids remain UI metadata. In trusted-proxy mode
+  // the coordinator supplies a server-derived lease-bound scope for all
+  // cancellation, intent, subprocess, and inner-call state.
+  const scopeId = String(deps.scopeId || conversationId || STUDIO_SESSION);
+  const internalSessionId = String(deps.internalSessionId || STUDIO_SESSION);
+  const internalConversationId = String(deps.internalConversationId || conversationId || scopeId);
   const runId = String(deps.runId || (req.body && req.body.runId) || scopeId);
   const port = deps.internalPort || parseInt((deps.env || process.env).PORT || "3002", 10);
   const internalTimeoutMs = deps.internalChatTimeoutMs
@@ -378,8 +383,8 @@ async function handleSceneLoop(req, res, deps) {
     const combinedFeedback = feedback || userFeedback || undefined;
     const body = {
       message: combinedPrompt,
-      sessionId: STUDIO_SESSION,
-      conversationId: conversationId || scopeId,
+      sessionId: internalSessionId,
+      conversationId: internalConversationId,
       runId,
       skills: skills || [],
       feedback: combinedFeedback,
