@@ -23,6 +23,7 @@ const {
 } = require("./webrtc-readiness-receipt");
 
 const FEATURE_NAMES = Object.freeze([
+  "artifact_journal",
   "review",
   "retrieval",
   "streaming",
@@ -62,7 +63,19 @@ function resolveStudioFeaturePolicy(env = process.env) {
       ? env.ASSET_REQUIRE_REAL_ASSETS
       : env.REQUIRE_REAL_ASSETS,
   );
+  const artifactJournalPolicy = explicitPolicy(
+    env,
+    "artifact_journal",
+    production
+      ? "required"
+      : (envFlag(env.VISTA_ARTIFACT_JOURNAL_ENABLED) || Boolean(String(env.VISTA_ARTIFACT_JOURNAL_ROOT || "").trim())
+        ? "optional" : "disabled"),
+  );
+  if (production && artifactJournalPolicy !== "required") {
+    throw new TypeError("READINESS_ARTIFACT_JOURNAL_POLICY must be required in production");
+  }
   return Object.freeze({
+    artifact_journal: artifactJournalPolicy,
     review: explicitPolicy(env, "review", production ? "required" : "optional"),
     retrieval: explicitPolicy(env, "retrieval", requireRealAssets ? "required" : "optional"),
     streaming: explicitPolicy(env, "streaming", transportProfile === "public_webrtc" ? "required" : "optional"),
@@ -728,6 +741,7 @@ function createStudioReadiness({
   fsImpl = fs,
   connect,
   animationUeProbe,
+  artifactJournalProbe,
   probeOverrides = {},
 } = {}) {
   for (const name of Object.keys(probeOverrides)) {
@@ -739,6 +753,18 @@ function createStudioReadiness({
     ? revision.build
     : (env.SIMWORLD_BUILD_REVISION || "working-tree");
   const probes = {
+    artifact_journal: {
+      probe: probeOverrides.artifact_journal || artifactJournalProbe || (async () => ({
+        status: "not_ready",
+        causes: [publicCause(
+          "ARTIFACT_JOURNAL_NOT_CONFIGURED",
+          "The durable artifact journal is not configured.",
+          false,
+          "artifact_journal",
+        )],
+      })),
+      timeoutMs: 10_000,
+    },
     review: probeOverrides.review || createReviewReadinessProbe({
       env,
       claudeBin,

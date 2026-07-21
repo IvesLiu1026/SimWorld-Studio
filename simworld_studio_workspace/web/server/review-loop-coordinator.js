@@ -7,6 +7,13 @@ const { ReviewRunRegistry } = require("./review-run-registry");
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const TRUSTED_PROFILES = new Set(["trusted_proxy", "trusted-proxy", "public_webrtc", "public-webrtc"]);
 const REQUEST_CONTEXT = Symbol("simworld.reviewRequestContext");
+const MAX_HELD_TERMINAL_BYTES = 64 * 1024;
+const REVIEW_FATAL_REASONS = new Set(["builder_error", "critic_error", "budget_exhausted"]);
+const REVIEW_REASONS = new Set([
+  "pass", "max_iterations", "builder_error", "critic_error",
+  "budget_exhausted", "cancelled",
+]);
+const REVIEW_VERDICTS = new Set(["PASS", "FAIL", "NEEDS_IMPROVEMENT"]);
 
 class ReviewLoopCoordinatorError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -64,10 +71,15 @@ function activeLeaseAuthority(identity) {
     : null;
 }
 
-function scopeWithActiveLease(scope, activeLease) {
-  if (!activeLease) return Object.freeze(scope);
-  Object.defineProperty(scope, "activeLease", {
+function scopeWithActiveLease(scope, activeLease, journalAccess) {
+  if (activeLease) Object.defineProperty(scope, "activeLease", {
     value: activeLease,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+  Object.defineProperty(scope, "journalAccess", {
+    value: Object.freeze(journalAccess),
     configurable: false,
     enumerable: false,
     writable: false,
@@ -117,7 +129,9 @@ function createReviewScopeResolver({
       scopeId: `review-${digest}`,
       conversationId,
       leaseBound: Boolean(leaseAuthority),
-    }, activeLease);
+    }, activeLease, activeLease
+      ? { ownerId: activeLease.ownerId, sessionId: activeLease.sessionId }
+      : { ownerId: loopbackAuthority, sessionId: loopbackAuthority });
   };
 }
 
@@ -237,6 +251,174 @@ function getReviewRequestContext(request) {
   return request && request[REQUEST_CONTEXT] || null;
 }
 
+function parseSseFrame(chunk) {
+  const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk || "");
+  const eventLine = text.split(/\r?\n/).find((entry) => entry.startsWith("event:"));
+  const event = eventLine ? eventLine.slice(6).trim().toLowerCase() : "";
+  const line = text.split(/\r?\n/).find((entry) => entry.startsWith("data:"));
+  if (!line) return null;
+  try {
+    return Object.freeze({ event, payload: JSON.parse(line.slice(5).trim()) });
+  } catch (_error) {
+    return null;
+  }
+}
+
+function terminalSummaryFromFrame(chunk) {
+  const frame = parseSseFrame(chunk);
+  if (!frame || !["done", "loop_done"].includes(frame.event)) return null;
+  const payload = frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload)
+    ? frame.payload : {};
+  const loop = frame.event === "loop_done"
+    ? payload
+    : (payload && typeof payload.loop === "object" && !Array.isArray(payload.loop)
+      ? payload.loop : {});
+  const rawReason = String(loop.reason || payload.failureReason || "").trim().toLowerCase();
+  const reason = REVIEW_REASONS.has(rawReason) ? rawReason : null;
+  const rawVerdict = String(loop.finalStatus || "").trim().toUpperCase();
+  const finalVerdict = REVIEW_VERDICTS.has(rawVerdict) ? rawVerdict : "UNKNOWN";
+  const rounds = Number(loop.rounds);
+  const errorCode = payload.error && typeof payload.error === "object"
+    ? payload.error.code : payload.code;
+  return Object.freeze({
+    outcome: reason === "cancelled" ? "cancelled" : (REVIEW_FATAL_REASONS.has(reason) || payload.isError === true ? "failed" : "completed"),
+    reason: reason || (payload.isError === true ? "handler_error" : "handler_completed"),
+    finalVerdict,
+    rounds: Number.isSafeInteger(rounds) && rounds >= 0 && rounds <= 100 ? rounds : 0,
+    errorCode: typeof errorCode === "string" ? errorCode : null,
+  });
+}
+
+function createTerminalResponseGate(response) {
+  if (!response || typeof response.write !== "function" || typeof response.end !== "function") {
+    throw new TypeError("Review response must expose write and end");
+  }
+  const originalWrite = response.write;
+  const originalEnd = response.end;
+  const heldWrites = [];
+  let heldBytes = 0;
+  let heldEnd = null;
+  let pendingText = "";
+  let summary = null;
+  let restored = false;
+  let holding = false;
+  let compromised = false;
+
+  function overflow() {
+    compromised = true;
+    holding = true;
+    heldWrites.length = 0;
+    heldBytes = 0;
+    heldEnd = null;
+    pendingText = "";
+    summary = null;
+    const error = new Error("Review terminal response exceeds its safety limit");
+    error.code = "REVIEW_TERMINAL_TOO_LARGE";
+    throw error;
+  }
+
+  function hold(chunk) {
+    const bytes = Buffer.byteLength(chunk, "utf8");
+    if (heldBytes + bytes > MAX_HELD_TERMINAL_BYTES) overflow();
+    heldBytes += bytes;
+    heldWrites.push(chunk);
+  }
+
+  function processFrame(frame) {
+    const parsedFrame = parseSseFrame(frame);
+    const parsedSummary = terminalSummaryFromFrame(frame);
+    const announcesPass = Boolean(parsedFrame && parsedFrame.event === "critic_verdict"
+      && String(parsedFrame.payload && parsedFrame.payload.status || "").trim().toUpperCase() === "PASS");
+    if (parsedSummary || announcesPass) holding = true;
+    if (parsedSummary) summary = parsedSummary;
+    if (holding) hold(frame);
+    else originalWrite.call(response, frame);
+  }
+
+  function drainCompleteFrames() {
+    while (pendingText) {
+      const boundary = /\r?\n\r?\n/.exec(pendingText);
+      if (!boundary) break;
+      const end = boundary.index + boundary[0].length;
+      const frame = pendingText.slice(0, end);
+      pendingText = pendingText.slice(end);
+      processFrame(frame);
+    }
+    if (Buffer.byteLength(pendingText, "utf8") > MAX_HELD_TERMINAL_BYTES) overflow();
+  }
+
+  response.write = function gatedWrite(chunk, encoding, callback) {
+    const accepted = typeof encoding === "function" ? encoding : callback;
+    if (compromised) {
+      if (typeof accepted === "function") queueMicrotask(accepted);
+      return true;
+    }
+    pendingText += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk || "");
+    drainCompleteFrames();
+    if (typeof accepted === "function") queueMicrotask(accepted);
+    return true;
+  };
+  response.end = function gatedEnd(chunk, encoding, callback) {
+    const accepted = typeof chunk === "function"
+      ? chunk
+      : (typeof encoding === "function" ? encoding : callback);
+    const body = typeof chunk === "function" ? null : chunk;
+    if (!compromised && body !== undefined && body !== null) {
+      response.write(body);
+    }
+    if (!compromised && pendingText) {
+      const parsed = terminalSummaryFromFrame(pendingText);
+      if (parsed) summary = parsed;
+      holding = true;
+      hold(pendingText);
+      pendingText = "";
+    }
+    if (typeof accepted === "function") queueMicrotask(accepted);
+    heldEnd = [];
+    return this;
+  };
+
+  function restore() {
+    if (restored) return;
+    restored = true;
+    response.write = originalWrite;
+    response.end = originalEnd;
+  }
+
+  return Object.freeze({
+    get summary() { return summary; },
+    get compromised() { return compromised; },
+    release() {
+      restore();
+      for (const chunk of heldWrites) originalWrite.call(response, chunk);
+      if (heldEnd) originalEnd.call(response, ...heldEnd);
+    },
+    failClosed({
+      code = "ARTIFACT_JOURNAL_UNAVAILABLE",
+      message = "Durable artifact journal is unavailable.",
+      runId = null,
+    } = {}) {
+      restore();
+      const payload = {
+        sessionId: null,
+        runId,
+        isError: true,
+        cancelled: false,
+        error: message,
+        code,
+      };
+      if (response.headersSent) {
+        originalWrite.call(response, `event: done\ndata: ${JSON.stringify(payload)}\n\n`);
+        originalEnd.call(response);
+      } else if (typeof response.status === "function" && typeof response.json === "function") {
+        response.status(503).json({ error: payload.error, code: payload.code, runId: payload.runId });
+      } else {
+        originalEnd.call(response, JSON.stringify({ error: payload.error, code: payload.code }));
+      }
+    },
+  });
+}
+
 function createReviewLoopCoordinator({
   registry = new ReviewRunRegistry(),
   transportProfile,
@@ -246,6 +428,7 @@ function createReviewLoopCoordinator({
   defaultMode = "vanilla",
   textHandler,
   visualHandler,
+  artifactRecorder = null,
   handlerDependencies = () => ({}),
   logger = () => {},
 } = {}) {
@@ -258,6 +441,11 @@ function createReviewLoopCoordinator({
   }
   if (typeof handlerDependencies !== "function") {
     throw new TypeError("handlerDependencies must be a function");
+  }
+  if (artifactRecorder !== null && artifactRecorder !== undefined
+      && (typeof artifactRecorder.prepareReviewTerminal !== "function"
+        || typeof artifactRecorder.ensureReviewTerminal !== "function")) {
+    throw new TypeError("artifactRecorder must expose prepareReviewTerminal and ensureReviewTerminal");
   }
   const resolveScope = createReviewScopeResolver({
     transportProfile,
@@ -285,6 +473,12 @@ function createReviewLoopCoordinator({
     if (mode === "vanilla") return next();
 
     let run = null;
+    let reviewTicket = null;
+    let responseGate = null;
+    let terminal = null;
+    let journalFailed = false;
+    let recoveryBlocked = false;
+    const durableReview = Boolean(artifactRecorder && artifactRecorder.enabled !== false);
     try {
       const requestedRunId = requestValue(request, "runId");
       run = registry.start({
@@ -294,15 +488,79 @@ function createReviewLoopCoordinator({
           : { runId: safeId(requestedRunId, "runId") }),
       });
       if (scope.leaseBound) activeRunScopes.set(activeRunKey(scope.scopeId, run.runId), scope);
-      const handler = mode === "visual_loop" ? visualHandler : textHandler;
-      await handler(request, response, {
-        ...handlerDependencies({ request, mode, scope, run }),
-        scopeId: scope.scopeId,
-        internalSessionId: scope.scopeId,
-        internalConversationId: scope.scopeId,
-        runId: run.runId,
-        signal: run.signal,
-      });
+      responseGate = createTerminalResponseGate(response);
+      if (durableReview) {
+        try {
+          reviewTicket = await artifactRecorder.prepareReviewTerminal({ scope, run, mode });
+        } catch (error) {
+          journalFailed = true;
+          throw error;
+        }
+        if (!reviewTicket || reviewTicket.disabled === true) {
+          journalFailed = true;
+          throw new ReviewLoopCoordinatorError(
+            "ARTIFACT_JOURNAL_UNAVAILABLE",
+            "Durable artifact journal is unavailable.",
+            503,
+          );
+        }
+        if (reviewTicket.created === false && reviewTicket.state === "prepared") {
+          recoveryBlocked = true;
+          fail(
+            "REVIEW_TERMINAL_RECOVERY_REQUIRED",
+            "This Review run has an unresolved prior provider attempt.",
+            409,
+          );
+        }
+        if (reviewTicket.created === false
+            && ["terminal_pending", "published"].includes(reviewTicket.state)) {
+          terminal = reviewTicket.terminal;
+          if (!terminal || typeof terminal !== "object") {
+            journalFailed = true;
+            throw new ReviewLoopCoordinatorError(
+              "ARTIFACT_JOURNAL_CORRUPT",
+              "Durable Review recovery data is invalid.",
+              503,
+            );
+          }
+          const payload = {
+            sessionId: scope.scopeId,
+            runId: run.runId,
+            isError: terminal.outcome === "failed",
+            cancelled: terminal.outcome === "cancelled",
+            recovered: true,
+            code: terminal.errorCode,
+            loop: {
+              reason: terminal.reason,
+              rounds: terminal.rounds,
+              finalStatus: terminal.finalVerdict,
+              mode,
+            },
+          };
+          response.write(`event: done\ndata: ${JSON.stringify(payload)}\n\n`);
+          response.end();
+        } else {
+          const handler = mode === "visual_loop" ? visualHandler : textHandler;
+          await handler(request, response, {
+            ...handlerDependencies({ request, mode, scope, run }),
+            scopeId: scope.scopeId,
+            internalSessionId: scope.scopeId,
+            internalConversationId: scope.scopeId,
+            runId: run.runId,
+            signal: run.signal,
+          });
+        }
+      } else {
+        const handler = mode === "visual_loop" ? visualHandler : textHandler;
+        await handler(request, response, {
+          ...handlerDependencies({ request, mode, scope, run }),
+          scopeId: scope.scopeId,
+          internalSessionId: scope.scopeId,
+          internalConversationId: scope.scopeId,
+          runId: run.runId,
+          signal: run.signal,
+        });
+      }
     } catch (error) {
       const aborted = Boolean(run && run.signal.aborted) || (error && error.name === "AbortError");
       const code = aborted
@@ -314,6 +572,13 @@ function createReviewLoopCoordinator({
       const message = aborted ? "Review run cancelled" : (error instanceof ReviewLoopCoordinatorError
         ? error.message
         : "Review loop failed");
+      terminal = {
+        outcome: aborted ? "cancelled" : "failed",
+        reason: aborted ? "cancelled" : "handler_error",
+        finalVerdict: "UNKNOWN",
+        rounds: 0,
+        errorCode: code,
+      };
       try { logger("review-coordinator", `${mode} ${code}`); } catch (_error) {}
       if (!response.headersSent) {
         response.status(statusCode).json({ error: message, code, runId: run && run.runId });
@@ -331,8 +596,42 @@ function createReviewLoopCoordinator({
       }
     } finally {
       if (run && scope) {
+        const handlerHttpFailed = Number(response && response.statusCode) >= 400;
+        const gateSummary = responseGate && responseGate.summary;
+        terminal = handlerHttpFailed
+          ? (terminal || {
+            outcome: "failed",
+            reason: "handler_error",
+            finalVerdict: "UNKNOWN",
+            rounds: 0,
+            errorCode: "REVIEW_HANDLER_HTTP_ERROR",
+          })
+          : (gateSummary || terminal || {
+            outcome: "completed",
+            reason: "handler_completed",
+            finalVerdict: "UNKNOWN",
+            rounds: 0,
+            errorCode: null,
+          });
+        try {
+          if (durableReview && reviewTicket && !recoveryBlocked) {
+            await artifactRecorder.ensureReviewTerminal({ ticket: reviewTicket, terminal });
+          }
+        } catch (_journalError) {
+          journalFailed = true;
+          try { logger("review-coordinator", `${mode} ARTIFACT_JOURNAL_UNAVAILABLE`); } catch (_error) {}
+        }
         activeRunScopes.delete(activeRunKey(scope.scopeId, run.runId));
         registry.complete({ scopeId: scope.scopeId, runId: run.runId });
+        if (responseGate) {
+          if (responseGate.compromised) responseGate.failClosed({
+            code: "REVIEW_TERMINAL_GATE_FAILED",
+            message: "Review terminal response could not be delivered safely.",
+            runId: run.runId,
+          });
+          else if (journalFailed) responseGate.failClosed({ runId: run.runId });
+          else responseGate.release();
+        }
       }
     }
   }
@@ -406,6 +705,7 @@ module.exports = {
   createReviewLoopCoordinator,
   createReviewScopeResolver,
   createScopedReviewModeStore,
+  createTerminalResponseGate,
   getReviewRequestContext,
   normalizeReviewMode,
 };

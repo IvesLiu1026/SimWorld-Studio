@@ -944,6 +944,7 @@ function createVistaAnimationTimelineRuntime(options = {}) {
     runtimeProvider,
     bindingResolver,
     recordRoot: config.recordRoot,
+    artifactRecorder: options.artifactRecorder || null,
     ...(typeof options.clock === "function" ? { clock: options.clock } : {}),
     ...(typeof options.randomBytes === "function" ? { randomBytes: options.randomBytes } : {}),
     ...(isPlainObject(options.schedulerOptions) ? { schedulerOptions: options.schedulerOptions } : {}),

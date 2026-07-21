@@ -94,6 +94,42 @@ test("concurrent commits select exactly one immutable winner", async (t) => {
   assert.equal(new Set(results.map((item) => item.idempotency.key)).size, 1);
 });
 
+test("journal gate uses persisted server identity and replays after an append failure", async (t) => {
+  let failJournal = true;
+  const seen = [];
+  const { artifactRoot, service } = fixture(t, {
+    service: {
+      artifactRecorder: {
+        async ensureImportCommitted({ artifact }) {
+          seen.push(artifact);
+          if (failJournal) throw Object.assign(new Error("private journal detail"), {
+            name: "ArtifactJournalRuntimeError",
+            code: "ARTIFACT_JOURNAL_WRITE_FAILED",
+          });
+        },
+      },
+    },
+  });
+  const request = {
+    datasetRevision: "revision-1",
+    sampleId: "mmg_040",
+    attempt: 7,
+    ownerId: "caller-spoof",
+    sessionId: "caller-spoof",
+  };
+  await assert.rejects(
+    service.commit(request, ACCESS),
+    (error) => error.code === "ARTIFACT_JOURNAL_WRITE_FAILED",
+  );
+  assert.equal(fs.readdirSync(artifactRoot).length, 1, "immutable domain artifact remains replayable");
+  assert.deepEqual(seen[0].access, { owner_id: ACCESS.ownerId, session_id: ACCESS.sessionId });
+
+  failJournal = false;
+  const replay = await service.commit(request, { ...ACCESS, sessionId: "reattached-session" });
+  assert.equal(replay.created, false);
+  assert.deepEqual(seen.at(-1).access, { owner_id: ACCESS.ownerId, session_id: ACCESS.sessionId });
+});
+
 test("status is owner-bound and permits a new authenticated browser session to reattach", async (t) => {
   const { service } = fixture(t);
   const committed = await service.commit({

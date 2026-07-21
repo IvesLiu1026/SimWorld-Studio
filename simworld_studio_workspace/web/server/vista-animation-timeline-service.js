@@ -170,6 +170,11 @@ function safeDependencyError(error, fallbackCode, fallbackMessage, fallbackStatu
   });
 }
 
+function isArtifactJournalFailure(error) {
+  return Boolean(error && (error.name === "ArtifactJournalRuntimeError"
+    || /^ARTIFACT_JOURNAL_/.test(String(error.code || ""))));
+}
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -266,6 +271,16 @@ function validateSuccessfulSceneBuild(status, scene) {
       || !isPlainObject(status.last_result)) {
     fail("ANIMATION_SCENE_BUILD_REQUIRED", "A successful exact VISTA scene build is required before animation", { status: 409 });
   }
+  const buildOperationId = typeof status.operation_id === "string" ? status.operation_id.trim() : "";
+  if (!PRINCIPAL_RE.test(buildOperationId)) {
+    fail("ANIMATION_SCENE_BUILD_INVALID", "Scene build response operation identity is missing", { status: 500 });
+  }
+  const buildLineage = status.artifact_lineage;
+  if (!isPlainObject(buildLineage) || buildLineage.kind !== "vista-scene-build"
+      || buildLineage.revision !== buildOperationId
+      || !SHA256_RE.test(String(buildLineage.content_digest || ""))) {
+    fail("ANIMATION_SCENE_BUILD_INVALID", "Scene build artifact lineage is missing or invalid", { status: 500 });
+  }
   let plan;
   try {
     plan = validateVistaSceneBuildPlan(status.plan);
@@ -326,7 +341,10 @@ function validateSuccessfulSceneBuild(status, scene) {
       fail("ANIMATION_SCENE_BUILD_INVALID", "Scene build required evidence is missing or stale", { status: 409 });
     }
   }
-  return { plan, result };
+  if (buildLineage.artifact_id !== plan.plan_id) {
+    fail("ANIMATION_SCENE_BUILD_INVALID", "Scene build artifact lineage does not match the BuildPlan", { status: 500 });
+  }
+  return { plan, result, buildOperationId, buildContentDigest: buildLineage.content_digest };
 }
 
 function recordPath(root, runId, ownerId) {
@@ -378,6 +396,8 @@ function validateStoredRecord(record, expectedRunId, expectedOwnerId) {
       || !PREFLIGHT_ID_RE.test(identity.preflight_id)
       || !TIMELINE_ID_RE.test(identity.timeline_id)
       || !PROGRAM_ID_RE.test(identity.program_id)
+      || !PRINCIPAL_RE.test(identity.scene_build_operation_id)
+      || !SHA256_RE.test(identity.scene_build_content_digest)
       || !PRINCIPAL_RE.test(access.last_session_id)
       || !Number.isSafeInteger(access.slot_id) || access.slot_id < 0 || access.slot_id > 1023
       || !SHA256_RE.test(access.lease_id_sha256)
@@ -488,6 +508,11 @@ class VistaAnimationTimelineService {
     this.runtimeProvider = options.runtimeProvider;
     this.bindingResolver = options.bindingResolver;
     this.runtimeLifecycle = options.runtimeLifecycle || null;
+    if (options.artifactRecorder !== undefined && options.artifactRecorder !== null
+        && typeof options.artifactRecorder.ensureTimelineTerminal !== "function") {
+      throw new TypeError("artifactRecorder must expose ensureTimelineTerminal");
+    }
+    this.artifactRecorder = options.artifactRecorder || null;
     const lifecycleAllowedKeys = new Set([
       "controllerFor", "exactIdentityFromRequest", "sceneProofFor",
       "startForIdentity", "stateForIdentity", "stopForIdentity",
@@ -576,13 +601,15 @@ class VistaAnimationTimelineService {
       if (TERMINAL_STATES.has(run.state) && active.completion) {
         await active.completion.catch(() => {});
         const finalized = await this._readRecord(checkedRunId, identity.ownerId, { allowMissing: false });
+        await this._ensureTerminalJournal(finalized);
         return this._statusResponse(finalized, finalized.run, finalized.evidence);
       }
       return this._statusResponse(active.record, run, null);
     }
     let record = await this._readRecord(checkedRunId, identity.ownerId, { allowMissing: false });
     if (record.identity.import_artifact_id !== importId) fail("ANIMATION_RUN_NOT_FOUND", "Animation run was not found", { status: 404 });
-    if (!TERMINAL_STATES.has(record.status)) record = await this._markOrphaned(record, identity);
+    if (!TERMINAL_STATES.has(record.status)) record = await this._markOrphaned(record);
+    await this._ensureTerminalJournal(record);
     return this._statusResponse(record, record.run, record.evidence);
   }
 
@@ -609,6 +636,10 @@ class VistaAnimationTimelineService {
     });
     Promise.resolve(stopPromise).catch(() => {});
     const run = active.scheduler.getRun(active.schedulerAccess);
+    if (TERMINAL_STATES.has(run.state) && active.completion) {
+      await active.completion.catch(() => {});
+      return this.status(importId, checkedRunId, identity);
+    }
     return this._statusResponse(active.record, run, null);
   }
 
@@ -622,8 +653,9 @@ class VistaAnimationTimelineService {
       if (this.activeRuns.has(this._runKey(identity.ownerId, checkedRunId))) {
         fail("ANIMATION_REPLAY_NOT_READY", "Only a terminal animation run can be replayed", { status: 409 });
       }
-      original = await this._markOrphaned(original, identity);
+      original = await this._markOrphaned(original);
     }
+    await this._ensureTerminalJournal(original);
     exactKeys(request, ["plan_id", "preflight_id", "timeline_id", "program_id", "confirm"], ["plan_id", "preflight_id", "timeline_id", "program_id", "confirm"]);
     if (request.confirm !== true
         || normalizePlanId(request.plan_id) !== original.identity.plan_id
@@ -662,6 +694,7 @@ class VistaAnimationTimelineService {
       const record = active
         ? active.record
         : await this._readRecord(prepared.startedRunId, identity.ownerId, { allowMissing: false });
+      if (TERMINAL_STATES.has(record.status)) await this._ensureTerminalJournal(record);
       return this._startResponse(record);
     }
     const slotKey = this._slotKey(identity);
@@ -725,7 +758,7 @@ class VistaAnimationTimelineService {
     } catch (error) {
       throw safeDependencyError(error, "ANIMATION_SCENE_BUILD_UNAVAILABLE", "Scene build status is unavailable", 503);
     }
-    const { plan, result } = validateSuccessfulSceneBuild(buildStatus, scene);
+    const { plan, result, buildOperationId, buildContentDigest } = validateSuccessfulSceneBuild(buildStatus, scene);
     if (plan.plan_id !== planId) fail("ANIMATION_PLAN_STALE", "Confirmed Scene BuildPlan is no longer current", { status: 409 });
     let buildRuntimeProof = null;
     if (this.runtimeLifecycle) {
@@ -756,6 +789,8 @@ class VistaAnimationTimelineService {
       scene,
       plan,
       buildResult: result,
+      buildOperationId,
+      buildContentDigest,
       buildRuntimeProof,
       profileId: normalizeProfileId(buildStatus.profile_id),
     };
@@ -855,6 +890,8 @@ class VistaAnimationTimelineService {
         preflight_id: prepared.preflightId,
         timeline_id: prepared.timelineId,
         program_id: prepared.programId,
+        scene_build_operation_id: resolved.buildOperationId,
+        scene_build_content_digest: resolved.buildContentDigest,
       },
       access: {
         owner_id: identity.ownerId,
@@ -987,7 +1024,10 @@ class VistaAnimationTimelineService {
     this.activeSlots.set(this._slotKey(identity), key);
     active.completion = Promise.resolve(scheduler.waitForRun(schedulerAccess))
       .then((run) => this._finalizeRun(active, run))
-      .catch((error) => this._terminalFailureRecord(active.record, error, "ANIMATION_RUN_FAILED"))
+      .catch((error) => {
+        if (isArtifactJournalFailure(error)) throw error;
+        return this._terminalFailureRecord(active.record, error, "ANIMATION_RUN_FAILED");
+      })
       .finally(() => {
         compiled.bundle.runtime.discardEvidence(runId);
         this.activeRuns.delete(key);
@@ -1018,6 +1058,7 @@ class VistaAnimationTimelineService {
       error,
     };
     active.record = await this._persistRecord(terminal);
+    await this._ensureTerminalJournal(active.record);
     return active.record;
   }
 
@@ -1030,18 +1071,26 @@ class VistaAnimationTimelineService {
       updated_at: nowIso(this.clock),
       error: { code: error.code, retryable: error.retryable },
     };
-    return this._persistRecord(failed);
+    const persisted = await this._persistRecord(failed);
+    await this._ensureTerminalJournal(persisted);
+    return persisted;
   }
 
-  async _markOrphaned(record, identity) {
-    return this._persistRecord({
+  async _markOrphaned(record) {
+    const persisted = await this._persistRecord({
       ...record,
       status: "failed",
       operation: { ...record.operation, state: "terminal" },
-      access: { ...record.access, last_session_id: identity.sessionId },
       updated_at: nowIso(this.clock),
       error: { code: "ANIMATION_RUN_RECOVERY_REQUIRED", retryable: false },
     });
+    await this._ensureTerminalJournal(persisted);
+    return persisted;
+  }
+
+  async _ensureTerminalJournal(record) {
+    if (!this.artifactRecorder || !record || !TERMINAL_STATES.has(record.status)) return;
+    await this.artifactRecorder.ensureTimelineTerminal({ record });
   }
 
   _lookupPrepared(identity, confirmation) {

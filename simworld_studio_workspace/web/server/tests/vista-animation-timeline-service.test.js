@@ -454,6 +454,13 @@ async function fixture(t, overrides = {}) {
     import_artifact_id: IMPORT_ID,
     profile_id: layout.profile_id,
     state: "succeeded",
+    operation_id: "vsj-111111111111111111111111",
+    artifact_lineage: {
+      kind: "vista-scene-build",
+      artifact_id: plan.plan_id,
+      revision: "vsj-111111111111111111111111",
+      content_digest: "9".repeat(64),
+    },
     plan,
     last_result: buildResult,
     updated_at: CHECKED_AT,
@@ -503,6 +510,7 @@ async function fixture(t, overrides = {}) {
     schedulerOptions: { clock: fakeClock, hookTimeoutMs: 1000 },
     preflightTtlMs: 60_000,
     ...(overrides.runtimeLifecycle ? { runtimeLifecycle: overrides.runtimeLifecycle } : {}),
+    ...(overrides.artifactRecorder ? { artifactRecorder: overrides.artifactRecorder } : {}),
   });
   return {
     artifact,
@@ -615,6 +623,45 @@ test("start writes a private pending receipt before execution and finalizes dura
   assert.equal(committed.status, "completed");
   assert.equal(committed.operation.state, "terminal");
   assert.equal(committed.evidence.run_id, started.run_id);
+});
+
+test("timeline terminal journal failure is not rewritten and status replays the same record", async (t) => {
+  let failJournal = true;
+  const seen = [];
+  const current = await fixture(t, {
+    artifactRecorder: {
+      async ensureTimelineTerminal({ record }) {
+        seen.push(clone(record));
+        if (failJournal) throw Object.assign(new Error("journal unavailable"), {
+          name: "ArtifactJournalRuntimeError",
+          code: "ARTIFACT_JOURNAL_WRITE_FAILED",
+        });
+      },
+    },
+  });
+  const preflight = await current.service.preflight(IMPORT_ID, { plan_id: current.plan.plan_id }, ACCESS);
+  const started = await current.service.start(IMPORT_ID, confirmation(preflight), ACCESS);
+  for (const time of [0, 2000, 5000, 9000, 12000]) {
+    current.fakeClock.advanceTo(time);
+    await flushTurns();
+  }
+  await assert.rejects(
+    current.service.status(IMPORT_ID, started.run_id, ACCESS),
+    (error) => error.code === "ARTIFACT_JOURNAL_WRITE_FAILED",
+  );
+  assert.equal(seen[0].status, "completed");
+  assert.equal(seen[0].access.owner_id, ACCESS.ownerId);
+  assert.equal(seen[0].access.last_session_id, ACCESS.sessionId);
+
+  failJournal = false;
+  const replayed = await current.service.status(
+    IMPORT_ID,
+    started.run_id,
+    { ...ACCESS, sessionId: "reattached-session" },
+  );
+  assert.equal(replayed.status, "completed");
+  assert.equal(seen.at(-1).access.last_session_id, ACCESS.sessionId);
+  assert.equal(seen.at(-1).identity.scene_build_operation_id, current.buildStatus.operation_id);
 });
 
 test("lease-bound backend Start/state gates events and authoritative Stop/state persists truthful ended_pie", async (t) => {
@@ -840,6 +887,7 @@ test("orphaned pending receipts fail closed with an explicit recovery requiremen
   const recordFile = path.join(current.root, "records", `${started.run_id}-${ownerHash}.json`);
   const pending = JSON.parse(fs.readFileSync(recordFile, "utf8"));
 
+  const journalRecords = [];
   const replacement = createVistaAnimationTimelineService({
     importService: current.service.importService,
     sceneBuildService: current.service.sceneBuildService,
@@ -848,12 +896,22 @@ test("orphaned pending receipts fail closed with an explicit recovery requiremen
     recordRoot: path.join(current.root, "records"),
     clock: () => CHECKED_AT,
     randomBytes: randomFactory(),
+    artifactRecorder: {
+      async ensureTimelineTerminal({ record }) { journalRecords.push(clone(record)); },
+    },
   });
   assert.equal(pending.status, "pending");
-  const recovered = await replacement.status(IMPORT_ID, started.run_id, ACCESS);
-  assert.equal(recovered.status, "failed");
-  assert.deepEqual(recovered.error, { code: "ANIMATION_RUN_RECOVERY_REQUIRED", retryable: false });
-  assert.equal(recovered.run, null, "restart quarantine must not fabricate end-PIE evidence");
+  const recovered = await Promise.all([
+    replacement.status(IMPORT_ID, started.run_id, { ...ACCESS, sessionId: "recovery-session-a" }),
+    replacement.status(IMPORT_ID, started.run_id, { ...ACCESS, sessionId: "recovery-session-b" }),
+  ]);
+  for (const status of recovered) {
+    assert.equal(status.status, "failed");
+    assert.deepEqual(status.error, { code: "ANIMATION_RUN_RECOVERY_REQUIRED", retryable: false });
+    assert.equal(status.run, null, "restart quarantine must not fabricate end-PIE evidence");
+  }
+  assert.ok(journalRecords.length >= 2);
+  assert.ok(journalRecords.every((record) => record.access.last_session_id === ACCESS.sessionId));
 });
 
 test("concurrent start requests are serialized per owner slot", async (t) => {

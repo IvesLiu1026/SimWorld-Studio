@@ -211,6 +211,7 @@ async function fixture(t, overrides = {}) {
     executor,
     clock: () => new Date("2026-07-21T00:00:00.000Z"),
     randomBytes: () => Buffer.alloc(12, 1),
+    ...(overrides.artifactRecorder ? { artifactRecorder: overrides.artifactRecorder } : {}),
   });
   return { artifact, executorCalls, importCalls, layout, root, service };
 }
@@ -286,6 +287,44 @@ test("execution record is persisted with mode 0600 and remains owner-bound acros
     service.status(artifact.artifact_id, {}, { ...ACCESS, ownerId: "other-owner" }),
     (error) => error.code === "VISTA_IMPORT_ACCESS_DENIED",
   );
+});
+
+test("journal failure never rewrites a successful UE build and status can replay durability", async (t) => {
+  let failJournal = true;
+  const recorded = [];
+  const artifactRecorder = {
+    sceneBuildLineage({ record }) {
+      return {
+        kind: "vista-scene-build",
+        artifact_id: record.plan_id,
+        revision: record.operation.operation_id,
+        content_digest: "e".repeat(64),
+      };
+    },
+    async ensureSceneBuildTerminal(input) {
+      recorded.push(input);
+      if (failJournal) throw Object.assign(new Error("journal unavailable"), {
+        name: "ArtifactJournalRuntimeError",
+        code: "ARTIFACT_JOURNAL_WRITE_FAILED",
+      });
+    },
+  };
+  const { artifact, service } = await fixture(t, { artifactRecorder });
+  const planned = await service.plan(artifact.artifact_id, {}, ACCESS);
+  await assert.rejects(
+    service.execute(artifact.artifact_id, { plan_id: planned.plan.plan_id, confirm: true }, ACCESS),
+    (error) => error.code === "ARTIFACT_JOURNAL_WRITE_FAILED",
+  );
+  assert.equal(service.resolveActiveRuntimeProof(ACCESS), null);
+  assert.equal(recorded[0].record.status, "succeeded");
+  assert.equal(recorded[0].record.access.owner_id, ACCESS.ownerId);
+  assert.equal(recorded[0].record.access.last_session_id, ACCESS.sessionId);
+
+  failJournal = false;
+  const status = await service.status(artifact.artifact_id, {}, { ...ACCESS, sessionId: "new-session" });
+  assert.equal(status.state, "succeeded");
+  assert.equal(status.artifact_lineage.revision, status.operation_id);
+  assert.equal(recorded.at(-1).record.access.last_session_id, ACCESS.sessionId);
 });
 
 test("missing executor and unresolved production bindings fail closed", async (t) => {

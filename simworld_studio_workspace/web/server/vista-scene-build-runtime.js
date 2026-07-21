@@ -150,6 +150,7 @@ function createVistaSceneBuildRuntime(options = {}) {
     layoutProfiles: config.layoutProfiles,
     recordRoot: config.recordRoot,
     executor: options.executor || null,
+    artifactRecorder: options.artifactRecorder || null,
   });
   return Object.freeze({ config, service });
 }

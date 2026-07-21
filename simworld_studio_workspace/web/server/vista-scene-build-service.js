@@ -15,6 +15,7 @@ const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 const PLAN_ID_PATTERN = /^vsp-[a-f0-9]{24}$/;
 const PRINCIPAL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
 const MAX_RECORD_BYTES = 32 * 1024 * 1024;
+const TERMINAL_BUILD_STATES = new Set(["succeeded", "already_applied", "failed"]);
 
 class VistaSceneBuildServiceError extends Error {
   constructor(code, message, options = {}) {
@@ -466,6 +467,12 @@ class VistaSceneBuildService {
     this.layoutProfiles = normalizeRegistry(options.layoutProfiles || {});
     this.recordRoot = recordRoot;
     this.executor = options.executor || null;
+    if (options.artifactRecorder !== undefined && options.artifactRecorder !== null
+        && (typeof options.artifactRecorder.ensureSceneBuildTerminal !== "function"
+          || typeof options.artifactRecorder.sceneBuildLineage !== "function")) {
+      throw new TypeError("artifactRecorder must expose scene build journal methods");
+    }
+    this.artifactRecorder = options.artifactRecorder || null;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
     this.maxRecordBytes = Number.isSafeInteger(options.maxRecordBytes) && options.maxRecordBytes > 0
@@ -482,6 +489,7 @@ class VistaSceneBuildService {
     exactKeys(request, ["profile_id"], []);
     const resolved = await this._resolvePlan(importArtifactId, request.profile_id, context);
     const record = await this._readRecord(resolved.plan.plan_id, resolved.access, { allowMissing: true });
+    await this._ensureTerminalJournal(resolved, record);
     return this._planResponse(resolved, record);
   }
 
@@ -489,6 +497,7 @@ class VistaSceneBuildService {
     exactKeys(request, ["profile_id"], []);
     const resolved = await this._resolvePlan(importArtifactId, request.profile_id, context);
     const record = await this._readRecord(resolved.plan.plan_id, resolved.access, { allowMissing: true });
+    await this._ensureTerminalJournal(resolved, record);
     return this._planResponse(resolved, record);
   }
 
@@ -572,8 +581,10 @@ class VistaSceneBuildService {
   }
 
   async _runExecution(resolved, operationId, context) {
+    let result;
+    let runtimeProof;
     try {
-      const result = validateExecutorResult(
+      result = validateExecutorResult(
         await this.executor.execute(resolved.plan, {
           signal: context.signal,
           ownerId: resolved.access.ownerId,
@@ -584,32 +595,46 @@ class VistaSceneBuildService {
         }),
         resolved.plan,
       );
-      const record = await this._writeRecord(resolved, result, operationId);
-      const runtimeProof = runtimeProofFromBuild(resolved, result);
-      this.liveRuntimeProofs.set(liveProofKey(resolved.access), runtimeProof);
-      while (this.liveRuntimeProofs.size > 128) {
-        this.liveRuntimeProofs.delete(this.liveRuntimeProofs.keys().next().value);
-      }
-      return {
-        schema: EXECUTION_RESPONSE_SCHEMA,
-        import_artifact_id: resolved.importArtifactId,
-        profile_id: resolved.profileId,
-        plan_id: resolved.plan.plan_id,
-        operation_id: operationId,
-        status: record.status,
-        result: record.result,
-      };
+      runtimeProof = runtimeProofFromBuild(resolved, result);
     } catch (rawError) {
       this.liveRuntimeProofs.delete(liveProofKey(resolved.access));
       const error = safeExecutionError(rawError);
+      let failureRecord = null;
       try {
-        const result = error.result
+        const failureResult = error.result
           ? validateExecutorResult(error.result, resolved.plan)
           : conservativeFailureResult(resolved.plan, error);
-        await this._writeRecord(resolved, result, operationId);
+        failureRecord = await this._writeRecord(resolved, failureResult, operationId);
       } catch (_recordError) {}
+      if (failureRecord) await this._ensureTerminalJournal(resolved, failureRecord);
       throw error;
     }
+
+    const record = await this._writeRecord(resolved, result, operationId);
+    // Durability is a separate terminal gate. A journal failure must not be
+    // reclassified as a UE execution failure or publish a live runtime proof.
+    await this._ensureTerminalJournal(resolved, record);
+    this.liveRuntimeProofs.set(liveProofKey(resolved.access), runtimeProof);
+    while (this.liveRuntimeProofs.size > 128) {
+      this.liveRuntimeProofs.delete(this.liveRuntimeProofs.keys().next().value);
+    }
+    return {
+      schema: EXECUTION_RESPONSE_SCHEMA,
+      import_artifact_id: resolved.importArtifactId,
+      profile_id: resolved.profileId,
+      plan_id: resolved.plan.plan_id,
+      operation_id: operationId,
+      status: record.status,
+      result: record.result,
+    };
+  }
+
+  async _ensureTerminalJournal(resolved, record) {
+    if (!this.artifactRecorder || !record || !TERMINAL_BUILD_STATES.has(record.status)) return;
+    await this.artifactRecorder.ensureSceneBuildTerminal({
+      record,
+      importArtifact: resolved.artifact,
+    });
   }
 
   _planResponse(resolved, record) {
@@ -618,6 +643,9 @@ class VistaSceneBuildService {
       import_artifact_id: resolved.importArtifactId,
       profile_id: resolved.profileId,
       state: record ? record.status : "planned",
+      operation_id: record ? record.operation.operation_id : null,
+      artifact_lineage: record && TERMINAL_BUILD_STATES.has(record.status) && this.artifactRecorder
+        ? this.artifactRecorder.sceneBuildLineage({ record }) : null,
       plan: resolved.plan,
       last_result: record ? record.result : null,
       updated_at: record ? record.updated_at : null,

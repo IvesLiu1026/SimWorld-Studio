@@ -2,6 +2,7 @@
 
 const READINESS_SCHEMA = "simworld-readiness/v1";
 const FEATURE_NAMES = Object.freeze([
+  "artifact_journal",
   "review",
   "retrieval",
   "streaming",
@@ -202,7 +203,7 @@ function normalizeFeaturePolicy(featurePolicy) {
   const policy = {};
   for (const name of FEATURE_NAMES) {
     const value = featurePolicy[name] === undefined
-      ? (name === "nlp_generation" ? "disabled" : "optional")
+      ? (name === "nlp_generation" || name === "artifact_journal" ? "disabled" : "optional")
       : featurePolicy[name];
     if (!FEATURE_POLICIES.includes(value)) {
       throw new TypeError(`${name} readiness policy must be required, optional, or disabled`);

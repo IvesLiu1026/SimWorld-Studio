@@ -155,10 +155,48 @@ test("feature policy makes production retrieval and public streaming blocking", 
     READINESS_NLP_GENERATION_POLICY: "disabled",
   });
   assert.equal(policy.retrieval, "required");
+  assert.equal(policy.artifact_journal, "required");
   assert.equal(policy.streaming, "required");
   assert.equal(policy.review, "required");
   assert.equal(policy.timeline, "optional");
   assert.equal(policy.nlp_generation, "required");
+});
+
+test("artifact journal is a closed production readiness feature", async () => {
+  assert.throws(
+    () => resolveStudioFeaturePolicy({
+      NODE_ENV: "production",
+      READINESS_ARTIFACT_JOURNAL_POLICY: "disabled",
+    }),
+    /must be required in production/,
+  );
+  const ready = async () => ({ status: "ready", causes: [] });
+  const registry = createStudioReadiness({
+    env: { NODE_ENV: "production" },
+    artifactJournalProbe: async () => ({
+      status: "not_ready",
+      causes: [{
+        code: "ARTIFACT_JOURNAL_CORRUPT",
+        message: "The artifact journal integrity chain could not be verified.",
+        retryable: false,
+      }],
+    }),
+    probeOverrides: {
+      review: ready,
+      retrieval: ready,
+      streaming: ready,
+      timeline: ready,
+      nlp_generation: ready,
+    },
+  });
+  const report = await registry.getReadiness();
+  assert.equal(report.ready, false);
+  assert.equal(report.features.artifact_journal.policy, "required");
+  assert.equal(report.features.artifact_journal.blocking, true);
+  assert.equal(report.features.artifact_journal.causes[0].code, "ARTIFACT_JOURNAL_CORRUPT");
+
+  const development = resolveStudioFeaturePolicy({ NODE_ENV: "development" });
+  assert.equal(development.artifact_journal, "disabled");
 });
 
 test("NLP typed mutation readiness is fail-closed and cannot be enabled by legacy flags", async () => {

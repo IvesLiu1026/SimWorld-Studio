@@ -144,6 +144,9 @@ services:
       - VISTA_IMPORT_BUNDLE_ROOT=/srv/simworld/vista-import
       - VISTA_IMPORT_MANIFEST=${VISTA_IMPORT_MANIFEST:-manifest.json}
       - VISTA_IMPORT_ARTIFACT_ROOT=/var/lib/simworld/vista-imports
+      - VISTA_ARTIFACT_JOURNAL_ENABLED=1
+      - VISTA_ARTIFACT_JOURNAL_ROOT=/var/lib/simworld/artifact-journal
+      - VISTA_ARTIFACT_JOURNAL_RETENTION_DAYS=${VISTA_ARTIFACT_JOURNAL_RETENTION_DAYS:-365}
       - VISTA_SCENE_LAYOUT_PROFILE_ID=${VISTA_SCENE_LAYOUT_PROFILE_ID:?Set the verified scene layout profile id}
       - VISTA_SCENE_LAYOUT_PROFILE_FILE=/run/simworld/config/vista-scene-layout.json
       - VISTA_SCENE_LAYOUT_PROFILE_SHA256=${VISTA_SCENE_LAYOUT_PROFILE_SHA256:?Pin the exact scene layout profile bytes}

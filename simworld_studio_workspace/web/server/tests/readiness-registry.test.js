@@ -12,6 +12,7 @@ const FIXED_TIME = Date.parse("2026-07-14T08:00:00.000Z");
 
 function disabledExcept(feature, policy = "required") {
   return {
+    artifact_journal: "disabled",
     review: "disabled",
     retrieval: "disabled",
     streaming: "disabled",

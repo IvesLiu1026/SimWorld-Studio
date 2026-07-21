@@ -110,6 +110,10 @@ install -d -o simworld -g simworld -m 755 \
 install -d -o root -g root -m 711 /var/lib/simworld-build
 install -d -o simworld-build -g simworld-build -m 700 /var/cache/simworld-build
 
+# Production readiness will not create or accept a permissive journal root.
+install -d -o simworld -g simworld -m 700 \
+    /var/lib/simworld/artifact-journal
+
 # Each slot dir created lazily by slot-launcher.sh on first start.
 
 # Release code and deployment templates are later executed by root during

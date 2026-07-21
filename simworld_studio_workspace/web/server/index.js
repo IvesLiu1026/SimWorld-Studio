@@ -15,6 +15,7 @@ const {
 const reviewRunRegistry = new ReviewRunRegistry();
 const { readinessHttpStatus } = require("./readiness-registry");
 const { createStudioReadiness } = require("./studio-readiness");
+const { createArtifactJournalRuntime } = require("./artifact-journal-runtime");
 const { createVistaImportRouter } = require("./vista-import-routes");
 const { createVistaImportRuntime } = require("./vista-import-runtime");
 const { createVistaAssetRuntime } = require("./vista-asset-runtime");
@@ -39,6 +40,7 @@ const {
   getBuilderRuntime,
 } = require("./builder-runtime-authority");
 let _vistaAnimationUeProbe=null;
+const artifactJournalRuntime=createArtifactJournalRuntime({env:process.env});
 const studioReadiness = createStudioReadiness({
   env: process.env,
   claudeBin: CLAUDE_BIN,
@@ -51,6 +53,7 @@ const studioReadiness = createStudioReadiness({
   animationUeProbe:(options)=>typeof _vistaAnimationUeProbe==="function"
     ?_vistaAnimationUeProbe(options)
     :null,
+  artifactJournalProbe:artifactJournalRuntime.readinessProbe,
 });
 const {
   codingAgentsEnabled,
@@ -111,6 +114,7 @@ const reviewLoopCoordinator=createReviewLoopCoordinator({
   defaultMode:({scope})=>reviewModeStore.get(scope),
   textHandler:handleSceneLoop,
   visualHandler:handleVisualSceneLoop,
+  artifactRecorder:artifactJournalRuntime.recorder,
   handlerDependencies:({scope})=>({
     STUDIO_SESSION,
     logToFile,
@@ -277,6 +281,7 @@ const vistaImportRuntime=createVistaImportRuntime({
   env:process.env,
   baseDir:__dirname,
   assetResolver:vistaAssetRuntime.resolver,
+  artifactRecorder:artifactJournalRuntime.recorder,
 });
 const _resolveVistaIdentity=(request)=>studioStreaming.resolveActiveSession(request);
 app.use("/api/vista/imports",createVistaImportRouter({
@@ -342,6 +347,7 @@ const vistaSceneBuildRuntime=createVistaSceneBuildRuntime({
   baseDir:__dirname,
   importService:vistaImportRuntime.service,
   executor:_vistaSceneExecutor,
+  artifactRecorder:artifactJournalRuntime.recorder,
   defaultRecordRoot:path.join(path.dirname(vistaImportRuntime.config.artifactRoot),"vista-scene-builds"),
 });
 app.use("/api/vista/imports",createVistaSceneBuildRouter({
@@ -364,6 +370,7 @@ const vistaAnimationTimelineRuntime=createVistaAnimationTimelineRuntime({
   importService:vistaImportRuntime.service,
   sceneBuildService:vistaSceneBuildRuntime.service,
   runtimeLifecycle:vistaRuntimeRegistry,
+  artifactRecorder:artifactJournalRuntime.recorder,
   transportResolver:_vistaAnimationTransportResolver,
   isActiveSessionBinding:(identity)=>studioStreaming.isActiveSessionBinding(identity),
   defaultRecordRoot:path.join(path.dirname(vistaImportRuntime.config.artifactRoot),"vista-animation-timeline"),

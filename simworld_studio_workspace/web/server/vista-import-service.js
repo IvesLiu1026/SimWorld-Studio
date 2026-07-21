@@ -345,6 +345,11 @@ class VistaImportService {
 
     this.importer = options.importer;
     this.artifactRoot = artifactRoot;
+    if (options.artifactRecorder !== undefined && options.artifactRecorder !== null
+        && typeof options.artifactRecorder.ensureImportCommitted !== "function") {
+      throw new TypeError("artifactRecorder must expose ensureImportCommitted");
+    }
+    this.artifactRecorder = options.artifactRecorder || null;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
     this.maxArtifactBytes = Number.isSafeInteger(options.maxArtifactBytes) && options.maxArtifactBytes > 0
@@ -404,6 +409,7 @@ class VistaImportService {
     if (existing) {
       this._assertMatchingIdentity(existing, identity);
       assertArtifactAccess(existing, access);
+      await this._ensureJournaled(existing);
       return { ...existing, created: false };
     }
 
@@ -460,6 +466,7 @@ class VistaImportService {
     const winner = persisted.artifact;
     this._assertMatchingIdentity(winner, identity);
     assertArtifactAccess(winner, access);
+    await this._ensureJournaled(winner);
     return { ...winner, created: persisted.created };
   }
 
@@ -468,7 +475,13 @@ class VistaImportService {
     const access = normalizeAccessContext(context);
     const artifact = await this._readArtifact(id, { allowMissing: false });
     assertArtifactAccess(artifact, access);
+    await this._ensureJournaled(artifact);
     return artifact;
+  }
+
+  async _ensureJournaled(artifact) {
+    if (!this.artifactRecorder) return;
+    await this.artifactRecorder.ensureImportCommitted({ artifact });
   }
 
   _assertMatchingIdentity(artifact, identity) {

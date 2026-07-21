@@ -140,6 +140,7 @@ function createVistaImportRuntime(options = {}) {
   const service = options.service || createVistaImportService({
     importer,
     artifactRoot: config.artifactRoot,
+    artifactRecorder: options.artifactRecorder || null,
   });
   return Object.freeze({ config, importer, service });
 }
