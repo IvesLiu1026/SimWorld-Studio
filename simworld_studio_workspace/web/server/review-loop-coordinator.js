@@ -19,6 +19,19 @@ const REVIEW_REASONS = new Set([
   "pass", "max_iterations", "builder_error", "critic_error",
   "budget_exhausted", "cancelled", "handler_error",
 ]);
+const REVIEW_EVIDENCE_PREFLIGHT_CODES = new Set([
+  "REVIEW_EVIDENCE_CAPACITY_EXHAUSTED",
+  "REVIEW_EVIDENCE_DURABILITY_FAULT",
+  "REVIEW_EVIDENCE_INVALID",
+  "REVIEW_EVIDENCE_ORPHAN_BACKLOG",
+  "REVIEW_EVIDENCE_PLATFORM_UNSUPPORTED",
+  "REVIEW_EVIDENCE_PROBE_ABORTED",
+  "REVIEW_EVIDENCE_PROBE_FAILED",
+  "REVIEW_EVIDENCE_SWEEP_BUDGET_EXHAUSTED",
+  "REVIEW_EVIDENCE_SWEEP_DEADLINE",
+  "REVIEW_EVIDENCE_SWEEP_UNSTABLE",
+  "REVIEW_EVIDENCE_UNAVAILABLE",
+]);
 const REVIEW_VERDICTS = new Set(["PASS", "FAIL", "NEEDS_IMPROVEMENT", "UNKNOWN"]);
 
 class ReviewLoopCoordinatorError extends Error {
@@ -645,6 +658,7 @@ function createReviewLoopCoordinator({
   artifactRecorder = null,
   captureReviewBinding = null,
   mutationArbiter = null,
+  reviewPreflight = null,
   handlerDependencies = () => ({}),
   logger = () => {},
 } = {}) {
@@ -666,6 +680,10 @@ function createReviewLoopCoordinator({
   if (mutationArbiter !== null && mutationArbiter !== undefined
       && (typeof mutationArbiter.acquire !== "function" || typeof mutationArbiter.isHeld !== "function")) {
     throw new TypeError("mutationArbiter must expose acquire and isHeld");
+  }
+  if (reviewPreflight !== null && reviewPreflight !== undefined
+      && typeof reviewPreflight !== "function") {
+    throw new TypeError("reviewPreflight must be a function");
   }
   const bindingCapture = typeof captureReviewBinding === "function"
     ? captureReviewBinding
@@ -746,6 +764,30 @@ function createReviewLoopCoordinator({
         ? null
         : safeId(requestedRunId, "runId");
       requestedReviewRunId = safeRequestedRunId;
+      if (reviewPreflight) {
+        let readiness;
+        try {
+          readiness = await reviewPreflight({ request, scope, mode });
+        } catch (_error) {
+          fail(
+            "REVIEW_EVIDENCE_PREFLIGHT_FAILED",
+            "Review evidence storage could not be certified before execution.",
+            503,
+          );
+        }
+        if (!readiness || readiness.status !== "ready") {
+          const cause = readiness && Array.isArray(readiness.causes)
+            ? readiness.causes.find((entry) => (
+              entry && REVIEW_EVIDENCE_PREFLIGHT_CODES.has(String(entry.code || ""))
+            ))
+            : null;
+          fail(
+            cause ? String(cause.code) : "REVIEW_EVIDENCE_NOT_READY",
+            "Review evidence storage is not ready for execution.",
+            503,
+          );
+        }
+      }
       resolvedHandlerDependencies = handlerDependencies({ request, mode, scope, run: null }) || {};
       if (!resolvedHandlerDependencies || typeof resolvedHandlerDependencies !== "object"
           || Array.isArray(resolvedHandlerDependencies)) {

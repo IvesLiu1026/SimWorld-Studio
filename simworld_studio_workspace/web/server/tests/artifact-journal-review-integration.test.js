@@ -227,6 +227,92 @@ test("exact pre-provider input failure explicitly permits a safe new Review ID",
   assert.equal(recorderCalls, 0);
 });
 
+test("Review evidence preflight blocks mutation and provider execution with exact recovery identity", async () => {
+  let starts = 0;
+  let handlerCalls = 0;
+  let recorderCalls = 0;
+  let preflightCalls = 0;
+  let dependencyCalls = 0;
+  let arbiterAcquires = 0;
+  const coordinator = createReviewLoopCoordinator({
+    registry: {
+      start() { starts += 1; throw new Error("must not start"); },
+      cancel() { return null; },
+      complete() { return false; },
+    },
+    transportProfile: "trusted_proxy",
+    resolveActiveSession: () => ACTIVE_LEASE,
+    isActiveSessionBinding: () => true,
+    loopbackSessionId: "loopback-session",
+    textHandler: async () => { handlerCalls += 1; },
+    visualHandler: async () => { handlerCalls += 1; },
+    handlerDependencies() {
+      dependencyCalls += 1;
+      throw new Error("must not resolve dependencies");
+    },
+    mutationArbiter: {
+      acquire() { arbiterAcquires += 1; throw new Error("must not acquire"); },
+      isHeld() { return false; },
+    },
+    reviewPreflight: async () => {
+      preflightCalls += 1;
+      return {
+        status: "not_ready",
+        causes: [{ code: "REVIEW_EVIDENCE_ORPHAN_BACKLOG" }],
+      };
+    },
+    artifactRecorder: artifactRecorderFixture({
+      prepare() { recorderCalls += 1; },
+      ensure() { recorderCalls += 1; },
+    }),
+  });
+  const response = responseFixture();
+  await coordinator.handleChat(request("text_loop"), response, () => {});
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(response.jsonBody, {
+    error: "Review evidence storage is not ready for execution.",
+    code: "REVIEW_EVIDENCE_ORPHAN_BACKLOG",
+    sessionId: `review-${"5d948d45c9ca690251c2de3caa6cd9e13e767b82bb18cf9a7df2549fceaa26dc"}`,
+    conversationId: "caller-conversation",
+    runId: "caller-run",
+    providerAttempted: false,
+  });
+  assert.equal(preflightCalls, 1);
+  assert.equal(dependencyCalls, 0);
+  assert.equal(arbiterAcquires, 0);
+  assert.equal(starts, 0);
+  assert.equal(handlerCalls, 0);
+  assert.equal(recorderCalls, 0);
+});
+
+test("Review evidence preflight exposes only allowlisted public cause codes", async () => {
+  let dependencyCalls = 0;
+  const coordinator = createReviewLoopCoordinator({
+    transportProfile: "trusted_proxy",
+    resolveActiveSession: () => ACTIVE_LEASE,
+    isActiveSessionBinding: () => true,
+    loopbackSessionId: "loopback-session",
+    textHandler: async () => {},
+    visualHandler: async () => {},
+    handlerDependencies() {
+      dependencyCalls += 1;
+      return {};
+    },
+    reviewPreflight: async () => ({
+      status: "not_ready",
+      causes: [{ code: "INTERNAL.CACHE:SHARD_7" }],
+    }),
+  });
+  const response = responseFixture();
+  await coordinator.handleChat(request("text_loop"), response, () => {});
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.jsonBody.code, "REVIEW_EVIDENCE_NOT_READY");
+  assert.equal(response.jsonBody.runId, "caller-run");
+  assert.equal(response.jsonBody.conversationId, "caller-conversation");
+  assert.equal(response.jsonBody.providerAttempted, false);
+  assert.equal(dependencyCalls, 0);
+});
+
 test("registry conflict never claims that an existing Review provider was not attempted", async () => {
   let handlerCalls = 0;
   let recorderCalls = 0;
