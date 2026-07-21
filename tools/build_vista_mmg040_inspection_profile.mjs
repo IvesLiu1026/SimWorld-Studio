@@ -16,7 +16,8 @@ import {
 
 export const INSPECTION_PROFILE_SCHEMA = "vista-mmg040-inspection-profile/v1";
 export const CANDIDATE_SOURCE_SCHEMA = "vista-mmg040-candidate-sources/v1";
-export const PINNED_CANDIDATE_SOURCE_SHA256 = "fc03861ddb92f71e23efa6794f98145455b22fdfef52e96b41fe11a299bf7c95";
+export const CANDIDATE_SOURCE_SET_ID = "official-minimal-gym-citynav-filename-audit-r2";
+export const PINNED_CANDIDATE_SOURCE_SHA256 = "35aaf9741650d028f8f11e303035ab10168ef78d5244411c64d9f37db7cf9f4e";
 
 const SAFE_ID = /^[a-z][a-z0-9_]{0,119}$/;
 const SAFE_CHECK = /^[a-z][a-z0-9_]{0,119}$/;
@@ -46,7 +47,7 @@ const OFFICIAL_FILESYSTEM_OBSERVATION = Object.freeze({
   count_semantics: "uasset_plus_umap_not_catalog_count",
   audit_document: Object.freeze({
     path: "docs/specs/production-readiness/evidence/2026-07-21-official-minimal-content-audit.md",
-    sha256: "e591be51470c2e4a4c390916f3cead810409daedbdeae84e7e28ffc5dac7015f",
+    sha256: "9769049b9aaddccfbcf40453f65e42ea44fdf05b7c599a27011774d5394f2c59",
   }),
   asset_registry_bundle: null,
 });
@@ -246,7 +247,7 @@ function validateCandidateSourceDocument(source, rawSha256, contract) {
   if (rawSha256 !== PINNED_CANDIDATE_SOURCE_SHA256) {
     fail("ANIMATION_MMG040_CANDIDATE_SOURCE_MISMATCH", "candidate source bytes do not match the compiled pin");
   }
-  if (source.schema !== CANDIDATE_SOURCE_SCHEMA || source.source_set_id !== "official-minimal-gym-citynav-filename-audit-r1" ||
+  if (source.schema !== CANDIDATE_SOURCE_SCHEMA || source.source_set_id !== CANDIDATE_SOURCE_SET_ID ||
       source.profile_id !== PROFILE_ID || source.profile_revision !== PROFILE_REVISION || source.sample_id !== SAMPLE_ID) {
     fail("ANIMATION_MMG040_CANDIDATE_SOURCE_MISMATCH", "candidate source identity is invalid");
   }

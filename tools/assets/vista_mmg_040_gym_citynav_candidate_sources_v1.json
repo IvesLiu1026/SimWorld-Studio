@@ -1,6 +1,6 @@
 {
   "schema": "vista-mmg040-candidate-sources/v1",
-  "source_set_id": "official-minimal-gym-citynav-filename-audit-r1",
+  "source_set_id": "official-minimal-gym-citynav-filename-audit-r2",
   "profile_id": "vista_mmg040",
   "profile_revision": "mmg040_project_content_r1",
   "sample_id": "mmg_040",
@@ -21,7 +21,7 @@
     "count_semantics": "uasset_plus_umap_not_catalog_count",
     "audit_document": {
       "path": "docs/specs/production-readiness/evidence/2026-07-21-official-minimal-content-audit.md",
-      "sha256": "e591be51470c2e4a4c390916f3cead810409daedbdeae84e7e28ffc5dac7015f"
+      "sha256": "9769049b9aaddccfbcf40453f65e42ea44fdf05b7c599a27011774d5394f2c59"
     },
     "asset_registry_bundle": null
   },
@@ -125,6 +125,84 @@
         "collision",
         "material_slots",
         "caster_physics"
+      ]
+    },
+    {
+      "candidate_id": "scene_sm_seat_table_01a",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Camping_Pack/Props/Seat_Table_01/Meshes/SM_SeatTable_01a.uasset",
+      "possible_roles": [
+        "stable_step_stool",
+        "seat_platform",
+        "gaze_target",
+        "hand_contact_target"
+      ],
+      "possible_target_asset_ids": [],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "loadable",
+        "spawnable",
+        "bounds",
+        "collision",
+        "material_slots",
+        "pbr_dependencies",
+        "support_surface",
+        "static_stability",
+        "visual_role_match"
+      ]
+    },
+    {
+      "candidate_id": "scene_sm_industrial_static_cart_1",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Industrial_Carts/Meshes/SM_Industrial_Carts_Static_Carts_1.uasset",
+      "possible_roles": [
+        "high_storage_support",
+        "cabinet_surrogate",
+        "box_support",
+        "gaze_target"
+      ],
+      "possible_target_asset_ids": [],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "loadable",
+        "spawnable",
+        "bounds",
+        "collision",
+        "material_slots",
+        "pbr_dependencies",
+        "support_surface",
+        "static_stability",
+        "visual_role_match"
+      ]
+    },
+    {
+      "candidate_id": "scene_sm_industrial_service_cart_8",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Industrial_Carts/Meshes/SM_Industrial_Carts_Service_Carts_8.uasset",
+      "possible_roles": [
+        "high_storage_support",
+        "cabinet_surrogate",
+        "box_support",
+        "gaze_target"
+      ],
+      "possible_target_asset_ids": [],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "loadable",
+        "spawnable",
+        "bounds",
+        "collision",
+        "material_slots",
+        "pbr_dependencies",
+        "support_surface",
+        "caster_physics",
+        "visual_role_match"
       ]
     }
   ],

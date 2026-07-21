@@ -44,6 +44,13 @@ Concrete package files relevant to the first `mmg_040` scene are present:
 - `CityDatabase/meshes/SM_chair_b.uasset`;
 - `CityDatabase/blueprints/BP_Box.uasset`, `BP_Box2.uasset`, and
   `BP_Box3.uasset`;
+- `Camping_Pack/Props/Seat_Table_01/Meshes/SM_SeatTable_01a.uasset`, a
+  filename-only candidate for the visible stable step/seat alternative;
+- `Industrial_Carts/Meshes/SM_Industrial_Carts_Static_Carts_1.uasset` and
+  `SM_Industrial_Carts_Service_Carts_8.uasset`, filename-only candidates for a
+  tall storage support or cabinet surrogate;
+- the industrial-cart pack also contains separate 4K BaseColor, Normal,
+  Roughness, and Metallic texture packages for its pinned material families;
 - multiple `Human_Avatar/Animation/LiftSet` sequences and montages, including
   look, pickup, put-aside, idle, and throw variants at several heights;
 - `Characters/Mannequins/Animations/Manny/MM_Fall_Loop.uasset`;
@@ -51,9 +58,11 @@ Concrete package files relevant to the first `mmg_040` scene are present:
   `CR_Mannequin_BasicFootIK.uasset` (with corresponding copies in the
   `Human_Avatar` subtree).
 
-No cabinet, shelf, or step-stool package was identified by the bounded
-filename search. That is not proof of absence: semantic names and Blueprint
-components can differ from filenames.
+No package named literally as a cabinet, shelf, or step stool was identified by
+the bounded filename search. A follow-up synonym search found the seat-table
+and industrial-cart candidates above. Their names and adjacent PBR packages
+make them useful live-inspection candidates, but do not prove dimensions,
+stability, support-surface suitability, semantic role, or spawnability.
 
 ## What remains unproven
 
@@ -65,7 +74,7 @@ was launched, so this audit does not establish:
 - Blueprint spawnability;
 - dimensions, collision, material slots, or PBR texture bindings;
 - animation skeleton/AnimBP compatibility;
-- cabinet/stool semantic matches;
+- cabinet/stool or storage-rack/stable-step semantic matches;
 - a catalog digest, Postgres row count, Qdrant point count, or embedding
   revision.
 

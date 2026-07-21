@@ -24,6 +24,7 @@ import {
 import * as inspectionProfileModule from "../build_vista_mmg040_inspection_profile.mjs";
 
 const {
+  CANDIDATE_SOURCE_SET_ID,
   INSPECTION_PROFILE_SCHEMA,
   Mmg040InspectionProfileError,
   PINNED_CANDIDATE_SOURCE_SHA256,
@@ -143,6 +144,7 @@ function writeProtectedJson(directory, name, value) {
 
 test("candidate source is byte-pinned to the official archive and filename-only evidence", () => {
   assert.equal(candidateSha256, PINNED_CANDIDATE_SOURCE_SHA256);
+  assert.equal(candidates.source_set_id, CANDIDATE_SOURCE_SET_ID);
   assert.equal(candidates.source_binding.archive_sha256,
     "806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f");
   assert.equal(candidates.source_binding.project_revision,
@@ -151,8 +153,26 @@ test("candidate source is byte-pinned to the official archive and filename-only 
   assert.equal(candidates.filesystem_inventory_observation.count_semantics,
     "uasset_plus_umap_not_catalog_count");
   assert.equal(candidates.filesystem_inventory_observation.asset_registry_bundle, null);
+  assert.equal(candidates.filesystem_inventory_observation.audit_document.sha256,
+    "9769049b9aaddccfbcf40453f65e42ea44fdf05b7c599a27011774d5394f2c59");
   assert.equal(hasKey(candidates, "asset_count"), false);
   assert.ok(candidates.scene_object_candidates.every((entry) => entry.possible_target_asset_ids.length === 0));
+  const sceneCandidates = new Map(candidates.scene_object_candidates
+    .map((entry) => [entry.candidate_id, entry]));
+  assert.equal(sceneCandidates.get("scene_sm_seat_table_01a").filesystem_locator,
+    "Camping_Pack/Props/Seat_Table_01/Meshes/SM_SeatTable_01a.uasset");
+  assert.ok(sceneCandidates.get("scene_sm_seat_table_01a").possible_roles.includes("stable_step_stool"));
+  assert.equal(sceneCandidates.get("scene_sm_industrial_static_cart_1").filesystem_locator,
+    "Industrial_Carts/Meshes/SM_Industrial_Carts_Static_Carts_1.uasset");
+  assert.equal(sceneCandidates.get("scene_sm_industrial_service_cart_8").filesystem_locator,
+    "Industrial_Carts/Meshes/SM_Industrial_Carts_Service_Carts_8.uasset");
+  for (const candidateId of [
+    "scene_sm_seat_table_01a",
+    "scene_sm_industrial_static_cart_1",
+    "scene_sm_industrial_service_cart_8",
+  ]) {
+    assert.ok(sceneCandidates.get(candidateId).unresolved_checks.includes("visual_role_match"));
+  }
   assert.ok(candidates.animation_source_candidates.every((entry) => !entry.filesystem_locator.startsWith("/Game/")));
   assert.ok(candidates.animation_source_candidates.every((entry) =>
     entry.locator_kind === "content_relative_prefix" ? entry.filesystem_locator.endsWith("/") : entry.filesystem_locator.endsWith(".uasset")));

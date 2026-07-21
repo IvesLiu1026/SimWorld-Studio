@@ -63,10 +63,26 @@ confirmed packages for:
 - `Human_Avatar/DefaultCharacter/Blueprint/BP_DefaultHuman.uasset`;
 - `Human_Avatar/DefaultCharacter/Blueprint/BP_Default_Character.uasset`.
 
-The same focused search found no package filename containing `stool`,
-`cabinet`, or `shelf`. This remains filename evidence only; it does not prove
-object path, class, loadability, spawnability, bounds, collision, materials or
-animation compatibility.
+The same initial search found no package filename containing `stool`,
+`cabinet`, or `shelf`. A bounded synonym expansion subsequently identified
+three official-content candidates that can be inspected before acquiring any
+external asset:
+
+| Candidate role | Content-relative package | SHA-256 |
+| --- | --- | --- |
+| stable step/seat alternative | `Camping_Pack/Props/Seat_Table_01/Meshes/SM_SeatTable_01a.uasset` | `e282a14a42d1824220ef8312932580b60de33d6cf1005b4e5de57d85fef31981` |
+| static high-storage support | `Industrial_Carts/Meshes/SM_Industrial_Carts_Static_Carts_1.uasset` | `a6f3047276af42d00f0a9e8a4d910a8efc1e7be871e37285c5ba3c45bda13d83` |
+| service-cart high-storage support | `Industrial_Carts/Meshes/SM_Industrial_Carts_Service_Carts_8.uasset` | `e3f7896f34be1596a20956cde1cd730117412cf4363e00fc357b00d926213f5c` |
+
+The two industrial-cart material families have adjacent BaseColor, Normal,
+Roughness and Metallic 4K texture packages in the same verified archive. The
+candidate set is raw-byte pinned as
+`35aaf9741650d028f8f11e303035ab10168ef78d5244411c64d9f37db7cf9f4e`
+and the generated inspection profile keeps all three at
+`candidate_unverified`, `start_allowed=false`. Filename and package-byte
+evidence still does not prove object path, class, loadability, spawnability,
+bounds, collision, resolved material slots, physical stability, support
+surface, or visual role.
 
 The checked-in Poly Haven bootstrap manifest passed its zero-network dry run:
 
@@ -85,13 +101,15 @@ publication remain later, separately evidenced state changes.
 ## Next authoritative evidence
 
 1. The live runtime owner captures a revision-bound AssetRegistry audit and a
-   read-only load/spawn/material/bounds/collision receipt for the chair, box and
-   selected Human Avatar candidates.
-2. An operator explicitly approves the pinned CC0 acquisition; the resulting
-   receipt and tree are verified before any UE import.
-3. A disposable UE copy imports and validates stool/shelf PBR assets, then
-   produces exact object paths and a non-fixture `mmg_040` layout profile.
-4. Only that reviewed object manifest becomes input to a generation-isolated
+   load/spawn/material/bounds/collision receipt for the chair, box, three new
+   official scene candidates, and selected Human Avatar candidates.
+2. If one step candidate and one high-storage candidate pass visual-role,
+   support-surface and stability review, use their exact observed object paths
+   to produce the non-fixture `mmg_040` layout profile without external assets.
+3. Only if the official candidates fail, an operator explicitly approves the
+   pinned CC0 acquisition; the resulting receipt and tree are verified before
+   any disposable UE import.
+4. Only the reviewed object manifest becomes input to a generation-isolated
    Postgres/Qdrant semantic snapshot build and parity receipt.
 
 Until those four items exist, the repository proves a hardened offline worker

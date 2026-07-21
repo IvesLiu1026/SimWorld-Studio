@@ -45,7 +45,7 @@
     },
     "candidate_source_sha256": {
       "type": "string",
-      "const": "fc03861ddb92f71e23efa6794f98145455b22fdfef52e96b41fe11a299bf7c95"
+      "const": "35aaf9741650d028f8f11e303035ab10168ef78d5244411c64d9f37db7cf9f4e"
     },
     "verification_status": {
       "enum": [
@@ -278,7 +278,7 @@
               "const": "docs/specs/production-readiness/evidence/2026-07-21-official-minimal-content-audit.md"
             },
             "sha256": {
-              "const": "e591be51470c2e4a4c390916f3cead810409daedbdeae84e7e28ffc5dac7015f"
+              "const": "9769049b9aaddccfbcf40453f65e42ea44fdf05b7c599a27011774d5394f2c59"
             }
           }
         },
