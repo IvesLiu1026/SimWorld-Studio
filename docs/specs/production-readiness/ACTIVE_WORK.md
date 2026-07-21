@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed checkpoint: `b38a2e1b` (`fix: reject unknown mmg040 animation revisions`)
+- Latest pushed checkpoint: `c8ae8071` (`fix: isolate one-shot model helpers`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -149,9 +149,15 @@ change and report validation commands plus remaining live/admin gates.
   from the pinned `BP_MMG040Character_C`; exact live character content,
   montage/IK adapters and rendered fall/pick-up evidence remain required.
 - Read-only archive inspection identified Manny/Quinn source skeleton, AnimBP,
-  Control Rig, IK Rig, LiftSet pick-up montage and fall-loop candidates. They
-  remain source-only: `EndHandTrace` is not the required attachment signal and
-  the observed fall loop is not a landed/root-motion fall montage.
+  Control Rig, IK Rig, LiftSet pick-up montage and a candidate named
+  `MM_Fall_Loop`. They now have a UE 5.3.2 NullRHI load receipt covering 12/12
+  animation-stack source objects, exact
+  pawn mesh/AnimBP/skeleton relationships and clip durations. They remain
+  source-only: the rigs preview Manny while the pawn uses Quinn, UE reports 14
+  stale PoseAsset warnings plus one inspection-script deprecation warning,
+  `EndHandTrace` is not the required attachment signal and the observed
+  `MM_Fall_Loop` clip has root motion disabled; no
+  landed fall/recovery behavior is verified.
 - The typed plugin r2 PickUp slice is preserved on the isolated
   `codex/mmg040-pickup-r2-candidate` branch at `bed9aafa`. It keeps r1 byte
   compatibility and adds revision-aware r2 14-asset/eight-action contracts,
@@ -175,6 +181,18 @@ change and report validation commands plus remaining live/admin gates.
   is not reproduced by this branch's current wiring.
 - The real Claude adapter remains tool-free, strict-schema, image-over-stdin,
   budgeted, cancellable, and stripped of Studio/database credentials.
+- Commit `c8ae8071` closes a separate pre-critic summarizer leak: Claude
+  one-shots now use the existing bubblewrap/tool-free policy and a fresh
+  allowlisted environment, require one usage/cost-bearing result, enforce an
+  independent `--max-budget-usd`, and terminate at hard stdout/stderr limits.
+  Codex one-shots fail before spawn for Production and summarizer workloads.
+- The one-shot cap is independent and is not yet recorded inside the
+  builder/critic aggregate Review budget snapshot. Production must either add
+  an explicit summarizer stage to that ledger or keep provider summarization
+  fail-closed; do not claim total Review cost closure from `c8ae8071` alone.
+- A live isolated summarizer also requires a service-owned mode-`0700`
+  `AGENT_SANDBOX_AUTH_ROOT/claude/`; missing Production auth configuration
+  fails closed to the existing deterministic intent fallback.
 - Review smoke receipts no longer trust caller-supplied CLI identity. The
   runner measures the exact configured Claude binary with a bounded
   `--version` preflight and rejects a mismatch before any paid call.
@@ -206,5 +224,7 @@ change and report validation commands plus remaining live/admin gates.
   `evidence/2026-07-22-mmg040-semantic-smoke-catalog-checkpoint.md`
 - Current isolated PickUp r2 candidate follow-up:
   `evidence/2026-07-22-mmg040-pickup-r2-candidate-checkpoint.md`
+- Current UE-loadable archive animation candidate follow-up:
+  `evidence/2026-07-22-mmg040-animation-candidate-inspection-checkpoint.md`
 - Current Review auth/CLI identity follow-up:
   `evidence/2026-07-22-review-cli-identity-checkpoint.md`
