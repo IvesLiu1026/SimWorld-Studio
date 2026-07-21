@@ -6540,6 +6540,27 @@ input, textarea, select { cursor: text; }
 }
 .review-accounting-detail { color: var(--ink-3); }
 .review-accounting-exhausted { border-left-color: var(--orange); }
+.review-retry-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--ink-3);
+  font-size: 10px;
+}
+.review-retry-button {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 2px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font: inherit;
+}
+.review-retry-button:hover {
+  border-color: var(--blue);
+  color: var(--blue-2);
+}
 
 @media (max-width: 1100px) {
   .sw-project-context { display: none; }

@@ -74,6 +74,45 @@ export async function resetScene() {
   }).catch(() => {});
 }
 
+function chatProtocolError(message) {
+  const error = new Error(message);
+  error.code = "CHAT_SSE_PROTOCOL_INVALID";
+  error.retryable = true;
+  return error;
+}
+
+const MAX_CHAT_SSE_BUFFER_BYTES = 1024 * 1024;
+
+function chatBufferBytes(value) {
+  return new TextEncoder().encode(String(value || "")).byteLength;
+}
+
+async function dispatchSseFrame(frame, onEvent) {
+  const lines = String(frame || "").split(/\r?\n/);
+  let eventType = "message";
+  const dataLines = [];
+  for (const line of lines) {
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) eventType = line.slice(6).trim() || "message";
+    if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+  }
+  if (dataLines.length === 0) return false;
+  let parsed;
+  try {
+    parsed = JSON.parse(dataLines.join("\n"));
+  } catch {
+    throw chatProtocolError("Chat stream returned invalid event data");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw chatProtocolError("Chat stream returned an invalid event payload");
+  }
+  if (eventType === "done" && typeof parsed.isError !== "boolean") {
+    throw chatProtocolError("Chat stream returned an invalid terminal payload");
+  }
+  await onEvent({ type: eventType, data: parsed });
+  return eventType === "done";
+}
+
 export async function sendChat(message, sessionId, onEvent, signal, options) {
   const controller = signal ? undefined : new AbortController();
   const effectiveSignal = signal || controller?.signal;
@@ -99,6 +138,7 @@ export async function sendChat(message, sessionId, onEvent, signal, options) {
         assetRetrievalMode: options?.assetRetrievalMode,
         requireRealAssets: options?.requireRealAssets,
         assetDegradedMode: options?.assetDegradedMode,
+        runId: options?.runId,
       }),
       signal: effectiveSignal,
     });
@@ -107,7 +147,17 @@ export async function sendChat(message, sessionId, onEvent, signal, options) {
   }
 
   if (!response.ok || !response.body) {
-    throw new Error(`Server error: ${response.status}`);
+    let details = null;
+    try { details = await response.json(); } catch {}
+    const error = new Error(details?.error || `Server error: ${response.status}`);
+    error.status = response.status;
+    error.code = details?.code || "CHAT_HTTP_ERROR";
+    error.retryable = details?.retryable === true;
+    error.recovered = details?.recovered === true;
+    error.runId = details?.runId || details?.run_id || null;
+    error.conversationId = details?.conversationId || details?.conversation_id || null;
+    error.providerAttempted = details?.providerAttempted ?? details?.provider_attempted;
+    throw error;
   }
 
   const reader = response.body.getReader();
@@ -115,53 +165,84 @@ export async function sendChat(message, sessionId, onEvent, signal, options) {
   let buffer = "";
   let lastDataTime = Date.now();
   const idleTimeoutMs = 120000;
+  let terminalReceived = false;
+  const rejectOversizedBuffer = async () => {
+    try { await reader.cancel(); } catch {}
+    throw chatProtocolError("Chat stream exceeded the SSE frame buffer limit");
+  };
+  const drainFrames = async () => {
+    for (;;) {
+      const delimiter = buffer.match(/\r?\n\r?\n/);
+      if (!delimiter || delimiter.index === undefined) break;
+      const frame = buffer.slice(0, delimiter.index);
+      buffer = buffer.slice(delimiter.index + delimiter[0].length);
+      if (chatBufferBytes(frame) > MAX_CHAT_SSE_BUFFER_BYTES) {
+        await rejectOversizedBuffer();
+      }
+      if (await dispatchSseFrame(frame, onEvent)) {
+        terminalReceived = true;
+        return true;
+      }
+    }
+    return false;
+  };
 
-  for (;;) {
-    const readPromise = reader.read();
-    const timeoutPromise = new Promise((_, reject) => {
-      const check = setInterval(() => {
-        if (Date.now() - lastDataTime > idleTimeoutMs) {
-          clearInterval(check);
-          reader.cancel();
-          reject(new Error("Connection idle timeout"));
+  try {
+    for (;;) {
+      const readPromise = reader.read();
+      const timeoutPromise = new Promise((_, reject) => {
+        const check = setInterval(() => {
+          if (Date.now() - lastDataTime > idleTimeoutMs) {
+            clearInterval(check);
+            Promise.resolve(reader.cancel()).catch(() => {});
+            reject(new Error("Connection idle timeout"));
+          }
+        }, 5000);
+        readPromise.then(() => clearInterval(check)).catch(() => clearInterval(check));
+      });
+
+      let result;
+      try {
+        result = await Promise.race([readPromise, timeoutPromise]);
+      } catch (cause) {
+        if (effectiveSignal?.aborted) {
+          const aborted = new Error("Chat request aborted");
+          aborted.name = "AbortError";
+          aborted.cause = cause;
+          throw aborted;
         }
-      }, 5000);
-      readPromise.then(() => clearInterval(check)).catch(() => clearInterval(check));
-    });
-
-    let result;
-    try {
-      result = await Promise.race([readPromise, timeoutPromise]);
-    } catch {
-      onEvent({ type: "done", data: { sessionId: null, isError: true, latestScreenshot: null } });
-      break;
-    }
-
-    const { done, value } = result;
-    if (done) break;
-
-    lastDataTime = Date.now();
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() ?? "";
-
-    for (const chunk of chunks) {
-      const lines = chunk.split("\n");
-      let eventType = "message";
-      let data = "";
-
-      for (const line of lines) {
-        if (line.startsWith("event: ")) eventType = line.slice(7).trim();
-        if (line.startsWith("data: ")) data = line.slice(6);
+        const error = new Error("Review delivery ended before an authoritative terminal response");
+        error.code = "REVIEW_TRANSPORT_AMBIGUOUS";
+        error.retryable = true;
+        error.cause = cause;
+        throw error;
       }
 
-      if (data) {
-        try {
-          const parsed = JSON.parse(data);
-          onEvent({ type: eventType, data: parsed });
-        } catch {}
+      const { done, value } = result;
+      if (done) {
+        buffer += decoder.decode();
+        await drainFrames();
+        if (chatBufferBytes(buffer) > MAX_CHAT_SSE_BUFFER_BYTES) {
+          await rejectOversizedBuffer();
+        }
+        break;
+      }
+
+      lastDataTime = Date.now();
+      buffer += decoder.decode(value, { stream: true });
+      if (await drainFrames()) return;
+      if (chatBufferBytes(buffer) > MAX_CHAT_SSE_BUFFER_BYTES) {
+        await rejectOversizedBuffer();
       }
     }
+    if (!terminalReceived) {
+      const error = new Error("Review delivery ended before an authoritative terminal response");
+      error.code = "REVIEW_TRANSPORT_AMBIGUOUS";
+      error.retryable = true;
+      throw error;
+    }
+  } finally {
+    try { await reader.cancel(); } catch {}
   }
 }
 

@@ -17,40 +17,55 @@ test("normalizes persisted review modes to a safe value", () => {
   assert.equal(normalizeLoopMode(null), "vanilla");
 });
 
-test("normalizes and deduplicates same-origin visual evidence", () => {
+test("normalizes and deduplicates scoped opaque visual evidence", () => {
+  const reference = {
+    schema: "simworld-review-evidence-ref/v1",
+    scope_digest: "a".repeat(64),
+    evidence_id: `sha256:${"b".repeat(64)}`,
+    handle: `evidence-${"c".repeat(48)}`,
+  };
   const urls = reviewEvidenceUrls({
-    screenshotUrl: "/api/screenshot/file?path=%2Ftmp%2Ffront.png",
-    screenshotUrls: [
-      "/api/screenshot/file?path=%2Ftmp%2Ffront.png",
-      "/api/screenshot/file?path=%2Ftmp%2Fside.png",
-      "https://example.test/not-allowed.png",
-    ],
-    paths: ["/tmp/top.png", "/tmp/top.png"],
-  });
+    screenshotRef: reference,
+    screenshotRefs: [reference],
+    screenshotUrls: ["/api/screenshot/file?path=%2Ftmp%2Fmust-not-leak.png"],
+    paths: ["/tmp/must-not-leak.png"],
+  }, "/api", "conversation-a");
 
   assert.deepEqual(urls, [
-    "/api/screenshot/file?path=%2Ftmp%2Ffront.png",
-    "/api/screenshot/file?path=%2Ftmp%2Fside.png",
-    "/api/screenshot/file?path=%2Ftmp%2Ftop.png",
+    `/api/review-evidence/${reference.handle}?evidenceId=sha256%3A${"b".repeat(64)}&conversationId=conversation-a`,
   ]);
 });
 
 test("merges multi-shot and verdict evidence without duplicate cards", () => {
+  const front = {
+    schema: "simworld-review-evidence-ref/v1",
+    scope_digest: "a".repeat(64),
+    evidence_id: `sha256:${"b".repeat(64)}`,
+    handle: `evidence-${"c".repeat(48)}`,
+  };
+  const side = {
+    ...front,
+    evidence_id: `sha256:${"d".repeat(64)}`,
+    handle: `evidence-${"e".repeat(48)}`,
+  };
   const shots = mergeReviewEvidence([], {
     round: 2,
-    paths: ["/tmp/front.png", "/tmp/side.png"],
-  });
+    evidence: [front, side],
+  }, "/api", "conversation-a");
   const merged = mergeReviewEvidence(shots, {
     round: 2,
-    screenshotUrls: [
-      "/api/screenshot/file?path=%2Ftmp%2Ffront.png",
-      "/api/screenshot/file?path=%2Ftmp%2Fside.png",
-    ],
-  });
+    screenshotRefs: [front, side],
+  }, "/api", "conversation-a");
 
   assert.deepEqual(merged, [
-    { round: 2, url: "/api/screenshot/file?path=%2Ftmp%2Ffront.png" },
-    { round: 2, url: "/api/screenshot/file?path=%2Ftmp%2Fside.png" },
+    {
+      round: 2,
+      url: `/api/review-evidence/${front.handle}?evidenceId=sha256%3A${"b".repeat(64)}&conversationId=conversation-a`,
+    },
+    {
+      round: 2,
+      url: `/api/review-evidence/${side.handle}?evidenceId=sha256%3A${"d".repeat(64)}&conversationId=conversation-a`,
+    },
   ]);
 });
 

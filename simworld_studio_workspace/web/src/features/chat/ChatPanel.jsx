@@ -22,6 +22,7 @@ import CheckpointBar from "./CheckpointBar.jsx";
 import SkillsPanel from "./SkillsPanel.jsx";
 import {
   appendTextDeltaToMessage,
+  assertReviewRunEvent,
   buildChatStopPayload,
   buildWelcomeMessage,
   generateMessageId,
@@ -29,6 +30,16 @@ import {
   mergeReviewAccounting,
   mergeReviewEvidence,
   normalizeLoopMode,
+  claimPendingReviewExclusive,
+  clearPreProviderReviewExclusive,
+  clearTerminalReviewExclusive,
+  createReviewOwnerId,
+  markPendingReviewTerminalExclusive,
+  pendingReviewRecordExists,
+  productionReviewRequiresWebLocks,
+  readPendingReview,
+  reviewFailureDisposition,
+  reviewTerminalDisposition,
   screenshotPathFromUrl,
   turnChangedScene,
 } from "./chatRuntime.js";
@@ -43,6 +54,13 @@ const QUICK_SUGGESTIONS = [
 
 const CHAT_CONVERSATIONS_KEY = "simworld.chat.conversations.v1";
 const CHAT_ACTIVE_KEY = "simworld.chat.activeConversation.v1";
+
+function generateReviewRunId() {
+  const uuid = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+  return `review-client-${uuid}`;
+}
 
 function normalizeAssetPolicy(value) {
   return value === "basic_geometry" ? "basic_geometry" : "real_assets";
@@ -104,9 +122,57 @@ function normalizeConversation(conversation) {
 
 function loadChatConversations() {
   const saved = readJsonStorage(CHAT_CONVERSATIONS_KEY, []);
-  const conversations = Array.isArray(saved) && saved.length > 0
+  let conversations = Array.isArray(saved) && saved.length > 0
     ? saved.map(normalizeConversation)
     : [makeConversation()];
+  const pending = readPendingReview();
+  if (pending) {
+    let conversation = conversations.find((item) => item.id === pending.conversationId);
+    if (!conversation) {
+      conversation = makeConversation({ id: pending.conversationId });
+      conversations = [conversation, ...conversations];
+    }
+    conversations = conversations.map((item) => {
+      if (item.id !== pending.conversationId) return item;
+      const messages = [...(item.state.messages || [])];
+      if (!messages.some((message) => message.id === pending.userMessageId)) {
+        messages.push({
+          id: pending.userMessageId,
+          role: "user",
+          content: pending.request.prompt,
+          timestamp: pending.createdAt || Date.now(),
+        });
+      }
+      const assistantIndex = messages.findIndex((message) => message.id === pending.assistantId);
+      const recovered = {
+        id: pending.assistantId,
+        role: "assistant",
+        content: pending.state === "terminal_received"
+          ? "A Review terminal was received but browser reconciliation did not finish. Retry the same server-owned run ID to recover it safely."
+          : "Review delivery was interrupted. Retry resumes the same server-owned run without starting a second provider attempt.",
+        waiting: false,
+        toolCalls: [],
+        timestamp: pending.createdAt || Date.now(),
+        reviewRequest: {
+          ...pending.request,
+          pendingGeneration: pending.generation,
+          pendingOwnerId: pending.ownerId,
+          pendingState: pending.state,
+          terminalReceipt: pending.terminalReceipt || null,
+        },
+        reviewRetryAvailable: true,
+        reviewStartNewAvailable: false,
+        reviewResult: {
+          code: "REVIEW_TRANSPORT_AMBIGUOUS",
+          retryable: true,
+          recovered: false,
+        },
+      };
+      if (assistantIndex >= 0) messages[assistantIndex] = { ...messages[assistantIndex], ...recovered };
+      else messages.push(recovered);
+      return { ...item, state: { ...item.state, messages } };
+    });
+  }
   const savedActiveId = (() => {
     try {
       return localStorage.getItem(CHAT_ACTIVE_KEY);
@@ -114,10 +180,93 @@ function loadChatConversations() {
       return null;
     }
   })();
-  const activeConversationId = conversations.some((conversation) => conversation.id === savedActiveId)
-    ? savedActiveId
-    : conversations[0].id;
+  const activeConversationId = pending
+    ? pending.conversationId
+    : (conversations.some((conversation) => conversation.id === savedActiveId)
+      ? savedActiveId
+      : conversations[0].id);
   return { conversations, activeConversationId };
+}
+
+function terminalUiPersistenceError(message) {
+  const error = new Error(message);
+  error.code = "REVIEW_TERMINAL_UI_PERSIST_FAILED";
+  error.retryable = true;
+  return error;
+}
+
+function persistedTerminalMessageMatches({
+  storage = globalThis.localStorage,
+  conversationId,
+  assistantId,
+  runId,
+  receiptId,
+}) {
+  try {
+    const stored = JSON.parse(storage.getItem(CHAT_CONVERSATIONS_KEY) || "[]");
+    const conversation = Array.isArray(stored)
+      ? stored.find((item) => item?.id === conversationId)
+      : null;
+    const message = conversation?.state?.messages?.find((item) => item?.id === assistantId);
+    return Boolean(
+      message
+      && message.reviewRequest?.runId === runId
+      && message.reviewTerminalReceiptId === receiptId
+      && message.waiting === false,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function persistTerminalConversation({
+  conversations,
+  activeConversationId,
+  messages,
+  assistantId,
+  runId,
+  receiptId,
+  storage = globalThis.localStorage,
+}) {
+  let stored;
+  try {
+    const raw = storage.getItem(CHAT_CONVERSATIONS_KEY);
+    stored = raw ? JSON.parse(raw) : conversations;
+  } catch {
+    throw terminalUiPersistenceError("Saved conversations could not be read");
+  }
+  if (!Array.isArray(stored)) {
+    throw terminalUiPersistenceError("Saved conversations are invalid");
+  }
+  const source = stored;
+  let matched = false;
+  const next = source.map((conversation) => {
+    if (conversation?.id !== activeConversationId) return conversation;
+    matched = true;
+    return {
+      ...conversation,
+      title: titleFromMessages(messages),
+      updatedAt: Date.now(),
+      state: { ...(conversation.state || {}), messages },
+    };
+  });
+  if (!matched) {
+    throw terminalUiPersistenceError("The Review conversation no longer exists");
+  }
+  try {
+    storage.setItem(CHAT_CONVERSATIONS_KEY, JSON.stringify(next));
+  } catch {
+    throw terminalUiPersistenceError("The Review terminal message could not be stored");
+  }
+  if (!persistedTerminalMessageMatches({
+    storage,
+    conversationId: activeConversationId,
+    assistantId,
+    runId,
+    receiptId,
+  })) {
+    throw terminalUiPersistenceError("The Review terminal message could not be verified");
+  }
 }
 
 function persistActiveConversation(conversations, activeConversationId, state) {
@@ -233,9 +382,14 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   const [annotating, setAnnotating] = useState(false);
   const [turnCount, setTurnCount] = useState(initialState.turnCount || 0);
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [preparingReview, setPreparingReview] = useState(false);
   const scrollRef = useRef(null);
   const abortRef = useRef(null);
   const activeRunRef = useRef(null);
+  const dispatchInFlightRef = useRef(false);
+  const preparingReviewRef = useRef(false);
+  const reviewOwnerIdRef = useRef(null);
+  if (!reviewOwnerIdRef.current) reviewOwnerIdRef.current = createReviewOwnerId();
   const textareaRef = useRef(null);
   const selfEvolutionReqSeqRef = useRef(0);
   const activeSkills = autoSkillSelectionEnabled ? autoSelectedSkills : selectedSkills;
@@ -249,6 +403,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
       insertText: (text) =>
         setInput((prev) => (prev ? prev + "\n" + text : text)),
       loadScene: (scene) => {
+        if (preparingReviewRef.current || dispatchInFlightRef.current) return;
         if (scene.sessionId) {
           setSessionId(scene.sessionId);
           setLoopMode(normalizeLoopMode(scene.loopMode));
@@ -361,7 +516,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   }, [onSessionChange]);
 
   const handleSelectConversation = useCallback((id) => {
-    if (loading || id === activeConversationId) return;
+    if (loading || preparingReviewRef.current || dispatchInFlightRef.current
+        || id === activeConversationId) return;
     const conversation = conversations.find((item) => item.id === id);
     if (!conversation) return;
     setActiveConversationId(id);
@@ -373,7 +529,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   }, [activeConversationId, conversations, loadConversationState, loading]);
 
   const handleNewConversation = useCallback(() => {
-    if (loading) return;
+    if (loading || preparingReviewRef.current || dispatchInFlightRef.current) return;
     const conversation = makeConversation();
     setConversations((prev) => {
       const next = [conversation, ...prev];
@@ -391,7 +547,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   }, [loadConversationState, loading]);
 
   const handleDeleteConversation = useCallback((id) => {
-    if (loading) return;
+    if (loading || preparingReviewRef.current || dispatchInFlightRef.current) return;
     const remaining = conversations.filter((conversation) => conversation.id !== id);
     const next = remaining.length ? remaining : [makeConversation()];
     writeJsonStorage(CHAT_CONVERSATIONS_KEY, next);
@@ -446,7 +602,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   // Restore (or switch branch to) a checkpoint: revert the live scene + load that chat path.
   const handleRestoreCheckpoint = useCallback(async (id) => {
     const sid = studioSessionRef.current;
-    if (!sid || restoringId) return;
+    if (!sid || restoringId || preparingReviewRef.current || dispatchInFlightRef.current) return;
     setRestoringId(id);
     try {
       await restoreCheckpoint(sid, id);
@@ -471,45 +627,191 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   }, [input]);
 
   const handleSend = useCallback(
-    async (overrideMessage, feedbackText) => {
+    async (overrideMessage, feedbackText, retryRequest = null) => {
       const text = (overrideMessage || input).trim();
-      if (!text || loading) return;
+      if (!text || loading || dispatchInFlightRef.current) return;
+      dispatchInFlightRef.current = true;
+      const pendingBeforeDispatch = readPendingReview();
+      const pendingRecordExists = pendingReviewRecordExists();
+      const isStartNewRequest = retryRequest?.startNew === true;
+      const isExactPendingRetry = Boolean(
+        pendingBeforeDispatch
+        && !isStartNewRequest
+        && retryRequest?.runId === pendingBeforeDispatch.request.runId
+        && retryRequest?.pendingGeneration === pendingBeforeDispatch.generation
+        && activeConversationId === pendingBeforeDispatch.conversationId,
+      );
+      if ((pendingRecordExists && !isExactPendingRetry)
+          || (retryRequest && !isStartNewRequest && !pendingBeforeDispatch)) {
+        setMessages((prev) => [...prev, {
+          id: generateMessageId(),
+          role: "assistant",
+          content: pendingBeforeDispatch
+            ? "Another Review still requires recovery. Resume that exact request before starting any new scene mutation."
+            : "Review recovery state is missing or invalid. No new scene mutation was sent.",
+          timestamp: Date.now(),
+        }]);
+        dispatchInFlightRef.current = false;
+        return;
+      }
       if (!overrideMessage) setInput("");
       if (autoSkillSelectionEnabled) {
         setAutoSelectionError("");
       }
 
+      const effectiveLoopMode = normalizeLoopMode(retryRequest?.options?.loopMode ?? loopMode);
+      const effectiveSessionId = retryRequest?.sessionId ?? sessionId;
+      const requestOptions = retryRequest?.options
+        ? { ...retryRequest.options }
+        : {
+            skills: selectedSkills.length > 0 ? selectedSkills : undefined,
+            feedback: feedbackText,
+            skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
+            agent: codingAgent,
+            conversationId: activeConversationId,
+            model: codingModel,
+            loopMode: effectiveLoopMode,
+            requireRealAssets: assetPolicy === "real_assets",
+            assetDegradedMode: assetPolicy === "basic_geometry" ? "basic_geometry" : "disabled",
+          };
+      const reviewRunId = effectiveLoopMode === "vanilla"
+        ? null
+        : (retryRequest?.runId || generateReviewRunId());
+      if (reviewRunId) requestOptions.runId = reviewRunId;
+      let reviewRequest = reviewRunId
+        ? {
+            runId: reviewRunId,
+            prompt: text,
+            sessionId: effectiveSessionId,
+            options: requestOptions,
+          }
+        : null;
+
+      const candidateCreatedAt = Date.now();
+      let userMessageId = generateMessageId();
+      let assistantId = generateMessageId();
+      let messageCreatedAt = candidateCreatedAt;
+
+      if (reviewRequest) {
+        preparingReviewRef.current = true;
+        setPreparingReview(true);
+        try {
+          const persisted = await claimPendingReviewExclusive(
+            {
+              schema: "simworld-review-pending/v2",
+              conversationId: activeConversationId,
+              userMessageId,
+              assistantId,
+              createdAt: candidateCreatedAt,
+              request: reviewRequest,
+            },
+            {
+              ownerId: reviewOwnerIdRef.current,
+              expectedGeneration: isExactPendingRetry
+                ? retryRequest.pendingGeneration
+                : null,
+            },
+            { requireLock: productionReviewRequiresWebLocks() },
+          );
+          userMessageId = persisted.userMessageId;
+          assistantId = persisted.assistantId;
+          messageCreatedAt = persisted.createdAt;
+          reviewRequest = {
+            ...persisted.request,
+            pendingGeneration: persisted.generation,
+            pendingOwnerId: persisted.ownerId,
+            pendingState: persisted.state,
+            terminalReceipt: persisted.terminalReceipt || null,
+          };
+        } catch (error) {
+          setMessages((prev) => [...prev, {
+            id: userMessageId,
+            role: "user",
+            content: text,
+            timestamp: candidateCreatedAt,
+          }, {
+            id: assistantId,
+            role: "assistant",
+            waiting: false,
+            content: `Review was not started because its recovery record could not be stored: ${error.message}`,
+            toolCalls: [],
+            timestamp: candidateCreatedAt,
+            reviewRequest: null,
+            reviewRetryAvailable: false,
+            reviewStartNewAvailable: false,
+          }]);
+          preparingReviewRef.current = false;
+          setPreparingReview(false);
+          dispatchInFlightRef.current = false;
+          return;
+        }
+      }
+
       const userMsg = {
-        id: generateMessageId(),
+        id: userMessageId,
         role: "user",
         content: text,
-        timestamp: Date.now(),
+        timestamp: messageCreatedAt,
       };
-      const assistantId = generateMessageId();
       const assistantMsg = {
         id: assistantId,
         role: "assistant",
         content: "",
-        waiting: true,  // Show "Waiting for {agent}..." until first event
+        waiting: true,
         toolCalls: [],
-        timestamp: Date.now(),
+        timestamp: messageCreatedAt,
+        ...(reviewRequest ? { reviewRequest, reviewRetryAvailable: false } : {}),
       };
-
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setMessages((prev) => {
+        if (!reviewRequest) return [...prev, userMsg, assistantMsg];
+        const withoutStaleActions = prev.map((message) => (
+          message.reviewRequest?.runId === reviewRequest.runId
+            ? { ...message, reviewRetryAvailable: false, reviewStartNewAvailable: false }
+            : message
+        ));
+        const userIndex = withoutStaleActions.findIndex((message) => message.id === userMessageId);
+        if (userIndex < 0) withoutStaleActions.push(userMsg);
+        const assistantIndex = withoutStaleActions.findIndex((message) => message.id === assistantId);
+        if (assistantIndex >= 0) {
+          const prior = withoutStaleActions[assistantIndex];
+          withoutStaleActions[assistantIndex] = {
+            ...prior,
+            ...assistantMsg,
+            content: prior.content || "",
+            blocks: prior.blocks,
+            reviewEvidence: prior.reviewEvidence,
+            reviewAccounting: prior.reviewAccounting,
+            reviewResult: null,
+          };
+        } else {
+          withoutStaleActions.push(assistantMsg);
+        }
+        return withoutStaleActions;
+      });
       setLoading(true);
+      preparingReviewRef.current = false;
+      setPreparingReview(false);
       setTurnCount((c) => c + 1);
 
       const controller = new AbortController();
       abortRef.current = controller;
       activeRunRef.current = {
         assistantId,
-        conversationId: activeConversationId,
-        runId: null,
-        // Vanilla runs use the request key. A review loop may replace it later
-        // with the server-authoritative key published by run_start.
-        sessionId: sessionId || "_global",
+        conversationId: requestOptions.conversationId || activeConversationId,
+        runId: reviewRunId,
+        // Review requests carry a client-stable idempotency key. The server
+        // must echo it from run_start; retries reuse the stored request below.
+        sessionId: effectiveSessionId || "_global",
       };
       const inputBuffers = new Map();
+      let authoritativeDone = false;
+      const reviewCasIdentity = () => ({
+        runId: reviewRequest?.runId,
+        conversationId: requestOptions.conversationId || activeConversationId,
+        generation: reviewRequest?.pendingGeneration,
+        ownerId: reviewRequest?.pendingOwnerId,
+      });
+      const reviewLockRuntime = { requireLock: productionReviewRequiresWebLocks() };
 
       // P2-2 SSE text batching: buffer rapid text deltas, flush via rAF to avoid
       // a React setState per character during fast streaming.
@@ -553,9 +855,46 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
       try {
         await sendChat(
           text,
-          sessionId,
-          (event) => {
-            const eventRunId = event.data?.runId || event.data?.run_id;
+          effectiveSessionId,
+          async (event) => {
+            const eventRunId = assertReviewRunEvent(
+              event,
+              reviewRunId,
+              requestOptions.conversationId || activeConversationId,
+            );
+            let terminalDisposition = null;
+            let terminalRecord = null;
+            if (event.type === "done" && reviewRequest) {
+              terminalDisposition = reviewTerminalDisposition({
+                isError: event.data.isError,
+                cancelled: event.data.cancelled === true,
+                recovered: event.data.recovered === true,
+                code: event.data.code || event.data.error?.code || null,
+                providerAttempted: event.data.providerAttempted
+                  ?? event.data.provider_attempted,
+                identityBound: true,
+              });
+              authoritativeDone = true;
+              terminalRecord = await markPendingReviewTerminalExclusive({
+                ...reviewCasIdentity(),
+                terminal: {
+                  isError: event.data.isError,
+                  cancelled: event.data.cancelled === true,
+                  recovered: event.data.recovered === true,
+                  code: event.data.code || event.data.error?.code || null,
+                  providerAttempted: event.data.providerAttempted
+                    ?? event.data.provider_attempted
+                    ?? null,
+                },
+              }, reviewLockRuntime);
+              reviewRequest = {
+                ...reviewRequest,
+                pendingGeneration: terminalRecord.generation,
+                pendingOwnerId: terminalRecord.ownerId,
+                pendingState: terminalRecord.state,
+                terminalReceipt: terminalRecord.terminalReceipt,
+              };
+            }
             const runSessionId = event.type === "run_start" ? event.data?.sessionId : null;
             if ((eventRunId || runSessionId) && activeRunRef.current?.assistantId === assistantId) {
               activeRunRef.current = {
@@ -565,10 +904,27 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                 ...(runSessionId ? { sessionId: runSessionId } : {}),
               };
             }
+            let settleTerminalPersistence;
+            let failTerminalPersistence;
+            let terminalPersistenceSettled = false;
+            const terminalPersistence = terminalRecord
+              ? new Promise((resolve, reject) => {
+                  settleTerminalPersistence = resolve;
+                  failTerminalPersistence = reject;
+                })
+              : null;
             setMessages((prev) => {
               const updated = [...prev];
               const idx = updated.findIndex((m) => m.id === assistantId);
-              if (idx === -1) return prev;
+              if (idx === -1) {
+                if (failTerminalPersistence && !terminalPersistenceSettled) {
+                  terminalPersistenceSettled = true;
+                  failTerminalPersistence(terminalUiPersistenceError(
+                    "The Review assistant message no longer exists",
+                  ));
+                }
+                return prev;
+              }
               let msg = { ...updated[idx] };
               if (event.type !== "text" && _textBuf) {
                 const result = appendTextDeltaToMessage(msg, _textBuf);
@@ -734,14 +1090,24 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                     model: event.data.model,
                     error: event.data.error,
                   }];
-                  msg.reviewEvidence = mergeReviewEvidence(msg.reviewEvidence, event.data, API_BASE);
+                  msg.reviewEvidence = mergeReviewEvidence(
+                    msg.reviewEvidence,
+                    event.data,
+                    API_BASE,
+                    requestOptions.conversationId || activeConversationId,
+                  );
                   msg.reviewAccounting = mergeReviewAccounting(msg.reviewAccounting, event.data, "critic");
                   break;
                 }
                 case "multi_shots":
                 case "review_evidence":
                 case "visual_evidence": {
-                  msg.reviewEvidence = mergeReviewEvidence(msg.reviewEvidence, event.data, API_BASE);
+                  msg.reviewEvidence = mergeReviewEvidence(
+                    msg.reviewEvidence,
+                    event.data,
+                    API_BASE,
+                    requestOptions.conversationId || activeConversationId,
+                  );
                   break;
                 }
                 case "builder_done": {
@@ -763,46 +1129,128 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                   break;
                 }
                 case "done": {
+                  authoritativeDone = true;
                   msg.reviewAccounting = mergeReviewAccounting(msg.reviewAccounting, event.data, "run");
+                  msg.reviewEvidence = mergeReviewEvidence(
+                    msg.reviewEvidence,
+                    event.data,
+                    API_BASE,
+                    requestOptions.conversationId || activeConversationId,
+                  );
                   const sid = event.data.sessionId;
                   const isErr = event.data.isError;
+                  const code = event.data.code || event.data.error?.code || null;
+                  const recovered = event.data.recovered === true;
+                  const cancelled = event.data.cancelled === true;
+                  const disposition = terminalDisposition || reviewTerminalDisposition({
+                    isError: isErr,
+                    cancelled,
+                    recovered,
+                    code,
+                    providerAttempted: event.data.providerAttempted
+                      ?? event.data.provider_attempted,
+                    identityBound: Boolean(reviewRequest),
+                  });
+                  const sameIdRetry = disposition.sameIdRetry;
+                  msg.waiting = false;
+                  if (msg.reviewRequest) {
+                    msg.reviewRequest = reviewRequest;
+                    if (terminalRecord) {
+                      msg.reviewTerminalReceiptId = terminalRecord.terminalReceipt.receiptId;
+                    }
+                    msg.reviewRetryAvailable = sameIdRetry;
+                    msg.reviewStartNewAvailable = disposition.startNew;
+                    msg.reviewResult = {
+                      code,
+                      retryable: event.data.retryable === true || sameIdRetry,
+                      recovered,
+                      cancelled,
+                    };
+                  }
+                  if (event.data.loop && !(msg.blocks || []).some((block) => block.type === "loop_done")) {
+                    msg.blocks = [...(msg.blocks || []), {
+                      type: "loop_done",
+                      reason: event.data.loop.reason,
+                      rounds: event.data.loop.rounds,
+                      finalStatus: event.data.loop.finalStatus,
+                      error: event.data.error,
+                      recovered,
+                    }];
+                  }
                   // Always keep sessionId - it's the stable studio session, not Claude's transient one
                   if (sid) {
                     setSessionId(sid);
                     onSessionChange?.(sid);
                   }
-                  const screenshot = event.data.latestScreenshot;
+                  const screenshot = event.data.latestScreenshot
+                    || (Array.isArray(msg.reviewEvidence) ? msg.reviewEvidence.at(-1)?.url : null);
                   if (screenshot) {
                     onScreenshotUpdate(screenshot);
                     setLatestScreenshot(screenshot);
                   }
                   // If no content was streamed at all, show fallback but keep session
-                  if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0)) {
-                    msg.content = isErr
-                      ? "**Warning:** Scene build process ended unexpectedly. Retry the operation."
-                      : "**Warning:** No operation result was received. Retry the command.";
+                  const hasResultBlock = (msg.blocks || []).some((block) => block.type !== "text" || block.content);
+                  if (!msg.content && (!msg.toolCalls || msg.toolCalls.length === 0) && !hasResultBlock) {
+                    msg.content = cancelled
+                      ? "Review was cancelled. You can start a new Review."
+                      : (isErr
+                        ? (disposition.sameIdRetry
+                          ? "Review finished with an error. Retry the same Review ID to reconcile it safely."
+                          : (disposition.startNew
+                            ? "Review was blocked before the provider attempt. You can start a new Review."
+                            : "Review finished with an error."))
+                        : "Review completed.");
                   }
-                  onChatDone?.();
                   break;
                 }
               }
 
               updated[idx] = msg;
+              if (terminalRecord && !terminalPersistenceSettled) {
+                try {
+                  persistTerminalConversation({
+                    conversations,
+                    activeConversationId: requestOptions.conversationId || activeConversationId,
+                    messages: updated,
+                    assistantId,
+                    runId: reviewRequest.runId,
+                    receiptId: terminalRecord.terminalReceipt.receiptId,
+                  });
+                  terminalPersistenceSettled = true;
+                  settleTerminalPersistence();
+                } catch (error) {
+                  terminalPersistenceSettled = true;
+                  failTerminalPersistence(error);
+                }
+              }
               return updated;
             });
+            if (terminalPersistence) {
+              await terminalPersistence;
+              const terminalIdentity = {
+                ...reviewCasIdentity(),
+                receiptId: terminalRecord.terminalReceipt.receiptId,
+              };
+              if (!persistedTerminalMessageMatches({
+                conversationId: terminalIdentity.conversationId,
+                assistantId,
+                runId: terminalIdentity.runId,
+                receiptId: terminalIdentity.receiptId,
+              })) {
+                throw terminalUiPersistenceError(
+                  "The persisted Review terminal message changed before recovery could clear",
+                );
+              }
+              if (!terminalDisposition.keepPending) {
+                await clearTerminalReviewExclusive(terminalIdentity, reviewLockRuntime);
+              }
+              onChatDone?.();
+            } else if (event.type === "done") {
+              onChatDone?.();
+            }
           },
           controller.signal,
-          {
-            skills: selectedSkills.length > 0 ? selectedSkills : undefined,
-            feedback: feedbackText,
-            skillSelectionMode: autoSkillSelectionEnabled ? "auto" : "manual",
-            agent: codingAgent,
-            conversationId: activeConversationId,
-            model: codingModel,
-            loopMode,
-            requireRealAssets: assetPolicy === "real_assets",
-            assetDegradedMode: assetPolicy === "basic_geometry" ? "basic_geometry" : "disabled",
-          }
+          requestOptions
         );
         // After a scene-changing turn, snapshot a checkpoint (branches from the active leaf).
         try {
@@ -824,24 +1272,84 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
           }
         } catch (_e) { /* checkpoint is best-effort; never block the chat */ }
       } catch (err) {
-        if (err instanceof Error && err.name !== "AbortError") {
+        if (err instanceof Error) {
+          let effectiveError = err;
+          const expectedConversationId = requestOptions.conversationId || activeConversationId;
+          if (reviewRequest && err.runId && err.runId !== reviewRequest.runId) {
+            err.code = "REVIEW_RUN_ID_MISMATCH";
+            err.retryable = true;
+          }
+          if (reviewRequest && err.conversationId
+              && err.conversationId !== expectedConversationId) {
+            err.code = "REVIEW_RUN_ID_MISMATCH";
+            err.retryable = true;
+          }
+          const identityBound = Boolean(
+            reviewRequest
+            && err.runId === reviewRequest.runId
+            && err.conversationId === expectedConversationId,
+          );
+          let disposition = reviewFailureDisposition({
+            hasReview: Boolean(reviewRequest),
+            authoritativeDone,
+            code: err.code,
+            status: err.status,
+            name: err.name,
+            providerAttempted: err.providerAttempted,
+            identityBound,
+          });
+          if (reviewRequest && !disposition.keepPending) {
+            try {
+              await clearPreProviderReviewExclusive({
+                ...reviewCasIdentity(),
+                providerAttempted: false,
+              }, reviewLockRuntime);
+            } catch (clearError) {
+              effectiveError = clearError instanceof Error
+                ? clearError
+                : new Error("Review recovery envelope could not be cleared");
+              disposition = reviewFailureDisposition({
+                hasReview: true,
+                authoritativeDone,
+                code: effectiveError.code || "REVIEW_PENDING_CLEAR_FAILED",
+              });
+            }
+          }
           setMessages((prev) => {
             const updated = [...prev];
             const idx = updated.findIndex((m) => m.id === assistantId);
             if (idx !== -1) {
+              const sameIdRetry = disposition.sameIdRetry;
+              const recoveryBlocked = disposition.recoveryBlocked;
               updated[idx] = {
                 ...updated[idx],
-                content: updated[idx].content || `Error: ${err.message}`,
+                content: updated[idx].content || (recoveryBlocked
+                  ? "This Review has an unresolved prior provider attempt. Operator recovery is required before another paid run."
+                  : (effectiveError.name === "AbortError"
+                    ? "Review delivery was interrupted while cancellation was being confirmed."
+                    : `Error: ${effectiveError.message}`)),
+                waiting: false,
+                reviewRetryAvailable: sameIdRetry,
+                reviewStartNewAvailable: disposition.startNew,
+                reviewResult: reviewRequest ? {
+                  code: effectiveError.code || (effectiveError.name === "AbortError" ? "REVIEW_TRANSPORT_AMBIGUOUS" : "CHAT_HTTP_ERROR"),
+                  retryable: sameIdRetry || effectiveError.retryable === true,
+                  recovered: effectiveError.recovered === true,
+                  recoveryBlocked,
+                } : null,
               };
             }
             return updated;
           });
         }
       } finally {
+        preparingReviewRef.current = false;
+        setPreparingReview(false);
         setLoading(false);
         setAutoSelectingSkills(false);
         abortRef.current = null;
         if (activeRunRef.current?.assistantId === assistantId) activeRunRef.current = null;
+        dispatchInFlightRef.current = false;
       }
     },
     [
@@ -850,6 +1358,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
       assetPolicy,
       codingAgent,
       codingModel,
+      conversations,
       input,
       loading,
       loopMode,
@@ -861,6 +1370,19 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
     ]
   );
 
+  const handleRetryReview = useCallback((reviewRequest) => {
+    if (loading || preparingReviewRef.current || dispatchInFlightRef.current
+        || !reviewRequest?.runId || !reviewRequest?.prompt) return;
+    handleSend(reviewRequest.prompt, undefined, reviewRequest);
+  }, [handleSend, loading]);
+
+  const handleStartNewReview = useCallback((reviewRequest) => {
+    if (loading || preparingReviewRef.current || dispatchInFlightRef.current
+        || !reviewRequest?.prompt) return;
+    const nextRequest = { ...reviewRequest, runId: generateReviewRunId(), startNew: true };
+    handleSend(nextRequest.prompt, undefined, nextRequest);
+  }, [handleSend, loading]);
+
   const requestChatStop = useCallback(() => {
     const payload = buildChatStopPayload(activeRunRef.current, sessionIdRef.current);
     return fetch(`${API_BASE}/chat-stop`, {
@@ -871,6 +1393,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   }, []);
 
   const handleStop = () => {
+    if (preparingReviewRef.current) return;
     // Tell the server to actually kill the Claude subprocess. Without this,
     // aborting the SSE alone just leaves the agent running in background
     // (server-side e.on("close") no longer kills on disconnect).
@@ -888,6 +1411,16 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   };
 
   const handleReset = () => {
+    if (preparingReviewRef.current || dispatchInFlightRef.current) return;
+    if (pendingReviewRecordExists()) {
+      setMessages((prev) => [...prev, {
+        id: generateMessageId(),
+        role: "assistant",
+        content: "Session reset is blocked while a Review recovery record is unresolved. Resume or reconcile that run first.",
+        timestamp: Date.now(),
+      }]);
+      return;
+    }
     requestChatStop();
     abortRef.current?.abort();
     activeRunRef.current = null;
@@ -917,7 +1450,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
   };
 
   const handleSelfEvolutionToggle = async () => {
-    if (!selfEvolutionReady) return;
+    if (!selfEvolutionReady || preparingReviewRef.current || dispatchInFlightRef.current) return;
     const prevEnabled = selfEvolutionEnabled;
     const nextEnabled = !prevEnabled;
     const reqSeq = ++selfEvolutionReqSeqRef.current;
@@ -1012,7 +1545,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
         sessionId={sessionId}
         turnCount={turnCount}
         latestScreenshot={latestScreenshot}
-        loading={loading}
+        loading={loading || preparingReview}
         onToggleSelfEvolution={handleSelfEvolutionToggle}
         onAnnotate={() => setAnnotating(true)}
         onSave={handleSave}
@@ -1048,6 +1581,8 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                 agentLabel={agentLabel(codingAgent)}
                 toolIcons={toolIcons}
                 fallbackToolIcon={icons?.hammer}
+                onRetry={msg.reviewRetryAvailable && !loading && !preparingReview ? handleRetryReview : null}
+                onStartNew={msg.reviewStartNewAvailable && !loading && !preparingReview ? handleStartNewReview : null}
               />
               <ReviewEvidenceGallery evidence={msg.reviewEvidence} />
               {ckpt && (
@@ -1056,7 +1591,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                   checkpoints={checkpoints}
                   activeLeafId={activeLeafId}
                   icons={icons}
-                  restoring={restoringId === ckpt.id}
+                  restoring={restoringId === ckpt.id || preparingReview}
                   onRestore={handleRestoreCheckpoint}
                 />
               )}
@@ -1068,7 +1603,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
       </div>
 
       {/* Quick suggestions */}
-      {!loading && sessionId && turnCount > 0 && (
+      {!loading && !preparingReview && sessionId && turnCount > 0 && (
         <div className="chat-quick-actions">
           <span className="chat-quick-label">COMMON REVISIONS</span>
           {QUICK_SUGGESTIONS.map((suggestion) => (
@@ -1097,15 +1632,15 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                 ? "Enter a scene revision command..."
                 : "Enter scene requirements, constraints, and camera needs..."
             }
-            disabled={loading}
+            disabled={loading || preparingReview}
             rows={1}
             className="chat-command-input"
           />
           <button
-            onClick={() => (loading ? handleStop() : handleSend())}
-            disabled={!loading && !input.trim()}
+            onClick={() => (loading ? handleStop() : preparingReview ? undefined : handleSend())}
+            disabled={preparingReview || (!loading && !input.trim())}
             className={`chat-command-submit${loading ? " stop" : input.trim() ? " ready" : ""}`}
-            title={loading ? "Stop operation" : "Run command"}
+            title={loading ? "Stop operation" : preparingReview ? "Preparing Review recovery" : "Run command"}
             type="button"
           >
             {loading ? icons?.close?.(15) : icons?.activity?.(15)}
@@ -1119,14 +1654,22 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
             {autoSelectingSkills ? " (selecting...)" : ""}
           </span>
           <span
-            onClick={() => setLoopMode((m) => (m === "vanilla" ? "text_loop" : m === "text_loop" ? "visual_loop" : "vanilla"))}
+            onClick={() => {
+              if (!loading && !preparingReviewRef.current && !dispatchInFlightRef.current) {
+                setLoopMode((m) => (m === "vanilla" ? "text_loop" : m === "text_loop" ? "visual_loop" : "vanilla"));
+              }
+            }}
             className={loopMode === "vanilla" ? "" : "active"}
             title="Verification mode — click to cycle: off → text → visual"
           >
             Review: {loopMode === "vanilla" ? "Off" : loopMode === "text_loop" ? "Text" : "Visual"}
           </span>
           <span
-            onClick={() => setAssetPolicy((policy) => policy === "real_assets" ? "basic_geometry" : "real_assets")}
+            onClick={() => {
+              if (!loading && !preparingReviewRef.current && !dispatchInFlightRef.current) {
+                setAssetPolicy((policy) => policy === "real_assets" ? "basic_geometry" : "real_assets");
+              }
+            }}
             className={assetPolicy === "real_assets" ? "active" : ""}
             title={assetPolicy === "real_assets"
               ? "Require retrieved 3D assets; block the build when retrieval is unavailable"
@@ -1163,7 +1706,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                 <button
                   className="chat-session-new"
                   onClick={handleNewConversation}
-                  disabled={loading}
+                  disabled={loading || preparingReview}
                   title="New build session"
                   type="button"
                 >
@@ -1187,7 +1730,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                     <button
                       className="chat-session-select"
                       onClick={() => handleSelectConversation(conversation.id)}
-                      disabled={loading}
+                      disabled={loading || preparingReview}
                       title={conversation.title}
                       type="button"
                     >
@@ -1199,7 +1742,7 @@ export default function ChatPanel({ onScreenshotUpdate, onRef, onSessionChange, 
                     <button
                       className="chat-session-delete"
                       onClick={() => handleDeleteConversation(conversation.id)}
-                      disabled={loading}
+                      disabled={loading || preparingReview}
                       title="Delete conversation"
                       type="button"
                     >

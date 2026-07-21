@@ -110,7 +110,7 @@ function LoopBlock({ block }) {
     return (
       <div className="loop-done">
         <div>
-          Validation cycle complete — {block.reason || "done"}{block.rounds ? ` · ${block.rounds} round(s)` : ""}{block.finalStatus ? ` · ${block.finalStatus}` : ""}
+          {block.recovered ? "Recovered validation result" : "Validation cycle complete"} — {block.reason || "done"}{block.rounds ? ` · ${block.rounds} round(s)` : ""}{block.finalStatus ? ` · ${block.finalStatus}` : ""}
         </div>
         {failure && <div><strong>Failure:</strong> {failure}</div>}
       </div>
@@ -162,7 +162,7 @@ function AssistantContent({ fallbackToolIcon, message, toolIcons }) {
   );
 }
 
-const ChatMessage = memo(function ChatMessage({ fallbackToolIcon, message, toolIcons }) {
+const ChatMessage = memo(function ChatMessage({ fallbackToolIcon, message, onRetry, onStartNew, toolIcons }) {
   const isUser = message.role === "user";
   const time = new Date(message.timestamp).toLocaleTimeString();
   const bubble = (
@@ -177,6 +177,30 @@ const ChatMessage = memo(function ChatMessage({ fallbackToolIcon, message, toolI
             toolIcons={toolIcons}
           />
           <ReviewAccounting accounting={message.reviewAccounting} />
+          {message.reviewRetryAvailable && onRetry && (
+            <div className="review-retry-row">
+              <button
+                className="review-retry-button"
+                onClick={() => onRetry(message.reviewRequest)}
+                type="button"
+              >
+                Retry Review
+              </button>
+              <span>Reuses the original review request ID.</span>
+            </div>
+          )}
+          {message.reviewStartNewAvailable && onStartNew && (
+            <div className="review-retry-row">
+              <button
+                className="review-retry-button"
+                onClick={() => onStartNew(message.reviewRequest)}
+                type="button"
+              >
+                Start new Review
+              </button>
+              <span>Creates a new request ID; the completed or unresolved run is not replayed.</span>
+            </div>
+          )}
         </>
       )}
     </div>
