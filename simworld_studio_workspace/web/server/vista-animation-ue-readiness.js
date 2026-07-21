@@ -42,13 +42,19 @@ const MAX_TRACKED_NONCES = 4_096;
 const MAX_PLUGIN_SOURCE_FILE_BYTES = 1_048_576;
 const SOURCE_AUDIT_READ_CHUNK_BYTES = 64 * 1024;
 const PLUGIN_SOURCE_RELATIVE_ROOT = "Plugins/VistaAnimationContentApi";
+const MMG040_PROFILE_ID = "vista_mmg040";
 
-const CONTENT_PROFILE_PLUGIN_COMPATIBILITY = deepFreeze({
-  "vista_mmg040/mmg040_project_content_r1": {
+const MMG040_PLUGIN_COMPATIBILITY = deepFreeze({
+  mmg040_project_content_r1: {
     plugin_version: "1.1.0",
     engine_version: "5.3.2",
     target_platform: "linux-x86_64",
   },
+});
+
+const CONTENT_PROFILE_PLUGIN_COMPATIBILITY = deepFreeze({
+  [`${MMG040_PROFILE_ID}/mmg040_project_content_r1`]:
+    MMG040_PLUGIN_COMPATIBILITY.mmg040_project_content_r1,
 });
 
 const EXPECTED_PLUGIN_SOURCE_MANIFEST = deepFreeze([
@@ -362,7 +368,11 @@ function normalizePluginArtifact(value, code = "ANIMATION_UE_PLUGIN_CONFIG_INVAL
 
 function pluginArtifactCompatibilityMismatch(contentProfile, pluginArtifact) {
   const key = `${contentProfile.profile_id}/${contentProfile.revision}`;
-  const policy = CONTENT_PROFILE_PLUGIN_COMPATIBILITY[key];
+  let policy = CONTENT_PROFILE_PLUGIN_COMPATIBILITY[key];
+  if (contentProfile.profile_id === MMG040_PROFILE_ID) {
+    policy = MMG040_PLUGIN_COMPATIBILITY[contentProfile.revision];
+    if (!policy) return "profile_revision";
+  }
   if (!policy) return null;
   for (const field of ["plugin_version", "engine_version", "target_platform"]) {
     if (pluginArtifact[field] !== policy[field]) return field;

@@ -242,6 +242,23 @@ test("runtime configuration rejects incompatible mmg040 plugin revisions before 
     );
   }
 
+  const unknownRevision = mmg040ContentProfile({
+    revision: "mmg040_project_content_r2",
+    content_revision: "gym-citynav-mmg040-content-r2",
+  });
+  for (const artifact of [
+    pluginArtifact({ plugin_version: "1.0.0", engine_version: "5.3.2" }),
+    pluginArtifact({ plugin_version: "1.1.0", engine_version: "5.3.2" }),
+    pluginArtifact({ plugin_version: "1.2.0", engine_version: "5.7.3", target_platform: "win64" }),
+    pluginArtifact({ plugin_version: "99.0.0", engine_version: "99.0.0", target_platform: "future-platform" }),
+  ]) {
+    const root = temporaryRoot(t);
+    assert.throws(
+      () => resolveVistaAnimationTimelineConfig(runtimeEnv(root, unknownRevision, artifact)),
+      hasCode("ANIMATION_RUNTIME_CONFIG_INVALID", 500),
+    );
+  }
+
   const validRoot = temporaryRoot(t);
   const valid = resolveVistaAnimationTimelineConfig(runtimeEnv(
     validRoot,

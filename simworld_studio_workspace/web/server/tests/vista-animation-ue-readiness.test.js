@@ -698,6 +698,47 @@ test("mmg040 profile statically rejects historical or cross-engine plugin artifa
   assert.equal(typeof unrelatedProfile, "function");
 });
 
+test("unknown mmg040 revisions fail closed before transport for every artifact tuple", async () => {
+  const unknownRevision = {
+    ...makeMmg040Profile(),
+    revision: "mmg040_project_content_r2",
+    content_revision: "gym-citynav-mmg040-content-r2",
+  };
+  const artifactTuples = [
+    { plugin_version: "1.0.0", engine_version: "5.3.2", target_platform: "linux-x86_64" },
+    { plugin_version: "1.1.0", engine_version: "5.3.2", target_platform: "linux-x86_64" },
+    { plugin_version: "1.2.0", engine_version: "5.7.3", target_platform: "win64" },
+    { plugin_version: "99.0.0", engine_version: "99.0.0", target_platform: "future-platform" },
+  ];
+
+  for (const artifactTuple of artifactTuples) {
+    const transport = makeTransport();
+    assert.throws(
+      () => makeProbe(transport, {
+        contentProfile: unknownRevision,
+        expectedArtifact: makeArtifact(artifactTuple),
+      }),
+      (error) => error instanceof VistaAnimationUeReadinessError
+        && error.code === "ANIMATION_UE_PLUGIN_CONFIG_INVALID"
+        && /profile_revision/.test(error.message),
+    );
+    assert.equal(transport.calls.length, 0);
+  }
+
+  const r1Transport = makeTransport({
+    mutate: (response) => {
+      response.plugin_artifact.plugin_version = "1.1.0";
+    },
+  });
+  const r1Probe = makeProbe(r1Transport, {
+    contentProfile: makeMmg040Profile(),
+    expectedArtifact: makeArtifact({ plugin_version: "1.1.0" }),
+  });
+  const ready = await r1Probe();
+  assert.equal(ready.status, "ready");
+  assert.equal(r1Transport.calls.length, 1);
+});
+
 test("generic MCP, Python, and invoke-only transports cannot satisfy readiness", async () => {
   const genericTransports = [
     null,
