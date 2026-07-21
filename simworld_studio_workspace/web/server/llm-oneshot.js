@@ -1,11 +1,23 @@
 "use strict";
 // Lightweight one-shot LLM calls for retrieval/routing helpers.
-// Default stays Claude for normal Studio use, but experiment runs can force Codex/GPT by
-// passing { provider: "codex" } or setting LLM_PROVIDER=codex.
+// Default stays Claude for normal Studio use. Non-production retrieval experiments may
+// force Codex/GPT, but production and summarizer calls reject that unisolated runner.
 const { spawn } = require("child_process");
-const path = require("path");
 const telemetry = require("./telemetry");
+const {
+  assertSafeToolFreeClaudeArgv,
+  buildClaudeToolFreeSafetyArgs,
+  buildMinimalToolFreeEnv,
+} = require("./builder-process-policy");
+const { sandboxedSpawn: defaultSandboxedSpawn } = require("./agent-sandbox");
 const NL = String.fromCharCode(10);
+
+const DEFAULT_ONESHOT_MAX_BUDGET_USD = 0.05;
+const MAX_ONESHOT_MAX_BUDGET_USD = 1;
+const DEFAULT_ONESHOT_MAX_INPUT_TOKENS = 50_000;
+const DEFAULT_ONESHOT_MAX_OUTPUT_TOKENS = 2_048;
+const MAX_ONESHOT_STDOUT_BYTES = 2 * 1024 * 1024;
+const MAX_ONESHOT_STDERR_BYTES = 64 * 1024;
 
 class LlmOneShotError extends Error {
   constructor(code, message, details = {}) {
@@ -23,12 +35,73 @@ function oneShotError(code, message, details) {
   return new LlmOneShotError(code, message, details);
 }
 
+function streamChunkBytes(chunk) {
+  return Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+}
+
 function oneShotTimeout(value) {
   const timeoutMs = Number(value == null || value === "" ? 120000 : value);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 1800000) {
     throw oneShotError("LLM_ONESHOT_CONFIG_INVALID", "One-shot timeout must be between 1 and 1800000 milliseconds");
   }
   return Math.floor(timeoutMs);
+}
+
+function oneShotBudget(value) {
+  const amount = Number(value == null || value === "" ? DEFAULT_ONESHOT_MAX_BUDGET_USD : value);
+  if (!Number.isFinite(amount) || amount < 0.01 || amount > MAX_ONESHOT_MAX_BUDGET_USD) {
+    throw oneShotError(
+      "LLM_ONESHOT_BUDGET_INVALID",
+      `One-shot max budget must be between 0.01 and ${MAX_ONESHOT_MAX_BUDGET_USD.toFixed(2)} USD`,
+    );
+  }
+  return Math.round(amount * 10_000) / 10_000;
+}
+
+function oneShotTokenLimit(value, { field, defaultValue, maximum }) {
+  const amount = Number(value == null || value === "" ? defaultValue : value);
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > maximum) {
+    throw oneShotError("LLM_ONESHOT_USAGE_LIMIT_INVALID", `${field} is outside the allowed range`);
+  }
+  return amount;
+}
+
+function usageInteger(usage, field) {
+  const value = usage && usage[field];
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw oneShotError("LLM_ONESHOT_USAGE_INVALID", `One-shot usage.${field} is missing or invalid`);
+  }
+  return value;
+}
+
+function validateClaudeUsageCost({ usage, costUsd }, limits) {
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) {
+    throw oneShotError("LLM_ONESHOT_USAGE_INVALID", "Claude one-shot returned no usage metadata");
+  }
+  const inputTokens = usageInteger(usage, "input_tokens");
+  const outputTokens = usageInteger(usage, "output_tokens");
+  let totalInputTokens = inputTokens;
+  for (const field of ["cache_creation_input_tokens", "cache_read_input_tokens"]) {
+    if (usage[field] !== undefined) totalInputTokens += usageInteger(usage, field);
+  }
+  if (!Number.isSafeInteger(totalInputTokens) || totalInputTokens > limits.maxInputTokens ||
+      outputTokens > limits.maxOutputTokens) {
+    throw oneShotError(
+      "LLM_ONESHOT_USAGE_LIMIT_EXCEEDED",
+      "Claude one-shot token usage exceeded its independent limit",
+    );
+  }
+  const cost = costUsd === null || costUsd === undefined || costUsd === "" ? NaN : Number(costUsd);
+  if (!Number.isFinite(cost) || cost < 0) {
+    throw oneShotError("LLM_ONESHOT_COST_INVALID", "Claude one-shot returned no valid cost metadata");
+  }
+  if (cost > limits.maxBudgetUsd) {
+    throw oneShotError(
+      "LLM_ONESHOT_COST_LIMIT_EXCEEDED",
+      "Claude one-shot cost exceeded its independent budget",
+    );
+  }
+  return Object.freeze({ usage, costUsd: Math.round(cost * 1_000_000) / 1_000_000 });
 }
 
 function normalizeProvider(v) {
@@ -75,36 +148,51 @@ function parseCodexJsonl(stdout) {
 
 function oneshotTextClaude(prompt, opts) {
   const o = opts || {};
-  const claudeBin = String(o.claudeBin || process.env.CLAUDE_BIN || "claude");
+  const startedAt = Date.now();
+  const baseEnv = o.env && typeof o.env === "object" ? o.env : process.env;
+  const claudeBin = String(o.claudeBin || baseEnv.CLAUDE_BIN || "claude");
   const model = o.model == null || o.model === "" ? null : String(o.model);
-  const timeoutMs = oneShotTimeout(o.timeoutMs == null ? process.env.LLM_ONESHOT_TIMEOUT_MS : o.timeoutMs);
+  const timeoutMs = oneShotTimeout(o.timeoutMs == null ? baseEnv.LLM_ONESHOT_TIMEOUT_MS : o.timeoutMs);
+  const maxBudgetUsd = oneShotBudget(
+    o.maxBudgetUsd == null ? baseEnv.LLM_ONESHOT_MAX_BUDGET_USD : o.maxBudgetUsd,
+  );
+  const maxInputTokens = oneShotTokenLimit(
+    o.maxInputTokens == null ? baseEnv.LLM_ONESHOT_MAX_INPUT_TOKENS : o.maxInputTokens,
+    { field: "One-shot max input tokens", defaultValue: DEFAULT_ONESHOT_MAX_INPUT_TOKENS, maximum: 1_000_000 },
+  );
+  const maxOutputTokens = oneShotTokenLimit(
+    o.maxOutputTokens == null ? baseEnv.LLM_ONESHOT_MAX_OUTPUT_TOKENS : o.maxOutputTokens,
+    { field: "One-shot max output tokens", defaultValue: DEFAULT_ONESHOT_MAX_OUTPUT_TOKENS, maximum: 100_000 },
+  );
   const signal = o.signal;
   const args = [
-    "--print",
+    "-p",
     "--input-format", "text",
     "--output-format", "stream-json",
     "--include-partial-messages",
     "--verbose",
-    "--safe-mode",
-    "--disable-slash-commands",
-    "--tools", "",
-    "--permission-mode", "dontAsk",
-    "--strict-mcp-config",
-    "--mcp-config", "{}",
-    "--no-session-persistence",
+    ...buildClaudeToolFreeSafetyArgs(),
   ];
   if (model) args.push("--model", model);
+  // The shared validator intentionally accepts only the exact tool-free policy.
+  // Budget is validated above and appended only after that policy is sealed.
+  assertSafeToolFreeClaudeArgv(args);
+  args.push("--max-budget-usd", String(maxBudgetUsd));
   return new Promise((resolve, reject) => {
     if (signal && signal.aborted) {
       reject(oneShotError("LLM_ONESHOT_ABORTED", "Claude one-shot was aborted before start", { provider: "claude", model }));
       return;
     }
-    const env = { ...process.env };
-    Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
+    let env;
     let proc;
     try {
-      proc = (o.spawnImpl || spawn)(claudeBin, args, {
-        cwd: o.cwd || path.resolve(__dirname, ".."), env, stdio: ["pipe", "pipe", "pipe"],
+      env = buildMinimalToolFreeEnv(baseEnv, { provider: "claude" });
+      const sandbox = (o.sandboxedSpawnImpl || defaultSandboxedSpawn)(claudeBin, args, null, {
+        env: baseEnv,
+        provider: "claude",
+      });
+      proc = (o.spawnImpl || spawn)(sandbox.cmd, sandbox.args, {
+        cwd: "/", env, stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (cause) {
       reject(oneShotError("LLM_ONESHOT_SPAWN_FAILED", "Claude one-shot could not be started", {
@@ -112,7 +200,9 @@ function oneshotTextClaude(prompt, opts) {
       }));
       return;
     }
-    let outBuf = "", errBuf = "", assistantText = "", resultText = "", isErr = false;
+    let outBuf = "", assistantText = "", resultText = "", isErr = false;
+    let stdoutBytes = 0, stderrBytes = 0;
+    let resultEvents = 0, resultUsage = null, resultCostUsd = null;
     let settled = false;
     let timer = null;
     let hardKillTimer = null;
@@ -156,12 +246,42 @@ function oneshotTextClaude(prompt, opts) {
         const blocks = e.message && Array.isArray(e.message.content) ? e.message.content : [];
         for (const b of blocks) if (b.type === "text" && b.text) assistantText += String(b.text);
       } else if (e.type === "result") {
+        resultEvents += 1;
         isErr = Boolean(e.is_error || e.subtype === "error_during_turn");
         if (typeof e.result === "string") resultText += e.result;
+        resultUsage = e.usage;
+        resultCostUsd = e.total_cost_usd !== undefined ? e.total_cost_usd
+          : (e.totalCostUsd !== undefined ? e.totalCostUsd : e.cost_usd);
       }
     }
-    proc.stdout.on("data", c => { outBuf += c.toString(); const ls = outBuf.split(NL); outBuf = ls.pop() || ""; for (const l of ls) if (l.trim()) handle(l); });
-    proc.stderr.on("data", c => { errBuf += c.toString(); });
+    proc.stdout.on("data", c => {
+      if (settled) return;
+      stdoutBytes += streamChunkBytes(c);
+      if (stdoutBytes > MAX_ONESHOT_STDOUT_BYTES) {
+        fail(oneShotError(
+          "LLM_ONESHOT_OUTPUT_LIMIT_EXCEEDED",
+          "Claude one-shot output exceeded its hard byte limit",
+          { provider: "claude", model },
+        ), true);
+        return;
+      }
+      outBuf += c.toString();
+      const ls = outBuf.split(NL);
+      outBuf = ls.pop() || "";
+      for (const l of ls) if (l.trim()) handle(l);
+    });
+    proc.stderr.on("data", c => {
+      if (settled) return;
+      stderrBytes += streamChunkBytes(c);
+      if (stderrBytes > MAX_ONESHOT_STDERR_BYTES) {
+        fail(oneShotError(
+          "LLM_ONESHOT_DIAGNOSTICS_LIMIT_EXCEEDED",
+          "Claude one-shot diagnostics exceeded their hard byte limit",
+          { provider: "claude", model },
+        ), true);
+        return;
+      }
+    });
     proc.on("error", cause => fail(oneShotError("LLM_ONESHOT_SPAWN_FAILED", "Claude one-shot process failed", {
       provider: "claude", model, cause,
     })));
@@ -178,12 +298,39 @@ function oneshotTextClaude(prompt, opts) {
         }));
         return;
       }
+      if (resultEvents !== 1) {
+        fail(oneShotError(
+          "LLM_ONESHOT_PROTOCOL_ERROR",
+          "Claude one-shot must return exactly one terminal result event",
+          { provider: "claude", model },
+        ));
+        return;
+      }
+      let accounting;
+      try {
+        accounting = validateClaudeUsageCost(
+          { usage: resultUsage, costUsd: resultCostUsd },
+          { maxBudgetUsd, maxInputTokens, maxOutputTokens },
+        );
+      } catch (error) {
+        fail(error);
+        return;
+      }
       if (!raw) {
         fail(oneShotError("LLM_ONESHOT_EMPTY_OUTPUT", "Claude one-shot returned empty output", {
           provider: "claude", model,
         }));
         return;
       }
+      try {
+        telemetry.record({
+          component: o.telemetryComponent || "oneshot",
+          model,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          usage: telemetry.normUsage(accounting.usage),
+          costUsd: accounting.costUsd,
+        });
+      } catch (_error) {}
       succeed(raw);
     });
     try {
@@ -238,7 +385,8 @@ function oneshotTextCodex(prompt, opts) {
       }));
       return;
     }
-    let stdout = "", stderr = "";
+    let stdout = "";
+    let stdoutBytes = 0, stderrBytes = 0;
     let settled = false;
     let timer = null;
     let hardKillTimer = null;
@@ -275,8 +423,31 @@ function oneshotTextCodex(prompt, opts) {
       { provider: "codex", model, retryable: true },
     ), true), timeoutMs);
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    proc.stdout.on("data", c => { stdout += c.toString(); });
-    proc.stderr.on("data", c => { stderr += c.toString(); });
+    proc.stdout.on("data", c => {
+      if (settled) return;
+      stdoutBytes += streamChunkBytes(c);
+      if (stdoutBytes > MAX_ONESHOT_STDOUT_BYTES) {
+        fail(oneShotError(
+          "LLM_ONESHOT_OUTPUT_LIMIT_EXCEEDED",
+          "Codex one-shot output exceeded its hard byte limit",
+          { provider: "codex", model },
+        ), true);
+        return;
+      }
+      stdout += c.toString();
+    });
+    proc.stderr.on("data", c => {
+      if (settled) return;
+      stderrBytes += streamChunkBytes(c);
+      if (stderrBytes > MAX_ONESHOT_STDERR_BYTES) {
+        fail(oneShotError(
+          "LLM_ONESHOT_DIAGNOSTICS_LIMIT_EXCEEDED",
+          "Codex one-shot diagnostics exceeded their hard byte limit",
+          { provider: "codex", model },
+        ), true);
+        return;
+      }
+    });
     proc.on("error", cause => fail(oneShotError("LLM_ONESHOT_SPAWN_FAILED", "Codex one-shot process failed", {
       provider: "codex", model, cause,
     })));
@@ -314,7 +485,20 @@ function oneshotTextCodex(prompt, opts) {
 
 function oneshotText(prompt, opts) {
   const o = opts || {};
-  if (providerFromOpts(o) === "codex") return oneshotTextCodex(prompt, o);
+  if (providerFromOpts(o) === "codex") {
+    const runtimeEnv = o.env && typeof o.env === "object" ? o.env : process.env;
+    const component = String(o.telemetryComponent || "").trim().toLowerCase();
+    const isProduction = [process.env.NODE_ENV, runtimeEnv.NODE_ENV]
+      .some(value => String(value || "").trim().toLowerCase() === "production");
+    if (isProduction || component === "summarizer") {
+      return Promise.reject(oneShotError(
+        "LLM_ONESHOT_PROVIDER_DISABLED",
+        "Codex one-shots are disabled for production and summarizer workloads until they have an isolated, budgeted runner",
+        { provider: "codex", model: codexModel(o.model) },
+      ));
+    }
+    return oneshotTextCodex(prompt, o);
+  }
   return oneshotTextClaude(prompt, o);
 }
 

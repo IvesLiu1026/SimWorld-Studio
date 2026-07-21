@@ -80,6 +80,10 @@ function fakeChildFactory(onInput) {
   return { spawnImpl, calls };
 }
 
+function passthroughSandbox(bin, args) {
+  return { cmd: bin, args };
+}
+
 function emitResult(child, structuredOutput, extras = {}) {
   child.stdout.write(`${JSON.stringify({
     type: "result",
@@ -671,6 +675,213 @@ test("an in-flight UE evidence wait is cancelled by AbortSignal", async () => {
   assert.equal(calls, 1);
 });
 
+test("Claude one-shot uses the tool-free sandbox, strips ambient secrets, and enforces an independent budget", async () => {
+  const fake = fakeChildFactory(({ child }) => {
+    child.stdout.write(`${JSON.stringify({
+      type: "result",
+      result: "bounded summary",
+      usage: { input_tokens: 120, output_tokens: 8 },
+      total_cost_usd: 0.01,
+    })}\n`);
+    child.emit("close", 0, null);
+  });
+  const sandboxCalls = [];
+  const sandboxedSpawnImpl = (bin, args, _cwd, options) => {
+    sandboxCalls.push({ bin, args, options });
+    return { cmd: "/usr/bin/bwrap", args: ["--sandboxed", ...args] };
+  };
+  const env = {
+    PATH: process.env.PATH,
+    LANG: "C.UTF-8",
+    NODE_ENV: "production",
+    AGENT_SANDBOX_AUTH_ROOT: "/run/test-auth",
+    STUDIO_ACCESS_TOKEN: "must-not-reach-child",
+    POSTGRES_URL: "postgres://must-not-reach-child",
+    QDRANT_API_KEY: "must-not-reach-child",
+    ANTHROPIC_API_KEY: "must-not-reach-child",
+    ANTHROPIC_AUTH_TOKEN: "must-not-reach-child",
+    CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child",
+  };
+
+  const result = await oneshotText("summarize this", {
+    provider: "claude",
+    model: "claude-opus-4-8",
+    env,
+    spawnImpl: fake.spawnImpl,
+    sandboxedSpawnImpl,
+    maxBudgetUsd: 0.05,
+  });
+
+  assert.equal(result, "bounded summary");
+  assert.equal(sandboxCalls.length, 1);
+  assert.equal(sandboxCalls[0].options.provider, "claude");
+  assert.equal(fake.calls.length, 1);
+  assert.equal(fake.calls[0].binary, "/usr/bin/bwrap");
+  const budgetAt = fake.calls[0].args.indexOf("--max-budget-usd");
+  assert.notEqual(budgetAt, -1);
+  assert.equal(fake.calls[0].args[budgetAt + 1], "0.05");
+  const toolsAt = fake.calls[0].args.indexOf("--tools");
+  assert.notEqual(toolsAt, -1);
+  assert.equal(fake.calls[0].args[toolsAt + 1], "");
+  assert.equal(fake.calls[0].options.cwd, "/");
+  assert.equal(fake.calls[0].options.env.HOME, "/home/simworld-agent");
+  assert.equal(fake.calls[0].options.env.CLAUDE_CONFIG_DIR, "/run/simworld-agent-auth/claude");
+  for (const key of [
+    "STUDIO_ACCESS_TOKEN",
+    "POSTGRES_URL",
+    "QDRANT_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ]) {
+    assert.equal(fake.calls[0].options.env[key], undefined, `${key} must not reach the child`);
+  }
+});
+
+test("Claude one-shot fails closed on missing or excessive usage/cost metadata", async (t) => {
+  const cases = [
+    {
+      name: "missing usage",
+      event: { total_cost_usd: 0.01 },
+      code: "LLM_ONESHOT_USAGE_INVALID",
+    },
+    {
+      name: "missing cost",
+      event: { usage: { input_tokens: 10, output_tokens: 2 } },
+      code: "LLM_ONESHOT_COST_INVALID",
+    },
+    {
+      name: "cost exceeds budget",
+      event: { usage: { input_tokens: 10, output_tokens: 2 }, total_cost_usd: 0.051 },
+      code: "LLM_ONESHOT_COST_LIMIT_EXCEEDED",
+    },
+    {
+      name: "cache-inclusive input exceeds limit",
+      event: {
+        usage: { input_tokens: 4, output_tokens: 2, cache_read_input_tokens: 7 },
+        total_cost_usd: 0.01,
+      },
+      maxInputTokens: 10,
+      code: "LLM_ONESHOT_USAGE_LIMIT_EXCEEDED",
+    },
+  ];
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, async () => {
+      const fake = fakeChildFactory(({ child }) => {
+        child.stdout.write(`${JSON.stringify({
+          type: "result",
+          result: "summary",
+          ...fixture.event,
+        })}\n`);
+        child.emit("close", 0, null);
+      });
+      await assert.rejects(
+        oneshotText("summarize this", {
+          provider: "claude",
+          model: "claude-opus-4-8",
+          env: {},
+          spawnImpl: fake.spawnImpl,
+          sandboxedSpawnImpl: passthroughSandbox,
+          maxBudgetUsd: 0.05,
+          ...(fixture.maxInputTokens ? { maxInputTokens: fixture.maxInputTokens } : {}),
+        }),
+        (error) => error instanceof LlmOneShotError && error.code === fixture.code,
+      );
+    });
+  }
+});
+
+test("Claude and Codex one-shots terminate when a process stream exceeds its hard byte ceiling", async (t) => {
+  const cases = [
+    {
+      name: "Claude stdout",
+      provider: "claude",
+      stream: "stdout",
+      bytes: 2 * 1024 * 1024 + 1,
+      code: "LLM_ONESHOT_OUTPUT_LIMIT_EXCEEDED",
+    },
+    {
+      name: "Claude stderr",
+      provider: "claude",
+      stream: "stderr",
+      bytes: 64 * 1024 + 1,
+      code: "LLM_ONESHOT_DIAGNOSTICS_LIMIT_EXCEEDED",
+    },
+    {
+      name: "Codex stdout",
+      provider: "codex",
+      stream: "stdout",
+      bytes: 2 * 1024 * 1024 + 1,
+      code: "LLM_ONESHOT_OUTPUT_LIMIT_EXCEEDED",
+    },
+    {
+      name: "Codex stderr",
+      provider: "codex",
+      stream: "stderr",
+      bytes: 64 * 1024 + 1,
+      code: "LLM_ONESHOT_DIAGNOSTICS_LIMIT_EXCEEDED",
+    },
+  ];
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, async () => {
+      const fake = fakeChildFactory(({ child }) => {
+        child[fixture.stream].write(Buffer.alloc(fixture.bytes));
+      });
+      await assert.rejects(
+        oneshotText("summarize this", {
+          provider: fixture.provider,
+          model: fixture.provider === "claude" ? "claude-opus-4-8" : "gpt-5.5",
+          env: { NODE_ENV: "test" },
+          spawnImpl: fake.spawnImpl,
+          ...(fixture.provider === "claude" ? { sandboxedSpawnImpl: passthroughSandbox } : {}),
+        }),
+        (error) => {
+          assert.ok(error instanceof LlmOneShotError);
+          assert.equal(error.code, fixture.code);
+          assert.equal(error.provider, fixture.provider);
+          return true;
+        },
+      );
+      assert.deepEqual(fake.calls[0].child.kills, ["SIGTERM"]);
+      fake.calls[0].child.emit("close", null, "SIGTERM");
+    });
+  }
+});
+
+test("Codex one-shots fail closed before spawn for summarizer and production workloads", async (t) => {
+  const cases = [
+    { name: "summarizer", telemetryComponent: "summarizer", env: { NODE_ENV: "test" } },
+    { name: "production retrieval", telemetryComponent: "retrieval", env: { NODE_ENV: "production" } },
+  ];
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, async () => {
+      let spawnCalls = 0;
+      await assert.rejects(
+        oneshotText("summarize this", {
+          provider: "codex",
+          model: "gpt-5.5",
+          telemetryComponent: fixture.telemetryComponent,
+          env: fixture.env,
+          spawnImpl() {
+            spawnCalls += 1;
+            throw new Error("must not spawn");
+          },
+        }),
+        (error) => {
+          assert.ok(error instanceof LlmOneShotError);
+          assert.equal(error.code, "LLM_ONESHOT_PROVIDER_DISABLED");
+          assert.equal(error.provider, "codex");
+          return true;
+        },
+      );
+      assert.equal(spawnCalls, 0);
+    });
+  }
+});
+
 test("Claude and Codex one-shots terminate on AbortSignal with a settled typed failure", async () => {
   for (const providerName of ["claude", "codex"]) {
     const fake = fakeChildFactory(() => {});
@@ -679,6 +890,7 @@ test("Claude and Codex one-shots terminate on AbortSignal with a settled typed f
       provider: providerName,
       model: providerName === "claude" ? "claude-opus-4-8" : "gpt-5.5",
       spawnImpl: fake.spawnImpl,
+      ...(providerName === "claude" ? { sandboxedSpawnImpl: passthroughSandbox } : {}),
       timeoutMs: 500,
       signal: controller.signal,
     });
@@ -702,6 +914,7 @@ test("one-shot timeout kills the child and cannot resolve from a late close", as
     provider: "claude",
     model: "claude-opus-4-8",
     spawnImpl: fake.spawnImpl,
+    sandboxedSpawnImpl: passthroughSandbox,
     timeoutMs: 15,
   });
   await assert.rejects(pending, (error) => {
