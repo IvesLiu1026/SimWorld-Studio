@@ -51,17 +51,17 @@ test.describe("SimWorld Studio shell", () => {
 
     const header = page.locator("header");
     await expect(header.locator(".sw-brand-name")).toHaveText("SimWorld Studio");
-    await expect(header.getByRole("button", { name: /Studio/ })).toBeVisible();
-    await expect(header.getByRole("button", { name: /Library/ })).toBeVisible();
-    await expect(header.getByRole("button", { name: /Results/ })).toBeVisible();
+    await expect(header.getByRole("button", { name: /Workspace/ })).toBeVisible();
+    await expect(header.getByRole("button", { name: /Catalog/ })).toBeVisible();
+    await expect(header.getByRole("button", { name: /Reports/ })).toBeVisible();
     await expectNoDocumentOverflow(page);
     await expectNoTopbarOverlap(page);
 
     const modes = [
-      [1, "Task Builder"],
-      [2, "Training Config"],
-      [3, "Curriculum Builder"],
-      [0, "Intent + SimCoder"],
+      [1, "Task Parameters"],
+      [2, "Run Configuration"],
+      [3, "Curriculum Configuration"],
+      [0, "Scene Specification"],
     ];
 
     for (const [modeIndex, panelTitle] of modes) {

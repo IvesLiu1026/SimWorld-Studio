@@ -22,7 +22,7 @@ function SkillPageCard({ isNew = false, onClick, skill }) {
       onClick={onClick}
       style={{
         padding: "14px 16px",
-        borderRadius: 10,
+        borderRadius: 2,
         border: "1px solid var(--line)",
         background: "var(--panel)",
         cursor: "pointer",
@@ -33,7 +33,7 @@ function SkillPageCard({ isNew = false, onClick, skill }) {
       }}
       onMouseEnter={(event) => {
         event.currentTarget.style.borderColor = "var(--blue)";
-        event.currentTarget.style.boxShadow = "0 2px 12px color-mix(in srgb, var(--blue) 10%, transparent)";
+        event.currentTarget.style.boxShadow = "none";
       }}
       onMouseLeave={(event) => {
         event.currentTarget.style.borderColor = "var(--line)";
@@ -127,7 +127,7 @@ export function SkillPageDetailModal({ icons, onClose, onDelete, skill }) {
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: "14px 20px" }}>
-        <Eyebrow style={{ marginBottom: 8 }}>Skill Content</Eyebrow>
+        <Eyebrow style={{ marginBottom: 8 }}>Procedure Definition</Eyebrow>
         <pre
           style={{
             fontSize: 12,
@@ -139,7 +139,7 @@ export function SkillPageDetailModal({ icons, onClose, onDelete, skill }) {
             margin: 0,
             background: "var(--bg-tertiary)",
             border: "1px solid var(--line)",
-            borderRadius: 8,
+            borderRadius: 2,
             padding: 16,
           }}
         >
@@ -156,7 +156,7 @@ export function SkillPageCreateModal({ icons, onClose, onCreated }) {
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
   const [content, setContent] = useState(
-    "# My Custom Skill\n\n## Overview\nDescribe what this skill does.\n\n## Instructions\nProvide detailed instructions for the AI agent.\n"
+    "# Custom Procedure\n\n## Overview\nDescribe what this procedure does.\n\n## Instructions\nProvide detailed execution instructions.\n"
   );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -181,7 +181,7 @@ export function SkillPageCreateModal({ icons, onClose, onCreated }) {
       });
       onCreated();
     } catch {
-      setError("Failed to save skill");
+      setError("Failed to save procedure");
     } finally {
       setSaving(false);
     }
@@ -189,27 +189,27 @@ export function SkillPageCreateModal({ icons, onClose, onCreated }) {
 
   return (
     <ModalOverlay onClose={onClose} maxWidth={650}>
-      <ModalHeader title="Create Custom Skill" onClose={onClose} closeIcon={icons?.close?.(14)} />
+      <ModalHeader title="Create Procedure" onClose={onClose} closeIcon={icons?.close?.(14)} />
 
       <div style={{ flex: 1, overflow: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-        <Field label="Skill ID (lowercase, no spaces)">
-          <input value={id} onChange={(event) => setId(event.target.value)} placeholder="my_custom_skill" style={inputSx} />
+        <Field label="Procedure ID (lowercase, no spaces)">
+          <input value={id} onChange={(event) => setId(event.target.value)} placeholder="my_custom_procedure" style={inputSx} />
         </Field>
         <Field label="Name">
-          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="My Custom Skill" style={inputSx} />
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Custom Procedure" style={inputSx} />
         </Field>
         <Field label="Description (short summary)">
           <input
             value={description}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="What this skill teaches the agent to do"
+            placeholder="What this procedure configures or verifies"
             style={inputSx}
           />
         </Field>
         <Field label="Tags (comma-separated)">
           <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="buildings, layout, custom" style={inputSx} />
         </Field>
-        <Field label="Content (Markdown - instructions for the AI agent)">
+        <Field label="Procedure definition (Markdown)">
           <textarea
             value={content}
             onChange={(event) => setContent(event.target.value)}
@@ -227,7 +227,7 @@ export function SkillPageCreateModal({ icons, onClose, onCreated }) {
 
       <ModalFooter>
         <Btn variant="cancel" onClick={onClose}>Cancel</Btn>
-        <Btn variant="success" disabled={saving} onClick={handleSave}>{saving ? "Saving..." : "Create Skill"}</Btn>
+        <Btn variant="success" disabled={saving} onClick={handleSave}>{saving ? "Saving..." : "Create Procedure"}</Btn>
       </ModalFooter>
     </ModalOverlay>
   );
@@ -295,9 +295,9 @@ export default function SkillsPage({ icons, newlyAddedSkillIds = [], onMarkSkill
     <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
       <PageHeader
         icon={icons?.book?.(22)}
-        title="Skills"
-        subtitle="Browse, create, and manage skills that teach the AI agent new capabilities"
-        action={<Btn variant="success" size="md" onClick={() => setShowCreate(true)}>+ Create Skill</Btn>}
+        title="Procedures"
+        subtitle="Browse and manage reusable scene-building and validation procedures"
+        action={<Btn variant="success" size="md" onClick={() => setShowCreate(true)}>+ Create Procedure</Btn>}
       />
 
       <div style={{ padding: "10px 24px", borderBottom: "1px solid var(--line)", display: "flex", gap: 10, alignItems: "center" }}>
@@ -305,7 +305,7 @@ export default function SkillsPage({ icons, newlyAddedSkillIds = [], onMarkSkill
           type="text"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search skills..."
+          placeholder="Search procedures..."
           style={{ ...inputSx, flex: 1 }}
         />
         <div style={{ display: "flex", gap: 4 }}>
@@ -316,7 +316,7 @@ export default function SkillsPage({ icons, newlyAddedSkillIds = [], onMarkSkill
           ))}
         </div>
         <span style={{ fontSize: 12, color: "var(--ink-2)", whiteSpace: "nowrap" }}>
-          {filtered.length} skill{filtered.length !== 1 ? "s" : ""}
+          {filtered.length} procedure{filtered.length !== 1 ? "s" : ""}
         </span>
       </div>
 
@@ -327,10 +327,10 @@ export default function SkillsPage({ icons, newlyAddedSkillIds = [], onMarkSkill
           <div style={{ textAlign: "center", padding: 60 }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>{icons?.book?.(40)}</div>
             <div style={{ fontSize: 16, color: "var(--ink)", fontWeight: 600, marginBottom: 8 }}>
-              No skills found
+              No procedures found
             </div>
             <div style={{ fontSize: 13, color: "var(--ink-3)" }}>
-              {search ? "Try a different search term." : "Create a custom skill to get started."}
+              {search ? "Try a different search term." : "Create a procedure to get started."}
             </div>
           </div>
         ) : (
@@ -357,7 +357,7 @@ export default function SkillsPage({ icons, newlyAddedSkillIds = [], onMarkSkill
       )}
       {deleteId && (
         <ConfirmDeleteModal
-          message="Are you sure you want to delete this skill? This cannot be undone."
+          message="Are you sure you want to delete this procedure? This cannot be undone."
           onConfirm={() => handleDelete(deleteId)}
           onCancel={() => setDeleteId(null)}
         />

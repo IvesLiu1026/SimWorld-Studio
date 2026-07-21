@@ -8,7 +8,9 @@ MANIFEST="${MANIFEST:-/data/siddhant/asset_db/ue58_object_manifest.json}"
 RUN_ROOT="${RUN_ROOT:-${ASSET_DB_DIR}/runs}"
 RUN_ID="${RUN_ID:-ue58_parallel_qwen36_$(date -u +%Y%m%d_%H%M%S)}"
 RUN_DIR="${RUN_DIR:-${RUN_ROOT}/${RUN_ID}}"
-POSTGRES_URL="${POSTGRES_URL:-postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db_ue58_qwen}"
+# The DSN is environment-only so it cannot leak through argv or run metadata.
+POSTGRES_URL="${POSTGRES_URL:-}"
+export POSTGRES_URL
 QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
 QDRANT_COLLECTION="${QDRANT_COLLECTION:-assets_ue58_qwen}"
 CAPTION_PROVIDER="${CAPTION_PROVIDER:-qwen}"
@@ -25,11 +27,24 @@ MIN_VIEWS="${MIN_VIEWS:-4}"
 RES="${RES:-1024}"
 ENSURE_POSTGRES_DB="${ENSURE_POSTGRES_DB:-1}"
 
+for arg in "$@"; do
+  case "$arg" in
+    --postgres-url|--postgres-url=*|*postgresql://*|*postgres://*)
+      echo "Refusing a Postgres DSN on the command line; set POSTGRES_URL in the service environment instead." >&2
+      exit 2
+      ;;
+  esac
+done
+
 mkdir -p "$RUN_DIR"
 LOG="${RUN_DIR}/runner.log"
 
 if [[ "$ENSURE_POSTGRES_DB" == "1" || "$ENSURE_POSTGRES_DB" == "true" ]]; then
-  POSTGRES_URL="$POSTGRES_URL" python3 "${REPO_ROOT}/tools/ensure_postgres_database.py" --postgres-url "$POSTGRES_URL"
+  if [[ -z "${POSTGRES_URL}" ]]; then
+    echo "POSTGRES_URL is required when ENSURE_POSTGRES_DB is enabled; inject it through the service environment." >&2
+    exit 2
+  fi
+  python3 "${REPO_ROOT}/tools/ensure_postgres_database.py"
 fi
 
 CMD=(
@@ -38,7 +53,6 @@ CMD=(
   --manifest "$MANIFEST"
   --run-root "$RUN_ROOT"
   --run-dir "$RUN_DIR"
-  --postgres-url "$POSTGRES_URL"
   --qdrant-url "$QDRANT_URL"
   --qdrant-collection "$QDRANT_COLLECTION"
   --caption-provider "$CAPTION_PROVIDER"
@@ -63,7 +77,12 @@ esac
   echo "asset_db_dir=${ASSET_DB_DIR}"
   echo "manifest=${MANIFEST}"
   echo "run_dir=${RUN_DIR}"
-  echo "postgres_url=${POSTGRES_URL}"
+  if [[ -n "${POSTGRES_URL}" ]]; then
+    echo "postgres_url_configured=true"
+  else
+    echo "postgres_url_configured=false"
+  fi
+  echo "postgres_url_source=POSTGRES_URL_environment"
   echo "qdrant_url=${QDRANT_URL}"
   echo "qdrant_collection=${QDRANT_COLLECTION}"
   echo "caption_provider=${CAPTION_PROVIDER}"

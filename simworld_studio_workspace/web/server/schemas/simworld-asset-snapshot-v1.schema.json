@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-asset-snapshot-v1.schema.json",
+  "title": "SimWorld semantic asset snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "snapshot_id", "ue_content_revision", "catalog", "postgres", "qdrant", "embedding"],
+  "properties": {
+    "schema": { "const": "simworld-asset-snapshot/v1" },
+    "snapshot_id": { "$ref": "#/$defs/id" },
+    "ue_content_revision": { "$ref": "#/$defs/id" },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sha256"],
+      "properties": {
+        "count": { "$ref": "#/$defs/count" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "row_count"],
+      "properties": {
+        "schema_version": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "row_count": { "$ref": "#/$defs/count" }
+      }
+    },
+    "qdrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["collection", "point_count", "dense_name", "dense_size", "sparse_name"],
+      "properties": {
+        "collection": { "$ref": "#/$defs/id" },
+        "point_count": { "$ref": "#/$defs/count" },
+        "dense_name": { "$ref": "#/$defs/id" },
+        "dense_size": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "sparse_name": { "$ref": "#/$defs/id" }
+      }
+    },
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "dense_model", "sparse_model"],
+      "properties": {
+        "version": { "$ref": "#/$defs/id" },
+        "dense_model": { "$ref": "#/$defs/model" },
+        "sparse_model": { "$ref": "#/$defs/model" }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+ -]*$"
+    },
+    "count": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

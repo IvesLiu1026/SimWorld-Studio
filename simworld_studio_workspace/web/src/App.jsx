@@ -33,6 +33,7 @@ import TaskGenPanel from "./features/tasks/TaskGenPanel.jsx";
 import TaskInspectorPanel from "./features/tasks/TaskInspectorPanel.jsx";
 import TrainingConfigPanel from "./features/training/TrainingConfigPanel.jsx";
 import TrainingMonitorPanel from "./features/training/TrainingMonitorPanel.jsx";
+import VistaImportPanel from "./features/vista/VistaImportPanel.jsx";
 import ViewportPanel from "./features/viewport/ViewportPanel.jsx";
 import { useStudioStore } from "./state/studioStore.js";
 import {
@@ -142,6 +143,12 @@ function App() {
     if (sessionQuery.data?.sessionId) setCurrentSessionId(sessionQuery.data.sessionId);
   }, [sessionQuery.data?.sessionId]);
 
+  useEffect(() => {
+    if (!drawerTabs.some((tab) => tab.id === drawerTab)) {
+      setDrawerTab(drawerTabs[0].id);
+    }
+  }, [drawerTab, drawerTabs, setDrawerTab]);
+
   // Open a saved scene (.umap) from the Results gallery → switch to Scene Generation and
   // load it into the live viewport (reuses /api/load-map + the viewport auto-reconnect).
   const openSavedScene = useCallback(async (path) => {
@@ -170,13 +177,8 @@ function App() {
 
       <StudioTopbar
         artifactUnread={artifactUnread}
-        codingAgent={codingAgent}
-        codingAgents={codingAgents}
-        codingModel={codingModel}
         health={health}
         icons={ICONS}
-        onCodingAgentChange={handleCodingAgentChange}
-        onCodingModelChange={setCodingModel}
         onSettingsOpen={() => setShowSettings(true)}
         onStudioModeChange={setStudioMode}
         onTopSectionChange={setTopSection}
@@ -191,8 +193,13 @@ function App() {
       {/* Settings modal */}
       {showSettings && (
         <SettingsModal
+          codingAgent={codingAgent}
+          codingAgents={codingAgents}
+          codingModel={codingModel}
           icons={ICONS}
           uiTheme={uiTheme}
+          onCodingAgentChange={handleCodingAgentChange}
+          onCodingModelChange={setCodingModel}
           onThemeChange={setUiTheme}
           layoutMode={studioMode}
           onLayoutMode={setStudioMode}
@@ -216,11 +223,11 @@ function App() {
           <button
             className="artifact-chain-toggle"
             onClick={() => setPipelineVisible((value) => !value)}
-            title={pipelineVisible ? "Hide pipeline artifacts" : "Show pipeline artifacts"}
+            title={pipelineVisible ? "Hide workflow status" : "Show workflow status"}
             type="button"
           >
             {pipelineVisible ? ICONS.close(11) : ICONS.folder(12)}
-            <span>{pipelineVisible ? "Hide" : "Pipeline"}</span>
+            <span>{pipelineVisible ? "Hide" : "Workflow"}</span>
           </button>
         </div>
       )}
@@ -242,16 +249,16 @@ function App() {
         )}
         {showLeft && !leftPanelCollapsed && <div ref={leftColRef} style={{
           width: colLeft, minWidth:260, maxWidth:640, flexShrink:0,
-          display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
+          display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:0, margin:0,
         }}>
           {/* ── Left panel content — driven by studioMode ── */}
           <div className="sw-panel-card" style={{
-            flex:1, minHeight:0, borderRadius:12, border:"1px solid var(--line)",
+            flex:1, minHeight:0, borderRadius:"var(--radius)", border:"1px solid var(--line)",
             display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header">
               <span className="sw-section-title">
-                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>
+                <span className="sw-num-chip">
                   {ICONS[leftPanelMeta.icon]?.(11)}
                 </span>
                 {leftPanelMeta.title}
@@ -318,7 +325,7 @@ function App() {
                 {drawerOpen ? ICONS.chevronDown?.(10) : ICONS.folder(10)}
               </span>
               <span style={{ fontSize:12, fontWeight:700, color:"var(--ink-2)" }}>
-                {drawerOpen ? drawerTab.charAt(0).toUpperCase()+drawerTab.slice(1) : "Workspace drawer"}
+                {drawerOpen ? drawerTab.charAt(0).toUpperCase()+drawerTab.slice(1) : "Workspace"}
               </span>
               <div style={{ flex:1 }} />
               {drawerOpen && (
@@ -326,7 +333,11 @@ function App() {
                   {drawerTabs.map(t => (
                     <button key={t.id}
                       className={`sw-tab-btn${drawerTab===t.id?" active":""}`}
-                      onClick={e => { e.stopPropagation(); setDrawerTab(t.id); }}
+                      onClick={e => {
+                        e.stopPropagation();
+                        setDrawerTab(t.id);
+                        if (t.id === "vista_import" && drawerH < 360) setDrawerH(360);
+                      }}
                       style={{ fontSize:11, padding:"2px 8px" }}
                     >{t.label}</button>
                   ))}
@@ -359,6 +370,9 @@ function App() {
                     refreshKey={contextRefreshKey}
                   />
                 )}
+                {drawerTab === "vista_import" && studioMode === "scene" && (
+                  <VistaImportPanel icons={ICONS} />
+                )}
               </div>
             )}
           </div>
@@ -370,15 +384,15 @@ function App() {
         {/* ── RIGHT PANEL — driven by studioMode ── */}
         {showRight && !rightPanelCollapsed && <div ref={rightColRef} style={{
           width: colRight, minWidth:240, maxWidth:560, flexShrink:0,
-          display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:"0 4px", margin:"0 -4px",
+          display:"flex", flexDirection:"column", gap:0, overflow:"visible", padding:0, margin:0,
         }}>
           <div className="sw-panel-card" style={{
-            flex:1, minHeight:0, borderRadius:12, border:"1px solid var(--line)",
+            flex:1, minHeight:0, borderRadius:"var(--radius)", border:"1px solid var(--line)",
             display:"flex", flexDirection:"column", overflow:"hidden", background:"var(--panel)",
           }}>
             <div className="sw-panel-header">
               <span className="sw-section-title">
-                <span className="sw-num-chip" style={{ background:"var(--ink-3)" }}>
+                <span className="sw-num-chip">
                   {ICONS[rightPanelMeta.icon]?.(11)}
                 </span>
                 {rightPanelMeta.title}
@@ -429,7 +443,7 @@ function App() {
       {(topSection === "library" || topSection === "results") && (
         <div style={{
           flex: 1, overflow: "hidden",
-          borderRadius: 12, border: "1px solid var(--line)",
+          borderRadius: "var(--radius)", border: "1px solid var(--line)",
           boxShadow: "var(--shadow-card)", background: "var(--panel)", minHeight: 0,
         }}>
           {topSection === "library" && (

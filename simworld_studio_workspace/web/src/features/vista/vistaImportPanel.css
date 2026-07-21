@@ -1,0 +1,471 @@
+.vista-import-panel {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.vista-import-toolbar {
+  display: grid;
+  grid-template-columns: minmax(210px, 1.4fr) minmax(175px, 1fr) minmax(110px, 0.7fr) minmax(105px, 0.6fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-3);
+  flex-shrink: 0;
+}
+
+.vista-import-toolbar-copy {
+  min-width: 0;
+  align-self: center;
+}
+
+.vista-import-toolbar-copy strong,
+.vista-import-toolbar-copy span {
+  display: block;
+}
+
+.vista-import-toolbar-copy strong {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.vista-import-toolbar-copy span {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--ink-3);
+}
+
+.vista-import-toolbar label {
+  display: block;
+  min-width: 0;
+}
+
+.vista-import-toolbar label > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.vista-import-toolbar select {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+}
+
+.vista-import-toolbar select:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.vista-import-empty {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 20px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+.vista-import-empty-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+.vista-import-empty strong {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.vista-import-empty span {
+  max-width: 440px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.vista-import-preview {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  scrollbar-color: var(--line) transparent;
+}
+
+.vista-import-preview-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.vista-import-kicker {
+  margin-bottom: 4px;
+  color: var(--ink-3);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vista-import-preview-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.vista-import-preview-title > span {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.vista-import-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+.vista-import-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-3);
+  overflow: hidden;
+}
+
+.vista-import-card-wide {
+  grid-column: 1 / -1;
+}
+
+.vista-import-card-header {
+  min-height: 31px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-2);
+}
+
+.vista-import-card-header h3 {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.vista-import-card-header > span {
+  color: var(--ink-3);
+  font-size: 10px;
+}
+
+.vista-import-definition-list {
+  margin: 0;
+  padding: 6px 9px;
+}
+
+.vista-import-definition-list > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.65fr) minmax(0, 1.35fr);
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 10px;
+}
+
+.vista-import-definition-list dt {
+  color: var(--ink-3);
+}
+
+.vista-import-definition-list dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-2);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vista-import-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  padding: 6px 9px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-3);
+  font-size: 9px;
+}
+
+.vista-import-provenance code,
+.vista-import-artifact code,
+.vista-import-confirm-grid code {
+  color: var(--ink-2);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+
+.vista-import-table-wrap {
+  overflow-x: auto;
+}
+
+.vista-import-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: var(--ink-2);
+  font-size: 10px;
+}
+
+.vista-import-table th,
+.vista-import-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.vista-import-table th {
+  color: var(--ink-3);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.vista-import-table th:nth-child(1),
+.vista-import-table td:nth-child(1) { width: 58px; }
+.vista-import-table th:nth-child(2),
+.vista-import-table td:nth-child(2) { width: 100px; }
+.vista-import-table th:nth-child(3),
+.vista-import-table td:nth-child(3) { width: 112px; }
+.vista-import-table th:nth-child(5),
+.vista-import-table td:nth-child(5) { width: 92px; }
+
+.vista-import-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.vista-import-mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.vista-import-list {
+  max-height: 230px;
+  overflow: auto;
+}
+
+.vista-import-list-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.vista-import-list-row:last-child {
+  border-bottom: 0;
+}
+
+.vista-import-list-row.compact {
+  align-items: center;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.vista-import-list-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vista-import-list-copy strong {
+  color: var(--ink-2);
+  font-size: 10px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.vista-import-list-copy span {
+  color: var(--ink-3);
+  font-size: 9px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.vista-import-empty-line {
+  padding: 16px 9px;
+  color: var(--ink-3);
+  font-size: 10px;
+  text-align: center;
+}
+
+.vista-import-notice {
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: 10px;
+}
+
+.vista-import-notice.error {
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+  background: color-mix(in srgb, var(--red) 9%, var(--panel));
+}
+
+.vista-import-notice.warning {
+  border-color: color-mix(in srgb, var(--orange) 45%, var(--line));
+  background: color-mix(in srgb, var(--orange) 8%, var(--panel));
+}
+
+.vista-import-notice.success {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--line));
+  background: color-mix(in srgb, var(--green) 8%, var(--panel));
+}
+
+.vista-import-notice strong {
+  color: var(--ink);
+}
+
+.vista-import-artifact {
+  margin: 8px 8px 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 40%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--green) 7%, var(--panel));
+}
+
+.vista-import-artifact-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vista-import-artifact-main > div {
+  min-width: 0;
+}
+
+.vista-import-artifact strong,
+.vista-import-artifact code {
+  display: block;
+  font-size: 10px;
+}
+
+.vista-import-artifact code {
+  margin-top: 2px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vista-import-artifact .vista-import-notice {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.vista-import-confirm-body {
+  padding: 18px 20px;
+  overflow: auto;
+}
+
+.vista-import-confirm-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.65fr) minmax(0, 1.35fr);
+  gap: 9px 14px;
+  font-size: 12px;
+}
+
+.vista-import-confirm-grid > span {
+  color: var(--ink-3);
+}
+
+.vista-import-confirm-grid > strong,
+.vista-import-confirm-grid > code {
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.vista-import-confirm-body .vista-import-notice {
+  margin: 18px 0 0;
+}
+
+@media (max-width: 1100px) {
+  .vista-import-toolbar {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  }
+
+  .vista-import-toolbar-copy {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 780px) {
+  .vista-import-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .vista-import-toolbar-copy,
+  .vista-import-toolbar label:first-of-type {
+    grid-column: 1 / -1;
+  }
+
+  .vista-import-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vista-import-card-wide {
+    grid-column: auto;
+  }
+}

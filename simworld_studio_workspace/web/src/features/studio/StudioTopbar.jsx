@@ -1,20 +1,16 @@
 import React, { useState } from "react";
-import CodingAgentSelector from "../agents/CodingAgentSelector.jsx";
-import { agentLabel } from "../agents/codingAgents.js";
 import { PipelineStepper } from "./pipeline.jsx";
 
-function StatusPill({ health, codingAgent }) {
+function StatusPill({ health }) {
   const [open, setOpen] = useState(false);
   const connecting = !health;
   const ue = !!health?.ueConnected;
   const mcp = !!health?.mcpConnected;
-  const agentOk = true;
   const state = connecting ? "connecting" : ue && mcp ? "ok" : !ue && !mcp ? "down" : "warn";
-  const labels = { ok: "Running", warn: "Issues", down: "Offline", connecting: "Connecting..." };
+  const labels = { ok: "Operational", warn: "Degraded", down: "Offline", connecting: "Starting" };
   const modules = [
-    { name: "UE Engine", ok: ue },
-    { name: "MCP Server", ok: mcp },
-    { name: agentLabel(codingAgent), ok: agentOk },
+    { name: "Unreal Engine", ok: ue },
+    { name: "Scene Bridge", ok: mcp },
   ];
 
   return (
@@ -22,7 +18,7 @@ function StatusPill({ health, codingAgent }) {
       <button
         className={`sw-connection-pill ${state}`}
         onClick={() => setOpen((value) => !value)}
-        title="Connection status - click for details"
+        title="System status"
       >
         <span className="sw-connection-dot" />
         <span>{labels[state]}</span>
@@ -45,7 +41,7 @@ function StatusPill({ health, codingAgent }) {
                     connecting ? "connecting" : module.ok ? "connected" : "disconnected"
                   }`}
                 >
-                  {connecting ? "..." : module.ok ? "Connected" : "Not connected"}
+                  {connecting ? "..." : module.ok ? "Ready" : "Unavailable"}
                 </span>
               </div>
             ))}
@@ -58,13 +54,8 @@ function StatusPill({ health, codingAgent }) {
 
 export default function StudioTopbar({
   artifactUnread,
-  codingAgent,
-  codingAgents,
-  codingModel,
   health,
   icons,
-  onCodingAgentChange,
-  onCodingModelChange,
   onSettingsOpen,
   onStudioModeChange,
   onTopSectionChange,
@@ -86,29 +77,23 @@ export default function StudioTopbar({
 
   return (
     <header className="sw-topbar">
-      <div className="sw-brand" style={{ paddingRight: 12 }}>
-        <div className="sw-brand-logo">
-          <img src="/simworld-studio-logo.png" alt="SimWorld" />
+      <div className="sw-brand">
+        <div className="sw-brand-mark" aria-hidden="true">
+          {icons.cube(15)}
         </div>
-        <span className="sw-brand-name" style={{ fontSize: 14 }}>
-          SimWorld Studio
-        </span>
+        <span className="sw-brand-name">SimWorld Studio</span>
       </div>
 
-      <CodingAgentSelector
-        agents={codingAgents}
-        agent={codingAgent}
-        setAgent={onCodingAgentChange}
-        model={codingModel}
-        setModel={onCodingModelChange}
-        icon={icons?.robot ? icons.robot(14) : null}
-      />
+      <div className="sw-project-context" title="Current workspace">
+        <span>WORKSPACE</span>
+        <strong>Scene Development</strong>
+      </div>
       <div className="sw-topbar-divider" />
 
       {topSection === "studio" ? (
         <PipelineStepper activeMode={studioMode} onChange={openStudioMode} icons={icons} />
       ) : (
-        <div className="sw-topbar-section-title">{topSection === "library" ? "Library" : "Results"}</div>
+        <div className="sw-topbar-section-title">{topSection === "library" ? "Asset Catalog" : "Reports"}</div>
       )}
 
       <div className="sw-secondary-nav">
@@ -116,20 +101,20 @@ export default function StudioTopbar({
           className={`sec-nav-btn${topSection === "studio" ? " active" : ""}`}
           onClick={() => onTopSectionChange("studio")}
         >
-          {icons.layout(13)} Studio
+          {icons.layout(13)} Workspace
         </button>
         <button
           className={`sec-nav-btn${topSection === "library" ? " active" : ""}`}
           onClick={() => onTopSectionChange("library")}
         >
-          {icons.book(13)} Library
+          {icons.book(13)} Catalog
           {hasUnreadLibrary && <span className="sw-nav-dot" />}
         </button>
         <button
           className={`sec-nav-btn${topSection === "results" ? " active" : ""}`}
           onClick={() => onTopSectionChange("results")}
         >
-          {icons.frame(13)} Results
+          {icons.frame(13)} Reports
         </button>
       </div>
 
@@ -143,7 +128,7 @@ export default function StudioTopbar({
         )}
         {staleCount > 0 && (
           <div className="sw-topbar-alert warn" title={`Stale: ${[...staleAgents].join(", ")}`}>
-            {icons.ghost(14)} {staleCount} stale
+            {icons.warning(14)} {staleCount} stale
           </div>
         )}
 
@@ -154,7 +139,7 @@ export default function StudioTopbar({
           </div>
         )}
 
-        <StatusPill health={health} codingAgent={codingAgent} />
+        <StatusPill health={health} />
         <button className="sw-settings-btn" onClick={onSettingsOpen} title="Settings">
           {icons.gear(22)}
         </button>

@@ -33,7 +33,7 @@ export default function AgentAggregatePanelTabs({ agentColors = DEFAULT_AGENT_CO
     if (!name) return;
     await trackAgent(name);
     setTrackName("");
-    setTrackMsg(`Tracking: ${name}`);
+    setTrackMsg(`Actor selected: ${name}`);
     if (trackTimerRef.current) clearTimeout(trackTimerRef.current);
     trackTimerRef.current = setTimeout(() => setTrackMsg(""), 3000);
   };
@@ -41,7 +41,7 @@ export default function AgentAggregatePanelTabs({ agentColors = DEFAULT_AGENT_CO
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "testbed", label: "Testbed" },
-    { id: "chat", label: "Comm" },
+    { id: "chat", label: "Messages" },
   ];
 
   return (
@@ -53,7 +53,7 @@ export default function AgentAggregatePanelTabs({ agentColors = DEFAULT_AGENT_CO
           onKeyDown={(event) => {
             if (event.key === "Enter") handleTrack();
           }}
-          placeholder="Track agent by name..."
+          placeholder="Track actor by name..."
         />
         <button onClick={handleTrack}>Track</button>
         {trackMsg && <span>{trackMsg}</span>}
@@ -162,7 +162,7 @@ function AgentOverviewPanel({ agentColors, icons }) {
     return (
       <div className="agent-overview-empty">
         <div>{icons.robot ? icons.robot(36) : null}</div>
-        No agents in scene
+        No tracked actors in scene
       </div>
     );
   }
@@ -181,7 +181,7 @@ function AgentOverviewPanel({ agentColors, icons }) {
   return (
     <div className="agent-overview">
       <div className="agent-stat-grid">
-        <AgentStat label="Agents" value={sessions.length} tone="blue" />
+        <AgentStat label="Actors" value={sessions.length} tone="blue" />
         <AgentStat label="Running" value={running} tone="orange" />
         <AgentStat label="Collisions" value={totalCollisions} tone={totalCollisions > 0 ? "red" : "green"} />
         <AgentStat label="Total Turns" value={totalTurns} tone="muted" />
@@ -193,7 +193,7 @@ function AgentOverviewPanel({ agentColors, icons }) {
       </div>
 
       {Object.keys(series).length === 0 && (
-        <div className="agent-chart-hint">Charts will appear after agents start moving (sampled every 5s)</div>
+        <div className="agent-chart-hint">Charts will appear after actors start moving (sampled every 5s)</div>
       )}
     </div>
   );
@@ -234,12 +234,12 @@ function MultiAgentTestbed({ sessionId }) {
             break;
           }
         }
-        addLog(pieReady ? "PIE active" : "PIE did not start - agents may not work correctly");
+        addLog(pieReady ? "PIE active" : "PIE did not start - actors may not work correctly");
       } else {
         addLog("PIE already active");
       }
 
-      addLog(`Spawning ${count} agents...`);
+      addLog(`Spawning ${count} actors...`);
       const positions = Array.from({ length: count }, (_, index) => {
         const angle = (2 * Math.PI * index) / count;
         const radius = 1500;
@@ -251,14 +251,14 @@ function MultiAgentTestbed({ sessionId }) {
         ))
         .join("\n");
       await postChatCommand(spawnMessage, sessionId);
-      addLog(`Spawned ${count} agents`);
+      addLog(`Spawned ${count} actors`);
 
       for (let index = 1; index <= count; index += 1) {
         addLog(`Sending goal to TestAgent_${index}...`);
         await broadcastAgentMessage(goal, `TestAgent_${index}`);
         await new Promise((resolve) => setTimeout(resolve, 400));
       }
-      addLog("All agents received goals. Testbed running.");
+      addLog("All actors received goals. Testbed running.");
     } catch (error) {
       addLog(`Error: ${error.message}`);
     } finally {
@@ -269,14 +269,14 @@ function MultiAgentTestbed({ sessionId }) {
   const stopAgents = async () => {
     setRunning(false);
     await stopAllAgents();
-    addLog("Stopped all agents");
+    addLog("Stopped all actors");
   };
 
   return (
     <div className="agent-testbed">
-      <div className="agent-testbed-title">Multi-Agent Testbed</div>
+      <div className="agent-testbed-title">Multi-Actor Testbed</div>
       <div className="agent-testbed-row">
-        <label>Agents:</label>
+        <label>Actors:</label>
         <select value={count} onChange={(event) => setCount(Number(event.target.value))}>
           {[2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}
         </select>
@@ -285,7 +285,7 @@ function MultiAgentTestbed({ sessionId }) {
         value={goal}
         onChange={(event) => setGoal(event.target.value)}
         rows={2}
-        placeholder="Navigation goal for all agents..."
+        placeholder="Navigation goal for all actors..."
       />
       <div className="agent-testbed-actions">
         <button className="agent-testbed-run" onClick={spawnAndRun} disabled={running}>
@@ -352,7 +352,7 @@ function CommHistory({ agentColors, agents }) {
       <div className="agent-comm-header">Communication</div>
       <div ref={scrollRef} className="agent-comm-messages">
         {messages.length === 0 ? (
-          <div className="agent-comm-empty">Messages between you and agents will appear here.</div>
+          <div className="agent-comm-empty">Actor messages will appear here.</div>
         ) : messages.map((message, index) => (
           <div key={`${message.timestamp}-${index}`} className="agent-comm-message">
             <div className="agent-comm-meta">

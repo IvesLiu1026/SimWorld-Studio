@@ -1,0 +1,782 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-simworld-scene-v1.schema.json",
+  "title": "Normalized VISTA SimWorld scene",
+  "description": "The deterministic reconstruction contract shared by the VISTA importer, asset resolver, scene builder, and timeline compiler.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "scene_id",
+    "profile",
+    "privilege",
+    "source",
+    "duration_sec",
+    "environment",
+    "camera",
+    "entities",
+    "relations",
+    "timeline",
+    "dialogue",
+    "unresolved",
+    "provenance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "vista-simworld-scene/v1"
+    },
+    "scene_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}@[a-f0-9]{12,64}$"
+    },
+    "profile": {
+      "const": "reconstruction"
+    },
+    "privilege": {
+      "$ref": "#/$defs/scenePrivilege"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "duration_sec": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 3600
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "camera": {
+      "$ref": "#/$defs/camera"
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "timeline": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/timelineEvent"
+      }
+    },
+    "dialogue": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/dialogueTurn"
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/unresolvedMapping"
+      }
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "safeIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z][A-Za-z0-9+.-]*:)[A-Za-z0-9._/-]+$"
+    },
+    "privilegeLabel": {
+      "enum": [
+        "reconstruction_only",
+        "evaluation_safe"
+      ]
+    },
+    "scenePrivilege": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "classification",
+        "evaluation_input_allowed",
+        "field_labels"
+      ],
+      "properties": {
+        "profile": {
+          "const": "reconstruction"
+        },
+        "classification": {
+          "const": "reconstruction_only"
+        },
+        "evaluation_input_allowed": {
+          "const": false
+        },
+        "field_labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "render_script",
+            "environment",
+            "timeline",
+            "dialogue"
+          ],
+          "properties": {
+            "render_script": {
+              "const": "reconstruction_only"
+            },
+            "environment": {
+              "const": "reconstruction_only"
+            },
+            "timeline": {
+              "const": "reconstruction_only"
+            },
+            "dialogue": {
+              "const": "evaluation_safe"
+            }
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile",
+        "classification",
+        "dataset_revision",
+        "source_row_id",
+        "visual_id",
+        "case_scope",
+        "scenario_type",
+        "attempt",
+        "files",
+        "media",
+        "source_checksum"
+      ],
+      "properties": {
+        "profile": {
+          "const": "reconstruction"
+        },
+        "classification": {
+          "const": "reconstruction_source"
+        },
+        "dataset_revision": {
+          "$ref": "#/$defs/safeIdentifier"
+        },
+        "source_row_id": {
+          "$ref": "#/$defs/safeIdentifier"
+        },
+        "visual_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$"
+        },
+        "case_scope": {
+          "$ref": "#/$defs/safeIdentifier"
+        },
+        "scenario_type": {
+          "enum": [
+            "multimodal_grounded",
+            "contradictory",
+            "video_grounded_ontopic",
+            "video_grounded_offtopic",
+            "text_grounded",
+            "no_assistance"
+          ]
+        },
+        "attempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "index",
+            "selected"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "selected": {
+              "const": true
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/sourceFile"
+          }
+        },
+        "media": {
+          "$ref": "#/$defs/mediaReference"
+        },
+        "source_checksum": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "sourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "path",
+        "media_type",
+        "sha256",
+        "bytes",
+        "required",
+        "privilege"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "render_script",
+            "dialogue_no_oracle",
+            "media_descriptor"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "media_type": {
+          "enum": [
+            "application/json",
+            "application/yaml"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "privilege": {
+          "$ref": "#/$defs/privilegeLabel"
+        }
+      }
+    },
+    "mediaReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "media_id",
+        "role",
+        "logical_ref",
+        "media_type",
+        "sha256",
+        "bytes",
+        "duration_sec",
+        "width",
+        "height",
+        "bundled",
+        "integrity_status",
+        "privilege"
+      ],
+      "properties": {
+        "media_id": { "$ref": "#/$defs/safeIdentifier" },
+        "role": { "const": "reference_video" },
+        "logical_ref": { "$ref": "#/$defs/relativePath" },
+        "media_type": { "const": "video/mp4" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "duration_sec": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "bundled": { "const": false },
+        "integrity_status": { "const": "recorded_checksum" },
+        "privilege": { "const": "reconstruction_only" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "description",
+        "lighting"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "lighting": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "perspective",
+        "position",
+        "height",
+        "angle",
+        "motion",
+        "framing",
+        "constraints"
+      ],
+      "properties": {
+        "perspective": {
+          "const": "first_person"
+        },
+        "position": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "height": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "angle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "motion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "framing": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "constraints": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "semantic_query",
+        "required",
+        "asset_binding",
+        "source_pointer",
+        "privilege"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "semantic_query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "asset_binding": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/assetBinding"
+            }
+          ]
+        },
+        "asset_resolution": {
+          "$ref": "#/$defs/assetResolution"
+        },
+        "source_pointer": {
+          "$ref": "#/$defs/sourcePointer"
+        },
+        "privilege": {
+          "const": "reconstruction_only"
+        }
+      }
+    },
+    "assetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_id",
+        "asset_id",
+        "ue_path",
+        "confidence"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "$ref": "#/$defs/safeIdentifier"
+        },
+        "asset_id": {
+          "$ref": "#/$defs/safeIdentifier"
+        },
+        "ue_path": {
+          "type": "string",
+          "pattern": "^/Game/[A-Za-z0-9_./-]+$",
+          "maxLength": 512
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "assetCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rank", "snapshot_id", "asset_id", "ue_path", "confidence", "origin"],
+      "properties": {
+        "rank": { "type": "integer", "minimum": 1, "maximum": 40 },
+        "snapshot_id": { "$ref": "#/$defs/safeIdentifier" },
+        "asset_id": { "$ref": "#/$defs/safeIdentifier" },
+        "ue_path": { "type": "string", "pattern": "^/Game/[A-Za-z0-9_./-]+$", "maxLength": 512 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "origin": { "enum": ["search", "manual_override"] }
+      }
+    },
+    "manualOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confirmed", "reason", "snapshot_id", "asset_id", "ue_path", "confidence"],
+      "properties": {
+        "confirmed": { "const": true },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "snapshot_id": { "$ref": "#/$defs/safeIdentifier" },
+        "asset_id": { "$ref": "#/$defs/safeIdentifier" },
+        "ue_path": { "type": "string", "pattern": "^/Game/[A-Za-z0-9_./-]+$", "maxLength": 512 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "assetResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "snapshot_id", "query", "min_confidence", "candidates", "selected_binding", "selected_by", "manual_override"],
+      "properties": {
+        "schema": { "const": "vista-asset-resolution/v1" },
+        "snapshot_id": { "$ref": "#/$defs/safeIdentifier" },
+        "query": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "min_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "candidates": {
+          "type": "array",
+          "maxItems": 40,
+          "items": { "$ref": "#/$defs/assetCandidate" }
+        },
+        "selected_binding": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/assetBinding" }
+          ]
+        },
+        "selected_by": {
+          "oneOf": [
+            { "type": "null" },
+            { "enum": ["automatic", "manual_override"] }
+          ]
+        },
+        "manual_override": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/manualOverride" }
+          ]
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relation_id",
+        "source_id",
+        "predicate",
+        "target_id",
+        "source_pointer",
+        "privilege"
+      ],
+      "properties": {
+        "relation_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,79}$"
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "predicate": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "target_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "source_pointer": {
+          "$ref": "#/$defs/sourcePointer"
+        },
+        "privilege": {
+          "const": "reconstruction_only"
+        }
+      }
+    },
+    "timelineEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "at_sec",
+        "action",
+        "description",
+        "actor_id",
+        "target_id",
+        "parameters",
+        "source_pointer",
+        "privilege"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "pattern": "^beat-[0-9]{4}(?:-[a-z0-9_-]+)?$"
+        },
+        "at_sec": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "action": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "actor_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "target_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,79}$"
+            }
+          ]
+        },
+        "parameters": {
+          "$ref": "#/$defs/parameters"
+        },
+        "source_pointer": {
+          "$ref": "#/$defs/sourcePointer"
+        },
+        "privilege": {
+          "const": "reconstruction_only"
+        }
+      }
+    },
+    "dialogueTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_id",
+        "role",
+        "speaker",
+        "text",
+        "source_pointer",
+        "privilege"
+      ],
+      "properties": {
+        "turn_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "role": {
+          "const": "context"
+        },
+        "speaker": {
+          "enum": [
+            "other_person",
+            "user"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "source_pointer": {
+          "$ref": "#/$defs/sourcePointer"
+        },
+        "privilege": {
+          "const": "evaluation_safe"
+        }
+      }
+    },
+    "unresolvedMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mapping_id",
+        "kind",
+        "source_pointer",
+        "reason_code",
+        "message",
+        "blocking",
+        "candidates"
+      ],
+      "properties": {
+        "mapping_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,119}$"
+        },
+        "kind": {
+          "enum": [
+            "action",
+            "asset",
+            "camera",
+            "entity",
+            "relation"
+          ]
+        },
+        "source_pointer": {
+          "$ref": "#/$defs/sourcePointer"
+        },
+        "reason_code": {
+          "enum": [
+            "ambiguous_entity",
+            "invalid_source",
+            "missing_required_field",
+            "no_asset_match",
+            "unsupported_action"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "candidates": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "importer_name",
+        "importer_version",
+        "source_checksum",
+        "bundle_id"
+      ],
+      "properties": {
+        "importer_name": {
+          "const": "vista-scene-importer"
+        },
+        "importer_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
+        },
+        "source_checksum": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bundle_id": {
+          "$ref": "#/$defs/safeIdentifier"
+        }
+      }
+    },
+    "sourcePointer": {
+      "type": "string",
+      "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$",
+      "maxLength": 512
+    },
+    "parameters": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "string",
+            "maxLength": 1000
+          },
+          {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "maxLength": 1000
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

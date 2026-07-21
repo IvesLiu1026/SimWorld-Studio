@@ -1,0 +1,50 @@
+Global_Metadata:
+  Title: Office high-shelf retrieval with a wheeled chair versus a safer step aid
+  Perspective: First-person (Egocentric, Head-mounted)
+  Environment: A single open-plan office bay or copy and storage corner with a tall cabinet holding a box out of easy reach, a wheeled office chair nearby, and a visible safer alternative such as a stable step stool.
+  Lighting: Neutral office daylight with soft overhead fluorescent fill.
+  Duration_sec: 12
+  Dialogue_Delivery: external_text_only
+  Speech_Policy: no_spoken_dialogue
+  Audio_Policy: ambient_non_speech_only
+  Viewpoint_Contract:
+    POV_Mode: absolute_first_person_head_mounted
+    Allowed_Body_Visibility:
+      - hands
+      - forearms
+    Face_Visibility: none
+    Forbidden_Views:
+      - third_person
+      - selfie
+      - overhead
+      - floating_camera
+Camera_Continuity:
+  Position: Head-mounted eye-line camera
+  Height: Adult eye-level
+  Angle: Natural egocentric viewing angle
+  Motion: A single uninterrupted take follows deliberate gaze shifts between the high box, wheeled chair, and safer step stool, ending before a full climb.
+  Framing: Strict first-person framing with only hands or forearms visible.
+  Forbidden_Camera_Behaviors:
+    - third_person
+    - floating_camera
+    - selfie_view
+    - visible_user_face
+    - detached_overhead
+    - rec_overlay
+    - timestamp_overlay
+Scene:
+  Key_Visual_Elements:
+    - wheeled office chair with visible casters
+    - stable step stool
+    - cardboard box on a high cabinet
+    - camera wearer hands and forearms
+  Description: In a strict first-person office view, the camera wearer needs to retrieve a box from a high cabinet, pulls a rolling chair into position, and pauses while a stable step stool remains visible nearby.
+  Actions:
+    - '[00:00] Look up at a cardboard box on a tall office cabinet, then lower the gaze so the wheeled office chair and nearby stable step stool are established in the same continuous first-person space.'
+    - '[00:02] Reach out and drag the rolling office chair beneath the cabinet while the safer step stool remains visible off to the side.'
+    - '[00:05] Brace one hand on the chair back and one near the cabinet edge, lift one foot toward the chair seat, and pause before placing weight on it.'
+    - '[00:09] Hold at the decision point as the chair moves slightly on its casters, with the stable step stool still visible, and end before climbing or retrieving the box.'
+  Dialogue: []
+Exit_State:
+  Action: The clip ends at the unresolved pre-action decision point with both the wheeled chair and stable step stool visible.
+  Audio: ambient_non_speech_only

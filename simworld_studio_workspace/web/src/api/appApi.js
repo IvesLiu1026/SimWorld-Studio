@@ -93,9 +93,12 @@ export async function sendChat(message, sessionId, onEvent, signal, options) {
         agent: options?.agent,
         model: options?.model,
         loopMode: options?.loopMode,
+        conversationId: options?.conversationId,
         runner: options?.runner,
         assetMode: options?.assetMode,
         assetRetrievalMode: options?.assetRetrievalMode,
+        requireRealAssets: options?.requireRealAssets,
+        assetDegradedMode: options?.assetDegradedMode,
       }),
       signal: effectiveSignal,
     });
@@ -362,13 +365,18 @@ export async function fetchLatestScreenshotDataUrl() {
 }
 
 export async function scoreSceneWithVlm(imageDataUrl, sessionId) {
-  return (
-    await fetch(`${API_BASE}/vlm-score`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageDataUrl, sessionId }),
-    })
-  ).json();
+  const response = await fetch(`${API_BASE}/vlm-score`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ imageDataUrl, sessionId }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(result.error || `VLM review failed (${response.status})`);
+    error.code = result.code || "REVIEW_PROVIDER_ERROR";
+    throw error;
+  }
+  return result;
 }
 
 export async function scoreLatestScreenshot(sessionId) {
@@ -455,4 +463,44 @@ export async function deleteToolProcedure(id) {
       method: "DELETE",
     })
   ).json();
+}
+
+async function vistaImportJson(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error || `VISTA import request failed (${response.status})`);
+    error.name = "VistaImportApiError";
+    error.status = response.status;
+    error.code = payload.code || "VISTA_IMPORT_REQUEST_FAILED";
+    error.retryable = Boolean(payload.retryable);
+    throw error;
+  }
+  return payload;
+}
+
+export function previewVistaImport(request, signal) {
+  return vistaImportJson("/vista/imports/preview", {
+    method: "POST",
+    body: JSON.stringify(request),
+    signal,
+  });
+}
+
+export function commitVistaImport(request, signal) {
+  return vistaImportJson("/vista/imports", {
+    method: "POST",
+    body: JSON.stringify(request),
+    signal,
+  });
+}
+
+export function fetchVistaImportStatus(runId, signal) {
+  return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}`, { signal });
 }

@@ -312,7 +312,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
   const vistaPlayLeaseRef = useRef(false);
   const vistaReconciledRef = useRef(false);
   const [pixelStreamReady, setPixelStreamReady] = useState(false);
-  const [vistaDemo, setVistaDemo] = useState({ phase: "idle", text: "Waiting for live stream" });
+  const [vistaDemo, setVistaDemo] = useState({ phase: "idle", text: "Waiting for viewport stream" });
   const engineLabel = health?.engineLabel || (health?.engineVersion ? `UE ${health.engineVersion}` : "Unreal Engine");
 
   const clearVistaPoll = useCallback(() => {
@@ -330,7 +330,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
     if (vistaDemo.phase !== "idle") return;
     setVistaDemo({
       phase: "idle",
-      text: pixelStreamReady ? "VISTA Demo ready" : "Waiting for live stream",
+      text: pixelStreamReady ? "Simulation ready" : "Waiting for viewport stream",
     });
   }, [pixelStreamReady, vistaDemo.phase]);
 
@@ -372,7 +372,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
           vistaExpectedPawnRef.current = null;
           vistaPlayDispatchedRef.current = false;
           vistaPlayLeaseRef.current = false;
-          setVistaDemo({ phase: "idle", text: "VISTA Demo ready" });
+          setVistaDemo({ phase: "idle", text: "Simulation ready" });
           return;
         }
         if (typeof payload?.pawn_class === "string" && validRuntimeState(payload, payload.pawn_class)) {
@@ -381,7 +381,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
           vistaPlayDispatchedRef.current = true;
           vistaLiveRef.current = true;
           setMode("pixelstream");
-          setVistaDemo({ phase: "live", text: "VISTA Demo already live — controls recovered" });
+          setVistaDemo({ phase: "live", text: "Simulation already running — controls recovered" });
           return;
         }
         throw new Error("UE Play state could not be reconciled");
@@ -436,7 +436,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
     vistaPlayDispatchedRef.current = false;
     vistaPlayLeaseRef.current = false;
     setMode("pixelstream");
-    setVistaDemo({ phase: "preparing", text: "Preparing VISTA Demo..." });
+    setVistaDemo({ phase: "preparing", text: "Preparing simulation..." });
 
     const scheduleProbe = (delayMs) => {
       clearVistaPoll();
@@ -487,7 +487,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
           vistaExpectedPawnRef.current = null;
           vistaPlayDispatchedRef.current = false;
           vistaPlayLeaseRef.current = false;
-          setVistaDemo({ phase: "stopped", text: "VISTA Demo remained stopped — Play was not toggled twice" });
+          setVistaDemo({ phase: "stopped", text: "Simulation remained stopped — Play was not toggled twice" });
           return;
         }
         const observedPawnClass = expectedPawnClass || payload?.pawn_class;
@@ -498,7 +498,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
         vistaExpectedPawnRef.current = observedPawnClass;
         vistaReconciledRef.current = true;
         vistaLiveRef.current = true;
-        setVistaDemo({ phase: "live", text: "VISTA Demo live — WASD / arrows / mouse / Space" });
+        setVistaDemo({ phase: "live", text: "Simulation running — WASD / arrows / mouse / Space" });
       } catch (error) {
         if (vistaRunRef.current === runId) {
           setVistaDemo({
@@ -642,7 +642,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
           vistaPlayDispatchedRef.current = false;
           vistaPlayLeaseRef.current = false;
           vistaReconciledRef.current = true;
-          setVistaDemo({ phase: "stopped", text: "VISTA Demo stopped — UE confirmed" });
+          setVistaDemo({ phase: "stopped", text: "Simulation stopped — UE confirmed" });
           return;
         }
         if (validRuntimeState(payload, expectedPawnClass)) {
@@ -844,16 +844,16 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
         </button>
         <div className="viewport-mode-tabs">
           {[
-            { id: "pixelstream", label: "Live" },
-            { id: "agent", label: "Agent" },
-            { id: "screenshot", label: "Shot" },
+            { id: "pixelstream", label: "Editor" },
+            { id: "agent", label: "Camera" },
+            { id: "screenshot", label: "Capture" },
           ].map((tab) => (
             <button
               key={tab.id}
               className={`viewport-mode-btn${mode === tab.id ? " active" : ""}`}
               disabled={vistaOwnsViewport && tab.id !== "pixelstream"}
               onClick={() => setMode(tab.id)}
-              title={vistaOwnsViewport && tab.id !== "pixelstream" ? "Stop VISTA Demo before changing views" : undefined}
+              title={vistaOwnsViewport && tab.id !== "pixelstream" ? "Stop the simulation before changing views" : undefined}
             >
               {tab.label}
             </button>
@@ -899,7 +899,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
             ))}
             <button
               className="viewport-unlock-btn"
-              title="Unlock camera from agent"
+              title="Release camera lock"
               disabled={cameraMoving}
               onClick={() => {
                 setCameraMoving(true);
@@ -912,7 +912,7 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
           </div>
         ) : (
           <div className="viewport-compact-label">
-            {mode === "pixelstream" ? "Live stream controls hidden" : "Screenshot controls hidden"}
+            {mode === "pixelstream" ? "Editor controls hidden" : "Capture controls hidden"}
           </div>
         )}
 
@@ -937,12 +937,12 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
               }}
             >
               {vistaDemo.phase === "stopping"
-                ? "Stopping VISTA Demo..."
+                ? "Stopping simulation..."
                 : vistaDemo.phase === "reconciling"
-                  ? "Checking VISTA Demo..."
+                  ? "Checking simulation..."
                 : canStopVista
-                  ? "Stop VISTA Demo"
-                  : "Start VISTA Demo"}
+                  ? "Stop Simulation"
+                  : "Start Simulation"}
             </button>
             <span
               role="status"

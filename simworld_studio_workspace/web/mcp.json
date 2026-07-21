@@ -1,1 +1,16 @@
-{"mcpServers":{"simworld":{"command":"node","args":["/home/koe/SimWorld-Studio-Internal/simworld_studio_workspace/web/server/mcp-server.js"],"env":{"UNREAL_HOST":"127.0.0.1","UNREAL_PORT":"55564"}}}}
+{
+  "mcpServers": {
+    "simworld": {
+      "command": "/home/yhliu/.local/bin/node",
+      "args": [
+        "/home/yhliu/SimWorld-Studio-src/simworld_studio_workspace/web/server/mcp-server.js"
+      ],
+      "env": {
+        "SIMWORLD_BROKER_HOST": "127.0.0.1",
+        "UNREAL_HOST": "127.0.0.1",
+        "UNREAL_PORT": "55570",
+        "PORT": "3022"
+      }
+    }
+  }
+}

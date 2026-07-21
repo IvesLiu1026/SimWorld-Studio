@@ -151,7 +151,7 @@ function ToolDetailModal({ busy, onClose, onDelete, onOpenSkill, onToggleEnabled
         <div style={{ fontSize: 13, color: "var(--ink)", lineHeight: 1.5 }}>{tool.description || "No description"}</div>
         {!readOnly && (
           <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-3)" }}>
-            Related skills: <span style={{ color: "var(--ink)" }}>{relatedSkills?.length || 0}</span>
+            Related procedures: <span style={{ color: "var(--ink)" }}>{relatedSkills?.length || 0}</span>
           </div>
         )}
         {!readOnly && relatedSkills?.length > 0 && (
@@ -197,7 +197,7 @@ function ToolDetailModal({ busy, onClose, onDelete, onOpenSkill, onToggleEnabled
         )}
 
         <div style={{ marginTop: 16, fontSize: 12, color: "var(--ink-2)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
-          How the Agent Calls This Tool
+          Invocation Contract
         </div>
         <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-3)", lineHeight: 1.5 }}>
           Use <span style={{ color: "var(--blue)", fontFamily: "monospace" }}>{tool.mcpName}</span> with an arguments object.

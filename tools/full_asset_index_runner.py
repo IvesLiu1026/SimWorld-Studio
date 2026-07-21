@@ -38,7 +38,6 @@ from typing import Any
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_ASSET_DB_DIR = pathlib.Path("/data/siddhant/asset_db")
-DEFAULT_POSTGRES_URL = "postgresql://USER:PASSWORD@127.0.0.1:55432/asset_db"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 DEFAULT_COLLECTION = "assets"
 DEFAULT_QWEN_BASE_URL = "http://137.110.161.132:8005/v1"
@@ -275,10 +274,75 @@ def jsonable(value: Any) -> Any:
     return value
 
 
+POSTGRES_DSN_RE = re.compile(r"\bpostgres(?:ql)?://[^\s\"'<>]+", re.IGNORECASE)
+SERIALIZED_SECRET_KEYS = {
+    "postgres_url",
+    "postgres_dsn",
+    "dsn",
+}
+
+
+def redact_secret_text(value: str) -> str:
+    """Remove credential-bearing Postgres DSNs from persisted diagnostics."""
+    return POSTGRES_DSN_RE.sub("<redacted-postgres-dsn>", value)
+
+
+def redact_command(command: list[Any]) -> list[Any]:
+    """Return an argv-shaped value that is safe to serialize or log."""
+    redacted: list[Any] = []
+    redact_next = False
+    for item in command:
+        if not isinstance(item, str):
+            redacted.append(redact_for_serialization(item))
+            continue
+        if redact_next:
+            redacted.append("<redacted-postgres-dsn>")
+            redact_next = False
+            continue
+        if item == "--postgres-url":
+            redacted.append(item)
+            redact_next = True
+            continue
+        if item.startswith("--postgres-url="):
+            redacted.append("--postgres-url=<redacted-postgres-dsn>")
+            continue
+        redacted.append(redact_secret_text(item))
+    return redacted
+
+
+def redact_for_serialization(value: Any, *, field_name: str = "") -> Any:
+    """Recursively redact secrets before writing config, events, or logs."""
+    if field_name.casefold() in SERIALIZED_SECRET_KEYS:
+        return "<redacted>" if value else value
+    if isinstance(value, dict):
+        return {
+            key: redact_for_serialization(item, field_name=str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        if field_name.casefold() in {"argv", "cmd", "command"}:
+            return redact_command(value)
+        return [redact_for_serialization(item) for item in value]
+    if isinstance(value, tuple):
+        return [redact_for_serialization(item) for item in value]
+    if isinstance(value, str):
+        return redact_secret_text(value)
+    return value
+
+
+def serialize_run_config(args: argparse.Namespace, schema: pathlib.Path) -> dict[str, Any]:
+    """Build the durable run config without storing the database DSN."""
+    config = jsonable(vars(args) | {"schema": str(schema)})
+    postgres_url = config.pop("postgres_url", "")
+    config["postgres_url_configured"] = bool(postgres_url)
+    config["postgres_url_source"] = "POSTGRES_URL environment"
+    return redact_for_serialization(config)
+
+
 def append_jsonl(path: pathlib.Path, obj: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        f.write(json.dumps(redact_for_serialization(obj), ensure_ascii=False) + "\n")
 
 
 def read_jsonl(path: pathlib.Path) -> list[dict[str, Any]]:
@@ -1079,7 +1143,8 @@ def run_command(
 ) -> subprocess.CompletedProcess[str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as log:
-        log.write(f"\n$ {' '.join(cmd)}\n")
+        safe_cmd = [str(item) for item in redact_command(cmd)]
+        log.write(f"\n$ {' '.join(safe_cmd)}\n")
         log.flush()
         try:
             proc = subprocess.run(
@@ -1194,7 +1259,10 @@ def write_id_list(path: pathlib.Path, rows: list[dict[str, Any]]) -> None:
 def build_env(args: argparse.Namespace) -> dict[str, str]:
     env = dict(os.environ)
     env["ASSET_DB_DIR"] = str(args.asset_db_dir)
-    env["POSTGRES_URL"] = args.postgres_url
+    if args.postgres_url:
+        env["POSTGRES_URL"] = args.postgres_url
+    else:
+        env.pop("POSTGRES_URL", None)
     env["QDRANT_URL"] = args.qdrant_url
     env["QDRANT_COLLECTION"] = args.qdrant_collection
     return env
@@ -1318,16 +1386,12 @@ def sync_database(
         "tools/migrate_to_postgres.py",
         "--asset-db-dir",
         str(args.asset_db_dir),
-        "--postgres-url",
-        args.postgres_url,
         "--commit-every",
         str(args.db_commit_every),
     ]
     qdrant_cmd = [
         sys.executable,
         "tools/build_qdrant_index.py",
-        "--postgres-url",
-        args.postgres_url,
         "--qdrant-url",
         args.qdrant_url,
         "--collection",
@@ -1350,7 +1414,7 @@ def sync_database(
                 "ts": utc_now(),
                 "event": "db_sync_command_failed",
                 "sync_id": sync_id,
-                "cmd": cmd,
+                "cmd": redact_command(cmd),
                 "returncode": proc.returncode,
                 "log": str(log_path),
             })
@@ -1703,6 +1767,10 @@ def run_preflight(args: argparse.Namespace, schema: pathlib.Path) -> None:
             shotdir.mkdir(parents=True, exist_ok=True)
             check_ue(args.mcp_port)
             if not args.no_db_sync:
+                if not args.postgres_url:
+                    raise RuntimeError(
+                        "POSTGRES_URL is required for DB sync; inject it through the service environment"
+                    )
                 try:
                     check_postgres(args.postgres_url)
                     check_qdrant(args.qdrant_url)
@@ -1852,7 +1920,7 @@ def run_index(args: argparse.Namespace) -> int:
         state["_last_sync_monotonic"] = time.monotonic()
         state["_last_sync_attempt_monotonic"] = time.monotonic()
         state["_last_sync_attempt_pending_count"] = 0
-        write_json(run_dir / "config.json", jsonable(vars(args) | {"schema": str(schema)}))
+        write_json(run_dir / "config.json", serialize_run_config(args, schema))
         write_text_atomic(
             run_dir / "selected_asset_ids.txt",
             "".join(f"{asset.get('asset_id')}\n" for asset in assets),
@@ -2511,7 +2579,9 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--skip-asset-ids", default=os.environ.get("SKIP_ASSET_IDS", ""))
     p.add_argument("--skip-asset-id-file", default=os.environ.get("SKIP_ASSET_ID_FILE", ""))
     p.add_argument("--limit", type=int)
-    p.add_argument("--postgres-url", default=os.environ.get("POSTGRES_URL", DEFAULT_POSTGRES_URL))
+    # Environment-only by design: accepting a DSN option would expose it in
+    # process listings and shell history.
+    p.set_defaults(postgres_url=os.environ.get("POSTGRES_URL", ""))
     p.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL", DEFAULT_QDRANT_URL))
     p.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", DEFAULT_COLLECTION))
     p.add_argument("--no-db-sync", action="store_true")

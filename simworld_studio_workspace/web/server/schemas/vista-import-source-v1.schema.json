@@ -1,0 +1,387 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-import-source-v1.schema.json",
+  "title": "VISTA curated import source bundle",
+  "description": "A path-safe, checksum-pinned bundle accepted by the VISTA scene importer. Reconstruction-only data is explicitly separated from evaluation-safe dialogue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "bundle_id",
+    "dataset_revision",
+    "profile",
+    "privilege",
+    "sample",
+    "files"
+  ],
+  "properties": {
+    "schema": {
+      "const": "vista-import-source/v1"
+    },
+    "bundle_id": {
+      "$ref": "#/$defs/safeIdentifier"
+    },
+    "dataset_revision": {
+      "$ref": "#/$defs/safeIdentifier"
+    },
+    "profile": {
+      "enum": [
+        "reconstruction",
+        "evaluation_safe"
+      ]
+    },
+    "privilege": {
+      "$ref": "#/$defs/bundlePrivilege"
+    },
+    "sample": {
+      "$ref": "#/$defs/sample"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/file"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "reconstruction"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "privilege": {
+            "properties": {
+              "classification": {
+                "const": "reconstruction_source"
+              },
+              "evaluation_input_allowed": {
+                "const": false
+              }
+            }
+          },
+          "files": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "role": {
+                      "const": "render_script"
+                    },
+                    "privilege": {
+                      "const": "reconstruction_only"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "privilege"
+                  ]
+                },
+                "minContains": 1,
+                "maxContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "role": {
+                      "const": "media_descriptor"
+                    },
+                    "privilege": {
+                      "const": "reconstruction_only"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "privilege"
+                  ]
+                },
+                "minContains": 1,
+                "maxContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "role": {
+                      "const": "dialogue_no_oracle"
+                    },
+                    "privilege": {
+                      "const": "evaluation_safe"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "privilege"
+                  ]
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "privilege": {
+            "properties": {
+              "classification": {
+                "const": "evaluation_safe"
+              },
+              "evaluation_input_allowed": {
+                "const": true
+              }
+            }
+          },
+          "files": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "privilege": {
+                    "const": "reconstruction_only"
+                  }
+                },
+                "required": [
+                  "privilege"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z][A-Za-z0-9+.-]*:)[A-Za-z0-9._/-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "bundlePrivilege": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "evaluation_input_allowed",
+        "allowed_consumers"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "reconstruction_source",
+            "evaluation_safe"
+          ]
+        },
+        "evaluation_input_allowed": {
+          "type": "boolean"
+        },
+        "allowed_consumers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "vista_importer",
+              "scene_normalizer",
+              "evaluation_exporter"
+            ]
+          }
+        }
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_row_id",
+        "visual_id",
+        "case_scope",
+        "scenario_type",
+        "duration_sec",
+        "attempt"
+      ],
+      "properties": {
+        "source_row_id": {
+          "$ref": "#/$defs/safeIdentifier"
+        },
+        "visual_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$"
+        },
+        "case_scope": {
+          "$ref": "#/$defs/safeIdentifier"
+        },
+        "scenario_type": {
+          "enum": [
+            "multimodal_grounded",
+            "contradictory",
+            "video_grounded_ontopic",
+            "video_grounded_offtopic",
+            "text_grounded",
+            "no_assistance"
+          ]
+        },
+        "duration_sec": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 3600
+        },
+        "attempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "index",
+            "selected"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "selected": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "role",
+        "media_type",
+        "sha256",
+        "bytes",
+        "required",
+        "privilege"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "role": {
+          "enum": [
+            "render_script",
+            "dialogue_no_oracle",
+            "media_descriptor"
+          ]
+        },
+        "media_type": {
+          "enum": [
+            "application/json",
+            "application/yaml"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10485760
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "privilege": {
+          "enum": [
+            "reconstruction_only",
+            "evaluation_safe"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "render_script"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "media_type": {
+                "const": "application/yaml"
+              },
+              "privilege": {
+                "const": "reconstruction_only"
+              },
+              "required": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "dialogue_no_oracle"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "media_type": {
+                "const": "application/json"
+              },
+              "privilege": {
+                "const": "evaluation_safe"
+              },
+              "required": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "media_descriptor"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "media_type": {
+                "const": "application/json"
+              },
+              "privilege": {
+                "const": "reconstruction_only"
+              },
+              "required": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

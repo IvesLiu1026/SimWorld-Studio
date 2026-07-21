@@ -4,8 +4,8 @@ import LineChart from "../../components/charts/LineChart.jsx";
 import { useMetrics } from "../../state/pollContext.jsx";
 
 const TABS = [
-  { id: "collisions", label: "Rule-based Checker" },
-  { id: "vlm", label: "VLM Score" },
+  { id: "collisions", label: "Geometry Checks" },
+  { id: "vlm", label: "Visual Review" },
 ];
 
 function countTone(value, warningTone = "red") {
@@ -55,15 +55,20 @@ export default function CodingVerifierPanel({ latestScreenshot, sessionId }) {
     setVlmError(null);
     try {
       const result = await scoreLatestScreenshot(sessionId);
+      if (!Number.isFinite(result?.score)) {
+        throw new Error(result?.error || "Visual review returned an invalid score");
+      }
       setScores((prev) => [...prev.slice(-9), {
         feedback: result.feedback,
         label: result.label,
+        model: result.model,
+        provider: result.provider,
         score: result.score,
         screenshot: result.imageDataUrl,
         ts: Date.now(),
       }]);
     } catch (error) {
-      setVlmError(error.message);
+      setVlmError(error instanceof Error ? error.message : "Visual review failed");
     } finally {
       setVlmRunning(false);
     }
@@ -73,8 +78,7 @@ export default function CodingVerifierPanel({ latestScreenshot, sessionId }) {
     if (!latestScreenshot || latestScreenshot === prevScreenRef.current) return;
     prevScreenRef.current = latestScreenshot;
     runCollisionCheck();
-    runVlmScore();
-  }, [latestScreenshot, runCollisionCheck, runVlmScore]);
+  }, [latestScreenshot, runCollisionCheck]);
 
   const collisionCount = collisionData?.collision_count ?? "-";
   const floatingCount = collisionData?.floating_count ?? "-";
@@ -104,7 +108,7 @@ export default function CodingVerifierPanel({ latestScreenshot, sessionId }) {
         )}
         {tab === "vlm" && (
           <button className="scene-verifier-action" onClick={runVlmScore} disabled={vlmRunning} type="button">
-            {vlmRunning ? "Scoring..." : "Score"}
+            {vlmRunning ? "Reviewing..." : "Run Review"}
           </button>
         )}
       </div>
@@ -167,7 +171,7 @@ export default function CodingVerifierPanel({ latestScreenshot, sessionId }) {
           <div>
             {vlmError && <div className="scene-verifier-error">{vlmError}</div>}
             {scores.length === 0 && !vlmRunning && (
-              <div className="scene-verifier-empty">Click Score to evaluate the current scene with VLM</div>
+              <div className="scene-verifier-empty">Click Run Review to evaluate the current scene visually</div>
             )}
             {scores.slice().reverse().map((score, index) => (
               <div key={index} className="scene-verifier-score-card">
@@ -178,6 +182,11 @@ export default function CodingVerifierPanel({ latestScreenshot, sessionId }) {
                   {score.label && <span className="scene-verifier-label">{score.label}</span>}
                   <time>{new Date(score.ts).toLocaleTimeString()}</time>
                 </div>
+                {(score.provider || score.model) && (
+                  <div className="scene-verifier-note">
+                    {[score.provider, score.model].filter(Boolean).join(" · ")}
+                  </div>
+                )}
                 {score.feedback && <p>{score.feedback}</p>}
               </div>
             ))}

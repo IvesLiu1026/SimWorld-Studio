@@ -44,7 +44,7 @@ export default function CurriculumBuilderPanel({ icons, sessionId }) {
           ["Episodes per round", "500"],
           ["Max rounds", "25"],
           ["Advance policy", "Consecutive"],
-          ["Agent update", "Online"],
+          ["Controller update", "Online"],
         ].map(([label, value]) => (
           <div key={label} className="config-row">
             <label>{label}</label>
@@ -53,7 +53,7 @@ export default function CurriculumBuilderPanel({ icons, sessionId }) {
         ))}
 
         <div className="config-section-title" style={{ marginTop: 12 }}>
-          SimCoder Adaptation
+          Curriculum Adaptation
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {[
@@ -78,7 +78,7 @@ export default function CurriculumBuilderPanel({ icons, sessionId }) {
             </>
           ) : (
             <>
-              {icons.refresh(13)} Run Co-evolution
+              {icons.refresh(13)} Run Iteration
             </>
           )}
         </button>

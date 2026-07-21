@@ -7,7 +7,7 @@ export default function ArtifactToastStack({ items }) {
     <div className="sw-artifact-toast-stack">
       {items.map((item) => {
         const isTool = item.kind === "tool";
-        const title = isTool ? "New Tool Learned" : "New Skill Learned";
+        const title = isTool ? "Tool Registered" : "Procedure Registered";
         return (
           <div key={item.id} className={`sw-artifact-toast ${isTool ? "tool" : "skill"}`}>
             <div className="sw-artifact-toast-body">

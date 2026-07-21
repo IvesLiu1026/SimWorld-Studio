@@ -124,7 +124,7 @@ export default function TrainingConfigPanel({ icons, sessionId }) {
           </select>
         </div>
         <div className="config-row">
-          <label>Agent LLM</label>
+          <label>Navigation controller</label>
           <select className="config-select" value={model} onChange={(event) => setModel(event.target.value)} disabled={running}>
             {models.map((modelDef) => (
               <option key={modelDef.id} value={modelDef.id}>
@@ -152,20 +152,21 @@ export default function TrainingConfigPanel({ icons, sessionId }) {
             onChange={(event) => setEpochs(event.target.value)} disabled={running} />
         </div>
         <div className="config-row">
-          <label>Memory</label>
+          <label>Adaptation memory</label>
           <select className="config-select" value={memory} onChange={(event) => setMemory(event.target.value)} disabled={running}>
             {[
-              ["none", "none — baseline (no learning)"],
-              ["text", "text — memory-trained (writes lessons)"],
-              ["hierarchical", "hierarchical"],
+              ["none", "disabled — baseline"],
+              ["text", "event log — collision feedback"],
+              ["hierarchical", "structured — hierarchical feedback"],
             ].map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
           </select>
         </div>
         <div style={{ fontSize: 11, color: "var(--ink-3)", padding: "2px 2px", lineHeight: 1.5 }}>
-          Episodes run easy→hard in a dedicated UE 5.8 SPEAR cluster, driven live by the selected LLM. With
-          memory on, the agent writes a lesson after each collision and applies it next time. Watch it in the Monitor.
+          Episodes run from easy to hard in a dedicated UE 5.8 SPEAR cluster using the selected controller. When
+          adaptation memory is enabled, collision feedback is recorded and applied to subsequent attempts. Run
+          details are available in the monitor.
         </div>
 
         <div className="config-section-title" style={{ marginTop: 12 }}>Live Run</div>

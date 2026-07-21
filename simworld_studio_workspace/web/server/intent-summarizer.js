@@ -13,7 +13,7 @@ You will be given the PRIOR summary (may be empty) and the user's NEW prompt. Pr
 - Keeps it CONCISE: 1-2 short paragraphs OR up to ~8 bullet points. No preamble, no commentary, no explanation of what you changed.
 - Output ONLY the updated summary text, nothing else.`;
 
-async function updateIntentSummary({ priorSummary, newPrompt, model, timeoutMs = 60000, provider, runner }) {
+async function updateIntentSummary({ priorSummary, newPrompt, model, timeoutMs = 60000, provider, runner, signal }) {
   const prior = String(priorSummary || "").trim() || "(no prior — this is the first prompt)";
   const prompt =
     SUMMARIZER_SYSTEM_PROMPT + "\n\n" +
@@ -26,6 +26,7 @@ async function updateIntentSummary({ priorSummary, newPrompt, model, timeoutMs =
     provider: selectedProvider,
     model: selectedModel,
     timeoutMs,
+    signal,
     reasoningEffort: selectedProvider === "codex" ? (process.env.SUMMARIZER_REASONING_EFFORT || "high") : undefined,
     telemetryComponent: "summarizer",
   }) || "").trim();
