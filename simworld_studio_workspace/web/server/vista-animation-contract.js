@@ -37,6 +37,18 @@ const ACTION_DEFINITIONS = deepFreeze({
     anchor_kinds: ["gaze_target"],
     defaults: { duration_sec: 1 },
   },
+  pick_up: {
+    adapter_id: "vista_pick_up_ik_v1",
+    bridge_action_id: "vista_pick_up_ik_v1",
+    actor_kinds: ["player"],
+    target_policy: "required",
+    target_kinds: ["prop"],
+    actor_capabilities: ["upper_body_ik", "object_attachment"],
+    target_capabilities: ["pickupable", "hand_contact_target"],
+    anchor_kinds: ["hand_contact"],
+    completion_signal: "vista_pick_up_attached",
+    defaults: { hand: "right", duration_sec: 2 },
+  },
   brace: {
     adapter_id: "vista_brace_ik_v1",
     bridge_action_id: "vista_brace_ik_v1",
@@ -237,6 +249,7 @@ function validateActionParameters(action, parameters) {
   if (!definition) fail("ANIMATION_ACTION_UNSUPPORTED", `Action '${action}' has no fixed animation definition`);
   const allowed = {
     look_at: ["duration_sec"],
+    pick_up: ["hand", "duration_sec"],
     brace: ["hand", "duration_sec"],
     drag: ["hand", "distance_cm", "duration_sec"],
     lift_foot: ["foot", "height_cm", "duration_sec"],
@@ -315,6 +328,9 @@ function validateContentProfile(profile) {
     const implementationAsset = requireString(entry.implementation_asset, `${pointer}.implementation_asset`, { pattern: UE_CONTENT_PATH_RE, max: 512, code });
     if (implementationAsset.includes("..") || implementationAsset.includes("//")) fail(code, `${pointer}.implementation_asset is not canonical`);
     const completionSignal = requireString(entry.completion_signal, `${pointer}.completion_signal`, { pattern: SAFE_ID_RE, max: 120, code });
+    if (definition.completion_signal && completionSignal !== definition.completion_signal) {
+      fail(code, `Action '${action}' does not use the fixed completion signal`);
+    }
     if (!Number.isInteger(entry.timeout_ms) || entry.timeout_ms < 100 || entry.timeout_ms > 60_000) {
       fail(code, `${pointer}.timeout_ms must be an integer in [100, 60000]`);
     }

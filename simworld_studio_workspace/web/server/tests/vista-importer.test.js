@@ -83,6 +83,18 @@ function updateFileEvidence(bundleRoot, role) {
   writeJson(manifestPath, manifest);
 }
 
+function replaceFinalFixtureAction(bundleRoot, description) {
+  const renderPath = path.join(bundleRoot, "render_script.yaml");
+  const source = fs.readFileSync(renderPath, "utf8");
+  const replaced = source.replace(
+    /^    - '\[00:09\][^\n]*'$/m,
+    `    - '[00:09] ${description}'`,
+  );
+  assert.notEqual(replaced, source, "counterfactual fixture must replace the final action");
+  fs.writeFileSync(renderPath, replaced, "utf8");
+  updateFileEvidence(bundleRoot, "render_script");
+}
+
 async function expectImportError(promise, code) {
   await assert.rejects(promise, (error) => {
     assert.ok(error instanceof VistaImportError);
@@ -126,6 +138,7 @@ test("mmg_040 golden preview preserves verified identity, evidence, and explicit
   assert.equal(scene.duration_sec, 12);
   assert.deepEqual(scene.timeline.map((event) => event.at_sec), [0, 2, 5, 5, 9]);
   assert.deepEqual(scene.timeline.map((event) => event.action), ["look_at", "drag", "brace", "lift_foot", "pause"]);
+  assert.equal(scene.timeline.some((event) => event.action === "pick_up" || event.action === "fall"), false);
   assert.deepEqual(scene.timeline.map((event) => event.event_id), [
     "beat-0001",
     "beat-0002",
@@ -202,6 +215,41 @@ test("mmg_040 golden preview preserves verified identity, evidence, and explicit
     attempt: 7,
     source_checksum: EXPECTED_SOURCE_CHECKSUM,
   });
+});
+
+test("counterfactual pick-up and unresolved prose stay blocking without changing canonical mmg_040", async (t) => {
+  const cases = [
+    {
+      description: "Pick up the cardboard box from the high cabinet.",
+      action: "pick_up",
+      target: "cardboard_box_on_a_high_cabinet",
+    },
+    {
+      description: "Perform a backward somersault beside the chair.",
+      action: "unresolved_action",
+      target: "wheeled_office_chair_with_visible_casters",
+    },
+  ];
+
+  for (const fixtureCase of cases) {
+    const { bundleRoot } = copyFixture(t);
+    replaceFinalFixtureAction(bundleRoot, fixtureCase.description);
+    const scene = await makeImporter(bundleRoot).preview(REQUEST);
+    const event = scene.timeline.at(-1);
+    assert.equal(event.at_sec, 9);
+    assert.equal(event.action, fixtureCase.action);
+    assert.equal(event.target_id, fixtureCase.target);
+    assert.ok(scene.unresolved.some((item) => (
+      item.kind === "action"
+      && item.source_pointer === "/Scene/Actions/3"
+      && item.reason_code === "unsupported_action"
+      && item.blocking === true
+    )));
+  }
+
+  const canonical = await makeImporter().preview(REQUEST);
+  assert.deepEqual(canonical.timeline.map((event) => event.action), ["look_at", "drag", "brace", "lift_foot", "pause"]);
+  assert.equal(canonical.timeline.some((event) => event.action === "pick_up" || event.action === "fall"), false);
 });
 
 test("operator-injected semantic resolver produces schema-valid real-asset bindings", async () => {

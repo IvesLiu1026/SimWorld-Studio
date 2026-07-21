@@ -85,7 +85,7 @@
         "at_frame": { "type": "integer", "minimum": 0, "maximum": 864000 },
         "frame_order": { "type": "integer", "minimum": 0, "maximum": 999 },
         "action": {
-          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+          "enum": ["look_at", "pick_up", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
         },
         "actor_binding_id": { "$ref": "#/$defs/safeId" },
         "target_binding_id": { "$ref": "#/$defs/nullableSafeId" },

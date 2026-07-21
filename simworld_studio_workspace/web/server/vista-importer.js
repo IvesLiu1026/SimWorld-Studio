@@ -32,7 +32,7 @@ const TOP_LEVEL_SCENE_KEYS = Object.freeze([
 ]);
 
 const UNSUPPORTED_RUNTIME_ACTIONS = new Set([
-  "brace", "drag", "hesitate", "lift_foot", "unresolved_action",
+  "brace", "drag", "drop", "hesitate", "lift_foot", "move_to", "pick_up", "unresolved_action",
 ]);
 
 const BRACE_ACTION_RE = /\b(?:brace|bracing)/;

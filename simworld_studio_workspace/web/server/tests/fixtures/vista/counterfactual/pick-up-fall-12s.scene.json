@@ -1,0 +1,50 @@
+{
+  "schema": "vista-simworld-scene/v1",
+  "scene_id": "mmg_040_counterfactual@cccccccccccccccc",
+  "source": {
+    "source_checksum": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "duration_sec": 12,
+  "entities": [
+    { "id": "high_box" },
+    { "id": "rolling_chair" }
+  ],
+  "timeline": [
+    {
+      "event_id": "beat-0001",
+      "at_sec": 0,
+      "action": "look_at",
+      "actor_id": "camera_wearer",
+      "target_id": "high_box",
+      "parameters": {},
+      "source_pointer": "/Counterfactual/Actions/0"
+    },
+    {
+      "event_id": "beat-0002",
+      "at_sec": 2,
+      "action": "pick_up",
+      "actor_id": "camera_wearer",
+      "target_id": "high_box",
+      "parameters": {},
+      "source_pointer": "/Counterfactual/Actions/1"
+    },
+    {
+      "event_id": "beat-0003",
+      "at_sec": 5,
+      "action": "pause",
+      "actor_id": "camera_wearer",
+      "target_id": null,
+      "parameters": {},
+      "source_pointer": "/Counterfactual/Actions/2"
+    },
+    {
+      "event_id": "beat-0004",
+      "at_sec": 9,
+      "action": "fall",
+      "actor_id": "camera_wearer",
+      "target_id": null,
+      "parameters": {},
+      "source_pointer": "/Counterfactual/Actions/3"
+    }
+  ]
+}

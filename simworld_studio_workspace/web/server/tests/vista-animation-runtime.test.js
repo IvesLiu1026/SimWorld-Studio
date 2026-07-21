@@ -38,6 +38,10 @@ const CONTENT_DIGEST = "b".repeat(64);
 const STATE_DIGEST = "c".repeat(64);
 const SCENE_REVISION = "mmg_040@aaaaaaaaaaaaaaaa";
 const SCHEMA_ROOT = path.resolve(__dirname, "../schemas");
+const COUNTERFACTUAL_PICK_UP_FALL_SCENE = path.resolve(
+  __dirname,
+  "fixtures/vista/counterfactual/pick-up-fall-12s.scene.json",
+);
 
 class FakeMonotonicClock {
   constructor() {
@@ -125,7 +129,7 @@ function makeProfile(actions = ALL_ACTIONS) {
       version: "1.0.0",
       bridge_action_id: ACTION_DEFINITIONS[action].bridge_action_id,
       implementation_asset: `/Game/VISTA/Animations/ABP_${action}.ABP_${action}`,
-      completion_signal: `vista_${action}_complete`,
+      completion_signal: ACTION_DEFINITIONS[action].completion_signal || `vista_${action}_complete`,
       timeout_ms: 5000,
     })),
   };
@@ -231,10 +235,13 @@ function makeFakeBroker({
       const runtimeTargets = request.target_binding_ids.map((bindingId) => {
         const target = targets.get(bindingId);
         const isChair = bindingId === "target_rolling_chair";
+        const anchors = [
+          ...(target.capabilities.includes("foot_contact_target") ? ["foot_contact"] : []),
+          ...(target.capabilities.includes("gaze_target") ? ["gaze_target"] : []),
+          ...(target.capabilities.includes("hand_contact_target") ? ["hand_contact"] : []),
+        ];
         return bindingRuntimeResponse(target, {
-          anchors: isChair
-            ? (missingChairAnchors ? ["gaze_target"] : ["foot_contact", "gaze_target", "hand_contact"])
-            : ["gaze_target"],
+          anchors: isChair && missingChairAnchors ? ["gaze_target"] : anchors,
         });
       });
       const ready = runtimeActors.every((entry) => entry.available && entry.class_matches && entry.skeleton_matches)
@@ -289,7 +296,7 @@ function makeFakeBroker({
         schema: WAIT_RESPONSE_SCHEMA,
         status: "completed",
         action_handle: request.action_handle,
-        completion_signal: `vista_${action}_complete`,
+        completion_signal: ACTION_DEFINITIONS[action].completion_signal || `vista_${action}_complete`,
         engine_time: 1.5,
         evidence_ids: [`broker:${request.event_id}`],
       };
@@ -349,6 +356,7 @@ async function prepare({
   bindings = makeBindings(),
   brokerOptions = {},
   evidenceOptions = {},
+  sceneRevision = SCENE_REVISION,
 } = {}) {
   const broker = makeFakeBroker({ bindings, ...brokerOptions });
   const runtime = createVistaAnimationRuntime({
@@ -359,7 +367,7 @@ async function prepare({
     fps: 30,
   });
   const prepared = await runtime.preflight({
-    sceneRevision: SCENE_REVISION,
+    sceneRevision,
     bindings,
     requestedActions: actions,
   });
@@ -408,9 +416,31 @@ test("animation schemas and fixed action allowlist are versioned and closed", ()
     assert.equal(value.additionalProperties, false);
     assert.equal(value.properties.schema.const, schema);
   }
-  assert.deepEqual(Object.keys(ACTION_DEFINITIONS).sort(), ["brace", "drag", "fall", "lift_foot", "look_at", "pause", "recover"]);
+  assert.deepEqual(Object.keys(ACTION_DEFINITIONS).sort(), ["brace", "drag", "fall", "lift_foot", "look_at", "pause", "pick_up", "recover"]);
   assert.equal(ACTION_DEFINITIONS.brace.anchor_kinds.includes("hand_contact"), true);
   assert.equal(ACTION_DEFINITIONS.lift_foot.anchor_kinds.includes("foot_contact"), true);
+  assert.deepEqual(ACTION_DEFINITIONS.pick_up, {
+    adapter_id: "vista_pick_up_ik_v1",
+    bridge_action_id: "vista_pick_up_ik_v1",
+    actor_kinds: ["player"],
+    target_policy: "required",
+    target_kinds: ["prop"],
+    actor_capabilities: ["upper_body_ik", "object_attachment"],
+    target_capabilities: ["pickupable", "hand_contact_target"],
+    anchor_kinds: ["hand_contact"],
+    completion_signal: "vista_pick_up_attached",
+    defaults: { hand: "right", duration_sec: 2 },
+  });
+  const contentSchema = JSON.parse(fs.readFileSync(path.join(SCHEMA_ROOT, "vista-animation-content-profile-v1.schema.json"), "utf8"));
+  const programSchema = JSON.parse(fs.readFileSync(path.join(SCHEMA_ROOT, "vista-animation-program-v1.schema.json"), "utf8"));
+  const preflightSchema = JSON.parse(fs.readFileSync(path.join(SCHEMA_ROOT, "vista-animation-preflight-v1.schema.json"), "utf8"));
+  const evidenceSchema = JSON.parse(fs.readFileSync(path.join(SCHEMA_ROOT, "vista-animation-evidence-v1.schema.json"), "utf8"));
+  assert.equal(contentSchema.properties.actions.maxItems, 8);
+  assert.equal(contentSchema.$defs.action.properties.action.enum.includes("pick_up"), true);
+  assert.equal(programSchema.$defs.event.properties.action.enum.includes("pick_up"), true);
+  assert.equal(preflightSchema.$defs.actionName.enum.includes("pick_up"), true);
+  assert.equal(preflightSchema.$defs.actionList.maxItems, 8);
+  assert.equal(evidenceSchema.$defs.checkpoint.properties.action.oneOf[1].enum.includes("pick_up"), true);
 });
 
 test("content profile rejects unverified receipts, arbitrary bridge commands, and noncanonical assets", () => {
@@ -426,6 +456,76 @@ test("content profile rejects unverified receipts, arbitrary bridge commands, an
   const traversal = makeProfile(["brace"]);
   traversal.actions[0].implementation_asset = "/Game/VISTA/../Private.Secret";
   assert.throws(() => validateContentProfile(traversal), (error) => error.code === "ANIMATION_CONTENT_PROFILE_INVALID");
+
+  const wrongPickUpCompletion = makeProfile(["pick_up"]);
+  wrongPickUpCompletion.actions[0].completion_signal = "vista_pick_up_complete";
+  assert.throws(
+    () => validateContentProfile(wrongPickUpCompletion),
+    (error) => error.code === "ANIMATION_CONTENT_PROFILE_INVALID",
+  );
+});
+
+test("counterfactual 0/2/5/9 pick-up and fall fixture compiles through the 12-second terminal checkpoint", async () => {
+  const actions = ["look_at", "pick_up", "pause", "fall"];
+  const bindings = makeBindings({
+    actorCapabilities: [
+      "fall_montage",
+      "gaze",
+      "hold_pose",
+      "object_attachment",
+      "root_motion",
+      "upper_body_ik",
+    ],
+  });
+  bindings.entities[0].capabilities.push("hand_contact_target", "pickupable");
+  const scene = JSON.parse(fs.readFileSync(COUNTERFACTUAL_PICK_UP_FALL_SCENE, "utf8"));
+  const { broker, runtime, prepared } = await prepare({
+    actions,
+    profileActions: actions,
+    bindings,
+    sceneRevision: scene.scene_id,
+  });
+
+  const timeline = compile(scene, bindings, prepared);
+  const program = runtime.compileProgram(timeline, prepared.artifact);
+  assert.equal(timeline.start_allowed, true);
+  assert.deepEqual(program.events.map((event) => event.at_sec), [0, 2, 5, 9]);
+  assert.deepEqual(program.events.map((event) => event.action), actions);
+  const pickUp = program.events[1];
+  assert.equal(pickUp.target_binding_id, "target_high_box");
+  assert.equal(pickUp.adapter_id, "vista_pick_up_ik_v1");
+  assert.equal(pickUp.bridge_action_id, "vista_pick_up_ik_v1");
+  assert.deepEqual(pickUp.parameters, { duration_sec: 2, hand: "right" });
+  assert.equal(prepared.artifact.actions.find((entry) => entry.action === "pick_up").completion_signal, "vista_pick_up_attached");
+  assert.deepEqual(program.checkpoints.at(-1), {
+    checkpoint_id: program.checkpoints.at(-1).checkpoint_id,
+    kind: "terminal",
+    event_id: null,
+    at_sec: 12,
+    at_frame: 360,
+    frame_order: 0,
+  });
+  assert.deepEqual(broker.log.map(([method]) => method), ["preflight"], "compile-only fixture must not claim a live mutation");
+
+  const missingTarget = JSON.parse(JSON.stringify(scene));
+  missingTarget.timeline[1].target_id = null;
+  const blockedTarget = compile(missingTarget, bindings, prepared);
+  assert.equal(blockedTarget.start_allowed, false);
+  assert.equal(blockedTarget.events[1].preflight_status, "incompatible");
+  assert.throws(
+    () => runtime.compileProgram(blockedTarget, prepared.artifact),
+    (error) => error.code === "ANIMATION_PROGRAM_START_BLOCKED",
+  );
+
+  const unresolvedAction = JSON.parse(JSON.stringify(scene));
+  unresolvedAction.timeline[1].action = "unresolved_action";
+  const blockedUnknown = compile(unresolvedAction, bindings, prepared);
+  assert.equal(blockedUnknown.start_allowed, false);
+  assert.equal(blockedUnknown.events[1].preflight_status, "unsupported");
+  assert.throws(
+    () => runtime.compileProgram(blockedUnknown, prepared.artifact),
+    (error) => error.code === "ANIMATION_PROGRAM_START_BLOCKED",
+  );
 });
 
 test("live preflight registers only verified fixed adapters and fails closed on missing fall/recover content", async () => {

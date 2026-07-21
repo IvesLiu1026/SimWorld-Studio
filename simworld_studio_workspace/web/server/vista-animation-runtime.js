@@ -46,7 +46,7 @@ const SHA256_RE = /^[a-f0-9]{64}$/;
 const ARTIFACT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/@-]{0,511}$/;
 const TERMINAL_RUN_STATES = new Set(["completed", "failed", "cancelled"]);
 const CLEANUP_ROLLBACK_REASONS = new Set(["failed", "cancelled", "timed_out"]);
-const INTERACTION_ACTIONS = new Set(["brace", "drag", "lift_foot"]);
+const INTERACTION_ACTIONS = new Set(["brace", "drag", "lift_foot", "pick_up"]);
 const EVIDENCE_HOOKS = Object.freeze(["pose_snapshot", "interaction_state", "screenshot", "scene_validation"]);
 const PHASE_ORDER = Object.freeze({ before: 0, after: 1, rollback: 2, terminal: 3 });
 

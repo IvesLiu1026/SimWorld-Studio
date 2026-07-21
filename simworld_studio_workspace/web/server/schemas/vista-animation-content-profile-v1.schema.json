@@ -37,7 +37,7 @@
     "actions": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 7,
+      "maxItems": 8,
       "items": { "$ref": "#/$defs/action" }
     }
   },
@@ -74,7 +74,7 @@
       ],
       "properties": {
         "action": {
-          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+          "enum": ["look_at", "pick_up", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
         },
         "adapter_id": { "$ref": "#/$defs/safeId" },
         "version": { "const": "1.0.0" },
@@ -86,7 +86,22 @@
           "minimum": 100,
           "maximum": 60000
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "action": { "const": "pick_up" } },
+            "required": ["action"]
+          },
+          "then": {
+            "properties": {
+              "adapter_id": { "const": "vista_pick_up_ik_v1" },
+              "bridge_action_id": { "const": "vista_pick_up_ik_v1" },
+              "completion_signal": { "const": "vista_pick_up_attached" }
+            }
+          }
+        }
+      ]
     }
   }
 }
