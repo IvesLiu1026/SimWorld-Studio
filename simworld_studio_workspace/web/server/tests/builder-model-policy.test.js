@@ -7,7 +7,9 @@ const test = require("node:test");
 
 const {
   DEFAULT_CLAUDE_BUILDER_MODEL,
+  resolveBuilderAgent,
   resolveClaudeBuilderModel,
+  resolveCodingAgentRegistry,
 } = require("../builder-model-policy");
 
 test("production Claude builder ignores a stale browser override and uses Opus 4.8", () => {
@@ -36,8 +38,31 @@ test("development keeps an explicit model selector while defaulting to Opus 4.8"
   assert.throws(() => resolveClaudeBuilderModel("bad\nmodel", {}), /non-empty model identifier/);
 });
 
+test("production ignores a stale non-Claude agent and advertises only the pinned runtime", () => {
+  const env = { NODE_ENV: "production", CLAUDE_MODEL: "claude-opus-4-8" };
+  assert.equal(resolveBuilderAgent("codex", env), "claude");
+  assert.deepEqual(resolveCodingAgentRegistry({
+    default: "codex",
+    agents: {
+      claude: { label: "Claude", defaultModel: "claude-sonnet-4-6", models: ["claude-sonnet-4-6"] },
+      codex: { label: "Codex", defaultModel: "gpt-5.5", models: ["gpt-5.5"] },
+    },
+  }, env), {
+    default: "claude",
+    agents: {
+      claude: {
+        label: "Claude",
+        defaultModel: "claude-opus-4-8",
+        models: ["claude-opus-4-8"],
+      },
+    },
+  });
+});
+
 test("chat and skill-selection entry points share the deployment-aware resolver", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
+  assert.match(source, /resolveBuilderAgent\(s\.body&&s\.body\.agent,process\.env\)/);
+  assert.match(source, /resolveCodingAgentRegistry\(reg,process\.env\)/);
   assert.match(source, /resolveClaudeBuilderModel\(s\.body&&s\.body\.model,process\.env\)/);
   assert.doesNotMatch(
     source,
