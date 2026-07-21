@@ -3,6 +3,11 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  assertPrivateDirectory,
+  readPrivateFile,
+  syncPrivateDirectory,
+} = require("./durable-artifact-io");
 
 const ARTIFACT_SCHEMA = "vista-import-artifact/v1";
 const IDEMPOTENCY_SCHEMA = "vista-import-idempotency/v1";
@@ -352,6 +357,8 @@ class VistaImportService {
     this.artifactRecorder = options.artifactRecorder || null;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
+    this.syncDirectory = typeof options.syncDirectory === "function"
+      ? options.syncDirectory : syncPrivateDirectory;
     this.maxArtifactBytes = Number.isSafeInteger(options.maxArtifactBytes) && options.maxArtifactBytes > 0
       ? options.maxArtifactBytes
       : DEFAULT_MAX_ARTIFACT_BYTES;
@@ -481,6 +488,20 @@ class VistaImportService {
 
   async _ensureJournaled(artifact) {
     if (!this.artifactRecorder) return;
+    // A failed directory fsync can leave the published inode visible to this
+    // process even though the directory entry is not yet crash durable.  Every
+    // journal publication (including status/idempotency replay) must therefore
+    // re-establish directory durability before it can bind the record.
+    try {
+      await this.syncDirectory(this.artifactRoot);
+    } catch (error) {
+      throw wrapDependencyError(
+        error,
+        "VISTA_IMPORT_STORAGE_UNAVAILABLE",
+        "Import artifact storage is unavailable",
+        503,
+      );
+    }
     await this.artifactRecorder.ensureImportCommitted({ artifact });
   }
 
@@ -498,8 +519,7 @@ class VistaImportService {
   async _ensureArtifactRoot() {
     try {
       await fs.promises.mkdir(this.artifactRoot, { recursive: true, mode: 0o700 });
-      const stat = await fs.promises.stat(this.artifactRoot);
-      if (!stat.isDirectory()) throw new Error("not a directory");
+      await assertPrivateDirectory(this.artifactRoot);
     } catch (error) {
       throw wrapDependencyError(
         error,
@@ -512,17 +532,21 @@ class VistaImportService {
 
   async _readArtifact(artifactId, { allowMissing }) {
     const target = safeArtifactPath(this.artifactRoot, artifactId);
-    const noFollow = Number(fs.constants.O_NOFOLLOW || 0);
-    let handle;
     try {
-      handle = await fs.promises.open(target, fs.constants.O_RDONLY | noFollow);
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size > this.maxArtifactBytes) {
-        throw serviceError("VISTA_IMPORT_ARTIFACT_CORRUPT", "Stored import artifact failed validation", {
-          statusCode: 500,
-        });
+      let bytes;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        try {
+          bytes = await readPrivateFile(target, {
+            minBytes: 2,
+            maxBytes: this.maxArtifactBytes,
+          });
+          break;
+        } catch (error) {
+          if (!error || error.code !== "DURABLE_ARTIFACT_FILE_BUSY" || attempt === 19) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
       }
-      const raw = await handle.readFile({ encoding: "utf8" });
+      const raw = bytes.toString("utf8");
       let artifact;
       try {
         artifact = JSON.parse(raw);
@@ -544,8 +568,6 @@ class VistaImportService {
         "Import artifact storage is unavailable",
         503,
       );
-    } finally {
-      if (handle) await handle.close().catch(() => {});
     }
   }
 
@@ -592,8 +614,9 @@ class VistaImportService {
       } catch (error) {
         if (!error || error.code !== "EEXIST") throw error;
       }
-      await fs.promises.unlink(temporary).catch(() => {});
+      await fs.promises.unlink(temporary);
       temporary = null;
+      if (created) await this.syncDirectory(this.artifactRoot);
       return {
         artifact: await this._readArtifact(artifact.artifact_id, { allowMissing: false }),
         created,

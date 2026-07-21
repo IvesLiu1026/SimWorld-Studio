@@ -34,6 +34,7 @@ const {
 } = require("../vista-animation-timeline-service");
 const { createVistaImporter, validateSceneSpec } = require("../vista-importer");
 const { BINDINGS_SCHEMA } = require("../vista-timeline-compiler");
+const { createRuntimeMutationArbiter } = require("../runtime-mutation-arbiter");
 
 const FIXTURE_ROOT = path.resolve(__dirname, "fixtures/vista/mmg_040");
 const OWNER = "owner-animation-test";
@@ -483,7 +484,10 @@ async function fixture(t, overrides = {}) {
       },
       resolveActiveRuntimeProof(identity) {
         assert.deepEqual(identity, ACCESS);
-        return clone(overrides.buildRuntimeProof || buildRuntimeProof);
+        const selected = typeof overrides.resolveBuildRuntimeProof === "function"
+          ? overrides.resolveBuildRuntimeProof(identity, buildRuntimeProof)
+          : (overrides.buildRuntimeProof || buildRuntimeProof);
+        return selected ? clone(selected) : null;
       },
     },
     runtimeProvider: overrides.runtimeProvider || (async (identity) => {
@@ -511,6 +515,7 @@ async function fixture(t, overrides = {}) {
     preflightTtlMs: 60_000,
     ...(overrides.runtimeLifecycle ? { runtimeLifecycle: overrides.runtimeLifecycle } : {}),
     ...(overrides.artifactRecorder ? { artifactRecorder: overrides.artifactRecorder } : {}),
+    ...(overrides.service || {}),
   });
   return {
     artifact,
@@ -623,6 +628,113 @@ test("start writes a private pending receipt before execution and finalizes dura
   assert.equal(committed.status, "completed");
   assert.equal(committed.operation.state, "terminal");
   assert.equal(committed.evidence.run_id, started.run_id);
+});
+
+test("animation holds the shared UE mutation lock for the entire timeline", async (t) => {
+  let tokenId = 0;
+  const mutationArbiter = createRuntimeMutationArbiter({
+    randomUUID: () => `timeline-mutation-${++tokenId}`,
+  });
+  const current = await fixture(t, { service: { mutationArbiter } });
+  const preflight = await current.service.preflight(IMPORT_ID, { plan_id: current.plan.plan_id }, ACCESS);
+  const started = await current.service.start(IMPORT_ID, confirmation(preflight), ACCESS);
+  assert.equal(mutationArbiter.activeCount, 1);
+  assert.throws(
+    () => mutationArbiter.acquire(ACCESS, { kind: "review", operationId: "competing-review" }),
+    (error) => error.code === "RUNTIME_MUTATION_SLOT_BUSY",
+  );
+
+  const status = await finishRun(current, started.run_id);
+  assert.equal(status.status, "completed");
+  assert.equal(mutationArbiter.activeCount, 0);
+});
+
+test("verified build then Review mutation leaves timeline blocked after the Review releases its slot", async (t) => {
+  let tokenId = 0;
+  const mutationArbiter = createRuntimeMutationArbiter({
+    randomUUID: () => `cross-service-mutation-${++tokenId}`,
+  });
+  const verifiedEpoch = mutationArbiter.currentEpoch(ACCESS);
+  const current = await fixture(t, {
+    service: { mutationArbiter },
+    runtimeLifecycle: {
+      async startForIdentity() { throw new Error("invalidated proof must block before runtime Start"); },
+      async stateForIdentity() { throw new Error("invalidated proof must block before runtime state"); },
+      async stopForIdentity() { throw new Error("invalidated proof must block before runtime Stop"); },
+    },
+    resolveBuildRuntimeProof(_identity, proof) {
+      return mutationArbiter.currentEpoch(ACCESS) === verifiedEpoch ? proof : null;
+    },
+  });
+  const preflight = await current.service.preflight(IMPORT_ID, { plan_id: current.plan.plan_id }, ACCESS);
+  const review = mutationArbiter.acquire(ACCESS, { kind: "review", operationId: "review-edit" });
+  review.invalidateScene();
+  review.release();
+
+  await assert.rejects(
+    current.service.start(IMPORT_ID, confirmation(preflight), ACCESS),
+    hasCode("ANIMATION_SCENE_BUILD_RUNTIME_PROOF_REQUIRED"),
+  );
+  assert.equal(mutationArbiter.activeCount, 0, "failed timeline start releases its own slot lock");
+});
+
+test("animation directory fsync failure prevents runtime launch and terminal journal publication", async (t) => {
+  let journalCalls = 0;
+  const current = await fixture(t, {
+    artifactRecorder: {
+      async ensureTimelineTerminal() { journalCalls += 1; },
+    },
+    service: {
+      async syncDirectory() {
+        throw Object.assign(new Error("simulated directory fsync failure"), { code: "EIO" });
+      },
+    },
+  });
+  const preflight = await current.service.preflight(IMPORT_ID, { plan_id: current.plan.plan_id }, ACCESS);
+  await assert.rejects(
+    current.service.start(IMPORT_ID, confirmation(preflight), ACCESS),
+    hasCode("ANIMATION_STORAGE_UNAVAILABLE"),
+  );
+  assert.equal(journalCalls, 0);
+});
+
+test("visible animation terminal is re-synced before a status replay may journal it", async (t) => {
+  let failSync = false;
+  let syncFailures = 0;
+  const journalRecords = [];
+  const current = await fixture(t, {
+    artifactRecorder: {
+      async ensureTimelineTerminal({ record }) { journalRecords.push(clone(record)); },
+    },
+    service: {
+      async syncDirectory() {
+        if (failSync) {
+          syncFailures += 1;
+          throw Object.assign(new Error("simulated directory fsync failure"), { code: "EIO" });
+        }
+      },
+    },
+  });
+  const preflight = await current.service.preflight(IMPORT_ID, { plan_id: current.plan.plan_id }, ACCESS);
+  const started = await current.service.start(IMPORT_ID, confirmation(preflight), ACCESS);
+  failSync = true;
+  for (const time of [0, 2000, 5000, 9000, 12000]) {
+    current.fakeClock.advanceTo(time);
+    await flushTurns();
+  }
+  await assert.rejects(
+    current.service.status(IMPORT_ID, started.run_id, ACCESS),
+    hasCode("ANIMATION_STORAGE_UNAVAILABLE"),
+  );
+  assert.ok(syncFailures >= 2, "terminal and conservative failure records both reached rename before fsync failed");
+  assert.equal(journalRecords.length, 0);
+
+  failSync = false;
+  const replayed = await current.service.status(IMPORT_ID, started.run_id, ACCESS);
+  assert.equal(replayed.status, "failed");
+  assert.equal(journalRecords.length, 1, "status must successfully re-sync before journal publication");
+  assert.equal(journalRecords[0].run_id, started.run_id);
+  assert.equal(journalRecords[0].status, "failed");
 });
 
 test("timeline terminal journal failure is not rewritten and status replays the same record", async (t) => {
@@ -938,6 +1050,19 @@ test("tampered records and symlinked record roots are rejected", async (t) => {
   await current.service.status(IMPORT_ID, started.run_id, ACCESS);
   const ownerHash = crypto.createHash("sha256").update(OWNER).digest("hex").slice(0, 24);
   const recordFile = path.join(current.root, "records", `${started.run_id}-${ownerHash}.json`);
+  fs.chmodSync(recordFile, 0o640);
+  await assert.rejects(
+    current.service.status(IMPORT_ID, started.run_id, ACCESS),
+    hasCode("ANIMATION_STORAGE_UNAVAILABLE"),
+  );
+  fs.chmodSync(recordFile, 0o600);
+  const hardlink = `${recordFile}.hardlink`;
+  fs.linkSync(recordFile, hardlink);
+  await assert.rejects(
+    current.service.status(IMPORT_ID, started.run_id, ACCESS),
+    hasCode("ANIMATION_STORAGE_UNAVAILABLE"),
+  );
+  fs.unlinkSync(hardlink);
   fs.writeFileSync(recordFile, "{not-json\n", "utf8");
   await assert.rejects(
     current.service.status(IMPORT_ID, started.run_id, ACCESS),

@@ -16,6 +16,11 @@ const {
   validateTimelineRunArtifact,
 } = require("./vista-timeline-scheduler");
 const { normalizeSceneProof } = require("./vista-runtime-broker");
+const {
+  assertPrivateDirectory,
+  readPrivateFile,
+  syncPrivateDirectory,
+} = require("./durable-artifact-io");
 
 const ANIMATION_PREFLIGHT_SERVICE_SCHEMA = "vista-animation-timeline-preflight-service/v1";
 const ANIMATION_START_SERVICE_SCHEMA = "vista-animation-timeline-start/v1";
@@ -357,9 +362,7 @@ function recordPath(root, runId, ownerId) {
 async function ensureRecordRoot(root, { create }) {
   try {
     if (create) await fs.promises.mkdir(root, { recursive: true, mode: 0o700 });
-    const stat = await fs.promises.lstat(root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("record root is not a private directory");
-    if (create && (stat.mode & 0o077) !== 0) await fs.promises.chmod(root, 0o700);
+    await assertPrivateDirectory(root);
     return true;
   } catch (error) {
     if (!create && error && error.code === "ENOENT") return false;
@@ -513,6 +516,11 @@ class VistaAnimationTimelineService {
       throw new TypeError("artifactRecorder must expose ensureTimelineTerminal");
     }
     this.artifactRecorder = options.artifactRecorder || null;
+    if (options.mutationArbiter !== undefined && options.mutationArbiter !== null
+        && typeof options.mutationArbiter.acquire !== "function") {
+      throw new TypeError("mutationArbiter must expose acquire");
+    }
+    this.mutationArbiter = options.mutationArbiter || null;
     const lifecycleAllowedKeys = new Set([
       "controllerFor", "exactIdentityFromRequest", "sceneProofFor",
       "startForIdentity", "stateForIdentity", "stopForIdentity",
@@ -527,6 +535,8 @@ class VistaAnimationTimelineService {
     this.recordRoot = recordRoot;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
+    this.syncDirectory = typeof options.syncDirectory === "function"
+      ? options.syncDirectory : syncPrivateDirectory;
     this.createScheduler = typeof options.createScheduler === "function"
       ? options.createScheduler
       : createVistaTimelineScheduler;
@@ -702,7 +712,25 @@ class VistaAnimationTimelineService {
       fail("ANIMATION_SLOT_BUSY", "This Studio slot already has an active animation run", { status: 409 });
     }
     this.startingSlots.add(slotKey);
+    let mutationToken = null;
+    let mutationTransferred = false;
     try {
+      try {
+        mutationToken = this.mutationArbiter
+          ? this.mutationArbiter.acquire(identity, {
+            kind: "timeline",
+            operationId: confirmation.timelineId,
+          })
+          : null;
+      } catch (error) {
+        if (error && error.code === "RUNTIME_MUTATION_SLOT_BUSY") {
+          fail("ANIMATION_SLOT_BUSY", "This Studio slot already has an active runtime mutation", {
+            status: 409,
+            retryable: true,
+          });
+        }
+        throw error;
+      }
       const resolved = await this._resolveScene(importId, confirmation.planId, prepared.profileId, identity);
       if (this.runtimeLifecycle
           && digest(resolved.buildRuntimeProof) !== prepared.sceneRuntimeProofDigest) {
@@ -722,11 +750,14 @@ class VistaAnimationTimelineService {
         prepared,
         compiled,
         replayOf,
+        mutationToken,
       });
+      mutationTransferred = true;
       prepared.startedRunId = response.run_id;
       return response;
     } finally {
       this.startingSlots.delete(slotKey);
+      if (mutationToken && !mutationTransferred) mutationToken.release();
     }
   }
 
@@ -763,10 +794,19 @@ class VistaAnimationTimelineService {
     let buildRuntimeProof = null;
     if (this.runtimeLifecycle) {
       try {
+        const rawRuntimeProof = this.sceneBuildService.resolveActiveRuntimeProof(identity);
+        if (rawRuntimeProof === null || rawRuntimeProof === undefined) {
+          fail(
+            "ANIMATION_SCENE_BUILD_RUNTIME_PROOF_REQUIRED",
+            "Rebuild the verified scene in this active Studio lease before animation",
+            { status: 409 },
+          );
+        }
         buildRuntimeProof = normalizeSceneProof(
-          this.sceneBuildService.resolveActiveRuntimeProof(identity),
+          rawRuntimeProof,
         );
       } catch (error) {
+        if (error instanceof VistaAnimationTimelineServiceError) throw error;
         throw safeDependencyError(
           error,
           "ANIMATION_SCENE_BUILD_RUNTIME_PROOF_INVALID",
@@ -867,7 +907,7 @@ class VistaAnimationTimelineService {
     return { bundle, readiness, bindings, preflight, timeline, program };
   }
 
-  async _launch({ importId, resolved, identity, prepared, compiled, replayOf }) {
+  async _launch({ importId, resolved, identity, prepared, compiled, replayOf, mutationToken = null }) {
     const suffix = this.randomBytes(12).toString("hex");
     if (!/^[a-f0-9]{24}$/.test(suffix)) fail("ANIMATION_RANDOM_INVALID", "Animation run random source is invalid", { status: 500 });
     const runId = `vtr-${suffix}`;
@@ -1032,6 +1072,7 @@ class VistaAnimationTimelineService {
         compiled.bundle.runtime.discardEvidence(runId);
         this.activeRuns.delete(key);
         if (this.activeSlots.get(this._slotKey(identity)) === key) this.activeSlots.delete(this._slotKey(identity));
+        if (mutationToken) mutationToken.release();
       });
     return this._startResponse(persisted);
   }
@@ -1090,6 +1131,17 @@ class VistaAnimationTimelineService {
 
   async _ensureTerminalJournal(record) {
     if (!this.artifactRecorder || !record || !TERMINAL_STATES.has(record.status)) return;
+    // A record can remain readable after rename even when the directory fsync
+    // failed.  Re-establish crash durability before every initial or replayed
+    // terminal journal publication.
+    try {
+      await this.syncDirectory(this.recordRoot);
+    } catch (_error) {
+      fail("ANIMATION_STORAGE_UNAVAILABLE", "Animation record storage is unavailable", {
+        status: 503,
+        retryable: true,
+      });
+    }
     await this.artifactRecorder.ensureTimelineTerminal({ record });
   }
 
@@ -1204,16 +1256,14 @@ class VistaAnimationTimelineService {
       fail("ANIMATION_RUN_NOT_FOUND", "Animation run was not found", { status: 404 });
     }
     const target = recordPath(this.recordRoot, runId, ownerId);
-    let handle;
     try {
-      handle = await fs.promises.open(target, fs.constants.O_RDONLY | Number(fs.constants.O_NOFOLLOW || 0));
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size < 2 || stat.size > this.maxRecordBytes) {
-        fail("ANIMATION_RECORD_CORRUPT", "Stored animation run record failed validation", { status: 500 });
-      }
+      const raw = await readPrivateFile(target, {
+        minBytes: 2,
+        maxBytes: this.maxRecordBytes,
+      });
       let value;
       try {
-        value = JSON.parse(await handle.readFile("utf8"));
+        value = JSON.parse(raw.toString("utf8"));
       } catch {
         fail("ANIMATION_RECORD_CORRUPT", "Stored animation run record failed validation", { status: 500 });
       }
@@ -1223,8 +1273,6 @@ class VistaAnimationTimelineService {
       if (error && error.code === "ENOENT") fail("ANIMATION_RUN_NOT_FOUND", "Animation run was not found", { status: 404 });
       if (error instanceof VistaAnimationTimelineServiceError) throw error;
       fail("ANIMATION_STORAGE_UNAVAILABLE", "Animation record storage is unavailable", { status: 503, retryable: true });
-    } finally {
-      if (handle) await handle.close().catch(() => {});
     }
   }
 
@@ -1234,6 +1282,7 @@ class VistaAnimationTimelineService {
       fail("ANIMATION_RECORD_TOO_LARGE", "Animation run record exceeds its size limit", { status: 500 });
     }
     await ensureRecordRoot(this.recordRoot, { create: true });
+    await assertPrivateDirectory(this.recordRoot);
     const target = recordPath(this.recordRoot, record.run_id, record.access.owner_id);
     const suffix = this.randomBytes(12).toString("hex");
     if (!/^[a-f0-9]{24}$/.test(suffix)) fail("ANIMATION_RANDOM_INVALID", "Animation record random source is invalid", { status: 500 });
@@ -1246,6 +1295,7 @@ class VistaAnimationTimelineService {
       await handle.close();
       handle = null;
       await fs.promises.rename(temporary, target);
+      await this.syncDirectory(this.recordRoot);
       return validateStoredRecord(record, record.run_id, record.access.owner_id);
     } catch (error) {
       if (error instanceof VistaAnimationTimelineServiceError) throw error;

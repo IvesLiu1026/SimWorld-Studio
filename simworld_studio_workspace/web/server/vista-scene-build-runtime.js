@@ -151,6 +151,7 @@ function createVistaSceneBuildRuntime(options = {}) {
     recordRoot: config.recordRoot,
     executor: options.executor || null,
     artifactRecorder: options.artifactRecorder || null,
+    mutationArbiter: options.mutationArbiter || null,
   });
   return Object.freeze({ config, service });
 }

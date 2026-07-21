@@ -15,6 +15,7 @@ const {
   VistaSceneBuildServiceError,
   createVistaSceneBuildService,
 } = require("../vista-scene-build-service");
+const { createRuntimeMutationArbiter } = require("../runtime-mutation-arbiter");
 
 const FIXTURE_ROOT = path.resolve(__dirname, "fixtures/vista/mmg_040");
 const ACCESS = Object.freeze({
@@ -212,6 +213,7 @@ async function fixture(t, overrides = {}) {
     clock: () => new Date("2026-07-21T00:00:00.000Z"),
     randomBytes: () => Buffer.alloc(12, 1),
     ...(overrides.artifactRecorder ? { artifactRecorder: overrides.artifactRecorder } : {}),
+    ...(overrides.service || {}),
   });
   return { artifact, executorCalls, importCalls, layout, root, service };
 }
@@ -283,10 +285,77 @@ test("execution record is persisted with mode 0600 and remains owner-bound acros
   const raw = fs.readFileSync(file, "utf8");
   assert.equal(raw.includes(ACCESS.ownerId), true);
   assert.equal(JSON.stringify(status).includes(ACCESS.ownerId), false, "public response omits access principals");
+  fs.chmodSync(file, 0o640);
+  await assert.rejects(
+    service.status(artifact.artifact_id, {}, ACCESS),
+    (error) => error.code === "SCENE_BUILD_STORAGE_UNAVAILABLE",
+  );
+  fs.chmodSync(file, 0o600);
+  const hardlink = `${file}.hardlink`;
+  fs.linkSync(file, hardlink);
+  await assert.rejects(
+    service.status(artifact.artifact_id, {}, ACCESS),
+    (error) => error.code === "SCENE_BUILD_STORAGE_UNAVAILABLE",
+  );
+  fs.unlinkSync(hardlink);
   await assert.rejects(
     service.status(artifact.artifact_id, {}, { ...ACCESS, ownerId: "other-owner" }),
     (error) => error.code === "VISTA_IMPORT_ACCESS_DENIED",
   );
+});
+
+test("a same-plan rebuild gets a fresh created_at while pending and terminal keep one operation timestamp", async (t) => {
+  let randomValue = 1;
+  let clockTick = 0;
+  const instants = [
+    "2026-07-21T01:00:00.000Z",
+    "2026-07-21T01:00:01.000Z",
+    "2026-07-21T02:00:00.000Z",
+    "2026-07-21T02:00:01.000Z",
+  ];
+  const { artifact, root, service } = await fixture(t, {
+    service: {
+      randomBytes: () => Buffer.alloc(12, randomValue++),
+      clock: () => new Date(instants[Math.min(clockTick++, instants.length - 1)]),
+    },
+  });
+  const planned = await service.plan(artifact.artifact_id, {}, ACCESS);
+  await service.execute(artifact.artifact_id, { plan_id: planned.plan.plan_id, confirm: true }, ACCESS);
+  const file = path.join(root, "records", fs.readdirSync(path.join(root, "records"))[0]);
+  const first = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(first.created_at, instants[0]);
+  assert.equal(first.updated_at, instants[1]);
+
+  await service.execute(artifact.artifact_id, { plan_id: planned.plan.plan_id, confirm: true }, ACCESS);
+  const second = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.notEqual(second.operation.operation_id, first.operation.operation_id);
+  assert.equal(second.created_at, instants[2]);
+  assert.equal(second.updated_at, instants[3]);
+});
+
+test("directory fsync failure blocks UE execution and journal publication", async (t) => {
+  let journalCalls = 0;
+  const current = await fixture(t, {
+    artifactRecorder: {
+      sceneBuildLineage() { throw new Error("must not run"); },
+      async ensureSceneBuildTerminal() { journalCalls += 1; },
+    },
+    service: {
+      async syncDirectory() {
+        throw Object.assign(new Error("simulated directory fsync failure"), { code: "EIO" });
+      },
+    },
+  });
+  const planned = await current.service.plan(current.artifact.artifact_id, {}, ACCESS);
+  await assert.rejects(
+    current.service.execute(current.artifact.artifact_id, {
+      plan_id: planned.plan.plan_id,
+      confirm: true,
+    }, ACCESS),
+    hasCode("SCENE_BUILD_STORAGE_UNAVAILABLE"),
+  );
+  assert.equal(current.executorCalls.length, 0);
+  assert.equal(journalCalls, 0);
 });
 
 test("journal failure never rewrites a successful UE build and status can replay durability", async (t) => {
@@ -325,6 +394,69 @@ test("journal failure never rewrites a successful UE build and status can replay
   assert.equal(status.state, "succeeded");
   assert.equal(status.artifact_lineage.revision, status.operation_id);
   assert.equal(recorded.at(-1).record.access.last_session_id, ACCESS.sessionId);
+});
+
+test("a new build quarantines old runtime lineage and re-syncs a visible terminal before journal replay", async (t) => {
+  let randomValue = 1;
+  let armed = false;
+  let armedSyncCalls = 0;
+  const journalRecords = [];
+  const artifactRecorder = {
+    async ensureSceneBuildTerminal({ record }) { journalRecords.push(clone(record)); },
+    sceneBuildLineage({ record }) {
+      return {
+        kind: "vista-scene-build",
+        artifact_id: record.plan_id,
+        revision: record.operation.operation_id,
+        content_digest: crypto.createHash("sha256")
+          .update(record.operation.operation_id, "utf8").digest("hex"),
+      };
+    },
+  };
+  const { artifact, service } = await fixture(t, {
+    artifactRecorder,
+    service: {
+      randomBytes() { return Buffer.alloc(12, randomValue++); },
+      async syncDirectory() {
+        if (!armed) return;
+        armedSyncCalls += 1;
+        if (armedSyncCalls === 2) {
+          armed = false;
+          throw Object.assign(new Error("simulated terminal directory fsync failure"), { code: "EIO" });
+        }
+      },
+    },
+  });
+  const planned = await service.plan(artifact.artifact_id, {}, ACCESS);
+  const first = await service.execute(
+    artifact.artifact_id,
+    { plan_id: planned.plan.plan_id, confirm: true },
+    ACCESS,
+  );
+  assert.equal(service.resolveActiveRuntimeProof(ACCESS).start_allowed, true);
+  assert.equal(service.resolveActiveRuntimeLineage(ACCESS).revision, first.operation_id);
+
+  armed = true;
+  await assert.rejects(
+    service.execute(
+      artifact.artifact_id,
+      { plan_id: planned.plan.plan_id, confirm: true },
+      ACCESS,
+    ),
+    hasCode("SCENE_BUILD_STORAGE_UNAVAILABLE"),
+  );
+  assert.equal(armedSyncCalls, 2, "the failure occurs after the new terminal rename");
+  assert.equal(service.resolveActiveRuntimeProof(ACCESS), null);
+  assert.equal(service.resolveActiveRuntimeLineage(ACCESS), null);
+  assert.equal(journalRecords.length, 1, "the not-yet-durable terminal must not be journaled");
+
+  const replayed = await service.status(artifact.artifact_id, {}, ACCESS);
+  assert.equal(replayed.state, "succeeded");
+  assert.notEqual(replayed.operation_id, first.operation_id);
+  assert.equal(journalRecords.length, 2, "status re-syncs the target before publishing its journal record");
+  assert.equal(journalRecords[1].operation.operation_id, replayed.operation_id);
+  assert.equal(service.resolveActiveRuntimeProof(ACCESS), null, "journal replay cannot recreate process-local UE proof");
+  assert.equal(service.resolveActiveRuntimeLineage(ACCESS), null, "journal replay cannot recreate live lineage");
 });
 
 test("missing executor and unresolved production bindings fail closed", async (t) => {
@@ -399,4 +531,86 @@ test("runtime proof is exact-lease process-local and requires verified semantic/
 
   const restarted = await fixture(t);
   assert.equal(restarted.service.resolveActiveRuntimeProof(ACCESS), null, "restart must quarantine stale disk evidence");
+});
+
+test("successful journaled execution exposes exact-lease scene-build lineage for Review", async (t) => {
+  const artifactRecorder = {
+    async ensureSceneBuildTerminal() { return { created: true }; },
+    sceneBuildLineage({ record }) {
+      return {
+        kind: "vista-scene-build",
+        artifact_id: record.plan_id,
+        revision: record.operation.operation_id,
+        content_digest: "e".repeat(64),
+      };
+    },
+  };
+  const { artifact, service } = await fixture(t, { artifactRecorder });
+  const planned = await service.plan(artifact.artifact_id, {}, ACCESS);
+  const executed = await service.execute(
+    artifact.artifact_id,
+    { plan_id: planned.plan.plan_id, confirm: true },
+    ACCESS,
+  );
+  assert.deepEqual(service.resolveActiveRuntimeLineage(ACCESS), {
+    kind: "vista-scene-build",
+    artifact_id: planned.plan.plan_id,
+    revision: executed.operation_id,
+    content_digest: "e".repeat(64),
+    scene_id: planned.plan.scene_id,
+  });
+  assert.equal(service.resolveActiveRuntimeLineage({ ...ACCESS, leaseId: "another-lease" }), null);
+});
+
+test("a Review mutation epoch invalidates a previously verified scene proof and lineage", async (t) => {
+  let tokenId = 0;
+  const mutationArbiter = createRuntimeMutationArbiter({
+    randomUUID: () => `mutation-token-${++tokenId}`,
+  });
+  const artifactRecorder = {
+    async ensureSceneBuildTerminal() {},
+    sceneBuildLineage({ record }) {
+      return {
+        kind: "vista-scene-build",
+        artifact_id: record.plan_id,
+        revision: record.operation.operation_id,
+        content_digest: "e".repeat(64),
+      };
+    },
+  };
+  const { artifact, service } = await fixture(t, {
+    artifactRecorder,
+    service: { mutationArbiter },
+  });
+  const planned = await service.plan(artifact.artifact_id, {}, ACCESS);
+  await service.execute(artifact.artifact_id, { plan_id: planned.plan.plan_id, confirm: true }, ACCESS);
+  assert.equal(service.resolveActiveRuntimeProof(ACCESS).start_allowed, true);
+  assert.equal(service.resolveActiveRuntimeLineage(ACCESS).artifact_id, planned.plan.plan_id);
+
+  const review = mutationArbiter.acquire(ACCESS, { kind: "review", operationId: "review-epoch" });
+  assert.equal(service.resolveActiveRuntimeLineage(ACCESS).artifact_id, planned.plan.plan_id,
+    "the locked pre-mutation snapshot may still bind the verified build lineage");
+  review.invalidateScene();
+  assert.equal(service.resolveActiveRuntimeProof(ACCESS), null);
+  assert.equal(service.resolveActiveRuntimeLineage(ACCESS), null);
+  review.release();
+});
+
+test("scene execution rejects another active mutation before writing or calling UE", async (t) => {
+  let tokenId = 0;
+  const mutationArbiter = createRuntimeMutationArbiter({
+    randomUUID: () => `mutation-token-${++tokenId}`,
+  });
+  const { artifact, executorCalls, root, service } = await fixture(t, {
+    service: { mutationArbiter },
+  });
+  const planned = await service.plan(artifact.artifact_id, {}, ACCESS);
+  const review = mutationArbiter.acquire(ACCESS, { kind: "review", operationId: "active-review" });
+  await assert.rejects(
+    service.execute(artifact.artifact_id, { plan_id: planned.plan.plan_id, confirm: true }, ACCESS),
+    hasCode("SCENE_BUILD_SLOT_BUSY"),
+  );
+  assert.deepEqual(executorCalls, []);
+  assert.equal(fs.existsSync(path.join(root, "records")), false);
+  review.release();
 });

@@ -6,6 +6,11 @@ const path = require("node:path");
 
 const { compileVistaSceneBuildPlan } = require("./vista-scene-build-plan");
 const { createVistaRuntimeSceneProof } = require("./vista-runtime-broker");
+const {
+  assertPrivateDirectory,
+  readPrivateFile,
+  syncPrivateDirectory,
+} = require("./durable-artifact-io");
 
 const PLAN_RESPONSE_SCHEMA = "vista-scene-build-plan-response/v1";
 const PREFLIGHT_RESPONSE_SCHEMA = "vista-scene-build-service-preflight/v1";
@@ -473,8 +478,16 @@ class VistaSceneBuildService {
       throw new TypeError("artifactRecorder must expose scene build journal methods");
     }
     this.artifactRecorder = options.artifactRecorder || null;
+    if (options.mutationArbiter !== undefined && options.mutationArbiter !== null
+        && (typeof options.mutationArbiter.acquire !== "function"
+          || typeof options.mutationArbiter.currentEpoch !== "function")) {
+      throw new TypeError("mutationArbiter must expose acquire and currentEpoch");
+    }
+    this.mutationArbiter = options.mutationArbiter || null;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
+    this.syncDirectory = typeof options.syncDirectory === "function"
+      ? options.syncDirectory : syncPrivateDirectory;
     this.maxRecordBytes = Number.isSafeInteger(options.maxRecordBytes) && options.maxRecordBytes > 0
       ? options.maxRecordBytes
       : MAX_RECORD_BYTES;
@@ -483,6 +496,7 @@ class VistaSceneBuildService {
     // caller must explicitly reconcile/rebuild rather than trusting a stale
     // disk record as proof of the editor world's current contents.
     this.liveRuntimeProofs = new Map();
+    this.liveRuntimeLineages = new Map();
   }
 
   async plan(importArtifactId, request = {}, context = {}) {
@@ -544,7 +558,23 @@ class VistaSceneBuildService {
 
   resolveActiveRuntimeProof(context = {}) {
     const access = normalizeAccess(context);
-    return this.liveRuntimeProofs.get(liveProofKey(access)) || null;
+    return this._resolveLiveValue(this.liveRuntimeProofs, access);
+  }
+
+  resolveActiveRuntimeLineage(context = {}) {
+    const access = normalizeAccess(context);
+    return this._resolveLiveValue(this.liveRuntimeLineages, access);
+  }
+
+  _resolveLiveValue(store, access) {
+    const key = liveProofKey(access);
+    const entry = store.get(key);
+    if (!entry) return null;
+    if (this.mutationArbiter && entry.epoch !== this.mutationArbiter.currentEpoch(access)) {
+      store.delete(key);
+      return null;
+    }
+    return entry.value;
   }
 
   async _beginExecution(importArtifactId, request = {}, context = {}) {
@@ -554,15 +584,47 @@ class VistaSceneBuildService {
     this._assertPlanId(resolved.plan, request.plan_id);
     this._requireExecutor();
     assertProductionRuntimePlan(resolved);
-    const activeKey = `${resolved.access.ownerId}:${resolved.access.slotId}:${resolved.plan.plan_id}`;
+    const activeKey = `${resolved.access.ownerId}:${resolved.access.slotId}`;
     const active = this.activeExecutions.get(activeKey);
-    if (active) return active;
-    const operationId = `vsj-${this.randomBytes(12).toString("hex")}`;
-    if (!/^vsj-[a-f0-9]{24}$/.test(operationId)) {
-      fail("SCENE_BUILD_RANDOM_INVALID", "Scene build random source is invalid", { status: 500 });
+    if (active) {
+      if (active.planId === resolved.plan.plan_id) return active;
+      fail("SCENE_BUILD_SLOT_BUSY", "This Studio slot already has an active scene build", {
+        status: 409,
+        retryable: true,
+      });
     }
-    await this._writePending(resolved, operationId);
+    let mutationToken = null;
+    try {
+      mutationToken = this.mutationArbiter
+        ? this.mutationArbiter.acquire(resolved.access, {
+          kind: "scene_build",
+          operationId: resolved.plan.plan_id,
+        })
+        : null;
+    } catch (error) {
+      if (error && error.code === "RUNTIME_MUTATION_SLOT_BUSY") {
+        fail("SCENE_BUILD_SLOT_BUSY", "This Studio slot already has an active runtime mutation", {
+          status: 409,
+          retryable: true,
+        });
+      }
+      throw error;
+    }
+    // Starting a new mutation invalidates the previously published proof for
+    // this exact runtime immediately.  It is re-published only after the new
+    // terminal record and journal entry are both durable.
+    const runtimeKey = liveProofKey(resolved.access);
+    try {
+      if (mutationToken) mutationToken.invalidateScene();
+      this.liveRuntimeProofs.delete(runtimeKey);
+      this.liveRuntimeLineages.delete(runtimeKey);
+      const operationId = `vsj-${this.randomBytes(12).toString("hex")}`;
+      if (!/^vsj-[a-f0-9]{24}$/.test(operationId)) {
+        fail("SCENE_BUILD_RANDOM_INVALID", "Scene build random source is invalid", { status: 500 });
+      }
+      await this._writePending(resolved, operationId);
     const execution = {
+      planId: resolved.plan.plan_id,
       response: {
         schema: EXECUTION_RESPONSE_SCHEMA,
         import_artifact_id: resolved.importArtifactId,
@@ -574,13 +636,20 @@ class VistaSceneBuildService {
       },
       promise: null,
     };
-    execution.promise = this._runExecution(resolved, operationId, context)
-      .finally(() => this.activeExecutions.delete(activeKey));
+      execution.promise = this._runExecution(resolved, operationId, context, mutationToken)
+        .finally(() => {
+          this.activeExecutions.delete(activeKey);
+          if (mutationToken) mutationToken.release();
+        });
     this.activeExecutions.set(activeKey, execution);
     return execution;
+    } catch (error) {
+      if (mutationToken) mutationToken.release();
+      throw error;
+    }
   }
 
-  async _runExecution(resolved, operationId, context) {
+  async _runExecution(resolved, operationId, context, mutationToken = null) {
     let result;
     let runtimeProof;
     try {
@@ -597,7 +666,9 @@ class VistaSceneBuildService {
       );
       runtimeProof = runtimeProofFromBuild(resolved, result);
     } catch (rawError) {
-      this.liveRuntimeProofs.delete(liveProofKey(resolved.access));
+      const runtimeKey = liveProofKey(resolved.access);
+      this.liveRuntimeProofs.delete(runtimeKey);
+      this.liveRuntimeLineages.delete(runtimeKey);
       const error = safeExecutionError(rawError);
       let failureRecord = null;
       try {
@@ -613,10 +684,18 @@ class VistaSceneBuildService {
     const record = await this._writeRecord(resolved, result, operationId);
     // Durability is a separate terminal gate. A journal failure must not be
     // reclassified as a UE execution failure or publish a live runtime proof.
-    await this._ensureTerminalJournal(resolved, record);
-    this.liveRuntimeProofs.set(liveProofKey(resolved.access), runtimeProof);
+    const runtimeLineage = await this._ensureTerminalJournal(resolved, record);
+    const runtimeKey = liveProofKey(resolved.access);
+    const epoch = this.mutationArbiter
+      ? (mutationToken ? mutationToken.epoch : this.mutationArbiter.currentEpoch(resolved.access))
+      : null;
+    this.liveRuntimeProofs.set(runtimeKey, { value: runtimeProof, epoch });
+    if (runtimeLineage) this.liveRuntimeLineages.set(runtimeKey, { value: runtimeLineage, epoch });
+    else this.liveRuntimeLineages.delete(runtimeKey);
     while (this.liveRuntimeProofs.size > 128) {
-      this.liveRuntimeProofs.delete(this.liveRuntimeProofs.keys().next().value);
+      const evicted = this.liveRuntimeProofs.keys().next().value;
+      this.liveRuntimeProofs.delete(evicted);
+      this.liveRuntimeLineages.delete(evicted);
     }
     return {
       schema: EXECUTION_RESPONSE_SCHEMA,
@@ -630,10 +709,25 @@ class VistaSceneBuildService {
   }
 
   async _ensureTerminalJournal(resolved, record) {
-    if (!this.artifactRecorder || !record || !TERMINAL_BUILD_STATES.has(record.status)) return;
+    if (!this.artifactRecorder || !record || !TERMINAL_BUILD_STATES.has(record.status)) return null;
+    // Re-sync on replay: rename may have made a terminal record visible before
+    // a prior directory fsync failed, so readability alone is not durability.
+    try {
+      await this.syncDirectory(this.recordRoot);
+    } catch (_error) {
+      fail("SCENE_BUILD_STORAGE_UNAVAILABLE", "Scene build record storage is unavailable", {
+        status: 503,
+        retryable: true,
+      });
+    }
     await this.artifactRecorder.ensureSceneBuildTerminal({
       record,
       importArtifact: resolved.artifact,
+    });
+    const lineage = this.artifactRecorder.sceneBuildLineage({ record });
+    return Object.freeze({
+      ...lineage,
+      scene_id: record.result.scene_id,
     });
   }
 
@@ -698,12 +792,11 @@ class VistaSceneBuildService {
 
   async _readRecord(planId, access, { allowMissing }) {
     const target = recordPath(this.recordRoot, planId, access.ownerId);
-    let handle;
     try {
-      handle = await fs.promises.open(target, fs.constants.O_RDONLY | Number(fs.constants.O_NOFOLLOW || 0));
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.size > this.maxRecordBytes) throw new Error("invalid record");
-      const record = JSON.parse(await handle.readFile("utf8"));
+      const record = JSON.parse((await readPrivateFile(target, {
+        minBytes: 2,
+        maxBytes: this.maxRecordBytes,
+      })).toString("utf8"));
       if (!isPlainObject(record) || record.schema !== BUILD_RECORD_SCHEMA || record.plan_id !== planId
           || !isPlainObject(record.access)
           || !new Set(["pending", "succeeded", "already_applied", "failed"]).has(record.status)
@@ -718,8 +811,6 @@ class VistaSceneBuildService {
       if (error && error.code === "ENOENT" && allowMissing) return null;
       if (error instanceof VistaSceneBuildServiceError) throw error;
       fail("SCENE_BUILD_STORAGE_UNAVAILABLE", "Scene build record storage is unavailable", { status: 503, retryable: true });
-    } finally {
-      if (handle) await handle.close().catch(() => {});
     }
   }
 
@@ -750,7 +841,9 @@ class VistaSceneBuildService {
         operation_id: operationId,
         state: status === "pending" ? "running" : "terminal",
       },
-      created_at: existing ? existing.created_at : timestamp,
+      created_at: existing && existing.operation.operation_id === operationId
+        ? existing.created_at
+        : timestamp,
       updated_at: timestamp,
       result,
     };
@@ -759,6 +852,7 @@ class VistaSceneBuildService {
       fail("SCENE_BUILD_RECORD_TOO_LARGE", "Scene build record exceeds its size limit", { status: 500 });
     }
     await fs.promises.mkdir(this.recordRoot, { recursive: true, mode: 0o700 });
+    await assertPrivateDirectory(this.recordRoot);
     const suffix = this.randomBytes(12).toString("hex");
     if (!/^[a-f0-9]{24}$/.test(suffix)) fail("SCENE_BUILD_RANDOM_INVALID", "Scene build random source is invalid", { status: 500 });
     const target = recordPath(this.recordRoot, resolved.plan.plan_id, resolved.access.ownerId);
@@ -771,6 +865,7 @@ class VistaSceneBuildService {
       await handle.close();
       handle = null;
       await fs.promises.rename(temporary, target);
+      await this.syncDirectory(this.recordRoot);
       return record;
     } catch (error) {
       if (error instanceof VistaSceneBuildServiceError) throw error;

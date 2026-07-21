@@ -85,6 +85,30 @@ test("commit is atomic and idempotent for the same source identity", async (t) =
   assert.equal(stored.created_at, "2026-07-14T00:00:00.000Z");
 });
 
+test("status rejects weak-mode and hard-linked import artifacts", async (t) => {
+  const { artifactRoot, service } = fixture(t);
+  const committed = await service.commit(
+    { datasetRevision: "revision-1", sampleId: "mmg_040", attempt: 7 },
+    ACCESS,
+  );
+  const file = path.join(artifactRoot, `${committed.artifact_id}.json`);
+  fs.chmodSync(file, 0o640);
+  await assert.rejects(
+    service.status(committed.artifact_id, ACCESS),
+    (error) => error.code === "VISTA_IMPORT_STORAGE_UNAVAILABLE"
+      && error.causeCode === "DURABLE_ARTIFACT_FILE_INSECURE",
+  );
+  fs.chmodSync(file, 0o600);
+  const linked = path.join(artifactRoot, "operator-hardlink.json");
+  fs.linkSync(file, linked);
+  await assert.rejects(
+    service.status(committed.artifact_id, ACCESS),
+    (error) => error.code === "VISTA_IMPORT_STORAGE_UNAVAILABLE"
+      && error.causeCode === "DURABLE_ARTIFACT_FILE_BUSY",
+  );
+  fs.unlinkSync(linked);
+});
+
 test("concurrent commits select exactly one immutable winner", async (t) => {
   const { service } = fixture(t);
   const request = { datasetRevision: "revision-1", sampleId: "mmg_040", attempt: 7 };
@@ -128,6 +152,38 @@ test("journal gate uses persisted server identity and replays after an append fa
   const replay = await service.commit(request, { ...ACCESS, sessionId: "reattached-session" });
   assert.equal(replay.created, false);
   assert.deepEqual(seen.at(-1).access, { owner_id: ACCESS.ownerId, session_id: ACCESS.sessionId });
+});
+
+test("import directory fsync failure blocks journal publication until replay re-syncs the target", async (t) => {
+  let failSync = true;
+  let syncCalls = 0;
+  let journalCalls = 0;
+  const { artifactRoot, service } = fixture(t, {
+    service: {
+      async syncDirectory() {
+        syncCalls += 1;
+        if (failSync) {
+          throw Object.assign(new Error("simulated directory fsync failure"), { code: "EIO" });
+        }
+      },
+      artifactRecorder: {
+        async ensureImportCommitted() { journalCalls += 1; },
+      },
+    },
+  });
+  const request = { datasetRevision: "revision-1", sampleId: "mmg_040", attempt: 7 };
+  await assert.rejects(
+    service.commit(request, ACCESS),
+    (error) => error.code === "VISTA_IMPORT_STORAGE_UNAVAILABLE",
+  );
+  assert.equal(fs.readdirSync(artifactRoot).length, 1, "rename/link may remain visible after fsync failure");
+  assert.equal(journalCalls, 0);
+
+  failSync = false;
+  const replayed = await service.commit(request, ACCESS);
+  assert.equal(replayed.created, false);
+  assert.equal(syncCalls, 2, "replay must re-sync the existing target before journal publication");
+  assert.equal(journalCalls, 1);
 });
 
 test("status is owner-bound and permits a new authenticated browser session to reattach", async (t) => {
