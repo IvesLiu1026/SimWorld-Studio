@@ -25,6 +25,20 @@ test("source server keeps the resolved transport and model gates wired", () => {
   assert.doesNotMatch(source, /sendFile\(path\.resolve\(t\)\)/);
 });
 
+test("retired verifier parsing is absent from every builder event adapter", () => {
+  const sources = [
+    "index.js",
+    "codex-runner.js",
+    "cursor-runner.js",
+    "gemini-runner.js",
+    "grok-runner.js",
+    "opencode-runner.js",
+  ].map((filename) => fs.readFileSync(path.resolve(__dirname, "..", filename), "utf8"));
+  for (const source of sources) {
+    assert.doesNotMatch(source, /verifier_(?:start|result)|verifierTools|verify_scene/);
+  }
+});
+
 test("browser source has no remote font import and binds signalling to an opaque same-origin path", () => {
   const css = fs.readFileSync(path.resolve(__dirname, "../../src/index.css"), "utf8");
   const player = fs.readFileSync(path.resolve(__dirname, "../../public/ue-player.html"), "utf8");
@@ -135,5 +149,13 @@ test("staged model-off workspace pins the fixed broker and exposes no agent MCP"
   assert.match(source, /"web\/mcp\.json": sha256_file\(workspace \/ "web" \/ "mcp\.json"\)/);
   assert.match(source, /"vista-runtime-broker\.js": sha256_file\(/);
   assert.match(source, /workspace \/ "web" \/ "server" \/ "vista-runtime-broker\.js"/);
+  assert.match(source, /"tmp\/review-evidence",/);
+  assert.match(source, /"tmp\/review-evidence\/text",/);
+  assert.match(source, /"tmp\/review-evidence\/visual",/);
+  assert.match(source, /def _open_runtime_workspace_authority\(workspace:/);
+  assert.match(source, /os\.open\(part, flags, dir_fd=current_fd\)/);
+  assert.match(source, /os\.mkdir\(part, mode=PRIVATE_RUNTIME_DIRECTORY_MODE, dir_fd=current_fd\)/);
+  assert.match(source, /_revalidate_runtime_workspace_authority\(authority\)/);
+  assert.doesNotMatch(source, /\(workspace \/ relative\)\.mkdir\(/);
   assert.doesNotMatch(source, /"simworld": \{\s*"command": "node"/);
 });

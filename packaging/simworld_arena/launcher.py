@@ -20,11 +20,12 @@ import signal
 import re
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from . import __version__
@@ -33,6 +34,74 @@ from . import __version__
 CIRRUS_LOOPBACK_PATCH_MARKER = "VISTA_LOOPBACK_PATCH_V1"
 EXPECTED_ORIGINAL_CIRRUS_SHA256 = "92298e881c9240ebe76adfdf0fda39310cc28f5fd5934070194940cca7be29a4"
 EXPECTED_PATCHED_CIRRUS_SHA256 = "133a12cf843c69914263a41c3ea3d7f09914ad9241125358850ea0318e55300e"
+SECURITY_MANIFEST_SCHEMA = "vista-simworld-security-manifest/v1"
+SECURITY_MANIFEST_DIGEST_RE = re.compile(r"^[a-f0-9]{64}$")
+SECURITY_MANIFEST_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+PRIVATE_WORKSPACE_DIRECTORY_MODE = 0o700
+PRIVATE_REVIEW_EVIDENCE_DIRS = (
+    "tmp/review-evidence",
+    "tmp/review-evidence/text",
+    "tmp/review-evidence/visual",
+)
+REQUIRED_WORKSPACE_SECURITY_PATHS = frozenset(
+    {
+        "web/server/index.js",
+        "web/server/runtime-security.js",
+        "web/server/pixel-streaming-config.js",
+        "web/server/pixel-streaming-endpoint-registry.js",
+        "web/server/pixel-streaming-gateway.js",
+        "web/server/pixel-streaming-telemetry.js",
+        "web/server/review-loop-coordinator.js",
+        "web/server/review-public-events.js",
+        "web/server/session-manager.js",
+        "web/server/vista-runtime-broker.js",
+        "web/server/agent-sandbox.js",
+        "web/server/builder-runtime-authority.js",
+        "web/server/builder-process-policy.js",
+        "web/server/agent-runtime-policy.js",
+        "web/server/internal-run-capability.js",
+        "web/server/production-execution-policy.js",
+        "web/server/skill-selector.js",
+        "web/server/chat-codex.js",
+        "web/server/codex-runner.js",
+        "web/server/cursor-runner.js",
+        "web/server/gemini-runner.js",
+        "web/server/grok-runner.js",
+        "web/server/mcp-server.js",
+        "web/server/opencode-runner.js",
+        "web/server/artifact-revision-journal.js",
+        "web/server/artifact-journal-runtime.js",
+        "web/server/durable-artifact-io.js",
+        "web/server/runtime-mutation-arbiter.js",
+        "web/server/runtime-mutation-middleware.js",
+        "web/server/internal-http.js",
+        "web/server/review-provider.js",
+        "web/server/review-budget.js",
+        "web/server/review-run-registry.js",
+        "web/server/review-scene-binding.js",
+        "web/server/review-evidence-route.js",
+        "web/server/scene-critic.js",
+        "web/server/scene-loop.js",
+        "web/server/scene-loop-visual.js",
+        "web/server/studio-readiness.js",
+        "web/server/vista-animation-timeline-runtime.js",
+        "web/server/vista-animation-ue-readiness.js",
+        "web/public/ue-player.html",
+        "web/public/ue-assets/player.js",
+        "web/src/PixelStreamPlayer.jsx",
+        "web/src/features/viewport/ViewportPanel.jsx",
+        "web/src/state/useSession.js",
+        "web/src/state/pollContext.jsx",
+        "web/src/api/studioApi.js",
+        "web/src/api/appApi.js",
+        "web/src/features/chat/chatRuntime.js",
+        "web/src/features/chat/ChatPanel.jsx",
+        "web/src/features/chat/ChatMessage.jsx",
+        "web/src/features/library/staticMcpTools.js",
+        "web/src/features/scene/CodingVerifierPanel.jsx",
+        "web/src/index.css",
+    }
+)
 VISTA_DEMO_GAME_MODE = (
     "/Game/Human_Avatar/DefaultCharacter/ThirdPerson/Blueprints/"
     "BP_ThirdPersonGameMode.BP_ThirdPersonGameMode_C"
@@ -332,11 +401,44 @@ def validate_prepared_workspace(workspace: Path, manifest_path: Optional[Path] =
 
     manifest_path = Path(manifest_path) if manifest_path else get_package_dir() / "security-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema") != "vista-simworld-security-manifest/v1":
+    if not isinstance(manifest, dict) or manifest.get("schema") != SECURITY_MANIFEST_SCHEMA:
         raise RuntimeError("Installed Studio security manifest has an invalid schema")
-    for relative, expected in manifest.get("workspace_sha256", {}).items():
+    workspace_sha256 = manifest.get("workspace_sha256")
+    if not isinstance(workspace_sha256, dict) or not workspace_sha256:
+        raise RuntimeError("Installed Studio security manifest hashes must be a non-empty object")
+    for relative, expected in workspace_sha256.items():
+        parsed = PurePosixPath(relative) if isinstance(relative, str) else None
+        if (
+            parsed is None
+            or not SECURITY_MANIFEST_PATH_RE.fullmatch(relative)
+            or parsed.is_absolute()
+            or any(part in {"", ".", ".."} for part in parsed.parts)
+            or parsed.as_posix() != relative
+        ):
+            raise RuntimeError("Installed Studio security manifest contains an unsafe workspace path")
+        if not isinstance(expected, str) or not SECURITY_MANIFEST_DIGEST_RE.fullmatch(expected):
+            raise RuntimeError(
+                f"Installed Studio security manifest has an invalid SHA-256 digest: {relative}"
+            )
+    actual_paths = frozenset(workspace_sha256)
+    if actual_paths != REQUIRED_WORKSPACE_SECURITY_PATHS:
+        missing = sorted(REQUIRED_WORKSPACE_SECURITY_PATHS - actual_paths)
+        unexpected = sorted(actual_paths - REQUIRED_WORKSPACE_SECURITY_PATHS)
+        raise RuntimeError(
+            "Installed Studio security manifest has an invalid required path set "
+            f"(missing={missing}, unexpected={unexpected})"
+        )
+    for relative in sorted(REQUIRED_WORKSPACE_SECURITY_PATHS):
+        expected = workspace_sha256[relative]
         candidate = workspace / relative
-        if not candidate.is_file() or sha256_file(candidate) != expected:
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(workspace)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise RuntimeError(
+                f"Prepared workspace security path is unavailable or escapes workspace: {relative}"
+            ) from error
+        if candidate.is_symlink() or not resolved.is_file() or sha256_file(resolved) != expected:
             raise RuntimeError(f"Prepared workspace security SHA-256 mismatch: {relative}")
 
     receipt_path = workspace.parent / "source-receipt.json"
@@ -1176,97 +1278,696 @@ def has_unrealcv_plugin(ue_root: Path, project_file: Path) -> bool:
     )
 
 
+def _private_directory_flags() -> int:
+    if any(not hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
+        raise RuntimeError("Private workspace directories require no-follow directory descriptors")
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _parse_private_relative(relative: str) -> PurePosixPath:
+    if not isinstance(relative, str) or not relative:
+        raise RuntimeError(f"Private workspace directory is invalid: {relative}")
+    parsed = PurePosixPath(relative)
+    if (
+        relative in {".", ".."}
+        or parsed.as_posix() != relative
+        or parsed.is_absolute()
+        or not parsed.parts
+        or any(part in {"", ".", ".."} for part in parsed.parts)
+    ):
+        raise RuntimeError(f"Private workspace directory is invalid: {relative}")
+    return parsed
+
+
+def _close_descriptors(descriptors: list[int], primary_error: BaseException | None) -> None:
+    """Close every tracked descriptor without replacing an in-flight failure."""
+
+    cleanup_error = None
+    while descriptors:
+        descriptor = descriptors.pop()
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is not None and primary_error is None:
+        raise cleanup_error
+
+
+def _prepare_private_directory_fd(descriptor: int, label: str) -> tuple[int, int]:
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.geteuid():
+        raise RuntimeError(f"Private workspace directory is not owner-controlled: {label}")
+    os.fchmod(descriptor, PRIVATE_WORKSPACE_DIRECTORY_MODE)
+    os.fsync(descriptor)
+    checked = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(checked.st_mode)
+        or checked.st_uid != os.geteuid()
+        or stat.S_IMODE(checked.st_mode) != PRIVATE_WORKSPACE_DIRECTORY_MODE
+        or (checked.st_dev, checked.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise RuntimeError(f"Private workspace directory mode or identity is invalid: {label}")
+    return opened.st_dev, opened.st_ino
+
+
+def _canonical_private_absolute_path(value: Path | str, label: str) -> tuple[Path, tuple[str, ...]]:
+    raw = os.fspath(value)
+    if not isinstance(raw, str) or not raw or "\0" in raw or raw.startswith("//"):
+        raise RuntimeError(f"{label} is invalid")
+    if os.path.isabs(raw):
+        if os.path.normpath(raw) != raw:
+            raise RuntimeError(f"{label} is not canonical: {raw}")
+        checked = Path(raw)
+    else:
+        parsed = _parse_private_relative(raw)
+        checked = Path(os.getcwd()).joinpath(*parsed.parts)
+    if checked == Path(checked.anchor) or not checked.is_absolute():
+        raise RuntimeError(f"{label} must not be the filesystem root")
+    parsed_absolute = PurePosixPath(os.fspath(checked))
+    if parsed_absolute.as_posix() != os.fspath(checked):
+        raise RuntimeError(f"{label} is not canonical: {checked}")
+    return checked, tuple(parsed_absolute.parts[1:])
+
+
+def _open_absolute_directory_authority(
+    value: Path | str,
+    *,
+    label: str,
+    require_owner: bool,
+    private: bool,
+) -> dict:
+    """Open an absolute directory one no-follow component at a time from `/`."""
+
+    checked, parts = _canonical_private_absolute_path(value, label)
+    flags = _private_directory_flags()
+    descriptors: list[int] = []
+    primary_error = None
+    try:
+        anchor_fd = os.open("/", flags)
+        descriptors.append(anchor_fd)
+        anchor_status = os.fstat(anchor_fd)
+        if not stat.S_ISDIR(anchor_status.st_mode):
+            raise RuntimeError(f"{label} trusted root is unavailable")
+        anchor_identity = (anchor_status.st_dev, anchor_status.st_ino)
+        current_fd = os.dup(anchor_fd)
+        descriptors.append(current_fd)
+        identities = []
+        for part in parts:
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError as error:
+                raise RuntimeError(f"{label} is unavailable or unsafe: {checked}") from error
+            descriptors.append(next_fd)
+            opened = os.fstat(next_fd)
+            if not stat.S_ISDIR(opened.st_mode):
+                raise RuntimeError(f"{label} is unavailable or unsafe: {checked}")
+            identities.append((opened.st_dev, opened.st_ino))
+            os.close(current_fd)
+            descriptors.remove(current_fd)
+            current_fd = next_fd
+        target_status = os.fstat(current_fd)
+        if require_owner and target_status.st_uid != os.geteuid():
+            raise RuntimeError(f"{label} is not owner-controlled: {checked}")
+        if private:
+            os.fchmod(current_fd, PRIVATE_WORKSPACE_DIRECTORY_MODE)
+            os.fsync(current_fd)
+            target_status = os.fstat(current_fd)
+            if (
+                target_status.st_uid != os.geteuid()
+                or stat.S_IMODE(target_status.st_mode) != PRIVATE_WORKSPACE_DIRECTORY_MODE
+            ):
+                raise RuntimeError(f"{label} is not private: {checked}")
+        target_identity = (target_status.st_dev, target_status.st_ino)
+        identities[-1] = target_identity
+        descriptors.remove(anchor_fd)
+        descriptors.remove(current_fd)
+        return {
+            "path": checked,
+            "parts": parts,
+            "anchor_fd": anchor_fd,
+            "anchor_identity": anchor_identity,
+            "directory_fd": current_fd,
+            "identities": tuple(identities),
+            "target_identity": target_identity,
+            "require_owner": require_owner,
+            "private": private,
+            "label": label,
+        }
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _revalidate_absolute_directory_authority(authority: dict) -> None:
+    """Rewalk an authority from its held `/` descriptor and compare every inode."""
+
+    flags = _private_directory_flags()
+    descriptors: list[int] = []
+    primary_error = None
+    try:
+        anchor_status = os.fstat(authority["anchor_fd"])
+        if (
+            not stat.S_ISDIR(anchor_status.st_mode)
+            or (anchor_status.st_dev, anchor_status.st_ino) != authority["anchor_identity"]
+        ):
+            raise RuntimeError(f'{authority["label"]} trusted root changed')
+        current_fd = os.dup(authority["anchor_fd"])
+        descriptors.append(current_fd)
+        for index, part in enumerate(authority["parts"]):
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError as error:
+                raise RuntimeError(f'{authority["label"]} changed during use') from error
+            descriptors.append(next_fd)
+            opened = os.fstat(next_fd)
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != authority["identities"][index]
+            ):
+                raise RuntimeError(f'{authority["label"]} changed during use')
+            os.close(current_fd)
+            descriptors.remove(current_fd)
+            current_fd = next_fd
+        target_status = os.fstat(authority["directory_fd"])
+        walked_status = os.fstat(current_fd)
+        for checked_status in (target_status, walked_status):
+            if (
+                not stat.S_ISDIR(checked_status.st_mode)
+                or (checked_status.st_dev, checked_status.st_ino) != authority["target_identity"]
+                or (authority["require_owner"] and checked_status.st_uid != os.geteuid())
+                or (
+                    authority["private"]
+                    and stat.S_IMODE(checked_status.st_mode) != PRIVATE_WORKSPACE_DIRECTORY_MODE
+                )
+            ):
+                raise RuntimeError(f'{authority["label"]} changed during use')
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _open_private_directory_chain(
+    root_fd: int,
+    relative: str,
+    expected_identities: dict[tuple[str, ...], tuple[int, int]] | None = None,
+) -> tuple[int, dict[tuple[str, ...], tuple[int, int]]]:
+    """Create and open a relative directory chain from an already trusted root."""
+
+    parsed = _parse_private_relative(relative)
+    flags = _private_directory_flags()
+    descriptors: list[int] = []
+    identities: dict[tuple[str, ...], tuple[int, int]] = {}
+    primary_error = None
+    try:
+        current_fd = os.dup(root_fd)
+        descriptors.append(current_fd)
+        prefix: list[str] = []
+        for part in parsed.parts:
+            created = False
+            try:
+                os.mkdir(part, mode=PRIVATE_WORKSPACE_DIRECTORY_MODE, dir_fd=current_fd)
+                created = True
+            except FileExistsError:
+                pass
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError as error:
+                raise RuntimeError(
+                    f"Private workspace directory is unavailable or unsafe: {relative}"
+                ) from error
+            descriptors.append(next_fd)
+            prefix.append(part)
+            opened = os.fstat(next_fd)
+            expected = (expected_identities or {}).get(tuple(prefix))
+            if expected is not None and (opened.st_dev, opened.st_ino) != expected:
+                raise RuntimeError(f"Private workspace directory changed: {relative}")
+            identity = _prepare_private_directory_fd(next_fd, relative)
+            identities[tuple(prefix)] = identity
+            if created:
+                os.fsync(current_fd)
+            os.close(current_fd)
+            descriptors.remove(current_fd)
+            current_fd = next_fd
+        descriptors.remove(current_fd)
+        return current_fd, identities
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _revalidate_directory_identities(
+    root_fd: int,
+    identities: dict[tuple[str, ...], tuple[int, int]],
+    label: str,
+) -> None:
+    """Re-open every path component no-follow and compare its original inode."""
+
+    flags = _private_directory_flags()
+    for parts, expected in sorted(identities.items(), key=lambda item: item[0]):
+        descriptors: list[int] = []
+        primary_error = None
+        try:
+            current_fd = os.dup(root_fd)
+            descriptors.append(current_fd)
+            for part in parts:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+                descriptors.append(next_fd)
+                os.close(current_fd)
+                descriptors.remove(current_fd)
+                current_fd = next_fd
+            checked = os.fstat(current_fd)
+            if (
+                not stat.S_ISDIR(checked.st_mode)
+                or checked.st_uid != os.geteuid()
+                or (checked.st_dev, checked.st_ino) != expected
+            ):
+                raise RuntimeError(f"Private workspace directory changed: {label}")
+        except BaseException as error:
+            primary_error = error
+            if isinstance(error, RuntimeError):
+                raise
+            raise RuntimeError(f"Private workspace directory changed: {label}") from error
+        finally:
+            _close_descriptors(descriptors, primary_error)
+
+
+def ensure_private_workspace_directory(workspace: Path, relative: str) -> Path:
+    """Create one owner-only workspace directory without following symlinks."""
+
+    parsed = _parse_private_relative(relative)
+    descriptors: list[int] = []
+    authority = None
+    primary_error = None
+    try:
+        authority = _open_absolute_directory_authority(
+            workspace,
+            label="Private workspace root",
+            require_owner=True,
+            private=True,
+        )
+        descriptors.extend([authority["anchor_fd"], authority["directory_fd"]])
+        leaf_fd, identities = _open_private_directory_chain(
+            authority["directory_fd"],
+            relative,
+        )
+        descriptors.append(leaf_fd)
+        _revalidate_directory_identities(authority["directory_fd"], identities, relative)
+        _revalidate_absolute_directory_authority(authority)
+        return authority["path"].joinpath(*parsed.parts)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _write_all(descriptor: int, content: bytes) -> None:
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise OSError("Private workspace write made no progress")
+        remaining = remaining[written:]
+
+
+def _atomic_write_at(
+    directory_fd: int,
+    name: str,
+    content: bytes,
+    *,
+    mode: int,
+    timestamps_ns: tuple[int, int] | None = None,
+) -> None:
+    """Replace one leaf through its parent descriptor without following it."""
+
+    if not name or name in {".", ".."} or "/" in name:
+        raise RuntimeError(f"Private workspace file name is invalid: {name}")
+    temporary = f".{name}.tmp-{secrets.token_hex(8)}"
+    descriptors: list[int] = []
+    primary_error = None
+    installed = False
+    try:
+        temporary_fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            mode,
+            dir_fd=directory_fd,
+        )
+        descriptors.append(temporary_fd)
+        _write_all(temporary_fd, content)
+        os.fchmod(temporary_fd, mode)
+        os.fsync(temporary_fd)
+        os.close(temporary_fd)
+        descriptors.remove(temporary_fd)
+        if timestamps_ns is not None:
+            os.utime(
+                temporary,
+                ns=timestamps_ns,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        installed = True
+        os.fsync(directory_fd)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+        if not installed:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                if primary_error is None:
+                    raise
+
+
+def _copy_file_at(source: Path, directory_fd: int, name: str) -> None:
+    descriptors: list[int] = []
+    primary_error = None
+    try:
+        source_fd = os.open(Path(source), os.O_RDONLY | os.O_NOFOLLOW)
+        descriptors.append(source_fd)
+        source_status = os.fstat(source_fd)
+        if not stat.S_ISREG(source_status.st_mode):
+            raise RuntimeError(f"Package source is not a regular file: {source}")
+        chunks = []
+        while True:
+            chunk = os.read(source_fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        _atomic_write_at(
+            directory_fd,
+            name,
+            b"".join(chunks),
+            mode=stat.S_IMODE(source_status.st_mode),
+            timestamps_ns=(source_status.st_atime_ns, source_status.st_mtime_ns),
+        )
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _remove_directory_contents_at(directory_fd: int) -> None:
+    """Remove a directory's contents without traversing a symlink entry."""
+
+    flags = _private_directory_flags()
+    for name in os.listdir(directory_fd):
+        entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISDIR(entry.st_mode) and not stat.S_ISLNK(entry.st_mode):
+            descriptors: list[int] = []
+            primary_error = None
+            try:
+                child_fd = os.open(name, flags, dir_fd=directory_fd)
+                descriptors.append(child_fd)
+                _remove_directory_contents_at(child_fd)
+            except BaseException as error:
+                primary_error = error
+                raise
+            finally:
+                _close_descriptors(descriptors, primary_error)
+            os.rmdir(name, dir_fd=directory_fd)
+        else:
+            os.unlink(name, dir_fd=directory_fd)
+    os.fsync(directory_fd)
+
+
+def _copy_tree_at(source: Path, directory_fd: int) -> None:
+    """Copy a trusted package tree into a descriptor-anchored destination."""
+
+    flags = _private_directory_flags()
+    with os.scandir(source) as entries:
+        for entry in entries:
+            source_path = Path(entry.path)
+            if entry.is_symlink():
+                raise RuntimeError(f"Package tree cannot contain symlinks: {source_path}")
+            if entry.is_dir(follow_symlinks=False):
+                try:
+                    os.mkdir(
+                        entry.name,
+                        mode=PRIVATE_WORKSPACE_DIRECTORY_MODE,
+                        dir_fd=directory_fd,
+                    )
+                    os.fsync(directory_fd)
+                except FileExistsError:
+                    pass
+                descriptors: list[int] = []
+                primary_error = None
+                try:
+                    child_fd = os.open(entry.name, flags, dir_fd=directory_fd)
+                    descriptors.append(child_fd)
+                    _prepare_private_directory_fd(child_fd, entry.name)
+                    _copy_tree_at(source_path, child_fd)
+                except BaseException as error:
+                    primary_error = error
+                    raise
+                finally:
+                    _close_descriptors(descriptors, primary_error)
+            elif entry.is_file(follow_symlinks=False):
+                _copy_file_at(source_path, directory_fd, entry.name)
+            else:
+                raise RuntimeError(f"Package tree has an unsupported entry: {source_path}")
+    os.fsync(directory_fd)
+
+
+def _read_version_at(workspace_fd: int) -> str:
+    descriptors: list[int] = []
+    primary_error = None
+    try:
+        try:
+            version_fd = os.open(
+                ".studio_version",
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=workspace_fd,
+            )
+        except FileNotFoundError:
+            return ""
+        except OSError as error:
+            raise RuntimeError("Workspace version file is unavailable or unsafe") from error
+        descriptors.append(version_fd)
+        version_status = os.fstat(version_fd)
+        if not stat.S_ISREG(version_status.st_mode):
+            raise RuntimeError("Workspace version file is unavailable or unsafe")
+        content = os.read(version_fd, 4097)
+        if len(content) > 4096:
+            raise RuntimeError("Workspace version file is invalid")
+        return content.decode("utf-8").strip()
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _entry_is_regular_at(directory_fd: int, name: str) -> bool:
+    try:
+        entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(entry.st_mode):
+        raise RuntimeError(f"Private workspace file is unavailable or unsafe: {name}")
+    return True
+
+
+def _entry_is_directory_at(directory_fd: int, name: str) -> bool:
+    try:
+        entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+        raise RuntimeError(f"Private workspace directory is unavailable or unsafe: {name}")
+    return True
+
+
 def setup_workspace(workspace, pkg_dir):
     """
     Create/update workspace with bundled files.
     Only copies files if they're missing or package version changed.
     """
-    workspace = Path(workspace)
+    workspace_path, workspace_parts = _canonical_private_absolute_path(
+        workspace,
+        "Workspace",
+    )
+    if len(workspace_parts) < 2:
+        raise RuntimeError("Workspace parent must be an owner-controlled non-root directory")
+    _parse_private_relative(workspace_path.name)
+    workspace_parent = workspace_path.parent
+    workspace = workspace_parent / workspace_path.name
     pkg_dir = Path(pkg_dir)
+    flags = _private_directory_flags()
+    descriptors: list[int] = []
+    identities: dict[tuple[str, ...], tuple[int, int]] = {}
+    parent_authority = None
+    primary_error = None
+    try:
+        parent_authority = _open_absolute_directory_authority(
+            workspace_parent,
+            label="Workspace parent",
+            require_owner=True,
+            private=False,
+        )
+        parent_fd = parent_authority["directory_fd"]
+        descriptors.extend([parent_authority["anchor_fd"], parent_fd])
+        created_workspace = False
+        try:
+            os.mkdir(
+                workspace_path.name,
+                mode=PRIVATE_WORKSPACE_DIRECTORY_MODE,
+                dir_fd=parent_fd,
+            )
+            created_workspace = True
+        except FileExistsError:
+            pass
+        try:
+            workspace_fd = os.open(workspace_path.name, flags, dir_fd=parent_fd)
+        except OSError as error:
+            raise RuntimeError(f"Workspace is unavailable or unsafe: {workspace}") from error
+        descriptors.append(workspace_fd)
+        workspace_identity = _prepare_private_directory_fd(workspace_fd, str(workspace))
+        if created_workspace:
+            os.fsync(parent_fd)
 
-    # Version tracking
-    version_file = workspace / ".studio_version"
-    current_version = version_file.read_text().strip() if version_file.exists() else ""
+        target_fds: dict[str, int] = {}
+        target_directories = {
+            "web/server",
+            "web/dist",
+            "arena/skills/builtin",
+            "arena/config",
+        }
+        for relative in [
+            "web/server",
+            "web/dist",
+            "arena/skills/builtin",
+            "arena/config",
+            "scenes",
+            "skills",
+            "tmp/screens",
+            "tmp/thumbnails",
+            "logs",
+            "arena_data",
+            *PRIVATE_REVIEW_EVIDENCE_DIRS,
+        ]:
+            directory_fd, opened_identities = _open_private_directory_chain(
+                workspace_fd,
+                relative,
+                identities,
+            )
+            descriptors.append(directory_fd)
+            for parts, identity in opened_identities.items():
+                expected = identities.get(parts)
+                if expected is not None and expected != identity:
+                    raise RuntimeError(f"Private workspace directory changed: {relative}")
+                identities[parts] = identity
+            if relative in target_directories:
+                target_fds[relative] = directory_fd
+            else:
+                os.close(directory_fd)
+                descriptors.remove(directory_fd)
 
-    needs_update = current_version != __version__
+        current_version = _read_version_at(workspace_fd)
+        needs_update = current_version != __version__
+        server_fd = target_fds["web/server"]
 
-    # Create directory structure
-    for d in [
-        "web/server",
-        "web/dist",
-        "arena/skills/builtin",
-        "arena/config",
-        "scenes",
-        "skills",
-        "tmp/screens",
-        "tmp/thumbnails",
-        "logs",
-        "arena_data",
-    ]:
-        (workspace / d).mkdir(parents=True, exist_ok=True)
+        if needs_update:
+            print(f"  Setting up workspace (v{__version__})...")
 
-    if needs_update:
-        print(f"  Setting up workspace (v{__version__})...")
+            server_src = pkg_dir / "server"
+            if server_src.exists():
+                if server_src.is_symlink() or not server_src.is_dir():
+                    raise RuntimeError(f"Package server source is unsafe: {server_src}")
+                for source in server_src.iterdir():
+                    if source.is_file():
+                        _copy_file_at(source, server_fd, source.name)
 
-        # Copy server JS files
-        server_src = pkg_dir / "server"
-        server_dst = workspace / "web" / "server"
-        if server_src.exists():
-            for f in server_src.iterdir():
-                if f.is_file():
-                    shutil.copy2(f, server_dst / f.name)
+            dist_src = pkg_dir / "server" / "dist"
+            if dist_src.exists():
+                if dist_src.is_symlink() or not dist_src.is_dir():
+                    raise RuntimeError(f"Package frontend source is unsafe: {dist_src}")
+                dist_fd = target_fds["web/dist"]
+                _remove_directory_contents_at(dist_fd)
+                _copy_tree_at(dist_src, dist_fd)
 
-        # Copy frontend dist
-        dist_src = pkg_dir / "server" / "dist"
-        dist_dst = workspace / "web" / "dist"
-        if dist_src.exists():
-            shutil.rmtree(dist_dst, ignore_errors=True)
-            shutil.copytree(dist_src, dist_dst, dirs_exist_ok=True)
+            skills_src = pkg_dir / "skills" / "builtin"
+            if skills_src.exists():
+                if skills_src.is_symlink() or not skills_src.is_dir():
+                    raise RuntimeError(f"Package skills source is unsafe: {skills_src}")
+                skills_fd = target_fds["arena/skills/builtin"]
+                for source in skills_src.glob("*.md"):
+                    _copy_file_at(source, skills_fd, source.name)
 
-        # Copy skills
-        skills_src = pkg_dir / "skills" / "builtin"
-        skills_dst = workspace / "arena" / "skills" / "builtin"
-        if skills_src.exists():
-            for f in skills_src.glob("*.md"):
-                shutil.copy2(f, skills_dst / f.name)
+            config_src = pkg_dir / "config"
+            if config_src.exists():
+                if config_src.is_symlink() or not config_src.is_dir():
+                    raise RuntimeError(f"Package config source is unsafe: {config_src}")
+                config_fd = target_fds["arena/config"]
+                for source in config_src.iterdir():
+                    if source.is_file():
+                        _copy_file_at(source, config_fd, source.name)
 
-        # Copy config
-        config_src = pkg_dir / "config"
-        config_dst = workspace / "arena" / "config"
-        if config_src.exists():
-            for f in config_src.iterdir():
-                if f.is_file():
-                    shutil.copy2(f, config_dst / f.name)
-
-        # Install npm deps
-        server_dst = workspace / "web" / "server"
-        pkg_json = server_dst / "package.json"
-        if pkg_json.exists():
-            node_modules = server_dst / "node_modules"
-            if not node_modules.exists():
+        package_json_exists = _entry_is_regular_at(server_fd, "package.json")
+        node_modules_exists = _entry_is_directory_at(server_fd, "node_modules")
+        if package_json_exists and not node_modules_exists:
+            if needs_update:
                 print("  Installing Node.js dependencies...")
-                subprocess.run(
-                    ["npm", "install", "--production", "--no-optional", "--no-audit", "--no-fund"],
-                    cwd=str(server_dst),
-                    capture_output=True,
-                )
+            subprocess.run(
+                ["npm", "install", "--production", "--no-optional", "--no-audit", "--no-fund"],
+                cwd=f"/proc/self/fd/{server_fd}",
+                pass_fds=(server_fd,),
+                capture_output=True,
+            )
 
-        # Write version marker
-        version_file.write_text(__version__)
-    else:
-        # Still ensure npm deps exist
-        server_dst = workspace / "web" / "server"
-        node_modules = server_dst / "node_modules"
-        if not node_modules.exists():
-            pkg_json = server_dst / "package.json"
-            if pkg_json.exists():
-                subprocess.run(
-                    ["npm", "install", "--production", "--no-optional", "--no-audit", "--no-fund"],
-                    cwd=str(server_dst),
-                    capture_output=True,
-                )
+        if needs_update:
+            _atomic_write_at(
+                workspace_fd,
+                ".studio_version",
+                __version__.encode("utf-8"),
+                mode=0o600,
+            )
 
-    return workspace
+        _revalidate_absolute_directory_authority(parent_authority)
+        try:
+            lexical_workspace = os.stat(
+                workspace_path.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            opened_workspace = os.fstat(workspace_fd)
+        except OSError as error:
+            raise RuntimeError(f"Workspace changed during setup: {workspace}") from error
+        if (
+            not stat.S_ISDIR(lexical_workspace.st_mode)
+            or stat.S_ISLNK(lexical_workspace.st_mode)
+            or (lexical_workspace.st_dev, lexical_workspace.st_ino) != workspace_identity
+            or not stat.S_ISDIR(opened_workspace.st_mode)
+            or (opened_workspace.st_dev, opened_workspace.st_ino) != workspace_identity
+            or opened_workspace.st_uid != os.geteuid()
+            or stat.S_IMODE(opened_workspace.st_mode) != PRIVATE_WORKSPACE_DIRECTORY_MODE
+        ):
+            raise RuntimeError(f"Workspace changed during setup: {workspace}")
+        _revalidate_directory_identities(workspace_fd, identities, str(workspace))
+        return workspace
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
 
 
 def generate_mcp_config(workspace, ue_host, ue_port, *, enabled=False):

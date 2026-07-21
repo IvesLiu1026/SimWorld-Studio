@@ -9,6 +9,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -33,11 +34,283 @@ RUNTIME_DIRS = (
     "skills",
     "tmp/screens",
     "tmp/thumbnails",
+    "tmp/review-evidence",
+    "tmp/review-evidence/text",
+    "tmp/review-evidence/visual",
     "logs",
     "arena_data",
     "checkpoints",
     "tasksets",
 )
+PRIVATE_RUNTIME_DIRECTORY_MODE = 0o700
+
+
+def _runtime_directory_flags() -> int:
+    if any(not hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW")):
+        raise RuntimeError("Runtime directories require no-follow directory descriptors")
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _close_descriptors(descriptors: list[int], primary_error: BaseException | None) -> None:
+    cleanup_error = None
+    while descriptors:
+        descriptor = descriptors.pop()
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is not None and primary_error is None:
+        raise cleanup_error
+
+
+def _runtime_parts(relative: str) -> tuple[str, ...]:
+    parts = tuple(relative.split("/"))
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise RuntimeError(f"Runtime directory path is invalid: {relative}")
+    return parts
+
+
+def _prepare_private_directory_fd(descriptor: int, label: str) -> tuple[int, int]:
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.geteuid():
+        raise RuntimeError(f"Runtime directory is not owner-controlled: {label}")
+    os.fchmod(descriptor, PRIVATE_RUNTIME_DIRECTORY_MODE)
+    os.fsync(descriptor)
+    checked = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(checked.st_mode)
+        or checked.st_uid != os.geteuid()
+        or stat.S_IMODE(checked.st_mode) != PRIVATE_RUNTIME_DIRECTORY_MODE
+        or (checked.st_dev, checked.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        raise RuntimeError(f"Runtime directory mode or identity is invalid: {label}")
+    return opened.st_dev, opened.st_ino
+
+
+def _canonical_runtime_workspace(value: Path | str) -> tuple[Path, tuple[str, ...]]:
+    raw = os.fspath(value)
+    if not isinstance(raw, str) or not raw or "\0" in raw or raw.startswith("//"):
+        raise RuntimeError("Runtime workspace path is invalid")
+    if os.path.isabs(raw):
+        if os.path.normpath(raw) != raw:
+            raise RuntimeError(f"Runtime workspace path is not canonical: {raw}")
+        checked = Path(raw)
+    else:
+        checked = Path(os.getcwd()).joinpath(*_runtime_parts(raw))
+    if checked == Path(checked.anchor) or not checked.is_absolute():
+        raise RuntimeError("Runtime workspace must not be the filesystem root")
+    return checked, tuple(checked.parts[1:])
+
+
+def _open_runtime_workspace_authority(workspace: Path | str) -> dict:
+    checked, parts = _canonical_runtime_workspace(workspace)
+    flags = _runtime_directory_flags()
+    descriptors: list[int] = []
+    primary_error = None
+    try:
+        anchor_fd = os.open("/", flags)
+        descriptors.append(anchor_fd)
+        anchor_status = os.fstat(anchor_fd)
+        if not stat.S_ISDIR(anchor_status.st_mode):
+            raise RuntimeError("Runtime workspace trusted root is unavailable")
+        anchor_identity = (anchor_status.st_dev, anchor_status.st_ino)
+        current_fd = os.dup(anchor_fd)
+        descriptors.append(current_fd)
+        identities = []
+        for part in parts:
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError as error:
+                raise RuntimeError(f"Runtime workspace is unavailable or unsafe: {checked}") from error
+            descriptors.append(next_fd)
+            opened = os.fstat(next_fd)
+            if not stat.S_ISDIR(opened.st_mode):
+                raise RuntimeError(f"Runtime workspace is unavailable or unsafe: {checked}")
+            identities.append((opened.st_dev, opened.st_ino))
+            os.close(current_fd)
+            descriptors.remove(current_fd)
+            current_fd = next_fd
+        target_identity = _prepare_private_directory_fd(current_fd, str(checked))
+        identities[-1] = target_identity
+        descriptors.remove(anchor_fd)
+        descriptors.remove(current_fd)
+        return {
+            "path": checked,
+            "parts": parts,
+            "anchor_fd": anchor_fd,
+            "anchor_identity": anchor_identity,
+            "workspace_fd": current_fd,
+            "identities": tuple(identities),
+            "target_identity": target_identity,
+        }
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _revalidate_runtime_workspace_authority(authority: dict) -> None:
+    flags = _runtime_directory_flags()
+    descriptors: list[int] = []
+    primary_error = None
+    try:
+        anchor_status = os.fstat(authority["anchor_fd"])
+        if (
+            not stat.S_ISDIR(anchor_status.st_mode)
+            or (anchor_status.st_dev, anchor_status.st_ino) != authority["anchor_identity"]
+        ):
+            raise RuntimeError("Runtime workspace trusted root changed")
+        current_fd = os.dup(authority["anchor_fd"])
+        descriptors.append(current_fd)
+        for index, part in enumerate(authority["parts"]):
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError as error:
+                raise RuntimeError("Runtime workspace changed during staging") from error
+            descriptors.append(next_fd)
+            opened = os.fstat(next_fd)
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != authority["identities"][index]
+            ):
+                raise RuntimeError("Runtime workspace changed during staging")
+            os.close(current_fd)
+            descriptors.remove(current_fd)
+            current_fd = next_fd
+        opened_workspace = os.fstat(authority["workspace_fd"])
+        walked_workspace = os.fstat(current_fd)
+        for checked in (opened_workspace, walked_workspace):
+            if (
+                not stat.S_ISDIR(checked.st_mode)
+                or (checked.st_dev, checked.st_ino) != authority["target_identity"]
+                or checked.st_uid != os.geteuid()
+                or stat.S_IMODE(checked.st_mode) != PRIVATE_RUNTIME_DIRECTORY_MODE
+            ):
+                raise RuntimeError("Runtime workspace changed during staging")
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _open_runtime_directory_chain(
+    workspace_fd: int,
+    relative: str,
+    expected_identities: dict[tuple[str, ...], tuple[int, int]],
+) -> tuple[int, dict[tuple[str, ...], tuple[int, int]]]:
+    flags = _runtime_directory_flags()
+    descriptors: list[int] = []
+    identities: dict[tuple[str, ...], tuple[int, int]] = {}
+    primary_error = None
+    try:
+        current_fd = os.dup(workspace_fd)
+        descriptors.append(current_fd)
+        prefix = []
+        for part in _runtime_parts(relative):
+            created = False
+            try:
+                os.mkdir(part, mode=PRIVATE_RUNTIME_DIRECTORY_MODE, dir_fd=current_fd)
+                created = True
+            except FileExistsError:
+                pass
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except OSError as error:
+                raise RuntimeError(f"Runtime directory is unavailable or unsafe: {relative}") from error
+            descriptors.append(next_fd)
+            prefix.append(part)
+            opened = os.fstat(next_fd)
+            expected = expected_identities.get(tuple(prefix))
+            if expected is not None and (opened.st_dev, opened.st_ino) != expected:
+                raise RuntimeError(f"Runtime directory changed during staging: {relative}")
+            identity = _prepare_private_directory_fd(next_fd, relative)
+            identities[tuple(prefix)] = identity
+            if created:
+                os.fsync(current_fd)
+            os.close(current_fd)
+            descriptors.remove(current_fd)
+            current_fd = next_fd
+        descriptors.remove(current_fd)
+        return current_fd, identities
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
+
+
+def _revalidate_runtime_directories(
+    workspace_fd: int,
+    identities: dict[tuple[str, ...], tuple[int, int]],
+) -> None:
+    flags = _runtime_directory_flags()
+    for parts, expected in sorted(identities.items(), key=lambda item: item[0]):
+        descriptors: list[int] = []
+        primary_error = None
+        try:
+            current_fd = os.dup(workspace_fd)
+            descriptors.append(current_fd)
+            for part in parts:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+                descriptors.append(next_fd)
+                os.close(current_fd)
+                descriptors.remove(current_fd)
+                current_fd = next_fd
+            checked = os.fstat(current_fd)
+            if (
+                not stat.S_ISDIR(checked.st_mode)
+                or checked.st_uid != os.geteuid()
+                or (checked.st_dev, checked.st_ino) != expected
+            ):
+                raise RuntimeError("Runtime directory changed during staging")
+        except BaseException as error:
+            primary_error = error
+            if isinstance(error, RuntimeError):
+                raise
+            raise RuntimeError("Runtime directory changed during staging") from error
+        finally:
+            _close_descriptors(descriptors, primary_error)
+
+
+def provision_private_runtime_directories(
+    workspace: Path,
+    relatives: tuple[str, ...] = RUNTIME_DIRS,
+) -> tuple[Path, ...]:
+    """Create runtime trees under one no-follow workspace authority."""
+
+    descriptors: list[int] = []
+    identities: dict[tuple[str, ...], tuple[int, int]] = {}
+    authority = None
+    primary_error = None
+    try:
+        authority = _open_runtime_workspace_authority(workspace)
+        workspace_fd = authority["workspace_fd"]
+        descriptors.extend([authority["anchor_fd"], workspace_fd])
+        for relative in relatives:
+            directory_fd, opened_identities = _open_runtime_directory_chain(
+                workspace_fd,
+                relative,
+                identities,
+            )
+            descriptors.append(directory_fd)
+            for parts, identity in opened_identities.items():
+                expected = identities.get(parts)
+                if expected is not None and expected != identity:
+                    raise RuntimeError(f"Runtime directory changed during staging: {relative}")
+                identities[parts] = identity
+            os.close(directory_fd)
+            descriptors.remove(directory_fd)
+        _revalidate_runtime_directories(workspace_fd, identities)
+        _revalidate_runtime_workspace_authority(authority)
+        return tuple(authority["path"].joinpath(*_runtime_parts(relative)) for relative in relatives)
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _close_descriptors(descriptors, primary_error)
 
 
 def sha256_file(path: Path) -> str:
@@ -232,8 +505,7 @@ def stage(source_repository: Path, release: Path) -> Path:
 
     try:
         tracked_file_count = copy_tracked_workspace(source_repository, workspace)
-        for relative in RUNTIME_DIRS:
-            (workspace / relative).mkdir(mode=0o700, parents=True, exist_ok=True)
+        provision_private_runtime_directories(workspace)
 
         mcp_config = {"mcpServers": {}}
         (workspace / "web" / "mcp.json").write_text(

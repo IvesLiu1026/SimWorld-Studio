@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,10 +16,13 @@ from unittest import mock
 from simworld_arena.launcher import (
     CIRRUS_LOOPBACK_PATCH_MARKER,
     EXPECTED_ORIGINAL_CIRRUS_SHA256,
+    REQUIRED_WORKSPACE_SECURITY_PATHS,
     VISTA_DEMO_MAP,
     build_ue_map_url,
     configure_vista_demo_server_environment,
     detected_gpu_indices,
+    ensure_private_workspace_directory,
+    _parse_private_relative,
     generate_mcp_config,
     get_nvidia_headless_icd,
     has_unrealcv_plugin,
@@ -36,6 +40,7 @@ from simworld_arena.launcher import (
     sha256_file,
     sha256_server_source_tree,
     sha256_tree,
+    setup_workspace,
     start_managed_process,
     terminate_managed_process_group,
     ue_startup_timeout_seconds,
@@ -59,6 +64,273 @@ STAGE_TOOL_SPEC.loader.exec_module(STAGE_TOOL)
 
 
 class LauncherSecurityTests(unittest.TestCase):
+    def test_private_workspace_paths_reject_normalized_aliases_and_root_before_chmod(self):
+        for invalid in ("", ".", "..", "a//b", "./a", "a/.", "a/"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(RuntimeError, "invalid"):
+                    _parse_private_relative(invalid)
+        self.assertEqual(_parse_private_relative("a/b").parts, ("a", "b"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "package"
+            package.mkdir()
+            with mock.patch("simworld_arena.launcher.os.fchmod", wraps=os.fchmod) as fchmod:
+                with self.assertRaisesRegex(RuntimeError, "filesystem root"):
+                    setup_workspace(Path("/"), package)
+            fchmod.assert_not_called()
+
+    def test_workspace_setup_rejects_resolve_to_open_ancestor_swap_without_chmod(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            ancestor = base / "launcher-trusted-ancestor"
+            original_parent = ancestor / "parent"
+            original_parent.mkdir(parents=True, mode=0o755)
+            original_parent.chmod(0o755)
+            workspace = original_parent / "workspace"
+            displaced = base / "launcher-ancestor-displaced"
+            outside = base / "launcher-outside"
+            outside_parent = outside / "parent"
+            outside_parent.mkdir(parents=True, mode=0o755)
+            outside_parent.chmod(0o755)
+            original_mode = stat.S_IMODE(original_parent.stat().st_mode)
+            outside_mode = stat.S_IMODE(outside_parent.stat().st_mode)
+            package = base / "package"
+            package.mkdir()
+            real_open = os.open
+            swapped = False
+
+            def swap_intermediate_before_open(target, *args, **kwargs):
+                nonlocal swapped
+                if (
+                    not swapped
+                    and str(target) == ancestor.name
+                    and kwargs.get("dir_fd") is not None
+                ):
+                    swapped = True
+                    ancestor.rename(displaced)
+                    ancestor.symlink_to(outside, target_is_directory=True)
+                return real_open(target, *args, **kwargs)
+
+            with mock.patch(
+                "simworld_arena.launcher.os.open",
+                side_effect=swap_intermediate_before_open,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "unavailable or unsafe"):
+                    setup_workspace(workspace, package)
+
+            self.assertTrue(swapped)
+            self.assertEqual(stat.S_IMODE((displaced / "parent").stat().st_mode), original_mode)
+            self.assertEqual(stat.S_IMODE(outside_parent.stat().st_mode), outside_mode)
+            self.assertEqual(list((displaced / "parent").iterdir()), [])
+            self.assertEqual(list(outside_parent.iterdir()), [])
+
+    def test_workspace_setup_provisions_private_review_evidence_roots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            workspace = base / "workspace"
+            package = base / "package"
+            package.mkdir()
+
+            self.assertEqual(setup_workspace(workspace, package), workspace.resolve())
+            for relative in (
+                "tmp/review-evidence",
+                "tmp/review-evidence/text",
+                "tmp/review-evidence/visual",
+            ):
+                directory = workspace / relative
+                self.assertTrue(directory.is_dir())
+                self.assertFalse(directory.is_symlink())
+                self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+                self.assertEqual(directory.stat().st_uid, os.geteuid())
+
+            visual = workspace / "tmp" / "review-evidence" / "visual"
+            visual.chmod(0o755)
+            setup_workspace(workspace, package)
+            self.assertEqual(stat.S_IMODE(visual.stat().st_mode), 0o700)
+
+            visual.rmdir()
+            outside = base / "outside"
+            outside.mkdir()
+            visual.symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "unavailable or unsafe"):
+                setup_workspace(workspace, package)
+
+    def test_workspace_setup_rejects_tmp_symlinks_and_parent_swap_without_outside_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            package = base / "package"
+            package.mkdir()
+
+            for leaf_name in ("screens", "thumbnails"):
+                workspace = base / f"workspace-{leaf_name}"
+                setup_workspace(workspace, package)
+                leaf = workspace / "tmp" / leaf_name
+                leaf.rmdir()
+                outside = base / f"outside-{leaf_name}"
+                outside.mkdir()
+                leaf.symlink_to(outside, target_is_directory=True)
+                with self.assertRaisesRegex(RuntimeError, "unavailable or unsafe"):
+                    setup_workspace(workspace, package)
+                self.assertEqual(list(outside.iterdir()), [])
+
+            workspace = base / "workspace-tmp"
+            workspace.mkdir(mode=0o700)
+            outside_tmp = base / "outside-tmp"
+            outside_tmp.mkdir()
+            (workspace / "tmp").symlink_to(outside_tmp, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "unavailable or unsafe"):
+                setup_workspace(workspace, package)
+            self.assertEqual(list(outside_tmp.iterdir()), [])
+
+            race_workspace = base / "workspace-race"
+            setup_workspace(race_workspace, package)
+            (race_workspace / "tmp" / "screens").rmdir()
+            displaced = race_workspace / "tmp-displaced"
+            outside_race = base / "outside-race"
+            outside_race.mkdir()
+            original_mkdir = os.mkdir
+            swapped = False
+
+            def swap_parent_before_mkdir(target, *args, **kwargs):
+                nonlocal swapped
+                if not swapped and str(target) == "screens" and kwargs.get("dir_fd") is not None:
+                    swapped = True
+                    os.rename(race_workspace / "tmp", displaced)
+                    os.symlink(outside_race, race_workspace / "tmp", target_is_directory=True)
+                return original_mkdir(target, *args, **kwargs)
+
+            with mock.patch("simworld_arena.launcher.os.mkdir", side_effect=swap_parent_before_mkdir):
+                with self.assertRaisesRegex(RuntimeError, "changed|unavailable or unsafe"):
+                    setup_workspace(race_workspace, package)
+            self.assertTrue(swapped)
+            self.assertEqual(list(outside_race.iterdir()), [])
+            self.assertTrue((displaced / "screens").is_dir())
+
+    def test_workspace_setup_keeps_post_validation_mutations_on_open_descriptors(self):
+        for swapped_relative in ("web/server", "web"):
+            with self.subTest(swapped_relative=swapped_relative):
+                with tempfile.TemporaryDirectory() as temporary:
+                    base = Path(temporary)
+                    package = base / "package"
+                    package_server = package / "server"
+                    package_server.mkdir(parents=True)
+                    (package_server / "sentinel.js").write_text("descriptor anchored\n")
+                    workspace = base / "workspace"
+                    setup_workspace(workspace, base / "empty-package")
+                    (workspace / ".studio_version").unlink()
+
+                    target = workspace / swapped_relative
+                    displaced = workspace / f"{swapped_relative.replace('/', '-')}-displaced"
+                    outside = base / f"outside-{swapped_relative.replace('/', '-')}"
+                    outside.mkdir()
+                    original_copy = __import__(
+                        "simworld_arena.launcher", fromlist=["_copy_file_at"]
+                    )._copy_file_at
+                    swapped = False
+
+                    def swap_after_validation(source, directory_fd, name):
+                        nonlocal swapped
+                        if not swapped:
+                            swapped = True
+                            target.rename(displaced)
+                            target.symlink_to(outside, target_is_directory=True)
+                        return original_copy(source, directory_fd, name)
+
+                    with mock.patch(
+                        "simworld_arena.launcher._copy_file_at",
+                        side_effect=swap_after_validation,
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "changed"):
+                            setup_workspace(workspace, package)
+
+                    self.assertTrue(swapped)
+                    self.assertEqual(list(outside.iterdir()), [])
+                    if swapped_relative == "web/server":
+                        copied = displaced / "sentinel.js"
+                    else:
+                        copied = displaced / "server" / "sentinel.js"
+                    self.assertEqual(copied.read_text(), "descriptor anchored\n")
+
+    def test_private_directory_faults_close_parent_and_child_descriptors(self):
+        operations = ("fstat", "fchmod", "fsync")
+        for operation in operations:
+            for attempt in range(12):
+                with self.subTest(operation=operation, attempt=attempt):
+                    with tempfile.TemporaryDirectory() as temporary:
+                        root = Path(temporary)
+                        baseline = len(os.listdir("/proc/self/fd"))
+                        real_open = os.open
+                        real_operation = getattr(os, operation)
+                        opened = {}
+
+                        def tracking_open(path, *args, **kwargs):
+                            descriptor = real_open(path, *args, **kwargs)
+                            if str(path) == "child" and kwargs.get("dir_fd") is not None:
+                                opened["child"] = descriptor
+                            elif kwargs.get("dir_fd") is None and Path(path) == root:
+                                opened["parent"] = descriptor
+                            return descriptor
+
+                        def fail_child(descriptor, *args, **kwargs):
+                            if descriptor == opened.get("child"):
+                                raise OSError(f"injected child {operation} failure")
+                            return real_operation(descriptor, *args, **kwargs)
+
+                        with mock.patch(
+                            "simworld_arena.launcher.os.open",
+                            side_effect=tracking_open,
+                        ), mock.patch(
+                            f"simworld_arena.launcher.os.{operation}",
+                            side_effect=fail_child,
+                        ):
+                            with self.assertRaisesRegex(OSError, f"child {operation}"):
+                                ensure_private_workspace_directory(root, "child")
+
+                        for descriptor in opened.values():
+                            with self.assertRaises(OSError):
+                                os.fstat(descriptor)
+                        self.assertEqual(len(os.listdir("/proc/self/fd")), baseline)
+
+    def test_private_directory_cleanup_never_masks_the_primary_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = len(os.listdir("/proc/self/fd"))
+            real_open = os.open
+            real_fstat = os.fstat
+            real_close = os.close
+            opened = {}
+
+            def tracking_open(path, *args, **kwargs):
+                descriptor = real_open(path, *args, **kwargs)
+                if str(path) == "child" and kwargs.get("dir_fd") is not None:
+                    opened["child"] = descriptor
+                return descriptor
+
+            def fail_child_fstat(descriptor):
+                if descriptor == opened.get("child"):
+                    raise OSError("primary child fstat failure")
+                return real_fstat(descriptor)
+
+            def close_then_report_failure(descriptor):
+                real_close(descriptor)
+                if descriptor == opened.get("child"):
+                    raise OSError("secondary cleanup close failure")
+
+            with mock.patch(
+                "simworld_arena.launcher.os.open",
+                side_effect=tracking_open,
+            ), mock.patch(
+                "simworld_arena.launcher.os.fstat",
+                side_effect=fail_child_fstat,
+            ), mock.patch(
+                "simworld_arena.launcher.os.close",
+                side_effect=close_then_report_failure,
+            ):
+                with self.assertRaisesRegex(OSError, "primary child fstat failure"):
+                    ensure_private_workspace_directory(root, "child")
+
+            self.assertEqual(len(os.listdir("/proc/self/fd")), baseline)
+
     def test_vista_demo_allows_one_bounded_cold_shader_compile(self):
         self.assertEqual(ue_startup_timeout_seconds(vista_demo=True), 300)
         self.assertEqual(ue_startup_timeout_seconds(vista_demo=False), 120)
@@ -713,6 +985,10 @@ class LauncherSecurityTests(unittest.TestCase):
         manifest = json.loads(
             (repository / "packaging" / "simworld_arena" / "security-manifest.json").read_text()
         )
+        self.assertEqual(
+            frozenset(manifest["workspace_sha256"]),
+            REQUIRED_WORKSPACE_SECURITY_PATHS,
+        )
         for relative, expected in manifest["workspace_sha256"].items():
             source = repository / "simworld_studio_workspace" / relative
             self.assertEqual(sha256_file(source), expected, relative)
@@ -735,6 +1011,11 @@ class LauncherSecurityTests(unittest.TestCase):
             (server / "index.js").write_text(
                 "requestLoopbackGuard; createModelGate; app.listen(PORT,STUDIO_HOST,()=>{});\n"
             )
+            for relative in sorted(REQUIRED_WORKSPACE_SECURITY_PATHS):
+                candidate = workspace / relative
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                if not candidate.exists():
+                    candidate.write_text(f"reviewed fixture: {relative}\n")
             dist = workspace / "web" / "dist"
             dist.mkdir()
             (dist / "index.html").write_text("<!doctype html>\n")
@@ -746,25 +1027,15 @@ class LauncherSecurityTests(unittest.TestCase):
                 sha256_server_source_tree(server),
             )
             manifest = workspace / "security-manifest.json"
+            manifest_hashes = {
+                relative: sha256_file(workspace / relative)
+                for relative in sorted(REQUIRED_WORKSPACE_SECURITY_PATHS)
+            }
             manifest.write_text(
                 json.dumps(
                     {
                         "schema": "vista-simworld-security-manifest/v1",
-                        "workspace_sha256": {
-                            "web/server/index.js": sha256_file(server / "index.js"),
-                            "web/server/runtime-security.js": sha256_file(
-                                server / "runtime-security.js"
-                            ),
-                            "web/server/vista-runtime-broker.js": sha256_file(
-                                server / "vista-runtime-broker.js"
-                            ),
-                            "web/server/agent-sandbox.js": sha256_file(
-                                server / "agent-sandbox.js"
-                            ),
-                            "web/public/ue-player.html": sha256_file(
-                                public / "ue-player.html"
-                            ),
-                        },
+                        "workspace_sha256": manifest_hashes,
                     }
                 )
             )
@@ -824,6 +1095,35 @@ class LauncherSecurityTests(unittest.TestCase):
             self.assertEqual(
                 validate_prepared_workspace(workspace, manifest), workspace.resolve()
             )
+
+            valid_manifest = json.loads(manifest.read_text())
+            missing_manifest = json.loads(json.dumps(valid_manifest))
+            missing_manifest["workspace_sha256"].pop("web/server/review-provider.js")
+            manifest.write_text(json.dumps(missing_manifest))
+            with self.assertRaisesRegex(RuntimeError, "invalid required path set"):
+                validate_prepared_workspace(workspace, manifest)
+
+            empty_manifest = json.loads(json.dumps(valid_manifest))
+            empty_manifest["workspace_sha256"] = {}
+            manifest.write_text(json.dumps(empty_manifest))
+            with self.assertRaisesRegex(RuntimeError, "non-empty object"):
+                validate_prepared_workspace(workspace, manifest)
+
+            invalid_digest_manifest = json.loads(json.dumps(valid_manifest))
+            invalid_digest_manifest["workspace_sha256"]["web/server/review-provider.js"] = "A" * 64
+            manifest.write_text(json.dumps(invalid_digest_manifest))
+            with self.assertRaisesRegex(RuntimeError, "invalid SHA-256 digest"):
+                validate_prepared_workspace(workspace, manifest)
+
+            unsafe_path_manifest = json.loads(json.dumps(valid_manifest))
+            unsafe_path_manifest["workspace_sha256"]["../outside.js"] = (
+                unsafe_path_manifest["workspace_sha256"].pop("web/server/review-provider.js")
+            )
+            manifest.write_text(json.dumps(unsafe_path_manifest))
+            with self.assertRaisesRegex(RuntimeError, "unsafe workspace path"):
+                validate_prepared_workspace(workspace, manifest)
+
+            manifest.write_text(json.dumps(valid_manifest))
 
             frontend_dependencies = workspace / "web" / "node_modules"
             frontend_dependencies.mkdir()
