@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed implementation checkpoint: `ba08a1d0` (`fix: refresh review provider security pin`)
+- Latest pushed implementation checkpoint: `74524aa4` (`feat: add typed pickup animation contract`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -76,25 +76,47 @@ change and report validation commands plus remaining live/admin gates.
   revision that resolves the intentional false/true capability gate; PA-01
   through PA-21 evidence and explicit release approval.
 
-## Current `mmg_040` scene candidate checkpoint
+## Current `mmg_040` live asset checkpoint
 
-- The archive-bound scene candidate set now contains seven exact
-  Content-relative package locators: the official chair, three `BP_Box`
-  variants, `SM_SeatTable_01a`, `SM_Industrial_Carts_Static_Carts_1`, and
-  `SM_Industrial_Carts_Service_Carts_8`.
-- The seat-table is only a stable-step/seat candidate; the two cart meshes are
-  only high-storage/cabinet-surrogate candidates. Their source packages and
-  adjacent PBR families exist in the verified official archive, but no UE
-  class/load/spawn/bounds/collision/material or visual-role claim has been
-  made.
-- Candidate-source raw-byte pin:
-  `35aaf9741650d028f8f11e303035ab10168ef78d5244411c64d9f37db7cf9f4e`.
-  The generated profile remains `candidate_unverified`,
-  `start_allowed=false`, and `runtime_ready=false` until a live receipt exists.
-- Next authoritative action is a runtime-owner AssetRegistry and disposable
-  load/spawn/material/bounds/collision inspection of these seven objects. If
-  one step alternative and one high-storage candidate pass, a non-fixture
-  layout can be emitted without the separately gated CC0 download.
+- A revision-bound UE 5.3.2 AssetRegistry bootstrap observed 1,350 rows and
+  402 object candidates in the verified official archive. The seven selected
+  `mmg_040` objects all loaded and spawned in a disposable runtime. Four are
+  complete real `StaticMesh` candidates: the chair, seat-table and two carts.
+  The three `BP_Box` variants expose collision helpers but no visible mesh or
+  material and are rejected as box assets.
+- The operator-authorized CC0 v2 bundle is acquired and byte-pinned at
+  `/home/yhliu/.simworld/vendor-assets/vista-mmg-040-polyhaven-v2`: three Poly
+  Haven assets, 15 files, 4,648,718 bytes, manifest SHA-256
+  `f887de3303fc9ad513fb0c75172e8332d75f8e0dc29e2af9fd542972160ab5f2`,
+  tree SHA-256
+  `0d3858dc07a1cf77d9dd592a6eb897865f2fb7c3e4796a4f86d215ac4969ac36`.
+- Studio-socket `AssetImportTask` reached Interchange but did not return or
+  write a package within the fixed timeout. It is `transport_ambiguous`, was
+  not retried, and its disposable project is quarantined. The same fixed
+  import through `UnrealEditor-Cmd -run=pythonscript` succeeded for all three
+  assets in a new disposable project and wrote 15 local `.uasset` files.
+- Each imported asset has one real static mesh, a non-default material slot,
+  three texture assets, finite nonzero bounds, and one convex simple-collision
+  element. Base color is sRGB; packed roughness/metallic and normal are
+  non-sRGB; normal compression is `TC_NORMALMAP`; UE flipped the OpenGL normal
+  green channel.
+- The durable operator observation is pinned by SHA-256
+  `ec473e1be15613bf857702b829c39edad63b3292c5b69db6699a3959d51bf0d3`.
+  It deliberately keeps material dependency, Interchange pipeline fingerprint,
+  rendered scale/contact/collision/PBR, Production readiness and semantic-index
+  eligibility open.
+
+## Current animation checkpoint
+
+- Commit `74524aa4` adds a typed `pick_up` contract with fixed
+  `vista_pick_up_ik_v1`, target attachment, upper-body IK, hand-contact anchor
+  and exact `vista_pick_up_attached` completion signal. A separate
+  counterfactual 12-second slice compiles `look_at` at 0 s, `pick_up` at 2 s,
+  `pause` at 5 s, `fall` at 9 s and a terminal checkpoint at 12 s.
+- Focused animation/importer tests pass 27/27. This is contract evidence, not a
+  live character mutation. The broker still hardcodes a different pawn class
+  from the pinned `BP_MMG040Character_C`; exact live character content,
+  montage/IK adapters and rendered fall/pick-up evidence remain required.
 
 ## Current Review checkpoint
 
@@ -129,5 +151,7 @@ change and report validation commands plus remaining live/admin gates.
   `evidence/2026-07-21-semantic-control-signature-offline-checkpoint.md`
 - Current isolation and `mmg_040` asset-gap follow-up:
   `evidence/2026-07-22-semantic-isolation-and-mmg040-gap-checkpoint.md`
+- Current live Interchange and real-asset follow-up:
+  `evidence/2026-07-22-mmg040-live-interchange-checkpoint.md`
 - Current Review auth/CLI identity follow-up:
   `evidence/2026-07-22-review-cli-identity-checkpoint.md`

@@ -1,7 +1,9 @@
 # VISTA CC0 UE 5.3 Interchange import-job preparation
 
-Status: offline job preparation is code-verified; no Unreal Editor was started
-and no asset has been imported into UE Content.
+Status: offline job preparation is code-verified. A separately authorized,
+bounded UE 5.3.2 commandlet observation imported the fixed v2 bundle into a
+disposable project; Production execution, rendered review and semantic-index
+publication remain gated.
 
 ## Boundary
 
@@ -39,8 +41,7 @@ separately gated acquisition procedure in
 must contain the exact private 0700/0600 tree plus its canonical
 `source-manifest.json` and `acquisition-receipt.json`.
 
-This repository has not run that acquisition into a persistent asset
-directory. The examples below use an operator-selected placeholder:
+The authorized v2 bundle is now present at the operator-selected private path:
 
 ```bash
 ACQUISITION_DIR="$HOME/.simworld/vendor-assets/vista-mmg-040-polyhaven-v2"
@@ -116,10 +117,24 @@ This mapping is based on Epic's experimental UE 5.3 Python documentation for
 [AssetImportTask](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/AssetImportTask.html?application_version=5.3)
 and
 [InterchangeManager](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/InterchangeManager.html?application_version=5.3).
-The latter documents `create_source_data()` and `import_asset()`, but this
-repository has not probed those APIs in the exact packaged Editor. Therefore
-there is deliberately no live executor in this slice. An administrator must
-first authorize a disposable project copy and a bounded 5.3.2 API probe.
+The latter documents `create_source_data()` and `import_asset()`. Live evidence
+on the exact packaged Editor found an important transport distinction:
+
+- the Studio TCP Python bridge reached Interchange but did not return or write
+  a package within the fixed timeout; that mutation attempt was not retried
+  and its disposable project is quarantined;
+- `UnrealEditor-Cmd -run=pythonscript` executed the same fixed synchronous
+  `AssetImportTask` successfully; a subsequent fresh commandlet imported all
+  three assets and wrote 15 packages.
+
+The observation receipt is pinned at
+`docs/specs/production-readiness/evidence/2026-07-22-mmg040-live-interchange-checkpoint.md`.
+It is not yet a production executor receipt. A reusable executor must launch
+the exact commandlet locally, verify the engine binary, `.uproject`, Config,
+plugin and all 15 source files, publish a durable write-ahead intent before
+mutation, and quarantine the disposable project after any timeout, signal,
+missing marker or partial inventory. It must never fall back to the known
+ambiguous Studio-socket import route.
 
 ## Required post-import evidence
 
@@ -145,6 +160,12 @@ Only a later AssetRegistry capture may establish final object paths. Only
 after the content owner accepts that evidence may a separate translator add
 those paths to a semantic object manifest. This preparation bundle is never a
 semantic-index receipt.
+
+The current one-off machine observation passed synchronous import, exact
+object inventory, nonzero bounds, non-default material slots, texture flags
+and convex-collision checks. It deliberately leaves the Interchange pipeline
+fingerprint, material dependency edges and every rendered review item open;
+`production_ready=false` and `semantic_index_eligible=false` remain mandatory.
 
 ## Verification
 
