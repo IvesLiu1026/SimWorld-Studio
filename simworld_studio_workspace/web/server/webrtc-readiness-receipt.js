@@ -686,10 +686,28 @@ function writeWebRtcReadinessReceiptAtomic(file, receipt, { fsImpl = fs } = {}) 
 function parseBoundedJsonFile(file, { fsImpl = fs, maxBytes, unavailableCode, invalidCode } = {}) {
   const target = validateFilePath(file, invalidCode);
   let bytes;
+  let descriptor;
   try {
-    bytes = fsImpl.readFileSync(target);
+    if (typeof fsImpl.openSync === "function" && typeof fsImpl.fstatSync === "function"
+        && typeof fsImpl.closeSync === "function") {
+      descriptor = fsImpl.openSync(target, fs.constants.O_RDONLY | Number(fs.constants.O_NOFOLLOW || 0));
+      const before = fsImpl.fstatSync(descriptor);
+      if (!before.isFile() || before.size < 2 || before.size > maxBytes) {
+        fail(invalidCode, "WebRTC evidence file has an invalid size", "path");
+      }
+      bytes = fsImpl.readFileSync(descriptor);
+      const after = fsImpl.fstatSync(descriptor);
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+        fail(invalidCode, "WebRTC evidence file changed while it was being read", "path");
+      }
+    } else {
+      bytes = fsImpl.readFileSync(target);
+    }
   } catch (_cause) {
+    if (_cause instanceof WebRtcReadinessError) throw _cause;
     fail(unavailableCode, "WebRTC evidence file is unavailable", "path", true);
+  } finally {
+    try { if (descriptor !== undefined) fsImpl.closeSync(descriptor); } catch (_error) {}
   }
   if (!Buffer.isBuffer(bytes)) bytes = Buffer.from(String(bytes));
   if (bytes.length < 2 || bytes.length > maxBytes) {

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-asset-live-audit-v1.schema.json",
+  "title": "SimWorld semantic asset live-audit receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "snapshot_id",
+    "manifest_sha256",
+    "observations_sha256",
+    "issued_at",
+    "expires_at",
+    "ttl_seconds",
+    "observations"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-asset-live-audit/v1" },
+    "snapshot_id": { "$ref": "simworld-asset-snapshot-v1.schema.json#/$defs/id" },
+    "manifest_sha256": { "$ref": "simworld-asset-snapshot-v1.schema.json#/$defs/sha256" },
+    "observations_sha256": { "$ref": "simworld-asset-snapshot-v1.schema.json#/$defs/sha256" },
+    "issued_at": { "$ref": "#/$defs/utcSecond" },
+    "expires_at": { "$ref": "#/$defs/utcSecond" },
+    "ttl_seconds": { "type": "integer", "minimum": 1, "maximum": 900 },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_snapshot_revision",
+        "ue_content_revision",
+        "catalog",
+        "postgres",
+        "qdrant",
+        "embedding"
+      ],
+      "properties": {
+        "asset_snapshot_revision": { "$ref": "simworld-asset-snapshot-v1.schema.json#/$defs/id" },
+        "ue_content_revision": { "$ref": "simworld-asset-snapshot-v1.schema.json#/$defs/id" },
+        "catalog": { "$ref": "simworld-asset-snapshot-v1.schema.json#/properties/catalog" },
+        "postgres": { "$ref": "simworld-asset-snapshot-v1.schema.json#/properties/postgres" },
+        "qdrant": { "$ref": "simworld-asset-snapshot-v1.schema.json#/properties/qdrant" },
+        "embedding": { "$ref": "simworld-asset-snapshot-v1.schema.json#/properties/embedding" }
+      }
+    }
+  },
+  "$defs": {
+    "utcSecond": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

@@ -45,11 +45,11 @@
   "schema": "simworld-asset-snapshot/v1",
   "snapshot_id": "ue-content-<revision>-<index-revision>",
   "ue_content_revision": "...",
-  "catalog": { "count": 0, "sha256": "..." },
-  "postgres": { "schema_version": 1, "row_count": 0 },
+  "catalog": { "count": 12345, "sha256": "..." },
+  "postgres": { "schema_version": 2, "row_count": 12345 },
   "qdrant": {
     "collection": "...",
-    "point_count": 0,
+    "point_count": 12345,
     "dense_name": "text_dense",
     "dense_size": 1024,
     "sparse_name": "text_sparse"

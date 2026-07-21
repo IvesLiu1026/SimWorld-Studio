@@ -4,10 +4,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { searchAssets: defaultSearchAssets } = require("./asset-retrieval-db");
-const { validateAssetSnapshotManifest } = require("./asset-snapshot");
+const {
+  validateAssetLiveAuditReceipt,
+  validateAssetSnapshotManifest,
+} = require("./asset-snapshot");
 const { createVistaAssetResolver } = require("./vista-asset-resolver");
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
+const MAX_RECEIPT_BYTES = 1024 * 1024;
+const SHA256 = /^[a-f0-9]{64}$/;
 
 function flag(value) {
   return /^(?:1|true|yes|on)$/i.test(String(value || "").trim());
@@ -42,16 +47,31 @@ function requireAbsoluteFile(value, field) {
   return resolved;
 }
 
-function readManifest(file, fsImpl = fs) {
+function readBoundedFile(file, maximum, label, fsImpl = fs) {
   const descriptor = fsImpl.openSync(file, fs.constants.O_RDONLY | Number(fs.constants.O_NOFOLLOW || 0));
   try {
-    const stat = fsImpl.fstatSync(descriptor);
-    if (!stat.isFile() || stat.size < 2 || stat.size > MAX_MANIFEST_BYTES) {
-      throw new TypeError("ASSET_SNAPSHOT_MANIFEST must be a bounded regular file");
+    const before = fsImpl.fstatSync(descriptor);
+    if (!before.isFile() || before.size < 2 || before.size > maximum) {
+      throw new TypeError(`${label} must be a bounded regular file`);
     }
-    return validateAssetSnapshotManifest(JSON.parse(fsImpl.readFileSync(descriptor, "utf8")));
+    const bytes = fsImpl.readFileSync(descriptor);
+    const after = fsImpl.fstatSync(descriptor);
+    const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    if (buffer.length !== before.size || after.size !== before.size
+        || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      throw new TypeError(`${label} changed while it was being read`);
+    }
+    return buffer;
   } finally {
     fsImpl.closeSync(descriptor);
+  }
+}
+
+function parseJson(bytes, label) {
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (_error) {
+    throw new TypeError(`${label} must contain valid JSON`);
   }
 }
 
@@ -75,8 +95,28 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
   const enabled = flag(env.VISTA_ASSET_RESOLUTION_ENABLED);
   if (!enabled) return Object.freeze({ enabled: false, manifest: null, snapshotId: null });
 
+  const fsImpl = options.fsImpl || fs;
   const manifestPath = requireAbsoluteFile(env.ASSET_SNAPSHOT_MANIFEST, "ASSET_SNAPSHOT_MANIFEST");
-  const manifest = readManifest(manifestPath, options.fsImpl || fs);
+  const manifestBytes = readBoundedFile(manifestPath, MAX_MANIFEST_BYTES, "ASSET_SNAPSHOT_MANIFEST", fsImpl);
+  const manifest = validateAssetSnapshotManifest(parseJson(manifestBytes, "ASSET_SNAPSHOT_MANIFEST"));
+  const liveAuditReceiptPath = requireAbsoluteFile(
+    env.ASSET_LIVE_AUDIT_RECEIPT,
+    "ASSET_LIVE_AUDIT_RECEIPT",
+  );
+  const liveAuditReceiptBytes = readBoundedFile(
+    liveAuditReceiptPath,
+    MAX_RECEIPT_BYTES,
+    "ASSET_LIVE_AUDIT_RECEIPT",
+    fsImpl,
+  );
+  const liveAuditReceipt = parseJson(liveAuditReceiptBytes, "ASSET_LIVE_AUDIT_RECEIPT");
+  const liveAuditReceiptSha256 = requireText(
+    env.ASSET_LIVE_AUDIT_RECEIPT_SHA256,
+    "ASSET_LIVE_AUDIT_RECEIPT_SHA256",
+  ).toLowerCase();
+  if (!SHA256.test(liveAuditReceiptSha256)) {
+    throw new TypeError("ASSET_LIVE_AUDIT_RECEIPT_SHA256 must be a lowercase SHA-256 digest");
+  }
   const snapshotRevision = requireText(env.ASSET_SNAPSHOT_REVISION, "ASSET_SNAPSHOT_REVISION");
   const verifiedRevision = requireText(env.ASSET_READINESS_VERIFIED_REVISION, "ASSET_READINESS_VERIFIED_REVISION");
   if (snapshotRevision !== manifest.snapshot_id || verifiedRevision !== manifest.snapshot_id) {
@@ -93,10 +133,23 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
   if (ueContentRevision !== manifest.ue_content_revision) throw new TypeError("VISTA_UE_CONTENT_REVISION does not match the asset snapshot");
   requireText(env.POSTGRES_URL, "POSTGRES_URL");
 
+  const clock = typeof options.clock === "function" ? options.clock : () => new Date();
+  const assertLiveAuditFresh = () => validateAssetLiveAuditReceipt(liveAuditReceipt, {
+    manifest,
+    manifestBytes,
+    receiptBytes: liveAuditReceiptBytes,
+    expectedReceiptSha256: liveAuditReceiptSha256,
+    clock,
+  });
+  assertLiveAuditFresh();
+
   return Object.freeze({
     enabled: true,
     manifest,
     manifestPath,
+    liveAuditReceiptPath,
+    liveAuditReceiptSha256,
+    liveAuditExpiresAt: liveAuditReceipt.expires_at,
     snapshotId: manifest.snapshot_id,
     qdrantUrl: requireOrigin(env.QDRANT_URL, "QDRANT_URL"),
     qdrantCollection,
@@ -107,6 +160,7 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
     maxCandidates: requirePositiveInt(env.VISTA_ASSET_MAX_CANDIDATES, 8, "VISTA_ASSET_MAX_CANDIDATES", 40),
     timeoutMs: requirePositiveInt(env.VISTA_ASSET_SEARCH_TIMEOUT_MS, 5_000, "VISTA_ASSET_SEARCH_TIMEOUT_MS", 60_000),
     totalTimeoutMs: requirePositiveInt(env.VISTA_ASSET_TOTAL_TIMEOUT_MS, 30_000, "VISTA_ASSET_TOTAL_TIMEOUT_MS", 120_000),
+    assertLiveAuditFresh,
   });
 }
 
@@ -140,7 +194,10 @@ function normalizeRetrievalCandidates(raw, snapshotId) {
 
 function createVistaAssetRuntime(options = {}) {
   const env = options.env || process.env;
-  const config = options.config || resolveVistaAssetRuntimeConfig(env, { fsImpl: options.fsImpl });
+  const config = options.config || resolveVistaAssetRuntimeConfig(env, {
+    fsImpl: options.fsImpl,
+    clock: options.clock,
+  });
   if (!config.enabled) return Object.freeze({ config, resolver: null });
   const retrieval = options.searchAssets || defaultSearchAssets;
   if (typeof retrieval !== "function") throw new TypeError("searchAssets must be a function");
@@ -150,19 +207,25 @@ function createVistaAssetRuntime(options = {}) {
     maxCandidates: config.maxCandidates,
     timeoutMs: config.timeoutMs,
     totalTimeoutMs: config.totalTimeoutMs,
-    searchAssets: async (request) => normalizeRetrievalCandidates(await retrieval({
-      query: request.query,
-      k: request.k,
-    }, {
-      signal: request.signal,
-      qdrantUrl: config.qdrantUrl,
-      collection: config.qdrantCollection,
-      embedServiceUrl: config.embedServiceUrl,
-      embeddingTimeoutMs: config.timeoutMs,
-      qdrantTimeoutMs: config.timeoutMs,
-      postgresTimeoutMs: config.timeoutMs,
-      assetSnapshotRevision: config.snapshotId,
-    }), config.snapshotId),
+    searchAssets: async (request) => {
+      if (typeof config.assertLiveAuditFresh !== "function") {
+        throw new TypeError("Verified asset runtime requires a live-audit freshness check");
+      }
+      config.assertLiveAuditFresh();
+      return normalizeRetrievalCandidates(await retrieval({
+        query: request.query,
+        k: request.k,
+      }, {
+        signal: request.signal,
+        qdrantUrl: config.qdrantUrl,
+        collection: config.qdrantCollection,
+        embedServiceUrl: config.embedServiceUrl,
+        embeddingTimeoutMs: config.timeoutMs,
+        qdrantTimeoutMs: config.timeoutMs,
+        postgresTimeoutMs: config.timeoutMs,
+        assetSnapshotRevision: config.snapshotId,
+      }), config.snapshotId);
+    },
   });
   return Object.freeze({ config, resolver });
 }

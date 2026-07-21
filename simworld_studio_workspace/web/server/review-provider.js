@@ -105,7 +105,34 @@ function resolveReviewConfig(options = {}, env = process.env) {
   // Review selection is intentionally independent from the builder's generic
   // LLM_PROVIDER. A Codex builder must not silently turn the critic into a
   // host-capable Codex CLI review process.
-  const providerValue = options.provider || options.runner || env.CRITIC_PROVIDER || "claude";
+  const production = String(env.NODE_ENV || "").trim().toLowerCase() === "production";
+  let providerValue = options.provider || options.runner || env.CRITIC_PROVIDER || "claude";
+  let modelValue = options.model || env.CRITIC_MODEL || env.CLAUDE_MODEL;
+  let budgetValue = options.maxBudgetUsd == null ? env.CRITIC_MAX_BUDGET_USD : options.maxBudgetUsd;
+  if (production) {
+    if (!env.CRITIC_PROVIDER || !env.CRITIC_MODEL || !env.CRITIC_MAX_BUDGET_USD) {
+      throw reviewError(
+        "REVIEW_PRODUCTION_PIN_MISSING",
+        "Production review requires pinned provider, model, and budget configuration",
+      );
+    }
+    const pinnedProvider = normalizeReviewProvider(env.CRITIC_PROVIDER);
+    const pinnedModel = validateClaudeModel(env.CRITIC_MODEL);
+    const pinnedBudget = validateMaxBudgetUsd(env.CRITIC_MAX_BUDGET_USD);
+    if ((options.provider || options.runner)
+        && normalizeReviewProvider(options.provider || options.runner) !== pinnedProvider) {
+      throw reviewError("REVIEW_PROVIDER_PIN_MISMATCH", "Requested review provider does not match the deployment pin");
+    }
+    if (options.model && validateClaudeModel(options.model) !== pinnedModel) {
+      throw reviewError("REVIEW_MODEL_PIN_MISMATCH", "Requested review model does not match the deployment pin");
+    }
+    if (options.maxBudgetUsd != null && validateMaxBudgetUsd(options.maxBudgetUsd) > pinnedBudget) {
+      throw reviewError("REVIEW_BUDGET_EXCEEDS_DEPLOYMENT_CAP", "Requested review budget exceeds the deployment cap");
+    }
+    providerValue = pinnedProvider;
+    modelValue = pinnedModel;
+    budgetValue = options.maxBudgetUsd == null ? pinnedBudget : options.maxBudgetUsd;
+  }
   const provider = normalizeReviewProvider(providerValue);
   if (provider === "codex") {
     throw reviewError(
@@ -115,8 +142,6 @@ function resolveReviewConfig(options = {}, env = process.env) {
     );
   }
 
-  const modelValue = options.model || env.CRITIC_MODEL || env.CLAUDE_MODEL;
-  const budgetValue = options.maxBudgetUsd == null ? env.CRITIC_MAX_BUDGET_USD : options.maxBudgetUsd;
   return {
     provider,
     model: validateClaudeModel(modelValue),

@@ -68,6 +68,23 @@ The output receipt is written atomically with mode `0600`. Standard output is a
 small secret-safe summary and SHA-256 digest. Errors contain only a structured
 code and field path; raw probe values are never echoed.
 
+Configure the deployed Web process with the independently reviewed values and
+the exact digest printed by the verifier:
+
+```bash
+export WEBRTC_READINESS_RECEIPT_PATH=/secure/evidence/webrtc-readiness-receipt.json
+export WEBRTC_READINESS_RECEIPT_SHA256='<receipt_sha256>'
+export SIMWORLD_BUILD_REVISION='<exact 40-character deployed git revision>'
+export WEBRTC_DEPLOYMENT_FINGERPRINT='<deployment manifest sha256>'
+export STUDIO_PUBLIC_ORIGIN='https://studio.example.edu'
+export WEBRTC_CERTIFICATE_SHA256='<public TLS certificate sha256>'
+```
+
+Public streaming readiness revalidates the receipt, deployment fingerprint,
+build, origin, optional certificate fingerprint, digest, and expiry on every
+probe. `PUBLIC_WEBRTC_EXTERNAL_VERIFIED` is deliberately ignored and cannot
+make a public deployment ready.
+
 The verifier returning `ready: true` validates the supplied evidence contract;
 it is not itself a live network probe. Production readiness must continue to
 fail until a current receipt is generated from the required external tests.

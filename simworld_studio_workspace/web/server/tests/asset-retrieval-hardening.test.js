@@ -21,7 +21,7 @@ function embedOk() {
   };
 }
 
-function qdrantPoint(id = "chair-1") {
+function qdrantPoint(id = "chair-1", snapshotRevision = "") {
   return {
     score: 0.92,
     payload: {
@@ -37,11 +37,12 @@ function qdrantPoint(id = "chair-1") {
       height_m: 1.1,
       unreal_asset_path: "/Game/Office/SM_Chair.SM_Chair",
       asset_type: "StaticMesh",
+      asset_snapshot_revision: snapshotRevision,
     },
   };
 }
 
-function postgresRow(id = "chair-pg") {
+function postgresRow(id = "chair-pg", snapshotRevision = "") {
   return {
     asset_id: id,
     name: "Database Chair",
@@ -56,6 +57,7 @@ function postgresRow(id = "chair-pg") {
     height_m: 1.0,
     unreal_asset_path: "/Game/Office/SM_Chair_PG.SM_Chair_PG",
     asset_type: "StaticMesh",
+    asset_snapshot_revision: snapshotRevision,
     text_rank: 0.8,
     setting_rank: 1,
   };
@@ -184,6 +186,47 @@ test("search_assets succeeds from Qdrant while Postgres is unavailable", async (
     fallback_used: false,
     causes: [],
   });
+});
+
+test("Qdrant and PostgreSQL queries are both constrained to the exact asset snapshot revision", async () => {
+  const snapshotRevision = "assets-2026-07-21-r1";
+  let qdrantRequest;
+  const qdrantAssets = await retrievalDb.searchAssets({ query: "office chair", category: "furniture" }, {
+    assetSnapshotRevision: snapshotRevision,
+    fetchImpl: async () => embedOk(),
+    qdrantClient: {
+      query: async (_collection, request) => {
+        qdrantRequest = request;
+        return [qdrantPoint("chair-revision", snapshotRevision)];
+      },
+    },
+    pgPool: { query: async () => { throw new Error("postgres should not be called"); } },
+    timeoutMs: 100,
+  });
+  assert.equal(qdrantAssets[0].asset_snapshot_revision, snapshotRevision);
+  assert.equal(qdrantRequest.prefetch.length, 2);
+  for (const query of qdrantRequest.prefetch) {
+    assert.deepEqual(query.filter.must, [
+      { key: "category", match: { value: "furniture" } },
+      { key: "asset_snapshot_revision", match: { value: snapshotRevision } },
+    ]);
+  }
+
+  let postgresRequest;
+  const postgresAssets = await retrievalDb.searchAssets({ query: "office chair" }, {
+    assetSnapshotRevision: snapshotRevision,
+    fetchImpl: async () => { throw new Error("embedding unavailable"); },
+    pgPool: {
+      query: async (request) => {
+        postgresRequest = request;
+        return { rows: [postgresRow("chair-pg-revision", snapshotRevision)] };
+      },
+    },
+    timeoutMs: 100,
+  });
+  assert.equal(postgresAssets[0].asset_snapshot_revision, snapshotRevision);
+  assert.equal(postgresRequest.values[2], snapshotRevision);
+  assert.match(postgresRequest.text, /asset_snapshot_revision = \$3/);
 });
 
 test("search_assets preserves a representative Chinese query for multilingual embedding", async () => {

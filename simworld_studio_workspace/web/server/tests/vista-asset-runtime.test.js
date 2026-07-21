@@ -2,15 +2,19 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const { canonicalJson } = require("../asset-snapshot");
 const {
   createVistaAssetRuntime,
   normalizeRetrievalCandidates,
   resolveVistaAssetRuntimeConfig,
 } = require("../vista-asset-runtime");
+
+const NOW = new Date("2026-07-21T01:00:00Z");
 
 function manifest() {
   return {
@@ -18,17 +22,19 @@ function manifest() {
     snapshot_id: "assets-2026-07-21-r1",
     ue_content_revision: "ue-content-2026-07-21-r1",
     catalog: { count: 100, sha256: "a".repeat(64) },
-    postgres: { schema_version: 1, row_count: 100 },
+    postgres: { schema_version: 2, row_count: 100 },
     qdrant: { collection: "assets-r1", point_count: 100, dense_name: "text_dense", dense_size: 1024, sparse_name: "text_sparse" },
     embedding: { version: "bge-bm25-r1", dense_model: "BAAI/bge@revision", sparse_model: "Qdrant/bm25@revision" },
   };
 }
 
-function enabledEnv(file) {
+function enabledEnv(fixtureValue) {
   const value = manifest();
   return {
     VISTA_ASSET_RESOLUTION_ENABLED: "1",
-    ASSET_SNAPSHOT_MANIFEST: file,
+    ASSET_SNAPSHOT_MANIFEST: fixtureValue.file,
+    ASSET_LIVE_AUDIT_RECEIPT: fixtureValue.receiptFile,
+    ASSET_LIVE_AUDIT_RECEIPT_SHA256: fixtureValue.receiptSha256,
     ASSET_SNAPSHOT_REVISION: value.snapshot_id,
     ASSET_READINESS_VERIFIED_REVISION: value.snapshot_id,
     POSTGRES_URL: "postgresql://not-read-by-config",
@@ -45,8 +51,38 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vista-asset-runtime-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, "snapshot.json");
-  fs.writeFileSync(file, `${JSON.stringify(manifest())}\n`, { mode: 0o600 });
-  return { file, root };
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest())}\n`, "utf8");
+  fs.writeFileSync(file, manifestBytes, { mode: 0o600 });
+  const observations = {
+    asset_snapshot_revision: manifest().snapshot_id,
+    ue_content_revision: manifest().ue_content_revision,
+    catalog: manifest().catalog,
+    postgres: manifest().postgres,
+    qdrant: manifest().qdrant,
+    embedding: manifest().embedding,
+  };
+  const receipt = {
+    schema: "simworld-asset-live-audit/v1",
+    snapshot_id: manifest().snapshot_id,
+    manifest_sha256: crypto.createHash("sha256").update(manifestBytes).digest("hex"),
+    observations_sha256: crypto.createHash("sha256").update(canonicalJson(observations), "utf8").digest("hex"),
+    issued_at: "2026-07-21T01:00:00Z",
+    expires_at: "2026-07-21T01:05:00Z",
+    ttl_seconds: 300,
+    observations,
+  };
+  const receiptFile = path.join(root, "snapshot-live-audit.json");
+  const receiptBytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+  fs.writeFileSync(receiptFile, receiptBytes, { mode: 0o600 });
+  return {
+    file,
+    manifestBytes,
+    receipt,
+    receiptBytes,
+    receiptFile,
+    receiptSha256: crypto.createHash("sha256").update(receiptBytes).digest("hex"),
+    root,
+  };
 }
 
 function scene() {
@@ -81,8 +117,8 @@ test("runtime is explicitly disabled by default and does not require dependency 
 });
 
 test("enabled runtime requires one matching verified snapshot across all dependencies", (t) => {
-  const { file } = fixture(t);
-  const config = resolveVistaAssetRuntimeConfig(enabledEnv(file));
+  const files = fixture(t);
+  const config = resolveVistaAssetRuntimeConfig(enabledEnv(files), { clock: () => NOW });
   assert.equal(config.enabled, true);
   assert.equal(config.snapshotId, manifest().snapshot_id);
   assert.equal(config.qdrantCollection, manifest().qdrant.collection);
@@ -94,15 +130,32 @@ test("enabled runtime requires one matching verified snapshot across all depende
     ["EMBED_VERSION", "wrong"],
     ["VISTA_UE_CONTENT_REVISION", "wrong"],
   ]) {
-    assert.throws(() => resolveVistaAssetRuntimeConfig({ ...enabledEnv(file), [field]: value }));
+    assert.throws(() => resolveVistaAssetRuntimeConfig({ ...enabledEnv(files), [field]: value }, { clock: () => NOW }));
   }
 });
 
+test("runtime requires an exact unexpired digest-bound live audit receipt", (t) => {
+  const files = fixture(t);
+  const env = enabledEnv(files);
+  for (const field of ["ASSET_LIVE_AUDIT_RECEIPT", "ASSET_LIVE_AUDIT_RECEIPT_SHA256"]) {
+    assert.throws(() => resolveVistaAssetRuntimeConfig({ ...env, [field]: "" }, { clock: () => NOW }));
+  }
+  assert.throws(
+    () => resolveVistaAssetRuntimeConfig({ ...env, ASSET_LIVE_AUDIT_RECEIPT_SHA256: "f".repeat(64) }, { clock: () => NOW }),
+    (error) => error.code === "ASSET_LIVE_AUDIT_RECEIPT_DIGEST_MISMATCH",
+  );
+  assert.throws(
+    () => resolveVistaAssetRuntimeConfig(env, { clock: () => new Date("2026-07-21T01:05:00Z") }),
+    (error) => error.code === "ASSET_LIVE_AUDIT_EXPIRED",
+  );
+});
+
 test("verified search results bind exact asset IDs and UE paths without geometry fallback", async (t) => {
-  const { file } = fixture(t);
+  const files = fixture(t);
   const calls = [];
   const runtime = createVistaAssetRuntime({
-    env: enabledEnv(file),
+    env: enabledEnv(files),
+    clock: () => NOW,
     searchAssets: async (request, options) => {
       calls.push({ request, options });
       const assets = [{
@@ -127,6 +180,27 @@ test("verified search results bind exact asset IDs and UE paths without geometry
   assert.deepEqual(calls[0].request, { query: "black wheeled office chair", k: 8 });
   assert.equal(calls[0].options.collection, manifest().qdrant.collection);
   assert.equal(calls[0].options.assetSnapshotRevision, manifest().snapshot_id);
+});
+
+test("a receipt that expires after startup blocks retrieval before dependencies are called", async (t) => {
+  const files = fixture(t);
+  let now = NOW;
+  let calls = 0;
+  const runtime = createVistaAssetRuntime({
+    env: enabledEnv(files),
+    clock: () => now,
+    searchAssets: async () => {
+      calls += 1;
+      return [];
+    },
+  });
+  now = new Date("2026-07-21T01:05:00Z");
+  await assert.rejects(
+    runtime.resolver.resolve(scene()),
+    (error) => error.code === "VISTA_ASSET_SEARCH_FAILED"
+      && error.details.upstream_code === "ASSET_LIVE_AUDIT_EXPIRED",
+  );
+  assert.equal(calls, 0);
 });
 
 test("uncalibrated retrieval scores fail closed instead of becoming false confidence", () => {

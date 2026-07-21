@@ -11,7 +11,15 @@ const {
   resolveReviewSmokeReceiptPath,
   verifyReviewSmokeReceipt,
 } = require("./review-smoke-receipt");
-const { validateAssetSnapshotManifest } = require("./asset-snapshot");
+const {
+  validateAssetLiveAuditReceipt,
+  validateAssetSnapshotManifest,
+} = require("./asset-snapshot");
+const {
+  digestJson: digestWebRtcReceipt,
+  readWebRtcReadinessReceipt,
+  verifyWebRtcReadinessReceipt,
+} = require("./webrtc-readiness-receipt");
 
 const FEATURE_NAMES = Object.freeze(["review", "retrieval", "streaming", "timeline"]);
 const POLICY_VALUES = new Set(["required", "optional", "disabled"]);
@@ -169,7 +177,7 @@ function createReviewReadinessProbe({
     }
 
     const expectedType = String(env.REVIEW_SMOKE_RECEIPT_TYPE || "").trim().toLowerCase();
-    if (expectedType && expectedType !== "text" && expectedType !== "visual") {
+    if (!production && expectedType && expectedType !== "text" && expectedType !== "visual") {
       return {
         status: "not_ready",
         revision,
@@ -182,16 +190,51 @@ function createReviewReadinessProbe({
       };
     }
 
-    let receipt;
+    const requirements = production
+      ? [
+        { reviewType: "text", path: String(env.REVIEW_TEXT_SMOKE_RECEIPT_PATH || "").trim() },
+        { reviewType: "visual", path: String(env.REVIEW_VISUAL_SMOKE_RECEIPT_PATH || "").trim() },
+      ]
+      : [{
+        reviewType: expectedType || null,
+        path: resolveReviewSmokeReceiptPath(env),
+      }];
+    if (production && requirements.some((entry) => !entry.path)) {
+      return {
+        status: "not_ready",
+        revision,
+        causes: [publicCause(
+          envFlag(env.REVIEW_READINESS_VERIFIED)
+            ? "REVIEW_LEGACY_OVERRIDE_REJECTED"
+            : "REVIEW_SMOKE_RECEIPTS_INCOMPLETE",
+          envFlag(env.REVIEW_READINESS_VERIFIED)
+            ? "REVIEW_READINESS_VERIFIED is legacy metadata and cannot replace Text and Visual provider receipts."
+            : "Production requires separate current Text and Visual provider smoke receipts.",
+          false,
+          "review_provider",
+        )],
+      };
+    }
+
+    const receipts = [];
     try {
-      receipt = readReviewSmokeReceipt(resolveReviewSmokeReceiptPath(env), { fsImpl });
-      verifyReviewSmokeReceipt(receipt, {
-        provider: config.provider,
-        model: config.model,
-        sourceRevision: revision.source_revision,
-        ...(expectedType ? { reviewType: expectedType } : {}),
-        now,
-      });
+      for (const requirement of requirements) {
+        const receipt = readReviewSmokeReceipt(requirement.path, { fsImpl });
+        verifyReviewSmokeReceipt(receipt, {
+          provider: config.provider,
+          model: config.model,
+          sourceRevision: revision.source_revision,
+          ...(requirement.reviewType ? { reviewType: requirement.reviewType } : {}),
+          now,
+        });
+        receipts.push(receipt);
+      }
+      if (production && (receipts[0].cli.name !== receipts[1].cli.name
+          || receipts[0].cli.version !== receipts[1].cli.version)) {
+        const mismatch = new Error("Text and Visual review smoke CLI identities differ");
+        mismatch.code = "REVIEW_SMOKE_RECEIPT_MISMATCH";
+        throw mismatch;
+      }
     } catch (error) {
       const legacyOverride = envFlag(env.REVIEW_READINESS_VERIFIED);
       const knownCode = error && typeof error.code === "string" && /^REVIEW_SMOKE_[A-Z0-9_]+$/.test(error.code)
@@ -203,6 +246,7 @@ function createReviewReadinessProbe({
       const messages = {
         REVIEW_LEGACY_OVERRIDE_REJECTED: "REVIEW_READINESS_VERIFIED is legacy metadata and cannot replace a provider smoke receipt.",
         REVIEW_SMOKE_RECEIPT_UNAVAILABLE: "A real tool-free provider smoke receipt is not available.",
+        REVIEW_SMOKE_RECEIPTS_INCOMPLETE: "Separate Text and Visual provider smoke receipts are required.",
         REVIEW_SMOKE_RECEIPT_EXPIRED: "The review provider smoke receipt has expired.",
         REVIEW_SMOKE_RECEIPT_MISMATCH: "The review provider smoke receipt does not match the running provider, model, source revision, or review type.",
         REVIEW_SMOKE_RECEIPT_NOT_YET_VALID: "The review provider smoke receipt timestamp is not yet valid.",
@@ -227,36 +271,48 @@ function createReviewReadinessProbe({
       status: "ready",
       revision: {
         ...revision,
-        verification: "provider_smoke_receipt",
-        receipt_id: receipt.receipt_id,
-        review_type: receipt.review_type,
-        cli_name: receipt.cli.name,
-        cli_version: receipt.cli.version,
-        recorded_at: receipt.recorded_at,
-        expires_at: receipt.expires_at,
+        verification: production ? "text_visual_provider_smoke_receipts" : "provider_smoke_receipt",
+        receipt_ids: Object.fromEntries(receipts.map((receipt) => [receipt.review_type, receipt.receipt_id])),
+        review_types: receipts.map((receipt) => receipt.review_type).sort(),
+        cli_name: receipts[0].cli.name,
+        cli_version: receipts[0].cli.version,
+        recorded_at: Object.fromEntries(receipts.map((receipt) => [receipt.review_type, receipt.recorded_at])),
+        expires_at: Object.fromEntries(receipts.map((receipt) => [receipt.review_type, receipt.expires_at])),
       },
       causes: [],
     };
   };
 }
 
-function safeReadJson(file, fsImpl) {
-  return JSON.parse(fsImpl.readFileSync(file, "utf8"));
+function safeReadBytes(file, fsImpl, maximum = 1024 * 1024) {
+  const value = fsImpl.readFileSync(file);
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8");
+  if (bytes.length < 2 || bytes.length > maximum) throw new Error("invalid bounded JSON file");
+  return bytes;
 }
 
-function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs } = {}) {
+function safeParseJson(bytes) {
+  return JSON.parse(bytes.toString("utf8"));
+}
+
+function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs, clock = () => new Date() } = {}) {
   return async function probeRetrieval() {
     const dataRoot = env.XDG_DATA_HOME
       || (env.HOME ? path.join(env.HOME, ".local", "share") : path.resolve(__dirname, "..", ".runtime"));
     const assetDbDir = env.ASSET_DB_DIR || path.join(dataRoot, "simworld-studio", "asset-db");
     const indexPath = path.join(assetDbDir, "category_index.json");
     const manifestPath = env.ASSET_SNAPSHOT_MANIFEST || path.join(assetDbDir, "snapshot-manifest.json");
+    const liveAuditReceiptPath = env.ASSET_LIVE_AUDIT_RECEIPT
+      || path.join(assetDbDir, "snapshot-live-audit.json");
     let index;
     let manifest;
+    let manifestBytes;
+    let liveAuditReceipt;
+    let liveAuditReceiptBytes;
     const causes = [];
 
     try {
-      index = safeReadJson(indexPath, fsImpl);
+      index = safeParseJson(safeReadBytes(indexPath, fsImpl));
       if (!index || !Array.isArray(index.categories)) throw new Error("invalid category index");
     } catch (_error) {
       causes.push(publicCause(
@@ -267,13 +323,25 @@ function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs } = {}) 
       ));
     }
     try {
-      manifest = validateAssetSnapshotManifest(safeReadJson(manifestPath, fsImpl));
+      manifestBytes = safeReadBytes(manifestPath, fsImpl);
+      manifest = validateAssetSnapshotManifest(safeParseJson(manifestBytes));
     } catch (_error) {
       causes.push(publicCause(
         "ASSET_SNAPSHOT_MANIFEST_MISSING",
         "A valid simworld-asset-snapshot/v1 manifest is not available.",
         false,
         "catalog",
+      ));
+    }
+    try {
+      liveAuditReceiptBytes = safeReadBytes(liveAuditReceiptPath, fsImpl);
+      liveAuditReceipt = safeParseJson(liveAuditReceiptBytes);
+    } catch (_error) {
+      causes.push(publicCause(
+        "ASSET_LIVE_AUDIT_RECEIPT_MISSING",
+        "A current asset live-audit receipt is not available.",
+        true,
+        "asset_stack",
       ));
     }
 
@@ -339,6 +407,48 @@ function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs } = {}) 
         "embedding",
       ));
     }
+    const verifiedRevision = String(env.ASSET_READINESS_VERIFIED_REVISION || "").trim();
+    if (!verifiedRevision || (manifest && verifiedRevision !== manifest.snapshot_id)) {
+      causes.push(publicCause(
+        "ASSET_READINESS_REVISION_MISMATCH",
+        "The deployment readiness revision does not match the asset snapshot.",
+        false,
+        "asset_stack",
+      ));
+    }
+    const liveAuditReceiptSha256 = String(env.ASSET_LIVE_AUDIT_RECEIPT_SHA256 || "").trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(liveAuditReceiptSha256)) {
+      causes.push(publicCause(
+        "ASSET_LIVE_AUDIT_RECEIPT_PIN_MISSING",
+        "The deployment does not pin a valid live-audit receipt digest.",
+        false,
+        "asset_stack",
+      ));
+    }
+    if (manifest && manifestBytes && liveAuditReceipt && liveAuditReceiptBytes
+        && /^[a-f0-9]{64}$/.test(liveAuditReceiptSha256)) {
+      try {
+        validateAssetLiveAuditReceipt(liveAuditReceipt, {
+          manifest,
+          manifestBytes,
+          receiptBytes: liveAuditReceiptBytes,
+          expectedReceiptSha256: liveAuditReceiptSha256,
+          clock,
+        });
+      } catch (error) {
+        const code = error && typeof error.code === "string" && /^[A-Z0-9_]{3,100}$/.test(error.code)
+          ? error.code
+          : "ASSET_LIVE_AUDIT_RECEIPT_INVALID";
+        causes.push(publicCause(
+          code,
+          code === "ASSET_LIVE_AUDIT_EXPIRED"
+            ? "The asset live-audit receipt has expired."
+            : "The asset live-audit receipt is invalid for this deployment.",
+          code === "ASSET_LIVE_AUDIT_EXPIRED",
+          "asset_stack",
+        ));
+      }
+    }
 
     const revision = manifest ? {
       snapshot_id: manifest.snapshot_id,
@@ -349,24 +459,19 @@ function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs } = {}) 
       postgres_row_count: manifest.postgres.row_count,
       qdrant_point_count: manifest.qdrant.point_count,
       qdrant_collection: manifest.qdrant.collection,
+      live_audit_expires_at: liveAuditReceipt && typeof liveAuditReceipt.expires_at === "string"
+        ? liveAuditReceipt.expires_at
+        : null,
     } : {
       snapshot_id: env.ASSET_SNAPSHOT_REVISION || env.ASSET_CATALOG_REVISION || "unversioned",
       catalog_count: catalogCount,
       category_count: categoryCount,
     };
     if (causes.length) return { status: "not_ready", revision, causes };
-
-    const verifiedRevision = String(env.ASSET_READINESS_VERIFIED_REVISION || "").trim();
-    const verified = verifiedRevision && verifiedRevision === String(manifest.snapshot_id);
     return {
-      status: verified ? "ready" : "degraded",
+      status: "ready",
       revision,
-      causes: verified ? [] : [publicCause(
-        "ASSET_DEPENDENCY_HEALTH_UNVERIFIED",
-        "Snapshot metadata is present, but dependency counts and health have not been verified for this revision.",
-        true,
-        "asset_stack",
-      )],
+      causes: [],
     };
   };
 }
@@ -400,9 +505,11 @@ function createStreamingReadinessProbe({
   host = "127.0.0.1",
   port = 8585,
   connect,
+  fsImpl = fs,
+  clock = () => Date.now(),
 } = {}) {
   const profile = normalizeTransportProfile(env.STUDIO_TRANSPORT_PROFILE || env.TRANSPORT_PROFILE);
-  return async function probeStreaming({ signal }) {
+  return async function probeStreaming({ signal } = {}) {
     const reachable = await tcpReachable({ host, port, signal, ...(connect ? { connect } : {}) });
     if (!reachable) {
       return {
@@ -416,39 +523,100 @@ function createStreamingReadinessProbe({
         )],
       };
     }
-    if (profile === "public_webrtc" && !envFlag(env.PUBLIC_WEBRTC_EXTERNAL_VERIFIED)) {
-      return {
-        status: "degraded",
-        revision: { profile },
-        causes: [publicCause(
-          "TURN_RELAY_UNVERIFIED",
-          "Local signaling is reachable, but public ICE/TURN relay has not passed an external verification.",
-          false,
-          "turn",
-        )],
-      };
+    if (profile === "public_webrtc") {
+      const receiptPath = String(env.WEBRTC_READINESS_RECEIPT_PATH || "").trim();
+      const expectedDigest = String(env.WEBRTC_READINESS_RECEIPT_SHA256 || "").trim().toLowerCase();
+      const buildRevision = String(env.SIMWORLD_BUILD_REVISION || "").trim().toLowerCase();
+      const deploymentFingerprint = String(env.WEBRTC_DEPLOYMENT_FINGERPRINT || "").trim().toLowerCase();
+      const publicOrigin = String(env.STUDIO_PUBLIC_ORIGIN || "").trim();
+      const certificateSha256 = String(env.WEBRTC_CERTIFICATE_SHA256 || "").trim().toLowerCase();
+      if (!receiptPath || !/^[a-f0-9]{64}$/.test(expectedDigest)
+          || !/^[a-f0-9]{40}$/.test(buildRevision)
+          || !/^[a-f0-9]{64}$/.test(deploymentFingerprint)
+          || !publicOrigin) {
+        return {
+          status: "not_ready",
+          revision: { profile },
+          causes: [publicCause(
+            "WEBRTC_READINESS_CONFIG_MISSING",
+            "Public WebRTC requires a pinned, deployment-bound external readiness receipt.",
+            false,
+            "turn",
+          )],
+        };
+      }
+      try {
+        const receipt = readWebRtcReadinessReceipt(receiptPath, { fsImpl });
+        if (digestWebRtcReceipt(receipt) !== expectedDigest) {
+          const mismatch = new Error("WebRTC readiness receipt digest mismatch");
+          mismatch.code = "WEBRTC_EVIDENCE_MISMATCH";
+          throw mismatch;
+        }
+        verifyWebRtcReadinessReceipt(receipt, {
+          buildRevision,
+          deploymentFingerprint,
+          publicOrigin,
+          ...(certificateSha256 ? { certificateSha256 } : {}),
+          now: clock,
+        });
+        return {
+          status: "ready",
+          revision: {
+            profile,
+            verification: "external_forced_relay_receipt",
+            receipt_id: receipt.receipt_id,
+            public_origin: receipt.public_endpoint.origin,
+            expires_at: receipt.expires_at,
+          },
+          causes: [],
+        };
+      } catch (error) {
+        const code = error && typeof error.code === "string" && /^[A-Z0-9_]{3,100}$/.test(error.code)
+          ? error.code
+          : "WEBRTC_RECEIPT_UNAVAILABLE";
+        return {
+          status: "not_ready",
+          revision: { profile },
+          causes: [publicCause(
+            code,
+            code === "WEBRTC_EVIDENCE_EXPIRED"
+              ? "The public WebRTC external readiness receipt has expired."
+              : "The public WebRTC external readiness receipt is unavailable or invalid.",
+            code === "WEBRTC_EVIDENCE_EXPIRED" || code === "WEBRTC_RECEIPT_UNAVAILABLE",
+            "turn",
+          )],
+        };
+      }
     }
     return { status: "ready", revision: { profile }, causes: [] };
   };
 }
 
-function createTimelineReadinessProbe({ env = process.env } = {}) {
-  return async function probeTimeline() {
-    if (envFlag(env.TIMELINE_AUTOMATION_VERIFIED)) {
-      return {
-        status: "ready",
-        revision: { schema: env.TIMELINE_SCHEMA_REVISION || "vista-timeline/v1" },
-        causes: [],
-      };
+function createTimelineReadinessProbe({ animationUeProbe } = {}) {
+  return async function probeTimeline({ signal } = {}) {
+    if (typeof animationUeProbe === "function") {
+      let result;
+      try {
+        result = await animationUeProbe({ signal });
+      } catch (_error) {
+        result = null;
+      }
+      if (result && result.status === "ready" && Array.isArray(result.causes)
+          && result.causes.length === 0 && result.revision
+          && result.revision.verification === "live_plugin_challenge") {
+        return result;
+      }
+      if (result && result.status === "not_ready" && Array.isArray(result.causes)
+          && result.revision && typeof result.revision === "object") return result;
     }
     return {
       status: "not_ready",
-      revision: { schema: "unimplemented" },
+      revision: { schema: "vista-timeline/v1", animation_content_api: "not_ready" },
       causes: [publicCause(
-        "TIMELINE_AUTOMATION_UNAVAILABLE",
-        "The server-authoritative VISTA timeline and animation workflow is not implemented.",
+        "ANIMATION_UE_PLUGIN_TRANSPORT_MISSING",
+        "The server timeline is implemented, but a trusted live VISTA animation UE plugin is not available.",
         false,
-        "timeline",
+        "vista_animation_ue_plugin",
       )],
     };
   };
@@ -462,6 +630,7 @@ function createStudioReadiness({
   revision,
   fsImpl = fs,
   connect,
+  animationUeProbe,
   probeOverrides = {},
 } = {}) {
   for (const name of Object.keys(probeOverrides)) {
@@ -485,8 +654,9 @@ function createStudioReadiness({
       host: cirrusHost,
       port: cirrusPort,
       connect,
+      fsImpl,
     }),
-    timeline: probeOverrides.timeline || createTimelineReadinessProbe({ env }),
+    timeline: probeOverrides.timeline || createTimelineReadinessProbe({ animationUeProbe }),
   };
   return createReadinessRegistry({
     revision: revision || { build: buildRevision },

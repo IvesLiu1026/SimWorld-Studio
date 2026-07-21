@@ -197,6 +197,7 @@ may the deployment set the readiness revision to the already-selected snapshot:
 
 ```bash
 export ASSET_READINESS_VERIFIED_REVISION='<verified snapshot_id>'
+export ASSET_LIVE_AUDIT_RECEIPT="$ASSET_DB_DIR/snapshot-live-audit.json"
 export ASSET_LIVE_AUDIT_RECEIPT_SHA256='<live_audit_receipt_sha256>'
 ```
 
@@ -204,6 +205,11 @@ The live receipt is deliberately short-lived. Runtime/startup integration must
 validate its exact schema, raw-file SHA-256, manifest binding, snapshot binding,
 observation digest, and expiry before claiming ready. A static
 `ASSET_READINESS_VERIFIED_REVISION` alone is not fresh live evidence.
+The Web runtime repeats the expiry check before every semantic search, so a
+process that outlives the pinned receipt fails closed before contacting
+Qdrant/PostgreSQL. Refresh the receipt through the read-only verifier, update
+the pinned digest through the deployment secret/config mechanism, and restart
+or roll the Web process before the old receipt expires.
 
 Any catalog, DB, index, model, vector schema, or UE Content change invalidates
 the receipt. Rebuild/verify a new snapshot and switch the revision only after

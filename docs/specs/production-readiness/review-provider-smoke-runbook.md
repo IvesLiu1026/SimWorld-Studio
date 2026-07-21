@@ -140,22 +140,27 @@ or Visual scene change exits non-zero and writes no new receipt.
 
 ## Readiness binding
 
-Point the service at the approved receipt whose review type is required by the
-deployment policy:
+Production readiness requires both independently generated receipts from the
+same pinned provider/model/CLI/build. Point the service at both approved files:
 
 ```bash
-export REVIEW_SMOKE_RECEIPT_PATH=/run/simworld/review-smoke-visual.json
-export REVIEW_SMOKE_RECEIPT_TYPE=visual
+export REVIEW_TEXT_SMOKE_RECEIPT_PATH=/run/simworld/review-smoke-text.json
+export REVIEW_VISUAL_SMOKE_RECEIPT_PATH=/run/simworld/review-smoke-visual.json
 export CRITIC_PROVIDER=claude
 export CRITIC_MODEL=claude-opus-4-8
+export CRITIC_MAX_BUDGET_USD=0.05
 export SIMWORLD_BUILD_REVISION="$(git rev-parse HEAD)"
 ```
 
-`/health/ready` remains not-ready if the file is absent, expired, malformed,
-credential-like, bound to another provider/model/build/type, or reports a
-non-`PASS` verdict or a mutated Visual scene. Do not use
+`/health/ready` remains not-ready if either file is absent, expired, malformed,
+credential-like, bound to another provider/model/build/type/CLI, or reports a
+non-`PASS` verdict or a mutated Visual scene. The single-receipt
+`REVIEW_SMOKE_RECEIPT_PATH` remains available only for non-production policy
+checks; it cannot satisfy Production Text + Visual readiness. Do not use
 `REVIEW_READINESS_VERIFIED=1`; it is legacy metadata and is deliberately
 rejected as proof.
+Production review requests cannot override the pinned provider/model or raise
+the deployment budget cap; a caller may only request a lower per-call budget.
 
 ## Retention and incident handling
 

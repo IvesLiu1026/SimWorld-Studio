@@ -151,6 +151,29 @@ test("provider and model selection fail closed before spawning", async () => {
     () => resolveReviewConfig({ provider: "claude", model: "claude-opus-4-8", maxBudgetUsd: 0 }, {}),
     (error) => error.code === "REVIEW_BUDGET_INVALID",
   );
+  const productionEnv = {
+    NODE_ENV: "production",
+    CRITIC_PROVIDER: "claude",
+    CRITIC_MODEL: "claude-opus-4-8",
+    CRITIC_MAX_BUDGET_USD: "0.05",
+  };
+  assert.deepEqual(resolveReviewConfig({}, productionEnv), {
+    provider: "claude",
+    model: "claude-opus-4-8",
+    maxBudgetUsd: 0.05,
+  });
+  assert.throws(
+    () => resolveReviewConfig({ model: "claude-sonnet-4-6" }, productionEnv),
+    (error) => error.code === "REVIEW_MODEL_PIN_MISMATCH",
+  );
+  assert.throws(
+    () => resolveReviewConfig({ maxBudgetUsd: 0.06 }, productionEnv),
+    (error) => error.code === "REVIEW_BUDGET_EXCEEDS_DEPLOYMENT_CAP",
+  );
+  assert.throws(
+    () => resolveReviewConfig({}, { ...productionEnv, CRITIC_MAX_BUDGET_USD: "" }),
+    (error) => error.code === "REVIEW_PRODUCTION_PIN_MISSING",
+  );
 
   let spawned = false;
   const provider = createReviewProvider({ spawnImpl: () => { spawned = true; } });
