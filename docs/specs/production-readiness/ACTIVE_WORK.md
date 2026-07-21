@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed implementation checkpoint: `f9ac76f6` (`fix: bind review smoke to measured cli`)
+- Latest pushed implementation checkpoint: `ba08a1d0` (`fix: refresh review provider security pin`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -27,7 +27,7 @@
 
 | Agent | Worktree / branch | Owns | Must not touch | Runtime ownership |
 | --- | --- | --- | --- | --- |
-| Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | None; offline code only |
+| Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | GPU 0; loopback `3010/55560/8585/8586/8889` for the bounded `mmg_040` live run |
 | `approval_aggregate` | shared worktree, completed | six-party opaque approval aggregate in new files only | Shared schemas/launcher/state/terminal and runtime | None |
 | `adapter_registration_audit` | shared worktree, completed read-only | real query/build/registration/source-closure inventory | All source/docs edits and runtime | None |
 
@@ -36,7 +36,15 @@ change and report validation commands plus remaining live/admin gates.
 
 ## Runtime Ownership
 
-- This work item owns no runtime, GPU, port, database, UE lease, or provider.
+- The user authorized a bounded live verification run on 2026-07-22. This work
+  item owns exactly GPU 0 and loopback ports `3010/55560/8585/8586/8889` for
+  that run, including the UE lease, Pixel Streaming stack, fixed
+  `execute_python_script` asset inspection, deterministic `mmg_040` build,
+  screenshot, and cleanup.
+- The run is model-off, loopback-only, and does not authorize a public listener,
+  provider call, PostgreSQL/Qdrant write, production deploy, or mutation of the
+  canonical archived UE project. A disposable staged workspace and append-only
+  evidence paths must be used.
 - A separate isolated demo task owns GPU 1 and loopback ports
   `3012/55570/8595/8596/8899`; this work item must not inspect, restart, bind,
   or terminate those resources.
