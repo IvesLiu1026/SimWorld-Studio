@@ -48,6 +48,7 @@ class VISTAANIMATIONCONTENTAPI_API UVistaAnimationContentApiSubsystem final
   GENERATED_BODY()
 
 public:
+  UVistaAnimationContentApiSubsystem();
   virtual ~UVistaAnimationContentApiSubsystem() override;
 
   virtual void Initialize(FSubsystemCollectionBase &Collection) override;
@@ -75,5 +76,8 @@ public:
 
 private:
   class FImplementation;
-  TUniquePtr<FImplementation> Implementation;
+  struct FImplementationDeleter {
+    void operator()(FImplementation *Instance) const;
+  };
+  TUniquePtr<FImplementation, FImplementationDeleter> Implementation;
 };

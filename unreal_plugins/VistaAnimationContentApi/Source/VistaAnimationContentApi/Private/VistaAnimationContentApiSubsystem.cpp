@@ -246,7 +246,8 @@ FString JsonStringArray(const TArray<FString> &Values) {
   return FString::Printf(TEXT("[%s]"), *FString::Join(Encoded, TEXT(",")));
 }
 
-FString MakeError(const FString &CandidateCode, bool bRetryable = false) {
+FString BuildAnimationErrorJson(const FString &CandidateCode,
+                                bool bRetryable = false) {
   const FString Code = IsSafeErrorCode(CandidateCode)
                            ? CandidateCode
                            : TEXT("ANIMATION_CONTENT_API_REJECTED");
@@ -255,6 +256,11 @@ FString MakeError(const FString &CandidateCode, bool bRetryable = false) {
                          *Quote(Code),
                          bRetryable ? TEXT("true") : TEXT("false"));
 }
+
+// Unreal 5.7 exports a generic MakeError forwarding template. Keep the
+// protocol helper's existing call sites explicit at preprocessing time so a
+// TCHAR literal cannot bind to that unrelated template.
+#define MakeError(...) BuildAnimationErrorJson(__VA_ARGS__)
 
 int32 Utf8Bytes(const FString &Value) {
   FTCHARToUTF8 Utf8(*Value);
@@ -745,7 +751,7 @@ private:
     NonceOrder.Add(Nonce);
     if (NonceOrder.Num() > MaxReplayEntries) {
       UsedNonces.Remove(NonceOrder[0]);
-      NonceOrder.RemoveAt(0, 1, false);
+      NonceOrder.RemoveAt(0, 1, EAllowShrinking::No);
     }
     return true;
   }
@@ -820,7 +826,7 @@ private:
       if (Entry && Entry->Response.IsEmpty())
         break;
       Journal.Remove(Oldest);
-      JournalOrder.RemoveAt(0, 1, false);
+      JournalOrder.RemoveAt(0, 1, EAllowShrinking::No);
     }
     if (Journal.Num() >= MaxJournalEntries) {
       OutError = MakeError(TEXT("ANIMATION_MUTATION_JOURNAL_FULL"));
@@ -925,8 +931,16 @@ private:
   TMap<FString, FHandleState> Handles;
 };
 
+UVistaAnimationContentApiSubsystem::UVistaAnimationContentApiSubsystem() =
+    default;
+
 UVistaAnimationContentApiSubsystem::~UVistaAnimationContentApiSubsystem() =
     default;
+
+void UVistaAnimationContentApiSubsystem::FImplementationDeleter::operator()(
+    FImplementation *Instance) const {
+  delete Instance;
+}
 
 bool UVistaAnimationContentApiSubsystem::FImplementation::HandlePreflight(
     const FEnvelope &Envelope, FString &OutPayload) {
@@ -1670,7 +1684,7 @@ bool UVistaAnimationContentApiSubsystem::FImplementation::HandleRestore(
 void UVistaAnimationContentApiSubsystem::Initialize(
     FSubsystemCollectionBase &Collection) {
   Super::Initialize(Collection);
-  Implementation = MakeUnique<FImplementation>();
+  Implementation.Reset(new FImplementation());
 }
 
 void UVistaAnimationContentApiSubsystem::Deinitialize() {
@@ -1728,3 +1742,5 @@ bool UVistaAnimationContentApiSubsystem::HandleContentRequestJson(
   }
   return Implementation->Content(RequestJson, OutResponseJson);
 }
+
+#undef MakeError
