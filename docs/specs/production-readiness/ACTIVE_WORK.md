@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed checkpoint: `c6ded6ec` (`docs: record live mmg040 scene build`)
+- Latest pushed checkpoint: `f129cc32` (`feat: add isolated mmg040 semantic smoke catalog`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -30,8 +30,8 @@
 | Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | GPU 0; loopback `3010/55560/8585/8586/8889` for the bounded `mmg_040` live run |
 | `approval_aggregate` | shared worktree, completed | six-party opaque approval aggregate in new files only | Shared schemas/launcher/state/terminal and runtime | None |
 | `adapter_registration_audit` | shared worktree, completed read-only | real query/build/registration/source-closure inventory | All source/docs edits and runtime | None |
-| `commandlet_executor` | shared worktree, active | commandlet-only Interchange executor and focused tests | Runtime, UE, network, docs and all other source | None |
-| `semantic_smoke_catalog` | shared worktree, active | new non-Production `mmg_040` three-record catalog preparer and focused tests | Existing source/docs, DB/network/runtime, and Production readiness claims | None |
+| `commandlet_executor` | shared worktree, blocked draft | untracked commandlet-only Interchange executor and focused tests | Runtime, UE, network, docs and all other source | None; live apply prohibited by independent P0 review |
+| `semantic_smoke_catalog` | shared worktree, completed and pushed at `f129cc32` | isolated non-Production `mmg_040` three-record catalog preparer and focused tests | Existing source/docs, DB/network/runtime, and Production readiness claims | One private append-only file publication completed; no DB/network/UE |
 | `mmg040_animation_content_map` | shared worktree, active | `VistaAnimationContentApi` r2 PickUp parity slice and one new focused parity test | Runtime evidence, UE/GPU/ports, docs, commandlet/semantic files, and Production readiness claims | None |
 
 The coordinator is the only merge owner. Workers must commit a single coherent
@@ -124,6 +124,18 @@ change and report validation commands plus remaining live/admin gates.
   permission must be fixed and a new login/Vulkan preflight completed before
   using another fresh render project. Failed render receipt SHA-256:
   `170d6f82acf9a7839c162dd369825d3624b74539562970c9420587484a831c2f`.
+- Commit `f129cc32` adds a separately reviewed three-record semantic smoke
+  catalog preparer. One private append-only publication is sealed at
+  `evidence/semantic-smoke-catalog-nonproduction-r1` under the live release.
+  Its receipt SHA-256 is
+  `47c4429830084dccaefe4e728c4778a068504172cf094b8c048a75f9b7fa93e4`,
+  catalog SHA-256 is
+  `f5e4fe29b238d71bea54e44af121fa0e85bbbd6d1b111082cf9cc10583018673`,
+  and prepared seal SHA-256 is
+  `f9f3a5604184bf93eb26b5f4dda8b9ceb837c611718a4792e8b33d20bb306061`.
+  The namespace, directory names and receipt all forbid generic consumer,
+  database migration and category-index rebuild use. This is not the
+  Production PostgreSQL/Qdrant index.
 
 ## Current animation checkpoint
 
@@ -172,5 +184,7 @@ change and report validation commands plus remaining live/admin gates.
   `evidence/2026-07-22-semantic-isolation-and-mmg040-gap-checkpoint.md`
 - Current live Interchange and real-asset follow-up:
   `evidence/2026-07-22-mmg040-live-interchange-checkpoint.md`
+- Current isolated semantic smoke catalog follow-up:
+  `evidence/2026-07-22-mmg040-semantic-smoke-catalog-checkpoint.md`
 - Current Review auth/CLI identity follow-up:
   `evidence/2026-07-22-review-cli-identity-checkpoint.md`
