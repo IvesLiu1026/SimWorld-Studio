@@ -623,31 +623,39 @@ uv-managed runtime and isolated system Python where their dependencies permit:
 - a pathless caller-supplied-directory-FD ledger with durable prepare/result
   publication, immutable replay, conflict detection, and ordinary phase
   identity/revision binding;
-- an ordinary phase service that prepares before invoking its callback,
-  validates and commits the exact result before reply, and refuses blind
-  execution after an incomplete prepare;
+- a separately pinned pathless control ledger for all four closed recovery
+  operations; an incomplete prepare yields a deterministic recovery-required
+  result and never blind re-execution;
+- a single-threaded fork/session/process-group isolation primitive with an
+  absolute monotonic deadline, bounded result channel, complete group kill and
+  bounded leader reap; authenticated phase/control service paths commit the
+  exact validated bytes before reply;
+- real Ed25519 verification for all six approval purposes followed by an opaque
+  six-party aggregate bound to independently supplied expected receipt, scope,
+  authorization, issuer, key, trust, environment, basis and validity pins;
 - release-pinned schema-source validation, cross-document semantic validation,
   and an explicitly empty Production adapter registry.
 
 This checkpoint is deliberately not a Production adapter or PA-01 through
-PA-21 completion. Durable control-operation storage, a deadline-enforced
-isolated real executor process with complete process-group termination/reaping,
-the seven real target executors, static release registration, root-capability
-public handoff evidence, and live target observations are still absent. The
+PA-21 completion. The seven real target executors, a fixed non-injectable worker
+dispatch/bootstrap, static release registration, a reproducible worker image
+and recalculated source closure, root-capability public handoff evidence, and
+live target observations are still absent. The isolated callback boundary is a
+reviewed primitive, not permission to supply arbitrary Production code. The
 current uv Python also lacks the Linux `memfd`/seal APIs needed by the launcher
 path; an ephemeral Python 3.10 validation environment proves code compatibility
 only and is not an attested deployment environment.
 
-Two cryptographic provenance claims also remain release blockers. Approval
-receipt validation currently checks canonical unsigned payloads, declared
-Ed25519 shape, signature bytes/digests, scope, and freshness, but the signed
-launcher receipt does not yet carry a closed proof that every approval was
-verified against its issuer trust root. Likewise, phase evidence currently
-binds worker payload/signature digests without transporting or verifying a
-worker signature against a pinned key. Neither digest-only claim may satisfy a
-Production signature gate. In addition, the execution-plan schema describes a
-future `production_capable=true` adapter while the release-pinned adapter
-manifest schema intentionally permits only the current unregistered
+Two cryptographic provenance projections remain release blockers. Approval
+receipts are now cryptographically verified against explicit issuer trust roots
+and aggregated only as opaque verified results, but that aggregate proof is not
+yet a release-pinned schema and is not signed into the launcher, execution state
+or terminal receipt. It cannot authorize a launch. Phase evidence still carries
+only worker payload/signature digests and no detached signature bytes, signer
+identity, trust bundle or public-key binding; the verifier therefore fails
+closed. In addition, the execution-plan schema describes a future
+`production_capable=true` adapter while the release-pinned adapter manifest
+schema intentionally permits only the current unregistered
 `production_capable=false` instance; no adapter can satisfy both until a new
 reviewed registered revision is introduced.
 

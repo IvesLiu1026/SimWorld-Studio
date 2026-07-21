@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import dataclasses
 import datetime as dt
 import hashlib
 import os
@@ -20,9 +21,15 @@ TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(TOOLS_DIR))
 
+import semantic_index_control_ledger as control_ledger  # noqa: E402
 import semantic_index_durable_ledger as durable_ledger  # noqa: E402
 import semantic_index_worker_protocol as worker_protocol  # noqa: E402
 import semantic_index_worker_service as worker_service  # noqa: E402
+from test_semantic_index_control_ledger import (  # noqa: E402
+    PINS as CONTROL_PINS,
+    make_request as make_ledger_control_request,
+    make_success_result as make_control_success_result,
+)
 from test_semantic_index_worker_protocol import (  # noqa: E402
     LEDGER_IDENTITY,
     LEDGER_REVISION,
@@ -49,8 +56,13 @@ class WorkerServiceTests(unittest.TestCase):
             self.directory_fd,
             LEDGER_IDENTITY,
         )
+        self.control_ledger = control_ledger.DurableControlLedger(
+            self.directory_fd,
+            CONTROL_PINS,
+        )
 
     def tearDown(self) -> None:
+        self.control_ledger.close()
         self.ledger.close()
         os.close(self.directory_fd)
         self.temporary.cleanup()
@@ -99,6 +111,276 @@ class WorkerServiceTests(unittest.TestCase):
             "replay",
             self.ledger.begin(worker_protocol.canonical_json_bytes(request)).action,
         )
+
+    def test_isolated_path_executes_then_replays_without_reforking(self) -> None:
+        request, capabilities, _policy = make_request(
+            operation="upsert_postgres_exact"
+        )
+
+        def executor(value, _secrets):
+            return live_success(value)
+
+        first = worker_service.execute_phase_request_isolated(
+            request,
+            canonical_request=worker_protocol.canonical_json_bytes(request),
+            capabilities=capabilities,
+            ledger=self.ledger,
+            expected_ledger_revision=LEDGER_REVISION,
+            executor=executor,
+        )
+        self.assertEqual("executed", first.disposition)
+
+        with mock.patch.object(
+            worker_service,
+            "_EXECUTE_ISOLATED",
+            side_effect=AssertionError("replay must not fork"),
+        ) as execute_isolated:
+            second = worker_service.execute_phase_request_isolated(
+                request,
+                canonical_request=worker_protocol.canonical_json_bytes(request),
+                capabilities=capabilities,
+                ledger=self.ledger,
+                expected_ledger_revision=LEDGER_REVISION,
+                executor=executor,
+            )
+        self.assertEqual("replay", second.disposition)
+        self.assertEqual(first.canonical_bytes, second.canonical_bytes)
+        execute_isolated.assert_not_called()
+
+    def test_isolated_callback_failure_leaves_recovery_required_prepare(self) -> None:
+        request, capabilities, _policy = make_request(
+            operation="upsert_qdrant_exact"
+        )
+
+        def executor(_value, _secrets):
+            raise RuntimeError("must remain inside child")
+
+        self.assert_protocol_error(
+            "WORKER_INTERNAL",
+            lambda: worker_service.execute_phase_request_isolated(
+                request,
+                canonical_request=worker_protocol.canonical_json_bytes(request),
+                capabilities=capabilities,
+                ledger=self.ledger,
+                expected_ledger_revision=LEDGER_REVISION,
+                executor=executor,
+            ),
+        )
+        self.assertEqual(
+            "recovery_required",
+            self.ledger.begin(worker_protocol.canonical_json_bytes(request)).action,
+        )
+
+    def test_isolated_deadline_kills_callback_and_preserves_prepare(self) -> None:
+        request, capabilities, _policy = make_request(
+            operation="upsert_postgres_exact",
+            deadline_ns=time.monotonic_ns() + 150_000_000,
+        )
+
+        def executor(_value, _secrets):
+            time.sleep(60)
+            raise AssertionError("deadline did not terminate child")
+
+        started = time.monotonic()
+        self.assert_protocol_error(
+            "WORKER_INTERNAL",
+            lambda: worker_service.execute_phase_request_isolated(
+                request,
+                canonical_request=worker_protocol.canonical_json_bytes(request),
+                capabilities=capabilities,
+                ledger=self.ledger,
+                expected_ledger_revision=LEDGER_REVISION,
+                executor=executor,
+            ),
+        )
+        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertEqual(
+            "recovery_required",
+            self.ledger.begin(worker_protocol.canonical_json_bytes(request)).action,
+        )
+
+    def test_isolated_control_operations_commit_and_replay_without_reforking(
+        self,
+    ) -> None:
+        for operation in (
+            "query_phase_status",
+            "recover_phase_receipt",
+            "cancel_phase_work",
+            "quarantine_generation",
+        ):
+            with self.subTest(operation=operation):
+                request = make_ledger_control_request(operation)
+                capabilities = (bytes(range(64)),)
+
+                def executor(value, _secrets):
+                    return make_control_success_result(value)
+
+                first = worker_service.execute_control_request_isolated(
+                    request,
+                    canonical_request=worker_protocol.canonical_json_bytes(request),
+                    capabilities=capabilities,
+                    ledger=self.control_ledger,
+                    expected_pins=CONTROL_PINS,
+                    executor=executor,
+                )
+                self.assertEqual("executed", first.disposition)
+                with mock.patch.object(
+                    worker_service,
+                    "_EXECUTE_ISOLATED",
+                    side_effect=AssertionError("control replay must not fork"),
+                ) as execute_isolated:
+                    second = worker_service.execute_control_request_isolated(
+                        request,
+                        canonical_request=worker_protocol.canonical_json_bytes(request),
+                        capabilities=capabilities,
+                        ledger=self.control_ledger,
+                        expected_pins=CONTROL_PINS,
+                        executor=executor,
+                    )
+                self.assertEqual("replay", second.disposition)
+                self.assertEqual(first.canonical_bytes, second.canonical_bytes)
+                execute_isolated.assert_not_called()
+
+    def test_control_service_requires_exact_independent_pins_object(self) -> None:
+        request = make_ledger_control_request()
+        capabilities = (bytes(range(64)),)
+        copied_pins = dataclasses.replace(CONTROL_PINS)
+
+        def executor(value, _secrets):
+            return make_control_success_result(value)
+
+        self.assert_protocol_error(
+            "WORKER_LEDGER_REVISION_INVALID",
+            lambda: worker_service.execute_control_request_isolated(
+                request,
+                canonical_request=worker_protocol.canonical_json_bytes(request),
+                capabilities=capabilities,
+                ledger=self.control_ledger,
+                expected_pins=copied_pins,
+                executor=executor,
+            ),
+        )
+        self.assertEqual([], list(self.root.iterdir()))
+
+    def test_isolated_control_failure_leaves_prepare_and_never_blind_retries(
+        self,
+    ) -> None:
+        request = make_ledger_control_request("cancel_phase_work")
+        raw = worker_protocol.canonical_json_bytes(request)
+        capabilities = (bytes(range(64)),)
+
+        def executor(_value, _secrets):
+            raise RuntimeError("control target failure stays in child")
+
+        self.assert_protocol_error(
+            "WORKER_INTERNAL",
+            lambda: worker_service.execute_control_request_isolated(
+                request,
+                canonical_request=raw,
+                capabilities=capabilities,
+                ledger=self.control_ledger,
+                expected_pins=CONTROL_PINS,
+                executor=executor,
+            ),
+        )
+        outcome = worker_service.execute_control_request_isolated(
+            request,
+            canonical_request=raw,
+            capabilities=capabilities,
+            ledger=self.control_ledger,
+            expected_pins=CONTROL_PINS,
+            executor=executor,
+        )
+        self.assertEqual("recovery_required", outcome.disposition)
+        self.assertEqual("ambiguous", outcome.value["mutation_state"])
+        self.assertEqual("WORKER_LEDGER_CONFLICT", outcome.value["error"]["code"])
+
+    def test_control_capability_transform_is_rejected_before_commit(self) -> None:
+        request = make_ledger_control_request("recover_phase_receipt")
+        raw = worker_protocol.canonical_json_bytes(request)
+        capabilities = (b"control-capability-secret" * 2,)
+        request["credential_transport"]["descriptors"][0]["byte_count"] = len(
+            capabilities[0]
+        )
+        raw = worker_protocol.canonical_json_bytes(request)
+
+        def executor(value, _secrets):
+            result = make_control_success_result(value)
+            result["receipt"]["immutable_phase_receipt_sha256"] = hashlib.sha256(
+                capabilities[0]
+            ).hexdigest()
+            return result
+
+        self.assert_protocol_error(
+            "WORKER_RESPONSE_CAPABILITY_LEAK",
+            lambda: worker_service.execute_control_request_isolated(
+                request,
+                canonical_request=raw,
+                capabilities=capabilities,
+                ledger=self.control_ledger,
+                expected_pins=CONTROL_PINS,
+                executor=executor,
+            ),
+        )
+        self.assertEqual("recovery_required", self.control_ledger.begin(raw).action)
+
+    def test_isolated_control_session_commits_before_exact_response_send(
+        self,
+    ) -> None:
+        request = make_ledger_control_request("quarantine_generation")
+        raw_request = worker_protocol.canonical_json_bytes(request)
+        capabilities = (bytes(range(64)),)
+        worker_side, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        received = worker_protocol._new_authenticated_received_request(
+            value=request,
+            canonical_bytes=raw_request,
+            capabilities=capabilities,
+            connection=worker_side,
+            response_deadline_monotonic_ns=request["deadline_monotonic_ns"],
+        )
+        original_send = worker_protocol.send_committed_worker_response
+        send_observations: list[str] = []
+
+        def observed_send(session, canonical_result):
+            send_observations.append(self.control_ledger.begin(raw_request).action)
+            return original_send(session, canonical_result)
+
+        def phase_executor(_value, _secrets):
+            raise AssertionError("control request reached the phase executor")
+
+        def control_executor(value, _secrets):
+            return make_control_success_result(value)
+
+        try:
+            with mock.patch.object(
+                worker_protocol,
+                "send_committed_worker_response",
+                side_effect=observed_send,
+            ):
+                outcome = worker_service.serve_received_request_isolated(
+                    received,
+                    ledger=self.ledger,
+                    expected_ledger_revision=LEDGER_REVISION,
+                    executor=phase_executor,
+                    control_ledger_instance=self.control_ledger,
+                    expected_control_pins=CONTROL_PINS,
+                    control_executor=control_executor,
+                )
+            header = peer.recv(4)
+            self.assertEqual(4, len(header))
+            (length,) = struct.unpack("!I", header)
+            body = bytearray()
+            while len(body) < length:
+                body.extend(peer.recv(length - len(body)))
+            self.assertEqual(outcome.canonical_bytes, bytes(body))
+            self.assertEqual(b"", peer.recv(1))
+        finally:
+            received.close()
+            peer.close()
+
+        self.assertEqual("executed", outcome.disposition)
+        self.assertEqual(["replay"], send_observations)
+        self.assertEqual("replay", self.control_ledger.begin(raw_request).action)
 
     def test_prepared_without_result_is_deterministic_recovery_required(self) -> None:
         request, capabilities, _policy = make_request(operation="upsert_qdrant_exact")

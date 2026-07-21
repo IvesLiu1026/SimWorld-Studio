@@ -5,6 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
+- Latest pushed checkpoint: `852edb4c` (`feat: close semantic index v2 contracts`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -26,9 +27,9 @@
 
 | Agent | Worktree / branch | Owns | Must not touch | Runtime ownership |
 | --- | --- | --- | --- | --- |
-| Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, embed-service hardening, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | None; offline code only |
-| `release_consistency_audit` | shared worktree, read-only | 21/20/24 schema closure and release consistency audit | All source/docs edits and runtime | None |
-| `service_contract_audit` | shared worktree, read-only | durable ordinary-phase service and ledger trust-boundary audit | All source/docs edits and runtime | None |
+| Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | None; offline code only |
+| `approval_aggregate` | shared worktree, completed | six-party opaque approval aggregate in new files only | Shared schemas/launcher/state/terminal and runtime | None |
+| `adapter_registration_audit` | shared worktree, completed read-only | real query/build/registration/source-closure inventory | All source/docs edits and runtime | None |
 
 The coordinator is the only merge owner. Workers must commit a single coherent
 change and report validation commands plus remaining live/admin gates.
@@ -51,17 +52,19 @@ change and report validation commands plus remaining live/admin gates.
 - Unregistered adapter digest surface: 20 schemas; the registry remains empty
   and every execution gate returns `ADAPTER_NOT_REGISTERED`.
 - Closed-schema runtime corpus: 24 schemas.
-- Implemented offline: Ed25519 receipt verification, exact one-use verified
-  handoff composition, durable ordinary-phase prepare/result ledger, exact
-  replay, request/evidence/terminal ledger identity and revision binding, and
-  prepare-before-execute/commit-before-send service ordering.
-- Still required before Production registration: a separate durable control
-  ledger; independently pinned deployment wiring; isolated real executor
-  process-group deadline termination/reaping; seven real operation executors;
-  root-capability handoff evidence; live UE/PostgreSQL/Qdrant/embedding/provider
-  observations; cryptographic approval and worker-evidence provenance; a new
-  registered adapter revision that resolves the intentional false/true
-  capability gate; PA-01 through PA-21 evidence and explicit release approval.
+- Implemented offline: real Ed25519 approval verification, a six-party opaque
+  verified aggregate, exact one-use verified launcher handoff composition,
+  durable ordinary/control prepare-result ledgers, exact replay, isolated
+  process-group execution with absolute deadlines and bounded reaping, and
+  commit-before-send service ordering for authenticated phase/control sessions.
+- Still required before Production registration: release-pinned projection of
+  the approval aggregate; detached worker signing for executor-owned phase
+  evidence; independently pinned launcher/control wiring; fixed static worker
+  dispatch; seven real operation executors; a reproducible worker image and
+  recalculated source closure; root-capability handoff evidence; live
+  UE/PostgreSQL/Qdrant/embedding/provider observations; a new registered adapter
+  revision that resolves the intentional false/true capability gate; PA-01
+  through PA-21 evidence and explicit release approval.
 
 ## Validation
 
@@ -77,3 +80,5 @@ change and report validation commands plus remaining live/admin gates.
   `docs/specs/production-readiness/evidence/`
 - Current semantic-v2 code evidence:
   `evidence/2026-07-21-semantic-index-v2-offline-checkpoint.md`
+- Current control/signature follow-up evidence:
+  `evidence/2026-07-21-semantic-control-signature-offline-checkpoint.md`
