@@ -1,5 +1,10 @@
 "use strict";
 
+const {
+  ANIMATION_UE_OPERATION_ALLOWLIST,
+  ANIMATION_UE_REQUEST_SCHEMA,
+} = require("./vista-animation-ue-adapter");
+
 const TRANSPORT_METHODS = Object.freeze([
   "captureAnimationEvidence",
   "invokeAnimationContentApi",
@@ -65,6 +70,26 @@ const IDENTITY_KEYS = Object.freeze([
 ]);
 const OPAQUE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$/;
 const PLAN_ID_RE = /^vsp-[a-f0-9]{24}$/;
+const CONTENT_ENVELOPE_KEYS = Object.freeze([
+  "content_proof",
+  "invocation_id",
+  "nonce_marker",
+  "operation_fingerprint",
+  "operation_id",
+  "request",
+  "request_digest",
+  "schema",
+]);
+const CONTENT_OPERATIONS = Object.freeze(Object.fromEntries(
+  Object.values(ANIMATION_UE_OPERATION_ALLOWLIST).map((operation) => [
+    operation.operation_id,
+    Object.freeze({
+      mutation: operation.mutation,
+      maxAttempts: operation.max_attempts,
+      operationFingerprint: operation.operation_fingerprint,
+    }),
+  ]),
+));
 
 class VistaAnimationDedicatedTransportError extends Error {
   constructor(code, message, { status = 500, retryable = false } = {}) {
@@ -118,12 +143,14 @@ function validateRequestJson(requestJson, profile) {
   if (size < 2 || size > profile.maxRequestBytes) {
     fail("ANIMATION_UE_TRANSPORT_REQUEST_INVALID", "Animation transport request exceeds its fixed bound", { status: 413 });
   }
+  let value;
   try {
-    if (!isPlainObject(JSON.parse(requestJson))) throw new Error("request must be an object");
+    value = JSON.parse(requestJson);
+    if (!isPlainObject(value)) throw new Error("request must be an object");
   } catch {
     fail("ANIMATION_UE_TRANSPORT_REQUEST_INVALID", "Animation transport requires a JSON object", { status: 400 });
   }
-  return requestJson;
+  return Object.freeze({ text: requestJson, value });
 }
 
 function normalizeSignal(signal) {
@@ -188,6 +215,30 @@ function normalizeBrokerOptions(method, rawOptions, profile) {
   });
 }
 
+function resolveFixedOperationPolicy(method, request, rawOptions, brokerOptions) {
+  if (method !== "invokeAnimationContentApi") {
+    return Object.freeze({ mutation: false, maxAttempts: brokerOptions.maxAttempts });
+  }
+  if (!hasExactKeys(request.value, CONTENT_ENVELOPE_KEYS)
+      || request.value.schema !== ANIMATION_UE_REQUEST_SCHEMA
+      || typeof request.value.operation_id !== "string"
+      || typeof request.value.operation_fingerprint !== "string") {
+    fail("ANIMATION_UE_TRANSPORT_REQUEST_INVALID", "Animation content request envelope is invalid", { status: 400 });
+  }
+  const operation = CONTENT_OPERATIONS[request.value.operation_id];
+  if (!operation || request.value.operation_fingerprint !== operation.operationFingerprint) {
+    fail("ANIMATION_UE_TRANSPORT_REQUEST_INVALID", "Animation content operation is not fixed and allowlisted", { status: 403 });
+  }
+  if (rawOptions.mutation !== operation.mutation || brokerOptions.maxAttempts !== operation.maxAttempts) {
+    fail(
+      "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID",
+      "Animation content retry policy does not match the fixed operation contract",
+      { status: 500 },
+    );
+  }
+  return operation;
+}
+
 function parseOuterResponse(raw, profile) {
   if (!hasExactKeys(raw, ["result", "status"])) {
     fail("ANIMATION_UE_TRANSPORT_PROTOCOL_INVALID", "Animation UE response has an invalid outer shape", { status: 502 });
@@ -219,25 +270,35 @@ function createTransport(resolveBoundBroker) {
     return [method, async (requestJson, rawOptions) => {
       const request = validateRequestJson(requestJson, profile);
       const options = normalizeBrokerOptions(method, rawOptions, profile);
+      const operationPolicy = resolveFixedOperationPolicy(method, request, rawOptions, options);
       const broker = await resolveBoundBroker();
       if (broker === null) {
         fail("ANIMATION_UE_TRANSPORT_UNAVAILABLE", "Dedicated animation UE slot is unavailable", {
           status: 503,
-          retryable: !rawOptions.mutation,
+          retryable: !operationPolicy.mutation,
         });
       }
+      const sendOptions = Object.freeze({
+        ...options,
+        maxAttempts: operationPolicy.maxAttempts,
+        maxResponseBytes: profile.maxOuterBytes,
+        preSendAuthorize: async () => {
+          const currentBroker = await resolveBoundBroker();
+          return currentBroker !== null && currentBroker === broker;
+        },
+      });
       let response;
       try {
         response = await broker.send(
           profile.commandType,
-          Object.freeze({ request_json: request }),
-          options,
+          Object.freeze({ request_json: request.text }),
+          sendOptions,
         );
       } catch (error) {
         if (error instanceof VistaAnimationDedicatedTransportError) throw error;
         fail("ANIMATION_UE_TRANSPORT_UNAVAILABLE", "Dedicated animation UE command is unavailable", {
           status: 503,
-          retryable: !rawOptions.mutation,
+          retryable: !operationPolicy.mutation,
         });
       }
       return parseOuterResponse(response, profile);

@@ -333,6 +333,12 @@ const UE_BUCKET_CAP = parseInt(process.env.UE_GATE_BUCKET_CAP || '20', 10);
 const UE_BUCKET_RATE = parseFloat(process.env.UE_GATE_BUCKET_RATE || '10'); // tokens/sec
 const UE_DEFAULT_TIMEOUT_MS = 30000;
 const UE_DEFAULT_RETRIES = 2; // was 3 in mcp-server.js — trimmed to dampen retry amplification
+const UE_MAX_SCOPED_RESPONSE_BYTES = 16 * 1024 * 1024;
+const UE_NON_RETRYABLE_ERROR_CODES = new Set([
+  'UE_COMMAND_ABORTED',
+  'UE_COMMAND_AUTHORIZATION_EXPIRED',
+  'UE_RESPONSE_TOO_LARGE',
+]);
 
 const UE_COOLDOWN = {
   spawn_blueprint_actor: 200,
@@ -371,7 +377,9 @@ class UeMcpBroker {
     this.paused = false;
     this._pumpScheduled = false;
     // injectable for tests: a fake one-shot executor
-    this._exec = opts.exec || ((type, params, timeoutMs, signal) => this._execOnce(type, params, timeoutMs, signal));
+    this._exec = opts.exec || ((type, params, timeoutMs, signal, maxResponseBytes) => (
+      this._execOnce(type, params, timeoutMs, signal, maxResponseBytes)
+    ));
     this.totalSent = 0;
     this.totalErrors = 0;
     this.total429 = 0;
@@ -388,9 +396,21 @@ class UeMcpBroker {
       ? opts.queueDeadlineMs : Math.max(timeoutMs * 2, 15000);
     const maxAttempts = opts.maxAttempts === undefined ? UE_DEFAULT_RETRIES : Number(opts.maxAttempts);
     const signal = opts.signal;
+    const preSendAuthorize = opts.preSendAuthorize;
+    const maxResponseBytes = opts.maxResponseBytes === undefined ? null : Number(opts.maxResponseBytes);
     return new Promise((resolve, reject) => {
       if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 5) {
         return reject(new TypeError('UE broker maxAttempts must be an integer from 1 to 5'));
+      }
+      if (preSendAuthorize !== undefined && typeof preSendAuthorize !== 'function') {
+        return reject(new TypeError('UE broker preSendAuthorize must be a function'));
+      }
+      if (maxResponseBytes !== null && (
+        !Number.isSafeInteger(maxResponseBytes)
+        || maxResponseBytes < 2
+        || maxResponseBytes > UE_MAX_SCOPED_RESPONSE_BYTES
+      )) {
+        return reject(new TypeError('UE broker maxResponseBytes must be an integer from 2 to 16777216'));
       }
       if (signal && signal.aborted) {
         const error = new Error(`UE command '${type}' was aborted`);
@@ -424,7 +444,8 @@ class UeMcpBroker {
         if (this.inFlight !== job) this._pump();
       };
       job = {
-        type, params, timeoutMs, queueDeadlineMs, maxAttempts, enqueuedAt: Date.now(),
+        type, params, timeoutMs, queueDeadlineMs, maxAttempts, preSendAuthorize,
+        maxResponseBytes, enqueuedAt: Date.now(),
         resolve: safeResolve, reject: safeReject, signal, cancelled: false,
       };
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
@@ -513,13 +534,21 @@ class UeMcpBroker {
     this._lastCooldown = UE_COOLDOWN[job.type] || UE_COOLDOWN._default;
 
     Promise.resolve()
-      .then(() => this._execWithRetry(job.type, job.params, job.timeoutMs, job.maxAttempts, job.signal))
+      .then(() => this._execWithRetry(
+        job.type,
+        job.params,
+        job.timeoutMs,
+        job.maxAttempts,
+        job.signal,
+        job.maxResponseBytes,
+        job.preSendAuthorize,
+      ))
       .then((r) => { if (!job.cancelled) { this.totalSent++; job.resolve(r); } })
       .catch((e) => { if (!job.cancelled) { this.totalErrors++; this.lastError = e && e.message; job.reject(e); } })
       .finally(() => { this._lastCmdEnd = Date.now(); this.inFlight = null; this._pump(); });
   }
 
-  _execOnce(type, params, timeoutMs, signal) {
+  _execOnce(type, params, timeoutMs, signal, maxResponseBytes = null) {
     return new Promise((resolve, reject) => {
       if (signal && signal.aborted) {
         const error = new Error(`UE command '${type}' was aborted`);
@@ -529,6 +558,7 @@ class UeMcpBroker {
       const sock = new net.Socket();
       let settled = false;
       let buf = '';
+      let responseBytes = 0;
       const cleanup = () => {
         clearTimeout(timer);
         if (signal) signal.removeEventListener('abort', onAbort);
@@ -543,7 +573,17 @@ class UeMcpBroker {
       const timer = setTimeout(() => finish(reject, new Error(`UE command '${type}' timed out after ${timeoutMs}ms`)), timeoutMs);
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
       sock.connect(this.port, this.host, () => { sock.write(JSON.stringify({ type, params }) + '\n'); });
-      sock.on('data', (d) => { buf += d.toString(); try { finish(resolve, JSON.parse(buf)); } catch {} });
+      sock.on('data', (d) => {
+        responseBytes += Buffer.isBuffer(d) ? d.length : Buffer.byteLength(String(d), 'utf8');
+        if (maxResponseBytes !== null && responseBytes > maxResponseBytes) {
+          const error = new Error(`UE command '${type}' response exceeded its fixed byte limit`);
+          error.code = 'UE_RESPONSE_TOO_LARGE';
+          finish(reject, error);
+          return;
+        }
+        buf += d.toString();
+        try { finish(resolve, JSON.parse(buf)); } catch {}
+      });
       sock.on('error', (e) => finish(reject, new Error(`UE connection error: ${e.message}`)));
       sock.on('close', () => {
         if (settled) return;
@@ -553,7 +593,7 @@ class UeMcpBroker {
     });
   }
 
-  async _execWithRetry(type, params, timeoutMs, retries, signal) {
+  async _execWithRetry(type, params, timeoutMs, retries, signal, maxResponseBytes = null, preSendAuthorize) {
     let lastErr;
     for (let i = 0; i < retries; i++) {
       if (signal && signal.aborted) {
@@ -561,10 +601,19 @@ class UeMcpBroker {
         error.name = 'AbortError'; error.code = 'UE_COMMAND_ABORTED';
         throw error;
       }
-      try { return await this._exec(type, params, timeoutMs, signal); }
+      if (preSendAuthorize) {
+        let authorized = false;
+        try { authorized = await preSendAuthorize(); } catch (_error) { authorized = false; }
+        if (authorized !== true) {
+          const error = new Error(`UE command '${type}' authorization expired before dispatch`);
+          error.code = 'UE_COMMAND_AUTHORIZATION_EXPIRED';
+          throw error;
+        }
+      }
+      try { return await this._exec(type, params, timeoutMs, signal, maxResponseBytes); }
       catch (e) {
         lastErr = e;
-        if (e && e.code === 'UE_COMMAND_ABORTED') throw e;
+        if (e && UE_NON_RETRYABLE_ERROR_CODES.has(e.code)) throw e;
         if (i < retries - 1) await new Promise((r) => setTimeout(r, 300 * (i + 1)));
       }
     }

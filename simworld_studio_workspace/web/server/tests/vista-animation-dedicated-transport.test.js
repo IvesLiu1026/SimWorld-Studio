@@ -2,10 +2,15 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const net = require("node:net");
 
 const { createProductionExecutionGuard, productionMcpToolAllowed } = require("../production-execution-policy");
 const { UeMcpBroker } = require("../unreal-bridge");
 const { createVistaSlotBrokerResolver } = require("../vista-scene-executor-runtime");
+const {
+  ANIMATION_UE_OPERATION_ALLOWLIST,
+  ANIMATION_UE_REQUEST_SCHEMA,
+} = require("../vista-animation-ue-adapter");
 const {
   TRANSPORT_METHODS,
   createVistaAnimationDedicatedTransportResolver,
@@ -25,6 +30,21 @@ function success(value) {
   return { status: "success", result: JSON.stringify(value) };
 }
 
+function contentRequest(method, { request = {}, operationFingerprint } = {}) {
+  const operation = ANIMATION_UE_OPERATION_ALLOWLIST[method];
+  if (!operation) throw new Error(`unknown test operation ${method}`);
+  return JSON.stringify({
+    schema: ANIMATION_UE_REQUEST_SCHEMA,
+    operation_id: operation.operation_id,
+    operation_fingerprint: operationFingerprint || operation.operation_fingerprint,
+    invocation_id: "vau-offline-test",
+    request_digest: "b".repeat(64),
+    content_proof: {},
+    nonce_marker: {},
+    request,
+  });
+}
+
 function createRecordingBroker(port = IDENTITY.mcpPort, responder = (type) => success({ type })) {
   const calls = [];
   return {
@@ -35,6 +55,14 @@ function createRecordingBroker(port = IDENTITY.mcpPort, responder = (type) => su
       return responder(type, params, options);
     },
   };
+}
+
+async function waitFor(predicate, timeoutMs = 1000) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error("timed out waiting for test condition");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 function createActiveResolver(broker, binding = IDENTITY) {
@@ -74,11 +102,11 @@ test("resolver exposes only four fixed methods and dispatches exact command/para
     { mutation: false, maxAttempts: 1, timeoutMs: 2500, queueDeadlineMs: 2500 },
   );
   const contentRead = await transport.invokeAnimationContentApi(
-    JSON.stringify({ operation: "preflight" }),
+    contentRequest("preflightAnimation"),
     { mutation: false, maxAttempts: 2, timeoutMs: 15_000, queueDeadlineMs: 30_000 },
   );
   const contentMutation = await transport.invokeAnimationContentApi(
-    JSON.stringify({ operation: "start" }),
+    contentRequest("startAnimationAction"),
     { mutation: true, maxAttempts: 1, timeoutMs: 10_000, queueDeadlineMs: 20_000 },
   );
   const engineTime = await transport.sampleAnimationEngineTime(
@@ -197,36 +225,103 @@ test("a lease revoked after runtime resolution fails closed before UE dispatch",
   assert.equal(broker.calls.length, 0);
 });
 
+test("a mutation revoked while queued is rejected by the broker pre-send authorization hook", async () => {
+  let active = true;
+  let releaseBlocker;
+  const blocker = new Promise((resolve) => { releaseBlocker = resolve; });
+  const executedTypes = [];
+  const broker = new UeMcpBroker({
+    port: IDENTITY.mcpPort,
+    exec: async (type) => {
+      executedTypes.push(type);
+      if (type === "test_blocker") return blocker;
+      return success({ type });
+    },
+  });
+  const resolve = createVistaAnimationDedicatedTransportResolver({
+    resolveUeBroker: () => (active ? broker : null),
+  });
+  const transport = await resolve(IDENTITY);
+  const first = broker.send("test_blocker", {}, { maxAttempts: 1 });
+  await waitFor(() => broker.status().inFlight === "test_blocker");
+  const queuedMutation = transport.invokeAnimationContentApi(
+    contentRequest("startAnimationAction"),
+    { mutation: true, maxAttempts: 1 },
+  );
+  await waitFor(() => broker.status().queueDepth === 1);
+  assert.deepEqual(Object.keys(broker.queue[0].params), ["request_json"]);
+
+  active = false;
+  releaseBlocker(success({ released: true }));
+  await first;
+  await assert.rejects(
+    queuedMutation,
+    (error) => error.code === "ANIMATION_UE_TRANSPORT_UNAVAILABLE" && error.retryable === false,
+  );
+  assert.deepEqual(executedTypes, ["test_blocker"]);
+});
+
 test("mutation and restricted read retry/timeout policies fail closed before dispatch", async () => {
   const broker = createRecordingBroker();
   const { resolve } = createActiveResolver(broker);
   const transport = await resolve(IDENTITY);
   const cases = [
-    () => transport.invokeAnimationContentApi("{}", { mutation: true, maxAttempts: 2 }),
-    () => transport.invokeAnimationContentApi("{}", { mutation: false, maxAttempts: 3 }),
-    () => transport.probeAnimationContentApi("{}", { mutation: false, maxAttempts: 2 }),
-    () => transport.captureAnimationEvidence("{}", { mutation: true, maxAttempts: 1 }),
-    () => transport.sampleAnimationEngineTime("{}", { mutation: false, maxAttempts: 1, timeoutMs: 10_001 }),
-    () => transport.probeAnimationContentApi("{}", { mutation: false, maxAttempts: 1, queueDeadlineMs: 10_001 }),
+    [() => transport.invokeAnimationContentApi(contentRequest("startAnimationAction"), { mutation: true, maxAttempts: 2 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
+    [() => transport.invokeAnimationContentApi(contentRequest("preflightAnimation"), { mutation: false, maxAttempts: 3 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
+    [() => transport.invokeAnimationContentApi(contentRequest("startAnimationAction"), { mutation: false, maxAttempts: 2 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
+    [() => transport.invokeAnimationContentApi(contentRequest("preflightAnimation"), { mutation: true, maxAttempts: 1 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
+    [() => transport.invokeAnimationContentApi(contentRequest("startAnimationAction", {
+      operationFingerprint: "f".repeat(64),
+    }), { mutation: true, maxAttempts: 1 }), "ANIMATION_UE_TRANSPORT_REQUEST_INVALID"],
+    [() => transport.probeAnimationContentApi("{}", { mutation: false, maxAttempts: 2 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
+    [() => transport.captureAnimationEvidence("{}", { mutation: true, maxAttempts: 1 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
+    [() => transport.sampleAnimationEngineTime("{}", { mutation: false, maxAttempts: 1, timeoutMs: 10_001 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
+    [() => transport.probeAnimationContentApi("{}", { mutation: false, maxAttempts: 1, queueDeadlineMs: 10_001 }), "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID"],
   ];
-  for (const invoke of cases) {
-    await assert.rejects(invoke, (error) => error.code === "ANIMATION_UE_TRANSPORT_OPTIONS_INVALID");
+  for (const [invoke, code] of cases) {
+    await assert.rejects(invoke, (error) => error.code === code);
   }
   assert.equal(broker.calls.length, 0);
 
   const controller = new AbortController();
-  await transport.invokeAnimationContentApi("{}", {
+  await transport.invokeAnimationContentApi(contentRequest("preflightAnimation"), {
     mutation: false,
-    maxAttempts: 1,
+    maxAttempts: 2,
     signal: controller.signal,
   });
   assert.equal(broker.calls[0].options.signal, controller.signal);
   assert.deepEqual(Object.keys(broker.calls[0].options).sort(), [
     "maxAttempts",
+    "maxResponseBytes",
+    "preSendAuthorize",
     "queueDeadlineMs",
     "signal",
     "timeoutMs",
   ]);
+});
+
+test("every fixed content operation derives mutation and retry policy from the adapter contract", async () => {
+  const broker = createRecordingBroker();
+  const { resolve } = createActiveResolver(broker);
+  const transport = await resolve(IDENTITY);
+  const mutationMethods = [
+    "startAnimationAction",
+    "stopAnimationAction",
+    "releaseAnimationAction",
+    "restoreAnimationState",
+  ];
+  const readMethods = [
+    "preflightAnimation",
+    "snapshotAnimationState",
+    "waitAnimationAction",
+  ];
+  for (const method of mutationMethods) {
+    await transport.invokeAnimationContentApi(contentRequest(method), { mutation: true, maxAttempts: 1 });
+  }
+  for (const method of readMethods) {
+    await transport.invokeAnimationContentApi(contentRequest(method), { mutation: false, maxAttempts: 2 });
+  }
+  assert.deepEqual(broker.calls.map((call) => call.options.maxAttempts), [1, 1, 1, 1, 2, 2, 2]);
 });
 
 test("real UeMcpBroker retries bounded reads but never retries a mutation", async () => {
@@ -242,7 +337,10 @@ test("real UeMcpBroker retries bounded reads but never retries a mutation", asyn
     resolveUeBroker: () => mutationBroker,
   })(IDENTITY);
   await assert.rejects(
-    mutationTransport.invokeAnimationContentApi("{}", { mutation: true, maxAttempts: 1 }),
+    mutationTransport.invokeAnimationContentApi(
+      contentRequest("startAnimationAction"),
+      { mutation: true, maxAttempts: 1 },
+    ),
     (error) => error.code === "ANIMATION_UE_TRANSPORT_UNAVAILABLE" && error.retryable === false,
   );
   assert.equal(mutationAttempts, 1);
@@ -259,10 +357,65 @@ test("real UeMcpBroker retries bounded reads but never retries a mutation", asyn
     resolveUeBroker: () => readBroker,
   })(IDENTITY);
   await assert.rejects(
-    readTransport.invokeAnimationContentApi("{}", { mutation: false, maxAttempts: 2 }),
+    readTransport.invokeAnimationContentApi(
+      contentRequest("preflightAnimation"),
+      { mutation: false, maxAttempts: 2 },
+    ),
     (error) => error.code === "ANIMATION_UE_TRANSPORT_UNAVAILABLE" && error.retryable === true,
   );
   assert.equal(readAttempts, 2);
+});
+
+test("a bounded read reauthorizes before every retry attempt", async () => {
+  let active = true;
+  let executionAttempts = 0;
+  const broker = new UeMcpBroker({
+    port: IDENTITY.mcpPort,
+    exec: async () => {
+      executionAttempts += 1;
+      active = false;
+      throw new Error("first read attempt disconnected");
+    },
+  });
+  const transport = await createVistaAnimationDedicatedTransportResolver({
+    resolveUeBroker: () => (active ? broker : null),
+  })(IDENTITY);
+
+  await assert.rejects(
+    transport.invokeAnimationContentApi(
+      contentRequest("preflightAnimation"),
+      { mutation: false, maxAttempts: 2 },
+    ),
+    (error) => error.code === "ANIMATION_UE_TRANSPORT_UNAVAILABLE" && error.retryable === true,
+  );
+  assert.equal(executionAttempts, 1, "revocation prevents the second socket attempt");
+});
+
+test("UeMcpBroker enforces a scoped response byte cap before buffering the full reply", async (t) => {
+  let connections = 0;
+  const server = net.createServer((socket) => {
+    connections += 1;
+    socket.once("data", () => {
+      socket.end(`{"status":"success","result":"${"x".repeat(4096)}"}`);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  const broker = new UeMcpBroker({ host: "127.0.0.1", port: address.port });
+
+  await assert.rejects(
+    broker.send("vista_animation_capabilities", { request_json: "{}" }, {
+      maxAttempts: 2,
+      maxResponseBytes: 256,
+    }),
+    (error) => error.code === "UE_RESPONSE_TOO_LARGE",
+  );
+  assert.equal(connections, 1, "oversized replies are non-retryable");
+  await assert.rejects(
+    broker.send("vista_animation_capabilities", { request_json: "{}" }, { maxResponseBytes: 1 }),
+    /maxResponseBytes/,
+  );
 });
 
 test("request and outer UE result contracts reject malformed, unknown, and oversized data", async () => {
@@ -301,7 +454,9 @@ test("broker failures are redacted and there is no Python, console, or fallback 
   const { resolve } = createActiveResolver(broker);
   const transport = await resolve(IDENTITY);
   await assert.rejects(
-    transport.invokeAnimationContentApi(JSON.stringify({ script: secret }), {
+    transport.invokeAnimationContentApi(contentRequest("startAnimationAction", {
+      request: { script: secret },
+    }), {
       mutation: true,
       maxAttempts: 1,
     }),
