@@ -7,6 +7,10 @@ function cleanId(value) {
   return id || null;
 }
 
+function runKey(scopeId, runId) {
+  return `${scopeId}\0${runId}`;
+}
+
 function abortError(reason) {
   const error = new Error(reason || "review run cancelled");
   error.name = "AbortError";
@@ -24,7 +28,8 @@ class ReviewRunRegistry {
   start({ scopeId, runId } = {}) {
     const scope = cleanId(scopeId) || "_global";
     const id = cleanId(runId) || this.randomUUID();
-    if (this.runs.has(id)) {
+    const key = runKey(scope, id);
+    if (this.runs.has(key)) {
       const error = new Error(`review run already exists: ${id}`);
       error.code = "REVIEW_RUN_CONFLICT";
       throw error;
@@ -41,18 +46,16 @@ class ReviewRunRegistry {
       signal: controller.signal,
       startedAt: Date.now(),
     };
-    this.runs.set(id, record);
+    this.runs.set(key, record);
     this.currentByScope.set(scope, id);
     return record;
   }
 
   get({ scopeId, runId } = {}) {
-    const scope = cleanId(scopeId);
-    const id = cleanId(runId) || (scope && this.currentByScope.get(scope));
+    const scope = cleanId(scopeId) || "_global";
+    const id = cleanId(runId) || this.currentByScope.get(scope);
     if (!id) return null;
-    const record = this.runs.get(id) || null;
-    if (record && scope && record.scopeId !== scope) return null;
-    return record;
+    return this.runs.get(runKey(scope, id)) || null;
   }
 
   cancel({ scopeId, runId, reason = "user_stop" } = {}) {
@@ -65,7 +68,7 @@ class ReviewRunRegistry {
   complete({ scopeId, runId } = {}) {
     const record = this.get({ scopeId, runId });
     if (!record) return false;
-    this.runs.delete(record.runId);
+    this.runs.delete(runKey(record.scopeId, record.runId));
     if (this.currentByScope.get(record.scopeId) === record.runId) {
       this.currentByScope.delete(record.scopeId);
     }

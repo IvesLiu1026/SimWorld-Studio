@@ -3,17 +3,23 @@
 const crypto = require("node:crypto");
 
 const { ReviewRunRegistry } = require("./review-run-registry");
+const { resolveReviewContract } = require("./internal-http");
+const { createRequestReviewBudget } = require("./review-budget");
+const { boundedCanonicalJson, normalizeReviewSceneBinding } = require("./review-scene-binding");
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 const TRUSTED_PROFILES = new Set(["trusted_proxy", "trusted-proxy", "public_webrtc", "public-webrtc"]);
 const REQUEST_CONTEXT = Symbol("simworld.reviewRequestContext");
 const MAX_HELD_TERMINAL_BYTES = 64 * 1024;
+const MAX_REVIEW_MESSAGE_BYTES = 1024 * 1024;
+const MAX_REVIEW_AUXILIARY_BYTES = 256 * 1024;
+const REVIEW_INPUT_CONTRACT_SCHEMA = "simworld-review-input-contract/v1";
 const REVIEW_FATAL_REASONS = new Set(["builder_error", "critic_error", "budget_exhausted"]);
 const REVIEW_REASONS = new Set([
   "pass", "max_iterations", "builder_error", "critic_error",
-  "budget_exhausted", "cancelled",
+  "budget_exhausted", "cancelled", "handler_error",
 ]);
-const REVIEW_VERDICTS = new Set(["PASS", "FAIL", "NEEDS_IMPROVEMENT"]);
+const REVIEW_VERDICTS = new Set(["PASS", "FAIL", "NEEDS_IMPROVEMENT", "UNKNOWN"]);
 
 class ReviewLoopCoordinatorError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -47,6 +53,97 @@ function requestValue(request, field) {
   const body = request && request.body && typeof request.body === "object" ? request.body : {};
   const query = request && request.query && typeof request.query === "object" ? request.query : {};
   return body[field] !== undefined ? body[field] : query[field];
+}
+
+function boundedInputString(value, field, { required = false, maxBytes = MAX_REVIEW_AUXILIARY_BYTES } = {}) {
+  if (value === undefined || value === null || value === "") {
+    if (required) fail("REVIEW_INPUT_INVALID", `${field} is required`, 400);
+    return null;
+  }
+  if (typeof value !== "string" || (required && value.trim().length === 0)
+      || Buffer.byteLength(value, "utf8") > maxBytes) {
+    fail("REVIEW_INPUT_INVALID", `${field} is invalid`, 400);
+  }
+  return value;
+}
+
+function reviewInputDigests({ request, mode, scope, dependencies = {} } = {}) {
+  const body = request && request.body && typeof request.body === "object" && !Array.isArray(request.body)
+    ? request.body : {};
+  const env = dependencies.env && typeof dependencies.env === "object"
+    ? dependencies.env : process.env;
+  const message = boundedInputString(body.message, "message", {
+    required: true,
+    maxBytes: MAX_REVIEW_MESSAGE_BYTES,
+  });
+  const feedback = boundedInputString(body.feedback, "feedback");
+  const focus = boundedInputString(body.focus, "focus");
+  const rawSkills = body.skills === undefined || body.skills === null ? [] : body.skills;
+  if (!Array.isArray(rawSkills) || rawSkills.length > 64
+      || rawSkills.some((value) => typeof value !== "string" || !SAFE_ID.test(value))) {
+    fail("REVIEW_INPUT_INVALID", "skills are invalid", 400);
+  }
+  const intentValue = dependencies.intentStore && typeof dependencies.intentStore.get === "function"
+    ? dependencies.intentStore.get(scope.scopeId) : "";
+  const priorIntent = boundedInputString(intentValue || "", "prior intent", {
+    maxBytes: MAX_REVIEW_MESSAGE_BYTES,
+  }) || "";
+  let contract;
+  let budget;
+  try {
+    contract = resolveReviewContract(body, env);
+    budget = createRequestReviewBudget(body, env).snapshot();
+  } catch (error) {
+    fail(
+      error && error.code || "REVIEW_INPUT_INVALID",
+      String(error && error.message || "Review input contract is invalid"),
+      400,
+    );
+  }
+  const optionalPolicy = {};
+  for (const key of [
+    "assetMode", "assetRetrievalMode", "require_real_assets", "requireRealAssets",
+    "asset_degraded_mode", "assetDegradedMode", "allow_degraded_assets", "allowDegradedAssets",
+    "skillSelectionMode",
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) optionalPolicy[key] = body[key];
+  }
+  let canonical;
+  try {
+    canonical = boundedCanonicalJson({
+      schema: REVIEW_INPUT_CONTRACT_SCHEMA,
+      mode,
+      message,
+      feedback,
+      focus,
+      skills: rawSkills,
+      resolved_contract: {
+        builder_agent: contract.builderAgent,
+        builder_model: contract.builderModel || null,
+        critic_provider: contract.criticProvider,
+        critic_model: contract.criticModel,
+        summarizer_provider: contract.summarizerProvider,
+        summarizer_model: contract.summarizerModel,
+      },
+      budget: {
+        limit_usd: budget.limit_usd,
+        minimum_stage_usd: budget.minimum_stage_usd,
+      },
+      policy: optionalPolicy,
+    });
+  } catch (_error) {
+    fail("REVIEW_INPUT_INVALID", "Review input contract is invalid", 400);
+  }
+  const requestDigest = crypto.createHash("sha256").update(canonical, "utf8").digest("hex");
+  const executionCanonical = boundedCanonicalJson({
+    schema: "simworld-review-execution-input/v1",
+    request_digest: requestDigest,
+    prior_intent: priorIntent,
+  });
+  return Object.freeze({
+    requestDigest,
+    inputDigest: crypto.createHash("sha256").update(executionCanonical, "utf8").digest("hex"),
+  });
 }
 
 function activeLeaseIdentity(identity) {
@@ -233,7 +330,13 @@ function createLeaseBoundReviewBroker({ scope, resolveUeBroker } = {}) {
           || Number(current.port) !== activeLease.mcpPort) {
         fail("REVIEW_BROKER_LEASE_INVALID", "The active Studio lease is no longer valid.", 409);
       }
-      return current.send(...args);
+      const response = await current.send(...args);
+      const confirmed = resolveUeBroker(activeLease);
+      if (confirmed !== selected || !confirmed || typeof confirmed.send !== "function"
+          || Number(confirmed.port) !== activeLease.mcpPort) {
+        fail("REVIEW_BROKER_LEASE_INVALID", "The active Studio lease was revoked during the UE operation.", 409);
+      }
+      return response;
     },
   });
 }
@@ -268,31 +371,82 @@ function terminalSummaryFromFrame(chunk) {
   const frame = parseSseFrame(chunk);
   if (!frame || !["done", "loop_done"].includes(frame.event)) return null;
   const payload = frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload)
-    ? frame.payload : {};
+    ? frame.payload : null;
+  if (!payload || (frame.event === "done" && typeof payload.isError !== "boolean")) return null;
   const loop = frame.event === "loop_done"
     ? payload
     : (payload && typeof payload.loop === "object" && !Array.isArray(payload.loop)
-      ? payload.loop : {});
+      ? payload.loop : null);
+  if (!loop) return null;
   const rawReason = String(loop.reason || payload.failureReason || "").trim().toLowerCase();
-  const reason = REVIEW_REASONS.has(rawReason) ? rawReason : null;
+  if (!REVIEW_REASONS.has(rawReason)) return null;
   const rawVerdict = String(loop.finalStatus || "").trim().toUpperCase();
-  const finalVerdict = REVIEW_VERDICTS.has(rawVerdict) ? rawVerdict : "UNKNOWN";
+  if (!REVIEW_VERDICTS.has(rawVerdict)) return null;
   const rounds = Number(loop.rounds);
+  if (!Number.isSafeInteger(rounds) || rounds < 0 || rounds > 100) return null;
   const errorCode = payload.error && typeof payload.error === "object"
     ? payload.error.code : payload.code;
   return Object.freeze({
-    outcome: reason === "cancelled" ? "cancelled" : (REVIEW_FATAL_REASONS.has(reason) || payload.isError === true ? "failed" : "completed"),
-    reason: reason || (payload.isError === true ? "handler_error" : "handler_completed"),
-    finalVerdict,
-    rounds: Number.isSafeInteger(rounds) && rounds >= 0 && rounds <= 100 ? rounds : 0,
+    outcome: rawReason === "cancelled" ? "cancelled" : (REVIEW_FATAL_REASONS.has(rawReason) || rawReason === "handler_error" || payload.isError === true ? "failed" : "completed"),
+    reason: rawReason,
+    finalVerdict: rawVerdict,
+    rounds,
     errorCode: typeof errorCode === "string" ? errorCode : null,
   });
 }
 
-function createTerminalResponseGate(response) {
+function sseEventName(chunk) {
+  const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk || "");
+  const eventLine = text.split(/\r?\n/).find((entry) => entry.startsWith("event:"));
+  return eventLine ? eventLine.slice(6).trim().toLowerCase() : "";
+}
+
+function sameTerminalSummary(left, right) {
+  return Boolean(left && right
+    && left.outcome === right.outcome
+    && left.reason === right.reason
+    && left.finalVerdict === right.finalVerdict
+    && left.rounds === right.rounds
+    && left.errorCode === right.errorCode);
+}
+
+function reviewEvidenceFromFrame(chunk, prior = null) {
+  const frame = parseSseFrame(chunk);
+  if (!frame) return prior;
+  const payload = frame.payload && typeof frame.payload === "object" && !Array.isArray(frame.payload)
+    ? frame.payload : {};
+  const review = frame.event === "done" && payload.review
+      && typeof payload.review === "object" && !Array.isArray(payload.review)
+    ? payload.review : {};
+  const providerValue = frame.event === "critic_verdict"
+    ? payload.provider : (review.criticProvider || review.provider);
+  const modelValue = frame.event === "critic_verdict"
+    ? payload.model : (review.criticModel || review.model);
+  const provider = SAFE_ID.test(String(providerValue || "").trim())
+    ? String(providerValue).trim() : (prior && prior.provider || null);
+  const model = SAFE_ID.test(String(modelValue || "").trim())
+    ? String(modelValue).trim() : (prior && prior.model || null);
+  const rawEvidence = frame.event === "critic_verdict" && Array.isArray(payload.evidence_ids)
+    ? payload.evidence_ids : null;
+  const evidenceIds = rawEvidence
+    ? [...new Set(rawEvidence
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter((value) => /^sha256:[a-f0-9]{64}$/.test(value)))].sort()
+    : (prior && prior.evidenceIds || []);
+  if (!provider && !model && evidenceIds.length === 0) return prior;
+  return Object.freeze({ provider, model, evidenceIds: Object.freeze(evidenceIds) });
+}
+
+function createTerminalResponseGate(response, identity = {}) {
   if (!response || typeof response.write !== "function" || typeof response.end !== "function") {
     throw new TypeError("Review response must expose write and end");
   }
+  const boundIdentity = Object.freeze({
+    sessionId: SAFE_ID.test(String(identity.sessionId || "")) ? String(identity.sessionId) : null,
+    conversationId: SAFE_ID.test(String(identity.conversationId || ""))
+      ? String(identity.conversationId) : null,
+    runId: SAFE_ID.test(String(identity.runId || "")) ? String(identity.runId) : null,
+  });
   const originalWrite = response.write;
   const originalEnd = response.end;
   const heldWrites = [];
@@ -300,9 +454,13 @@ function createTerminalResponseGate(response) {
   let heldEnd = null;
   let pendingText = "";
   let summary = null;
+  let reviewEvidence = null;
   let restored = false;
   let holding = false;
   let compromised = false;
+  let terminalInvalid = false;
+  let explicitTerminal = false;
+  let announcedPass = false;
 
   function overflow() {
     compromised = true;
@@ -327,12 +485,32 @@ function createTerminalResponseGate(response) {
   function processFrame(frame) {
     const parsedFrame = parseSseFrame(frame);
     const parsedSummary = terminalSummaryFromFrame(frame);
+    const eventName = parsedFrame ? parsedFrame.event : sseEventName(frame);
+    reviewEvidence = reviewEvidenceFromFrame(frame, reviewEvidence);
     const announcesPass = Boolean(parsedFrame && parsedFrame.event === "critic_verdict"
       && String(parsedFrame.payload && parsedFrame.payload.status || "").trim().toUpperCase() === "PASS");
-    if (parsedSummary || announcesPass) holding = true;
-    if (parsedSummary) summary = parsedSummary;
-    if (holding) hold(frame);
-    else originalWrite.call(response, frame);
+    if (announcesPass) announcedPass = true;
+    if (["done", "loop_done"].includes(eventName)) {
+      explicitTerminal = true;
+      holding = true;
+      if (!parsedSummary) terminalInvalid = true;
+      else if (summary && !sameTerminalSummary(summary, parsedSummary)) terminalInvalid = true;
+      else if (!summary) summary = parsedSummary;
+    }
+    const identityPayload = parsedFrame && parsedFrame.payload
+        && typeof parsedFrame.payload === "object" && !Array.isArray(parsedFrame.payload)
+      ? parsedFrame.payload : {};
+    const boundFrame = parsedFrame && ["run_start", "done", "loop_done"].includes(parsedFrame.event)
+      ? `event: ${parsedFrame.event}\ndata: ${JSON.stringify({
+        ...identityPayload,
+        sessionId: boundIdentity.sessionId,
+        conversationId: boundIdentity.conversationId,
+        runId: boundIdentity.runId,
+      })}\n\n`
+      : frame;
+    if (announcesPass) holding = true;
+    if (holding) hold(boundFrame);
+    else originalWrite.call(response, boundFrame);
   }
 
   function drainCompleteFrames() {
@@ -367,8 +545,9 @@ function createTerminalResponseGate(response) {
       response.write(body);
     }
     if (!compromised && pendingText) {
-      const parsed = terminalSummaryFromFrame(pendingText);
-      if (parsed) summary = parsed;
+      // A terminal fragment without an SSE frame boundary is never an
+      // authoritative terminal, even if its JSON happens to parse.
+      terminalInvalid = true;
       holding = true;
       hold(pendingText);
       pendingText = "";
@@ -387,7 +566,29 @@ function createTerminalResponseGate(response) {
 
   return Object.freeze({
     get summary() { return summary; },
+    get reviewEvidence() { return reviewEvidence; },
     get compromised() { return compromised; },
+    validateTerminal() {
+      const passTerminal = Boolean(summary
+        && summary.outcome === "completed"
+        && summary.reason === "pass"
+        && summary.finalVerdict === "PASS");
+      const passEvidence = Boolean(reviewEvidence
+        && reviewEvidence.provider
+        && reviewEvidence.model
+        && Array.isArray(reviewEvidence.evidenceIds)
+        && reviewEvidence.evidenceIds.length > 0);
+      const valid = !compromised && !terminalInvalid && explicitTerminal && Boolean(summary)
+        && announcedPass === passTerminal
+        && (!passTerminal || passEvidence);
+      return Object.freeze({
+        valid,
+        code: valid ? null : "REVIEW_TERMINAL_INVALID",
+        announcedPass,
+        explicitTerminal,
+        passTerminal,
+      });
+    },
     release() {
       restore();
       for (const chunk of heldWrites) originalWrite.call(response, chunk);
@@ -396,11 +597,12 @@ function createTerminalResponseGate(response) {
     failClosed({
       code = "ARTIFACT_JOURNAL_UNAVAILABLE",
       message = "Durable artifact journal is unavailable.",
-      runId = null,
+      runId = boundIdentity.runId,
     } = {}) {
       restore();
       const payload = {
-        sessionId: null,
+        sessionId: boundIdentity.sessionId,
+        conversationId: boundIdentity.conversationId,
         runId,
         isError: true,
         cancelled: false,
@@ -411,9 +613,21 @@ function createTerminalResponseGate(response) {
         originalWrite.call(response, `event: done\ndata: ${JSON.stringify(payload)}\n\n`);
         originalEnd.call(response);
       } else if (typeof response.status === "function" && typeof response.json === "function") {
-        response.status(503).json({ error: payload.error, code: payload.code, runId: payload.runId });
+        response.status(503).json({
+          error: payload.error,
+          code: payload.code,
+          sessionId: payload.sessionId,
+          conversationId: payload.conversationId,
+          runId: payload.runId,
+        });
       } else {
-        originalEnd.call(response, JSON.stringify({ error: payload.error, code: payload.code }));
+        originalEnd.call(response, JSON.stringify({
+          error: payload.error,
+          code: payload.code,
+          sessionId: payload.sessionId,
+          conversationId: payload.conversationId,
+          runId: payload.runId,
+        }));
       }
     },
   });
@@ -429,6 +643,8 @@ function createReviewLoopCoordinator({
   textHandler,
   visualHandler,
   artifactRecorder = null,
+  captureReviewBinding = null,
+  mutationArbiter = null,
   handlerDependencies = () => ({}),
   logger = () => {},
 } = {}) {
@@ -447,6 +663,15 @@ function createReviewLoopCoordinator({
         || typeof artifactRecorder.ensureReviewTerminal !== "function")) {
     throw new TypeError("artifactRecorder must expose prepareReviewTerminal and ensureReviewTerminal");
   }
+  if (mutationArbiter !== null && mutationArbiter !== undefined
+      && (typeof mutationArbiter.acquire !== "function" || typeof mutationArbiter.isHeld !== "function")) {
+    throw new TypeError("mutationArbiter must expose acquire and isHeld");
+  }
+  const bindingCapture = typeof captureReviewBinding === "function"
+    ? captureReviewBinding
+    : (artifactRecorder && typeof artifactRecorder.captureReviewBinding === "function"
+      ? artifactRecorder.captureReviewBinding.bind(artifactRecorder)
+      : null);
   const resolveScope = createReviewScopeResolver({
     transportProfile,
     resolveActiveSession,
@@ -458,6 +683,24 @@ function createReviewLoopCoordinator({
   }
   const activeRunScopes = new Map();
   const activeRunKey = (scopeId, runId) => `${scopeId}\0${runId}`;
+
+  async function captureBinding({ request, scope, mode, run, phase }) {
+    if (typeof bindingCapture !== "function") {
+      fail("REVIEW_SCENE_BINDING_UNAVAILABLE", "Review scene binding capture is unavailable.", 503);
+    }
+    try {
+      const value = normalizeReviewSceneBinding(await bindingCapture({
+        request, scope, mode, run, phase, signal: run && run.signal,
+      }), `review.${phase}Binding`);
+      if (value.scope_id !== scope.scopeId) {
+        fail("REVIEW_SCENE_BINDING_INVALID", "Review scene binding does not match the active scope.", 409);
+      }
+      return value;
+    } catch (error) {
+      if (error instanceof ReviewLoopCoordinatorError) throw error;
+      fail("REVIEW_SCENE_BINDING_UNAVAILABLE", "Review scene binding capture failed.", 503);
+    }
+  }
 
   async function handleChat(request, response, next) {
     let mode;
@@ -476,22 +719,87 @@ function createReviewLoopCoordinator({
     let reviewTicket = null;
     let responseGate = null;
     let terminal = null;
+    let bindingBefore = null;
     let journalFailed = false;
     let recoveryBlocked = false;
+    let recoveredTerminal = false;
+    let sceneBindingFailed = false;
+    let terminalGateFailed = false;
+    let resolvedHandlerDependencies = null;
+    let requestDigest = null;
+    let inputDigest = null;
+    let mutationToken = null;
+    let requestedReviewRunId = null;
+    let providerExecutionState = "proven_not_started";
     const durableReview = Boolean(artifactRecorder && artifactRecorder.enabled !== false);
     try {
       const requestedRunId = requestValue(request, "runId");
+      if (durableReview
+          && (requestedRunId === undefined || requestedRunId === null || requestedRunId === "")) {
+        fail(
+          "REVIEW_RUN_ID_REQUIRED",
+          "A stable client Review run ID is required for durable execution.",
+          400,
+        );
+      }
+      const safeRequestedRunId = requestedRunId === undefined || requestedRunId === null || requestedRunId === ""
+        ? null
+        : safeId(requestedRunId, "runId");
+      requestedReviewRunId = safeRequestedRunId;
+      resolvedHandlerDependencies = handlerDependencies({ request, mode, scope, run: null }) || {};
+      if (!resolvedHandlerDependencies || typeof resolvedHandlerDependencies !== "object"
+          || Array.isArray(resolvedHandlerDependencies)) {
+        throw new TypeError("handlerDependencies must return an object");
+      }
+      ({ requestDigest, inputDigest } = reviewInputDigests({
+        request,
+        mode,
+        scope,
+        dependencies: resolvedHandlerDependencies,
+      }));
+      // From this point onward, a conflict may belong to an already-running
+      // invocation with the same client ID. Never authorize a new paid run
+      // merely because this request has not reached its own handler yet.
+      providerExecutionState = "unknown";
+      if (mutationArbiter) {
+        const mutationIdentity = scope.leaseBound
+          ? scope.activeLease
+          : (resolvedHandlerDependencies.ueBroker
+              && Number.isSafeInteger(Number(resolvedHandlerDependencies.ueBroker.port))
+            ? { mcpPort: Number(resolvedHandlerDependencies.ueBroker.port) }
+            : { loopback: true });
+        try {
+          mutationToken = mutationArbiter.acquire(mutationIdentity, {
+            kind: "review",
+            operationId: safeRequestedRunId,
+          });
+        } catch (error) {
+          if (error && error.code === "RUNTIME_MUTATION_SLOT_BUSY") {
+            fail("REVIEW_SLOT_BUSY", "This Studio slot already has an active runtime mutation.", 409);
+          }
+          throw error;
+        }
+      }
       run = registry.start({
         scopeId: scope.scopeId,
-        ...(requestedRunId === undefined || requestedRunId === null || requestedRunId === ""
-          ? {}
-          : { runId: safeId(requestedRunId, "runId") }),
+        ...(safeRequestedRunId ? { runId: safeRequestedRunId } : {}),
       });
-      if (scope.leaseBound) activeRunScopes.set(activeRunKey(scope.scopeId, run.runId), scope);
-      responseGate = createTerminalResponseGate(response);
+      if (scope.leaseBound) {
+        activeRunScopes.set(activeRunKey(scope.scopeId, run.runId), { scope, mutationToken });
+      }
+      if (durableReview) {
+        bindingBefore = await captureBinding({ request, scope, mode, run, phase: "before" });
+      }
+      responseGate = createTerminalResponseGate(response, {
+        sessionId: scope.scopeId,
+        conversationId: scope.conversationId,
+        runId: run.runId,
+      });
       if (durableReview) {
         try {
-          reviewTicket = await artifactRecorder.prepareReviewTerminal({ scope, run, mode });
+          reviewTicket = await artifactRecorder.prepareReviewTerminal({
+            scope, run, mode, binding: bindingBefore, requestDigest, inputDigest,
+          });
         } catch (error) {
           journalFailed = true;
           throw error;
@@ -515,6 +823,8 @@ function createReviewLoopCoordinator({
         if (reviewTicket.created === false
             && ["terminal_pending", "published"].includes(reviewTicket.state)) {
           terminal = reviewTicket.terminal;
+          recoveredTerminal = true;
+          providerExecutionState = "attempted";
           if (!terminal || typeof terminal !== "object") {
             journalFailed = true;
             throw new ReviewLoopCoordinatorError(
@@ -525,6 +835,7 @@ function createReviewLoopCoordinator({
           }
           const payload = {
             sessionId: scope.scopeId,
+            conversationId: scope.conversationId,
             runId: run.runId,
             isError: terminal.outcome === "failed",
             cancelled: terminal.outcome === "cancelled",
@@ -541,8 +852,10 @@ function createReviewLoopCoordinator({
           response.end();
         } else {
           const handler = mode === "visual_loop" ? visualHandler : textHandler;
+          if (mutationToken) mutationToken.invalidateScene();
+          providerExecutionState = "attempted";
           await handler(request, response, {
-            ...handlerDependencies({ request, mode, scope, run }),
+            ...resolvedHandlerDependencies,
             scopeId: scope.scopeId,
             internalSessionId: scope.scopeId,
             internalConversationId: scope.scopeId,
@@ -552,8 +865,10 @@ function createReviewLoopCoordinator({
         }
       } else {
         const handler = mode === "visual_loop" ? visualHandler : textHandler;
+        if (mutationToken) mutationToken.invalidateScene();
+        providerExecutionState = "attempted";
         await handler(request, response, {
-          ...handlerDependencies({ request, mode, scope, run }),
+          ...resolvedHandlerDependencies,
           scopeId: scope.scopeId,
           internalSessionId: scope.scopeId,
           internalConversationId: scope.scopeId,
@@ -572,6 +887,11 @@ function createReviewLoopCoordinator({
       const message = aborted ? "Review run cancelled" : (error instanceof ReviewLoopCoordinatorError
         ? error.message
         : "Review loop failed");
+      const provenPreProviderFailure = Boolean(
+        providerExecutionState === "proven_not_started"
+        && scope
+        && requestedReviewRunId,
+      );
       terminal = {
         outcome: aborted ? "cancelled" : "failed",
         reason: aborted ? "cancelled" : "handler_error",
@@ -581,15 +901,30 @@ function createReviewLoopCoordinator({
       };
       try { logger("review-coordinator", `${mode} ${code}`); } catch (_error) {}
       if (!response.headersSent) {
-        response.status(statusCode).json({ error: message, code, runId: run && run.runId });
+        response.status(statusCode).json({
+          error: message,
+          code,
+          sessionId: scope ? scope.scopeId : null,
+          conversationId: scope ? scope.conversationId : null,
+          runId: run && run.runId || requestedReviewRunId,
+          ...(provenPreProviderFailure ? { providerAttempted: false } : {}),
+        });
       } else if (!response.writableEnded) {
         const payload = {
           sessionId: scope ? scope.scopeId : null,
-          runId: run && run.runId,
+          conversationId: scope ? scope.conversationId : null,
+          runId: run && run.runId || requestedReviewRunId,
           isError: true,
           cancelled: aborted,
           error: message,
           code,
+          ...(provenPreProviderFailure ? { providerAttempted: false } : {}),
+          loop: {
+            reason: terminal.reason,
+            rounds: terminal.rounds,
+            finalStatus: terminal.finalVerdict,
+            mode,
+          },
         };
         try { response.write(`event: done\ndata: ${JSON.stringify(payload)}\n\n`); } catch (_error) {}
         try { response.end(); } catch (_error) {}
@@ -598,21 +933,63 @@ function createReviewLoopCoordinator({
       if (run && scope) {
         const handlerHttpFailed = Number(response && response.statusCode) >= 400;
         const gateSummary = responseGate && responseGate.summary;
-        terminal = handlerHttpFailed
-          ? (terminal || {
+        const gateEvidence = responseGate && responseGate.reviewEvidence;
+        const gateValidation = recoveredTerminal || handlerHttpFailed || !responseGate
+          ? { valid: true }
+          : responseGate.validateTerminal();
+        terminal = recoveredTerminal
+          ? terminal
+          : (handlerHttpFailed
+            ? (terminal || {
+              outcome: "failed",
+              reason: "handler_error",
+              finalVerdict: "UNKNOWN",
+              rounds: 0,
+              errorCode: "REVIEW_HANDLER_HTTP_ERROR",
+            })
+            : (gateSummary || terminal || {
+              outcome: "completed",
+              reason: "handler_completed",
+              finalVerdict: "UNKNOWN",
+              rounds: 0,
+              errorCode: null,
+            }));
+        if (!gateValidation.valid) {
+          terminalGateFailed = true;
+          terminal = {
             outcome: "failed",
             reason: "handler_error",
             finalVerdict: "UNKNOWN",
-            rounds: 0,
-            errorCode: "REVIEW_HANDLER_HTTP_ERROR",
-          })
-          : (gateSummary || terminal || {
-            outcome: "completed",
-            reason: "handler_completed",
-            finalVerdict: "UNKNOWN",
-            rounds: 0,
-            errorCode: null,
-          });
+            rounds: terminal && Number.isSafeInteger(terminal.rounds) ? terminal.rounds : 0,
+            errorCode: terminal && terminal.outcome === "failed" && terminal.errorCode
+              ? terminal.errorCode : "REVIEW_TERMINAL_INVALID",
+          };
+        }
+        if (durableReview && reviewTicket && !recoveryBlocked && !recoveredTerminal) {
+          try {
+            const bindingAfter = await captureBinding({ request, scope, mode, run, phase: "after" });
+            terminal = {
+              ...terminal,
+              provider: gateEvidence && gateEvidence.provider,
+              model: gateEvidence && gateEvidence.model,
+              evidenceIds: gateEvidence && gateEvidence.evidenceIds || [],
+              bindingAfter,
+            };
+          } catch (_bindingError) {
+            sceneBindingFailed = true;
+            terminal = {
+              outcome: "failed",
+              reason: "handler_error",
+              finalVerdict: "UNKNOWN",
+              rounds: terminal.rounds || 0,
+              errorCode: "REVIEW_SCENE_BINDING_UNAVAILABLE",
+              provider: gateEvidence && gateEvidence.provider,
+              model: gateEvidence && gateEvidence.model,
+              evidenceIds: gateEvidence && gateEvidence.evidenceIds || [],
+              bindingAfter: null,
+            };
+          }
+        }
         try {
           if (durableReview && reviewTicket && !recoveryBlocked) {
             await artifactRecorder.ensureReviewTerminal({ ticket: reviewTicket, terminal });
@@ -624,15 +1001,26 @@ function createReviewLoopCoordinator({
         activeRunScopes.delete(activeRunKey(scope.scopeId, run.runId));
         registry.complete({ scopeId: scope.scopeId, runId: run.runId });
         if (responseGate) {
-          if (responseGate.compromised) responseGate.failClosed({
+          if (terminalGateFailed) responseGate.failClosed({
+            code: "REVIEW_TERMINAL_INVALID",
+            message: "Review did not produce one consistent authoritative terminal.",
+            runId: run.runId,
+          });
+          else if (responseGate.compromised) responseGate.failClosed({
             code: "REVIEW_TERMINAL_GATE_FAILED",
             message: "Review terminal response could not be delivered safely.",
             runId: run.runId,
           });
           else if (journalFailed) responseGate.failClosed({ runId: run.runId });
+          else if (sceneBindingFailed) responseGate.failClosed({
+            code: "REVIEW_SCENE_BINDING_UNAVAILABLE",
+            message: "Review scene binding capture failed.",
+            runId: run.runId,
+          });
           else responseGate.release();
         }
       }
+      if (mutationToken) mutationToken.release();
     }
   }
 
@@ -641,6 +1029,7 @@ function createReviewLoopCoordinator({
     let scope = null;
     let internal = false;
     let runId = null;
+    let activeEntry = null;
     try {
       try {
         scope = resolveScope(request);
@@ -652,7 +1041,8 @@ function createReviewLoopCoordinator({
         if (safeId(body.conversationId, "conversationId") !== scopeId) throw error;
         runId = safeId(body.runId, "runId");
         const record = registry.get({ scopeId, runId });
-        const activeScope = activeRunScopes.get(activeRunKey(scopeId, runId));
+        activeEntry = activeRunScopes.get(activeRunKey(scopeId, runId));
+        const activeScope = activeEntry && activeEntry.scope;
         let stillActive = false;
         try {
           stillActive = Boolean(activeScope && isActiveSessionBinding(activeScope.activeLease));
@@ -670,6 +1060,7 @@ function createReviewLoopCoordinator({
         runId,
         internal,
         activeLease: scope.activeLease,
+        mutationToken: internal && activeEntry ? activeEntry.mutationToken : null,
       });
       return next();
     } catch (error) {

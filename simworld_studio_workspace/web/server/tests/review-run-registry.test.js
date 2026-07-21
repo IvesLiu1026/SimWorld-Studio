@@ -47,12 +47,17 @@ test("completion removes only the matching current run", () => {
   assert.equal(registry.get({ scopeId: "conversation-a" }), null);
 });
 
-test("duplicate caller-supplied run ids fail closed", () => {
+test("caller-supplied run ids are unique within a scope but isolated across owners", () => {
   const registry = new ReviewRunRegistry();
-  registry.start({ scopeId: "conversation-a", runId: "client-run" });
+  const first = registry.start({ scopeId: "conversation-a", runId: "client-run" });
+  const second = registry.start({ scopeId: "conversation-b", runId: "client-run" });
+
+  assert.equal(registry.get({ scopeId: "conversation-a", runId: "client-run" }), first);
+  assert.equal(registry.get({ scopeId: "conversation-b", runId: "client-run" }), second);
+  assert.equal(registry.size, 2);
 
   assert.throws(
-    () => registry.start({ scopeId: "conversation-b", runId: "client-run" }),
+    () => registry.start({ scopeId: "conversation-a", runId: "client-run" }),
     (error) => error && error.code === "REVIEW_RUN_CONFLICT",
   );
 });

@@ -10,6 +10,11 @@ const {
   HARD_LIMITS,
   createArtifactRevisionJournal,
 } = require("./artifact-revision-journal");
+const {
+  normalizeReviewSceneBinding,
+  reviewSceneBindingDigest,
+  sameReviewSceneBinding,
+} = require("./review-scene-binding");
 
 const RUNTIME_SCHEMA = "simworld-artifact-journal-runtime/v1";
 const DEFAULT_RETENTION_DAYS = 365;
@@ -25,11 +30,19 @@ const REVIEW_REASONS = new Set([
   "budget_exhausted", "cancelled", "handler_completed", "handler_error",
 ]);
 const REVIEW_VERDICTS = new Set(["PASS", "FAIL", "NEEDS_IMPROVEMENT", "UNKNOWN"]);
-const REVIEW_OUTBOX_SCHEMA = "simworld-review-terminal-outbox/v1";
-const REVIEW_OUTBOX_TICKET_SCHEMA = "simworld-review-terminal-outbox-ticket/v1";
-const REVIEW_OUTBOX_STATES = new Set(["prepared", "terminal_pending", "published"]);
+const REVIEW_OUTBOX_SCHEMA = "simworld-review-terminal-outbox/v3";
+const REVIEW_OUTBOX_TICKET_SCHEMA = "simworld-review-terminal-outbox-ticket/v3";
+const REVIEW_ABANDONMENT_SCHEMA = "simworld-review-abandonment/v1";
+const REVIEW_OUTBOX_STATES = new Set(["prepared", "terminal_pending", "published", "abandoned"]);
+const REVIEW_ACTIVE_OUTBOX_STATES = new Set(["prepared", "terminal_pending"]);
+const REVIEW_ABANDONMENT_REASONS = new Set([
+  "provider_not_started",
+  "provider_result_unrecoverable",
+  "provider_charge_reconciled_no_result",
+]);
 const MAX_REVIEW_OUTBOX_BYTES = 32 * 1024;
 const MAX_REVIEW_OUTBOX_RECORDS = 10_000;
+const DEFAULT_REVIEW_OUTBOX_RECORDS_PER_OWNER = 256;
 const REVIEW_OUTBOX_RECORD_RE = /^([a-f0-9]{64})\.json$/;
 
 class ArtifactJournalRuntimeError extends Error {
@@ -65,6 +78,16 @@ function canonicalJson(value) {
 
 function digestJson(value) {
   return crypto.createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+function persistedRecordDigest(value, field) {
+  let persisted;
+  try {
+    persisted = JSON.parse(JSON.stringify(value));
+  } catch (error) {
+    throw new TypeError(`${field} is not JSON-persistable`, { cause: error });
+  }
+  return digestJson(persisted);
 }
 
 function safeLabel(value, field) {
@@ -107,6 +130,26 @@ function boolFlag(value, field) {
   if (["1", "true", "yes", "on"].includes(text)) return true;
   if (["0", "false", "no", "off"].includes(text)) return false;
   throw new TypeError(`${field} must be a boolean flag`);
+}
+
+function resolveReviewAbandonmentAuthorization(env = process.env) {
+  const operatorText = String(env.VISTA_REVIEW_ABANDON_OPERATOR_ID || "").trim();
+  const digestText = String(env.VISTA_REVIEW_ABANDON_TOKEN_SHA256 || "").trim().toLowerCase();
+  if (!operatorText && !digestText) {
+    return Object.freeze({ enabled: false, operatorId: null, tokenDigest: null, configError: null });
+  }
+  try {
+    const operatorId = safeLabel(operatorText, "VISTA_REVIEW_ABANDON_OPERATOR_ID");
+    const tokenDigest = safeDigest(digestText, "VISTA_REVIEW_ABANDON_TOKEN_SHA256");
+    return Object.freeze({ enabled: true, operatorId, tokenDigest, configError: null });
+  } catch (_error) {
+    return Object.freeze({
+      enabled: false,
+      operatorId: null,
+      tokenDigest: null,
+      configError: "ARTIFACT_REVIEW_ABANDONMENT_CONFIG_INVALID",
+    });
+  }
 }
 
 function resolveArtifactJournalConfig(env = process.env) {
@@ -196,6 +239,7 @@ function importSummary(artifact) {
   const profile = safeLabel(artifact.profile, "artifact.profile");
   const sourceChecksum = safeDigest(artifact.idempotency.source_checksum, "artifact.source_checksum");
   const importerVersion = safeLabel(artifact.idempotency.importer_version, "artifact.importer_version");
+  const recordDigest = persistedRecordDigest(artifact, "artifact");
   return Object.freeze({
     schema: "simworld-vista-import-terminal/v1",
     terminal_status: "committed",
@@ -204,6 +248,7 @@ function importSummary(artifact) {
     profile,
     source_checksum: sourceChecksum,
     importer_version: importerVersion,
+    record_digest: recordDigest,
     entity_count: countArray(artifact.scene_spec.entities),
     timeline_event_count: countArray(artifact.scene_spec.timeline),
     evaluation_safe_included: Object.prototype.hasOwnProperty.call(artifact, "evaluation_safe"),
@@ -212,8 +257,8 @@ function importSummary(artifact) {
 
 function importJournalIdentity(artifact) {
   const summary = importSummary(artifact);
-  const revision = `committed-${digestJson(summary).slice(0, 24)}`;
-  return { summary, revision, contentDigest: digestJson(summary) };
+  const revision = safeLabel(artifact.artifact_revision, "artifact.artifact_revision");
+  return { summary, revision, contentDigest: summary.record_digest };
 }
 
 function sceneBuildSummary(record) {
@@ -224,6 +269,7 @@ function sceneBuildSummary(record) {
   }
   const result = record.result;
   const rollback = isPlainObject(result.rollback) ? result.rollback : {};
+  const recordDigest = persistedRecordDigest(record, "record");
   return Object.freeze({
     schema: "simworld-vista-scene-build-terminal/v1",
     terminal_status: record.status,
@@ -231,6 +277,7 @@ function sceneBuildSummary(record) {
     import_artifact_id: safeLabel(record.import_artifact_id, "record.import_artifact_id"),
     profile_id: safeLabel(record.profile_id, "record.profile_id"),
     operation_id: safeLabel(record.operation.operation_id, "record.operation.operation_id"),
+    record_digest: recordDigest,
     scene_id: safeLabel(result.scene_id, "record.result.scene_id"),
     mutation_count: safeInteger(Number(result.mutation_count || 0), "record.result.mutation_count"),
     actor_count: countArray(result.actor_manifest),
@@ -247,7 +294,7 @@ function sceneBuildJournalLineage(record) {
     kind: "vista-scene-build",
     artifact_id: summary.plan_id,
     revision: safeLabel(record.operation.operation_id, "record.operation.operation_id"),
-    content_digest: digestJson(summary),
+    content_digest: summary.record_digest,
   });
 }
 
@@ -270,10 +317,12 @@ function timelineSummary(record) {
   }
   const run = isPlainObject(record.run) ? record.run : null;
   const cleanup = run && isPlainObject(run.cleanup) ? run.cleanup : {};
+  const recordDigest = persistedRecordDigest(record, "record");
   return Object.freeze({
     schema: "simworld-vista-animation-terminal/v1",
     terminal_status: record.status,
     run_id: safeLabel(record.run_id, "record.run_id"),
+    record_digest: recordDigest,
     import_artifact_id: safeLabel(record.identity.import_artifact_id, "record.identity.import_artifact_id"),
     plan_id: safeLabel(record.identity.plan_id, "record.identity.plan_id"),
     scene_id: safeLabel(record.identity.scene_id, "record.identity.scene_id"),
@@ -296,6 +345,24 @@ function timelineSummary(record) {
   });
 }
 
+function safeOptionalLabel(value, field) {
+  if (value === null || value === undefined || value === "") return null;
+  return safeLabel(value, field);
+}
+
+function normalizeReviewEvidenceIds(value) {
+  if (value === undefined || value === null) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 20) {
+    throw new TypeError("Review evidence ids are invalid");
+  }
+  const ids = value.map((entry, index) => (
+    `sha256:${safeDigest(entry, `review.evidenceIds[${index}]`)}`
+  ));
+  const unique = [...new Set(ids)].sort();
+  if (unique.length !== ids.length) throw new TypeError("Review evidence ids contain duplicates");
+  return Object.freeze(unique);
+}
+
 function normalizeReviewTerminal(value) {
   if (!isPlainObject(value)) throw new TypeError("Review terminal summary is invalid");
   const outcome = String(value.outcome || "").trim().toLowerCase();
@@ -304,18 +371,43 @@ function normalizeReviewTerminal(value) {
   if (!REVIEW_OUTCOMES.has(outcome) || !REVIEW_REASONS.has(reason) || !REVIEW_VERDICTS.has(verdict)) {
     throw new TypeError("Review terminal summary contains an invalid enum");
   }
+  const provider = safeOptionalLabel(value.provider, "review.provider");
+  const model = safeOptionalLabel(value.model, "review.model");
+  const evidenceIds = normalizeReviewEvidenceIds(value.evidenceIds || value.evidence_ids);
+  const bindingAfterValue = value.bindingAfter === undefined ? value.binding_after : value.bindingAfter;
+  const bindingAfter = bindingAfterValue === null || bindingAfterValue === undefined
+    ? null : normalizeReviewSceneBinding(bindingAfterValue, "review.bindingAfter");
+  const errorCode = safeOptionalCode(value.errorCode || value.error_code);
+  if ((provider === null) !== (model === null)) {
+    throw new TypeError("Review provider and model must be recorded together");
+  }
+  if (verdict === "PASS" && (outcome !== "completed" || reason !== "pass"
+      || provider === null || evidenceIds.length < 1 || bindingAfter === null)) {
+    throw new TypeError("A passing Review terminal lacks provider, evidence, or scene binding");
+  }
+  if (bindingAfter === null
+      && !(outcome === "failed" && errorCode === "REVIEW_SCENE_BINDING_UNAVAILABLE")) {
+    throw new TypeError("Review terminal lacks its post-execution scene binding");
+  }
   return Object.freeze({
     outcome,
     reason,
     final_verdict: verdict,
     rounds: safeInteger(Number(value.rounds || 0), "review.rounds", 100),
-    error_code: safeOptionalCode(value.errorCode),
+    error_code: errorCode,
+    provider,
+    model,
+    evidence_ids: evidenceIds,
+    binding_after: bindingAfter,
   });
 }
 
 function storedReviewTerminal(value) {
   if (!isPlainObject(value)) throw new TypeError("Stored Review terminal summary is invalid");
-  const expected = ["error_code", "final_verdict", "outcome", "reason", "rounds"];
+  const expected = [
+    "binding_after", "error_code", "evidence_ids", "final_verdict", "model",
+    "outcome", "provider", "reason", "rounds",
+  ];
   const keys = Object.keys(value).sort();
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
     throw new TypeError("Stored Review terminal summary is invalid");
@@ -326,6 +418,10 @@ function storedReviewTerminal(value) {
     finalVerdict: value.final_verdict,
     rounds: value.rounds,
     errorCode: value.error_code,
+    provider: value.provider,
+    model: value.model,
+    evidenceIds: value.evidence_ids,
+    bindingAfter: value.binding_after,
   });
 }
 
@@ -338,13 +434,134 @@ function publicReviewTerminal(value) {
     finalVerdict: normalized.final_verdict,
     rounds: normalized.rounds,
     errorCode: normalized.error_code,
+    provider: normalized.provider,
+    model: normalized.model,
+    evidenceIds: normalized.evidence_ids,
+    bindingAfter: normalized.binding_after,
+  });
+}
+
+function reviewTerminalProjection(record) {
+  return Object.freeze({
+    schema: record.schema,
+    lookup_digest: record.lookup_digest,
+    owner_id: record.owner_id,
+    session_id: record.session_id,
+    mode: record.mode,
+    request_digest: record.request_digest,
+    input_digest: record.input_digest,
+    journal_run_id: record.journal_run_id,
+    started_at_ms: record.started_at_ms,
+    created_at: record.created_at,
+    binding_before: record.binding_before,
+    terminal: record.terminal,
+  });
+}
+
+function reviewTerminalDigest(record) {
+  return digestJson(reviewTerminalProjection(record));
+}
+
+function assertReviewBindingContinuity(before, after) {
+  if (!after) return;
+  if (before.scope_id !== after.scope_id || before.slot_id !== after.slot_id
+      || before.lease_id_sha256 !== after.lease_id_sha256
+      || canonicalJson(before.scene_build_lineage) !== canonicalJson(after.scene_build_lineage)) {
+    throw new TypeError("Review scene binding changed authority or VISTA lineage");
+  }
+}
+
+function normalizeReviewAbandonmentDecision(value, operatorId, startedAtMs, nowText) {
+  if (!isPlainObject(value)) throw new TypeError("Review abandonment decision is invalid");
+  const expected = ["decidedAt", "decisionId", "evidenceDigest", "reasonCode"].sort();
+  const keys = Object.keys(value).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new TypeError("Review abandonment decision is invalid");
+  }
+  const decisionId = safeLabel(value.decisionId, "decision.decisionId");
+  const decidedAt = isoTimestamp(value.decidedAt, "decision.decidedAt");
+  const reasonCode = String(value.reasonCode || "").trim().toLowerCase();
+  const evidenceDigest = safeDigest(value.evidenceDigest, "decision.evidenceDigest");
+  const decidedAtMs = Date.parse(decidedAt);
+  const nowMs = Date.parse(nowText);
+  if (!REVIEW_ABANDONMENT_REASONS.has(reasonCode)
+      || decidedAtMs < startedAtMs || decidedAtMs > nowMs + 5 * 60 * 1000) {
+    throw new TypeError("Review abandonment decision is invalid");
+  }
+  return Object.freeze({
+    schema: REVIEW_ABANDONMENT_SCHEMA,
+    decision_id: decisionId,
+    decided_at: decidedAt,
+    operator_id: operatorId,
+    reason_code: reasonCode,
+    evidence_digest: evidenceDigest,
+  });
+}
+
+function storedReviewAbandonment(value) {
+  if (!isPlainObject(value)) throw new TypeError("Stored Review abandonment is invalid");
+  const expected = [
+    "decided_at", "decision_id", "evidence_digest", "operator_id", "reason_code", "schema",
+  ].sort();
+  const keys = Object.keys(value).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])
+      || value.schema !== REVIEW_ABANDONMENT_SCHEMA) {
+    throw new TypeError("Stored Review abandonment is invalid");
+  }
+  const reasonCode = String(value.reason_code || "").trim().toLowerCase();
+  if (!REVIEW_ABANDONMENT_REASONS.has(reasonCode)) {
+    throw new TypeError("Stored Review abandonment is invalid");
+  }
+  return Object.freeze({
+    schema: REVIEW_ABANDONMENT_SCHEMA,
+    decision_id: safeLabel(value.decision_id, "abandonment.decision_id"),
+    decided_at: isoTimestamp(value.decided_at, "abandonment.decided_at"),
+    operator_id: safeLabel(value.operator_id, "abandonment.operator_id"),
+    reason_code: reasonCode,
+    evidence_digest: safeDigest(value.evidence_digest, "abandonment.evidence_digest"),
+  });
+}
+
+function reviewAbandonmentDigest(record, abandonment) {
+  return digestJson({
+    schema: REVIEW_ABANDONMENT_SCHEMA,
+    lookup_digest: record.lookup_digest,
+    owner_id: record.owner_id,
+    session_id: record.session_id,
+    mode: record.mode,
+    input_digest: record.input_digest,
+    request_digest: record.request_digest,
+    journal_run_id: record.journal_run_id,
+    started_at_ms: record.started_at_ms,
+    created_at: record.created_at,
+    binding_before: record.binding_before,
+    abandonment,
   });
 }
 
 function createArtifactJournalRuntime(options = {}) {
   const config = options.config || resolveArtifactJournalConfig(options.env || process.env);
+  const reviewAbandonmentAuthorization = resolveReviewAbandonmentAuthorization(
+    options.env || process.env,
+  );
   const clock = typeof options.clock === "function" ? options.clock : () => new Date();
   const randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
+  const maxReviewOutboxRecords = options.maxReviewOutboxRecords === undefined
+    ? MAX_REVIEW_OUTBOX_RECORDS
+    : safeInteger(options.maxReviewOutboxRecords, "maxReviewOutboxRecords", MAX_REVIEW_OUTBOX_RECORDS);
+  if (maxReviewOutboxRecords < 1) {
+    throw new TypeError("maxReviewOutboxRecords is invalid");
+  }
+  const maxReviewOutboxRecordsPerOwner = options.maxReviewOutboxRecordsPerOwner === undefined
+    ? Math.min(DEFAULT_REVIEW_OUTBOX_RECORDS_PER_OWNER, maxReviewOutboxRecords)
+    : safeInteger(
+      options.maxReviewOutboxRecordsPerOwner,
+      "maxReviewOutboxRecordsPerOwner",
+      maxReviewOutboxRecords,
+    );
+  if (maxReviewOutboxRecordsPerOwner < 1) {
+    throw new TypeError("maxReviewOutboxRecordsPerOwner is invalid");
+  }
   const journal = options.journal || (config.enabled && !config.configError && config.root
     ? createArtifactRevisionJournal({ root: config.root, now: clock })
     : null);
@@ -384,7 +601,7 @@ function createArtifactJournalRuntime(options = {}) {
     };
   }
 
-  function reviewOutboxCapacityReport(recordCount = MAX_REVIEW_OUTBOX_RECORDS) {
+  function reviewOutboxCapacityReport(recordCount = maxReviewOutboxRecords) {
     return {
       status: "not_ready",
       revision: {
@@ -392,7 +609,7 @@ function createArtifactJournalRuntime(options = {}) {
         enabled: true,
         verification: "full_hash_chain",
         review_outbox_record_count: recordCount,
-        max_review_outbox_record_count: MAX_REVIEW_OUTBOX_RECORDS,
+        max_review_outbox_record_count: maxReviewOutboxRecords,
       },
       causes: [{
         code: "ARTIFACT_REVIEW_OUTBOX_CAPACITY_EXHAUSTED",
@@ -409,6 +626,14 @@ function createArtifactJournalRuntime(options = {}) {
       "ARTIFACT_JOURNAL_ROOT_INSECURE",
       "ARTIFACT_JOURNAL_CORRUPT",
       "ARTIFACT_JOURNAL_LIMIT_EXCEEDED",
+      "ARTIFACT_JOURNAL_CAPACITY_EXHAUSTED",
+      "ARTIFACT_REVIEW_OUTBOX_CAPACITY_EXHAUSTED",
+      "ARTIFACT_REVIEW_OWNER_QUOTA_EXHAUSTED",
+      "ARTIFACT_REVIEW_ABANDONMENT_CONFIG_INVALID",
+      "ARTIFACT_REVIEW_ABANDONMENT_NOT_CONFIGURED",
+      "ARTIFACT_REVIEW_OPERATOR_AUTH_REQUIRED",
+      "ARTIFACT_REVIEW_ABANDONMENT_CONFLICT",
+      "ARTIFACT_REVIEW_RUN_ABANDONED",
       "ARTIFACT_IDEMPOTENCY_CONFLICT",
     ]);
     return new ArtifactJournalRuntimeError(
@@ -456,6 +681,27 @@ function createArtifactJournalRuntime(options = {}) {
     const date = value instanceof Date ? value : new Date(value);
     if (!Number.isFinite(date.getTime())) throw unavailable("ARTIFACT_JOURNAL_WRITE_FAILED");
     return date.toISOString();
+  }
+
+  function authorizeReviewAbandonment(authorizationToken) {
+    if (reviewAbandonmentAuthorization.configError) {
+      throw unavailable(reviewAbandonmentAuthorization.configError);
+    }
+    if (!reviewAbandonmentAuthorization.enabled) {
+      throw unavailable("ARTIFACT_REVIEW_ABANDONMENT_NOT_CONFIGURED");
+    }
+    const token = typeof authorizationToken === "string"
+      ? Buffer.from(authorizationToken, "utf8")
+      : null;
+    if (!token || token.length < 32 || token.length > 4096) {
+      throw unavailable("ARTIFACT_REVIEW_OPERATOR_AUTH_REQUIRED");
+    }
+    const observed = crypto.createHash("sha256").update(token).digest();
+    const expected = Buffer.from(reviewAbandonmentAuthorization.tokenDigest, "hex");
+    if (observed.length !== expected.length || !crypto.timingSafeEqual(observed, expected)) {
+      throw unavailable("ARTIFACT_REVIEW_OPERATOR_AUTH_REQUIRED");
+    }
+    return reviewAbandonmentAuthorization.operatorId;
   }
 
   async function ensureSecureReviewOutboxRoot({ create = true } = {}) {
@@ -595,8 +841,9 @@ function createArtifactJournalRuntime(options = {}) {
   function validateReviewOutboxRecord(value, expectedDigest) {
     if (!isPlainObject(value)) throw unavailable("ARTIFACT_JOURNAL_CORRUPT");
     const expectedKeys = [
-      "created_at", "journal_run_id", "lookup_digest", "mode", "owner_id",
-      "schema", "session_id", "started_at_ms", "state", "terminal",
+      "abandonment", "abandonment_digest", "binding_before", "created_at", "input_digest",
+      "journal_run_id", "lookup_digest", "mode", "owner_id", "request_digest", "schema",
+      "session_id", "started_at_ms", "state", "terminal", "terminal_digest",
     ].sort();
     const keys = Object.keys(value).sort();
     if (keys.length !== expectedKeys.length
@@ -613,6 +860,12 @@ function createArtifactJournalRuntime(options = {}) {
     let createdAt;
     let startedAtMs;
     let terminal;
+    let bindingBefore;
+    let terminalDigest;
+    let abandonment;
+    let abandonmentDigest;
+    let inputDigest;
+    let requestDigest;
     try {
       ownerId = safeLabel(value.owner_id, "outbox.owner_id");
       sessionId = safeLabel(value.session_id, "outbox.session_id");
@@ -624,9 +877,36 @@ function createArtifactJournalRuntime(options = {}) {
         throw new TypeError("Review outbox identity is invalid");
       }
       terminal = value.terminal === null ? null : storedReviewTerminal(value.terminal);
-      if ((value.state === "prepared" && terminal !== null)
-          || (value.state !== "prepared" && terminal === null)) {
+      bindingBefore = normalizeReviewSceneBinding(value.binding_before, "outbox.binding_before");
+      inputDigest = safeDigest(value.input_digest, "outbox.input_digest");
+      requestDigest = safeDigest(value.request_digest, "outbox.request_digest");
+      terminalDigest = value.terminal_digest === null
+        ? null : safeDigest(value.terminal_digest, "outbox.terminal_digest");
+      abandonment = value.abandonment === null
+        ? null : storedReviewAbandonment(value.abandonment);
+      abandonmentDigest = value.abandonment_digest === null
+        ? null : safeDigest(value.abandonment_digest, "outbox.abandonment_digest");
+      const terminalState = value.state === "terminal_pending" || value.state === "published";
+      const abandonedState = value.state === "abandoned";
+      if ((terminalState !== (terminal !== null && terminalDigest !== null))
+          || (abandonedState !== (abandonment !== null && abandonmentDigest !== null))
+          || (terminal !== null && abandonment !== null)) {
         throw new TypeError("Review outbox state is invalid");
+      }
+      if (terminal) {
+        assertReviewBindingContinuity(bindingBefore, terminal.binding_after);
+        if (reviewTerminalDigest({ ...value, binding_before: bindingBefore, terminal }) !== terminalDigest) {
+          throw new TypeError("Review outbox terminal digest is invalid");
+        }
+      }
+      if (abandonment) {
+        if (Date.parse(abandonment.decided_at) < startedAtMs
+            || reviewAbandonmentDigest(
+              { ...value, binding_before: bindingBefore, input_digest: inputDigest, request_digest: requestDigest },
+              abandonment,
+            ) !== abandonmentDigest) {
+          throw new TypeError("Review outbox abandonment digest is invalid");
+        }
       }
     } catch (error) {
       if (error instanceof ArtifactJournalRuntimeError) throw error;
@@ -638,10 +918,16 @@ function createArtifactJournalRuntime(options = {}) {
       owner_id: ownerId,
       session_id: sessionId,
       mode: value.mode,
+      input_digest: inputDigest,
+      request_digest: requestDigest,
       journal_run_id: journalRunId,
       started_at_ms: startedAtMs,
       state: value.state,
       terminal,
+      binding_before: bindingBefore,
+      terminal_digest: terminalDigest,
+      abandonment,
+      abandonment_digest: abandonmentDigest,
       created_at: createdAt,
     });
   }
@@ -698,7 +984,7 @@ function createArtifactJournalRuntime(options = {}) {
       }
       names.push(entry.name);
     }
-    if (names.length > MAX_REVIEW_OUTBOX_RECORDS) {
+    if (names.length > maxReviewOutboxRecords) {
       throw unavailable("ARTIFACT_JOURNAL_LIMIT_EXCEEDED");
     }
     return names.sort();
@@ -782,10 +1068,13 @@ function createArtifactJournalRuntime(options = {}) {
       ownerId: record.owner_id,
       sessionId: record.session_id,
       mode: record.mode,
+      inputDigest: record.input_digest,
+      requestDigest: record.request_digest,
       journalRunId: record.journal_run_id,
       startedAt: record.started_at_ms,
       state: record.state,
       created: created === true,
+      bindingBefore: record.binding_before,
       terminal: publicReviewTerminal(record.terminal),
     });
   }
@@ -799,22 +1088,65 @@ function createArtifactJournalRuntime(options = {}) {
     const sessionId = safeLabel(ticket.sessionId, "ticket.sessionId");
     const journalRunId = safeLabel(ticket.journalRunId, "ticket.journalRunId");
     const mode = String(ticket.mode || "");
-    if (!REVIEW_MODES.has(mode) || !/^review-journal-[a-f0-9]{48}$/.test(journalRunId)) {
+    const inputDigest = safeDigest(ticket.inputDigest, "ticket.inputDigest");
+    const requestDigest = safeDigest(ticket.requestDigest, "ticket.requestDigest");
+    const bindingBefore = normalizeReviewSceneBinding(ticket.bindingBefore, "ticket.bindingBefore");
+    const startedAt = safeInteger(Number(ticket.startedAt), "ticket.startedAt");
+    if (!REVIEW_MODES.has(mode) || !/^review-journal-[a-f0-9]{48}$/.test(journalRunId)
+        || !Number.isFinite(new Date(startedAt).getTime())) {
       throw new TypeError("Review outbox ticket is invalid");
     }
-    return { lookupDigest, ownerId, sessionId, journalRunId, mode };
+    return {
+      lookupDigest, ownerId, sessionId, journalRunId, mode,
+      inputDigest, requestDigest, bindingBefore, startedAt,
+    };
   }
 
   function assertTicketMatchesRecord(ticket, record) {
     if (ticket.lookupDigest !== record.lookup_digest || ticket.ownerId !== record.owner_id
         || ticket.sessionId !== record.session_id || ticket.mode !== record.mode
-        || ticket.journalRunId !== record.journal_run_id) {
+        || ticket.inputDigest !== record.input_digest
+        || ticket.requestDigest !== record.request_digest
+        || ticket.journalRunId !== record.journal_run_id
+        || ticket.startedAt !== record.started_at_ms
+        || !sameReviewSceneBinding(ticket.bindingBefore, record.binding_before)) {
+      throw unavailable("ARTIFACT_IDEMPOTENCY_CONFLICT");
+    }
+  }
+
+  function validateReviewAbandonmentIdentity(value) {
+    if (!isPlainObject(value)) throw new TypeError("Review abandonment identity is invalid");
+    const expected = ["journalRunId", "lookupDigest", "ownerId", "sessionId"].sort();
+    const keys = Object.keys(value).sort();
+    if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+      throw new TypeError("Review abandonment identity is invalid");
+    }
+    const identity = Object.freeze({
+      lookupDigest: safeDigest(value.lookupDigest, "identity.lookupDigest"),
+      ownerId: safeLabel(value.ownerId, "identity.ownerId"),
+      sessionId: safeLabel(value.sessionId, "identity.sessionId"),
+      journalRunId: safeLabel(value.journalRunId, "identity.journalRunId"),
+    });
+    if (!/^review-journal-[a-f0-9]{48}$/.test(identity.journalRunId)) {
+      throw new TypeError("Review abandonment identity is invalid");
+    }
+    return identity;
+  }
+
+  function assertAbandonmentIdentityMatchesRecord(identity, record) {
+    if (identity.lookupDigest !== record.lookup_digest || identity.ownerId !== record.owner_id
+        || identity.sessionId !== record.session_id
+        || identity.journalRunId !== record.journal_run_id) {
       throw unavailable("ARTIFACT_IDEMPOTENCY_CONFLICT");
     }
   }
 
   async function appendReviewOutboxRecord(record, appendOptions) {
     const terminal = storedReviewTerminal(record.terminal);
+    const bindingBefore = normalizeReviewSceneBinding(record.binding_before, "outbox.binding_before");
+    const bindingAfter = terminal.binding_after;
+    const lineage = (bindingAfter && bindingAfter.scene_build_lineage)
+      || bindingBefore.scene_build_lineage;
     const instanceDigest = digestJson({
       owner_id: record.owner_id,
       session_id: record.session_id,
@@ -831,18 +1163,83 @@ function createArtifactJournalRuntime(options = {}) {
       correlationId: `review:${instanceDigest.slice(0, 40)}`,
       idempotencyKey: deterministicIdempotency("vista-review", artifactId, "terminal"),
       expiresAt: expiresAt(new Date(record.started_at_ms).toISOString(), config.retentionDays),
-      sourceLineage: [],
+      sourceLineage: lineage ? [{
+        kind: lineage.kind,
+        artifactId: lineage.artifact_id,
+        revision: lineage.revision,
+        contentDigest: lineage.content_digest,
+      }] : [],
       content: Object.freeze({
-        schema: "simworld-review-terminal/v1",
+        schema: "simworld-review-terminal/v2",
         mode: record.mode,
+        input_digest: record.input_digest,
+        request_digest: record.request_digest,
         terminal_status: terminal.outcome,
         reason: terminal.reason,
         final_verdict: terminal.final_verdict,
         rounds: terminal.rounds,
         error_code: terminal.error_code,
-        scene_binding: "unbound",
+        provider: terminal.provider,
+        model: terminal.model,
+        evidence_ids: terminal.evidence_ids,
+        evidence_digest: digestJson(terminal.evidence_ids),
+        outbox_lookup_digest: record.lookup_digest,
+        outbox_terminal_digest: safeDigest(record.terminal_digest, "outbox.terminal_digest"),
+        record_digest: safeDigest(record.terminal_digest, "outbox.terminal_digest"),
+        scene_binding: Object.freeze({
+          before_digest: reviewSceneBindingDigest(bindingBefore),
+          after_digest: bindingAfter ? reviewSceneBindingDigest(bindingAfter) : null,
+          before_revision: bindingBefore.scene_revision,
+          after_revision: bindingAfter ? bindingAfter.scene_revision : null,
+          slot_id: bindingBefore.slot_id,
+        }),
       }),
     }, appendOptions);
+  }
+
+  async function appendReviewAbandonmentRecord(record, abandonment) {
+    const bindingBefore = normalizeReviewSceneBinding(record.binding_before, "outbox.binding_before");
+    const checkedAbandonment = storedReviewAbandonment(abandonment);
+    const abandonmentDigest = reviewAbandonmentDigest(record, checkedAbandonment);
+    const instanceDigest = digestJson({
+      owner_id: record.owner_id,
+      journal_run_id: record.journal_run_id,
+      started_at_ms: record.started_at_ms,
+    });
+    const artifactId = `review-abandonment-${instanceDigest}`;
+    const lineage = bindingBefore.scene_build_lineage;
+    return append({
+      kind: "vista-review-abandonment",
+      artifactId,
+      revision: "abandoned",
+      ownerId: record.owner_id,
+      sessionId: record.session_id,
+      correlationId: `review-abandonment:${instanceDigest.slice(0, 32)}`,
+      idempotencyKey: deterministicIdempotency(
+        "vista-review-abandonment",
+        artifactId,
+        "abandoned",
+      ),
+      expiresAt: expiresAt(checkedAbandonment.decided_at, config.retentionDays),
+      sourceLineage: lineage ? [{
+        kind: lineage.kind,
+        artifactId: lineage.artifact_id,
+        revision: lineage.revision,
+        contentDigest: lineage.content_digest,
+      }] : [],
+      content: Object.freeze({
+        schema: REVIEW_ABANDONMENT_SCHEMA,
+        decision_id: checkedAbandonment.decision_id,
+        operator_id: checkedAbandonment.operator_id,
+        reason_code: checkedAbandonment.reason_code,
+        evidence_digest: checkedAbandonment.evidence_digest,
+        outbox_lookup_digest: record.lookup_digest,
+        outbox_abandonment_digest: abandonmentDigest,
+        request_digest: record.request_digest,
+        input_digest: record.input_digest,
+        binding_before_digest: reviewSceneBindingDigest(bindingBefore),
+      }),
+    });
   }
 
   async function inspectReviewOutbox() {
@@ -992,7 +1389,7 @@ function createArtifactJournalRuntime(options = {}) {
       });
     },
 
-    async prepareReviewTerminal({ scope, run, mode } = {}) {
+    async prepareReviewTerminal({ scope, run, mode, binding, requestDigest, inputDigest } = {}) {
       if (!config.enabled) return Object.freeze({ disabled: true });
       if (!scope || typeof scope !== "object" || !run || typeof run !== "object") {
         throw new TypeError("Review scope and run are required");
@@ -1003,6 +1400,12 @@ function createArtifactJournalRuntime(options = {}) {
       }
       const checkedMode = String(mode || "").trim().toLowerCase();
       if (!REVIEW_MODES.has(checkedMode)) throw new TypeError("Review mode is invalid");
+      const bindingBefore = normalizeReviewSceneBinding(binding, "binding");
+      const checkedInputDigest = safeDigest(inputDigest, "inputDigest");
+      const checkedRequestDigest = safeDigest(requestDigest, "requestDigest");
+      if (bindingBefore.scope_id !== scope.scopeId) {
+        throw new TypeError("Review scene binding does not match the Review scope");
+      }
       const publicRunId = safeLabel(run.runId, "run.runId");
       const startedAtMs = Number(run.startedAt);
       if (!Number.isSafeInteger(startedAtMs) || startedAtMs < 0
@@ -1013,23 +1416,44 @@ function createArtifactJournalRuntime(options = {}) {
       if (!accessSource) throw new TypeError("Review journal authority is missing");
       const access = normalizeAccess(accessSource, "scope.journalAccess");
       const lookupDigest = digestJson([
-        "simworld-review-terminal-outbox/v1",
+        "simworld-review-terminal-outbox-id/v1",
         access.ownerId,
-        checkedMode,
         publicRunId,
       ]);
       try {
         return await withReviewOutboxLock(async () => {
           const prior = await readReviewOutboxRecord(lookupDigest, { allowMissing: true });
           if (prior) {
-            if (prior.owner_id !== access.ownerId || prior.mode !== checkedMode) {
+            if (prior.owner_id !== access.ownerId || prior.mode !== checkedMode
+                || prior.request_digest !== checkedRequestDigest) {
+              throw unavailable("ARTIFACT_IDEMPOTENCY_CONFLICT");
+            }
+            if (prior.state === "abandoned") {
+              throw unavailable("ARTIFACT_REVIEW_RUN_ABANDONED");
+            }
+            const expectedBinding = prior.state === "prepared"
+              ? prior.binding_before
+              : (prior.terminal.binding_after || prior.binding_before);
+            if (!sameReviewSceneBinding(bindingBefore, expectedBinding)) {
               throw unavailable("ARTIFACT_IDEMPOTENCY_CONFLICT");
             }
             return reviewOutboxTicket(prior, false);
           }
           const names = await reviewOutboxNames();
-          if (names.length >= MAX_REVIEW_OUTBOX_RECORDS) {
-            throw unavailable("ARTIFACT_JOURNAL_LIMIT_EXCEEDED");
+          if (names.length >= maxReviewOutboxRecords) {
+            throw unavailable("ARTIFACT_REVIEW_OUTBOX_CAPACITY_EXHAUSTED");
+          }
+          let ownerRecordCount = 0;
+          for (const name of names) {
+            const digest = REVIEW_OUTBOX_RECORD_RE.exec(name)[1];
+            const existing = await readReviewOutboxRecord(digest);
+            if (existing.owner_id === access.ownerId
+                && REVIEW_ACTIVE_OUTBOX_STATES.has(existing.state)) {
+              ownerRecordCount += 1;
+            }
+          }
+          if (ownerRecordCount >= maxReviewOutboxRecordsPerOwner) {
+            throw unavailable("ARTIFACT_REVIEW_OWNER_QUOTA_EXHAUSTED");
           }
           const record = {
             schema: REVIEW_OUTBOX_SCHEMA,
@@ -1037,24 +1461,105 @@ function createArtifactJournalRuntime(options = {}) {
             owner_id: access.ownerId,
             session_id: access.sessionId,
             mode: checkedMode,
+            input_digest: checkedInputDigest,
+            request_digest: checkedRequestDigest,
             journal_run_id: `review-journal-${randomHex(24)}`,
             started_at_ms: startedAtMs,
             state: "prepared",
             terminal: null,
+            binding_before: bindingBefore,
+            terminal_digest: null,
+            abandonment: null,
+            abandonment_digest: null,
             created_at: clockTimestamp(),
           };
           const written = await writeReviewOutboxRecord(record, { create: true });
+          if (names.length + 1 >= maxReviewOutboxRecords) {
+            lastFailureCode = "ARTIFACT_REVIEW_OUTBOX_CAPACITY_EXHAUSTED";
+            cachedReadiness = reviewOutboxCapacityReport(names.length + 1);
+          }
           return reviewOutboxTicket(written, true);
         });
       } catch (error) {
         if (error instanceof ArtifactJournalRuntimeError
-            && error.code === "ARTIFACT_JOURNAL_LIMIT_EXCEEDED") {
+            && error.code === "ARTIFACT_REVIEW_OUTBOX_CAPACITY_EXHAUSTED") {
           lastFailureCode = error.code;
-          cachedReadiness = reviewOutboxCapacityReport();
+          cachedReadiness = reviewOutboxCapacityReport(maxReviewOutboxRecords);
         } else if (!(error instanceof ArtifactJournalRuntimeError)
-            || !["ARTIFACT_JOURNAL_BUSY", "ARTIFACT_IDEMPOTENCY_CONFLICT"].includes(error.code)) {
+            || ![
+              "ARTIFACT_JOURNAL_BUSY",
+              "ARTIFACT_IDEMPOTENCY_CONFLICT",
+              "ARTIFACT_REVIEW_OWNER_QUOTA_EXHAUSTED",
+              "ARTIFACT_REVIEW_RUN_ABANDONED",
+            ].includes(error.code)) {
           revokeIntegrity(error && error.code || "ARTIFACT_JOURNAL_WRITE_FAILED");
         }
+        throw error;
+      }
+    },
+
+    async abandonPreparedReview({ identity, authorizationToken, decision } = {}) {
+      if (!config.enabled) return Object.freeze({ disabled: true });
+      if (!journal || config.configError) throw unavailable();
+      if (config.required && !integrityVerified) {
+        throw unavailable("ARTIFACT_JOURNAL_NOT_VERIFIED");
+      }
+      const operatorId = authorizeReviewAbandonment(authorizationToken);
+      const checkedIdentity = validateReviewAbandonmentIdentity(identity);
+      try {
+        return await withReviewOutboxLock(async () => {
+          let record = await readReviewOutboxRecord(checkedIdentity.lookupDigest);
+          assertAbandonmentIdentityMatchesRecord(checkedIdentity, record);
+          const abandonment = normalizeReviewAbandonmentDecision(
+            decision,
+            operatorId,
+            record.started_at_ms,
+            clockTimestamp(),
+          );
+          const abandonmentDigest = reviewAbandonmentDigest(record, abandonment);
+          if (record.state === "abandoned") {
+            if (record.abandonment_digest !== abandonmentDigest
+                || canonicalJson(record.abandonment) !== canonicalJson(abandonment)) {
+              throw unavailable("ARTIFACT_IDEMPOTENCY_CONFLICT");
+            }
+            return Object.freeze({
+              state: record.state,
+              lookupDigest: record.lookup_digest,
+              journalRunId: record.journal_run_id,
+              abandonmentDigest: record.abandonment_digest,
+              idempotent: true,
+            });
+          }
+          if (record.state !== "prepared") {
+            throw unavailable("ARTIFACT_REVIEW_ABANDONMENT_CONFLICT");
+          }
+          const audit = await appendReviewAbandonmentRecord(record, abandonment);
+          record = await writeReviewOutboxRecord({
+            ...record,
+            state: "abandoned",
+            abandonment,
+            abandonment_digest: abandonmentDigest,
+          });
+          cachedReadiness = null;
+          return Object.freeze({
+            state: record.state,
+            lookupDigest: record.lookup_digest,
+            journalRunId: record.journal_run_id,
+            abandonmentDigest: record.abandonment_digest,
+            idempotent: false,
+            audit,
+          });
+        });
+      } catch (error) {
+        if (error instanceof ArtifactJournalRuntimeError
+            && [
+              "ARTIFACT_JOURNAL_BUSY",
+              "ARTIFACT_IDEMPOTENCY_CONFLICT",
+              "ARTIFACT_REVIEW_ABANDONMENT_CONFLICT",
+            ].includes(error.code)) {
+          throw error;
+        }
+        revokeIntegrity(error && error.code || "ARTIFACT_JOURNAL_WRITE_FAILED");
         throw error;
       }
     },
@@ -1067,16 +1572,22 @@ function createArtifactJournalRuntime(options = {}) {
       }
       const checkedTicket = validateReviewOutboxTicket(ticket);
       const normalized = normalizeReviewTerminal(terminal);
+      assertReviewBindingContinuity(checkedTicket.bindingBefore, normalized.binding_after);
       try {
         return await withReviewOutboxLock(async () => {
           let record = await readReviewOutboxRecord(checkedTicket.lookupDigest);
           assertTicketMatchesRecord(checkedTicket, record);
+          if (record.state === "abandoned") {
+            throw unavailable("ARTIFACT_REVIEW_RUN_ABANDONED");
+          }
           if (record.state === "prepared") {
-            record = await writeReviewOutboxRecord({
+            const pendingRecord = {
               ...record,
               state: "terminal_pending",
               terminal: normalized,
-            });
+            };
+            pendingRecord.terminal_digest = reviewTerminalDigest(pendingRecord);
+            record = await writeReviewOutboxRecord(pendingRecord);
           } else if (canonicalJson(storedReviewTerminal(record.terminal)) !== canonicalJson(normalized)) {
             throw unavailable("ARTIFACT_IDEMPOTENCY_CONFLICT");
           }
@@ -1095,7 +1606,11 @@ function createArtifactJournalRuntime(options = {}) {
           lastFailureCode = error.code;
           if (!cachedReadiness) cachedReadiness = capacityReport();
         } else if (!(error instanceof ArtifactJournalRuntimeError)
-            || !["ARTIFACT_JOURNAL_BUSY", "ARTIFACT_IDEMPOTENCY_CONFLICT"].includes(error.code)) {
+            || ![
+              "ARTIFACT_JOURNAL_BUSY",
+              "ARTIFACT_IDEMPOTENCY_CONFLICT",
+              "ARTIFACT_REVIEW_RUN_ABANDONED",
+            ].includes(error.code)) {
           revokeIntegrity(error && error.code || "ARTIFACT_JOURNAL_WRITE_FAILED");
         }
         throw error;
@@ -1125,7 +1640,7 @@ function createArtifactJournalRuntime(options = {}) {
       }
       if (pendingReviews.length > 0) lastIntegrity = await journal.verifyIntegrity();
       const outboxAfter = pendingReviews.length > 0 ? await inspectReviewOutbox() : outboxBefore;
-      const outboxCounts = { prepared: 0, terminal_pending: 0, published: 0 };
+      const outboxCounts = { prepared: 0, terminal_pending: 0, published: 0, abandoned: 0 };
       for (const record of outboxAfter) outboxCounts[record.state] += 1;
       if (failureEpoch !== verificationEpoch) {
         throw unavailable(lastFailureCode || "ARTIFACT_JOURNAL_INTEGRITY_FAILED");
@@ -1134,7 +1649,7 @@ function createArtifactJournalRuntime(options = {}) {
       if (lastIntegrity.entry_count >= maxJournalEntries()) {
         lastFailureCode = "ARTIFACT_JOURNAL_CAPACITY_EXHAUSTED";
         cachedReadiness = capacityReport(lastIntegrity.entry_count);
-      } else if (outboxAfter.length >= MAX_REVIEW_OUTBOX_RECORDS) {
+      } else if (outboxAfter.length >= maxReviewOutboxRecords) {
         lastFailureCode = "ARTIFACT_REVIEW_OUTBOX_CAPACITY_EXHAUSTED";
         cachedReadiness = reviewOutboxCapacityReport(outboxAfter.length);
       } else {

@@ -11,6 +11,7 @@ const {
   createScopedReviewModeStore,
 } = require("../review-loop-coordinator");
 const { ReviewRunRegistry } = require("../review-run-registry");
+const { createRuntimeMutationArbiter } = require("../runtime-mutation-arbiter");
 const { handleSceneLoop } = require("../scene-loop");
 const { handleVisualSceneLoop } = require("../scene-loop-visual");
 const { createVistaSlotBrokerResolver } = require("../vista-scene-executor-runtime");
@@ -105,6 +106,7 @@ async function createHarness(t, options = {}) {
     loopbackSessionId: "loopback-test",
     textHandler: handleSceneLoop,
     visualHandler: handleVisualSceneLoop,
+    ...(options.mutationArbiter ? { mutationArbiter: options.mutationArbiter } : {}),
     handlerDependencies: () => ({
       STUDIO_SESSION: "public-studio-test",
       accessToken: TOKEN,
@@ -132,7 +134,9 @@ async function createHarness(t, options = {}) {
           screenshots: options.screenshots,
           provider: "claude",
           model: "claude-opus-4-8",
-          evidence_ids: options.screenshots ? ["visual:fake"] : ["text:fake"],
+          evidence_ids: [options.screenshots
+            ? `sha256:${"a".repeat(64)}`
+            : `sha256:${"b".repeat(64)}`],
           usage: { input_tokens: 10, output_tokens: 4 },
           cost_usd: 0.05,
           latency_ms: 3,
@@ -344,7 +348,12 @@ test("lease-derived scopes prevent cross-session cancellation", async (t) => {
   const replyA = await runA;
   assert.equal(parseEvents(replyA.raw).at(-1).data.loop.reason, "cancelled");
   await waitFor(() => harness.registry.size === 1);
-  assert.equal(harness.registry.get({ runId: "run-b" }).signal.aborted, false);
+  const scopeB = harness.coordinator.resolveScope({
+    headers: { "x-test-principal": "b" },
+    body: { conversationId: "shared-conversation" },
+    query: {},
+  });
+  assert.equal(harness.registry.get({ scopeId: scopeB.scopeId, runId: "run-b" }).signal.aborted, false);
 
   await harness.post("/api/chat-stop", {
     conversationId: "shared-conversation",
@@ -353,6 +362,35 @@ test("lease-derived scopes prevent cross-session cancellation", async (t) => {
   const replyB = await runB;
   assert.equal(parseEvents(replyB.raw).at(-1).data.loop.reason, "cancelled");
   await waitFor(() => harness.registry.size === 0);
+});
+
+test("one UE slot rejects a second Review conversation without superseding the paid run", async (t) => {
+  let tokenId = 0;
+  const mutationArbiter = createRuntimeMutationArbiter({
+    randomUUID: () => `review-mutation-${++tokenId}`,
+  });
+  const harness = await createHarness(t, { mutationArbiter });
+  const first = harness.post("/api/chat", reviewRequest("text_loop", "hang", {
+    conversationId: "conversation-a",
+    runId: "run-slot-a",
+  }), "a");
+  await waitFor(() => harness.registry.size === 1 && mutationArbiter.activeCount === 1);
+
+  const second = await harness.post("/api/chat", reviewRequest("visual_loop", "hang", {
+    conversationId: "conversation-b",
+    runId: "run-slot-b",
+  }), "a");
+  assert.equal(second.statusCode, 409);
+  assert.equal(JSON.parse(second.raw).code, "REVIEW_SLOT_BUSY");
+  assert.equal(harness.registry.size, 1);
+  assert.equal(harness.builderBodies.length, 1, "the rejected Review never dispatches a provider/builder call");
+
+  await harness.post("/api/chat-stop", {
+    conversationId: "conversation-a",
+    runId: "run-slot-a",
+  }, "a");
+  await first;
+  await waitFor(() => harness.registry.size === 0 && mutationArbiter.activeCount === 0);
 });
 
 test("trusted vanilla child keys ignore caller sessionId and only the owning lease can stop them", async (t) => {
@@ -531,6 +569,37 @@ test("lease-bound Review broker selects two slots and denies cross-slot drift or
     { port: valid[1].mcpPort, type: "slot-b" },
     { port: valid[1].mcpPort, type: "slot-b-still-active" },
   ]);
+});
+
+test("lease-bound Review broker rejects a UE response when the lease is revoked in flight", async () => {
+  const activeLease = {
+    leaseId: "lease-in-flight",
+    slotId: 7,
+    mcpPort: 55670,
+  };
+  let revoked = false;
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const selected = {
+    port: activeLease.mcpPort,
+    async send() {
+      await pending;
+      return { accepted: true };
+    },
+  };
+  const resolveUeBroker = () => (revoked ? null : selected);
+  const broker = createLeaseBoundReviewBroker({
+    scope: { leaseBound: true, activeLease },
+    resolveUeBroker,
+  });
+
+  const dispatched = broker.send("delayed-operation");
+  revoked = true;
+  release();
+  await assert.rejects(
+    dispatched,
+    (error) => error.code === "REVIEW_BROKER_LEASE_INVALID" && error.statusCode === 409,
+  );
 });
 
 test("trusted proxy fails closed without a lease while loopback remains deterministic", async () => {

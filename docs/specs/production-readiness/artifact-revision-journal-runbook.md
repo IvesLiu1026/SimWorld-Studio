@@ -42,18 +42,23 @@ chain reaches capacity; startup never rotates or truncates it automatically.
 
 Domain records and the journal are separate filesystem stores; there is no
 cross-filesystem transaction. Services therefore persist their terminal domain
-record, append its deterministic journal revision, and only then return a
+record, `fsync` the containing private directory, append its deterministic
+journal revision, and only then return a
 durable terminal response. If append fails, status/commit retries replay the
-same fixed creator session, domain timestamp, revision, expiry, and bounded
-summary. A journal error does not rewrite a successful UE execution as a
+same fixed creator session, domain timestamp, revision, expiry, and exact
+canonical domain-record digest. A journal error does not rewrite a successful UE execution as a
 domain failure. Review streaming similarly holds authoritative PASS,
 `loop_done`, and final `done` frames until its compact terminal summary is
 appended; a journal or bounded-gate failure discards those success frames.
 
 Review has one additional crash boundary because the critic/provider may be a
-paid, non-idempotent call. Before invoking it, the runtime persists an
-owner-scoped outbox record with a server-minted journal identity. The compact
-terminal then moves through `prepared -> terminal_pending -> published`:
+paid, non-idempotent call. The browser creates one stable `runId`, persists it
+with the conversation, and reuses it for an explicit Retry Review operation;
+production rejects a Review request without that id before registry or provider
+execution. Before invoking the provider, the runtime captures and hashes the
+exact UE actor snapshot, then persists an owner-scoped v3 outbox record with a
+server-minted journal identity. The compact terminal then moves through
+`prepared -> terminal_pending -> published`:
 `terminal_pending` is fsynced before journal append, and `published` is fsynced
 only after append succeeds. A retry with the same public `runId` reuses the
 persisted creator session and journal identity, publishes or replays the saved
@@ -61,6 +66,27 @@ terminal, and never invokes the provider again. Startup verification also
 replays `terminal_pending` records idempotently. An orphaned `prepared` record
 is deliberately not guessed safe to rerun; that run returns
 `REVIEW_TERMINAL_RECOVERY_REQUIRED` for operator review.
+
+Only unresolved `prepared` and `terminal_pending` receipts consume the
+per-owner active allocation (256 by default). `published` receipts remain
+immutable evidence and still count toward the global 10,000-record capacity,
+but cannot permanently starve that owner of new runs. A reviewed orphan may
+also move from `prepared -> abandoned`; it remains on disk and receives a
+separate append-only `vista-review-abandonment` journal revision. The original
+public run id then fails permanently with `ARTIFACT_REVIEW_RUN_ABANDONED` and
+can never invoke or publish a provider result. Only a newly minted browser run
+id can start a later attempt.
+
+The v2 terminal binds the pre- and post-execution actor-snapshot digests, slot
+and hashed lease identity, provider/model, and SHA-256 ids derived from the
+actual screenshot bytes. It never persists screenshot paths, prompts, provider
+prose, or raw lease ids. If the active lease has a journaled VISTA build, the
+terminal also carries that exact scene-build revision/content digest as source
+lineage. A replay must observe the stored post-scene binding; scene drift is an
+idempotency conflict, not permission to call the provider again. PASS cannot be
+published without provider/model, content-hash evidence, and a post-scene
+binding. Failure to capture the post-scene is itself journaled as a failed
+terminal and the held success response is discarded.
 
 ## Storage contract
 
@@ -77,6 +103,66 @@ is deliberately not guessed safe to rerun; that run returns
 - The root must be on one local filesystem that supports `O_NOFOLLOW`, hard
   links, directory `fsync`, and exclusive file creation. NFS or object-store
   mounts are outside this contract.
+
+The current runtime accepts only `simworld-review-terminal-outbox/v3` records.
+Before the first deployment of this unreleased format, verify that
+`review-outbox/` is empty apart from no lock file. A future migration from a
+deployed older format requires a separately reviewed offline migration; never
+rename or rewrite receipt files while Studio is running.
+
+## Operator abandonment of an orphaned paid Review
+
+Abandonment is an exceptional offline/operator action, not an HTTP route and
+not an automatic timeout. First reconcile the provider billing/request logs
+and build a redacted evidence pack. Its canonical bytes must have a recorded
+SHA-256 digest. Record the exact outbox filename digest, owner, creator session,
+server-minted `journal_run_id`, one stable decision id, and one of these reason
+codes:
+
+- `provider_not_started`
+- `provider_result_unrecoverable`
+- `provider_charge_reconciled_no_result`
+
+Provision one high-entropy operator token outside the Studio environment and
+configure only its digest plus the operator identity for the operator process:
+
+```bash
+export VISTA_REVIEW_ABANDON_OPERATOR_ID='production-operator-id'
+export VISTA_REVIEW_ABANDON_TOKEN_SHA256='<sha256-of-at-least-32-byte-token>'
+```
+
+Do not put the raw token in an environment variable, command argument, shell
+history, evidence pack, or log. Supply it to the operator process through a
+protected inherited file descriptor. After a forced successful readiness
+verification, the operator integration calls the recorder with the reviewed
+identity and decision:
+
+```js
+await runtime.recorder.abandonPreparedReview({
+  identity: {
+    lookupDigest: reviewedReceipt.lookup_digest,
+    ownerId: reviewedReceipt.owner_id,
+    sessionId: reviewedReceipt.session_id,
+    journalRunId: reviewedReceipt.journal_run_id,
+  },
+  authorizationToken: tokenReadFromProtectedInheritedFd,
+  decision: {
+    decisionId: "abandon-20260721-001",
+    decidedAt: "2026-07-21T12:34:56.000Z",
+    reasonCode: "provider_charge_reconciled_no_result",
+    evidenceDigest: "<64-lowercase-hex-evidence-pack-digest>",
+  },
+});
+```
+
+The runtime validates all four receipt identity fields under the outbox lock,
+uses a constant-time comparison against the configured token digest, appends
+the audit revision first, and only then fsyncs the `abandoned` receipt. A crash
+after audit append but before receipt publication stays fail-closed as
+`prepared`; rerun the exact same decision after `readinessProbe({force:true})`.
+Changing any decision field is an idempotency conflict. Never abandon
+`terminal_pending` or `published`: both already have an authoritative terminal
+and must use normal recovery/replay.
 
 The shared runtime performs the append; direct service calls are shown only to
 document the underlying primitive:
@@ -157,7 +243,9 @@ operator procedure.
 Defaults cap content at 1 MiB, journal entries and Review outbox receipts at
 10,000 each, an outbox receipt at 32 KiB, JSON depth at 16, JSON nodes at
 50,000, lineage items at 64, a public page at 100, and a retention apply at 256
-targets. Callers may lower but not raise these hard limits.
+targets. The exact outbox-capacity-fulfilling create immediately makes readiness
+blocking while still allowing an existing receipt to be finalized/replayed.
+Callers may lower but not raise these hard limits.
 Secret-shaped keys and values, credential URLs, private-key material, local
 home/system paths, traversal paths, and secret-file paths are rejected.
 
