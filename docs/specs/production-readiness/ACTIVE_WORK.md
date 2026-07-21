@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed implementation checkpoint: `c3b0fb27` (`fix: use UE 5.3 overlap property API`)
+- Latest pushed checkpoint: `c6ded6ec` (`docs: record live mmg040 scene build`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -31,6 +31,8 @@
 | `approval_aggregate` | shared worktree, completed | six-party opaque approval aggregate in new files only | Shared schemas/launcher/state/terminal and runtime | None |
 | `adapter_registration_audit` | shared worktree, completed read-only | real query/build/registration/source-closure inventory | All source/docs edits and runtime | None |
 | `commandlet_executor` | shared worktree, active | commandlet-only Interchange executor and focused tests | Runtime, UE, network, docs and all other source | None |
+| `semantic_smoke_catalog` | shared worktree, active | new non-Production `mmg_040` three-record catalog preparer and focused tests | Existing source/docs, DB/network/runtime, and Production readiness claims | None |
+| `mmg040_animation_content_map` | shared worktree, active | `VistaAnimationContentApi` r2 PickUp parity slice and one new focused parity test | Runtime evidence, UE/GPU/ports, docs, commandlet/semantic files, and Production readiness claims | None |
 
 The coordinator is the only merge owner. Workers must commit a single coherent
 change and report validation commands plus remaining live/admin gates.
@@ -116,10 +118,11 @@ change and report validation commands plus remaining live/admin gates.
   `1689f72e1f88205edb17d8056ddec7cb27d135f62542619a232435cf2f90025b`.
 - A fresh GPU 0 offscreen render probe failed before MCP startup with
   `VK_ERROR_INCOMPATIBLE_DRIVER` and created no screenshot. The current user
-  lacks read/write access to both DRM render nodes and is not in the
-  `render` group; that permission must be fixed and a new login/Vulkan
-  preflight completed before using another fresh render project. Failed render
-  receipt SHA-256:
+  is not in the `render` group. PCI bus `0000:16:00.0` is GPU 0 and maps via
+  `/dev/dri/by-path/pci-0000:16:00.0-render` to `/dev/dri/renderD128`, which is
+  owned by `root:render` with mode `0660`; `yhliu` cannot open it. That
+  permission must be fixed and a new login/Vulkan preflight completed before
+  using another fresh render project. Failed render receipt SHA-256:
   `170d6f82acf9a7839c162dd369825d3624b74539562970c9420587484a831c2f`.
 
 ## Current animation checkpoint
