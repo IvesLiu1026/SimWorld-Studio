@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed checkpoint: `852edb4c` (`feat: close semantic index v2 contracts`)
+- Latest pushed checkpoint: `3df767c2` (`fix: harden semantic process isolation`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -55,8 +55,10 @@ change and report validation commands plus remaining live/admin gates.
 - Implemented offline: real Ed25519 approval verification, a six-party opaque
   verified aggregate, exact one-use verified launcher handoff composition,
   durable ordinary/control prepare-result ledgers, exact replay, isolated
-  process-group execution with absolute deadlines and bounded reaping, and
-  commit-before-send service ordering for authenticated phase/control sessions.
+  process-group execution with absolute deadlines, Linux pidfd fallback,
+  subreaper cleanup for escaped descendants, complete inherited-FD closure and
+  bounded reaping, and commit-before-send service ordering for authenticated
+  phase/control sessions.
 - Still required before Production registration: release-pinned projection of
   the approval aggregate; detached worker signing for executor-owned phase
   evidence; independently pinned launcher/control wiring; fixed static worker
@@ -82,3 +84,5 @@ change and report validation commands plus remaining live/admin gates.
   `evidence/2026-07-21-semantic-index-v2-offline-checkpoint.md`
 - Current control/signature follow-up evidence:
   `evidence/2026-07-21-semantic-control-signature-offline-checkpoint.md`
+- Current isolation and `mmg_040` asset-gap follow-up:
+  `evidence/2026-07-22-semantic-isolation-and-mmg040-gap-checkpoint.md`
