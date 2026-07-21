@@ -42,14 +42,17 @@ const USAGE = `Usage:
     --prompt-file <review-request.txt> \\
     --image <evidence.png> \\
     --cli-name claude-code \\
-    --cli-version <version> \\
+    --cli-version <expected-version> \\
     --max-budget-usd 0.10 \\
     --timeout-ms 120000 \\
     --max-input-tokens 50000 \\
     --max-output-tokens 2048 \\
     --receipt <review-smoke-receipt.json>
 
-Provider credentials are read only by the provider adapter from its allowlisted
+The CLI name/version flags are expectations. The runner measures the configured
+binary immediately before the provider call and refuses a mismatch; it never
+copies the flag values into a receipt as unverified evidence. Provider
+credentials are read only by the provider adapter from its allowlisted
 environment. Do not pass credentials on this command line.`;
 
 function cliError(code, message) {

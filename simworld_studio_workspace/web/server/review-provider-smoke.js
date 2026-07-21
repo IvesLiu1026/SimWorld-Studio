@@ -249,10 +249,41 @@ function safeProviderFailure(error) {
   return smokeError(code, "Review provider invocation failed", { retryable });
 }
 
+function normalizeCliIdentity(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw smokeError("REVIEW_SMOKE_CLI_IDENTITY_INVALID", "Review CLI identity is invalid");
+  }
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== "name" || keys[1] !== "version") {
+    throw smokeError("REVIEW_SMOKE_CLI_IDENTITY_INVALID", "Review CLI identity is invalid");
+  }
+  return Object.freeze({
+    name: requireSafeToken(value.name, "cliIdentity.name"),
+    version: requireSafeToken(value.version, "cliIdentity.version"),
+  });
+}
+
+function safeCliIdentityFailure(error) {
+  if (error instanceof ReviewProviderSmokeError) return error;
+  const retryable = Boolean(error && error.retryable);
+  const code = error && typeof error.code === "string" && /^REVIEW_(?:CLI|ABORTED)[A-Z0-9_]*$/.test(error.code)
+    ? error.code
+    : "REVIEW_SMOKE_CLI_INSPECTION_FAILED";
+  return smokeError(code, "Review CLI identity inspection failed", { retryable });
+}
+
 function createReviewProviderSmokeRunner(runtime = {}) {
   const providerAdapter = runtime.providerAdapter || createReviewProvider(runtime.providerRuntime || {});
   if (!providerAdapter || typeof providerAdapter.review !== "function") {
     throw smokeError("REVIEW_SMOKE_CONFIG_INVALID", "A review provider adapter is required");
+  }
+  const inspectRuntimeIdentity = runtime.inspectRuntimeIdentity
+    || providerAdapter.inspectRuntimeIdentity;
+  if (typeof inspectRuntimeIdentity !== "function") {
+    throw smokeError(
+      "REVIEW_SMOKE_CONFIG_INVALID",
+      "A measured review CLI identity adapter is required",
+    );
   }
   const now = runtime.now || Date.now;
   const randomBytes = runtime.randomBytes || crypto.randomBytes;
@@ -292,8 +323,10 @@ function createReviewProviderSmokeRunner(runtime = {}) {
     const reviewRequest = normalizeReviewRequest(input.reviewRequest);
     const images = normalizeImages(input.images);
     const evidenceIds = normalizeEvidenceIds(input.evidenceIds, images);
-    const cliName = requireSafeToken(input.cliName, "cliName");
-    const cliVersion = requireSafeToken(input.cliVersion, "cliVersion");
+    // These are operator expectations, not receipt evidence. The receipt is
+    // populated only from a fresh measurement of the exact configured binary.
+    const expectedCliName = requireSafeToken(input.cliName, "cliName");
+    const expectedCliVersion = requireSafeToken(input.cliVersion, "cliVersion");
     const receiptPath = typeof input.receiptPath === "string" ? input.receiptPath.trim() : "";
     if (!receiptPath || receiptPath.includes("\0")) {
       throw smokeError("REVIEW_SMOKE_INPUT_INVALID", "receiptPath is required");
@@ -347,6 +380,25 @@ function createReviewProviderSmokeRunner(runtime = {}) {
     }, timeoutMs);
 
     try {
+      let cliIdentity;
+      try {
+        cliIdentity = normalizeCliIdentity(await Promise.race([
+          Promise.resolve().then(() => inspectRuntimeIdentity({
+            signal: controller.signal,
+            timeoutMs: Math.min(timeoutMs, 30_000),
+          })),
+          boundary,
+        ]));
+      } catch (error) {
+        throw safeCliIdentityFailure(error);
+      }
+      if (cliIdentity.name !== expectedCliName || cliIdentity.version !== expectedCliVersion) {
+        throw smokeError(
+          "REVIEW_SMOKE_CLI_MISMATCH",
+          "Measured review CLI identity does not match the approved expectation",
+        );
+      }
+
       let providerResult;
       try {
         providerResult = await Promise.race([
@@ -413,8 +465,8 @@ function createReviewProviderSmokeRunner(runtime = {}) {
         reviewType,
         provider: providerConfig.provider,
         model: providerConfig.model,
-        cliName,
-        cliVersion,
+        cliName: cliIdentity.name,
+        cliVersion: cliIdentity.version,
         sourceRevision,
         recordedAt: new Date(recordedAtMs).toISOString(),
         expiresAt: new Date(recordedAtMs + receiptTtlMs).toISOString(),

@@ -33,6 +33,12 @@ the non-secret fields of `claude auth status --json`. They did not send a
 prompt, resolve a model, consume tokens, capture an image, access UE, or write
 a review receipt.
 
+Follow-up on 2026-07-22: the smoke runner now repeats a bounded `--version`
+measurement against the exact configured Claude binary immediately before the
+provider request. Command-line CLI identity values are expectations only and
+cannot be copied into a receipt without matching the measured value. See
+`2026-07-22-review-cli-identity-checkpoint.md`.
+
 ## Remaining live proof
 
 This preflight does not prove that `claude-opus-4-8` is enabled for the Team

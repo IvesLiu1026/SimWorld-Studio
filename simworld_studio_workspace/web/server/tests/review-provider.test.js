@@ -12,6 +12,7 @@ const path = require("node:path");
 const {
   ReviewProviderError,
   createReviewProvider,
+  parseClaudeCliIdentity,
   resolveReviewConfig,
   validateReviewVerdict,
 } = require("../review-provider");
@@ -147,6 +148,43 @@ test("tool-free Claude adapter uses strict schema and keeps evidence off argv", 
   assert.equal(call.options.env.STUDIO_ACCESS_TOKEN, undefined);
   assert.equal(call.options.env.POSTGRES_URL, undefined);
   assert.equal(call.options.env.CLAUDECODE, undefined);
+});
+
+test("Claude CLI identity is measured from the configured binary with a bounded safe environment", async () => {
+  const calls = [];
+  const provider = createReviewProvider({
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      ANTHROPIC_AUTH_TOKEN: "allowed-provider-auth",
+      STUDIO_ACCESS_TOKEN: "must-not-reach-version-check",
+    },
+    spawnImpl(binary, args, options) {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      calls.push({ binary, args, options });
+      queueMicrotask(() => {
+        child.stdout.write("2.1.215 (Claude Code)\n");
+        child.emit("close", 0, null);
+      });
+      return child;
+    },
+  });
+
+  assert.deepEqual(await provider.inspectRuntimeIdentity(), {
+    name: "claude-code",
+    version: "2.1.215",
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ["--version"]);
+  assert.equal(calls[0].options.env.ANTHROPIC_AUTH_TOKEN, "allowed-provider-auth");
+  assert.equal(calls[0].options.env.STUDIO_ACCESS_TOKEN, undefined);
+  assert.throws(
+    () => parseClaudeCliIdentity("2.1.215 (Claude Code)\nuntrusted-extra-line"),
+    (error) => error.code === "REVIEW_CLI_IDENTITY_INVALID",
+  );
 });
 
 test("provider and model selection fail closed before spawning", async () => {

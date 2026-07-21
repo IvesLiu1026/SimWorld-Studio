@@ -61,12 +61,23 @@ function runInput(overrides = {}) {
   };
 }
 
-function makeRunner({ result = providerResult(), captureDigest = SCENE_DIGEST, providerReview, now } = {}) {
+function makeRunner({
+  result = providerResult(),
+  captureDigest = SCENE_DIGEST,
+  providerReview,
+  cliIdentity = { name: "claude-code", version: "2.1.215" },
+  inspectRuntimeIdentity,
+  now,
+} = {}) {
   const events = [];
   const writes = [];
   let clockCalls = 0;
   const runner = createReviewProviderSmokeRunner({
     providerAdapter: {
+      inspectRuntimeIdentity: inspectRuntimeIdentity || (async () => {
+        events.push({ type: "cli" });
+        return cliIdentity;
+      }),
       review: providerReview || (async (options) => {
         events.push({ type: "provider", options });
         return result;
@@ -99,7 +110,7 @@ test("PASS-only smoke uses the strict read-only prompt and atomically publishes 
   const { runner, events, writes } = makeRunner();
   const output = await runner.run(runInput());
 
-  assert.deepEqual(events.map((event) => event.type), ["provider", "scene-after", "write"]);
+  assert.deepEqual(events.map((event) => event.type), ["cli", "provider", "scene-after", "write"]);
   assert.equal(writes.length, 1);
   assert.equal(output.receiptPath, "/runtime/review-smoke.json");
   assert.equal(output.receipt.verdict.status, "PASS");
@@ -109,7 +120,7 @@ test("PASS-only smoke uses the strict read-only prompt and atomically publishes 
   assert.equal(JSON.stringify(output.receipt).includes("sensitive-provider-prose"), false);
   assert.equal(JSON.stringify(output.receipt).includes("mmg_040"), false);
 
-  const providerCall = events[0].options;
+  const providerCall = events.find((event) => event.type === "provider").options;
   assert.equal(providerCall.systemPrompt, SMOKE_SYSTEM_PROMPT);
   assert.match(providerCall.systemPrompt, /no tools/i);
   assert.match(providerCall.systemPrompt, /must not request.*scene mutation/i);
@@ -184,11 +195,31 @@ test("explicit immutable inputs and post-scene evidence fail closed before provi
   assert.equal(writes.length, 0);
 
   const withoutPostCapture = createReviewProviderSmokeRunner({
-    providerAdapter: { review: async () => { calls += 1; return providerResult(); } },
+    providerAdapter: {
+      inspectRuntimeIdentity: async () => ({ name: "claude-code", version: "2.1.215" }),
+      review: async () => { calls += 1; return providerResult(); },
+    },
     writeReceipt: () => { throw new Error("must not write"); },
   });
   await rejectCode(withoutPostCapture.run(runInput()), "REVIEW_SMOKE_SCENE_INVALID");
   assert.equal(calls, 0);
+});
+
+test("measured CLI identity must match the approved expectation before provider execution", async () => {
+  let providerCalls = 0;
+  const { runner, events, writes } = makeRunner({
+    cliIdentity: { name: "claude-code", version: "2.1.216" },
+    providerReview: async () => { providerCalls += 1; return providerResult(); },
+  });
+  await rejectCode(runner.run(runInput()), "REVIEW_SMOKE_CLI_MISMATCH");
+  assert.deepEqual(events.map((event) => event.type), ["cli"]);
+  assert.equal(providerCalls, 0);
+  assert.equal(writes.length, 0);
+
+  assert.throws(
+    () => createReviewProviderSmokeRunner({ providerAdapter: { review: async () => providerResult() } }),
+    (error) => error.code === "REVIEW_SMOKE_CONFIG_INVALID",
+  );
 });
 
 test("provider failures are redacted and independent outer timeout aborts an injected provider", async () => {
@@ -220,7 +251,10 @@ test("the same wall-clock boundary covers post-review scene capture", async () =
   let captureSignal;
   const writes = [];
   const runner = createReviewProviderSmokeRunner({
-    providerAdapter: { review: async () => providerResult() },
+    providerAdapter: {
+      inspectRuntimeIdentity: async () => ({ name: "claude-code", version: "2.1.215" }),
+      review: async () => providerResult(),
+    },
     captureSceneDigestAfter: ({ signal }) => {
       captureSignal = signal;
       return new Promise(() => {});
@@ -265,6 +299,12 @@ function fakeProviderProcess() {
       },
     });
     calls.push({ binary, args, options, get input() { return input; } });
+    if (args.length === 1 && args[0] === "--version") {
+      queueMicrotask(() => {
+        child.stdout.write("2.1.215 (Claude Code)\n");
+        child.emit("close", 0, null);
+      });
+    }
     return child;
   };
   return { calls, spawnImpl };
@@ -287,9 +327,10 @@ test("process runtime is dependency-injected and retains the lower adapter's too
   });
 
   await runner.run(runInput());
-  assert.equal(processFake.calls.length, 1);
+  assert.equal(processFake.calls.length, 2);
   assert.equal(writes.length, 1);
-  const call = processFake.calls[0];
+  assert.deepEqual(processFake.calls[0].args, ["--version"]);
+  const call = processFake.calls[1];
   assert.equal(call.binary, "claude");
   assert.equal(call.args[call.args.indexOf("--tools") + 1], "");
   assert.ok(call.args.includes("--safe-mode"));

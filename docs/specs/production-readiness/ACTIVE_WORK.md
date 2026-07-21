@@ -88,6 +88,21 @@ change and report validation commands plus remaining live/admin gates.
   one step alternative and one high-storage candidate pass, a non-fixture
   layout can be emitted without the separately gated CC0 download.
 
+## Current Review checkpoint
+
+- Text/Visual server-side access-token injection and authenticated loopback
+  `/api/chat` chaining were revalidated against the current source and fake
+  HTTP provider matrix; the previous `Studio access token required` response
+  is not reproduced by this branch's current wiring.
+- The real Claude adapter remains tool-free, strict-schema, image-over-stdin,
+  budgeted, cancellable, and stripped of Studio/database credentials.
+- Review smoke receipts no longer trust caller-supplied CLI identity. The
+  runner measures the exact configured Claude binary with a bounded
+  `--version` preflight and rejects a mismatch before any paid call.
+- Local read-only measurement reports Claude Code `2.1.215`; no model request
+  was sent. `T1A.11` still requires user approval for one real Text and one
+  read-only Visual `claude-opus-4-8` call.
+
 ## Validation
 
 - Focused Node unit/contract tests for each slice
@@ -106,3 +121,5 @@ change and report validation commands plus remaining live/admin gates.
   `evidence/2026-07-21-semantic-control-signature-offline-checkpoint.md`
 - Current isolation and `mmg_040` asset-gap follow-up:
   `evidence/2026-07-22-semantic-isolation-and-mmg040-gap-checkpoint.md`
+- Current Review auth/CLI identity follow-up:
+  `evidence/2026-07-22-review-cli-identity-checkpoint.md`

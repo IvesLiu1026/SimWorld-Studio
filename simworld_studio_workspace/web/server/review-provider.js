@@ -42,6 +42,10 @@ const SAFE_ENV_KEYS = Object.freeze([
 ]);
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
+const MAX_CLI_IDENTITY_BYTES = 16 * 1024;
+const DEFAULT_CLI_IDENTITY_TIMEOUT_MS = 5_000;
+const MAX_CLI_IDENTITY_TIMEOUT_MS = 30_000;
+const CLAUDE_CLI_VERSION = /^([0-9]+(?:\.[0-9]+){2}(?:[-+][A-Za-z0-9.-]+)?) \(Claude Code\)$/;
 
 class ReviewProviderError extends Error {
   constructor(code, message, details = {}) {
@@ -198,6 +202,144 @@ function buildSafeProviderEnv(source = process.env) {
   return env;
 }
 
+function parseClaudeCliIdentity(stdout) {
+  const lines = String(stdout || "").trim().split(/\r?\n/).filter(Boolean);
+  const match = lines.length === 1 ? lines[0].match(CLAUDE_CLI_VERSION) : null;
+  if (!match) {
+    throw reviewError(
+      "REVIEW_CLI_IDENTITY_INVALID",
+      "Claude CLI returned an invalid version identity",
+      { provider: "claude" },
+    );
+  }
+  return Object.freeze({ name: "claude-code", version: match[1] });
+}
+
+function inspectClaudeCliIdentity({
+  spawnImpl = defaultSpawn,
+  claudeBin = "claude",
+  env = process.env,
+  timeoutMs = DEFAULT_CLI_IDENTITY_TIMEOUT_MS,
+  signal,
+} = {}) {
+  const deadlineMs = Number(timeoutMs);
+  if (!Number.isFinite(deadlineMs) || deadlineMs < 1 || deadlineMs > MAX_CLI_IDENTITY_TIMEOUT_MS) {
+    return Promise.reject(reviewError(
+      "REVIEW_CLI_INSPECTION_CONFIG_INVALID",
+      "Claude CLI identity timeout is invalid",
+      { provider: "claude" },
+    ));
+  }
+  if (signal && signal.aborted) {
+    return Promise.reject(reviewError(
+      "REVIEW_ABORTED",
+      "Review was aborted before Claude CLI identity inspection",
+      { provider: "claude" },
+    ));
+  }
+
+  return new Promise((resolve, reject) => {
+    let child;
+    let stdout = "";
+    let diagnosticsBytes = 0;
+    let settled = false;
+    let hardKillTimer = null;
+    const removeAbortListener = () => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+    };
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      removeAbortListener();
+      fn(value);
+    };
+    const terminate = () => {
+      try { child && child.kill("SIGTERM"); } catch (_error) {}
+      hardKillTimer = setTimeout(() => {
+        try { child && child.kill("SIGKILL"); } catch (_error) {}
+      }, 1_000);
+      if (hardKillTimer.unref) hardKillTimer.unref();
+    };
+    const fail = (error, terminateChild = false) => {
+      if (settled) return;
+      if (terminateChild) terminate();
+      settle(reject, error);
+    };
+    const onAbort = () => fail(reviewError(
+      "REVIEW_ABORTED",
+      "Review was aborted during Claude CLI identity inspection",
+      { provider: "claude" },
+    ), true);
+    const timeoutTimer = setTimeout(() => fail(reviewError(
+      "REVIEW_CLI_INSPECTION_TIMEOUT",
+      "Claude CLI identity inspection timed out",
+      { provider: "claude", retryable: true },
+    ), true), Math.floor(deadlineMs));
+    if (timeoutTimer.unref) timeoutTimer.unref();
+
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      child = spawnImpl(claudeBin, ["--version"], {
+        cwd: os.tmpdir(),
+        env: buildSafeProviderEnv(env),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (cause) {
+      fail(reviewError(
+        "REVIEW_CLI_INSPECTION_FAILED",
+        "Claude CLI identity inspection could not be started",
+        { provider: "claude", cause },
+      ));
+      return;
+    }
+
+    child.stdout.on("data", (chunk) => {
+      if (settled) return;
+      stdout += chunk.toString();
+      if (Buffer.byteLength(stdout) > MAX_CLI_IDENTITY_BYTES) {
+        fail(reviewError(
+          "REVIEW_CLI_IDENTITY_INVALID",
+          "Claude CLI version output exceeded its size limit",
+          { provider: "claude" },
+        ), true);
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      if (settled) return;
+      diagnosticsBytes += chunk.length;
+      if (diagnosticsBytes > MAX_CLI_IDENTITY_BYTES) {
+        fail(reviewError(
+          "REVIEW_CLI_IDENTITY_INVALID",
+          "Claude CLI diagnostics exceeded their size limit",
+          { provider: "claude" },
+        ), true);
+      }
+    });
+    child.on("error", (cause) => fail(reviewError(
+      "REVIEW_CLI_INSPECTION_FAILED",
+      "Claude CLI identity process failed to start",
+      { provider: "claude", cause },
+    )));
+    child.on("close", (code, childSignal) => {
+      if (settled) return;
+      if (code !== 0) {
+        fail(reviewError(
+          "REVIEW_CLI_INSPECTION_FAILED",
+          `Claude CLI identity process exited unsuccessfully (${code == null ? childSignal || "unknown" : code})`,
+          { provider: "claude", retryable: true },
+        ));
+        return;
+      }
+      try {
+        settle(resolve, parseClaudeCliIdentity(stdout));
+      } catch (error) {
+        settle(reject, error);
+      }
+    });
+  });
+}
+
 function parseExactJson(value) {
   if (value && typeof value === "object") return value;
   const text = String(value || "").trim();
@@ -295,6 +437,16 @@ function createReviewProvider(runtime = {}) {
   const spawnImpl = runtime.spawnImpl || defaultSpawn;
   const envSource = runtime.env || process.env;
   const now = runtime.now || Date.now;
+
+  function inspectRuntimeIdentity(options = {}) {
+    return inspectClaudeCliIdentity({
+      spawnImpl,
+      claudeBin: runtime.claudeBin || envSource.CLAUDE_BIN || "claude",
+      env: envSource,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+    });
+  }
 
   async function review(options = {}) {
     const config = resolveReviewConfig(options, envSource);
@@ -445,7 +597,7 @@ function createReviewProvider(runtime = {}) {
     });
   }
 
-  return Object.freeze({ review });
+  return Object.freeze({ inspectRuntimeIdentity, review });
 }
 
 const defaultProvider = createReviewProvider();
@@ -459,6 +611,8 @@ module.exports = {
   validateMaxBudgetUsd,
   validateReviewVerdict,
   buildSafeProviderEnv,
+  inspectClaudeCliIdentity,
+  parseClaudeCliIdentity,
   parseClaudeReviewOutput,
   createReviewProvider,
   review: defaultProvider.review,

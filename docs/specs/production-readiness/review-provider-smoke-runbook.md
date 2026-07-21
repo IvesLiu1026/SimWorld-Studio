@@ -20,6 +20,9 @@ adapter with all of the following controls:
 
 - explicit provider, model, immutable build revision, and pre/post scene
   SHA-256 digests;
+- a fresh, bounded `claude --version` measurement of the exact configured
+  binary; the operator-supplied CLI name/version are expectations only and a
+  mismatch fails before any provider request;
 - one to four bounded PNG/JPEG evidence files and a bounded review request;
 - no tools, safe mode, an empty MCP configuration, no session persistence,
   strict JSON schema output, and no permission bypass;
@@ -82,7 +85,9 @@ Before requesting cost approval, verify:
    most 8 MiB.
 3. The review request file contains only the expected scene criteria.
 4. The current commit is the exact build that will consume the receipt.
-5. `claude --version` reports the CLI version recorded in the command.
+5. `claude --version` reports the expected CLI version supplied to the command.
+   The smoke runner independently repeats this measurement and records only
+   the measured identity.
 6. The receipt destination is outside the repository and has a `0700` parent
    directory.
 
@@ -143,7 +148,7 @@ node server/review-provider-smoke-cli.js \
 ```
 
 There is no automatic retry. A timeout, provider error, non-JSON response,
-schema error, non-`PASS` verdict, missing/over-budget usage, identity mismatch,
+schema error, non-`PASS` verdict, missing/over-budget usage, CLI/provider/model identity mismatch,
 or Visual scene change exits non-zero and writes no new receipt.
 
 ## Readiness binding
