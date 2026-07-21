@@ -54,3 +54,36 @@ test("coturn materializer rejects missing external identity before writing", () 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /TURN_PUBLIC_HOST/);
 });
+
+test("coturn materializer cannot replace its secret or template inputs", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-coturn-alias-"));
+  try {
+    const secret = "coturn-protected-static-secret-".repeat(2);
+    const secretFile = path.join(root, "turn.secret");
+    const template = path.join(root, "coturn.conf.template");
+    fs.writeFileSync(secretFile, `${secret}\n`, { mode: 0o600 });
+    fs.copyFileSync(TEMPLATE, template);
+    fs.chmodSync(template, 0o600);
+    const environment = {
+      ...process.env,
+      TURN_PUBLIC_HOST: "turn.example.test",
+      TURN_EXTERNAL_IP: "203.0.113.20",
+      TURN_PRIVATE_IP: "10.0.0.20",
+      TURN_SHARED_SECRET_FILE: secretFile,
+    };
+    for (const protectedFile of [secretFile, template]) {
+      const before = fs.readFileSync(protectedFile);
+      const result = spawnSync(process.execPath, [
+        SCRIPT,
+        "--template", template,
+        "--output", protectedFile,
+      ], { encoding: "utf8", env: environment });
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /must not replace/);
+      assert.deepEqual(fs.readFileSync(protectedFile), before);
+      assert.doesNotMatch(result.stderr, new RegExp(secret));
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
-const fs = require("node:fs");
-const path = require("node:path");
+const { readSecretFile, writePrivateAtomic } = require("./secure-config-files");
 const {
   buildCirrusConfig,
   createTurnRestCredentials,
@@ -40,14 +39,22 @@ function port(value, field) {
 
 function secretFile(variable) {
   const filename = String(process.env[variable] || "").trim();
-  if (!path.isAbsolute(filename)) die(`${variable} must be an absolute secret-file path`);
-  let value;
+  const expectedGroupId = optionalGroupId(`${variable}_GID`);
   try {
-    value = fs.readFileSync(filename, "utf8").replace(/\r?\n$/, "");
-  } catch {
-    die(`${variable} could not be read`);
+    return {
+      filename,
+      value: readSecretFile(filename, { label: variable, expectedGroupId }),
+    };
   }
-  if (Buffer.byteLength(value) < 32) die(`${variable} must contain at least 32 bytes`);
+  catch (error) { die(error.message); }
+}
+
+function optionalGroupId(variable) {
+  const raw = String(process.env[variable] || "").trim();
+  if (!raw) return undefined;
+  if (!/^[1-9][0-9]{0,9}$/.test(raw)) die(`${variable} must be a positive non-root GID`);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value > 0xffffffff) die(`${variable} must be a positive non-root GID`);
   return value;
 }
 
@@ -61,24 +68,6 @@ function boundedInteger(value, fallback, minimum, maximum, field) {
     die(`${field} must be an integer between ${minimum} and ${maximum}`);
   }
   return number;
-}
-
-function writeAtomic(filename, value) {
-  const target = path.resolve(filename);
-  const directory = path.dirname(target);
-  const temporary = path.join(directory, `.${path.basename(target)}.${process.pid}.tmp`);
-  try {
-    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    fs.renameSync(temporary, target);
-    fs.chmodSync(target, 0o600);
-  } catch (error) {
-    try { fs.unlinkSync(temporary); } catch {}
-    die(`could not atomically write output: ${error.code || "write_failed"}`);
-  }
 }
 
 const args = argumentsMap(process.argv.slice(2));
@@ -111,10 +100,11 @@ const minimumCredentialLifetimeSeconds = Math.ceil(sessionHardMaxMs / 1000) + re
 if (ttlSeconds < minimumCredentialLifetimeSeconds) {
   die("TURN credential lifetime must cover SESSION_HARD_MAX_MS plus reconnect grace");
 }
+const turnSecret = secretFile("TURN_SHARED_SECRET_FILE");
 const credentials = createTurnRestCredentials({
   sessionId: args["--session"],
   ttlSeconds,
-}, { turnSharedSecret: secretFile("TURN_SHARED_SECRET_FILE") });
+}, { turnSharedSecret: turnSecret.value });
 const stunUrls = commaList(process.env.TURN_STUN_URLS || `stun:${publicHost}:3478`);
 const turnUrls = commaList(
   process.env.TURN_URLS || [
@@ -137,10 +127,24 @@ const config = buildCirrusConfig({
   },
 }, { turnCredential: credentials.credential });
 
-writeAtomic(args["--output"], config);
+let output;
+try {
+  output = writePrivateAtomic(
+    args["--output"],
+    `${JSON.stringify(config, null, 2)}\n`,
+    {
+      label: "Cirrus output",
+      forbiddenInputs: [
+        { filename: turnSecret.filename, label: "TURN_SHARED_SECRET_FILE" },
+      ],
+    },
+  );
+} catch (error) {
+  die(error.message);
+}
 process.stdout.write(`${JSON.stringify({
   ok: true,
-  output: path.resolve(args["--output"]),
+  output,
   turnCredentialExpiresAt: credentials.expiresAt,
   reconnectGraceSeconds,
   sessionHardMaxMs,

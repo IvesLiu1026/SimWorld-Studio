@@ -59,6 +59,29 @@ modify DNS/firewall/NAT, or execute a live credential rotation.
 `T4.10` is therefore code-complete. Live portions of `T4.11` and all of
 `T4.12` remain open.
 
+### Independent secret-path hardening delta
+
+A later independent security review reproduced two destructive deployment
+defects before commit: either config CLI could replace its own TURN shared
+secret when `--output` named that file, and group-readable `0640/0650` secrets
+were accepted without binding the group to an approved numeric GID. It also
+found that the AMI recipe made the release tree writable by the service account
+even though an administrator later executes its materializer as root.
+
+The corrected contract now rejects path and existing-inode aliases against the
+secret and Coturn template, accepts group read only as exact `0040` bound to an
+explicit numeric GID, rejects special/execute/world bits and unsafe ancestors,
+and performs owner/GID/mode checks through the temporary FD before rename.
+Post-commit directory-fsync failure is reported as installed-but-not-confirmed,
+not as a clean rollback. The AMI builds under a distinct, private build UID,
+seals and validates build outputs before root copies them, and keeps release
+code root-owned and service-user read-only. Compose explicitly pins the host
+runtime UID:GID and reviewed host secret GID. Focused
+tests preserve protected input bytes across both destructive-alias attempts,
+cover wrong-GID and `0650`, nested writable ancestors, and fault-injected
+post-commit fsync semantics. These remain offline contracts; no live secret was
+read or rotated.
+
 ## Offline verification
 
 - Review coordinator and focused Review contracts: 33 passing tests.
@@ -68,7 +91,8 @@ modify DNS/firewall/NAT, or execute a live credential rotation.
 - Full Node `*.test.js` suite: 467 passing tests, 0 failures.
 - Legacy server unit runner: 11 passing, 18 live integration/UE tests skipped
   by the explicit `unit` selection.
-- AWS deployment script contracts: 8 passing tests.
+- AWS deployment script contracts: 21 passing tests after the secret-path
+  hardening delta.
 - Launcher/security packaging suite: 28 passing tests.
 - Production frontend build: passed (1,879 modules transformed).
 

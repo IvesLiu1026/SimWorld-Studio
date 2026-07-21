@@ -18,6 +18,7 @@ DEPLOY_DIR="$REPO_DIR/deploy/aws"
 LOG="/var/log/simworld-bake.log"
 
 log() { echo "[$(date -Is)] $*" | tee -a "$LOG"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
 log "=== bake-ami.sh start ==="
 
@@ -26,7 +27,7 @@ log "[1/8] apt update + base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
-    curl wget git unzip rsync htop tmux jq \
+    curl wget git unzip rsync htop tmux jq procps \
     build-essential python3 python3-pip python3-venv \
     nginx coturn certbot python3-certbot-nginx \
     netcat-openbsd vulkan-tools mesa-vulkan-drivers \
@@ -76,40 +77,210 @@ else
     log "[6/8] simworld user already exists"
 fi
 
+if ! id simworld-build >/dev/null 2>&1; then
+    log "[6/8b] creating isolated build user"
+    useradd --system --create-home \
+            --home-dir /var/cache/simworld-build \
+            --shell /usr/sbin/nologin simworld-build
+fi
+[[ "$(id -u simworld-build)" != "$(id -u simworld)" ]] || {
+    echo "ERROR: simworld-build must have a distinct UID from simworld" >&2
+    exit 1
+}
+BUILD_PRIMARY_GID="$(id -g simworld-build)"
+SIMWORLD_PRIMARY_GID="$(id -g simworld)"
+[[ "$(id -u simworld-build)" != "0" \
+   && "$BUILD_PRIMARY_GID" != "0" \
+   && "$BUILD_PRIMARY_GID" != "$SIMWORLD_PRIMARY_GID" ]] || {
+    echo "ERROR: simworld-build must use a dedicated non-root primary group" >&2
+    exit 1
+}
+for build_group in $(id -G simworld-build); do
+    [[ "$build_group" == "$BUILD_PRIMARY_GID" ]] || {
+        echo "ERROR: simworld-build must not have supplementary groups" >&2
+        exit 1
+    }
+done
+
 install -d -o simworld -g simworld -m 755 \
     /var/lib/simworld \
     /var/lib/simworld/claude-home \
     /var/lib/simworld/slots \
     /opt/simworld-content
+install -d -o root -g root -m 711 /var/lib/simworld-build
+install -d -o simworld-build -g simworld-build -m 700 /var/cache/simworld-build
 
 # Each slot dir created lazily by slot-launcher.sh on first start.
 
-# Web server logs dir (must be writable by simworld user)
-install -d -o simworld -g simworld -m 755 \
-    "$REPO_DIR/simworld_studio_workspace/logs"
+# Release code and deployment templates are later executed by root during
+# config materialization. Keep them root-owned and immutable to the long-lived
+# service account; only the explicit runtime log directory is writable.
+[[ -d "$REPO_DIR/.git" && ! -L "$REPO_DIR" ]] || {
+    echo "ERROR: REPO_DIR must be a non-symlink Git checkout" >&2
+    exit 1
+}
+lock_release_tree() {
+    local runtime_log_dir="$REPO_DIR/simworld_studio_workspace/logs"
+    chown -hR root:root "$REPO_DIR"
+    chmod -R go-w "$REPO_DIR"
+    if [[ -L "$runtime_log_dir" ]]; then
+        echo "ERROR: runtime log directory must not be a symlink" >&2
+        return 1
+    fi
+    install -d -o simworld -g simworld -m 750 \
+        "$runtime_log_dir"
+    chown -hR simworld:simworld "$runtime_log_dir"
+}
+BUILD_UID="$(id -u simworld-build)"
+kill_build_processes() {
+    if pgrep -u "$BUILD_UID" >/dev/null 2>&1; then
+        pkill -TERM -u "$BUILD_UID" >/dev/null 2>&1 || true
+        for _ in {1..20}; do
+            pgrep -u "$BUILD_UID" >/dev/null 2>&1 || return 0
+            sleep 0.1
+        done
+        pkill -KILL -u "$BUILD_UID" >/dev/null 2>&1 || true
+    fi
+    ! pgrep -u "$BUILD_UID" >/dev/null 2>&1
+}
 
-# Give simworld user read access to the repo
-chown -R simworld:simworld "$REPO_DIR"
+validate_build_tree() {
+    local tree="$1"
+    local link_policy="$2"
+    [[ -d "$tree" && ! -L "$tree" ]] || die "build output must be a real directory: $tree"
+    [[ "$(find -P "$tree" -printf '.' | wc -c)" -le 500000 ]] \
+        || die "build output exceeds the file-count bound: $tree"
+    [[ "$(du -s --apparent-size --block-size=1 "$tree" | cut -f1)" -le 4294967296 ]] \
+        || die "build output exceeds the byte bound: $tree"
+    [[ -z "$(find -P "$tree" \( ! -type d -a ! -type f -a ! -type l \) -print -quit)" ]] \
+        || die "build output contains a special file: $tree"
+    [[ -z "$(find -P "$tree" -type f -links +1 -print -quit)" ]] \
+        || die "build output contains a hard-linked file: $tree"
+    [[ -z "$(find -P "$tree" ! -uid 0 -print -quit)" ]] \
+        || die "sealed build output is not root-owned: $tree"
+    if [[ "$link_policy" == "none" ]]; then
+        [[ -z "$(find -P "$tree" -type l -print -quit)" ]] \
+            || die "frontend build output must not contain symlinks"
+    else
+        while IFS= read -r -d '' link; do
+            local target resolved
+            target="$(readlink -- "$link")"
+            [[ -n "$target" && "$target" != /* ]] \
+                || die "node_modules link must be non-empty and relative: $link"
+            resolved="$(realpath -e -- "$link")" \
+                || die "node_modules link must resolve: $link"
+            case "$resolved" in
+                "$tree"/*) ;;
+                *) die "node_modules link escapes its sealed root: $link" ;;
+            esac
+        done < <(find -P "$tree" -type l -print0)
+    fi
+}
+
+BUILD_ROOT=""
+DIST_PUBLISH_TEMP=""
+DIST_NEW_FINAL=""
+MODULES_PUBLISH_TEMP=""
+MODULES_NEW_FINAL=""
+finish_release_tree() {
+    local cleanup_status=0
+    kill_build_processes || cleanup_status=1
+    if [[ -n "$BUILD_ROOT" && "$BUILD_ROOT" == /var/lib/simworld-build/release.* ]]; then
+        chown -hR root:root "$BUILD_ROOT" >/dev/null 2>&1 || cleanup_status=1
+        rm -rf -- "$BUILD_ROOT" || cleanup_status=1
+    fi
+    if [[ -n "$DIST_PUBLISH_TEMP" && "$DIST_PUBLISH_TEMP" == "$REPO_DIR"/simworld_studio_workspace/web/.dist.publish.* ]]; then
+        rm -rf -- "$DIST_PUBLISH_TEMP" || cleanup_status=1
+    fi
+    if [[ -n "$DIST_NEW_FINAL" && "$DIST_NEW_FINAL" == "$REPO_DIR"/simworld_studio_workspace/web/dist ]]; then
+        rm -rf -- "$DIST_NEW_FINAL" || cleanup_status=1
+    fi
+    if [[ -n "$MODULES_PUBLISH_TEMP" && "$MODULES_PUBLISH_TEMP" == "$REPO_DIR"/simworld_studio_workspace/web/server/.node_modules.publish.* ]]; then
+        rm -rf -- "$MODULES_PUBLISH_TEMP" || cleanup_status=1
+    fi
+    if [[ -n "$MODULES_NEW_FINAL" && "$MODULES_NEW_FINAL" == "$REPO_DIR"/simworld_studio_workspace/web/server/node_modules ]]; then
+        rm -rf -- "$MODULES_NEW_FINAL" || cleanup_status=1
+    fi
+    lock_release_tree || cleanup_status=1
+    return "$cleanup_status"
+}
+lock_release_tree
+trap finish_release_tree EXIT
 
 # ── 7. Web frontend build (one-shot) ──────────────────────────────────────────
 WEB_DIR="$REPO_DIR/simworld_studio_workspace/web"
-if [[ -d "$WEB_DIR" && ! -d "$WEB_DIR/dist" ]]; then
+SERVER_DIR="$WEB_DIR/server"
+NEED_WEB_DIST=0
+NEED_SERVER_MODULES=0
+if [[ -e "$WEB_DIR/dist" || -L "$WEB_DIR/dist" ]]; then
+    validate_build_tree "$WEB_DIR/dist" none
+elif [[ -d "$WEB_DIR" ]]; then
+    NEED_WEB_DIST=1
+fi
+if [[ -e "$SERVER_DIR/node_modules" || -L "$SERVER_DIR/node_modules" ]]; then
+    validate_build_tree "$SERVER_DIR/node_modules" relative-in-root
+elif [[ -d "$SERVER_DIR" ]]; then
+    NEED_SERVER_MODULES=1
+fi
+if [[ "$NEED_WEB_DIST" == "1" || "$NEED_SERVER_MODULES" == "1" ]]; then
+    BUILD_ROOT="$(mktemp -d /var/lib/simworld-build/release.XXXXXXXX)"
+    chown simworld-build:simworld-build "$BUILD_ROOT"
+    rsync -a \
+        --exclude dist \
+        --exclude node_modules \
+        --exclude server/node_modules \
+        "$WEB_DIR/" "$BUILD_ROOT/"
+    chown -R simworld-build:simworld-build "$BUILD_ROOT"
+fi
+if [[ "$NEED_WEB_DIST" == "1" ]]; then
     log "[7/8] building web frontend"
-    pushd "$WEB_DIR" >/dev/null
-    sudo -u simworld npm ci
-    sudo -u simworld npm run build
+    pushd "$BUILD_ROOT" >/dev/null
+    sudo -u simworld-build env HOME=/var/cache/simworld-build npm ci
+    sudo -u simworld-build env HOME=/var/cache/simworld-build npm run build
     popd >/dev/null
 else
     log "[7/8] frontend dist/ already present or web dir missing — skipping"
 fi
 
 # Same for server
-SERVER_DIR="$REPO_DIR/simworld_studio_workspace/web/server"
-if [[ -d "$SERVER_DIR" && ! -d "$SERVER_DIR/node_modules" ]]; then
+if [[ "$NEED_SERVER_MODULES" == "1" ]]; then
     log "[7/8b] installing server node_modules"
-    pushd "$SERVER_DIR" >/dev/null
-    sudo -u simworld npm ci --omit=dev
+    pushd "$BUILD_ROOT/server" >/dev/null
+    sudo -u simworld-build env HOME=/var/cache/simworld-build npm ci --omit=dev
     popd >/dev/null
+fi
+
+if [[ "$NEED_WEB_DIST" == "1" || "$NEED_SERVER_MODULES" == "1" ]]; then
+    kill_build_processes || die "could not quiesce the isolated build UID"
+    chown -hR root:root "$BUILD_ROOT"
+    chmod -R u-s,g-s,go-w "$BUILD_ROOT"
+fi
+if [[ "$NEED_WEB_DIST" == "1" ]]; then
+    validate_build_tree "$BUILD_ROOT/dist" none
+    [[ ! -e "$WEB_DIR/dist" && ! -L "$WEB_DIR/dist" ]] \
+        || die "frontend destination appeared during build"
+    DIST_PUBLISH_TEMP="$(mktemp -d "$WEB_DIR/.dist.publish.XXXXXXXX")"
+    rsync -a --safe-links --delete "$BUILD_ROOT/dist/" "$DIST_PUBLISH_TEMP/"
+    validate_build_tree "$DIST_PUBLISH_TEMP" none
+    DIST_NEW_FINAL="$WEB_DIR/dist"
+    mv -- "$DIST_PUBLISH_TEMP" "$DIST_NEW_FINAL"
+    DIST_PUBLISH_TEMP=""
+    validate_build_tree "$WEB_DIR/dist" none
+    DIST_NEW_FINAL=""
+fi
+if [[ "$NEED_SERVER_MODULES" == "1" ]]; then
+    validate_build_tree "$BUILD_ROOT/server/node_modules" relative-in-root
+    [[ ! -e "$SERVER_DIR/node_modules" && ! -L "$SERVER_DIR/node_modules" ]] \
+        || die "server node_modules destination appeared during build"
+    MODULES_PUBLISH_TEMP="$(mktemp -d "$SERVER_DIR/.node_modules.publish.XXXXXXXX")"
+    rsync -a --safe-links --delete \
+        "$BUILD_ROOT/server/node_modules/" "$MODULES_PUBLISH_TEMP/"
+    validate_build_tree "$MODULES_PUBLISH_TEMP" relative-in-root
+    MODULES_NEW_FINAL="$SERVER_DIR/node_modules"
+    mv -- "$MODULES_PUBLISH_TEMP" "$MODULES_NEW_FINAL"
+    MODULES_PUBLISH_TEMP=""
+    validate_build_tree "$SERVER_DIR/node_modules" relative-in-root
+    MODULES_NEW_FINAL=""
 fi
 
 # ── 8. Install systemd units + nginx config ──────────────────────────────────
@@ -134,6 +305,13 @@ if [[ ! -f /etc/turnserver.conf ]]; then
 fi
 
 systemctl daemon-reload
+
+# The EXIT trap also covers failed npm/install paths. Repeat explicitly on the
+# success path before releasing the trap so the service never starts from a
+# service-user-writable release tree.
+finish_release_tree
+BUILD_ROOT=""
+trap - EXIT
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 log "=== bake done ==="

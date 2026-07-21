@@ -60,11 +60,15 @@ ENV NODE_ENV=production \
     HOME=/var/lib/simworld/claude-home \
     NODE_OPTIONS=--require=/deploy/scripts/session-shim.js
 
-# Run as a non-root user (matches host simworld user UID/GID if you set them)
-# Override at runtime: `docker run --user $(id -u simworld):$(id -g simworld)`
+# Run as a non-root user. The image UID/GID is independent from the host;
+# Compose must add the reviewed numeric host secret GID explicitly. If host
+# runtime directories also require numeric identity parity, override `user:`
+# with the administrator-pinned host UID:GID rather than assuming a match.
 RUN groupadd -r simworld && useradd -r -g simworld simworld && \
     mkdir -p /var/lib/simworld/claude-home && \
-    chown -R simworld:simworld /app /var/lib/simworld /deploy
+    chown -R simworld:simworld /var/lib/simworld && \
+    chmod 0555 /deploy/scripts/container-entrypoint.sh && \
+    chmod -R go-w /app /deploy
 
 USER simworld
 
@@ -72,5 +76,5 @@ EXPOSE 3002
 
 # tini reaps zombies (important: the server spawns Claude CLI subprocesses
 # per chat turn, and they can be SIGKILLed mid-session)
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/deploy/scripts/container-entrypoint.sh"]
 CMD ["node", "server/index.js"]

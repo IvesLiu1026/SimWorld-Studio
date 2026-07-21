@@ -35,10 +35,35 @@ sudo chmod 0640 /etc/simworld/secrets/*
 Set the public origin, TURN DNS/IP, exact Git revision, and secret-file paths in
 `/etc/default/simworld`, following `deploy/aws/templates/simworld.env`.
 
+This deployment tooling is Linux-only and requires `O_NOFOLLOW` and
+`O_DIRECTORY` semantics. Record the exact numeric `simworld` secret-group GID
+as `TURN_SHARED_SECRET_FILE_GID` whenever the TURN secret is `0640`. A
+group-readable secret is rejected unless its GID exactly matches that value;
+owner-only `0400/0600` secrets omit it. Container deployments must also add
+that same host numeric GID through Compose `group_add`. Compose also requires
+the exact host `simworld` runtime UID:GID for writable state mounts; image-local
+names or coincidental IDs are not accepted as evidence.
+
 ## 3. Materialize and validate Coturn
 
 The reviewed template uses Coturn REST auth. The same shared-secret file is read
 by the per-slot Cirrus config builder to produce short-lived HMAC credentials.
+Both materializers fail closed unless every secret path is absolute and
+normalized, has no symlink component, and resolves to a single-link regular
+file owned by root or the invoking service user. Secret files may be `0600` or
+root/service-group-readable `0640`; group write and every world permission are
+rejected. Secret content is length-bounded and restricted to base64/hex-safe
+bytes, and is re-checked through the same open file descriptor before use.
+
+Generated Coturn and Cirrus configs contain credentials. They are written with
+same-directory `O_EXCL` temporary files, FD-bound `0600` mode (or explicit
+numeric-GID-bound `0640` for Coturn), file and directory `fsync`, and atomic
+rename. The destination directory must be owned by root or the invoking user
+and must not be group/world writable; an existing destination must itself be a
+private, single-link regular file with the same approved GID policy. Do not
+weaken these checks by copying secrets through `/tmp`, process substitution,
+environment values, or command-line arguments.
+
 `build-cirrus-config.js` refuses to create a config unless this invariant holds:
 
 ```text
@@ -52,17 +77,32 @@ the credential TTL to make an otherwise-invalid deployment start.
 
 ```bash
 cd /opt/simworld-studio
+SIMWORLD_SECRET_GID="$(getent group simworld | cut -d: -f3)"
+TURN_CONFIG_GID="$(getent group turnserver | cut -d: -f3)"
+test -n "$SIMWORLD_SECRET_GID" && test -n "$TURN_CONFIG_GID"
 sudo env \
   TURN_PUBLIC_HOST=turn.example.edu \
   TURN_EXTERNAL_IP=203.0.113.20 \
   TURN_PRIVATE_IP=10.0.0.20 \
   TURN_SHARED_SECRET_FILE=/etc/simworld/secrets/turn_shared_secret \
+  TURN_SHARED_SECRET_FILE_GID="$SIMWORLD_SECRET_GID" \
+  TURN_CONFIG_GID="$TURN_CONFIG_GID" \
   node deploy/aws/scripts/materialize-coturn-config.js \
     --template deploy/aws/templates/coturn.conf \
     --output /etc/turnserver.conf
-sudo chown root:turnserver /etc/turnserver.conf
-sudo chmod 0640 /etc/turnserver.conf
 ```
+
+The materializer creates the final `root:turnserver 0640` generation through
+the temporary file descriptor before rename. It refuses an output that is the
+same path or filesystem object as the TURN secret or template. Never execute
+the root materializer from a service-user-writable checkout: the pinned release
+tree and deployment templates must be root-owned, non-group/world-writable,
+and verified against the approved Git/security-manifest revision first.
+An older installation whose checkout was ever recursively owned by `simworld`
+must not repair trust by running its in-place `bake-ami.sh` as root. Stage a
+fresh root-owned checkout at the approved immutable revision, verify its
+security manifest out of band, then replace the release generation through the
+administrator-controlled deployment procedure.
 
 Install the systemd override, start Coturn, and inspect `journalctl -u coturn`
 for parser/listener errors before opening the public firewall rules.

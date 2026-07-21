@@ -25,6 +25,17 @@ services:
     #   3. Be reached by Cirrus WebRTC peers without container NAT mangling
     network_mode: host
 
+    # The image-local account is not assumed to share host numeric identity.
+    # Match the owner of /var/lib/simworld so HOME, slots, registry, and logs
+    # remain writable without making those host directories public.
+    user: "${SIMWORLD_RUNTIME_UID:?Set the numeric host simworld UID}:${SIMWORLD_RUNTIME_GID:?Set the numeric host simworld GID}"
+
+    # Bind-mounted secrets retain their host numeric GID. Add exactly that
+    # reviewed group rather than relying on the image's independently-created
+    # `simworld` GID to happen to match the host.
+    group_add:
+      - "${SIMWORLD_SECRET_GID:?Set the numeric host secret-group GID}"
+
     # Mount everything UE-related read-write so spawning slot-launcher.sh
     # (which writes Saved/Intermediate) works. The script itself is bind-
     # mounted into /deploy/scripts during image build (see Dockerfile).
@@ -78,6 +89,9 @@ services:
 
     environment:
       - NODE_ENV=production
+      - SIMWORLD_RUNTIME_UID=${SIMWORLD_RUNTIME_UID:?Set the numeric host simworld UID}
+      - SIMWORLD_RUNTIME_GID=${SIMWORLD_RUNTIME_GID:?Set the numeric host simworld GID}
+      - SIMWORLD_SECRET_GID=${SIMWORLD_SECRET_GID:?Set the numeric host secret-group GID}
       - CLAUDE_MODEL=claude-opus-4-8
       - UE_POOL_ENABLED=1
       - UE_POOL_SIZE=${UE_POOL_SIZE:-4}
@@ -94,6 +108,7 @@ services:
       - STUDIO_TRUSTED_PROXY=127.0.0.1,::1
       - TURN_PUBLIC_HOST=${TURN_PUBLIC_HOST:?Set TURN_PUBLIC_HOST}
       - TURN_SHARED_SECRET_FILE=/run/secrets/turn_shared_secret
+      - TURN_SHARED_SECRET_FILE_GID=${SIMWORLD_SECRET_GID:?Set the numeric host secret-group GID}
       - TURN_CREDENTIAL_TTL_SECONDS=${TURN_CREDENTIAL_TTL_SECONDS:-14400}
       - TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS=${TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS:-600}
       - TURN_TRANSPORT_POLICY=${TURN_TRANSPORT_POLICY:-relay}

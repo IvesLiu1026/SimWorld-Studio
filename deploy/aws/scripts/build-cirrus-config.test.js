@@ -156,3 +156,37 @@ test("Cirrus deployment config fails closed without DNS or secret-file inputs", 
   assert.equal(result.status, 2);
   assert.match(result.stderr, /TURN_PUBLIC_HOST/);
 });
+
+test("Cirrus deployment config cannot replace its TURN shared secret", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "simworld-cirrus-alias-"));
+  try {
+    const secret = "turn-protected-static-secret-material-".repeat(2);
+    const secretFile = path.join(root, "turn.secret");
+    fs.writeFileSync(secretFile, `${secret}\n`, { mode: 0o600 });
+    const before = fs.readFileSync(secretFile);
+    const result = spawnSync(process.execPath, [
+      SCRIPT,
+      "--output", secretFile,
+      "--http", "8585",
+      "--streamer", "8586",
+      "--sfu", "8989",
+      "--session", "slot-alias",
+    ], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        TURN_PUBLIC_HOST: "turn.example.test",
+        TURN_SHARED_SECRET_FILE: secretFile,
+        TURN_CREDENTIAL_TTL_SECONDS: "3600",
+        SESSION_HARD_MAX_MS: "1800000",
+        TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS: "300",
+      },
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /must not replace TURN_SHARED_SECRET_FILE/);
+    assert.deepEqual(fs.readFileSync(secretFile), before);
+    assert.doesNotMatch(result.stderr, new RegExp(secret));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
