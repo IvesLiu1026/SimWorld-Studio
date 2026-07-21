@@ -10,7 +10,9 @@ Pushed commits at this checkpoint:
 - `37283a8c` — inspect pinned `mmg_040` assets in live UE;
 - `749a9121` — pin a real CC0 cardboard box;
 - `90eeb3f8` — bound legacy UE inspection frames;
-- `74524aa4` — add the typed pick-up/IK animation contract.
+- `74524aa4` — add the typed pick-up/IK animation contract;
+- `ef4d17d9` — record the live Interchange evidence;
+- `c3b0fb27` — use the UE 5.3 overlap-event property API.
 
 ## Resource and mutation boundary
 
@@ -19,6 +21,13 @@ project and NullRHI commandlets assigned to this work item. It did not bind a
 public listener, call a paid model, write Postgres/Qdrant, modify the canonical
 archived UE Content, touch VISTA Production port `8000`, or inspect/restart the
 separate demo's GPU 1 and ports `3012/55570/8595/8596/8899`.
+
+The first two scene-build commandlets inherited the project-enabled UnrealMCP
+plugin and briefly started its default loopback listener on `55559`. No client
+used that listener and it stopped with each commandlet. This was outside the
+declared port set, so the successful third build explicitly disabled UnrealMCP
+and PixelStreaming in its disposable project descriptor. The later rendered
+probe enabled UnrealMCP only on the owned `55560` port.
 
 The full successful import wrote only below the local disposable path:
 
@@ -144,6 +153,65 @@ partial/timeout quarantine and full dependency-at-use verification. A correct
 commandlet executor must close those defects before this one-off observation
 becomes a repeatable execution contract.
 
+## Deterministic scene-build observation
+
+Three non-reused disposable projects preserve the UE 5.3 compatibility path:
+
+- r5 failed before save because `StaticMeshComponent` has no
+  `set_generate_overlap_events` method;
+- r6 passed that point but failed before save because
+  `SkyLightComponent.intensity_scale` is not exposed through the UE 5.3
+  Python reflection surface;
+- r7 used `set_editor_property("generate_overlap_events", ...)`,
+  `SkyLightComponent.set_intensity()`, and disabled runtime networking
+  plugins. It completed with process exit 0 and UE reported zero errors and
+  zero warnings.
+
+r7 saved a real 23,886-byte map at
+`/Game/VISTA/Scenes/MMG040_Office_CommandletR3`. Its SHA-256 is
+`afa9ecddf4133a443080827922686b44b4f61bd28418d087da378d429d7bfd14`.
+The marker contains 14 actors: ground and two walls, the official chair, the
+three imported Poly Haven meshes, the pinned third-person character,
+PlayerStart, camera, three lights and sky atmosphere. Binary strings in the
+saved map independently retain all five non-basic asset references.
+
+The append-only scene-build receipt is:
+
+```text
+/home/yhliu/SimWorldStudio-live/0.2.0-806e869a/releases/
+  ec5ed8dd4beb-mmg040-live-r1/evidence/ue-scene-build/
+  commandlet-r3-r1/observation-receipt.json
+```
+
+Its SHA-256 is
+`1689f72e1f88205edb17d8056ddec7cb27d135f62542619a232435cf2f90025b`.
+This proves a saved machine scene, not rendered correctness or Production
+readiness.
+
+## GPU 0 render preflight
+
+A fresh r8 copy retained the exact map digest, enabled UnrealMCP only for the
+owned `55560` port, and attempted an offscreen 1280×720 Vulkan editor render
+on GPU 0. UE failed before MCP startup with
+`vpCreateInstance ... VK_ERROR_INCOMPATIBLE_DRIVER` and exit code 139, so no
+screenshot was created and r8 is quarantined.
+
+The host simultaneously showed NVIDIA driver `590.48.01` and an idle RTX
+A6000, but the current user cannot read or write either
+`/dev/dri/renderD128` or `renderD129` and is not in the `render` group.
+That permission gap is the first host issue to fix; it is not proof that no
+additional UE 5.3/Vulkan compatibility issue exists. The append-only failed
+render receipt is:
+
+```text
+/home/yhliu/SimWorldStudio-live/0.2.0-806e869a/releases/
+  ec5ed8dd4beb-mmg040-live-r1/evidence/ue-scene-render/
+  editor-r1/observation-receipt.json
+```
+
+Its SHA-256 is
+`170d6f82acf9a7839c162dd369825d3624b74539562970c9420587484a831c2f`.
+
 ## Animation checkpoint
 
 Commit `74524aa4` adds fixed `pick_up` semantics:
@@ -157,13 +225,15 @@ adapter implementation, IK contact evidence, fall montage and rendered
 
 ## Next authoritative actions
 
-1. Land and audit a commandlet-only executor with fixed binary/project/source
-   pins, fsynced write-ahead intent, strict terminal receipt and automatic
-   quarantine on any ambiguous or partial mutation.
-2. Re-run the three-asset job once in another fresh disposable project through
-   that executor; do not reuse or promote the probe project.
-3. Start a GPU 0 rendered disposable runtime only after its strict GPU gate is
-   clear, assemble the `mmg_040` layout, and capture scale/contact/collision/PBR
-   screenshots plus exact material dependency evidence.
-4. Only a visually accepted object manifest may enter a generation-isolated
+1. Have an administrator add `yhliu` to `render` (or install an equivalent
+   persistent udev ACL), start a new login session, and re-run Vulkan preflight.
+2. Use a fresh disposable project—not r8—to render the saved map on GPU 0 and
+   capture scale/contact/collision/PBR screenshots.
+3. Land the commandlet-only executor only after independent review confirms
+   full execution-influence sealing, mandatory independent pins, bounded
+   process-group cleanup, durable project quarantine and terminal-receipt
+   finalization.
+4. Re-run the three-asset job once in another fresh disposable project through
+   that audited executor; do not reuse or promote the probe projects.
+5. Only a visually accepted object manifest may enter a generation-isolated
    semantic snapshot build; Postgres/Qdrant stay unchanged until then.

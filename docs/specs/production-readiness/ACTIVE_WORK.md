@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed implementation checkpoint: `74524aa4` (`feat: add typed pickup animation contract`)
+- Latest pushed implementation checkpoint: `c3b0fb27` (`fix: use UE 5.3 overlap property API`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -30,6 +30,7 @@
 | Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | GPU 0; loopback `3010/55560/8585/8586/8889` for the bounded `mmg_040` live run |
 | `approval_aggregate` | shared worktree, completed | six-party opaque approval aggregate in new files only | Shared schemas/launcher/state/terminal and runtime | None |
 | `adapter_registration_audit` | shared worktree, completed read-only | real query/build/registration/source-closure inventory | All source/docs edits and runtime | None |
+| `commandlet_executor` | shared worktree, active | commandlet-only Interchange executor and focused tests | Runtime, UE, network, docs and all other source | None |
 
 The coordinator is the only merge owner. Workers must commit a single coherent
 change and report validation commands plus remaining live/admin gates.
@@ -105,6 +106,21 @@ change and report validation commands plus remaining live/admin gates.
   It deliberately keeps material dependency, Interchange pipeline fingerprint,
   rendered scale/contact/collision/PBR, Production readiness and semantic-index
   eligibility open.
+- A UE 5.3 compatibility fix is pushed at `c3b0fb27`. Two fail-closed,
+  unsaved disposable scene builds preserve the rejected overlap-method and
+  SkyLight-property attempts. A third fresh build saved
+  `/Game/VISTA/Scenes/MMG040_Office_CommandletR3` with 14 actors and exact
+  official/Poly Haven/character references. The 23,886-byte map SHA-256 is
+  `afa9ecddf4133a443080827922686b44b4f61bd28418d087da378d429d7bfd14`;
+  the scene-build receipt SHA-256 is
+  `1689f72e1f88205edb17d8056ddec7cb27d135f62542619a232435cf2f90025b`.
+- A fresh GPU 0 offscreen render probe failed before MCP startup with
+  `VK_ERROR_INCOMPATIBLE_DRIVER` and created no screenshot. The current user
+  lacks read/write access to both DRM render nodes and is not in the
+  `render` group; that permission must be fixed and a new login/Vulkan
+  preflight completed before using another fresh render project. Failed render
+  receipt SHA-256:
+  `170d6f82acf9a7839c162dd369825d3624b74539562970c9420587484a831c2f`.
 
 ## Current animation checkpoint
 
