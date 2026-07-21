@@ -117,18 +117,43 @@ version，不能在 Production 動態擴充。
 ## Administrator-owned UE plugin artifact
 
 管理員必須從受控 source/build pipeline 取得或建立名為
-`VistaAnimationContentApi` 的 plugin，安裝到實際 UE project。最低 source tree 固定為：
+`VistaAnimationContentApi` 的 plugin，安裝到實際 UE project。Production source manifest 固定為
+以下 16 個 byte-pinned files：
 
 ```text
 Plugins/VistaAnimationContentApi/VistaAnimationContentApi.uplugin
+Plugins/VistaAnimationContentApi/Config/FilterPlugin.ini
+Plugins/VistaAnimationContentApi/ContentProfiles/vista-mmg040-project-profile-source-v1.json
+Plugins/VistaAnimationContentApi/Contract/vista-animation-content-api-v1.json
+Plugins/VistaAnimationContentApi/Contract/vista-animation-content-inspection-receipt-v1.schema.json
+Plugins/VistaAnimationContentApi/Contract/vista-animation-project-profile-source-v1.schema.json
 Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/VistaAnimationContentApi.Build.cs
 Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Public/VistaAnimationContentApiModule.h
 Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private/VistaAnimationContentApiModule.cpp
+Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Public/VistaAnimationContentApiSubsystem.h
+Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private/VistaAnimationContentApiSubsystem.cpp
+Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Public/VistaAnimationContentDriver.h
+Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.h
+Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.cpp
+Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Public/VistaMmg040ContentDriver.h
+Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private/VistaMmg040ContentDriver.cpp
 ```
 
-`inspectVistaAnimationUePluginSource(projectRoot)` 只確認這四個都是 project root 內的 regular
-files，不接受 symlink。`source_tree_complete=true` 仍只代表 source inventory 完整，不代表
-compile、load 或 live behavior 已驗證。
+其 canonical manifest digest 為
+`bdd97f8f967aff67569de708f7c4f18475c54c68371e791e4af4b4c5b09e5b71`。
+`inspectVistaAnimationUePluginSource(projectRoot)` 會逐檔以 `O_NOFOLLOW` 開啟，對
+`lstat/open/fstat/read/fstat/lstat` identity 做一致性檢查，在 1 MiB 上限內計算 SHA-256；
+project root 與所有 ancestors 必須是 canonical non-symlink directories，檔案必須是 single-link
+regular file。任何 missing、hash mismatch、hardlink、FIFO、directory、unreadable、oversize、
+path replacement 或 TOCTOU identity change 都會令 `source_tree_complete=false`，並出現在
+`mismatched_files`／`policy_violations` diagnostics。
+
+`Config/`、`ContentProfiles/`、`Contract/`、`Source/` 使用 recursive exact allowlist；任何額外
+entry（尤其 UBT 會自動編譯的 `.cpp`）都列入 `unexpected_entries` 並 fail closed。Plugin root
+只明確允許 optional non-production `.gitignore`、`README.md`、`Scripts/`、`Tests/`、
+`Binaries/`、`Intermediate/`；它們不屬於 16-file manifest，也不能用來滿足 production source
+evidence。`source_tree_complete=true` 仍只代表此 source inventory/bytes 完整，不代表 compile、
+loaded binary provenance 或 live behavior 已驗證。
 
 管理員提供給 Studio 的 root-owned pinned manifest 必須是 exact shape（不能加安裝 path、
 token 或任意設定）：

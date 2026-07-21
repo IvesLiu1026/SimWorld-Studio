@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -51,7 +52,7 @@ const strictJsonSource = readFileSync(path.join(
   "Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.cpp",
 ), "utf8");
 
-test("plugin descriptor and minimum source inventory are complete", () => {
+test("plugin descriptor and exact production source inventory are complete", (t) => {
   const descriptor = JSON.parse(readFileSync(path.join(pluginRoot, "VistaAnimationContentApi.uplugin"), "utf8"));
   assert.equal(descriptor.FileVersion, 3);
   assert.equal(descriptor.VersionName, "1.1.0");
@@ -65,17 +66,18 @@ test("plugin descriptor and minimum source inventory are complete", () => {
   assert.equal(includes.at(-1), '#include "VistaAnimationContentApiSubsystem.generated.h"');
 
   const temporaryProject = mkdtempSync(path.join(os.tmpdir(), "vista-animation-source-audit-"));
+  t.after(() => rmSync(temporaryProject, { recursive: true, force: true }));
   cpSync(pluginRoot, path.join(temporaryProject, "Plugins/VistaAnimationContentApi"), { recursive: true });
   const audit = readiness.inspectVistaAnimationUePluginSource(temporaryProject);
   assert.equal(audit.source_tree_complete, true);
+  assert.equal(audit.source_manifest_sha256, readiness.ANIMATION_UE_SOURCE_MANIFEST_SHA256);
+  assert.deepEqual(audit.expected_manifest, readiness.EXPECTED_PLUGIN_SOURCE_MANIFEST);
+  assert.deepEqual(audit.expected_files, readiness.EXPECTED_PLUGIN_SOURCE_FILES);
+  assert.deepEqual(audit.present_files, readiness.EXPECTED_PLUGIN_SOURCE_FILES);
   assert.deepEqual(audit.missing_files, []);
-  for (const relative of [
-    "Source/VistaAnimationContentApi/Public/VistaMmg040ContentDriver.h",
-    "Source/VistaAnimationContentApi/Private/VistaMmg040ContentDriver.cpp",
-    "ContentProfiles/vista-mmg040-project-profile-source-v1.json",
-    "Contract/vista-animation-project-profile-source-v1.schema.json",
-    "Contract/vista-animation-content-inspection-receipt-v1.schema.json",
-  ]) assert.equal(existsSync(path.join(pluginRoot, relative)), true, `missing ${relative}`);
+  assert.deepEqual(audit.mismatched_files, []);
+  assert.deepEqual(audit.unexpected_entries, []);
+  assert.deepEqual(audit.policy_violations, []);
 });
 
 test("subsystem binds every trusted config to the driver's sealed profile receipt", () => {

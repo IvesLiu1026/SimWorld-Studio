@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -163,7 +164,7 @@ test("profile preparation CLI is non-mutating and fails closed without a receipt
 });
 
 test("profile preparation CLI accepts only protected, exact receipt files", (t) => {
-  const temporary = mkdtempSync(path.join(pluginRoot, ".mmg040-profile-test-"));
+  const temporary = mkdtempSync(path.join(os.homedir(), ".mmg040-profile-test-"));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   chmodSync(temporary, 0o700);
   const receiptPath = path.join(temporary, "receipt.json");
@@ -283,7 +284,7 @@ test("strict JSON and protected-file reader reject duplicate keys, links, and al
     "ANIMATION_MMG040_JSON_INVALID",
   );
 
-  const temporary = mkdtempSync(path.join(pluginRoot, ".mmg040-path-test-"));
+  const temporary = mkdtempSync(path.join(os.homedir(), ".mmg040-path-test-"));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   chmodSync(temporary, 0o700);
   const receiptPath = path.join(temporary, "receipt.json");

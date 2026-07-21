@@ -229,6 +229,12 @@ git diff --check
 這些測試只證明 source contract、fail-closed receipt/profile preparation、typed dispatch 與 package
 inventory。它們不取代 UE compile/load、content authoring、runtime behavior 或 visual evidence。
 
+Server source audit 已固定 16 個 production source/config/contract/profile files 及其 SHA-256，並
+對 canonical ancestor、`O_NOFOLLOW` opened identity、hardlink/type/size、bounded read/hash、
+TOCTOU replacement 與 production namespace exact allowlist fail closed。Canonical source manifest
+digest 是 `bdd97f8f967aff67569de708f7c4f18475c54c68371e791e4af4b4c5b09e5b71`。這關閉先前的
+四檔 inventory gap，但不等於 UE compile/load 或 loaded binary provenance。
+
 ## 尚未解除的 live gates
 
 - 13 個 `/Game/VISTA/MMG040/...` assets 尚未 author/import；
@@ -236,9 +242,7 @@ inventory。它們不取代 UE compile/load、content authoring、runtime behavi
 - plugin `1.1.0` 尚未以 exact UE 5.3.2 rebuild/package/load；舊 `1.0.0`／UE 5.7.3 binary
   receipt 不適用於這份 source；
 - private listener 尚未 exact-dispatch 到新的 driver；
-- server `EXPECTED_PLUGIN_SOURCE_FILES`／source audit 尚只涵蓋四個核心檔，
-  `source_tree_complete=true` 不能證明 concrete driver/profile/schema 完整；此項由 server
-  readiness owner 擴充；
+- source manifest digest 尚未由管理員 build receipt 綁定到新 loaded binary；
 - 尚未取得 live inspection/content/profile receipt；
 - chair/cabinet/stool anchors、caster physics 與 collision 尚未驗證；
 - 尚未完成 0／2／5／9／12 秒、notify timeout、Stop race、disconnect/restart、fall/recover、

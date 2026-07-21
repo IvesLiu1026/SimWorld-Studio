@@ -47,11 +47,18 @@ provider, database or public network endpoint was called.
 - Without a live receipt, helper preflight exits `3` and reports `ready=false`,
   `start_allowed=false` with explicit reason codes.
 
-Known cross-owner gap: the current server-side `inspectVistaAnimationUePluginSource` inventory still
-checks only the descriptor, Build.cs and two module entry files. Its `source_tree_complete=true` does
-not prove that the subsystem, strict JSON parser, concrete driver, source profile or receipt schemas
-are present. The plugin-focused offline test checks those additional files directly, but the server
-readiness owner must expand the production inventory before treating that flag as deployment evidence.
+The server-side `inspectVistaAnimationUePluginSource` inventory now pins the exact SHA-256 of all 16
+production descriptor/config/profile/contract/module/subsystem/parser/driver files. It rejects
+non-canonical or symlinked ancestors, final symlinks, hardlinks, non-regular or unreadable files,
+files over 1 MiB, opened-file identity changes, byte mismatches and unexpected entries in every
+production namespace. The canonical source manifest digest is:
+
+```text
+bdd97f8f967aff67569de708f7c4f18475c54c68371e791e4af4b4c5b09e5b71
+```
+
+This closes the four-file source-inventory gap. It remains offline source evidence: a protected build
+receipt must still bind that source revision to the exact UE 5.3.2 loaded binary.
 
 Pinned source-contract SHA-256:
 
@@ -66,7 +73,7 @@ node --test offline-contract.test.mjs mmg040-content-profile.test.mjs
 22 passed, 0 failed
 
 node --test vista-animation-ue-readiness.test.js vista-animation-ue-adapter.test.js vista-animation-runtime.test.js
-55 passed, 0 failed
+63 passed, 0 failed
 
 node --check Scripts/prepare-content-profile.mjs
 passed
@@ -98,8 +105,7 @@ audit.
 3. Rebuild/package plugin `1.1.0` with exact UE 5.3.2 and pin the new loaded binary SHA/build ID.
 4. Exact-dispatch the four reserved commands from the private listener and pass live nonce/capability
    challenge.
-5. Expand the server-owned plugin source inventory beyond its current four-file minimum and bind the
-   complete inventory/package digest to the build receipt.
+5. Bind the complete source-manifest digest to the protected UE 5.3.2 build receipt and loaded binary.
 6. Produce a protected live inspection receipt and derived server content profile.
 7. Run disposable normal/timeout/Stop/disconnect/restart tests and `mmg_040` 0/2/5/9/12-second pose,
    contact, screenshot and scene-validation evidence.

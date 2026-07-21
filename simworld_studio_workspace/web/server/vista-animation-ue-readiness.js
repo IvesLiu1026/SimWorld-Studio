@@ -39,13 +39,132 @@ const MAX_CAPABILITY_RESPONSE_BYTES = 131_072;
 const DEFAULT_TIMEOUT_MS = 3_000;
 const MAX_TIMEOUT_MS = 10_000;
 const MAX_TRACKED_NONCES = 4_096;
+const MAX_PLUGIN_SOURCE_FILE_BYTES = 1_048_576;
+const SOURCE_AUDIT_READ_CHUNK_BYTES = 64 * 1024;
+const PLUGIN_SOURCE_RELATIVE_ROOT = "Plugins/VistaAnimationContentApi";
 
-const EXPECTED_PLUGIN_SOURCE_FILES = Object.freeze([
-  "Plugins/VistaAnimationContentApi/VistaAnimationContentApi.uplugin",
-  "Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/VistaAnimationContentApi.Build.cs",
-  "Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Public/VistaAnimationContentApiModule.h",
-  "Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private/VistaAnimationContentApiModule.cpp",
+const EXPECTED_PLUGIN_SOURCE_MANIFEST = deepFreeze([
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/VistaAnimationContentApi.uplugin`,
+    sha256: "bc9fc7c0f227722221e709e65b91dc2cbdef8c21c91b4a9df775ad5766c965af",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Config/FilterPlugin.ini`,
+    sha256: "5bb06a2a79c30f12f891befbd34294914b4bdf1b634577d03c1c14c251b56b72",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/ContentProfiles/vista-mmg040-project-profile-source-v1.json`,
+    sha256: "1b0aa6e48d251cb8dbeac4f34528ca8fa6084fb330fc2d150ef341f630528b1c",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Contract/vista-animation-content-api-v1.json`,
+    sha256: "b43d7ea45ad5cb8ff8bf645e52fb8a155462c71b47d8f625d45529a61400bd2e",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Contract/vista-animation-content-inspection-receipt-v1.schema.json`,
+    sha256: "919ba41b8effd621b88844be7a786cc2595627f14e8bb38f69d3e8279e11b463",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Contract/vista-animation-project-profile-source-v1.schema.json`,
+    sha256: "0c875748d29d76b8a7eaae1e6196a445631faee69a337b4b3567753dc0b5365c",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/VistaAnimationContentApi.Build.cs`,
+    sha256: "54d899c87f5121bacbb0ac18b29f320855ce564e54ee286e6c340f3aec7a91ed",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Public/VistaAnimationContentApiModule.h`,
+    sha256: "3569a537793faec46bb3240ac53575b30e73d9f212ac05f7bbd90a57311b9535",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Private/VistaAnimationContentApiModule.cpp`,
+    sha256: "fd27a21e49eea87bbfdf7bc21d6f9ed14f4cae074ad9e69fb749e4859d71e623",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Public/VistaAnimationContentApiSubsystem.h`,
+    sha256: "ddadedfb967a397f04416295eb40c689d964414e22ba40f39746d83fff289e77",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Private/VistaAnimationContentApiSubsystem.cpp`,
+    sha256: "6ecb19ad80ea769712c29bff32924abbf675e4e617d67563ca1681e8506232f5",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Public/VistaAnimationContentDriver.h`,
+    sha256: "92ec98da354baf76e2aa39e6d81e016a65fed73abcd030ef7eb60f6842585b9f",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.h`,
+    sha256: "8259e25e01b156b985744d556e00830b199aec6272e96272658cc1311e524838",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.cpp`,
+    sha256: "104d838750191764b0451ba12f86889867ad732c8c5fef7e72740c130bcd0ca4",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Public/VistaMmg040ContentDriver.h`,
+    sha256: "e88a9d498c75fb21740307a98f2f7f46c8f0f01c6a7a5168ee893be8b99832b3",
+  },
+  {
+    path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Private/VistaMmg040ContentDriver.cpp`,
+    sha256: "c69dd60ca28119858124951d2ae77a3463092902bc845a94f107078867df4302",
+  },
 ]);
+
+const EXPECTED_PLUGIN_SOURCE_FILES = Object.freeze(
+  EXPECTED_PLUGIN_SOURCE_MANIFEST.map((entry) => entry.path),
+);
+const ANIMATION_UE_SOURCE_MANIFEST_SHA256 = digest({
+  schema: ANIMATION_UE_SOURCE_AUDIT_SCHEMA,
+  plugin_name: ANIMATION_UE_PLUGIN_NAME,
+  files: EXPECTED_PLUGIN_SOURCE_MANIFEST,
+});
+
+const AUDITED_PLUGIN_DIRECTORY_CHILDREN = deepFreeze({
+  [PLUGIN_SOURCE_RELATIVE_ROOT]: [
+    "Config",
+    "ContentProfiles",
+    "Contract",
+    "Source",
+    "VistaAnimationContentApi.uplugin",
+  ],
+  [`${PLUGIN_SOURCE_RELATIVE_ROOT}/Config`]: ["FilterPlugin.ini"],
+  [`${PLUGIN_SOURCE_RELATIVE_ROOT}/ContentProfiles`]: [
+    "vista-mmg040-project-profile-source-v1.json",
+  ],
+  [`${PLUGIN_SOURCE_RELATIVE_ROOT}/Contract`]: [
+    "vista-animation-content-api-v1.json",
+    "vista-animation-content-inspection-receipt-v1.schema.json",
+    "vista-animation-project-profile-source-v1.schema.json",
+  ],
+  [`${PLUGIN_SOURCE_RELATIVE_ROOT}/Source`]: ["VistaAnimationContentApi"],
+  [`${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi`]: [
+    "Private",
+    "Public",
+    "VistaAnimationContentApi.Build.cs",
+  ],
+  [`${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Public`]: [
+    "VistaAnimationContentApiModule.h",
+    "VistaAnimationContentApiSubsystem.h",
+    "VistaAnimationContentDriver.h",
+    "VistaMmg040ContentDriver.h",
+  ],
+  [`${PLUGIN_SOURCE_RELATIVE_ROOT}/Source/VistaAnimationContentApi/Private`]: [
+    "VistaAnimationContentApiModule.cpp",
+    "VistaAnimationContentApiSubsystem.cpp",
+    "VistaAnimationStrictJson.cpp",
+    "VistaAnimationStrictJson.h",
+    "VistaMmg040ContentDriver.cpp",
+  ],
+});
+
+const OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES = deepFreeze({
+  ".gitignore": "file",
+  "README.md": "file",
+  Scripts: "directory",
+  Tests: "directory",
+  Binaries: "directory",
+  Intermediate: "directory",
+});
 
 const SECURITY_POLICY = deepFreeze({
   schema: ANIMATION_UE_SECURITY_POLICY_SCHEMA,
@@ -544,30 +663,452 @@ function createVistaAnimationUeReadinessProbe(options = {}) {
   };
 }
 
+class SourceAuditFault extends Error {
+  constructor(reason) {
+    super(reason);
+    this.name = "SourceAuditFault";
+    this.reason = reason;
+  }
+}
+
+function sourceAuditReason(error, fallback = "io_error") {
+  if (error instanceof SourceAuditFault) return error.reason;
+  if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return "missing";
+  if (error && (error.code === "EACCES" || error.code === "EPERM")) return "unreadable";
+  if (error && error.code === "ELOOP") return "symlink";
+  return fallback;
+}
+
+function sourceAuditPath(projectRoot, relativePath) {
+  const resolved = path.resolve(projectRoot, ...relativePath.split("/"));
+  const relative = path.relative(projectRoot, resolved);
+  if (
+    relative === ".."
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) throw new SourceAuditFault("outside_project_root");
+  return resolved;
+}
+
+function absolutePathComponents(absolutePath) {
+  const resolved = path.resolve(absolutePath);
+  const root = path.parse(resolved).root;
+  const tail = path.relative(root, resolved);
+  const components = [root];
+  let cursor = root;
+  for (const component of tail.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, component);
+    components.push(cursor);
+  }
+  return components;
+}
+
+function statToken(value) {
+  return typeof value === "bigint" ? value.toString() : String(value);
+}
+
+function hasStatValue(value) {
+  return typeof value === "bigint" || Number.isFinite(value);
+}
+
+function sameFileIdentity(left, right) {
+  return Boolean(
+    left
+    && right
+    && hasStatValue(left.dev)
+    && hasStatValue(left.ino)
+    && hasStatValue(right.dev)
+    && hasStatValue(right.ino)
+    && statToken(left.dev) === statToken(right.dev)
+    && statToken(left.ino) === statToken(right.ino),
+  );
+}
+
+function stableStatValue(value) {
+  if (typeof value === "bigint") return value.toString();
+  return Number.isFinite(value) ? value : null;
+}
+
+function directorySnapshot(status) {
+  for (const field of ["dev", "ino", "mode", "nlink", "size", "mtimeMs", "ctimeMs"]) {
+    if (!hasStatValue(status[field])) throw new SourceAuditFault("invalid_stat");
+  }
+  return Object.freeze({
+    dev: statToken(status.dev),
+    ino: statToken(status.ino),
+    mode: stableStatValue(status.mode),
+    nlink: stableStatValue(status.nlink),
+    size: stableStatValue(status.size),
+    mtime_ms: stableStatValue(status.mtimeMs),
+    ctime_ms: stableStatValue(status.ctimeMs),
+  });
+}
+
+function sameDirectorySnapshot(left, right) {
+  return Boolean(left && right && Object.keys(left).every((key) => left[key] === right[key]));
+}
+
+function sameDirectoryIdentity(left, right) {
+  return Boolean(
+    left
+    && right
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode,
+  );
+}
+
+function inspectCanonicalDirectory(fsImpl, directory) {
+  const resolvedDirectory = path.resolve(directory);
+  let status;
+  try {
+    status = fsImpl.lstatSync(resolvedDirectory);
+  } catch (error) {
+    throw new SourceAuditFault(sourceAuditReason(error));
+  }
+  if (typeof status.isSymbolicLink !== "function" || status.isSymbolicLink()) {
+    throw new SourceAuditFault("ancestor_symlink");
+  }
+  if (typeof status.isDirectory !== "function" || !status.isDirectory()) {
+    throw new SourceAuditFault("not_directory");
+  }
+  let canonical;
+  try {
+    canonical = fsImpl.realpathSync(resolvedDirectory);
+  } catch (error) {
+    throw new SourceAuditFault(sourceAuditReason(error));
+  }
+  if (path.resolve(String(canonical)) !== resolvedDirectory) {
+    throw new SourceAuditFault("ancestor_symlink");
+  }
+  const snapshot = directorySnapshot(status);
+  return snapshot;
+}
+
+function inspectCanonicalDirectoryChain(fsImpl, directory) {
+  return captureCanonicalDirectoryChain(fsImpl, directory).at(-1).snapshot;
+}
+
+function captureCanonicalDirectoryChain(fsImpl, directory) {
+  return absolutePathComponents(directory).map((component) => ({
+    path: component,
+    snapshot: inspectCanonicalDirectory(fsImpl, component),
+  }));
+}
+
+function sameDirectoryChain(left, right) {
+  return left.length === right.length && left.every((entry, index) => (
+    entry.path === right[index].path
+    && sameDirectoryIdentity(entry.snapshot, right[index].snapshot)
+  ));
+}
+
+function numericStatSize(status) {
+  const value = typeof status.size === "bigint" ? Number(status.size) : status.size;
+  if (!Number.isSafeInteger(value) || value < 0) throw new SourceAuditFault("invalid_size");
+  return value;
+}
+
+function requireRegularSingleLink(status, { opened = false } = {}) {
+  if (!opened && (typeof status.isSymbolicLink !== "function" || status.isSymbolicLink())) {
+    throw new SourceAuditFault("symlink");
+  }
+  if (typeof status.isFile !== "function" || !status.isFile()) {
+    throw new SourceAuditFault("not_regular_file");
+  }
+  for (const field of ["dev", "ino", "mode", "nlink", "size", "mtimeMs", "ctimeMs"]) {
+    if (!hasStatValue(status[field])) throw new SourceAuditFault("invalid_stat");
+  }
+  if (Number(status.nlink) !== 1) throw new SourceAuditFault("hardlink");
+  const size = numericStatSize(status);
+  if (size > MAX_PLUGIN_SOURCE_FILE_BYTES) throw new SourceAuditFault("oversize");
+  return size;
+}
+
+function sameStableFile(left, right) {
+  return sameFileIdentity(left, right)
+    && stableStatValue(left.mode) === stableStatValue(right.mode)
+    && stableStatValue(left.nlink) === stableStatValue(right.nlink)
+    && stableStatValue(left.size) === stableStatValue(right.size)
+    && stableStatValue(left.mtimeMs) === stableStatValue(right.mtimeMs)
+    && stableStatValue(left.ctimeMs) === stableStatValue(right.ctimeMs);
+}
+
+function hashOpenedSourceFile(fsImpl, descriptor, filepath, lexicalStatus) {
+  const openedBefore = fsImpl.fstatSync(descriptor);
+  const expectedSize = requireRegularSingleLink(openedBefore, { opened: true });
+  if (!sameFileIdentity(lexicalStatus, openedBefore)) {
+    throw new SourceAuditFault("identity_changed");
+  }
+  const hasher = crypto.createHash("sha256");
+  const chunk = Buffer.allocUnsafe(SOURCE_AUDIT_READ_CHUNK_BYTES);
+  let position = 0;
+  while (position <= MAX_PLUGIN_SOURCE_FILE_BYTES) {
+    const remaining = MAX_PLUGIN_SOURCE_FILE_BYTES - position + 1;
+    const requested = Math.min(chunk.length, remaining);
+    const bytesRead = fsImpl.readSync(descriptor, chunk, 0, requested, position);
+    if (!Number.isSafeInteger(bytesRead) || bytesRead < 0 || bytesRead > requested) {
+      throw new SourceAuditFault("io_error");
+    }
+    if (bytesRead === 0) break;
+    hasher.update(chunk.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  if (position > MAX_PLUGIN_SOURCE_FILE_BYTES) throw new SourceAuditFault("oversize");
+
+  const openedAfter = fsImpl.fstatSync(descriptor);
+  requireRegularSingleLink(openedAfter, { opened: true });
+  if (
+    position !== expectedSize
+    || !sameStableFile(openedBefore, openedAfter)
+  ) throw new SourceAuditFault("identity_changed");
+
+  const lexicalAfter = fsImpl.lstatSync(filepath);
+  requireRegularSingleLink(lexicalAfter);
+  if (!sameStableFile(openedAfter, lexicalAfter)) {
+    throw new SourceAuditFault("identity_changed");
+  }
+  return hasher.digest("hex");
+}
+
+function auditExpectedSourceFile(fsImpl, projectRoot, manifestEntry) {
+  let filepath;
+  try {
+    filepath = sourceAuditPath(projectRoot, manifestEntry.path);
+    inspectCanonicalDirectoryChain(fsImpl, path.dirname(filepath));
+  } catch (error) {
+    const reason = sourceAuditReason(error);
+    return reason === "missing"
+      ? { state: "missing" }
+      : { state: "mismatch", reason, actualSha256: null };
+  }
+
+  let lexicalStatus;
+  try {
+    lexicalStatus = fsImpl.lstatSync(filepath);
+    requireRegularSingleLink(lexicalStatus);
+  } catch (error) {
+    const reason = sourceAuditReason(error);
+    return reason === "missing"
+      ? { state: "missing" }
+      : { state: "mismatch", reason, actualSha256: null };
+  }
+
+  let descriptor;
+  let outcome;
+  try {
+    const noFollow = fs.constants.O_NOFOLLOW;
+    const nonBlocking = fs.constants.O_NONBLOCK;
+    if (!Number.isInteger(noFollow) || !Number.isInteger(nonBlocking)) {
+      throw new SourceAuditFault("platform_unsupported");
+    }
+    descriptor = fsImpl.openSync(
+      filepath,
+      fs.constants.O_RDONLY | noFollow | nonBlocking,
+    );
+    const actualSha256 = hashOpenedSourceFile(fsImpl, descriptor, filepath, lexicalStatus);
+    outcome = actualSha256 === manifestEntry.sha256
+      ? { state: "present" }
+      : { state: "mismatch", reason: "hash_mismatch", actualSha256 };
+  } catch (error) {
+    outcome = {
+      state: "mismatch",
+      reason: sourceAuditReason(error),
+      actualSha256: null,
+    };
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fsImpl.closeSync(descriptor);
+      } catch {
+        outcome = { state: "mismatch", reason: "io_error", actualSha256: null };
+      }
+    }
+  }
+  return outcome;
+}
+
+function addPolicyViolation(policyViolations, relativePath, reason) {
+  const key = `${relativePath}\u0000${reason}`;
+  if (!policyViolations.keys.has(key)) {
+    policyViolations.keys.add(key);
+    policyViolations.values.push({ path: relativePath, reason });
+  }
+}
+
+function inspectOptionalNonproductionEntry(
+  fsImpl,
+  projectRoot,
+  name,
+  expectedType,
+  policyViolations,
+  allowedEntries,
+) {
+  const relativePath = `${PLUGIN_SOURCE_RELATIVE_ROOT}/${name}`;
+  let filepath;
+  try {
+    filepath = sourceAuditPath(projectRoot, relativePath);
+    if (expectedType === "directory") {
+      inspectCanonicalDirectoryChain(fsImpl, filepath);
+    } else {
+      inspectCanonicalDirectoryChain(fsImpl, path.dirname(filepath));
+      const status = fsImpl.lstatSync(filepath);
+      requireRegularSingleLink(status);
+    }
+    allowedEntries.push(relativePath);
+  } catch (error) {
+    addPolicyViolation(policyViolations, relativePath, sourceAuditReason(error));
+  }
+}
+
+function scanAuditedPluginTree(fsImpl, projectRoot) {
+  const unexpectedEntries = new Set();
+  const allowedEntries = [];
+  const directorySnapshots = new Map();
+  const policyViolations = { keys: new Set(), values: [] };
+
+  for (const [relativeDirectory, expectedChildren] of Object.entries(AUDITED_PLUGIN_DIRECTORY_CHILDREN)) {
+    let directory;
+    let snapshot;
+    try {
+      directory = sourceAuditPath(projectRoot, relativeDirectory);
+      snapshot = inspectCanonicalDirectoryChain(fsImpl, directory);
+    } catch (error) {
+      const reason = sourceAuditReason(error);
+      if (reason !== "missing") addPolicyViolation(policyViolations, relativeDirectory, reason);
+      continue;
+    }
+    directorySnapshots.set(relativeDirectory, snapshot);
+
+    let actualChildren;
+    try {
+      actualChildren = fsImpl.readdirSync(directory).map(String).sort();
+    } catch (error) {
+      addPolicyViolation(policyViolations, relativeDirectory, sourceAuditReason(error));
+      continue;
+    }
+    const allowed = new Set(expectedChildren);
+    if (relativeDirectory === PLUGIN_SOURCE_RELATIVE_ROOT) {
+      for (const name of Object.keys(OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES)) allowed.add(name);
+    }
+    for (const name of actualChildren) {
+      if (!allowed.has(name)) unexpectedEntries.add(`${relativeDirectory}/${name}`);
+    }
+    if (relativeDirectory === PLUGIN_SOURCE_RELATIVE_ROOT) {
+      for (const [name, expectedType] of Object.entries(OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES)) {
+        if (actualChildren.includes(name)) {
+          inspectOptionalNonproductionEntry(
+            fsImpl,
+            projectRoot,
+            name,
+            expectedType,
+            policyViolations,
+            allowedEntries,
+          );
+        }
+      }
+    }
+  }
+
+  for (const [relativeDirectory, snapshot] of directorySnapshots) {
+    try {
+      const directory = sourceAuditPath(projectRoot, relativeDirectory);
+      const current = inspectCanonicalDirectoryChain(fsImpl, directory);
+      if (!sameDirectorySnapshot(snapshot, current)) throw new SourceAuditFault("identity_changed");
+    } catch (error) {
+      addPolicyViolation(policyViolations, relativeDirectory, sourceAuditReason(error));
+    }
+  }
+
+  return {
+    unexpectedEntries: [...unexpectedEntries].sort(),
+    allowedEntries: allowedEntries.sort(),
+    policyViolations: policyViolations.values.sort((left, right) => (
+      left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason)
+    )),
+  };
+}
+
 function inspectVistaAnimationUePluginSource(projectRoot, { fsImpl = fs } = {}) {
   if (typeof projectRoot !== "string" || projectRoot.length === 0 || !path.isAbsolute(projectRoot)) {
     throw new TypeError("projectRoot must be an absolute path");
   }
-  if (!fsImpl || typeof fsImpl.lstatSync !== "function") throw new TypeError("fsImpl.lstatSync is required");
+  const requiredFsMethods = [
+    "closeSync",
+    "fstatSync",
+    "lstatSync",
+    "openSync",
+    "readSync",
+    "readdirSync",
+    "realpathSync",
+  ];
+  if (!fsImpl || requiredFsMethods.some((method) => typeof fsImpl[method] !== "function")) {
+    throw new TypeError("fsImpl must provide the complete synchronous source-audit interface");
+  }
+  const canonicalProjectRoot = path.resolve(projectRoot);
   const presentFiles = [];
   const missingFiles = [];
-  for (const relativePath of EXPECTED_PLUGIN_SOURCE_FILES) {
-    let present = false;
-    try {
-      const status = fsImpl.lstatSync(path.resolve(projectRoot, ...relativePath.split("/")));
-      present = status.isFile() && !status.isSymbolicLink();
-    } catch {
-      present = false;
+  const mismatchedFiles = [];
+  let treeDiagnostics = { unexpectedEntries: [], allowedEntries: [], policyViolations: [] };
+
+  try {
+    const projectRootChain = captureCanonicalDirectoryChain(fsImpl, canonicalProjectRoot);
+    treeDiagnostics = scanAuditedPluginTree(fsImpl, canonicalProjectRoot);
+    for (const manifestEntry of EXPECTED_PLUGIN_SOURCE_MANIFEST) {
+      const outcome = auditExpectedSourceFile(fsImpl, canonicalProjectRoot, manifestEntry);
+      if (outcome.state === "present") {
+        presentFiles.push(manifestEntry.path);
+      } else if (outcome.state === "missing") {
+        missingFiles.push(manifestEntry.path);
+      } else {
+        mismatchedFiles.push({
+          path: manifestEntry.path,
+          reason: outcome.reason,
+          expected_sha256: manifestEntry.sha256,
+          actual_sha256: outcome.actualSha256,
+        });
+      }
     }
-    (present ? presentFiles : missingFiles).push(relativePath);
+    const finalProjectRootChain = captureCanonicalDirectoryChain(fsImpl, canonicalProjectRoot);
+    if (!sameDirectoryChain(projectRootChain, finalProjectRootChain)) {
+      throw new SourceAuditFault("identity_changed");
+    }
+  } catch (error) {
+    presentFiles.length = 0;
+    missingFiles.length = 0;
+    mismatchedFiles.length = 0;
+    missingFiles.push(...EXPECTED_PLUGIN_SOURCE_FILES);
+    treeDiagnostics.policyViolations.push({
+      path: ".",
+      reason: sourceAuditReason(error),
+    });
   }
+
+  const sourceTreeComplete = (
+    presentFiles.length === EXPECTED_PLUGIN_SOURCE_MANIFEST.length
+    && missingFiles.length === 0
+    && mismatchedFiles.length === 0
+    && treeDiagnostics.unexpectedEntries.length === 0
+    && treeDiagnostics.policyViolations.length === 0
+  );
+  const policyViolations = treeDiagnostics.policyViolations
+    .map((entry) => ({ ...entry }))
+    .sort((left, right) => (
+      left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason)
+    ));
   return deepFreeze({
     schema: ANIMATION_UE_SOURCE_AUDIT_SCHEMA,
     plugin_name: ANIMATION_UE_PLUGIN_NAME,
-    source_tree_complete: missingFiles.length === 0,
+    source_manifest_sha256: ANIMATION_UE_SOURCE_MANIFEST_SHA256,
+    source_tree_complete: sourceTreeComplete,
+    expected_manifest: EXPECTED_PLUGIN_SOURCE_MANIFEST.map((entry) => ({ ...entry })),
     expected_files: [...EXPECTED_PLUGIN_SOURCE_FILES],
     present_files: presentFiles,
-    missing_files: missingFiles,
+    missing_files: [...new Set(missingFiles)],
+    mismatched_files: mismatchedFiles,
+    unexpected_entries: treeDiagnostics.unexpectedEntries,
+    allowed_nonproduction_entries: treeDiagnostics.allowedEntries,
+    policy_violations: policyViolations,
   });
 }
 
@@ -585,7 +1126,10 @@ module.exports = {
   ANIMATION_UE_SECURITY_POLICY_SCHEMA,
   ANIMATION_UE_SLOT_BINDING_SCHEMA,
   ANIMATION_UE_SOURCE_AUDIT_SCHEMA,
+  ANIMATION_UE_SOURCE_MANIFEST_SHA256,
+  EXPECTED_PLUGIN_SOURCE_MANIFEST,
   EXPECTED_PLUGIN_SOURCE_FILES,
+  MAX_PLUGIN_SOURCE_FILE_BYTES,
   OPERATION_SET,
   SECURITY_POLICY,
   VistaAnimationUeReadinessError,
