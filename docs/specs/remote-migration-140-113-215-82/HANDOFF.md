@@ -30,9 +30,8 @@ Network/host owner must restore the approved route before Phase 1 of [runbook.md
 - Integration branch: `codex/vista-production-completion`
 - Deployment commit: **not hardcoded**. Resolve from GitHub with `git ls-remote`, compare to the
   coordinator-announced reviewed checkpoint, and record the exact 40-character SHA at execution time.
-- Authoring observation only: this refresh was branched from the local integration checkout at
-  `ceabc14c` (`feat: stage verified VISTA import bundles`). It is not a promise of the eventual remote
-  branch HEAD and must not be used instead of `git ls-remote`.
+- Local worktree commits and separate integration worktrees are authoring state, not a deployment SHA;
+  this handoff deliberately does not pin either one.
 - Historical target checkout: `/home/yhliu/SimWorld-Studio-src`, branch `codex/vista-loopback`, old HEAD
   plus its dirty migration layer. Preserve it as evidence; do not pull, clean, merge, copy or deploy it.
 - Historical Python/bridge tree: `/home/yhliu/SimWorld`, also preserved and not a current source sync path.
@@ -53,14 +52,32 @@ These are code capabilities, not target live evidence:
   resolution and deterministic 12-second `mmg_040` timeline.
 - Typed Scene BuildPlan/preflight/execute/rollback; production rejects BasicShapes/fallback surfaces,
   unverified `/Game` assets, missing exact material slots/PBR evidence and stale content receipts.
-- Fixed animation action/transport/readiness/runtime contracts, UI/routes and portable
-  `VistaAnimationContentApi` source. A UE 5.7.3 package was built as source/compile evidence only.
-- Full semantic stack deployment tooling: pinned model manifests/images, file secrets, schema/migration/
-  index, snapshot/live audit, backup manifest and fail-closed runtime readiness.
-- Isolated Review coordinator, tool-free strict provider adapter, fake HTTP failure matrix, bounded live
-  smoke CLI and separate Text/Visual receipt readiness.
+- Fixed animation action/transport/readiness/runtime contracts and UI/routes. The integrated
+  `VistaAnimationContentApi` v1.1.0 source has a concrete pinned content-driver
+  contract and 13 derived `mmg_040` target paths with deterministic source-audit tests. It has not been
+  compiled/loaded with UE 5.3.2 or proven live. The UE 5.7.3 v1.0.0 package is historical only.
+- Semantic stack deployment contracts: pinned model manifests/images, file secrets, schema/migration/
+  index, snapshot/live audit, backup manifest, fail-closed readiness and sealed pending-job preparation.
+  The reviewed executor is integrated with sealed independent pins, typed allowlisted phases, resumable
+  terminal evidence and bounded source/process checks. Only the non-Production offline fixture adapter is
+  registered; preparing or fixture-executing a pending job did not build an index, and no
+  DB/Qdrant/model service was run.
+- Isolated Review coordinator with durable outbox/artifact binding, execution preflight, tool-free strict
+  provider adapter, fake HTTP failure matrix, browser recovery, bounded live smoke CLI and separate
+  Text/Visual receipt readiness. Managed opaque evidence handles, bounded/cancellable capture,
+  fail-closed retain/cleanup and path redaction are integrated and verified offline; this is not live
+  evidence, and no paid/live provider call was made.
 - Trusted-proxy WebRTC path: secure session cookie, opaque same-origin WSS endpoint, loopback Cirrus,
   short-lived TURN REST credentials, redacted telemetry and external readiness receipt verifier.
+- Unified append-only import/scene/review/timeline artifact journal with offline recovery and ownership
+  tests. No Production journal root, retention cleanup or backup/restore drill has been executed.
+
+A read-only filename audit found 2,937 `.uasset`/`.umap` package files and names consistent with
+mannequin/skeletal/AnimBP/Control Rig/IK/lifting/fall/chair/box/table candidates. This is not an Asset
+Registry, catalog/index row count, or proof of class, object path, loadability or spawnability. The current
+profile remains `verification_status=candidate_unverified`, `source_lineage_status=candidate_unverified`,
+`runtime_ready=false` and `start_allowed=false`. No verified derived profile, package digest, immutable
+Content binding or live receipt was produced.
 
 Production generic free-form UE mutation remains intentionally blocked. NLP scene generation must compile
 into the typed SceneSpec/BuildPlan route.
@@ -71,15 +88,15 @@ into the typed SceneSpec/BuildPlan route.
 | --- | --- | --- |
 | Connectivity | working route to target and fresh inventory | blocked |
 | Source | pushed reviewed integration SHA and clean target generation | not synchronized |
-| UE plugin | exact UE 5.3.2 build, project install/load, listener exact dispatch, nonce/process receipt | not ready |
+| UE plugin | exact UE 5.3.2 build, project install/load, listener dispatch and nonce/process receipt | v1.1.0 source integrated; no target build/load |
 | VISTA data | dataset-owner verified projection and approved staged bundle | not staged on current target generation |
-| Assets | immutable model files, pinned services, full Postgres/Qdrant index, live audit, restore drill | not ready |
-| 3D scene | production layout/content profile and live Blueprint + StaticMesh PBR disposable build | not proven |
-| Character | real pawn/skeleton/AnimBP/Control Rig, hand/foot IK, drag, fall/recover montages/notifies | not ready |
+| Assets | reviewed Production adapter, immutable model files, pinned services, full Postgres/Qdrant index, live audit, restore drill | offline executor integrated; no Production adapter or index |
+| 3D scene | verified profile/digests and live Blueprint + StaticMesh PBR disposable build | filename-only candidates inventoried; not proven |
+| Character | derived pawn/skeleton/AnimBP/Control Rig profile, hand/foot IK, drag, fall/recover montages/notifies | v1.1.0 source contract; no live proof |
 | Timeline | 0/2/5/9/12 live evidence plus timeout/Stop/disconnect/restart matrix | not proven |
-| Review | exactly one real Text and one read-only Visual `PASS`, same scene digest, current receipts | not ready |
+| Review | exactly one paid Text and one read-only Visual `PASS`, same scene digest, current receipts | coordinator/evidence code only |
 | WebRTC | DNS/TLS/ingress, Coturn/firewall, two-network normal/forced relay and rotation receipt | not ready |
-| Operations | unified durable artifacts/retention, observability, backup/restore and rollback sign-off | incomplete |
+| Operations | live journal root, retention, observability, backup/restore and rollback sign-off | unified journal code only |
 
 ## Historical 2026-07-15 transfer ledger
 
@@ -111,7 +128,8 @@ The following were verified on 2026-07-15 and are stale until Phase 1 inventory 
 - NVIDIA libraries present, `vulkaninfo` absent;
 - ports 80/443/14500 occupied; candidate loopback ports were then free;
 - historical source/runtime transfer and that snapshot's offline suites passed;
-- no live asset DB, provider, public WebRTC, UE animation/content proof or production deploy was run.
+- no live asset DB/index/model, provider, public WebRTC, UE compile/load/animation/content proof or
+  production deploy was run.
 
 Do not act on any item without refreshing it read-only.
 
@@ -131,7 +149,7 @@ Do not act on any item without refreshing it read-only.
 5. Create/verify a clean GitHub checkout generation; never copy the dirty snapshot.
 6. Run offline tests and record results; do not patch the detached checkout.
 7. Request one bounded gate at a time in dependency order:
-   UE 5.3.2 toolchain/plugin -> VISTA staging -> asset stack -> typed scene -> content/timeline ->
+   UE 5.3.2 toolchain/plugin -> VISTA staging -> semantic executor/asset stack -> typed scene -> content/timeline ->
    provider smokes -> public WebRTC -> release.
 
 ## Live evidence ledger
@@ -143,10 +161,11 @@ Do not pre-fill `Actual` or mark pass without an artifact path and digest.
 | Connectivity | successful read-only session + timestamp | none after 2026-07-21 no-route | blocked |
 | Source | GitHub URL/branch/exact SHA, clean status, fsck | none for refreshed branch | pending |
 | Offline suite | exact generation + command/totals/build output | none on target for refreshed branch | pending |
-| UE 5.3.2 plugin | build log, binary/manifest SHA, load and nonce receipts | UE 5.7.3 compile only | pending |
+| UE 5.3.2 plugin | v1.1.0 build log, binary/manifest SHA, load and nonce receipts | historical UE 5.7.3 v1.0.0 compile only | pending |
 | VISTA source | dry-run/apply result and bundle digest | code fixture only | pending |
-| Models/services | model/image/config digests + unauthorized/authorized probes | none | pending |
-| Asset snapshot | counts/revisions/live receipt + restore proof | none | pending |
+| Semantic executor | reviewed exact implementation + offline terminal receipt | integrated; focused 53/53 and independent QA clean | code verified; live pending |
+| Models/services | model/image/config digests + unauthorized/authorized probes | none; no service started | pending |
+| Asset snapshot | counts/revisions/live receipt + restore proof | read-only candidate inventory only | pending |
 | Typed scene | import/plan/preflight/result + exact PBR/content evidence | none | pending |
 | Animation | content/plugin/live receipts + 0/2/5/9/12 matrix | none | pending |
 | Text Review | current tool-free `PASS` receipt | none | pending |
@@ -192,6 +211,16 @@ absolute restricted dataset paths.
   integration checkpoints.
 - Reconciled the handoff with the current code-ready runtime, raw staging, asset, typed scene, animation,
   Review and WebRTC architecture.
+- Removed the stale authoring-commit claim; the remote must resolve the coordinator-announced exact SHA.
+- Recorded the v1.1.0 animation source checkpoint, real `gym_citynav` candidate inventory, semantic
+  pending-job/executor split, managed Review evidence checkpoint and unified journal code/live split.
+- Integrated the reviewed sealed semantic executor after two independent QA rounds. Its fixture-only
+  adapter remains non-Production; no schema, catalog, embedding, Postgres or Qdrant mutation occurred.
+- Completed the local integration matrix: server 698, frontend 23, tools 208, semantic focused 53,
+  animation contracts 22, candidate profile 10, packaging security 35, staging 6, Review Chromium 4 and
+  VISTA Import Chromium 1 all passed; Vite built 1,879 modules and 25 schemas passed meta-schema checks.
+  This is local code evidence only, not a test result from `140.113.215.82`.
 - Preserved the 2026-07-15 transfer/test facts strictly as historical provenance.
 - Recorded the read-only SSH failure as `No route to host`; no target command or state change occurred.
 - Left all UE, dataset, asset, provider, public-network, operations and release gates open.
+- No provider, DB/Qdrant/model service, UE compile/load/mutation or public listener was run for this refresh.

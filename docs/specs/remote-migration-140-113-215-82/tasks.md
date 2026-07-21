@@ -65,8 +65,11 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
 - [x] **T3.1 [Code Evidence]** Portable `VistaAnimationContentApi` source, exact four-command contract,
   install/build/manifest scripts, dedicated server transport and offline tests exist.
 - [x] **T3.2 [Historical Code Evidence]** UE 5.7.3 UHT/BuildPlugin package succeeded on the source host.
-  Limitation: this package is not target-compatible proof.
-- [ ] **T3.3 [State/Admin]** Dry-run then build plugin with target UE 5.3.2 and a new opaque build ID.
+  Limitation: this was v1.0.0 and is neither v1.1.0 nor target-compatible proof.
+- [x] **T3.2a [Code Evidence]** `VistaAnimationContentApi` v1.1.0 source is integrated with a concrete pinned
+  content-driver contract, 13 derived `mmg_040` target paths and deterministic source-audit tests.
+  Source/tests do not prove that the target packages exist.
+- [ ] **T3.3 [State/Admin]** Dry-run then build v1.1.0 with target UE 5.3.2 and a new opaque build ID.
   Acceptance: UHT/build/package logs, module SHA, engine/platform and artifact manifest match.
 - [ ] **T3.4 [State]** Create a writable disposable project generation without changing the canonical runtime
   archive/project; install the UE 5.3.2 package there.
@@ -93,6 +96,12 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
 
 - [x] **T5.1 [Code Evidence]** Pinned model artifact, deployment preflight, file-secret, schema/migration/index,
   snapshot/live-audit, backup bundle and fail-closed runtime contracts exist.
+- [x] **T5.1a [Code Evidence]** Sealed pending-job preparation binds the reviewed recipe, immutable inputs and
+  exact asset/content pins. A pending job is an input contract, not an executed index.
+- [x] **T5.1b [Code Evidence]** The reviewed offline semantic executor is integrated. It consumes only the
+  sealed pending job and independent pins, uses typed allowlisted phases (no caller shell/legacy runner),
+  resumes idempotently and emits fail-closed terminal evidence. Only the `production_capable=false` fixture
+  adapter is registered; missing reviewed Production adapters fail closed.
 - [ ] **T5.2 [Data/Admin]** Select immutable UE Content, catalog, snapshot, embedding recipe, dense/sparse models,
   collection and image digests. Download/build/model population is a separate approved job.
 - [ ] **T5.3 [Admin]** Provision private secret files, model directories, persistent volumes, backup root,
@@ -109,6 +118,9 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
   model artifacts and UE Content must match exactly.
 - [ ] **T5.9 [State/Admin]** Create Postgres/Qdrant backup bundle, restore into disposable services, repeat the
   live audit, and document rollback generation.
+
+Current checkpoint: no Postgres/Qdrant/embedding/model service was started and no schema, catalog,
+embedding or index phase was run.
 
 ## Phase 6 — Typed SceneSpec/BuildPlan disposable scene
 
@@ -129,8 +141,16 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
 
 ## Phase 7 — Character content driver, IK, fall/recover and 12 seconds
 
-- [ ] **T7.1 [UE Content]** Implement `IVistaAnimationContentDriver` for look-at, brace, drag, lift-foot, pause,
-  fall and recover with verified pawn/skeleton/AnimBP or Control Rig/montages/notifies.
+- [ ] **T7.1 [UE Content/Code]** Implement the project-specific `IVistaMmg040ProjectBackend` behind the integrated
+  `FVistaMmg040ContentDriver`; derive and verify pawn/skeleton/AnimBP or Control Rig/montages/notifies for
+  look-at, brace, drag, lift-foot, pause, fall and recover.
+- [x] **T7.1a [Code Evidence]** T3.2a is integrated: the v1.1.0 concrete content-driver source and all 13 derived
+  target paths are part of this local reviewed branch. This is source evidence only and is not yet the pushed deployment revision.
+- [ ] **T7.1b [Remote/UE Content]** Refresh and preserve the `gym_citynav` read-only inventory. The current
+  filename-only observation found 2,937 `.uasset`/`.umap` package files and package-name candidates for
+  mannequin/skeletal/AnimBP/Control Rig/IK/lifting/fall/chair/box/table roles. This is not an Asset Registry,
+  catalog/index count, or proof of class, object path, loadability or spawnability. The current profile is
+  `candidate_unverified` with `runtime_ready=false` and `start_allowed=false`.
 - [ ] **T7.2 [UE Content]** Create immutable `vista-animation-content-profile/v1` and verification receipt;
   bind hand/foot targets, chair drag/caster physics, fall collision and recover capsule alignment.
 - [ ] **T7.3 [State]** Run live plugin capability/preflight against the exact scene plan, content profile, plugin
@@ -146,6 +166,10 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
 
 - [x] **T8.1 [Code Evidence]** Fake HTTP coordinator matrix and bounded two-receipt provider smoke runner/readiness
   exist; Review Off makes zero critic/VLM calls.
+- [x] **T8.1a [Code Evidence]** Tool-free strict adapter, durable coordinator/outbox and artifact binding,
+  execution preflight and browser recovery are verified offline. They are not paid-provider receipts.
+- [x] **T8.1b [Code Evidence]** Managed private evidence lifecycle is integrated and verified offline: opaque
+  browser handles, bounded/cancellable capture, fail-closed retention/cleanup and no raw path to builders.
 - [ ] **T8.2 [Cost/State]** User approves exactly two tool-free `claude-opus-4-8` calls with stated per-call/total
   budget, timeout and token limits; no retries.
 - [ ] **T8.3 [State]** Shared broker captures canonical scene-before digest and immutable evidence; no build/timeline
@@ -155,6 +179,8 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
   accepting `PASS` receipt.
 - [ ] **T8.6 [Remote]** Pin both unexpired receipt file hashes in deployment config and confirm Production readiness
   rejects missing, stale, mismatched or single receipts.
+
+Current checkpoint: fake-provider/offline tests only; no paid or live Text/Visual call was made.
 
 ## Phase 9 — DNS/TLS/Coturn/public WebRTC
 
@@ -175,8 +201,12 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
 
 ## Phase 10 — Operations and release
 
-- [ ] **T10.1 [State/Admin]** Finalize durable import/scene/review/timeline artifact revision journal, owner ACL,
-  retention, cleanup and backup/restore.
+- [ ] **T10.1 [Umbrella: Code + Operations]** Finalize durable import/scene/review/timeline artifact revision
+  journal, owner ACL, Production retention, cleanup and backup/restore. Only the code subtask is complete.
+- [x] **T10.1a [Code Evidence]** Unified append-only import/scene/review/timeline artifact journal, owner binding,
+  terminal transitions and recovery behavior are wired and verified by offline tests.
+- [ ] **T10.1b [State/Admin]** Provision the Production journal root, execute retention/cleanup and restart
+  recovery, then back up/restore the journal plus bound metadata in a disposable generation.
 - [ ] **T10.2 [Admin]** Add supervision, duplicate-stack alerts, dependency/review/asset/ICE/timeline metrics and
   safe log retention/redaction.
 - [ ] **T10.3 [State]** Execute source/plugin/content/asset/service rollback drill to prior generations without
@@ -189,3 +219,6 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
 The refreshed handoff itself is complete when these docs are committed. The user's product goal is not
 complete until T0.4 through T10.5 pass on the target. Code-ready checkmarks indicate only that the branch
 contains the fail-closed machinery needed to gather live proof.
+
+This documentation refresh ran no provider call, Postgres/Qdrant/model service or index job, UE
+compile/load/mutation, or public listener.

@@ -6,7 +6,7 @@
 
 ## Phase 0 — Baseline、ownership 與安全護欄
 
-- [x] **T0.1** 唯讀確認目前 live path：Studio/UE/MCP/local Cirrus connected，remote path仍為Xpra/SSH。
+- [x] **T0.1 [Historical Evidence]** 保存 2026-07-14／15 唯讀 baseline：當時 Studio／UE／MCP／local Cirrus connected，remote path 為 Xpra／SSH；不代表目前 process、lease、listener 或 target connectivity。
 - [x] **T0.2** 唯讀確認baseline builder runtime為`claude-opus-4-8`、critic/summarizer當時仍為Sonnet；Phase 1A 現已將builder/critic安全預設統一為`claude-opus-4-8`。
 - [x] **T0.3** 盤點五大區域及extra Production gaps，保存本規格。
 - [x] **T0.4** 在任何implementation前整理現有dirty worktree ownership；將既有Bearer/validator patch與其他UI work拆成可追蹤change set。
@@ -29,11 +29,13 @@ Implementation note（2026-07-21）：所有工作已隔離到乾淨 integration
 - [x] **T1A.8** 以conversation/run id實作完整cancel；隔離intent summary、round state與budget。
 - [x] **T1A.9** 修正UI stale `loopMode`、conversation persistence、visual evidence/multi-shot顯示；Review Off關閉所有自動VLM。
 - [x] **T1A.10** Fake-provider E2E涵蓋Text/Visual成功、所有failure classes、cancel、跨session isolation與cost budget。
+- [x] **T1A.10a [Code Evidence]** Durable coordinator/outbox、artifact binding、執行前preflight與browser recovery完成離線驗證。
+- [x] **T1A.10b [Code Evidence]** Managed private evidence lifecycle已整合並通過離線驗證：opaque handle、bounded/cancellable capture、fail-closed retain/cleanup與path redaction，builder拿不到raw server path。
 - [ ] **T1A.11** 經使用者核准後，在disposable scene各執行一次真實Text與read-only Visual smoke，保存provider/model/usage/verdict與scene diff。
 
 驗收：`requirements.md` REVIEW-001～010全部通過；Visual前後scene snapshot零差異。
 
-Implementation note（2026-07-21）：T1A.8 的 conversation/run cancellation、builder/critic/summarizer/capture abort、intent、round 與 aggregate dollar budget isolation 已完成；builder 與 critic 都受 run 剩餘額度約束，budget 耗盡會在下一個 mutation 前停止。T1A.10 現由實際 HTTP `/api/chat` coordinator harness 覆蓋 Text/Visual success、401、429、500、timeout、malformed SSE、builder failure 不叫 critic、Visual-only capture、exact cancel、獨立 cost budget 與跨 lease isolation。Production review scope 已改由 server-side active Studio lease 權限衍生，不再信任 caller 提供的 session id；loopback 則保留可預期的開發相容行為。T1A.11 仍依 cost/state gate 刻意未執行。
+Implementation note（2026-07-21）：T1A.8 的 conversation/run cancellation、builder/critic/summarizer/capture abort、intent、round 與 aggregate dollar budget isolation 已完成；builder 與 critic 都受 run 剩餘額度約束，budget 耗盡會在下一個 mutation 前停止。T1A.10 現由實際 HTTP `/api/chat` coordinator harness 覆蓋 Text/Visual success、401、429、500、timeout、malformed SSE、builder failure 不叫 critic、Visual-only capture、exact cancel、獨立 cost budget 與跨 lease isolation。Production review scope 已改由 server-side active Studio lease 權限衍生，不再信任 caller 提供的 session id；loopback 則保留可預期的開發相容行為。Durable outbox會把paid attempt與artifact journal綁定，preflight發生在builder工作之前，browser由server-owned state恢復；managed opaque evidence lifecycle已整合並通過離線測試，但尚未 provision Production journal/evidence root、以service identity執行retention/cleanup/restart或完成backup/restore。T1A.11 仍依 cost/state gate 刻意未執行，本輪沒有paid/live provider call。
 
 ## Phase 1B — Asset retrieval foundation（P0，需要asset snapshot/admin）
 
@@ -48,11 +50,13 @@ Implementation note（2026-07-21）：T1A.8 的 conversation/run cancellation、
 - [x] **T1B.9** 實作`require_real_assets` fail-closed與顯式degraded policy；UI/artifact顯示retrieval revision及fallback。
 - [x] **T1B.10** 實作revision-aware cache invalidation與readiness probes。
 - [x] **T1B.11** Unit/contract tests涵蓋default mode、每個dependency outage、中文/英文query、snapshot mismatch。
+- [x] **T1B.11a [Code Evidence]** 建立sealed semantic pending-job preparation：reviewed recipe、immutable inputs與exact asset/content pins；pending job不等於已執行index。
+- [x] **T1B.11b [Code Evidence]** Reviewed offline executor已整合：只接受sealed pending job與independent pins、typed phase allowlist、可重入／可恢復terminal receipt，不接受caller shell或legacy runner；缺Production adapter時fail closed。
 - [ ] **T1B.12** 在disposable UE scene spawn一個Blueprint與一個StaticMesh，檢查exact path、dimensions、material slots與PBR rendering。
 
 驗收：全部服務健康時不再產生whitebox fallback；全掛時build在UE mutation前被阻止。
 
-Implementation note（2026-07-21）：T1B.2 與 T1B.5～11 的 code-only contract 已完成。Local/AWS profiles 共用 pinned-image、loopback、file-secret、catalog/model mount 與 embedding service contract；offline preflight、model artifact manifest、backup bundle及 live-audit receipt 都 fail closed。`/health/ready` 在沒有正式 `simworld-asset-snapshot/v1`、一致 counts 與已驗證 revision 時仍明確 not-ready。T1B.1／3／4／12 受 Data/Admin/State-change Gate 約束：目前未取得 authoritative full catalog、未啟動 DB/index、未執行 live audit、未修改 UE scene。
+Implementation note（2026-07-21）：T1B.2、T1B.5～11b 的 code-only contract 已完成。Local/AWS profiles 共用 pinned-image、loopback、file-secret、catalog/model mount 與 embedding service contract；offline preflight、model artifact manifest、backup bundle及 live-audit receipt 都 fail closed。Sealed pending-job preparation只封裝輸入與approval basis，不會自行建index。Integrated executor只註冊`production_capable=false`的offline fixture adapter；它驗證exact plan/schema/source/credential bindings、以typed allowlisted phases執行並持久化resumable terminal evidence，沒有reviewed Production adapter時會fail closed。`/health/ready` 在沒有正式 `simworld-asset-snapshot/v1`、一致 counts 與已驗證 revision 時仍明確 not-ready。T1B.1／3／4／12 仍受 Data/Admin/State-change Gate 約束：目前未取得 authoritative full catalog，沒有啟動Postgres/Qdrant/embedding/model service，沒有執行schema/catalog/embedding/index或live audit，也沒有修改 UE scene。
 
 ## Phase 2 — VISTA importer與SceneSpec（依賴Phase 1B contract）
 
@@ -80,16 +84,18 @@ Implementation note（2026-07-21）：Phase 2 的 code-only contract、API、art
 - [x] **T3.3** 建立fixed action adapter interface：precondition、execute、completion、timeout、cancel、cleanup。
 - [x] **T3.4** 將現有`agent_action` registry接入adapter層並補unit tests；不要讓LLM自由組合未驗證`vbp`命令。
 - [ ] **T3.5** 與UE content owner完成第一批必要Blueprint/montage functions。若`mmg_040`為P0，至少包含drag chair、brace、lift-foot/hesitate及look-at。
+- [x] **T3.5a [Code Evidence]** `VistaAnimationContentApi` v1.1.0 source已整合：concrete pinned content-driver contract、13個derived `mmg_040` target paths與deterministic source audit。Source/tests不代表target packages存在。
+- [ ] **T3.5b [UE Content Evidence]** 將read-only filename-only candidates轉為derived/verified profile。現有觀察只證明2,937個`.uasset`／`.umap` package files及名稱疑似mannequin／skeletal／AnimBP／Control Rig／IK／lifting／fall／chair／box／table的candidates；不是Asset Registry、catalog/index count，也未證class、object path、loadability或spawnability。Current profile維持`verification_status=candidate_unverified`、`source_lineage_status=candidate_unverified`、`runtime_ready=false`、`start_allowed=false`。
 - [x] **T3.6** 將Start從browser硬編碼toolbar click搬到backend/UE runtime bridge；保留lease、nonce、state reconciliation與idempotent Stop。
 - [x] **T3.7** 實作server monotonic scheduler、drift measurement、UE engine-time sampling與bounded queue。
 - [x] **T3.8** 實作Stop/Replay：清pending events、adapter cleanup、停止角色、結束PIE、確認state。
 - [x] **T3.9** 建立timeline UI：preflight、elapsed time、event status、drift、Stop與artifact link。
-- [ ] **T3.10** Disposable UE integration：正常完成、event timeout、stream disconnect、Stop race、server restart/reconcile。
+- [ ] **T3.10** Disposable UE integration：v1.1.0以UE 5.3.2 compile/load、正常完成、event timeout、stream disconnect、Stop race、server restart/reconcile。
 - [ ] **T3.11** `mmg_040` 0/2/5/9/12秒keyframe/state validation與visual evidence。
 
 驗收：browser不是clock authority；所有event可追溯，Stop後無PIE/pending action殘留。
 
-Implementation note（2026-07-21）：Browser toolbar coordinates、synthetic Escape 與 iframe Play/Stop 已移除。Lease-bound backend Start/state/Stop、PIE/possession gate、live mesh/material/content receipt revalidation、monotonic scheduler、Stop/Replay、cleanup quarantine、restart recovery-required state及 timeline workbench 已完成離線驗證。`ended_pie` 只在 backend state 明確確認後記錄。Legacy `agent_action` 目前只提供 `humanoid.stop_action → pause` candidate；仍需 pinned profile、dedicated driver、live `hold_pose` capability與 completion signal 才會註冊成 executable adapter，絕不 fallback 到 `vbp`/Python。T3.5／10／11仍需真實 UE：目前 plugin 只有 abstract content driver，沒有 skeleton/AnimBP/Control Rig、drag/brace/lift-foot/fall/recover montage、notify/contact proof，也尚未在 disposable scene 驗證 0／2／5／9／12 秒 keyframes。
+Implementation note（2026-07-21）：Browser toolbar coordinates、synthetic Escape 與 iframe Play/Stop 已移除。Lease-bound backend Start/state/Stop、PIE/possession gate、live mesh/material/content receipt revalidation、monotonic scheduler、Stop/Replay、cleanup quarantine、restart recovery-required state及 timeline workbench 已完成離線驗證。`ended_pie` 只在 backend state 明確確認後記錄。Legacy `agent_action` 目前只提供 `humanoid.stop_action → pause` candidate；仍需verified derived profile、project-specific `IVistaMmg040ProjectBackend`、live `hold_pose` capability與completion signal才會註冊成executable adapter，絕不 fallback 到 `vbp`/Python。`FVistaMmg040ContentDriver` v1.1.0 source與13個derived targets已整合並通過離線測試，但尚未以UE 5.3.2 compile/load，沒有project backend、derived package digests、notify/contact/IK proof或live receipts。UE 5.7.3 v1.0.0 package只是historical evidence。T3.5／5b／10／11仍需content/live UE證據。
 
 ## Phase 4 — Public WebRTC + Coturn（可先做程式碼，開網需Admin Gate）
 
@@ -108,15 +114,18 @@ Implementation note（2026-07-21）：Browser toolbar coordinates、synthetic Es
 
 驗收：RTC-001～009通過；Xpra只保留admin recovery。
 
-Implementation note（2026-07-21）：T4.2～7已接入production source。`/api/pixel-streaming-url`只回傳session/slot/lease-bound opaque path；browser bearer已由`sessionStorage`移到Secure/HttpOnly cookie，Node upgrade gateway驗證Origin/Host/session後只代理到loopback Cirrus `HttpPort`。Player、frontend、per-session port router與Nginx均不再接受raw Cirrus port；Cirrus launcher以原子config builder注入短效Coturn REST/HMAC credential、forced-relay policy與loopback listeners。共用secret/config helper會拒絕relative/aliased/symlink path、弱owner/mode、hard link、可寫parent與不安全內容，並以`O_NOFOLLOW`讀取、same-directory `O_EXCL` temp、`fsync`及atomic rename寫入私有config。T4.10 的程式能力已完成：production readiness 必須驗證並綁定 external receipt，browser 同時以嚴格、租約綁定、去識別化 schema 回報 WSS/ICE、decoded frames、data channel 及 selected candidate type/protocol/TURN transport，並拒絕 SDP、IP、port、credential 等欄位。Browser telemetry 僅供營運觀測，不取代簽署的 external readiness receipt。TURN credential TTL 也必須覆蓋 hard session max 加 reconnect grace；rotation contract 有離線驗證。此host目前`80/443`已由未知既有服務占用，且未安裝Coturn/Nginx；T4.1／8／9仍需要管理員DNS/TLS/ingress/Coturn/firewall決策。T4.11～12仍需真Cirrus/UE、外部瀏覽器、live rotation 與 forced-relay evidence，因此尚未宣稱公開WebRTC ready，也未開任何public port。
+Implementation note（2026-07-21）：T4.2～7已接入production source。`/api/pixel-streaming-url`只回傳session/slot/lease-bound opaque path；browser bearer已由`sessionStorage`移到Secure/HttpOnly cookie，Node upgrade gateway驗證Origin/Host/session後只代理到loopback Cirrus `HttpPort`。Player、frontend、per-session port router與Nginx均不再接受raw Cirrus port；Cirrus launcher以原子config builder注入短效Coturn REST/HMAC credential、forced-relay policy與loopback listeners。共用secret/config helper會拒絕relative/aliased/symlink path、弱owner/mode、hard link、可寫parent與不安全內容，並以`O_NOFOLLOW`讀取、same-directory `O_EXCL` temp、`fsync`及atomic rename寫入私有config。T4.10 的程式能力已完成：production readiness 必須驗證並綁定 external receipt，browser 同時以嚴格、租約綁定、去識別化 schema 回報 WSS/ICE、decoded frames、data channel 及 selected candidate type/protocol/TURN transport，並拒絕 SDP、IP、port、credential 等欄位。Browser telemetry 僅供營運觀測，不取代簽署的 external readiness receipt。TURN credential TTL 也必須覆蓋 hard session max 加 reconnect grace；rotation contract 有離線驗證。Latest recorded historical inventory顯示`80/443`由未知服務占用；ownership與安裝狀態必須先重新盤點。本次code work沒有安裝或啟動Coturn/Nginx，也未開任何public port。T4.1／8／9仍需要管理員DNS/TLS/ingress/Coturn/firewall決策；T4.11～12仍需真Cirrus/UE、外部瀏覽器、live rotation與forced-relay evidence。
 
 Security hardening delta（2026-07-21）：共用helper現為Linux-only，另外拒絕未綁定numeric GID的group-read secret、group execute/special bits、可寫ancestor與input/output filesystem alias；寫入會在rename前以FD確認owner/GID/mode，commit後directory fsync失敗則明確回報「已安裝但durability未確認」。AMI build改由獨立私有UID在root-owned staging parent完成；npm結束後會清除殘留build UID processes、收回ownership、拒絕special/hard-linked/escaping-symlink tree，再複製到root-owned、service-user唯讀release。Compose也必須明確綁定host runtime UID:GID並加入host secret GID，避免container內同名帳號但numeric ID不同。這些是code/deployment contract完成，不代表已安裝或啟用Coturn。
 
 ## Phase 5 — Persistence、operations與release gate
 
-- [ ] **T5.1** 建立scene/import/review/timeline artifact revisions、owner ACL、retention與cleanup。
+- [ ] **T5.1 [Umbrella: Code + Operations]** 完成scene/import/review/timeline artifact revisions、owner ACL、Production retention與cleanup；目前只有code子項完成，live operations仍未完成。
+- [x] **T5.1a [Code Evidence]** Unified append-only import/scene/review/timeline artifact journal、owner binding、terminal transitions與recovery已接線並通過offline tests。
+- [ ] **T5.1b [State/Admin]** Provision Production journal root，以service identity執行retention/cleanup與restart recovery；code test不可取代live storage durability。
 - [ ] **T5.2** 在可寫且受控的Production workspace驗證Save/restore；active `-NOWRITE` demo sandbox不可當持久化測試。
 - [ ] **T5.3** 建立backup/restore與rollback drill：asset snapshot、artifact metadata、TURN secret rotation、service config。
+- [ ] **T5.3a [State/Admin]** 在disposable generation完成journal與bound artifact metadata backup/restore，驗證hash、ACL與rollback generation。
 - [ ] **T5.4** 建立dashboards/alerts：duplicate stacks、dependency readiness、retrieval fallback、review errors/cost、ICE relay failure、timeline drift。
 - [ ] **T5.5** 對照actual code更新README、AWS SOP、port matrix及completion status；刪除已失真的「complete」或「stub」敘述。
 - [ ] **T5.6** Security review：prompt injection、arbitrary path/URL、secret redaction、session isolation、UE command allowlist、rate/cost limits。
@@ -142,7 +151,22 @@ Security hardening delta（2026-07-21）：共用helper現為Linux-only，另外
 - Chromium mock E2E：Review 1 passed；VISTA Import 1 passed；沒有呼叫live Studio、UE或model provider。
 - Vite development build：1879 modules transformed。
 - JSON Schema Draft 2020-12：6個schema通過meta-schema檢查；2個sanitized golden fixture通過instance validation。
-- 本輪未restart live server、未連線真實asset DB、未呼叫provider、未mutate UE、未啟公網listener、未stage或commit。
+- 本輪與本次文件refresh均未restart live server、未啟動或連線真實Postgres/Qdrant/model service、未執行semantic index job、未呼叫paid/live provider、未compile/load或mutate UE、未啟公網listener。
+
+## 2026-07-21 local integration checkpoint（非target／live evidence）
+
+- Server Node suite：698 passed、0 failed、0 skipped。
+- Frontend Node suite：23 passed；Vite production build：1879 modules transformed。
+- Chromium mock E2E：Review 4 passed；VISTA Import 1 passed。Temporary loopback Vite listeners
+  `4179/4182`已在測試後退出。
+- Tools suite：208 passed。Semantic executor focused：53 passed，且第二輪independent QA為0 P0／P1／P2。
+- Animation plugin contract：22 passed；`mmg_040` inspection profile：10 passed。
+- Packaging launcher security：35 passed；private workspace staging：6 passed；55個required
+  workspace security hashes與source完全一致。
+- JSON Schema：25個schema通過其宣告draft的meta-schema validation；semantic plan另以Draft
+  2020-12驗證offline／Production valid profiles並拒絕credential/profile invalid cases。
+- 驗證沒有碰GPU 1或`3012/55570/8595/8596/8899`，沒有啟動或連線live
+  Studio／UE／Postgres／Qdrant／embedding／provider，也沒有開public listener。
 
 ## 每個change set的最低驗證
 
