@@ -968,12 +968,12 @@ test("Claude one-shot preserves terminal accounting when abort wins the race wit
   let markTerminalWritten;
   const terminalWritten = new Promise((resolve) => { markTerminalWritten = resolve; });
   const fake = fakeChildFactory(({ child }) => {
-    child.stdout.write(`${JSON.stringify({
+    child.stdout.write(JSON.stringify({
       type: "result",
       result: "completed before abort",
       usage: { input_tokens: 12, output_tokens: 2 },
       total_cost_usd: 0.015,
-    })}\n`);
+    }));
     markTerminalWritten();
   });
   const controller = new AbortController();
@@ -1003,12 +1003,12 @@ test("Claude one-shot preserves terminal accounting when abort wins the race wit
 
 test("Claude one-shot preserves terminal accounting when timeout wins the race with close", async () => {
   const fake = fakeChildFactory(({ child }) => {
-    child.stdout.write(`${JSON.stringify({
+    child.stdout.write(JSON.stringify({
       type: "result",
       result: "completed before timeout",
       usage: { input_tokens: 14, output_tokens: 3 },
       total_cost_usd: 0.016,
-    })}\n`);
+    }));
   });
   const accounting = [];
   const pending = oneshotText("summarize this", {

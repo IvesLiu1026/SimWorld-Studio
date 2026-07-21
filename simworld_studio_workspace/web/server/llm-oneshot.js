@@ -286,11 +286,19 @@ function oneshotTextClaude(prompt, opts) {
         return null;
       }
     }
+    function flushBufferedRecord() {
+      const buffered = outBuf.trim();
+      if (!buffered) return;
+      outBuf = "";
+      handle(buffered);
+    }
     const fail = (error, terminateChild = false) => {
       if (settled) return;
       // A complete terminal result may arrive just before cancellation,
-      // timeout, or another process failure. Commit its verified accounting
-      // exactly once before settling so a paid call cannot disappear.
+      // timeout, or another process failure. The CLI also permits its final
+      // JSON record to omit a trailing newline, so parse the buffered tail
+      // before committing verified accounting exactly once.
+      flushBufferedRecord();
       commitTerminalAccounting();
       settled = true;
       if (terminateChild) terminate();
@@ -372,7 +380,7 @@ function oneshotTextClaude(prompt, opts) {
     ), true));
     proc.on("close", code => {
       if (settled) return;
-      if (outBuf.trim()) handle(outBuf);
+      flushBufferedRecord();
       const raw = (resultText.trim() || assistantText.trim());
       if (resultEvents !== 1) {
         fail(oneShotError(
