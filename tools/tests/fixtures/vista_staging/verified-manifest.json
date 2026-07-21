@@ -1,0 +1,40 @@
+{
+  "schema": "vista-verified-source-manifest/v1",
+  "dataset_revision": "sanitized_round_r1",
+  "records": [
+    {
+      "schema": "vista-verified-sample/v1",
+      "dataset_revision": "sanitized_round_r1",
+      "source_row_id": "mmg_040__multimodal_grounded::sanitized_case_040::sora2::attempt_007",
+      "visual_id": "mmg_040",
+      "case_scope": "sanitized_case_040",
+      "scenario_type": "multimodal_grounded",
+      "duration_sec": 12,
+      "selected_attempt": {
+        "provider": "sora2",
+        "index": 7,
+        "selected": true,
+        "render_script": {
+          "path": "pipeline_v2/media/mmg_040/attempt_007/render_script.yaml",
+          "sha256": "e033bd6b8c2d31378cad84e9ec4a64d5876c405e08de0892ceefb876ffd712f4",
+          "bytes": 923
+        },
+        "dialogue_no_oracle": {
+          "path": "verified/dialogue/mmg_040.attempt_007.no-oracle.json",
+          "sha256": "30cc0a2058df76a6cd5af6d05b624da1188e0b8f5715f86fbbd2831b409cca80",
+          "bytes": 840
+        },
+        "media": {
+          "path": "pipeline_v2/media/mmg_040/attempt_007/video.mp4",
+          "media_id": "mmg_040:sora2:attempt_007:video",
+          "media_type": "video/mp4",
+          "sha256": "0c46b61009b80b003facf34044c93f7195f62dbe2c1669afd9dff2bca73d16a6",
+          "bytes": 213,
+          "duration_sec": 12,
+          "width": 1280,
+          "height": 720
+        }
+      }
+    }
+  ]
+}

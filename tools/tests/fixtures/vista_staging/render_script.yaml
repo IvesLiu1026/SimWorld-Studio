@@ -1,0 +1,26 @@
+Global_Metadata:
+  Title: Sanitized shelf retrieval fixture
+  Perspective: First-person egocentric
+  Environment: A compact office storage bay with a cabinet, box, rolling chair, and stable step stool.
+  Lighting: Neutral overhead office lighting.
+  Duration_sec: 12
+Camera_Continuity:
+  Position: Head-mounted eye line
+  Height: Adult eye level
+  Angle: Natural forward view
+  Motion: One uninterrupted take
+  Framing: Hands only, never the face
+Scene:
+  Key_Visual_Elements:
+    - wheeled office chair
+    - stable step stool
+    - cardboard box on a high cabinet
+  Description: The wearer considers how to reach the box.
+  Actions:
+    - "[00:00] Look at the box and both access options."
+    - "[00:02] Pull the rolling chair toward the cabinet."
+    - "[00:05] Brace a hand and pause before stepping up."
+    - "[00:09] Hold at the unresolved decision point."
+  Dialogue: []
+Exit_State:
+  Action: End before climbing.
