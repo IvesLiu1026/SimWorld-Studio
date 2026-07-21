@@ -172,7 +172,7 @@ RENDER_INTERVENTION_FIELDS = frozenset(
     {"Signal_State", "Signal_Location", "User_Awareness", "Reasoning", "Trigger_Condition"}
 )
 
-APPROVAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{5,255}$")
+APPROVAL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{5,255}$")
 TARGET_SIZE_RE = re.compile(r"^(\d{1,5})x(\d{1,5})$")
 URI_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 SIGNED_VALUE_RE = re.compile(
@@ -1073,7 +1073,12 @@ def _verify_existing_output(plan: ProjectionPlan) -> bool:
             path = current_path / directory
             relative = (relative_root / directory).as_posix()
             metadata = os.lstat(path)
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_IMODE(metadata.st_mode) != 0o700
+                or metadata.st_uid != os.geteuid()
+            ):
                 fail("VISTA_PROJECTION_OUTPUT_CONFLICT", "Existing output contains an unsafe directory", pointer=relative)
             observed_dirs.add(relative)
         for filename in files:

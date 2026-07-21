@@ -336,6 +336,16 @@ class VistaVerifiedProjectionTests(unittest.TestCase):
         self.assertEqual(report["owner_approval_reference_sha256"], sha256(b"VISTA-DATA-APPROVAL-001"))
         self.assertNotIn("VISTA-DATA-APPROVAL-001", json.dumps(report))
 
+    def test_approval_reference_rejects_urls_and_email_addresses(self) -> None:
+        for approval in ("https://tracker.invalid/VISTA-001", "owner@example.invalid"):
+            with self.subTest(approval=approval):
+                self.assert_projection_error(
+                    "VISTA_PROJECTION_OWNER_APPROVAL_INVALID",
+                    lambda approval=approval: exporter.build_projection_plan(
+                        self.fixture.args(apply=True, approval=approval)
+                    ),
+                )
+
     def test_projection_is_directly_compatible_with_staging_adapter(self) -> None:
         projection_args = self.fixture.args(apply=True, approval="VISTA-DATA-APPROVAL-001")
         exporter.apply_projection(exporter.build_projection_plan(projection_args))
