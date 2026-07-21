@@ -31,6 +31,9 @@ const MAX_CONTENT_PROFILE_BYTES = 2 * 1024 * 1024;
 const MAX_PLUGIN_ARTIFACT_BYTES = 256 * 1024;
 const MAX_TRANSPORT_RESPONSE_BYTES = 256 * 1024;
 const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
+const DEFAULT_READINESS_MAX_AGE_MS = 30_000;
+const MAX_READINESS_PROOFS = 128;
+const GLOBAL_READINESS_SCHEMA = "vista-animation-global-readiness/v1";
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const SAFE_ID_RE = /^[a-z][a-z0-9_-]{0,119}$/;
@@ -59,6 +62,18 @@ const CONFIG_KEYS = Object.freeze([
   "VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_SHA256",
   "VISTA_ANIMATION_RECORD_ROOT",
 ]);
+
+const READINESS_CAUSES = Object.freeze({
+  ANIMATION_UE_READINESS_DISABLED: ["VISTA animation timeline runtime is disabled.", false],
+  ANIMATION_UE_READINESS_NOT_CONFIGURED: ["Pinned VISTA animation runtime receipts are not configured.", false],
+  ANIMATION_UE_PLUGIN_TRANSPORT_MISSING: ["Dedicated VISTA animation UE transport is not configured.", false],
+  ANIMATION_UE_SESSION_REVALIDATION_MISSING: ["Active Studio lease revalidation is not configured.", false],
+  ANIMATION_UE_READINESS_PROOF_MISSING: ["No current session-bound live animation plugin proof is available.", true],
+  ANIMATION_UE_READINESS_PROOF_STALE: ["The session-bound live animation plugin proof expired.", true],
+  ANIMATION_UE_SESSION_BINDING_REVOKED: ["The Studio lease that produced the animation plugin proof is no longer active.", true],
+  ANIMATION_UE_READINESS_PROOF_MISMATCH: ["The live animation plugin proof does not match the pinned runtime and Studio slot.", false],
+  ANIMATION_UE_PLUGIN_PROBE_ABORTED: ["The live animation plugin readiness check was cancelled.", true],
+});
 
 class VistaAnimationTimelineRuntimeError extends Error {
   constructor(code, message, { status = 500, retryable = false } = {}) {
@@ -203,10 +218,19 @@ function rejectProductionFixture(contentProfile, pluginArtifact, files) {
   }
 }
 
+function normalizeReadinessMaxAge(value) {
+  const normalized = value === undefined ? DEFAULT_READINESS_MAX_AGE_MS : Number(value);
+  if (!Number.isInteger(normalized) || normalized < 1_000 || normalized > 300_000) {
+    fail("ANIMATION_RUNTIME_CONFIG_INVALID", "readinessMaxAgeMs must be an integer in [1000, 300000]");
+  }
+  return normalized;
+}
+
 function resolveVistaAnimationTimelineConfig(env = process.env, options = {}) {
   const production = envText(env, "NODE_ENV").toLowerCase() === "production";
   const enabled = flag(env.VISTA_ANIMATION_TIMELINE_ENABLED);
   const baseDir = path.resolve(options.baseDir || __dirname);
+  const readinessMaxAgeMs = normalizeReadinessMaxAge(options.readinessMaxAgeMs);
   const configuredKeys = CONFIG_KEYS.filter((key) => envText(env, key));
   if (configuredKeys.length > 0 && configuredKeys.length !== CONFIG_KEYS.length) {
     fail("ANIMATION_RUNTIME_CONFIG_INVALID", `${CONFIG_KEYS.join(", ")} must be configured together`);
@@ -223,6 +247,7 @@ function resolveVistaAnimationTimelineConfig(env = process.env, options = {}) {
       pluginArtifact: null,
       recordRoot: fallbackRecordRoot,
       probeTimeoutMs: DEFAULT_PROBE_TIMEOUT_MS,
+      readinessMaxAgeMs,
     });
   }
 
@@ -268,6 +293,7 @@ function resolveVistaAnimationTimelineConfig(env = process.env, options = {}) {
     pluginArtifact,
     recordRoot: safeAbsolutePath(envText(env, "VISTA_ANIMATION_RECORD_ROOT"), "VISTA_ANIMATION_RECORD_ROOT"),
     probeTimeoutMs,
+    readinessMaxAgeMs,
   });
 }
 
@@ -333,6 +359,174 @@ function makeSlotBinding(identity) {
     slot_id: String(identity.slotId),
     scene_revision: identity.sceneRevision,
   });
+}
+
+function leaseBinding(identity) {
+  return deepFreeze({
+    ownerId: identity.ownerId,
+    sessionId: identity.sessionId,
+    slotId: identity.slotId,
+    leaseId: identity.leaseId,
+    mcpPort: identity.mcpPort,
+  });
+}
+
+function clockMilliseconds(clock) {
+  let value;
+  try {
+    value = clock();
+  } catch {
+    fail("ANIMATION_RUNTIME_CLOCK_INVALID", "Animation runtime clock failed");
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) fail("ANIMATION_RUNTIME_CLOCK_INVALID", "Animation runtime clock is invalid");
+  return date.getTime();
+}
+
+function readinessNotReady(code, revision = {}) {
+  const cause = READINESS_CAUSES[code] || READINESS_CAUSES.ANIMATION_UE_READINESS_PROOF_MISSING;
+  return deepFreeze({
+    status: "not_ready",
+    revision: {
+      schema: GLOBAL_READINESS_SCHEMA,
+      animation_content_api: "not_ready",
+      ...cloneJson(revision),
+    },
+    causes: [{
+      code: READINESS_CAUSES[code] ? code : "ANIMATION_UE_READINESS_PROOF_MISSING",
+      message: cause[0],
+      retryable: cause[1],
+      dependency: "vista_animation_ue_plugin",
+    }],
+  });
+}
+
+function sanitizedLiveProof(result, identity, config, nowMs) {
+  if (!isPlainObject(result) || result.status !== "ready"
+      || !Array.isArray(result.causes) || result.causes.length !== 0
+      || !isPlainObject(result.revision)) return null;
+  const revision = result.revision;
+  const keys = [
+    "plugin_name", "plugin_version", "plugin_build_id", "binary_sha256",
+    "engine_version", "target_platform", "api_schema", "profile_id",
+    "profile_revision", "content_revision", "content_digest", "slot_binding_digest",
+    "operation_allowlist_digest", "process_instance_id", "checked_at", "verification",
+  ];
+  if (Object.keys(revision).length !== keys.length
+      || keys.some((key) => !Object.prototype.hasOwnProperty.call(revision, key))) return null;
+  const expectedSlotBindingDigest = digest({
+    schema: "vista-animation-ue-slot-binding/v1",
+    ...makeSlotBinding(identity),
+  });
+  const artifact = config.pluginArtifact;
+  const profile = config.contentProfile;
+  const checkedAtMs = Date.parse(revision.checked_at);
+  if (
+    revision.verification !== "live_plugin_challenge"
+    || revision.plugin_name !== artifact.plugin_name
+    || revision.plugin_version !== artifact.plugin_version
+    || revision.plugin_build_id !== artifact.plugin_build_id
+    || revision.binary_sha256 !== artifact.binary_sha256
+    || revision.engine_version !== artifact.engine_version
+    || revision.target_platform !== artifact.target_platform
+    || revision.api_schema !== artifact.api_schema
+    || revision.profile_id !== profile.profile_id
+    || revision.profile_revision !== profile.revision
+    || revision.content_revision !== profile.content_revision
+    || revision.content_digest !== profile.content_digest
+    || revision.slot_binding_digest !== expectedSlotBindingDigest
+    || !SHA256_RE.test(revision.operation_allowlist_digest)
+    || !OPAQUE_ID_RE.test(revision.process_instance_id)
+    || !Number.isFinite(checkedAtMs)
+    || checkedAtMs > nowMs + 5_000
+    || nowMs - checkedAtMs > config.readinessMaxAgeMs
+  ) return null;
+  return deepFreeze({
+    revision: cloneJson(revision),
+    checkedAtMs,
+    expiresAtMs: checkedAtMs + config.readinessMaxAgeMs,
+    identity: leaseBinding(identity),
+    key: digest({
+      ...leaseBinding(identity),
+      sceneRevision: identity.sceneRevision,
+      planId: identity.planId,
+    }),
+  });
+}
+
+function createGlobalAnimationReadiness({
+  config,
+  clock,
+  isActiveSessionBinding,
+  unavailableCode = null,
+} = {}) {
+  const proofs = new Map();
+
+  function prune(nowMs) {
+    let expired = false;
+    for (const [key, proof] of proofs) {
+      if (nowMs > proof.expiresAtMs) {
+        proofs.delete(key);
+        expired = true;
+      }
+    }
+    return expired;
+  }
+
+  function record(result, identity) {
+    const nowMs = clockMilliseconds(clock);
+    const proof = sanitizedLiveProof(result, identity, config, nowMs);
+    if (!proof) return false;
+    prune(nowMs);
+    proofs.delete(proof.key);
+    proofs.set(proof.key, proof);
+    while (proofs.size > MAX_READINESS_PROOFS) proofs.delete(proofs.keys().next().value);
+    return true;
+  }
+
+  async function revalidate(identity) {
+    if (typeof isActiveSessionBinding !== "function") return false;
+    try {
+      return await isActiveSessionBinding(identity) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function animationUeProbe({ signal } = {}) {
+    if (signal && signal.aborted) return readinessNotReady("ANIMATION_UE_PLUGIN_PROBE_ABORTED");
+    if (unavailableCode) return readinessNotReady(unavailableCode);
+    if (typeof isActiveSessionBinding !== "function") {
+      return readinessNotReady("ANIMATION_UE_SESSION_REVALIDATION_MISSING");
+    }
+    const nowMs = clockMilliseconds(clock);
+    const expired = prune(nowMs);
+    if (proofs.size === 0) {
+      return readinessNotReady(expired
+        ? "ANIMATION_UE_READINESS_PROOF_STALE"
+        : "ANIMATION_UE_READINESS_PROOF_MISSING");
+    }
+    const candidates = [...proofs.values()].sort((left, right) => right.checkedAtMs - left.checkedAtMs);
+    for (const proof of candidates) {
+      if (signal && signal.aborted) return readinessNotReady("ANIMATION_UE_PLUGIN_PROBE_ABORTED");
+      if (!await revalidate(proof.identity)) {
+        proofs.delete(proof.key);
+        continue;
+      }
+      if (signal && signal.aborted) return readinessNotReady("ANIMATION_UE_PLUGIN_PROBE_ABORTED");
+      return deepFreeze({
+        status: "ready",
+        revision: {
+          ...cloneJson(proof.revision),
+          proof_expires_at: new Date(proof.expiresAtMs).toISOString(),
+        },
+        causes: [],
+      });
+    }
+    return readinessNotReady("ANIMATION_UE_SESSION_BINDING_REVOKED");
+  }
+
+  return Object.freeze({ animationUeProbe, record, revalidate });
 }
 
 function createEngineTimeSampler(transport, identity) {
@@ -627,41 +821,62 @@ function createUnavailableService(code, message) {
 }
 
 function createVistaAnimationTimelineRuntime(options = {}) {
+  if (options.isActiveSessionBinding !== undefined && typeof options.isActiveSessionBinding !== "function") {
+    fail("ANIMATION_RUNTIME_CONFIG_INVALID", "isActiveSessionBinding must be a function when configured");
+  }
+  const clock = typeof options.clock === "function" ? options.clock : () => new Date();
   const config = resolveVistaAnimationTimelineConfig(options.env || process.env, {
     baseDir: options.baseDir || __dirname,
     defaultRecordRoot: options.defaultRecordRoot,
     fsImpl: options.fsImpl,
+    readinessMaxAgeMs: options.readinessMaxAgeMs,
   });
-  if (!config.enabled) {
+  const unavailable = (serviceCode, serviceMessage, readinessCode) => {
+    const globalReadiness = createGlobalAnimationReadiness({
+      config,
+      clock,
+      isActiveSessionBinding: options.isActiveSessionBinding,
+      unavailableCode: readinessCode,
+    });
     return Object.freeze({
       config,
-      service: createUnavailableService("ANIMATION_RUNTIME_DISABLED", "VISTA animation timeline runtime is disabled"),
+      service: createUnavailableService(serviceCode, serviceMessage),
       runtimeProvider: null,
       bindingResolver: null,
+      animationUeProbe: globalReadiness.animationUeProbe,
     });
+  };
+  if (!config.enabled) {
+    return unavailable(
+      "ANIMATION_RUNTIME_DISABLED",
+      "VISTA animation timeline runtime is disabled",
+      "ANIMATION_UE_READINESS_DISABLED",
+    );
   }
   if (!config.configured) {
-    return Object.freeze({
-      config,
-      service: createUnavailableService("ANIMATION_RUNTIME_NOT_CONFIGURED", "Pinned VISTA animation runtime receipts are not configured"),
-      runtimeProvider: null,
-      bindingResolver: null,
-    });
+    return unavailable(
+      "ANIMATION_RUNTIME_NOT_CONFIGURED",
+      "Pinned VISTA animation runtime receipts are not configured",
+      "ANIMATION_UE_READINESS_NOT_CONFIGURED",
+    );
   }
   if (typeof options.transportResolver !== "function") {
-    return Object.freeze({
-      config,
-      service: createUnavailableService("ANIMATION_UE_TRANSPORT_MISSING", "Dedicated VISTA animation UE transport is not configured"),
-      runtimeProvider: null,
-      bindingResolver: null,
-    });
+    return unavailable(
+      "ANIMATION_UE_TRANSPORT_MISSING",
+      "Dedicated VISTA animation UE transport is not configured",
+      "ANIMATION_UE_PLUGIN_TRANSPORT_MISSING",
+    );
   }
   if (!options.importService || typeof options.importService.status !== "function"
       || !options.sceneBuildService || typeof options.sceneBuildService.status !== "function") {
     fail("ANIMATION_RUNTIME_CONFIG_INVALID", "Enabled animation runtime requires import and scene-build services");
   }
   const bindingResolver = createVerifiedSceneBindingResolver();
-  const clock = typeof options.clock === "function" ? options.clock : () => new Date();
+  const globalReadiness = createGlobalAnimationReadiness({
+    config,
+    clock,
+    isActiveSessionBinding: options.isActiveSessionBinding,
+  });
   const runtimeProvider = async (rawIdentity) => {
     const identity = normalizeRuntimeIdentity(rawIdentity);
     let resolved;
@@ -689,16 +904,31 @@ function createVistaAnimationTimelineRuntime(options = {}) {
       evidenceHooks: createEvidenceHooks(transport, identity),
       clock: runtimeClock,
     });
+    const liveProbe = createVistaAnimationUeReadinessProbe({
+      transport,
+      expectedArtifact: config.pluginArtifact,
+      contentProfile: config.contentProfile,
+      slotBinding: makeSlotBinding(identity),
+      clock: readinessClock,
+      timeoutMs: config.probeTimeoutMs,
+    });
+    const probeReadiness = async (probeOptions = {}) => {
+      const result = await liveProbe(probeOptions);
+      if (result && result.status === "ready") {
+        if (typeof options.isActiveSessionBinding === "function"
+            && !await globalReadiness.revalidate(leaseBinding(identity))) {
+          return readinessNotReady("ANIMATION_UE_SESSION_BINDING_REVOKED", result.revision);
+        }
+        if (typeof options.isActiveSessionBinding === "function"
+            && !globalReadiness.record(result, identity)) {
+          return readinessNotReady("ANIMATION_UE_READINESS_PROOF_MISMATCH", result.revision);
+        }
+      }
+      return result;
+    };
     return Object.freeze({
       runtime,
-      probeReadiness: createVistaAnimationUeReadinessProbe({
-        transport,
-        expectedArtifact: config.pluginArtifact,
-        contentProfile: config.contentProfile,
-        slotBinding: makeSlotBinding(identity),
-        clock: readinessClock,
-        timeoutMs: config.probeTimeoutMs,
-      }),
+      probeReadiness,
       engineTimeSampler: createEngineTimeSampler(transport, identity),
     });
   };
@@ -711,8 +941,15 @@ function createVistaAnimationTimelineRuntime(options = {}) {
     ...(typeof options.clock === "function" ? { clock: options.clock } : {}),
     ...(typeof options.randomBytes === "function" ? { randomBytes: options.randomBytes } : {}),
     ...(isPlainObject(options.schedulerOptions) ? { schedulerOptions: options.schedulerOptions } : {}),
+    readinessMaxAgeMs: config.readinessMaxAgeMs,
   });
-  return Object.freeze({ config, service, runtimeProvider, bindingResolver });
+  return Object.freeze({
+    config,
+    service,
+    runtimeProvider,
+    bindingResolver,
+    animationUeProbe: globalReadiness.animationUeProbe,
+  });
 }
 
 module.exports = {
@@ -721,6 +958,7 @@ module.exports = {
   ENGINE_TIME_RESPONSE_SCHEMA,
   EVIDENCE_CAPTURE_REQUEST_SCHEMA,
   EVIDENCE_CAPTURE_RESPONSE_SCHEMA,
+  GLOBAL_READINESS_SCHEMA,
   VistaAnimationTimelineRuntimeError,
   createVerifiedSceneBindingResolver,
   createVistaAnimationTimelineRuntime,

@@ -128,6 +128,9 @@ test("disabled and wholly missing configuration construct an unavailable typed s
     disabled.service.preflight("ignored", {}, {}),
     hasCode("ANIMATION_RUNTIME_DISABLED", 503),
   );
+  const disabledReadiness = await disabled.animationUeProbe();
+  assert.equal(disabledReadiness.status, "not_ready");
+  assert.equal(disabledReadiness.causes[0].code, "ANIMATION_UE_READINESS_DISABLED");
 
   const missing = createVistaAnimationTimelineRuntime({
     env: { NODE_ENV: "development", VISTA_ANIMATION_TIMELINE_ENABLED: "1" },
@@ -138,6 +141,9 @@ test("disabled and wholly missing configuration construct an unavailable typed s
     missing.service.preflight("ignored", {}, {}),
     hasCode("ANIMATION_RUNTIME_NOT_CONFIGURED", 503),
   );
+  const missingReadiness = await missing.animationUeProbe();
+  assert.equal(missingReadiness.status, "not_ready");
+  assert.equal(missingReadiness.causes[0].code, "ANIMATION_UE_READINESS_NOT_CONFIGURED");
 });
 
 test("partial production configuration fails closed at startup", () => {
@@ -214,7 +220,7 @@ function capabilityResponse(request, artifact) {
   });
 }
 
-function dedicatedTransport(artifact, calls = []) {
+function dedicatedTransport(artifact, calls = [], { mutateCapability } = {}) {
   return {
     async captureAnimationEvidence() {
       throw new Error("not used by this test");
@@ -225,7 +231,9 @@ function dedicatedTransport(artifact, calls = []) {
     async probeAnimationContentApi(requestJson, options) {
       const request = JSON.parse(requestJson);
       calls.push({ kind: "probe", request, options });
-      return capabilityResponse(request, artifact);
+      const response = JSON.parse(capabilityResponse(request, artifact));
+      if (typeof mutateCapability === "function") mutateCapability(response);
+      return JSON.stringify(response);
     },
     async sampleAnimationEngineTime(requestJson, options) {
       const request = JSON.parse(requestJson);
@@ -309,6 +317,111 @@ test("runtime provider binds the live challenge and engine sampler to the exact 
   const sample = calls.find((entry) => entry.kind === "engine_time");
   assert.equal(Object.prototype.hasOwnProperty.call(sample.request, "lease_id"), false);
   assert.equal(sample.request.slot_binding.scene_revision, identity().sceneRevision);
+  const globalWithoutLeaseValidator = await runtime.animationUeProbe();
+  assert.equal(globalWithoutLeaseValidator.status, "not_ready");
+  assert.equal(globalWithoutLeaseValidator.causes[0].code, "ANIMATION_UE_SESSION_REVALIDATION_MISSING");
+});
+
+test("one exact live challenge creates a short-lived globally revalidated readiness proof", async (t) => {
+  const root = temporaryRoot(t);
+  const env = runtimeEnv(root);
+  const calls = [];
+  const activeChecks = [];
+  const runtime = createVistaAnimationTimelineRuntime({
+    env,
+    ...inertServices(),
+    transportResolver: async () => dedicatedTransport(pluginArtifact(), calls),
+    isActiveSessionBinding(binding) {
+      activeChecks.push(binding);
+      return true;
+    },
+    clock: () => new Date(CHECKED_AT),
+  });
+  const bundle = await runtime.runtimeProvider(identity());
+  assert.equal((await bundle.probeReadiness()).status, "ready");
+  const global = await runtime.animationUeProbe();
+  assert.equal(global.status, "ready");
+  assert.equal(global.revision.verification, "live_plugin_challenge");
+  assert.equal(global.revision.proof_expires_at, "2026-07-21T12:00:30.000Z");
+  assert.equal(global.causes.length, 0);
+  assert.equal(activeChecks.length, 2, "the lease is checked both when recording and when reporting readiness");
+  assert.deepEqual(activeChecks[0], {
+    ownerId: identity().ownerId,
+    sessionId: identity().sessionId,
+    slotId: identity().slotId,
+    leaseId: identity().leaseId,
+    mcpPort: identity().mcpPort,
+  });
+  const publicJson = JSON.stringify(global);
+  assert.equal(publicJson.includes(identity().ownerId), false);
+  assert.equal(publicJson.includes(identity().sessionId), false);
+  assert.equal(publicJson.includes(identity().leaseId), false);
+});
+
+test("global animation readiness expires a live proof at the configured max age", async (t) => {
+  const root = temporaryRoot(t);
+  let now = Date.parse(CHECKED_AT);
+  const runtime = createVistaAnimationTimelineRuntime({
+    env: runtimeEnv(root),
+    ...inertServices(),
+    transportResolver: async () => dedicatedTransport(pluginArtifact()),
+    isActiveSessionBinding: () => true,
+    readinessMaxAgeMs: 1_000,
+    clock: () => new Date(now),
+  });
+  const bundle = await runtime.runtimeProvider(identity());
+  assert.equal((await bundle.probeReadiness()).status, "ready");
+  now += 1_001;
+  const stale = await runtime.animationUeProbe();
+  assert.equal(stale.status, "not_ready");
+  assert.equal(stale.causes[0].code, "ANIMATION_UE_READINESS_PROOF_STALE");
+});
+
+test("global animation readiness revokes a cached proof when its exact lease is no longer active", async (t) => {
+  const root = temporaryRoot(t);
+  let active = true;
+  const runtime = createVistaAnimationTimelineRuntime({
+    env: runtimeEnv(root),
+    ...inertServices(),
+    transportResolver: async () => dedicatedTransport(pluginArtifact()),
+    isActiveSessionBinding: () => active,
+    clock: () => new Date(CHECKED_AT),
+  });
+  const bundle = await runtime.runtimeProvider(identity());
+  assert.equal((await bundle.probeReadiness()).status, "ready");
+  active = false;
+  const revoked = await runtime.animationUeProbe();
+  assert.equal(revoked.status, "not_ready");
+  assert.equal(revoked.causes[0].code, "ANIMATION_UE_SESSION_BINDING_REVOKED");
+  const afterRemoval = await runtime.animationUeProbe();
+  assert.equal(afterRemoval.causes[0].code, "ANIMATION_UE_READINESS_PROOF_MISSING");
+});
+
+test("a mismatched live challenge never populates global animation readiness", async (t) => {
+  const root = temporaryRoot(t);
+  let activeChecks = 0;
+  const runtime = createVistaAnimationTimelineRuntime({
+    env: runtimeEnv(root),
+    ...inertServices(),
+    transportResolver: async () => dedicatedTransport(pluginArtifact(), [], {
+      mutateCapability(response) {
+        response.slot_binding.scene_revision = `other@${"0".repeat(64)}`;
+      },
+    }),
+    isActiveSessionBinding: () => {
+      activeChecks += 1;
+      return true;
+    },
+    clock: () => new Date(CHECKED_AT),
+  });
+  const bundle = await runtime.runtimeProvider(identity());
+  const sessionProbe = await bundle.probeReadiness();
+  assert.equal(sessionProbe.status, "not_ready");
+  assert.equal(sessionProbe.causes[0].code, "ANIMATION_UE_PLUGIN_SLOT_MISMATCH");
+  assert.equal(activeChecks, 0, "a mismatched challenge is rejected before lease proof recording");
+  const global = await runtime.animationUeProbe();
+  assert.equal(global.status, "not_ready");
+  assert.equal(global.causes[0].code, "ANIMATION_UE_READINESS_PROOF_MISSING");
 });
 
 test("transport resolution rejects incomplete and generic command-capable interfaces", async (t) => {
