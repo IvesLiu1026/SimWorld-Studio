@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-webrtc-readiness-receipt-v1.schema.json",
+  "title": "SimWorld Public WebRTC Readiness Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "outcome",
+    "build_revision",
+    "deployment_fingerprint",
+    "recorded_at",
+    "expires_at",
+    "public_endpoint",
+    "transport",
+    "security",
+    "evidence"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-webrtc-readiness-receipt/v1" },
+    "receipt_id": { "$ref": "#/$defs/safeToken" },
+    "outcome": { "const": "ready" },
+    "build_revision": { "$ref": "#/$defs/gitRevision" },
+    "deployment_fingerprint": { "$ref": "#/$defs/sha256" },
+    "recorded_at": { "$ref": "#/$defs/timestamp" },
+    "expires_at": { "$ref": "#/$defs/timestamp" },
+    "public_endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "certificate_sha256", "tls_version", "https_status", "wss_status"],
+      "properties": {
+        "origin": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 256 },
+        "certificate_sha256": { "$ref": "#/$defs/sha256" },
+        "tls_version": { "enum": ["TLSv1.2", "TLSv1.3"] },
+        "https_status": { "const": 200 },
+        "wss_status": { "const": 101 }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cirrus_reachable",
+        "streamer_registered",
+        "forced_relay",
+        "networks_tested",
+        "sessions_tested",
+        "turn_transports",
+        "minimum_session_seconds",
+        "max_input_round_trip_ms"
+      ],
+      "properties": {
+        "cirrus_reachable": { "const": true },
+        "streamer_registered": { "const": true },
+        "forced_relay": { "const": true },
+        "networks_tested": { "type": "integer", "minimum": 2, "maximum": 8 },
+        "sessions_tested": { "type": "integer", "minimum": 6, "maximum": 24 },
+        "turn_transports": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "tcp" },
+            { "const": "tls" },
+            { "const": "udp" }
+          ],
+          "items": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "minimum_session_seconds": { "type": "integer", "minimum": 720, "maximum": 86400 },
+        "max_input_round_trip_ms": { "type": "integer", "minimum": 0, "maximum": 5000 }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "no_mixed_content",
+        "no_host_candidates",
+        "no_private_addresses",
+        "no_raw_ports",
+        "no_credentials",
+        "no_tokens",
+        "unauthenticated_denied",
+        "cross_session_denied"
+      ],
+      "properties": {
+        "no_mixed_content": { "const": true },
+        "no_host_candidates": { "const": true },
+        "no_private_addresses": { "const": true },
+        "no_raw_ports": { "const": true },
+        "no_credentials": { "const": true },
+        "no_tokens": { "const": true },
+        "unauthenticated_denied": { "const": true },
+        "cross_session_denied": { "const": true }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe_schema", "probe_id", "probe_sha256"],
+      "properties": {
+        "probe_schema": { "const": "simworld-webrtc-probe-results/v1" },
+        "probe_id": { "$ref": "#/$defs/safeToken" },
+        "probe_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  },
+  "$defs": {
+    "safeToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$"
+    },
+    "gitRevision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "maxLength": 40 }
+  }
+}

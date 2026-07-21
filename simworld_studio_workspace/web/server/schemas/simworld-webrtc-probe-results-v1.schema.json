@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-webrtc-probe-results-v1.schema.json",
+  "title": "SimWorld Redacted WebRTC Probe Results v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "probe_id",
+    "build_revision",
+    "deployment_fingerprint",
+    "recorded_at",
+    "expires_at",
+    "public_endpoint",
+    "cirrus",
+    "security",
+    "sessions"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-webrtc-probe-results/v1" },
+    "probe_id": { "$ref": "#/$defs/safeToken" },
+    "build_revision": { "$ref": "#/$defs/gitRevision" },
+    "deployment_fingerprint": { "$ref": "#/$defs/sha256" },
+    "recorded_at": { "$ref": "#/$defs/timestamp" },
+    "expires_at": { "$ref": "#/$defs/timestamp" },
+    "public_endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "certificate_sha256",
+        "wss_certificate_sha256",
+        "https_status",
+        "wss_status",
+        "tls_version",
+        "certificate_valid",
+        "certificate_dns_match",
+        "mixed_content",
+        "wss_upgraded",
+        "same_origin",
+        "opaque_path"
+      ],
+      "properties": {
+        "origin": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 256 },
+        "certificate_sha256": { "$ref": "#/$defs/sha256" },
+        "wss_certificate_sha256": { "$ref": "#/$defs/sha256" },
+        "https_status": { "const": 200 },
+        "wss_status": { "const": 101 },
+        "tls_version": { "enum": ["TLSv1.2", "TLSv1.3"] },
+        "certificate_valid": { "const": true },
+        "certificate_dns_match": { "const": true },
+        "mixed_content": { "const": false },
+        "wss_upgraded": { "const": true },
+        "same_origin": { "const": true },
+        "opaque_path": { "const": true }
+      }
+    },
+    "cirrus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "player_signalling_reachable",
+        "streamer_registered",
+        "http_listener_loopback_only",
+        "streamer_listener_loopback_only"
+      ],
+      "properties": {
+        "player_signalling_reachable": { "const": true },
+        "streamer_registered": { "const": true },
+        "http_listener_loopback_only": { "const": true },
+        "streamer_listener_loopback_only": { "const": true }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unauthenticated_denied",
+        "cross_session_denied",
+        "raw_control_ports_unreachable",
+        "host_candidates_absent",
+        "private_addresses_absent",
+        "credentials_absent",
+        "tokens_absent"
+      ],
+      "properties": {
+        "unauthenticated_denied": { "const": true },
+        "cross_session_denied": { "const": true },
+        "raw_control_ports_unreachable": { "const": true },
+        "host_candidates_absent": { "const": true },
+        "private_addresses_absent": { "const": true },
+        "credentials_absent": { "const": true },
+        "tokens_absent": { "const": true }
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 24,
+      "items": { "$ref": "#/$defs/externalSession" }
+    }
+  },
+  "$defs": {
+    "safeToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+~-]*$"
+    },
+    "gitRevision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "count": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+    "externalSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test_id",
+        "network_fingerprint",
+        "network_class",
+        "turn_transport",
+        "ice_policy",
+        "ice_gathering_state",
+        "started_at",
+        "completed_at",
+        "credential",
+        "selected_candidate",
+        "media",
+        "input",
+        "reconnect",
+        "leakage"
+      ],
+      "properties": {
+        "test_id": { "$ref": "#/$defs/safeToken" },
+        "network_fingerprint": { "$ref": "#/$defs/sha256" },
+        "network_class": {
+          "enum": ["external_other", "mobile_hotspot", "residential_nat", "restricted_network"]
+        },
+        "turn_transport": { "enum": ["udp", "tcp", "tls"] },
+        "ice_policy": { "const": "relay" },
+        "ice_gathering_state": { "const": "complete" },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "credential": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scheme", "redacted", "issued_at", "expires_at", "ttl_seconds"],
+          "properties": {
+            "scheme": { "const": "turn_rest_hmac" },
+            "redacted": { "const": true },
+            "issued_at": { "$ref": "#/$defs/timestamp" },
+            "expires_at": { "$ref": "#/$defs/timestamp" },
+            "ttl_seconds": { "type": "integer", "minimum": 300, "maximum": 86400 }
+          }
+        },
+        "selected_candidate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "protocol",
+            "turn_transport",
+            "candidate_fingerprint",
+            "turn_endpoint_matched",
+            "address_redacted"
+          ],
+          "properties": {
+            "type": { "const": "relay" },
+            "protocol": { "enum": ["udp", "tcp"] },
+            "turn_transport": { "enum": ["udp", "tcp", "tls"] },
+            "candidate_fingerprint": { "$ref": "#/$defs/sha256" },
+            "turn_endpoint_matched": { "const": true },
+            "address_redacted": { "const": true }
+          }
+        },
+        "media": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["decoded_frames", "first_frame_ms", "sustained_seconds"],
+          "properties": {
+            "decoded_frames": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+            "first_frame_ms": { "type": "integer", "minimum": 0, "maximum": 60000 },
+            "sustained_seconds": { "type": "integer", "minimum": 720, "maximum": 86400 }
+          }
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data_channel_open", "messages_sent", "messages_acknowledged", "max_round_trip_ms"],
+          "properties": {
+            "data_channel_open": { "const": true },
+            "messages_sent": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "messages_acknowledged": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "max_round_trip_ms": { "type": "integer", "minimum": 0, "maximum": 5000 }
+          }
+        },
+        "reconnect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attempted", "successful", "recovery_ms"],
+          "properties": {
+            "attempted": { "const": true },
+            "successful": { "const": true },
+            "recovery_ms": { "type": "integer", "minimum": 0, "maximum": 60000 }
+          }
+        },
+        "leakage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host_candidate_exposed",
+            "private_address_exposed",
+            "raw_port_exposed",
+            "credential_exposed",
+            "token_exposed"
+          ],
+          "properties": {
+            "host_candidate_exposed": { "const": false },
+            "private_address_exposed": { "const": false },
+            "raw_port_exposed": { "const": false },
+            "credential_exposed": { "const": false },
+            "token_exposed": { "const": false }
+          }
+        }
+      }
+    }
+  }
+}
