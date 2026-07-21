@@ -3,6 +3,10 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  assertTransportRequest,
+  buildPixelStreamingCsp,
+} = require("./pixel-streaming-config");
 
 const LOOPBACK_BIND_HOSTS = new Set(["127.0.0.1", "::1"]);
 const LOOPBACK_REQUEST_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -78,8 +82,21 @@ function createLoopbackBrowserHeaders(options = {}) {
 const setLoopbackBrowserHeaders = createLoopbackBrowserHeaders();
 
 function resolveAccessToken(env = process.env) {
-  const token = String(env.STUDIO_ACCESS_TOKEN || "");
+  const direct = String(env.STUDIO_ACCESS_TOKEN || "");
+  const filename = String(env.STUDIO_ACCESS_TOKEN_FILE || "").trim();
+  if (direct && filename) throw new Error("Configure only one Studio access token source");
+  let token = direct;
+  if (!token && filename) {
+    try {
+      token = fs.readFileSync(filename, "utf8").replace(/\r?\n$/, "");
+    } catch {
+      throw new Error("STUDIO_ACCESS_TOKEN_FILE could not be read");
+    }
+  }
   if (token.length < 32) throw new Error("STUDIO_ACCESS_TOKEN must contain at least 32 characters");
+  if (token.length > 4096 || /[\u0000-\u001f\u007f]/.test(token)) {
+    throw new Error("STUDIO_ACCESS_TOKEN does not meet policy");
+  }
   return token;
 }
 
@@ -100,8 +117,36 @@ function cookieValue(header, name) {
   return "";
 }
 
-function createAccessGuard(accessToken) {
+function createTransportBrowserHeaders(transport, options = {}) {
+  const csp = buildPixelStreamingCsp(transport, {
+    signalingPort: transport.profile === "loopback" ? (options.signalingPort ?? null) : null,
+  });
+  return function transportBrowserHeaders(_req, res, next) {
+    res.set("Content-Security-Policy", csp);
+    res.set("Referrer-Policy", "no-referrer");
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set("Cross-Origin-Resource-Policy", "same-origin");
+    return next();
+  };
+}
+
+function createTransportRequestGuard(transport) {
+  return function transportRequestGuard(req, res, next) {
+    try {
+      assertTransportRequest(req, transport);
+      return next();
+    } catch {
+      return res.status(403).json({
+        code: "TRANSPORT_REQUEST_REJECTED",
+        error: "Studio request authority is not allowed",
+      });
+    }
+  };
+}
+
+function createAccessGuard(accessToken, options = {}) {
   resolveAccessToken({ STUDIO_ACCESS_TOKEN: accessToken });
+  const secureCookie = Boolean(options.transport && options.transport.cookie && options.transport.cookie.secure);
   return function accessGuard(req, res, next) {
     const authorization = String(req.headers.authorization || "");
     const bearer = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
@@ -112,7 +157,8 @@ function createAccessGuard(accessToken) {
     if (req.method === "GET" && typeof queryToken === "string" && tokensEqual(queryToken, accessToken)) {
       res.setHeader(
         "Set-Cookie",
-        `vista_studio_access=${encodeURIComponent(accessToken)}; HttpOnly; SameSite=Strict; Path=/`,
+        `vista_studio_access=${encodeURIComponent(accessToken)}; HttpOnly; SameSite=Strict; Path=/` +
+          (secureCookie ? "; Secure" : ""),
       );
       const redirect = new URL(req.originalUrl || req.url, "http://localhost");
       redirect.searchParams.delete("token");
@@ -278,6 +324,8 @@ module.exports = {
   createAccessGuard,
   createLoopbackBrowserHeaders,
   createModelGate,
+  createTransportBrowserHeaders,
+  createTransportRequestGuard,
   LOOPBACK_BROWSER_CSP,
   requestIsLoopback,
   requestLoopbackGuard,

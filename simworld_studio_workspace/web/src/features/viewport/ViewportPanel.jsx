@@ -7,15 +7,21 @@ import { useLatestRun } from "../training/datahub.js";
 // (the UE instance currently running the agent), polled straight from the datahub so it is
 // ALWAYS connected to the latest running UE — independent of how many instances exist or of
 // any SSE store. This is the viewport "接入" the running agent camera.
-function AgentCameraView() {
+function AgentCameraView({ session }) {
   const data = useLatestRun(1200);   // run status + per-step metadata
-  const [cirrusPort, setCirrusPort] = useState(null);
+  const [streamingPath, setStreamingPath] = useState(null);
   useEffect(() => {
+    if (!session) return undefined;
     let on = true;
-    fetch(`${API_BASE}/pixel-streaming-url`).then((r) => r.json())
-      .then((j) => { if (on && j && j.detectedPort) setCirrusPort(j.detectedPort); }).catch(() => {});
+    fetch(`${API_BASE}/pixel-streaming-url`, { credentials: "same-origin", cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (on && j?.schema === "pixel-streaming-endpoint/v1" && typeof j.path === "string") {
+          setStreamingPath(j.path);
+        }
+      }).catch(() => {});
     return () => { on = false; };
-  }, []);
+  }, [session]);
   const run = data && data.run;
   const status = (data && data.status) || "idle";
   const live = status === "running" || status === "starting";
@@ -55,7 +61,9 @@ function AgentCameraView() {
   // "DefaultStreamer" (confirmed in client log: "PixelStreaming streamer ID: DefaultStreamer"), so
   // the viewport selects DefaultStreamer on the training cirrus. Falls back to the last captured
   // frame when finished.
-  const agentPlayerUrl = cirrusPort ? `/ue-player.html?cirrus=${cirrusPort}&StreamerId=DefaultStreamer` : null;
+  const agentPlayerUrl = streamingPath
+    ? `/ue-player.html?${new URLSearchParams({ endpoint: streamingPath, StreamerId: "DefaultStreamer" })}`
+    : null;
   // Only mount the WebRTC player once the stream is actually READY (first captured frame = render
   // client booted = DefaultStreamer registered on cirrus). Before that, mounting it just spins for
   // the whole ~3 min cluster boot with no streamer to connect to — which read as "一直转圈连不上".
@@ -291,7 +299,7 @@ async function fetchJsonWithTimeout(url, options, timeoutMs) {
   }
 }
 
-export default function ViewportPanel({ health, icons, latestScreenshot }) {
+export default function ViewportPanel({ health, icons, latestScreenshot, session }) {
   const [mode, setMode] = useState("pixelstream");
   const [imgKey, setImgKey] = useState(0);
   const [screenshotUrl, setScreenshotUrl] = useState(null);
@@ -734,23 +742,18 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/pixel-streaming-url`)
+    if (!session) return undefined;
+    let cancelled = false;
+    fetch(`${API_BASE}/pixel-streaming-url`, { credentials: "same-origin", cache: "no-store" })
       .then((response) => response.json())
       .then((data) => {
-        if (!data.url) return;
+        if (cancelled || data?.schema !== "pixel-streaming-endpoint/v1" || typeof data.path !== "string") return;
         const webRtcFps = data.webRtcFps === 30 || data.webRtcFps === 60
           ? data.webRtcFps
           : null;
         if (!webRtcFps) return;
-        const cirrusPort = data.detectedPort || (() => {
-          try {
-            return new URL(data.url).port || 8685;
-          } catch {
-            return 8685;
-          }
-        })();
         const params = new URLSearchParams({
-          cirrus: String(cirrusPort),
+          endpoint: data.path,
           StreamerId: "Editor",
           StreamerAutoJoinInterval: "3",
           MaxReconnectAttempts: "0",
@@ -771,7 +774,8 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
         setPlayerUrl(`/ue-player.html?${params.toString()}`);
       })
       .catch(() => {});
-  }, []);
+    return () => { cancelled = true; };
+  }, [session]);
 
   useEffect(() => {
     if (!latestScreenshot) return;
@@ -980,17 +984,13 @@ export default function ViewportPanel({ health, icons, latestScreenshot }) {
         {mode === "screenshot" && (
           <ScreenshotView src={screenshotUrl} imgKey={imgKey} onRefresh={fetchLatestScreenshot} />
         )}
-        {mode === "agent" && <AgentCameraView />}
+        {mode === "agent" && <AgentCameraView session={session} />}
       </div>
 
       <div className="viewport-statusbar">
         <span>{engineLabel} / SimWorld Studio</span>
         {playerUrl && (
-          <span>
-            {playerUrl.match(/cirrus=(\d+)/)?.[1]
-              ? `Cirrus :${playerUrl.match(/cirrus=(\d+)/)[1]}`
-              : playerUrl}
-          </span>
+          <span>Secure same-origin WebRTC</span>
         )}
         {mode === "screenshot" && screenshotUrl && (
           <span className="viewport-screenshot-ready">

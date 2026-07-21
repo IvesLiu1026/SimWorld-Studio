@@ -8,6 +8,7 @@ const {
   buildCirrusConfig,
   buildPixelStreamingCsp,
   createOpaqueStreamingEndpoint,
+  createTurnRestCredentials,
   normalizePathPrefix,
   redactCirrusConfig,
   resolveTransportProfile,
@@ -281,6 +282,42 @@ test("Cirrus builder fixes listeners to loopback and serializes ICE for the pinn
   }, CIRRUS_SECRETS);
   assert.equal(loopback.UseFrontend, true);
   assert.equal(JSON.parse(loopback.peerConnectionOptions).iceTransportPolicy, "all");
+});
+
+test("TURN REST credentials are short-lived, session-bound, and compatible with coturn auth-secret", () => {
+  const sharedSecret = "turn-rest-shared-secret-material-".repeat(2);
+  const first = createTurnRestCredentials({
+    sessionId: "slot-3-lease-a",
+    ttlSeconds: 3600,
+    nowSeconds: 1_800_000_000,
+  }, { turnSharedSecret: sharedSecret });
+  assert.deepEqual(first, {
+    username: "1800003600:slot-3-lease-a",
+    credential: require("node:crypto")
+      .createHmac("sha1", sharedSecret)
+      .update("1800003600:slot-3-lease-a")
+      .digest("base64"),
+    expiresAt: 1_800_003_600_000,
+  });
+  assert.equal(Object.isFrozen(first), true);
+  const second = createTurnRestCredentials({
+    sessionId: "slot-3-lease-b",
+    ttlSeconds: 3600,
+    nowSeconds: 1_800_000_000,
+  }, { turnSharedSecret: sharedSecret });
+  assert.notEqual(second.credential, first.credential);
+  assert.throws(
+    () => createTurnRestCredentials({ sessionId: "slot/3", nowSeconds: 1_800_000_000 }, { turnSharedSecret: sharedSecret }),
+    /unsupported characters/,
+  );
+  assert.throws(
+    () => createTurnRestCredentials({ sessionId: "slot-3", ttlSeconds: 30, nowSeconds: 1_800_000_000 }, { turnSharedSecret: sharedSecret }),
+    /between 300 and 86400/,
+  );
+  assert.throws(
+    () => createTurnRestCredentials({ sessionId: "slot-3", nowSeconds: 1_800_000_000 }, { turnSharedSecret: "weak" }),
+    /does not meet policy/,
+  );
 });
 
 test("Cirrus builder rejects unsafe overrides, port collisions, and incomplete ICE", () => {

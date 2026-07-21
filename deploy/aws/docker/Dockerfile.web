@@ -19,7 +19,7 @@
 # 127.0.0.1:55559..55565 (MCP) and 127.0.0.1:9017+ (UCV) on the host where UE
 # runs. Without host networking, we'd need a TCP relay per port.
 
-FROM node:18-bookworm-slim
+FROM node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
 
 # Tools the shim + launcher invocation need
 RUN apt-get update -qq && \
@@ -29,7 +29,7 @@ RUN apt-get update -qq && \
 
 # Install Claude Code CLI inside the container so the spawned subprocess
 # doesn't need a host-side binary.
-RUN npm install -g @anthropic-ai/claude-code@latest
+RUN npm install -g @anthropic-ai/claude-code@2.1.215
 
 WORKDIR /app
 

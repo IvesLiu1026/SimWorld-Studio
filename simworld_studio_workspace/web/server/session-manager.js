@@ -149,6 +149,7 @@ class SessionManager extends EventEmitter {
     const now = Date.now();
     const rec = {
       token:        crypto.randomBytes(32).toString('hex'),
+      leaseId:      crypto.randomBytes(24).toString('base64url'),
       slotId,
       userId,
       acquiredAt:   now,

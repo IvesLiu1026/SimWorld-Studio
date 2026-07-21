@@ -86,7 +86,9 @@ for spec in \
   "tcp 22 $MY_IP" \
   "tcp 80 0.0.0.0/0" \
   "tcp 443 0.0.0.0/0" \
-  "udp 3478 0.0.0.0/0" ; do
+  "udp 3478 0.0.0.0/0" \
+  "tcp 3478 0.0.0.0/0" \
+  "tcp 5349 0.0.0.0/0" ; do
   read -r proto port cidr <<<"$spec"
   aws ec2 authorize-security-group-ingress \
     --group-id "$SG_ID" --protocol $proto --port $port --cidr $cidr \
@@ -94,7 +96,7 @@ for spec in \
 done
 # TURN relay 范围
 aws ec2 authorize-security-group-ingress \
-  --group-id "$SG_ID" --protocol udp --port 49152-65535 --cidr 0.0.0.0/0 \
+  --group-id "$SG_ID" --protocol udp --port 49160-49200 --cidr 0.0.0.0/0 \
   --region "$REGION" 2>/dev/null || true
 
 # 1.3 查最新 Ubuntu 22.04 LTS x86_64 AMI
@@ -260,16 +262,14 @@ ssh -i ~/.ssh/id_ed25519 ubuntu@$EC2_IP \
   "sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos -m you@your-lab.edu"
 ```
 
-**没有域名的临时方案**：跳过 5.3，nginx 用 HTTP only（去掉 ssl 行），用 `http://$EC2_IP` 访问。WebRTC 在非 HTTPS 下浏览器可能拒绝麦克风等，但 Pixel Streaming 只需要 video，所以基本可用。
+**沒有域名時不要公開啟用**：production profile 要求 canonical HTTPS origin；先維持 SSH tunnel + loopback profile，取得 DNS/TLS 後再依 production WebRTC runbook 切換。
 
-### 5.4 改 coturn 配置
+### 5.4 產生 coturn 配置
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 ubuntu@$EC2_IP "
-  sudo sed -i 's/CHANGE_ME_TO_A_STRONG_SECRET/$(openssl rand -hex 24)/' /etc/turnserver.conf
-  sudo sed -i 's/simworld.your-lab.edu/$DOMAIN/g' /etc/turnserver.conf
-  sudo sed -i 's|# external-ip=PUBLIC_IP|external-ip=$EC2_IP|' /etc/turnserver.conf
-"
+# Follow docs/specs/production-readiness/webrtc-coturn-runbook.md.
+# It creates root-owned secret files and calls materialize-coturn-config.js;
+# secrets must not be passed through sed arguments or shell history.
 ```
 
 ---
@@ -349,7 +349,7 @@ aws ec2 associate-iam-instance-profile \
 | `nvidia-smi` 不 work | 没重启；或装错驱动 → `sudo apt install -y nvidia-driver-535 && sudo reboot` |
 | UE slot 起不来 | `journalctl -u simworld-web -f` 看 `[slot-N]` 日志；通常是 GPU 显存或 Vulkan |
 | Pixel Streaming 黑屏 | 等 60s；再不行查 `/var/lib/simworld/slots/0/logs/cirrus.log` 找 `Streamer connected` |
-| WebSocket disconnected | 浏览器拿不到 TURN 凭证 → 检查 `/etc/turnserver.conf` 的 external-ip 和 user |
+| WebSocket disconnected | 檢查短效 TURN REST credential、`external-ip`、TLS hostname 與 forced-relay receipt；不要改回 static user |
 | Cost 飙升 | 查 `aws ec2 describe-instances` 是不是 stop 失败；查 CloudWatch billing |
 
 ## 关键路径速查

@@ -168,8 +168,8 @@ function App() {
         expired={expired}
         icons={ICONS}
         onRetry={() => window.location.reload()}
-        onStartNewSession={() => {
-          clearSessionToken();
+        onStartNewSession={async () => {
+          await clearSessionToken();
           window.location.reload();
         }}
         poolFull={poolFull}
@@ -299,7 +299,7 @@ function App() {
 
           {/* UE Viewport card */}
           <div className="sw-panel-card viewport-card-shell">
-            <ViewportPanel icons={ICONS} latestScreenshot={latestScreenshot} health={health} />
+            <ViewportPanel icons={ICONS} latestScreenshot={latestScreenshot} health={health} session={session} />
           </div>
 
           {/* Drawer: Assets / Scenes / Context / Tools */}

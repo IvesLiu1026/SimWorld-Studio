@@ -93,7 +93,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await page.route("**/api/pixel-streaming-url", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ url: "http://127.0.0.1:8585", detectedPort: 8585, webRtcFps: 30 }),
+      body: JSON.stringify({ schema: "pixel-streaming-endpoint/v1", path: "/pixel-stream/session/ps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", expiresAt: Date.now() + 300000, webRtcFps: 30 }),
     }));
     await page.route("**/api/training/datahub/latest", (route) => route.fulfill({
       status: 200,
@@ -118,7 +118,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await page.route("**/api/pixel-streaming-url", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ url: "http://127.0.0.1:8585", detectedPort: 8585, webRtcFps: 60 }),
+      body: JSON.stringify({ schema: "pixel-streaming-endpoint/v1", path: "/pixel-stream/session/ps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", expiresAt: Date.now() + 300000, webRtcFps: 60 }),
     }));
     await page.route("**/api/training/datahub/latest", (route) => route.fulfill({
       status: 200,
@@ -152,7 +152,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await page.route("**/api/pixel-streaming-url", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ url: "http://127.0.0.1:8585", detectedPort: 8585, webRtcFps: 60 }),
+      body: JSON.stringify({ schema: "pixel-streaming-endpoint/v1", path: "/pixel-stream/session/ps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", expiresAt: Date.now() + 300000, webRtcFps: 60 }),
     }));
     await page.route("**/api/training/datahub/latest", (route) => route.fulfill({
       status: 200,
@@ -203,7 +203,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
 
   test("announces input readiness only after both a decoded frame and data channel", async ({ page }) => {
     await openAuthenticated(page);
-    await page.setContent('<iframe id="player" title="UE Pixel Streaming" src="/ue-player.html?cirrus=8585"></iframe>');
+    await page.setContent('<iframe id="player" title="UE Pixel Streaming" src="/ue-player.html?endpoint=%2Fpixel-stream%2Fsession%2Fps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"></iframe>');
     const frame = await playerFrame(page);
     await page.evaluate(() => {
       window.__vistaReadyMessages = 0;
@@ -250,17 +250,19 @@ test.describe("VISTA Pixel Streaming controls", () => {
     expect(await frame.evaluate(() => window._readyPosted)).toBe(false);
   });
 
-  test("server rejects a non-configured signaling destination", async ({ page }) => {
+  test("server accepts only the configured opaque same-origin signaling destination", async ({ page }) => {
     await openAuthenticated(page);
-    const allowed = await page.request.get(`${studioOrigin()}/ue-player.html?cirrus=8585`);
+    const allowed = await page.request.get(
+      `${studioOrigin()}/ue-player.html?endpoint=%2Fpixel-stream%2Fsession%2Fps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`,
+    );
     expect(allowed.status()).toBe(200);
     expect(allowed.headers()["content-security-policy"]).toContain("ws://127.0.0.1:8585");
     expect(allowed.headers()["content-security-policy"]).not.toContain("127.0.0.1:*");
     const response = await page.request.get(
-      `${studioOrigin()}/ue-player.html?ss=wss%3A%2F%2Fexample.com%3A443&cirrus=99999`,
+      `${studioOrigin()}/ue-player.html?endpoint=%2Fpixel-stream%2Fsession%2Fps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&ss=wss%3A%2F%2Fexample.com%2Fpixel-stream%2Fsession%2Fps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`,
     );
     expect(response.status()).toBe(400);
-    expect(await response.text()).toContain("configured signaling port");
+    expect(await response.text()).toContain("same-origin streaming endpoint");
   });
 
   test("accepts only exact commands from the same-origin direct parent", async ({ page }) => {
@@ -269,7 +271,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
       <iframe
         id="player"
         title="UE Pixel Streaming"
-        src="/ue-player.html?cirrus=8585"
+        src="/ue-player.html?endpoint=%2Fpixel-stream%2Fsession%2Fps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         style="width:526px;height:418px;border:0"
       ></iframe>
       <iframe id="sibling" src="about:blank"></iframe>
@@ -358,7 +360,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await page.route(parentUrl, (route) => route.fulfill({
       status: 200,
       contentType: "text/html",
-      body: `<iframe id="player" title="UE Pixel Streaming" src="${studioOrigin()}/ue-player.html?cirrus=8585"></iframe>`,
+      body: `<iframe id="player" title="UE Pixel Streaming" src="${studioOrigin()}/ue-player.html?endpoint=%2Fpixel-stream%2Fsession%2Fps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"></iframe>`,
     }));
     await page.goto(parentUrl);
     const frame = await playerFrame(page);
@@ -415,7 +417,7 @@ test.describe("VISTA Pixel Streaming controls", () => {
     await page.route("**/api/pixel-streaming-url", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ url: "http://127.0.0.1:8585", detectedPort: 8585, webRtcFps: 60 }),
+      body: JSON.stringify({ schema: "pixel-streaming-endpoint/v1", path: "/pixel-stream/session/ps1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", expiresAt: Date.now() + 300000, webRtcFps: 60 }),
     }));
     await page.route("**/api/training/datahub/latest", (route) => route.fulfill({
       status: 200,

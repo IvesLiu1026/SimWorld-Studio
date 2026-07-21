@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CIRRUS_CONFIG_BUILDER="${CIRRUS_CONFIG_BUILDER:-$SCRIPT_DIR/build-cirrus-config.js}"
+
 # ── Defaults from environment, with sensible fallbacks ────────────────────────
 UE_ENGINE_DIR="${UE_ENGINE_DIR:-/opt/ue-engine}"
 UE_PROJECT_DIR_SHARED="${UE_PROJECT_DIR_SHARED:-/opt/simworld-project}"
@@ -155,15 +158,20 @@ NVIDIA_ICD="/usr/share/vulkan/icd.d/nvidia_icd.json"
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-offscreen}"
 
 # ── 1. Cirrus signalling server ───────────────────────────────────────────────
-cat > "$CIRRUS_CONFIG" <<EOF
-{
-  "UseFrontend": true,
-  "UseMatchmaker": false,
-  "HttpPort": $CIRRUS_HTTP,
-  "StreamerPort": $CIRRUS_WS,
-  "SFUPort": $CIRRUS_SFU
-}
-EOF
+# The generated file binds every Cirrus listener to loopback and contains a
+# short-lived coturn REST credential. Browser signalling reaches HttpPort only
+# through the authenticated Node opaque-path gateway.
+if [[ ! -f "$CIRRUS_CONFIG_BUILDER" ]]; then
+    echo "ERROR: Cirrus config builder missing at $CIRRUS_CONFIG_BUILDER" >&2
+    exit 1
+fi
+node "$CIRRUS_CONFIG_BUILDER" \
+    --output "$CIRRUS_CONFIG" \
+    --http "$CIRRUS_HTTP" \
+    --streamer "$CIRRUS_WS" \
+    --sfu "$CIRRUS_SFU" \
+    --session "slot-$SLOT" \
+    >> "$LOG_DIR/cirrus-config.log" 2>&1
 
 if [[ -f "$CIRRUS_JS" ]]; then
     echo "[slot $SLOT][cirrus] starting HTTP:$CIRRUS_HTTP WS:$CIRRUS_WS"

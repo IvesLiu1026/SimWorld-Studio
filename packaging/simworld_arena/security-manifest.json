@@ -1,14 +1,21 @@
 {
   "schema": "vista-simworld-security-manifest/v1",
   "workspace_sha256": {
-    "web/server/index.js": "d0d3142c84d7c60afa1ee32f6ab7128865ba73d3b1222cd76af19a6011f42666",
-    "web/server/runtime-security.js": "c8e73f16df29e88e373d89435b85a997bb9a8427702c21d1477001c5e0b01ced",
+    "web/server/index.js": "49639455c08a01b1b56b6c42a48acdd8f690b3092a1c2bb7894407c4af0a6cd2",
+    "web/server/runtime-security.js": "e1ffc7f96b1371e0330f2b35c9eb59c95a5e7e8a9a55525d38753780693b5005",
+    "web/server/pixel-streaming-config.js": "3c7f5d7771c118bb0251a77315625516869f8ea94ddedc76f0b07f8e959f32bb",
+    "web/server/pixel-streaming-endpoint-registry.js": "8019cfa8df80df08d82b3037e8c1090a22345359e9765e8f941f96264e0b3578",
+    "web/server/pixel-streaming-gateway.js": "c55c4dc42925ec715fef939f97b337323f7db1674985d71d2fad28bdaf151ea5",
+    "web/server/session-manager.js": "906c892737acd8048df273cd226c1fc40597bf3436f620e9f568489b6c99addc",
     "web/server/vista-runtime-broker.js": "d2f744073a5589b1b256abb6e8a616625cacf577aa4b1a65efd0f83987d3e798",
     "web/server/agent-sandbox.js": "b5e575cbadf685e138d7f00593c12f829df4930ce0c27262648c14e57338f82c",
-    "web/public/ue-player.html": "c12676e21cb6f4f379f8a5e24f739f727d17d817f2001cb21241fc2c97e6ffa0",
+    "web/public/ue-player.html": "660a6993bebd3ca38cba447cfb76a1fd3720198a8c2778fda42308a7576fd477",
     "web/public/ue-assets/player.js": "a52517e0160cf021121137f3c3c17949f60ae08ddbb129ec9a3c7e56c89c0828",
     "web/src/PixelStreamPlayer.jsx": "1fb991df169c1242bf7ca679987e6856f92f6757a9d0f2c293b75196e049a3f4",
-    "web/src/features/viewport/ViewportPanel.jsx": "7b3195abe65244a00af64a613071ee7f9f6a78b478644216160b5df9493b1897",
+    "web/src/features/viewport/ViewportPanel.jsx": "1e4a9c1a80296c67a4f1c62184d1ed4f76274e6dc56d4afdd8aaecc0a90e647d",
+    "web/src/state/useSession.js": "1f96ecd4e8f5fd7f3755dd3e9cb75157e1aa8029a7c959cfd6ad2cabb997df17",
+    "web/src/state/pollContext.jsx": "d6a5d248cfb7ad8055095e8644e9939b0038e3ded776ef1ca32ac3921f722554",
+    "web/src/api/studioApi.js": "ccb4e7218783a727ddd695ef3e1ba6985eb2a90ccf39f6c4f710bb7170ddfa3f",
     "web/src/index.css": "5f537d33c25e29a65b3ebac5a33bc6ac8eab5fa4e7cdbd02613d1f40eb00f97b"
   },
   "cirrus": {

@@ -422,6 +422,40 @@ function buildPeerConnectionOptions(ice, secrets) {
   };
 }
 
+function createTurnRestCredentials(options, secrets) {
+  assertKnownKeys(
+    options,
+    new Set(["sessionId", "ttlSeconds", "nowSeconds"]),
+    "TURN REST credential options",
+  );
+  const sessionId = nonEmptyString(options.sessionId, "sessionId", 128);
+  if (!/^[A-Za-z0-9._-]+$/.test(sessionId)) {
+    fail("PIXEL_STREAMING_ICE_INVALID", "TURN REST sessionId contains unsupported characters");
+  }
+  const ttlSeconds = options.ttlSeconds === undefined ? 3600 : options.ttlSeconds;
+  if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 300 || ttlSeconds > 86400) {
+    fail("PIXEL_STREAMING_ICE_INVALID", "TURN REST ttlSeconds must be between 300 and 86400");
+  }
+  const nowSeconds = options.nowSeconds === undefined
+    ? Math.floor(Date.now() / 1000)
+    : options.nowSeconds;
+  if (!Number.isSafeInteger(nowSeconds) || nowSeconds < 1 || nowSeconds > 9_000_000_000) {
+    fail("PIXEL_STREAMING_ICE_INVALID", "TURN REST nowSeconds is invalid");
+  }
+  const expiresAtSeconds = nowSeconds + ttlSeconds;
+  if (!Number.isSafeInteger(expiresAtSeconds)) {
+    fail("PIXEL_STREAMING_ICE_INVALID", "TURN REST expiry is invalid");
+  }
+  const username = `${expiresAtSeconds}:${sessionId}`;
+  const sharedSecret = secretValue(secrets, "turnSharedSecret", 32).buffer;
+  const credential = crypto.createHmac("sha1", sharedSecret).update(username).digest("base64");
+  return Object.freeze({
+    username,
+    credential,
+    expiresAt: expiresAtSeconds * 1000,
+  });
+}
+
 function buildCirrusConfig(options, secrets) {
   assertKnownKeys(
     options,
@@ -509,6 +543,7 @@ module.exports = {
   buildCirrusConfig,
   buildPeerConnectionOptions,
   buildPixelStreamingCsp,
+  createTurnRestCredentials,
   createOpaqueStreamingEndpoint,
   normalizePathPrefix,
   redactCirrusConfig,

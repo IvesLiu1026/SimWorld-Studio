@@ -27,6 +27,7 @@ const UE_HOST     = process.env.UE_HOST     || '127.0.0.1';
 const UNREAL_PORT = parseInt(process.env.UNREAL_PORT || '55557', 10);
 const TIMEOUT_MS  = parseInt(process.env.TEST_TIMEOUT || '30000', 10);
 const SUITE       = process.argv[2] || 'all';
+let sessionCookie = '';
 
 // ── Colors ──────────────────────────────────────────────────────────────────
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m',
@@ -50,11 +51,20 @@ function request(method, urlPath, body) {
       path: url.pathname + url.search, method,
       headers: {
         'Content-Type': 'application/json',
+        ...(sessionCookie ? { Cookie: sessionCookie } : {}),
         ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
       },
     };
     const req = http.request(opts, res => {
       let buf = '';
+      const setCookie = res.headers['set-cookie'];
+      if (Array.isArray(setCookie)) {
+        const value = setCookie.find(item => item.startsWith('vista_stream_session='));
+        if (value) {
+          const pair = value.split(';', 1)[0];
+          sessionCookie = pair.endsWith('=') ? '' : pair;
+        }
+      }
       res.on('data', d => { buf += d; });
       res.on('end', () => {
         try { resolve({ status: res.statusCode, body: JSON.parse(buf) }); }
@@ -136,6 +146,7 @@ await run('session-manager: acquire / release / free slot count', async () => {
   const rec = await m.acquire('alice');
   eq(m.freeSlots, 9);
   eq(rec.token.length, 64);
+  assert(typeof rec.leaseId === 'string' && rec.leaseId.length >= 24);
   assert(Number.isInteger(rec.slotId));
   has(rec, 'uePorts');
 
@@ -320,14 +331,13 @@ await run('server: GET /api/session/status → 200', async () => {
   assert(body.mode === 'single-user' || typeof body.totalSlots === 'number');
 }, 'integration');
 
-await run('server: POST /api/session/acquire → valid token', async () => {
+await run('server: POST /api/session/acquire → HttpOnly session contract', async () => {
   const { status, body } = await POST('/api/session/acquire');
   eq(status, 200);
-  has(body, 'token');
-  assert(body.token.length > 0);
-  if (body.token !== '_dev') {
-    await POST('/api/session/release', { token: body.token });
-  }
+  eq(body.schema, 'studio-session/v2');
+  assert(!('token' in body), 'bearer token is not exposed to JavaScript');
+  assert(!('uePorts' in body), 'raw UE ports are not exposed');
+  await POST('/api/session/release', {});
 }, 'integration');
 
 await run('server: GET /api/events → SSE stream emits JSON', async () => {
@@ -467,16 +477,11 @@ section('MULTI — Session isolation');
 
 await run('multi: acquire → heartbeat → release lifecycle', async () => {
   const { body: acq } = await POST('/api/session/acquire');
-  assert(acq.token, 'got token');
-  if (acq.dev) { console.log('  (dev mode — skip heartbeat/release)'); return; }
-
-  const { body: hb } = await POST('/api/session/heartbeat', { token: acq.token });
-
-  // Heartbeat endpoint uses header; try both ways
-  const hbRes = await request('POST', '/api/session/heartbeat', null);
-  // Either format works
-
-  const { body: rel } = await POST('/api/session/release', { token: acq.token });
+  eq(acq.schema, 'studio-session/v2');
+  const { body: hb } = await POST('/api/session/heartbeat', {});
+  eq(hb.schema, 'studio-session-heartbeat/v2');
+  eq(hb.ok, true);
+  const { body: rel } = await POST('/api/session/release', {});
   eq(rel.ok, true, 'release succeeded');
 }, 'multi');
 

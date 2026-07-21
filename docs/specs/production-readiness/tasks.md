@@ -92,12 +92,12 @@ Implementation note（2026-07-14）：T3.1～3與T3.7的純程式契約已完成
 ## Phase 4 — Public WebRTC + Coturn（可先做程式碼，開網需Admin Gate）
 
 - [ ] **T4.1 [Admin Decision]** 確認正式Studio/TURN DNS、目前80/443 ingress owner、TLS與certificate renewal；不可另起Nginx搶已使用ports。
-- [ ] **T4.2** 實作`loopback`/`trusted_proxy`profiles、固定`STUDIO_PUBLIC_ORIGIN`、trusted proxy validation、public CSP與Secure cookie。
-- [ ] **T4.3** 建立session-bound opaque streaming endpoint；移除Host-derived URL、port scan與production raw port response。
-- [ ] **T4.4** 修正player支援same-origin WSS path，維持任意external signalling URL rejection。
-- [ ] **T4.5** 將session/slot identity完整保存在server-side；viewport/signalling/input均做cross-slot authorization。
-- [ ] **T4.6** 共用Cirrus config builder：loopback bind、正確HttpPort/StreamerPort、access control與secret-backed`peerConnectionOptions.iceServers`。
-- [ ] **T4.7** 修正ingress WebSocket proxy到Cirrus HttpPort；StreamerPort/SFU/MCP保持外部不可達。
+- [x] **T4.2** 實作`loopback`/`trusted_proxy`profiles、固定`STUDIO_PUBLIC_ORIGIN`、trusted proxy validation、public CSP與Secure cookie。
+- [x] **T4.3** 建立session-bound opaque streaming endpoint；移除Host-derived URL、port scan與production raw port response。
+- [x] **T4.4** 修正player支援same-origin WSS path，維持任意external signalling URL rejection。
+- [x] **T4.5** 將session/slot identity完整保存在server-side；viewport/signalling/input均做cross-slot authorization。
+- [x] **T4.6** 共用Cirrus config builder：loopback bind、正確HttpPort/StreamerPort、access control與secret-backed`peerConnectionOptions.iceServers`。
+- [x] **T4.7** 修正ingress WebSocket proxy到Cirrus HttpPort；StreamerPort/SFU/MCP保持外部不可達。
 - [ ] **T4.8 [Admin]** 安裝/營運Coturn，設定external IP、realm、REST/HMAC或secret credential、quota、relay range與監控。
 - [ ] **T4.9 [Admin]** 開放經核准的HTTPS/WSS、TURN與受控relay ports，建立ACL/NAT規則。
 - [ ] **T4.10** 增加Cirrus/streamer/WSS/ICE/TURN readiness及selected candidate telemetry。
@@ -106,7 +106,7 @@ Implementation note（2026-07-14）：T3.1～3與T3.7的純程式契約已完成
 
 驗收：RTC-001～009通過；Xpra只保留admin recovery。
 
-Implementation note（2026-07-14）：已新增strict `loopback`／`trusted_proxy` profile與canonical HTTPS origin/trusted-proxy驗證、public CSP/Secure-cookie metadata、loopback-only Cirrus config builder、secret-backed TURN ICE序列化，以及session/slot/lease-bound opaque endpoint registry。Registry只允許持有private in-process capability的proxy取得`127.0.0.1:Cirrus HttpPort`，public view不回傳host、port或credential。這些尚未接到`index.js`、SessionManager lifecycle、player、WSS proxy或launcher；既有`/api/pixel-streaming-url` raw/port-guessing route因此仍未移除，T4.2／3／6保持未勾選。T4.1、7～12仍需既有ingress owner、DNS/TLS、Coturn、firewall與外部網路測試核准；本輪沒有開port或變更網路服務。
+Implementation note（2026-07-21）：T4.2～7已接入production source。`/api/pixel-streaming-url`只回傳session/slot/lease-bound opaque path；browser bearer已由`sessionStorage`移到Secure/HttpOnly cookie，Node upgrade gateway驗證Origin/Host/session後只代理到loopback Cirrus `HttpPort`。Player、frontend、per-session port router與Nginx均不再接受raw Cirrus port；Cirrus launcher以原子config builder注入短效Coturn REST/HMAC credential、forced-relay policy與loopback listeners。274個Node/deploy contracts、frontend build與loopback HTTP smoke通過。T4.1／8／9仍需要管理員DNS/TLS/Coturn/firewall決策；T4.10～12仍需真Cirrus/UE、外部瀏覽器與forced-relay evidence，因此尚未宣稱公開WebRTC ready，也未開任何public port。
 
 ## Phase 5 — Persistence、operations與release gate
 

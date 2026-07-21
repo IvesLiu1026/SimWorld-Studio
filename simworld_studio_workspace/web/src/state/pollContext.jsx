@@ -39,8 +39,7 @@ export function PollProvider({ children }) {
   });
 
   useEffect(() => {
-    const token = sessionStorage.getItem("sw_session_token") || "";
-    const url = token ? `${API_BASE}/events?token=${token}` : `${API_BASE}/events`;
+    const url = `${API_BASE}/events`;
     let es = new EventSource(url);
     let reconnectTimer = null;
 

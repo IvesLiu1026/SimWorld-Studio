@@ -1,4 +1,4 @@
-"use strict";const{spawn}=require("child_process"),express=require("express"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),PIXEL_STREAMING_URL=process.env.PIXEL_STREAMING_URL||"http://127.0.0.1:8080",CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");function normalizeUnrealVersion(v){const s=String(v||"").trim();if(!s)return null;const m=s.match(/(?:UE\s*)?(\d+(?:\.\d+){1,2})/i);return m?m[1]:s}function versionFromPath(v){const s=String(v||"");const m=s.match(/(?:UE|Unreal(?:[_-]?Engine)?|Linux[_-]?Unreal[_-]?Engine)[_-]?(\d+(?:\.\d+){1,2})/i)||s.match(/(\d+\.\d+(?:\.\d+)?)/);return m?m[1]:null}function versionFromLog(){try{const p=path.join(LOG_DIR,"ue.log");if(!fs.existsSync(p))return null;const text=fs.readFileSync(p,"utf8").slice(-250000);const m=text.match(/Engine Version:\s*(\d+(?:\.\d+){1,2})/i)||text.match(/engineversion="(\d+(?:\.\d+){1,2})/i);return m?m[1]:null}catch{return null}}function getUnrealEngineVersion(){return normalizeUnrealVersion(process.env.UE_VERSION||process.env.UNREAL_VERSION||process.env.UNREAL_ENGINE_VERSION)||versionFromPath(process.env.UE_ROOT)||versionFromPath(process.env.UNREAL_ENGINE_ROOT)||versionFromPath(process.env.UE_EDITOR)||versionFromPath(process.env.UNREAL_EDITOR)||versionFromLog()}function getUnrealEngineHealthMeta(){const engineVersion=getUnrealEngineVersion();return{engineVersion,engineLabel:engineVersion?`UE ${engineVersion}`:"Unreal Engine"}}let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker,getUeBroker:_getUeBroker}=require("./unreal-bridge");const{createVistaRuntimeBroker}=require("./vista-runtime-broker");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const ueBroker=_getUeBroker();const vistaRuntimeBroker=createVistaRuntimeBroker({ueBroker});const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);const {SessionSkillManager}=require("./session-skills");const {generateSkills}=require("./skill-maker");const sessionSkillManager=new SessionSkillManager();const {handleSceneLoop}=require("./scene-loop");const {handleVisualSceneLoop}=require("./scene-loop-visual");const {handleCodexChat}=require("./chat-codex");const intentStore=new Map();
+"use strict";const{spawn}=require("child_process"),express=require("express"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");function normalizeUnrealVersion(v){const s=String(v||"").trim();if(!s)return null;const m=s.match(/(?:UE\s*)?(\d+(?:\.\d+){1,2})/i);return m?m[1]:s}function versionFromPath(v){const s=String(v||"");const m=s.match(/(?:UE|Unreal(?:[_-]?Engine)?|Linux[_-]?Unreal[_-]?Engine)[_-]?(\d+(?:\.\d+){1,2})/i)||s.match(/(\d+\.\d+(?:\.\d+)?)/);return m?m[1]:null}function versionFromLog(){try{const p=path.join(LOG_DIR,"ue.log");if(!fs.existsSync(p))return null;const text=fs.readFileSync(p,"utf8").slice(-250000);const m=text.match(/Engine Version:\s*(\d+(?:\.\d+){1,2})/i)||text.match(/engineversion="(\d+(?:\.\d+){1,2})/i);return m?m[1]:null}catch{return null}}function getUnrealEngineVersion(){return normalizeUnrealVersion(process.env.UE_VERSION||process.env.UNREAL_VERSION||process.env.UNREAL_ENGINE_VERSION)||versionFromPath(process.env.UE_ROOT)||versionFromPath(process.env.UNREAL_ENGINE_ROOT)||versionFromPath(process.env.UE_EDITOR)||versionFromPath(process.env.UNREAL_EDITOR)||versionFromLog()}function getUnrealEngineHealthMeta(){const engineVersion=getUnrealEngineVersion();return{engineVersion,engineLabel:engineVersion?`UE ${engineVersion}`:"Unreal Engine"}}let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker,getUeBroker:_getUeBroker}=require("./unreal-bridge");const{createVistaRuntimeBroker}=require("./vista-runtime-broker");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const ueBroker=_getUeBroker();const vistaRuntimeBroker=createVistaRuntimeBroker({ueBroker});const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);const {SessionSkillManager}=require("./session-skills");const {generateSkills}=require("./skill-maker");const sessionSkillManager=new SessionSkillManager();const {handleSceneLoop}=require("./scene-loop");const {handleVisualSceneLoop}=require("./scene-loop-visual");const {handleCodexChat}=require("./chat-codex");const intentStore=new Map();
 const { ReviewRunRegistry } = require("./review-run-registry");
 const reviewRunRegistry = new ReviewRunRegistry();
 const { readinessHttpStatus } = require("./readiness-registry");
@@ -16,13 +16,34 @@ const studioReadiness = createStudioReadiness({
     ue_engine: getUnrealEngineVersion(),
   },
 });
-const { codingAgentsEnabled, createAccessGuard, createLoopbackBrowserHeaders, createModelGate, requestLoopbackGuard, resolveAccessToken, resolveBindHost, resolveContainedFile, resolveModelMode, resolveVistaDemoFps } = require("./runtime-security");
+const {
+  codingAgentsEnabled,
+  createAccessGuard,
+  createModelGate,
+  createTransportBrowserHeaders,
+  createTransportRequestGuard,
+  resolveAccessToken,
+  resolveBindHost,
+  resolveContainedFile,
+  resolveModelMode,
+  resolveVistaDemoFps,
+} = require("./runtime-security");
+const { resolveTransportProfile } = require("./pixel-streaming-config");
+const { createStudioStreamingRuntime } = require("./pixel-streaming-gateway");
 const STUDIO_HOST = resolveBindHost(process.env);
 const STUDIO_ACCESS_TOKEN = resolveAccessToken(process.env);
+const STUDIO_TRANSPORT = resolveTransportProfile(process.env);
 const STUDIO_MODEL_MODE = resolveModelMode(process.env);
 const STUDIO_CODING_AGENTS_ENABLED = codingAgentsEnabled(process.env);
 const VISTA_DEMO_ENABLED = process.env.VISTA_DEMO_ENABLED === "1";
 const VISTA_DEMO_FPS = resolveVistaDemoFps(process.env);
+const { sessionManager: _sessionMgr } = require("./session-manager");
+const studioStreaming = createStudioStreamingRuntime({
+  env: process.env,
+  sessionManager: _sessionMgr,
+  webRtcFps: VISTA_DEMO_FPS,
+  logger: logToFile,
+});
 if (STUDIO_MODEL_MODE === "mock" && (!MOCK_MODE || !mockReplay || !mockExecutor)) {
   throw new Error("STUDIO_MODEL_MODE=mock requires the reviewed mock replay modules; use off for first bring-up");
 }
@@ -107,7 +128,7 @@ Example — spawn 2 pedestrians:
 - Keep it simple: spawn objects, screenshot. Don't overthink it.
 - To load a map use LevelEditorSubsystem (NOT deprecated EditorLevelLibrary):
   subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-  subsystem.load_level("/Game/PackName/Maps/MapName")`+"\n\n"+buildSceneAgentRuntimeAppendix(),app=express();app.use(express.json({limit:"10mb"})),app.use(requestLoopbackGuard),app.use(createAccessGuard(STUDIO_ACCESS_TOKEN)),app.use(createLoopbackBrowserHeaders({signalingPort:VISTA_DEMO_ENABLED?CIRRUS_HTTP_PORT:null})),app.use(createModelGate({mode:STUDIO_MODEL_MODE,allowCodingAgents:STUDIO_CODING_AGENTS_ENABLED,demoMode:VISTA_DEMO_ENABLED,isMockReady:()=>Boolean(MOCK_MODE&&mockReplay&&mockExecutor)})),app.use((req,res,next)=>{if(req.method==="POST"){const fixedVistaRoute=req.path==="/api/vista/setup_vista_play_mode"||req.path==="/api/vista/stop_vista_play_mode",bodyForLog=fixedVistaRoute?"<fixed-empty-contract>":JSON.stringify(req.body||{}).slice(0,200);logToFile("http",`${req.method} ${req.path} body=${bodyForLog}`)}res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.use("/asset-previews",express.static(ASSET_PREVIEW_DIR,{maxAge:"7d",immutable:true})),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
+  subsystem.load_level("/Game/PackName/Maps/MapName")`+"\n\n"+buildSceneAgentRuntimeAppendix(),app=express();app.use(express.json({limit:"10mb"})),app.use(createTransportRequestGuard(STUDIO_TRANSPORT)),app.use(createAccessGuard(STUDIO_ACCESS_TOKEN,{transport:STUDIO_TRANSPORT})),app.use(createTransportBrowserHeaders(STUDIO_TRANSPORT,{signalingPort:VISTA_DEMO_ENABLED?CIRRUS_HTTP_PORT:null})),app.use(createModelGate({mode:STUDIO_MODEL_MODE,allowCodingAgents:STUDIO_CODING_AGENTS_ENABLED,demoMode:VISTA_DEMO_ENABLED,isMockReady:()=>Boolean(MOCK_MODE&&mockReplay&&mockExecutor)})),app.use((req,res,next)=>{if(req.method==="POST"){const fixedVistaRoute=req.path==="/api/vista/setup_vista_play_mode"||req.path==="/api/vista/stop_vista_play_mode",bodyForLog=fixedVistaRoute?"<fixed-empty-contract>":JSON.stringify(req.body||{}).slice(0,200);logToFile("http",`${req.method} ${req.path} body=${bodyForLog}`)}res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.use("/asset-previews",express.static(ASSET_PREVIEW_DIR,{maxAge:"7d",immutable:true})),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
 <html style="width:100%;height:100%;margin:0;background:#000">
 <head><meta charset="utf-8"><title>UE Pixel Stream</title>
 <style>
@@ -163,13 +184,15 @@ body{margin:0;width:100vw;height:100vh;background:#000;overflow:hidden}
 .panel-wrap{min-width:260px!important;max-width:320px!important}
 </style>
 <script>
-(function(){var p=new URLSearchParams(location.search);
-var target='ws://'+location.hostname+':${CIRRUS_HTTP_PORT}';
-if(p.get('ss')!==target){p.set('ss',target);
-location.replace(location.pathname+'?'+p.toString());}})();
+(function(){fetch('/api/pixel-streaming-url',{credentials:'same-origin',cache:'no-store'})
+.then(function(r){return r.ok?r.json():Promise.reject(new Error('stream unavailable'));})
+.then(function(v){if(typeof v.path!=='string')throw new Error('invalid endpoint');
+var p=new URLSearchParams({endpoint:v.path});
+location.replace('/ue-player.html?'+p.toString());})
+.catch(function(){document.body.textContent='Pixel Streaming endpoint unavailable';});})();
 </script>
 <script defer src="/ue-assets/player.js"></script>
-</head><body style="width:100vw;height:100vh"></body></html>`)}),app.get("/api/pixel-streaming-url",async(s,e)=>{  const host=s.headers.host?.split(":")[0]||"127.0.0.1";  const candidates=[CIRRUS_HTTP_PORT,8685,8585,8785,8885,8485].filter((v,i,a)=>a.indexOf(v)===i);  const net=require("net");  const probe=p=>new Promise(r=>{    const sock=new net.Socket();    sock.setTimeout(800);    sock.connect(p,"127.0.0.1",()=>{sock.destroy();r(p)});    sock.on("error",()=>r(null));    sock.on("timeout",()=>{sock.destroy();r(null)});  });  for(const port of candidates){    const found=await probe(port);    if(found)return e.json({url:"http://"+host+":"+found,detectedPort:found,webRtcFps:VISTA_DEMO_FPS});  }  e.json({url:"http://"+host+":"+CIRRUS_HTTP_PORT,detectedPort:null,webRtcFps:VISTA_DEMO_FPS});}),app.get("/api/health",(s,e)=>{const t=require("net");let n=!1;const o=new t.Socket,i=setTimeout(()=>{o.destroy(),a()},2e3);o.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{n=!0,o.destroy(),clearTimeout(i),a()}),o.on("error",()=>{clearTimeout(i),a()});function a(){e.json({status:"ok",ueConnected:n,mcpConnected:n,pixelStreamingUrl:PIXEL_STREAMING_URL,vistaDemoFps:VISTA_DEMO_FPS,...getUnrealEngineHealthMeta()})}}),app.get("/api/screenshot/latest",(s,e)=>{let t=null;for(const n of SCREENSHOT_SEARCH_DIRS)if(fs.existsSync(n))try{const o=fs.readdirSync(n).filter(i=>i.endsWith(".png")).map(i=>({filepath:path.join(n,i),time:fs.statSync(path.join(n,i)).mtimeMs})).filter(({time:i})=>Date.now()-i<18e5);for(const i of o)(!t||i.time>t.time)&&(t=i)}catch{}if(!t)return e.status(404).json({error:"No screenshots found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t.filepath)}),app.get("/api/screenshot/file",(s,e)=>{const t=resolveContainedFile(s.query.path,SCREENSHOT_SEARCH_DIRS);if(!t)return e.status(404).json({error:"Not found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t)}),app.post("/api/camera",(s,e)=>{const{cmd:t,args:n=[]}=s.body;if(!["set_camera","get_camera"].includes(t))return e.status(400).json({error:"Unknown camera command"});const i=require("net"),a=new i.Socket,c=setTimeout(()=>{a.destroy(),e.status(504).json({error:"Timeout"})},1e4);let m={};if(t==="set_camera"&&n.length>=6)m={script:`
+</head><body style="width:100vw;height:100vh"></body></html>`)}),app.get("/api/pixel-streaming-url",studioStreaming.issueEndpoint),app.get("/api/health",(s,e)=>{const t=require("net");let n=!1;const o=new t.Socket,i=setTimeout(()=>{o.destroy(),a()},2e3);o.connect(parseInt(UNREAL_PORT),UNREAL_HOST,()=>{n=!0,o.destroy(),clearTimeout(i),a()}),o.on("error",()=>{clearTimeout(i),a()});function a(){e.json({status:"ok",ueConnected:n,mcpConnected:n,pixelStreamingProfile:STUDIO_TRANSPORT.profile,pixelStreamingPathPrefix:STUDIO_TRANSPORT.streamingPathPrefix,vistaDemoFps:VISTA_DEMO_FPS,...getUnrealEngineHealthMeta()})}}),app.get("/api/screenshot/latest",(s,e)=>{let t=null;for(const n of SCREENSHOT_SEARCH_DIRS)if(fs.existsSync(n))try{const o=fs.readdirSync(n).filter(i=>i.endsWith(".png")).map(i=>({filepath:path.join(n,i),time:fs.statSync(path.join(n,i)).mtimeMs})).filter(({time:i})=>Date.now()-i<18e5);for(const i of o)(!t||i.time>t.time)&&(t=i)}catch{}if(!t)return e.status(404).json({error:"No screenshots found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t.filepath)}),app.get("/api/screenshot/file",(s,e)=>{const t=resolveContainedFile(s.query.path,SCREENSHOT_SEARCH_DIRS);if(!t)return e.status(404).json({error:"Not found"});e.setHeader("Cache-Control","no-store"),e.sendFile(t)}),app.post("/api/camera",(s,e)=>{const{cmd:t,args:n=[]}=s.body;if(!["set_camera","get_camera"].includes(t))return e.status(400).json({error:"Unknown camera command"});const i=require("net"),a=new i.Socket,c=setTimeout(()=>{a.destroy(),e.status(504).json({error:"Timeout"})},1e4);let m={};if(t==="set_camera"&&n.length>=6)m={script:`
 import unreal
 subsys = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 loc = unreal.Vector(${n[0]}, ${n[1]}, ${n[2]})
@@ -501,7 +524,13 @@ function _gatherStatus(since=0){
     context:ctx||{agents:[],objects:[],environment:{ready:false},round:0,updatedAt:null},
     sessions,activities,chatLog,
     pieActive:_cachedPie,
-    health:{ueConnected:_cachedUeConn,mcpConnected:_cachedUeConn,pixelStreamingUrl:PIXEL_STREAMING_URL,...getUnrealEngineHealthMeta()},
+    health:{
+      ueConnected:_cachedUeConn,
+      mcpConnected:_cachedUeConn,
+      pixelStreamingProfile:STUDIO_TRANSPORT.profile,
+      pixelStreamingPathPrefix:STUDIO_TRANSPORT.streamingPathPrefix,
+      ...getUnrealEngineHealthMeta(),
+    },
     metrics:metricsHub.snapshot(),
   };
 }
@@ -1227,35 +1256,12 @@ function _ckptShutdown() { try { checkpointManager.clearAll(); } catch (_e) {} p
 process.on("SIGTERM", _ckptShutdown);
 process.on("SIGINT", _ckptShutdown);
 
-let _sessionMgr=null;
-try{const{sessionManager}=require('./session-manager');_sessionMgr=sessionManager;}
-catch(e){logToFile('session','session-manager not loaded: '+e.message);}
-
-app.post('/api/session/acquire',async(req,res)=>{
-  if(!_sessionMgr)return res.json({token:'_dev',slotId:0,totalSlots:1,freeSlots:1,sessionTtlMs:0,dev:true});
-  const userId=req.ip||'anon';
-  try{
-    const rec=await _sessionMgr.acquire(userId);
-    res.json({token:rec.token,slotId:rec.slotId,uePorts:rec.uePorts,totalSlots:_sessionMgr.totalSlots,freeSlots:_sessionMgr.freeSlots,sessionTtlMs:parseInt(process.env.SESSION_TTL_MS||'1800000',10)});
-  }catch(e){res.status(503).json({error:e.message,code:e.code||'UNAVAILABLE',queueLength:_sessionMgr.queueLength});}
-});
-
-app.post('/api/session/heartbeat',(req,res)=>{
-  if(!_sessionMgr)return res.json({ok:true,dev:true});
-  const tok=(req.headers['x-session-token']||req.body&&req.body.token||'').trim();
-  const rec=tok?_sessionMgr.touch(tok):null;
-  if(!rec)return res.status(401).json({error:'Session expired or invalid'});
-  res.json({ok:true,slotId:rec.slotId,idleMs:Date.now()-rec.lastActivity});
-});
-
-app.post('/api/session/release',(req,res)=>{
-  if(_sessionMgr){const tok=(req.headers['x-session-token']||req.body&&req.body.token||'').trim();if(tok)_sessionMgr.release(tok);}
-  res.json({ok:true});
-});
+app.post('/api/session/acquire',studioStreaming.acquireSession);
+app.post('/api/session/heartbeat',studioStreaming.heartbeatSession);
+app.post('/api/session/release',studioStreaming.releaseSession);
 
 app.get('/api/session/status',(req,res)=>{
-  if(!_sessionMgr)return res.json({mode:'single-user'});
-  res.json({totalSlots:_sessionMgr.totalSlots,freeSlots:_sessionMgr.freeSlots,activeSessions:_sessionMgr.activeSessions,queueLength:_sessionMgr.queueLength,sessions:_sessionMgr.snapshot()});
+  res.json({totalSlots:_sessionMgr.totalSlots,freeSlots:_sessionMgr.freeSlots,activeSessions:_sessionMgr.activeSessions,queueLength:_sessionMgr.queueLength});
 });
 
 // ── Asset Catalog API ──────────────────────────────────────────────────────────
@@ -2237,18 +2243,24 @@ app.all("/api/*",(s,e)=>{e.status(404).json({error:`Unknown API endpoint: ${s.me
 const FRONTEND_DIR=path.resolve(__dirname,"../dist");
 if(fs.existsSync(FRONTEND_DIR)){
   app.get("/ue-player.html",(req,res)=>{
-    if(VISTA_DEMO_ENABLED&&(
-      String(req.query.cirrus||"")!==String(CIRRUS_HTTP_PORT)||
-      req.query.ss!==undefined
-    )){
-      return res.status(400).type("text/plain").send("VISTA demo requires the configured signaling port");
+    const endpoint=typeof req.query.endpoint==="string"?req.query.endpoint:"";
+    const expectedSignallingUrl=studioStreaming.playerSignallingUrl(endpoint,req.headers.host);
+    if(
+      req.query.cirrus!==undefined||
+      !expectedSignallingUrl||
+      (req.query.ss!==undefined&&req.query.ss!==expectedSignallingUrl)
+    ){
+      return res.status(400).type("text/plain").send("A valid same-origin streaming endpoint is required");
     }
+    res.setHeader("Cache-Control","no-store");
     return res.sendFile(path.join(FRONTEND_DIR,"ue-player.html"));
   });
   app.use(express.static(FRONTEND_DIR));
   app.get("*",(s,e)=>{e.sendFile(path.join(FRONTEND_DIR,"index.html"))});
   console.log("  Frontend served from:",FRONTEND_DIR);
 }
-app.listen(PORT,STUDIO_HOST,()=>{console.log(`
+const studioHttpServer=require("node:http").createServer(app);
+studioStreaming.attach(studioHttpServer);
+studioHttpServer.listen(PORT,STUDIO_HOST,()=>{console.log(`
 \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557`),console.log("\u2551       SimWorld Studio Backend                      \u2551"),console.log("\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563"),console.log(`\u2551  Listening : http://${STUDIO_HOST}:${PORT}                  \u2551`),console.log(`\u2551  Claude    : ${CLAUDE_BIN}                            \u2551`),console.log("\u2551  MCP config: mcp.json (local stdio)               \u2551"),console.log(`\u2551  UE TCP    : ${UNREAL_HOST}:${UNREAL_PORT}                 \u2551`),console.log(`\u2551  Logs      : ${LOG_DIR}          \u2551`),console.log(`\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D
 `)});

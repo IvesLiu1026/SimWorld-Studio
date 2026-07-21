@@ -69,7 +69,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
 </style>
 
 <script>
-// ── Step 1: Translate ?cirrus=<port> → ?ss=ws://host:port ────────────────────
+// ── Step 1: Bind an opaque same-origin endpoint to the signalling URL ────────
 // Also inject default Pixel Streaming URL params for best latency & input.
 // player.js uses useUrlParams:true so it reads all of these.
 (function() {
@@ -80,35 +80,35 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b1220;overflow:
     if (!p.has(key)) { p.set(key, val); changed = true; }
   }
 
-  function validPort(value) {
-    return /^\d{1,5}$/.test(value || '') && Number(value) >= 1 && Number(value) <= 65535;
+  function validEndpoint(value) {
+    return /^\/(?:[A-Za-z0-9_-]+\/){1,7}ps1_[A-Za-z0-9_-]{43}$/.test(value || '');
   }
-  function localSignallingUrl(value) {
+  function exactSignallingUrl(value, endpoint) {
     try {
       var parsed = new URL(value);
-      return (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') &&
-        parsed.hostname.toLowerCase() === location.hostname.toLowerCase() &&
-        !parsed.username && !parsed.password && validPort(parsed.port);
+      var expectedProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return parsed.protocol === expectedProtocol &&
+        parsed.host.toLowerCase() === location.host.toLowerCase() &&
+        !parsed.username && !parsed.password &&
+        parsed.pathname === endpoint && !parsed.search && !parsed.hash;
     } catch (_error) {
       return false;
     }
   }
 
-  var cirrusPort = p.get('cirrus');
-  if (validPort(cirrusPort)) {
-    var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':' + cirrusPort;
-    window._swCirrusWs = wsUrl;
-    if (p.get('ss') !== wsUrl) { p.set('ss', wsUrl); changed = true; }
-  } else {
-    if (cirrusPort !== null) { p.delete('cirrus'); changed = true; }
-    var requestedSignalling = p.get('ss');
-    if (requestedSignalling && localSignallingUrl(requestedSignalling)) {
-      window._swCirrusWs = requestedSignalling;
-    } else if (requestedSignalling !== null) {
-      p.delete('ss');
-      changed = true;
-    }
+  var endpoint = p.get('endpoint');
+  if (!validEndpoint(endpoint)) {
+    p.delete('ss');
+    window._swCirrusWs = null;
+    return;
   }
+  var wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + endpoint;
+  var requestedSignalling = p.get('ss');
+  if (!exactSignallingUrl(requestedSignalling, endpoint)) {
+    p.set('ss', wsUrl);
+    changed = true;
+  }
+  window._swCirrusWs = wsUrl;
 
   // Subscribe directly to the Editor streamer (skip streamer-select UI)
   setDefault('StreamerId',     'Editor');

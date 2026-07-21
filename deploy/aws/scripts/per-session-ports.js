@@ -8,8 +8,8 @@
  * user, not the global default.
  *
  * Strategy:
- *   1. An Express middleware reads `x-session-token`, looks up the session in
- *      SessionManager, and runs the rest of the request inside an
+ *   1. An Express middleware reads the HttpOnly Studio session cookie, looks
+ *      up the session in SessionManager, and runs the rest of the request inside an
  *      AsyncLocalStorage context that carries the slot's port map.
  *   2. A one-time monkey-patch of `net.Socket.prototype.connect` and
  *      `net.createConnection` checks ALS at connect time. If a TCP connection
@@ -39,14 +39,27 @@ const DEFAULT_HOSTS    = new Set(['127.0.0.1', 'localhost', '::1']);
 
 let _patched = false;
 let _sessionManager = null;
+const SESSION_COOKIE = 'vista_stream_session';
+const SESSION_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
 function setSessionManager(sm) { _sessionManager = sm; }
+
+function sessionTokenFromCookie(header) {
+  let found = null;
+  for (const item of String(header || '').split(';')) {
+    const separator = item.indexOf('=');
+    if (separator < 0 || item.slice(0, separator).trim() !== SESSION_COOKIE) continue;
+    if (found !== null) return '';
+    try { found = decodeURIComponent(item.slice(separator + 1).trim()); }
+    catch { return ''; }
+  }
+  return SESSION_TOKEN_PATTERN.test(found || '') ? found : '';
+}
 
 /** Run `fn` (sync or async) inside the session's port context. */
 function withSession(rec, fn) {
   if (!rec || !rec.uePorts) return fn();
   return als.run({
-    token:   rec.token,
     slotId:  rec.slotId,
     ports:   rec.uePorts,
     userId:  rec.userId,
@@ -71,7 +84,6 @@ function currentEnv(base = process.env) {
     UNREAL_PORT: String(ctx.ports.mcpPort || ctx.ports.mcp),
     UCV_HOST:    '127.0.0.1',
     UCV_PORT:    String(ctx.ports.ucvPort || ctx.ports.ucv),
-    SIMWORLD_SESSION_TOKEN: ctx.token,
     SIMWORLD_SLOT_ID:       String(ctx.slotId),
   };
 }
@@ -80,11 +92,7 @@ function currentEnv(base = process.env) {
 function middleware() {
   return (req, res, next) => {
     if (!_sessionManager) return next();
-    const tok = (
-      req.headers['x-session-token'] ||
-      (req.query && req.query.sessionToken) ||
-      ''
-    ).toString().trim();
+    const tok = sessionTokenFromCookie(req.headers && req.headers.cookie);
     if (!tok) return next();
     const rec = _sessionManager.touch(tok);
     if (!rec) return next();
@@ -162,4 +170,5 @@ module.exports = {
   currentEnv,
   patchNet,
   setSessionManager,
+  sessionTokenFromCookie,
 };

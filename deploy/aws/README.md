@@ -62,7 +62,7 @@ HTTPS   │  Nginx + Let's Encrypt + Basic Auth          │  :443
 │   /opt/simworld-project/  (uproject + Plugins)         │
 │   /opt/simworld-content/  (from HuggingFace)           │
 │                                                         │
-│   coturn :3478 (UDP) — WebRTC NAT traversal             │
+│   coturn :3478 UDP/TCP, :5349 TLS, UDP 49160-49200      │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -104,7 +104,7 @@ changes needed.
 | `scripts/slot-launcher.sh` | Launch one UE instance for a given slot |
 | `scripts/slot-pool.js` | Node module: child-process lifecycle for N slots |
 | `scripts/session-shim.js` | Wires SlotPool into session-manager via env var |
-| `scripts/per-session-ports.js` | Helper for index.js to route by `x-session-token` |
+| `scripts/per-session-ports.js` | Routes internal UE calls from the HttpOnly Studio session cookie |
 | `scripts/bake-ami.sh` | Provision OS deps, NVIDIA driver, users, systemd units |
 | `scripts/download-content.sh` | Pull Content from HuggingFace once |
 | `scripts/test-slot-pool.js` | Smoke-test the pool with a fake launcher (no UE needed) |
@@ -129,7 +129,8 @@ anonymously. The cleanest workflow:
 
 ```bash
 # 1. Launch EC2 (g5.12xlarge or g6.12xlarge, 1 TB gp3, Ubuntu 22.04 LTS)
-#    Security Group: 22 (your IP), 80, 443, 3478/udp, 49152-65535/udp
+#    Security Group: 22 (your IP), 80/443 TCP, 3478 UDP/TCP,
+#                    5349 TCP, 49160-49200 UDP
 
 # 2. SSH in
 ssh -i your-key.pem ubuntu@<EC2_IP>

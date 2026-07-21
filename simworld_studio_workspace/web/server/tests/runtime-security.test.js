@@ -10,6 +10,8 @@ const {
   createAccessGuard,
   createLoopbackBrowserHeaders,
   createModelGate,
+  createTransportBrowserHeaders,
+  createTransportRequestGuard,
   requestIsLoopback,
   resolveAccessToken,
   resolveBindHost,
@@ -18,6 +20,7 @@ const {
   resolveVistaDemoFps,
   setLoopbackBrowserHeaders,
 } = require("../runtime-security");
+const { resolveTransportProfile } = require("../pixel-streaming-config");
 
 const ACCESS_TOKEN = "t".repeat(43);
 
@@ -68,6 +71,18 @@ test("browser headers prohibit external web origins and referrer leakage", () =>
 test("access token guard supports bearer and one-time cookie bootstrap", () => {
   assert.throws(() => resolveAccessToken({}), /at least 32/);
   assert.equal(resolveAccessToken({ STUDIO_ACCESS_TOKEN: ACCESS_TOKEN }), ACCESS_TOKEN);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "studio-access-token-"));
+  try {
+    const filename = path.join(temporary, "access.token");
+    fs.writeFileSync(filename, `${ACCESS_TOKEN}\n`, { mode: 0o600 });
+    assert.equal(resolveAccessToken({ STUDIO_ACCESS_TOKEN_FILE: filename }), ACCESS_TOKEN);
+    assert.throws(
+      () => resolveAccessToken({ STUDIO_ACCESS_TOKEN: ACCESS_TOKEN, STUDIO_ACCESS_TOKEN_FILE: filename }),
+      /only one/,
+    );
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
   const guard = createAccessGuard(ACCESS_TOKEN);
   let nextCalled = false;
   guard(
@@ -96,6 +111,79 @@ test("access token guard supports bearer and one-time cookie bootstrap", () => {
   assert.match(cookie, /HttpOnly; SameSite=Strict/);
   assert.equal(location, "/");
   assert.doesNotMatch(location, /token/);
+
+  const trusted = resolveTransportProfile({
+    STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
+    STUDIO_PUBLIC_ORIGIN: "https://studio.example.test",
+    STUDIO_TRUSTED_PROXY: "127.0.0.1",
+  });
+  const publicGuard = createAccessGuard(ACCESS_TOKEN, { transport: trusted });
+  let publicCookie = "";
+  publicGuard(
+    {
+      method: "GET",
+      headers: {},
+      query: { token: ACCESS_TOKEN },
+      originalUrl: `/?token=${ACCESS_TOKEN}`,
+      url: `/?token=${ACCESS_TOKEN}`,
+    },
+    {
+      setHeader(name, value) { if (name === "Set-Cookie") publicCookie = value; },
+      redirect() {},
+    },
+    () => assert.fail("query bootstrap should redirect"),
+  );
+  assert.match(publicCookie, /; Secure$/);
+});
+
+test("transport middleware admits only the resolved loopback or trusted proxy authority", () => {
+  const loopback = resolveTransportProfile({});
+  const loopbackHeaders = {};
+  let nextCalled = false;
+  createTransportBrowserHeaders(loopback, { signalingPort: 8585 })({}, {
+    set(name, value) { loopbackHeaders[name] = value; return this; },
+  }, () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
+  assert.match(loopbackHeaders["Content-Security-Policy"], /ws:\/\/127\.0\.0\.1:8585/);
+  assert.equal(loopbackHeaders["Cross-Origin-Resource-Policy"], "same-origin");
+
+  const trusted = resolveTransportProfile({
+    STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
+    STUDIO_PUBLIC_ORIGIN: "https://studio.example.test",
+    STUDIO_TRUSTED_PROXY: "127.0.0.1",
+  });
+  const publicHeaders = {};
+  createTransportBrowserHeaders(trusted)({}, {
+    set(name, value) { publicHeaders[name] = value; return this; },
+  }, () => {});
+  assert.match(publicHeaders["Content-Security-Policy"], /wss:\/\/studio\.example\.test/);
+  assert.doesNotMatch(publicHeaders["Content-Security-Policy"], /localhost|127\.0\.0\.1/);
+
+  const request = {
+    headers: {
+      host: "studio.example.test",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "studio.example.test",
+      "x-forwarded-port": "443",
+    },
+    socket: { remoteAddress: "127.0.0.1" },
+  };
+  let allowed = false;
+  createTransportRequestGuard(trusted)(request, {}, () => { allowed = true; });
+  assert.equal(allowed, true);
+
+  let status = null;
+  let payload = null;
+  createTransportRequestGuard(trusted)(
+    { ...request, socket: { remoteAddress: "10.0.0.5" } },
+    {
+      status(value) { status = value; return this; },
+      json(value) { payload = value; return this; },
+    },
+    () => assert.fail("untrusted source must be rejected"),
+  );
+  assert.equal(status, 403);
+  assert.equal(payload.code, "TRANSPORT_REQUEST_REJECTED");
 });
 
 test("screenshot files must resolve inside an approved realpath root", () => {

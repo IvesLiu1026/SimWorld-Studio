@@ -33,6 +33,9 @@ services:
       - /opt/simworld-project:/opt/simworld-project:ro
       - /opt/simworld-content:/opt/simworld-content:ro
       - /var/lib/simworld:/var/lib/simworld
+      - ${STUDIO_ACCESS_TOKEN_FILE_HOST:?Set STUDIO_ACCESS_TOKEN_FILE_HOST}:/run/secrets/studio_access_token:ro
+      - ${STUDIO_PIXEL_STREAMING_HMAC_KEY_FILE_HOST:?Set STUDIO_PIXEL_STREAMING_HMAC_KEY_FILE_HOST}:/run/secrets/pixel_streaming_hmac:ro
+      - ${TURN_SHARED_SECRET_FILE_HOST:?Set TURN_SHARED_SECRET_FILE_HOST}:/run/secrets/turn_shared_secret:ro
       # Optional: persist logs to host
       - ../../../simworld_studio_workspace/logs:/app/server/logs
 
@@ -67,10 +70,21 @@ services:
       - UE_POOL_SIZE=${UE_POOL_SIZE:-4}
       - UE_STARTUP_TIMEOUT_MS=${UE_STARTUP_TIMEOUT_MS:-180000}
       - SESSION_TTL_MS=${SESSION_TTL_MS:-1800000}
+      - SESSION_HARD_MAX_MS=${SESSION_HARD_MAX_MS:-10800000}
+      - STUDIO_ACCESS_TOKEN_FILE=/run/secrets/studio_access_token
+      - STUDIO_PIXEL_STREAMING_HMAC_KEY_FILE=/run/secrets/pixel_streaming_hmac
+      - STUDIO_TRANSPORT_PROFILE=trusted_proxy
+      - STUDIO_PUBLIC_ORIGIN=${STUDIO_PUBLIC_ORIGIN:?Set canonical HTTPS STUDIO_PUBLIC_ORIGIN}
+      - STUDIO_TRUSTED_PROXY=127.0.0.1,::1
+      - TURN_PUBLIC_HOST=${TURN_PUBLIC_HOST:?Set TURN_PUBLIC_HOST}
+      - TURN_SHARED_SECRET_FILE=/run/secrets/turn_shared_secret
+      - TURN_CREDENTIAL_TTL_SECONDS=${TURN_CREDENTIAL_TTL_SECONDS:-14400}
+      - TURN_TRANSPORT_POLICY=${TURN_TRANSPORT_POLICY:-relay}
+      - SIMWORLD_BUILD_REVISION=${SIMWORLD_BUILD_REVISION:?Set the deployed git revision}
 
   # ── Reverse proxy ──────────────────────────────────────────────────────────
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:1.25-alpine@sha256:516475cc129da42866742567714ddc681e5eed7b9ee0b9e9c015e464b4221a00
     container_name: simworld-nginx
     restart: unless-stopped
     network_mode: host
@@ -83,10 +97,11 @@ services:
 
   # ── TURN server for WebRTC ─────────────────────────────────────────────────
   coturn:
-    image: coturn/coturn:4.6
+    image: coturn/coturn:4.6@sha256:71c3c990283385567f11794ee692e3a47b66fd9b0bb39e42afbe776e331dd888
     container_name: simworld-coturn
     restart: unless-stopped
     network_mode: host
     volumes:
-      - ../templates/coturn.conf:/etc/turnserver.conf:ro
+      - ${TURN_CONFIG_FILE_HOST:?Materialize coturn.conf with the shared secret}:/etc/turnserver.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     command: ["-c", "/etc/turnserver.conf"]
