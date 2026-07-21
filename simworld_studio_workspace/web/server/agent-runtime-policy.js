@@ -1,5 +1,7 @@
 'use strict';
 
+const { productionExecutionLocked } = require('./production-execution-policy');
+
 const RESPONSE_LANGUAGE_RULES = [
   'All user-visible chat, progress, and status text must be in English unless the user explicitly asks for another language.',
   'Understand non-English user requests, but do not mirror the user language automatically.',
@@ -14,6 +16,13 @@ const PYTHON_SCRIPT_BATCHING_RULES = [
   'End every script with print("[DONE] <batch_name> count=<n>") on success, and catch exceptions so failures print "[ERROR] <batch_name>: <message>".',
   'After each batch, read log_path until it contains [DONE] or [ERROR], inspect the result, and only then continue with the next batch.',
   'Never generate one giant Python script for an entire large scene or full task pipeline.',
+];
+
+const PRODUCTION_UE_EXECUTION_RULES = [
+  'This production safety section overrides any earlier generic Python batching guidance.',
+  'Arbitrary execute_python_script, caller-authored console commands, and caller-authored UnrealCV mutations are disabled.',
+  'Use only registered high-level tools and the fixed VISTA Content API workflow; never ask the user to enable a generic execution bypass.',
+  'If a required operation has no fixed high-level tool, report that exact capability gap instead of attempting Python, console, shell, or broker workarounds.',
 ];
 
 const DEFAULT_HARNESS_BEHAVIORS = [
@@ -31,6 +40,17 @@ const DEFAULT_HARNESS_BEHAVIORS = [
     prompt:
       'After meaningful scene edits, capture a screenshot or otherwise expose a visual result to the UI.',
   },
+];
+
+const PRODUCTION_DEFAULT_HARNESS_BEHAVIORS = [
+  {
+    id: 'fixed_high_level_operations',
+    label: 'Fixed high-level operations',
+    enabledByDefault: true,
+    prompt:
+      'Use only registered high-level tools and fixed VISTA Content API operations.',
+  },
+  DEFAULT_HARNESS_BEHAVIORS[1],
 ];
 
 const OPTIONAL_HARNESS_BEHAVIORS = [
@@ -54,14 +74,18 @@ function linesForBatchingRules() {
   return ['## PYTHON SCRIPT BATCHING', ...PYTHON_SCRIPT_BATCHING_RULES.map((rule) => `- ${rule}`)];
 }
 
+function linesForProductionExecutionRules() {
+  return ['## PRODUCTION UE EXECUTION SAFETY', ...PRODUCTION_UE_EXECUTION_RULES.map((rule) => `- ${rule}`)];
+}
+
 function linesForResponseLanguageRules() {
   return ['## RESPONSE LANGUAGE', ...RESPONSE_LANGUAGE_RULES.map((rule) => `- ${rule}`)];
 }
 
-function buildHarnessBehaviorLines({ includeOptional = [] } = {}) {
+function buildHarnessBehaviorLines({ includeOptional = [], env = process.env } = {}) {
   const enabledOptional = new Set(includeOptional);
   const enabled = [
-    ...DEFAULT_HARNESS_BEHAVIORS,
+    ...(productionExecutionLocked(env) ? PRODUCTION_DEFAULT_HARNESS_BEHAVIORS : DEFAULT_HARNESS_BEHAVIORS),
     ...OPTIONAL_HARNESS_BEHAVIORS.filter((behavior) => enabledOptional.has(behavior.id)),
   ];
 
@@ -74,6 +98,16 @@ function buildHarnessBehaviorLines({ includeOptional = [] } = {}) {
 }
 
 function buildSceneAgentRuntimeAppendix(options = {}) {
+  const env = options.env || process.env;
+  if (productionExecutionLocked(env)) {
+    return [
+      ...linesForResponseLanguageRules(),
+      '',
+      ...linesForProductionExecutionRules(),
+      '',
+      ...buildHarnessBehaviorLines(options),
+    ].join('\n');
+  }
   return [
     ...linesForResponseLanguageRules(),
     '',
@@ -83,7 +117,10 @@ function buildSceneAgentRuntimeAppendix(options = {}) {
   ].join('\n');
 }
 
-function buildPanelAgentRuleLines({ agentName }) {
+function buildPanelAgentRuleLines({ agentName, env = process.env }) {
+  const executionRules = productionExecutionLocked(env)
+    ? linesForProductionExecutionRules()
+    : PYTHON_SCRIPT_BATCHING_RULES.map((rule) => `- ${rule}`);
   return [
     '## Response Language',
     ...RESPONSE_LANGUAGE_RULES.map((rule) => `- ${rule}`),
@@ -92,21 +129,24 @@ function buildPanelAgentRuleLines({ agentName }) {
     `- Always use agent_name="${agentName}"`,
     '- Only control YOUR agent.',
     '- Think step by step: observe -> think -> act -> verify.',
-    ...PYTHON_SCRIPT_BATCHING_RULES.map((rule) => `- ${rule}`),
+    ...executionRules,
     '- Be concise.',
     '',
-    ...buildHarnessBehaviorLines(),
+    ...buildHarnessBehaviorLines({ env }),
   ];
 }
 
 module.exports = {
   DEFAULT_HARNESS_BEHAVIORS,
   OPTIONAL_HARNESS_BEHAVIORS,
+  PRODUCTION_UE_EXECUTION_RULES,
+  PRODUCTION_DEFAULT_HARNESS_BEHAVIORS,
   PYTHON_SCRIPT_BATCHING_RULES,
   RESPONSE_LANGUAGE_RULES,
   buildHarnessBehaviorLines,
   buildPanelAgentRuleLines,
   buildSceneAgentRuntimeAppendix,
   linesForBatchingRules,
+  linesForProductionExecutionRules,
   linesForResponseLanguageRules,
 };

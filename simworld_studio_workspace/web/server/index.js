@@ -35,6 +35,7 @@ const {
   resolveModelMode,
   resolveVistaDemoFps,
 } = require("./runtime-security");
+const { createProductionExecutionGuard } = require("./production-execution-policy");
 const { resolveTransportProfile } = require("./pixel-streaming-config");
 const { createStudioStreamingRuntime } = require("./pixel-streaming-gateway");
 const STUDIO_HOST = resolveBindHost(process.env);
@@ -135,7 +136,7 @@ Example — spawn 2 pedestrians:
 - Keep it simple: spawn objects, screenshot. Don't overthink it.
 - To load a map use LevelEditorSubsystem (NOT deprecated EditorLevelLibrary):
   subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-  subsystem.load_level("/Game/PackName/Maps/MapName")`+"\n\n"+buildSceneAgentRuntimeAppendix(),app=express();app.use(express.json({limit:"10mb"})),app.use(createTransportRequestGuard(STUDIO_TRANSPORT)),app.use(createAccessGuard(STUDIO_ACCESS_TOKEN,{transport:STUDIO_TRANSPORT})),app.use(createTransportBrowserHeaders(STUDIO_TRANSPORT,{signalingPort:VISTA_DEMO_ENABLED?CIRRUS_HTTP_PORT:null})),app.use(createModelGate({mode:STUDIO_MODEL_MODE,allowCodingAgents:STUDIO_CODING_AGENTS_ENABLED,demoMode:VISTA_DEMO_ENABLED,isMockReady:()=>Boolean(MOCK_MODE&&mockReplay&&mockExecutor)})),app.use((req,res,next)=>{if(req.method==="POST"){const fixedVistaRoute=req.path==="/api/vista/setup_vista_play_mode"||req.path==="/api/vista/stop_vista_play_mode",bodyForLog=fixedVistaRoute?"<fixed-empty-contract>":JSON.stringify(req.body||{}).slice(0,200);logToFile("http",`${req.method} ${req.path} body=${bodyForLog}`)}res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.use("/asset-previews",express.static(ASSET_PREVIEW_DIR,{maxAge:"7d",immutable:true})),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
+  subsystem.load_level("/Game/PackName/Maps/MapName")`+"\n\n"+buildSceneAgentRuntimeAppendix(),app=express();app.use(express.json({limit:"10mb"})),app.use(createTransportRequestGuard(STUDIO_TRANSPORT)),app.use(createAccessGuard(STUDIO_ACCESS_TOKEN,{transport:STUDIO_TRANSPORT})),app.use(createTransportBrowserHeaders(STUDIO_TRANSPORT,{signalingPort:VISTA_DEMO_ENABLED?CIRRUS_HTTP_PORT:null})),app.use(createModelGate({mode:STUDIO_MODEL_MODE,allowCodingAgents:STUDIO_CODING_AGENTS_ENABLED,demoMode:VISTA_DEMO_ENABLED,isMockReady:()=>Boolean(MOCK_MODE&&mockReplay&&mockExecutor)})),app.use(createProductionExecutionGuard({env:process.env})),app.use((req,res,next)=>{if(req.method==="POST"){const fixedVistaRoute=req.path==="/api/vista/setup_vista_play_mode"||req.path==="/api/vista/stop_vista_play_mode",bodyForLog=fixedVistaRoute?"<fixed-empty-contract>":JSON.stringify(req.body||{}).slice(0,200);logToFile("http",`${req.method} ${req.path} body=${bodyForLog}`)}res.set("Connection","close");next()}),app.use("/screenshots",express.static(SCREENSHOT_DIR)),app.use("/thumbnails",express.static(path.join(ARENA_ROOT,"tmp","thumbnails"))),app.use("/asset-previews",express.static(ASSET_PREVIEW_DIR,{maxAge:"7d",immutable:true})),app.get("/ue",(s,e)=>{e.setHeader("Content-Type","text/html"),e.send(`<!DOCTYPE html>
 <html style="width:100%;height:100%;margin:0;background:#000">
 <head><meta charset="utf-8"><title>UE Pixel Stream</title>
 <style>
