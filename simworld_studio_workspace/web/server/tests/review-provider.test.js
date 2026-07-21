@@ -964,6 +964,74 @@ test("Claude one-shot commits valid terminal accounting before reporting a paid 
   assert.equal(accounting[0].costUsd, 0.02);
 });
 
+test("Claude one-shot preserves terminal accounting when abort wins the race with close", async () => {
+  let markTerminalWritten;
+  const terminalWritten = new Promise((resolve) => { markTerminalWritten = resolve; });
+  const fake = fakeChildFactory(({ child }) => {
+    child.stdout.write(`${JSON.stringify({
+      type: "result",
+      result: "completed before abort",
+      usage: { input_tokens: 12, output_tokens: 2 },
+      total_cost_usd: 0.015,
+    })}\n`);
+    markTerminalWritten();
+  });
+  const controller = new AbortController();
+  const accounting = [];
+  const pending = oneshotText("summarize this", {
+    provider: "claude",
+    model: "claude-opus-4-8",
+    env: {},
+    spawnImpl: fake.spawnImpl,
+    sandboxedSpawnImpl: passthroughSandbox,
+    signal: controller.signal,
+    onAccounting(value) { accounting.push(value); },
+  });
+  await terminalWritten;
+  controller.abort();
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "LLM_ONESHOT_ABORTED");
+    assert.equal(error.providerAttempted, true);
+    assert.equal(error.accountingKnown, true);
+    return true;
+  });
+  assert.equal(accounting.length, 1);
+  assert.equal(accounting[0].costUsd, 0.015);
+  fake.calls[0].child.emit("close", null, "SIGTERM");
+  assert.equal(accounting.length, 1);
+});
+
+test("Claude one-shot preserves terminal accounting when timeout wins the race with close", async () => {
+  const fake = fakeChildFactory(({ child }) => {
+    child.stdout.write(`${JSON.stringify({
+      type: "result",
+      result: "completed before timeout",
+      usage: { input_tokens: 14, output_tokens: 3 },
+      total_cost_usd: 0.016,
+    })}\n`);
+  });
+  const accounting = [];
+  const pending = oneshotText("summarize this", {
+    provider: "claude",
+    model: "claude-opus-4-8",
+    env: {},
+    spawnImpl: fake.spawnImpl,
+    sandboxedSpawnImpl: passthroughSandbox,
+    timeoutMs: 15,
+    onAccounting(value) { accounting.push(value); },
+  });
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "LLM_ONESHOT_TIMEOUT");
+    assert.equal(error.providerAttempted, true);
+    assert.equal(error.accountingKnown, true);
+    return true;
+  });
+  assert.equal(accounting.length, 1);
+  assert.equal(accounting[0].costUsd, 0.016);
+  fake.calls[0].child.emit("close", null, "SIGTERM");
+  assert.equal(accounting.length, 1);
+});
+
 test("Claude and Codex one-shots terminate on AbortSignal with a settled typed failure", async () => {
   for (const providerName of ["claude", "codex"]) {
     const fake = fakeChildFactory(() => {});

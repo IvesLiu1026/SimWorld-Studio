@@ -237,6 +237,9 @@ function oneshotTextClaude(prompt, opts) {
     let stdoutBytes = 0, stderrBytes = 0;
     let resultEvents = 0, resultUsage = null, resultCostUsd = null;
     let accountingKnown = false;
+    let accountingCommitAttempted = false;
+    let committedAccounting = null;
+    let accountingCommitError = null;
     let providerStarted = false;
     let settled = false;
     let timer = null;
@@ -250,8 +253,45 @@ function oneshotTextClaude(prompt, opts) {
       hardKillTimer = setTimeout(() => { try { proc.kill("SIGKILL"); } catch (_error) {} }, 1000);
       if (hardKillTimer.unref) hardKillTimer.unref();
     };
+    function commitTerminalAccounting({ strict = false } = {}) {
+      if (accountingCommitAttempted) {
+        if (strict && accountingCommitError) throw accountingCommitError;
+        return committedAccounting;
+      }
+      if (resultEvents !== 1) return null;
+      accountingCommitAttempted = true;
+      try {
+        const accounting = normalizeClaudeUsageCost({ usage: resultUsage, costUsd: resultCostUsd });
+        if (o.onAccounting) {
+          o.onAccounting(Object.freeze({
+            provider: "claude",
+            model,
+            usage: accounting.usage,
+            costUsd: accounting.costUsd,
+            maxBudgetUsd,
+          }));
+        }
+        committedAccounting = accounting;
+        accountingKnown = true;
+        return accounting;
+      } catch (cause) {
+        accountingCommitError = cause instanceof LlmOneShotError
+          ? cause
+          : oneShotError(
+            "LLM_ONESHOT_ACCOUNTING_FAILED",
+            "Claude one-shot accounting could not be committed",
+            { provider: "claude", model, cause },
+          );
+        if (strict) throw accountingCommitError;
+        return null;
+      }
+    }
     const fail = (error, terminateChild = false) => {
       if (settled) return;
+      // A complete terminal result may arrive just before cancellation,
+      // timeout, or another process failure. Commit its verified accounting
+      // exactly once before settling so a paid call cannot disappear.
+      commitTerminalAccounting();
       settled = true;
       if (terminateChild) terminate();
       cleanup();
@@ -344,28 +384,9 @@ function oneshotTextClaude(prompt, opts) {
       }
       let accounting;
       try {
-        accounting = normalizeClaudeUsageCost({ usage: resultUsage, costUsd: resultCostUsd });
+        accounting = commitTerminalAccounting({ strict: true });
       } catch (error) {
         fail(error);
-        return;
-      }
-      try {
-        if (o.onAccounting) {
-          o.onAccounting(Object.freeze({
-            provider: "claude",
-            model,
-            usage: accounting.usage,
-            costUsd: accounting.costUsd,
-            maxBudgetUsd,
-          }));
-        }
-        accountingKnown = true;
-      } catch (cause) {
-        fail(oneShotError(
-          "LLM_ONESHOT_ACCOUNTING_FAILED",
-          "Claude one-shot accounting could not be committed",
-          { provider: "claude", model, cause },
-        ));
         return;
       }
       try {
