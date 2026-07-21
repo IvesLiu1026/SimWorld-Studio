@@ -15,7 +15,7 @@ services:
     build:
       context: ../../..        # repo root
       dockerfile: deploy/aws/docker/Dockerfile.web
-    image: simworld/web:latest
+    image: ${SIMWORLD_WEB_IMAGE:?Set an immutable simworld/web tag or digest}
     container_name: simworld-web
     restart: unless-stopped
 
@@ -36,6 +36,11 @@ services:
       - ${STUDIO_ACCESS_TOKEN_FILE_HOST:?Set STUDIO_ACCESS_TOKEN_FILE_HOST}:/run/secrets/studio_access_token:ro
       - ${STUDIO_PIXEL_STREAMING_HMAC_KEY_FILE_HOST:?Set STUDIO_PIXEL_STREAMING_HMAC_KEY_FILE_HOST}:/run/secrets/pixel_streaming_hmac:ro
       - ${TURN_SHARED_SECRET_FILE_HOST:?Set TURN_SHARED_SECRET_FILE_HOST}:/run/secrets/turn_shared_secret:ro
+      - ${POSTGRES_URL_FILE_HOST:?Set POSTGRES_URL_FILE_HOST}:/run/secrets/postgres_url:ro
+      - ${ASSET_DB_DIR_HOST:?Set ASSET_DB_DIR_HOST}:/srv/simworld/asset-db:ro
+      - ${REVIEW_TEXT_SMOKE_RECEIPT_FILE_HOST:?Set REVIEW_TEXT_SMOKE_RECEIPT_FILE_HOST}:/run/simworld/evidence/review-smoke-text.json:ro
+      - ${REVIEW_VISUAL_SMOKE_RECEIPT_FILE_HOST:?Set REVIEW_VISUAL_SMOKE_RECEIPT_FILE_HOST}:/run/simworld/evidence/review-smoke-visual.json:ro
+      - ${WEBRTC_READINESS_RECEIPT_FILE_HOST:?Set WEBRTC_READINESS_RECEIPT_FILE_HOST}:/run/simworld/evidence/webrtc-readiness.json:ro
       # Optional: persist logs to host
       - ../../../simworld_studio_workspace/logs:/app/server/logs
 
@@ -66,6 +71,7 @@ services:
               capabilities: [gpu, compute, video, utility]
 
     environment:
+      - NODE_ENV=production
       - UE_POOL_ENABLED=1
       - UE_POOL_SIZE=${UE_POOL_SIZE:-4}
       - UE_STARTUP_TIMEOUT_MS=${UE_STARTUP_TIMEOUT_MS:-180000}
@@ -81,6 +87,31 @@ services:
       - TURN_CREDENTIAL_TTL_SECONDS=${TURN_CREDENTIAL_TTL_SECONDS:-14400}
       - TURN_TRANSPORT_POLICY=${TURN_TRANSPORT_POLICY:-relay}
       - SIMWORLD_BUILD_REVISION=${SIMWORLD_BUILD_REVISION:?Set the deployed git revision}
+      - WEBRTC_READINESS_RECEIPT_PATH=/run/simworld/evidence/webrtc-readiness.json
+      - WEBRTC_READINESS_RECEIPT_SHA256=${WEBRTC_READINESS_RECEIPT_SHA256:?Pin the exact WebRTC receipt bytes}
+      - WEBRTC_DEPLOYMENT_FINGERPRINT=${WEBRTC_DEPLOYMENT_FINGERPRINT:?Set the reviewed deployment manifest SHA-256}
+      - WEBRTC_CERTIFICATE_SHA256=${WEBRTC_CERTIFICATE_SHA256:?Set the public certificate SHA-256}
+      - CRITIC_PROVIDER=claude
+      - CRITIC_MODEL=claude-opus-4-8
+      - CRITIC_MAX_BUDGET_USD=${CRITIC_MAX_BUDGET_USD:-0.05}
+      - REVIEW_TEXT_SMOKE_RECEIPT_PATH=/run/simworld/evidence/review-smoke-text.json
+      - REVIEW_TEXT_SMOKE_RECEIPT_SHA256=${REVIEW_TEXT_SMOKE_RECEIPT_SHA256:?Pin the exact Text Review receipt bytes}
+      - REVIEW_VISUAL_SMOKE_RECEIPT_PATH=/run/simworld/evidence/review-smoke-visual.json
+      - REVIEW_VISUAL_SMOKE_RECEIPT_SHA256=${REVIEW_VISUAL_SMOKE_RECEIPT_SHA256:?Pin the exact Visual Review receipt bytes}
+      - VISTA_ASSET_RESOLUTION_ENABLED=1
+      - ASSET_REQUIRE_REAL_ASSETS=true
+      - ASSET_DB_DIR=/srv/simworld/asset-db
+      - ASSET_SNAPSHOT_MANIFEST=/srv/simworld/asset-db/snapshot-manifest.json
+      - ASSET_LIVE_AUDIT_RECEIPT=/srv/simworld/asset-db/snapshot-live-audit.json
+      - ASSET_LIVE_AUDIT_RECEIPT_SHA256=${ASSET_LIVE_AUDIT_RECEIPT_SHA256:?Pin the current live-audit receipt bytes}
+      - ASSET_SNAPSHOT_REVISION=${ASSET_SNAPSHOT_REVISION:?Set the immutable asset snapshot revision}
+      - ASSET_READINESS_VERIFIED_REVISION=${ASSET_SNAPSHOT_REVISION:?Set the immutable asset snapshot revision}
+      - VISTA_UE_CONTENT_REVISION=${VISTA_UE_CONTENT_REVISION:?Set the matching UE content revision}
+      - POSTGRES_URL_FILE=/run/secrets/postgres_url
+      - QDRANT_URL=${QDRANT_URL:-http://127.0.0.1:6333}
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:?Set the snapshot Qdrant collection}
+      - EMBED_SERVICE_URL=${EMBED_SERVICE_URL:-http://127.0.0.1:7777}
+      - EMBED_VERSION=${EMBED_VERSION:?Set the pinned embedding version}
 
   # ── Reverse proxy ──────────────────────────────────────────────────────────
   nginx:

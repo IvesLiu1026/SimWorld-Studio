@@ -229,6 +229,35 @@ test("Qdrant and PostgreSQL queries are both constrained to the exact asset snap
   assert.match(postgresRequest.text, /asset_snapshot_revision = \$3/);
 });
 
+test("semantic operations reject an expired live-audit gate before any dependency call", async () => {
+  let dependencyCalls = 0;
+  let freshnessChecks = 0;
+  const expired = () => {
+    freshnessChecks += 1;
+    const error = new Error("asset live audit expired");
+    error.code = "ASSET_LIVE_AUDIT_EXPIRED";
+    throw error;
+  };
+  const options = {
+    assertLiveAuditFresh: expired,
+    fetchImpl: async () => { dependencyCalls += 1; return embedOk(); },
+    qdrantClient: { query: async () => { dependencyCalls += 1; return []; } },
+    pgPool: { query: async () => { dependencyCalls += 1; return { rows: [] }; } },
+    timeoutMs: 100,
+  };
+
+  await assert.rejects(
+    retrievalDb.searchAssets({ query: "office chair" }, options),
+    (error) => error.code === "ASSET_LIVE_AUDIT_EXPIRED",
+  );
+  await assert.rejects(
+    retrievalDb.prefilterCategory("furniture", PLAN, options),
+    (error) => error.code === "ASSET_LIVE_AUDIT_EXPIRED",
+  );
+  assert.equal(freshnessChecks, 2);
+  assert.equal(dependencyCalls, 0);
+});
+
 test("search_assets preserves a representative Chinese query for multilingual embedding", async () => {
   let embeddedText = null;
   const assets = await retrievalDb.searchAssets({ query: "黑色有輪子的辦公椅" }, {

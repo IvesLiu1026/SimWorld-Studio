@@ -145,14 +145,18 @@ same pinned provider/model/CLI/build. Point the service at both approved files:
 
 ```bash
 export REVIEW_TEXT_SMOKE_RECEIPT_PATH=/run/simworld/review-smoke-text.json
+export REVIEW_TEXT_SMOKE_RECEIPT_SHA256="$(sha256sum "$REVIEW_TEXT_SMOKE_RECEIPT_PATH" | awk '{print $1}')"
 export REVIEW_VISUAL_SMOKE_RECEIPT_PATH=/run/simworld/review-smoke-visual.json
+export REVIEW_VISUAL_SMOKE_RECEIPT_SHA256="$(sha256sum "$REVIEW_VISUAL_SMOKE_RECEIPT_PATH" | awk '{print $1}')"
 export CRITIC_PROVIDER=claude
 export CRITIC_MODEL=claude-opus-4-8
 export CRITIC_MAX_BUDGET_USD=0.05
 export SIMWORLD_BUILD_REVISION="$(git rev-parse HEAD)"
 ```
 
-`/health/ready` remains not-ready if either file is absent, expired, malformed,
+`/health/ready` opens each receipt with `O_NOFOLLOW`, verifies a stable bounded
+read and its deployment-pinned raw-file SHA-256, and remains not-ready if either
+file is absent, expired, malformed,
 credential-like, bound to another provider/model/build/type/CLI, or reports a
 non-`PASS` verdict or a mutated Visual scene. The single-receipt
 `REVIEW_SMOKE_RECEIPT_PATH` remains available only for non-production policy

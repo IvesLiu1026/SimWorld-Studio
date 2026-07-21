@@ -9,6 +9,7 @@ const path = require("node:path");
 const {
   ReviewSmokeReceiptError,
   createReviewSmokeReceipt,
+  digestReviewSmokeReceiptBytes,
   digestReviewScene,
   readReviewSmokeReceipt,
   verifyReviewSmokeReceipt,
@@ -88,6 +89,12 @@ test("atomic receipt persistence round-trips a validated 0600 file", (t) => {
 
   assert.equal(writeReviewSmokeReceiptAtomic(file, receipt), path.resolve(file));
   assert.deepEqual(readReviewSmokeReceipt(file), receipt);
+  const receiptSha256 = digestReviewSmokeReceiptBytes(fs.readFileSync(file));
+  assert.deepEqual(readReviewSmokeReceipt(file, { expectedSha256: receiptSha256 }), receipt);
+  assert.throws(
+    () => readReviewSmokeReceipt(file, { expectedSha256: "0".repeat(64) }),
+    (error) => error.code === "REVIEW_SMOKE_RECEIPT_DIGEST_MISMATCH",
+  );
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ["receipt.json"]);
 });

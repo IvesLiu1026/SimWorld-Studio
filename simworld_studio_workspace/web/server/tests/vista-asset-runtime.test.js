@@ -37,7 +37,7 @@ function enabledEnv(fixtureValue) {
     ASSET_LIVE_AUDIT_RECEIPT_SHA256: fixtureValue.receiptSha256,
     ASSET_SNAPSHOT_REVISION: value.snapshot_id,
     ASSET_READINESS_VERIFIED_REVISION: value.snapshot_id,
-    POSTGRES_URL: "postgresql://not-read-by-config",
+    POSTGRES_URL: "postgresql://not-read-by-config/assets",
     QDRANT_URL: "http://127.0.0.1:6333",
     QDRANT_COLLECTION: value.qdrant.collection,
     EMBED_SERVICE_URL: "http://127.0.0.1:7777",
@@ -123,6 +123,7 @@ test("enabled runtime requires one matching verified snapshot across all depende
   assert.equal(config.snapshotId, manifest().snapshot_id);
   assert.equal(config.qdrantCollection, manifest().qdrant.collection);
   assert.equal(config.ueContentRevision, manifest().ue_content_revision);
+  assert.equal(config.postgresUrl, "postgresql://not-read-by-config/assets");
 
   for (const [field, value] of [
     ["ASSET_READINESS_VERIFIED_REVISION", "stale"],
@@ -132,6 +133,21 @@ test("enabled runtime requires one matching verified snapshot across all depende
   ]) {
     assert.throws(() => resolveVistaAssetRuntimeConfig({ ...enabledEnv(files), [field]: value }, { clock: () => NOW }));
   }
+});
+
+test("enabled runtime accepts a no-follow PostgreSQL DSN secret file", (t) => {
+  const files = fixture(t);
+  const secretFile = path.join(files.root, "postgres-url");
+  fs.writeFileSync(secretFile, "postgresql://asset_user:secret@127.0.0.1/assets\n", { mode: 0o600 });
+  const env = enabledEnv(files);
+  delete env.POSTGRES_URL;
+  env.POSTGRES_URL_FILE = secretFile;
+  const config = resolveVistaAssetRuntimeConfig(env, { clock: () => NOW });
+  assert.equal(config.postgresUrl, "postgresql://asset_user:secret@127.0.0.1/assets");
+  assert.throws(
+    () => resolveVistaAssetRuntimeConfig({ ...env, POSTGRES_URL: "postgresql://duplicate/db" }, { clock: () => NOW }),
+    /mutually exclusive/,
+  );
 });
 
 test("runtime requires an exact unexpired digest-bound live audit receipt", (t) => {

@@ -44,23 +44,9 @@ export EMBED_VERSION="${EMBED_VERSION:-bge-large-en-v1.5-bm25-v1}"
 
 export SIMWORLD_MCP_CONFIG="${SIMWORLD_MCP_CONFIG:-${SCRIPT_DIR}/../.runtime/mcp-${PORT}.json}"
 mkdir -p "$(dirname "${SIMWORLD_MCP_CONFIG}")"
-SIMWORLD_WEB_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SIMWORLD_WEB_DIR="${SIMWORLD_WEB_DIR}" node <<'NODE'
-const fs = require("fs");
-const path = require("path");
-
-const src = path.join(process.env.SIMWORLD_WEB_DIR, "mcp.json");
-const dst = process.env.SIMWORLD_MCP_CONFIG;
-const cfg = JSON.parse(fs.readFileSync(src, "utf8"));
-
-cfg.mcpServers = cfg.mcpServers || {};
-cfg.mcpServers.simworld = cfg.mcpServers.simworld || {};
-cfg.mcpServers.simworld.env = cfg.mcpServers.simworld.env || {};
-cfg.mcpServers.simworld.env.UNREAL_HOST = process.env.UNREAL_HOST || "127.0.0.1";
-cfg.mcpServers.simworld.env.UNREAL_PORT = String(process.env.UNREAL_PORT || "55559");
-
-fs.writeFileSync(dst, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
-NODE
+# index.js atomically creates this 0600 config from the current checkout.  It
+# intentionally contains no DB DSN, access token, or receipt secret; MCP
+# subprocesses inherit those values from the already-sandboxed builder process.
 
 ORIGINAL_HOME="${HOME:-}"
 REAL_CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"

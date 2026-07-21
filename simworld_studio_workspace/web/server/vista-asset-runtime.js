@@ -12,6 +12,7 @@ const { createVistaAssetResolver } = require("./vista-asset-resolver");
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
+const MAX_SECRET_BYTES = 8 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 function flag(value) {
@@ -91,6 +92,28 @@ function requirePositiveInt(value, fallback, field, maximum) {
   return parsed;
 }
 
+function resolvePostgresUrl(env, fsImpl) {
+  const direct = typeof env.POSTGRES_URL === "string" ? env.POSTGRES_URL.trim() : "";
+  const fileValue = typeof env.POSTGRES_URL_FILE === "string" ? env.POSTGRES_URL_FILE.trim() : "";
+  if (direct && fileValue) throw new TypeError("POSTGRES_URL and POSTGRES_URL_FILE are mutually exclusive");
+  let value = direct;
+  if (fileValue) {
+    const filename = requireAbsoluteFile(fileValue, "POSTGRES_URL_FILE");
+    value = readBoundedFile(filename, MAX_SECRET_BYTES, "POSTGRES_URL_FILE", fsImpl).toString("utf8").trim();
+  }
+  if (!value || /[\x00-\x20\x7f]/.test(value)) {
+    throw new TypeError("POSTGRES_URL or POSTGRES_URL_FILE is required and must contain one DSN");
+  }
+  let parsed;
+  try { parsed = new URL(value); } catch (_error) {
+    throw new TypeError("PostgreSQL DSN is invalid");
+  }
+  if (!new Set(["postgres:", "postgresql:"]).has(parsed.protocol) || !parsed.hostname || !parsed.pathname) {
+    throw new TypeError("PostgreSQL DSN is invalid");
+  }
+  return value;
+}
+
 function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
   const enabled = flag(env.VISTA_ASSET_RESOLUTION_ENABLED);
   if (!enabled) return Object.freeze({ enabled: false, manifest: null, snapshotId: null });
@@ -131,7 +154,7 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
   if (qdrantCollection !== manifest.qdrant.collection) throw new TypeError("QDRANT_COLLECTION does not match the asset snapshot");
   if (embeddingVersion !== manifest.embedding.version) throw new TypeError("EMBED_VERSION does not match the asset snapshot");
   if (ueContentRevision !== manifest.ue_content_revision) throw new TypeError("VISTA_UE_CONTENT_REVISION does not match the asset snapshot");
-  requireText(env.POSTGRES_URL, "POSTGRES_URL");
+  const postgresUrl = resolvePostgresUrl(env, fsImpl);
 
   const clock = typeof options.clock === "function" ? options.clock : () => new Date();
   const assertLiveAuditFresh = () => validateAssetLiveAuditReceipt(liveAuditReceipt, {
@@ -154,6 +177,7 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
     qdrantUrl: requireOrigin(env.QDRANT_URL, "QDRANT_URL"),
     qdrantCollection,
     embedServiceUrl: requireOrigin(env.EMBED_SERVICE_URL, "EMBED_SERVICE_URL"),
+    postgresUrl,
     embeddingVersion,
     ueContentRevision,
     minConfidence: requireConfidence(env.VISTA_ASSET_MIN_CONFIDENCE),
@@ -198,9 +222,31 @@ function createVistaAssetRuntime(options = {}) {
     fsImpl: options.fsImpl,
     clock: options.clock,
   });
-  if (!config.enabled) return Object.freeze({ config, resolver: null });
+  if (!config.enabled) return Object.freeze({ config, resolver: null, searchAssets: null });
   const retrieval = options.searchAssets || defaultSearchAssets;
   if (typeof retrieval !== "function") throw new TypeError("searchAssets must be a function");
+  const searchAssets = async (request = {}) => {
+    if (typeof config.assertLiveAuditFresh !== "function") {
+      throw new TypeError("Verified asset runtime requires a live-audit freshness check");
+    }
+    config.assertLiveAuditFresh();
+    return retrieval({
+      query: request.query,
+      ...(request.category ? { category: request.category } : {}),
+      ...(request.k ? { k: request.k } : {}),
+    }, {
+      signal: request.signal,
+      qdrantUrl: config.qdrantUrl,
+      collection: config.qdrantCollection,
+      embedServiceUrl: config.embedServiceUrl,
+      embeddingTimeoutMs: config.timeoutMs,
+      qdrantTimeoutMs: config.timeoutMs,
+      postgresTimeoutMs: config.timeoutMs,
+      postgresUrl: config.postgresUrl,
+      assetSnapshotRevision: config.snapshotId,
+      assertLiveAuditFresh: config.assertLiveAuditFresh,
+    });
+  };
   const resolver = createVistaAssetResolver({
     snapshotId: config.snapshotId,
     minConfidence: config.minConfidence,
@@ -208,26 +254,10 @@ function createVistaAssetRuntime(options = {}) {
     timeoutMs: config.timeoutMs,
     totalTimeoutMs: config.totalTimeoutMs,
     searchAssets: async (request) => {
-      if (typeof config.assertLiveAuditFresh !== "function") {
-        throw new TypeError("Verified asset runtime requires a live-audit freshness check");
-      }
-      config.assertLiveAuditFresh();
-      return normalizeRetrievalCandidates(await retrieval({
-        query: request.query,
-        k: request.k,
-      }, {
-        signal: request.signal,
-        qdrantUrl: config.qdrantUrl,
-        collection: config.qdrantCollection,
-        embedServiceUrl: config.embedServiceUrl,
-        embeddingTimeoutMs: config.timeoutMs,
-        qdrantTimeoutMs: config.timeoutMs,
-        postgresTimeoutMs: config.timeoutMs,
-        assetSnapshotRevision: config.snapshotId,
-      }), config.snapshotId);
+      return normalizeRetrievalCandidates(await searchAssets(request), config.snapshotId);
     },
   });
-  return Object.freeze({ config, resolver });
+  return Object.freeze({ config, resolver, searchAssets });
 }
 
 module.exports = {

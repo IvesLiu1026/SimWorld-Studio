@@ -30,7 +30,9 @@ function envFlag(value) {
 
 function normalizeTransportProfile(value) {
   const profile = String(value || "loopback").trim().toLowerCase();
-  if (["public", "public_webrtc", "public-webrtc", "webrtc"].includes(profile)) return "public_webrtc";
+  if (["public", "public_webrtc", "public-webrtc", "webrtc", "trusted_proxy", "trusted-proxy"].includes(profile)) {
+    return "public_webrtc";
+  }
   return "loopback";
 }
 
@@ -192,12 +194,21 @@ function createReviewReadinessProbe({
 
     const requirements = production
       ? [
-        { reviewType: "text", path: String(env.REVIEW_TEXT_SMOKE_RECEIPT_PATH || "").trim() },
-        { reviewType: "visual", path: String(env.REVIEW_VISUAL_SMOKE_RECEIPT_PATH || "").trim() },
+        {
+          reviewType: "text",
+          path: String(env.REVIEW_TEXT_SMOKE_RECEIPT_PATH || "").trim(),
+          sha256: String(env.REVIEW_TEXT_SMOKE_RECEIPT_SHA256 || "").trim().toLowerCase(),
+        },
+        {
+          reviewType: "visual",
+          path: String(env.REVIEW_VISUAL_SMOKE_RECEIPT_PATH || "").trim(),
+          sha256: String(env.REVIEW_VISUAL_SMOKE_RECEIPT_SHA256 || "").trim().toLowerCase(),
+        },
       ]
       : [{
         reviewType: expectedType || null,
         path: resolveReviewSmokeReceiptPath(env),
+        sha256: String(env.REVIEW_SMOKE_RECEIPT_SHA256 || "").trim().toLowerCase() || null,
       }];
     if (production && requirements.some((entry) => !entry.path)) {
       return {
@@ -215,11 +226,26 @@ function createReviewReadinessProbe({
         )],
       };
     }
+    if (production && requirements.some((entry) => !/^[a-f0-9]{64}$/.test(entry.sha256))) {
+      return {
+        status: "not_ready",
+        revision,
+        causes: [publicCause(
+          "REVIEW_SMOKE_RECEIPT_PINS_INCOMPLETE",
+          "Production requires SHA-256 pins for both Text and Visual provider smoke receipts.",
+          false,
+          "review_provider",
+        )],
+      };
+    }
 
     const receipts = [];
     try {
       for (const requirement of requirements) {
-        const receipt = readReviewSmokeReceipt(requirement.path, { fsImpl });
+        const receipt = readReviewSmokeReceipt(requirement.path, {
+          fsImpl,
+          expectedSha256: requirement.sha256,
+        });
         verifyReviewSmokeReceipt(receipt, {
           provider: config.provider,
           model: config.model,
@@ -247,6 +273,10 @@ function createReviewReadinessProbe({
         REVIEW_LEGACY_OVERRIDE_REJECTED: "REVIEW_READINESS_VERIFIED is legacy metadata and cannot replace a provider smoke receipt.",
         REVIEW_SMOKE_RECEIPT_UNAVAILABLE: "A real tool-free provider smoke receipt is not available.",
         REVIEW_SMOKE_RECEIPTS_INCOMPLETE: "Separate Text and Visual provider smoke receipts are required.",
+        REVIEW_SMOKE_RECEIPT_PINS_INCOMPLETE: "Separate Text and Visual provider smoke receipt SHA-256 pins are required.",
+        REVIEW_SMOKE_RECEIPT_DIGEST_MISMATCH: "The review provider smoke receipt does not match its deployment SHA-256 pin.",
+        REVIEW_SMOKE_RECEIPT_PIN_INVALID: "The review provider smoke receipt SHA-256 pin is invalid.",
+        REVIEW_SMOKE_RECEIPT_CHANGED: "The review provider smoke receipt changed while it was being read.",
         REVIEW_SMOKE_RECEIPT_EXPIRED: "The review provider smoke receipt has expired.",
         REVIEW_SMOKE_RECEIPT_MISMATCH: "The review provider smoke receipt does not match the running provider, model, source revision, or review type.",
         REVIEW_SMOKE_RECEIPT_NOT_YET_VALID: "The review provider smoke receipt timestamp is not yet valid.",
@@ -273,6 +303,13 @@ function createReviewReadinessProbe({
         ...revision,
         verification: production ? "text_visual_provider_smoke_receipts" : "provider_smoke_receipt",
         receipt_ids: Object.fromEntries(receipts.map((receipt) => [receipt.review_type, receipt.receipt_id])),
+        ...(requirements.some((entry) => entry.sha256) ? {
+          receipt_sha256: Object.fromEntries(
+            requirements
+              .filter((entry) => entry.sha256)
+              .map((entry, index) => [entry.reviewType || receipts[index].review_type, entry.sha256]),
+          ),
+        } : {}),
         review_types: receipts.map((receipt) => receipt.review_type).sort(),
         cli_name: receipts[0].cli.name,
         cli_version: receipts[0].cli.version,
@@ -345,7 +382,7 @@ function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs, clock =
       ));
     }
 
-    if (!env.POSTGRES_URL) {
+    if (!env.POSTGRES_URL && !env.POSTGRES_URL_FILE) {
       causes.push(publicCause(
         "ASSET_POSTGRES_CONFIG_MISSING",
         "The PostgreSQL asset catalog connection is not configured.",

@@ -21,17 +21,13 @@ function buildCodexMcpArgs(opts) {
   const uePort = opts.uePort || process.env.UNREAL_PORT || "55561";
   const ueHost = opts.ueHost || process.env.UNREAL_HOST || "127.0.0.1";
   const assetLib = opts.assetLibraryPath || process.env.ASSET_LIBRARY_PATH || "";
-  // Pass the retrieval-stack env through to the MCP subprocess so the search_assets tool
-  // (which hits Qdrant / embed / Postgres) works inside the codex-spawned mcp-server.
-  const _passEnv = ["QDRANT_URL", "QDRANT_COLLECTION", "EMBED_SERVICE_URL", "EMBED_VERSION", "POSTGRES_URL", "ASSET_DB_DIR", "PREFILTER_TOP_K"]
-    .filter(k => process.env[k])
-    .map(k => `,${k}="${String(process.env[k]).replace(/"/g, '\\"')}"`)
-    .join("");
+  // The Codex process receives the bounded server environment and its MCP child
+  // inherits it.  Never duplicate DSNs, tokens, or receipt pins into CLI argv.
   return [
     "-c", `mcp_servers.simworld.command="node"`,
     "-c", `mcp_servers.simworld.args=["${mcpServerJs}"]`,
     "-c",
-    `mcp_servers.simworld.env={UNREAL_HOST="${ueHost}",UNREAL_PORT="${uePort}"${assetLib ? `,ASSET_LIBRARY_PATH="${assetLib}"` : ""}${_passEnv}}`,
+    `mcp_servers.simworld.env={UNREAL_HOST="${ueHost}",UNREAL_PORT="${uePort}"${assetLib ? `,ASSET_LIBRARY_PATH="${assetLib}"` : ""}}`,
   ];
 }
 

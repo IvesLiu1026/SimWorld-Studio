@@ -72,7 +72,10 @@ function writeSmoke(file, overrides = {}) {
     ...overrides,
   });
   writeReviewSmokeReceiptAtomic(file, receipt);
-  return receipt;
+  return {
+    receipt,
+    sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+  };
 }
 
 function executableFs(exists) {
@@ -147,7 +150,7 @@ test("feature policy makes production retrieval and public streaming blocking", 
   const policy = resolveStudioFeaturePolicy({
     NODE_ENV: "production",
     ASSET_REQUIRE_REAL_ASSETS: "true",
-    STUDIO_TRANSPORT_PROFILE: "public_webrtc",
+    STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
   });
   assert.equal(policy.retrieval, "required");
   assert.equal(policy.streaming, "required");
@@ -169,6 +172,8 @@ test("review readiness ignores the legacy flag and requires a matching, current 
     SIMWORLD_BUILD_REVISION: "build-abc123",
     REVIEW_TEXT_SMOKE_RECEIPT_PATH: textReceiptPath,
     REVIEW_VISUAL_SMOKE_RECEIPT_PATH: visualReceiptPath,
+    REVIEW_TEXT_SMOKE_RECEIPT_SHA256: "0".repeat(64),
+    REVIEW_VISUAL_SMOKE_RECEIPT_SHA256: "0".repeat(64),
   };
   const probe = createReviewReadinessProbe({ env, claudeBin: process.execPath, now: () => REVIEW_NOW + 1 });
   const report = await probe();
@@ -188,8 +193,10 @@ test("review readiness ignores the legacy flag and requires a matching, current 
   assert.equal(legacy.status, "not_ready");
   assert.equal(legacy.causes[0].code, "REVIEW_LEGACY_OVERRIDE_REJECTED");
 
-  writeSmoke(textReceiptPath, { receiptId: "readiness-smoke-text", reviewType: "text" });
-  writeSmoke(visualReceiptPath, { receiptId: "readiness-smoke-visual", reviewType: "visual" });
+  const textSmoke = writeSmoke(textReceiptPath, { receiptId: "readiness-smoke-text", reviewType: "text" });
+  const visualSmoke = writeSmoke(visualReceiptPath, { receiptId: "readiness-smoke-visual", reviewType: "visual" });
+  env.REVIEW_TEXT_SMOKE_RECEIPT_SHA256 = textSmoke.sha256;
+  env.REVIEW_VISUAL_SMOKE_RECEIPT_SHA256 = visualSmoke.sha256;
   const verified = await probe();
   assert.equal(verified.status, "ready");
   assert.equal(verified.revision.verification, "text_visual_provider_smoke_receipts");
@@ -203,8 +210,8 @@ test("review readiness fails closed for receipt mismatch and expiry without prov
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const textReceiptPath = path.join(directory, "text-receipt.json");
   const visualReceiptPath = path.join(directory, "visual-receipt.json");
-  writeSmoke(textReceiptPath, { receiptId: "readiness-smoke-text", reviewType: "text" });
-  writeSmoke(visualReceiptPath, { receiptId: "readiness-smoke-visual", reviewType: "visual" });
+  const textSmoke = writeSmoke(textReceiptPath, { receiptId: "readiness-smoke-text", reviewType: "text" });
+  const visualSmoke = writeSmoke(visualReceiptPath, { receiptId: "readiness-smoke-visual", reviewType: "visual" });
   const base = {
     PATH: "/bin",
     NODE_ENV: "production",
@@ -214,6 +221,8 @@ test("review readiness fails closed for receipt mismatch and expiry without prov
     SIMWORLD_BUILD_REVISION: "build-abc123",
     REVIEW_TEXT_SMOKE_RECEIPT_PATH: textReceiptPath,
     REVIEW_VISUAL_SMOKE_RECEIPT_PATH: visualReceiptPath,
+    REVIEW_TEXT_SMOKE_RECEIPT_SHA256: textSmoke.sha256,
+    REVIEW_VISUAL_SMOKE_RECEIPT_SHA256: visualSmoke.sha256,
   };
 
   const mismatch = await createReviewReadinessProbe({
@@ -232,7 +241,7 @@ test("review readiness fails closed for receipt mismatch and expiry without prov
   assert.equal(expired.status, "not_ready");
   assert.equal(expired.causes[0].code, "REVIEW_SMOKE_RECEIPT_EXPIRED");
 
-  writeSmoke(visualReceiptPath, {
+  const failedSmoke = writeSmoke(visualReceiptPath, {
     receiptId: "readiness-smoke-visual-failed",
     reviewType: "visual",
     verdict: {
@@ -242,6 +251,14 @@ test("review readiness fails closed for receipt mismatch and expiry without prov
       raw_notes: "Not persisted.",
     },
   });
+  const stalePin = await createReviewReadinessProbe({
+    env: base,
+    claudeBin: process.execPath,
+    now: () => REVIEW_NOW + 1,
+  })();
+  assert.equal(stalePin.status, "not_ready");
+  assert.equal(stalePin.causes[0].code, "REVIEW_SMOKE_RECEIPT_DIGEST_MISMATCH");
+  base.REVIEW_VISUAL_SMOKE_RECEIPT_SHA256 = failedSmoke.sha256;
   const failedVerdict = await createReviewReadinessProbe({
     env: base,
     claudeBin: process.execPath,
@@ -398,7 +415,7 @@ test("streaming and timeline probes distinguish local transport from missing aut
 test("public streaming ignores legacy flags and requires a current deployment-bound forced-relay receipt", async () => {
   const legacy = await createStreamingReadinessProbe({
     env: {
-      STUDIO_TRANSPORT_PROFILE: "public_webrtc",
+      STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
       PUBLIC_WEBRTC_EXTERNAL_VERIFIED: "true",
     },
     connect: successfulConnection,
@@ -410,7 +427,7 @@ test("public streaming ignores legacy flags and requires a current deployment-bo
   const receiptPath = "/evidence/webrtc-readiness.json";
   const ready = await createStreamingReadinessProbe({
     env: {
-      STUDIO_TRANSPORT_PROFILE: "public_webrtc",
+      STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
       WEBRTC_READINESS_RECEIPT_PATH: receiptPath,
       WEBRTC_READINESS_RECEIPT_SHA256: digestWebRtcReceipt(receipt),
       SIMWORLD_BUILD_REVISION: receipt.build_revision,
@@ -427,7 +444,7 @@ test("public streaming ignores legacy flags and requires a current deployment-bo
 
   const expired = await createStreamingReadinessProbe({
     env: {
-      STUDIO_TRANSPORT_PROFILE: "public_webrtc",
+      STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
       WEBRTC_READINESS_RECEIPT_PATH: receiptPath,
       WEBRTC_READINESS_RECEIPT_SHA256: digestWebRtcReceipt(receipt),
       SIMWORLD_BUILD_REVISION: receipt.build_revision,

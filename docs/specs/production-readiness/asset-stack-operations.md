@@ -199,7 +199,14 @@ may the deployment set the readiness revision to the already-selected snapshot:
 export ASSET_READINESS_VERIFIED_REVISION='<verified snapshot_id>'
 export ASSET_LIVE_AUDIT_RECEIPT="$ASSET_DB_DIR/snapshot-live-audit.json"
 export ASSET_LIVE_AUDIT_RECEIPT_SHA256='<live_audit_receipt_sha256>'
+export POSTGRES_URL_FILE='/run/secrets/postgres_url'
 ```
+
+For the long-running Web/MCP service, prefer the root-managed `0600`
+`POSTGRES_URL_FILE`; do not set it together with `POSTGRES_URL`. The DSN is read
+with `O_NOFOLLOW` and passed in memory to the PostgreSQL client. Bounded admin
+CLI invocations above may receive `POSTGRES_URL` directly from the secret store,
+but it must never be placed in an MCP config or process argv.
 
 The live receipt is deliberately short-lived. Runtime/startup integration must
 validate its exact schema, raw-file SHA-256, manifest binding, snapshot binding,

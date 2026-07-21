@@ -1,7 +1,7 @@
 {
   "schema": "vista-simworld-security-manifest/v1",
   "workspace_sha256": {
-    "web/server/index.js": "62802b62587405947fe0480b5aec10979a05b104097cb4c349d2e05b1c60b019",
+    "web/server/index.js": "f04a95ac8cca72acd624ee1382258450f3b16b6e12b09786ccf8dc1dc72b7ee4",
     "web/server/runtime-security.js": "e1ffc7f96b1371e0330f2b35c9eb59c95a5e7e8a9a55525d38753780693b5005",
     "web/server/pixel-streaming-config.js": "3c7f5d7771c118bb0251a77315625516869f8ea94ddedc76f0b07f8e959f32bb",
     "web/server/pixel-streaming-endpoint-registry.js": "8019cfa8df80df08d82b3037e8c1090a22345359e9765e8f941f96264e0b3578",

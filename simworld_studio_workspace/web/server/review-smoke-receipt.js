@@ -299,20 +299,41 @@ function writeReviewSmokeReceiptAtomic(file, receipt, { fsImpl = fs } = {}) {
   }
 }
 
-function readReviewSmokeReceipt(file, { fsImpl = fs } = {}) {
+function readReviewSmokeReceipt(file, { fsImpl = fs, expectedSha256 = null } = {}) {
   let bytes;
+  let descriptor;
   try {
-    bytes = fsImpl.readFileSync(file);
+    descriptor = fsImpl.openSync(file, fs.constants.O_RDONLY | Number(fs.constants.O_NOFOLLOW || 0));
+    const before = fsImpl.fstatSync(descriptor);
+    if (!before.isFile() || before.size < 2 || before.size > MAX_RECEIPT_BYTES) {
+      fail("REVIEW_SMOKE_RECEIPT_INVALID", "Review smoke receipt has an invalid size");
+    }
+    bytes = fsImpl.readFileSync(descriptor);
+    const after = fsImpl.fstatSync(descriptor);
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      fail("REVIEW_SMOKE_RECEIPT_CHANGED", "Review smoke receipt changed while it was being read");
+    }
   } catch (_cause) {
+    if (_cause instanceof ReviewSmokeReceiptError) throw _cause;
     throw new ReviewSmokeReceiptError(
       "REVIEW_SMOKE_RECEIPT_UNAVAILABLE",
       "Review smoke receipt is unavailable",
       { retryable: true },
     );
+  } finally {
+    try { if (descriptor !== undefined) fsImpl.closeSync(descriptor); } catch (_error) {}
   }
   if (!Buffer.isBuffer(bytes)) bytes = Buffer.from(String(bytes));
   if (bytes.length < 2 || bytes.length > MAX_RECEIPT_BYTES) {
     fail("REVIEW_SMOKE_RECEIPT_INVALID", "Review smoke receipt has an invalid size");
+  }
+  if (expectedSha256 !== null) {
+    if (typeof expectedSha256 !== "string" || !SHA256.test(expectedSha256)) {
+      fail("REVIEW_SMOKE_RECEIPT_PIN_INVALID", "Review smoke receipt SHA-256 pin is invalid");
+    }
+    if (digestReviewSmokeReceiptBytes(bytes) !== expectedSha256) {
+      fail("REVIEW_SMOKE_RECEIPT_DIGEST_MISMATCH", "Review smoke receipt does not match its SHA-256 pin");
+    }
   }
   let receipt;
   try {
@@ -321,6 +342,14 @@ function readReviewSmokeReceipt(file, { fsImpl = fs } = {}) {
     fail("REVIEW_SMOKE_RECEIPT_INVALID", "Review smoke receipt is not valid JSON");
   }
   return validateReviewSmokeReceipt(receipt);
+}
+
+function digestReviewSmokeReceiptBytes(bytes) {
+  const value = Buffer.isBuffer(bytes) ? bytes : Buffer.from(String(bytes), "utf8");
+  if (value.length < 2 || value.length > MAX_RECEIPT_BYTES) {
+    fail("REVIEW_SMOKE_RECEIPT_INVALID", "Review smoke receipt has an invalid size");
+  }
+  return crypto.createHash("sha256").update(value).digest("hex");
 }
 
 function verifyReviewSmokeReceipt(receipt, {
@@ -370,6 +399,7 @@ module.exports = {
   REVIEW_SMOKE_RECEIPT_SCHEMA,
   ReviewSmokeReceiptError,
   createReviewSmokeReceipt,
+  digestReviewSmokeReceiptBytes,
   digestReviewScene,
   readReviewSmokeReceipt,
   resolveReviewSmokeReceiptPath,

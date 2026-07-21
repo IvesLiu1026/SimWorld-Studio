@@ -319,6 +319,26 @@ function getAssetSnapshotRevision(db, opts) {
   );
 }
 
+let _verifiedAssetRuntimeConfig = null;
+function withVerifiedAssetRuntimeOptions(opts) {
+  const provided = opts || {};
+  if (provided.assertLiveAuditFresh !== undefined || !_truthy(process.env.VISTA_ASSET_RESOLUTION_ENABLED)) {
+    return provided;
+  }
+  if (!_verifiedAssetRuntimeConfig) {
+    _verifiedAssetRuntimeConfig = require("./vista-asset-runtime")
+      .resolveVistaAssetRuntimeConfig(process.env);
+  }
+  if (!_verifiedAssetRuntimeConfig.enabled) return provided;
+  return {
+    ...provided,
+    snapshotRevision: _verifiedAssetRuntimeConfig.snapshotId,
+    assetSnapshotRevision: _verifiedAssetRuntimeConfig.snapshotId,
+    assertLiveAuditFresh: _verifiedAssetRuntimeConfig.assertLiveAuditFresh,
+    postgresUrl: _verifiedAssetRuntimeConfig.postgresUrl,
+  };
+}
+
 function buildRetrievalCacheKey(scene, opts, revision) {
   const usePrefilter = _usePrefilter(opts);
   return JSON.stringify({
@@ -504,6 +524,12 @@ function _dependencyCausesFromErrors(errors) {
 // ── orchestrator ─────────────────────────────────────────────────────────────
 async function retrieve(scene, opts) {
   const o = Object.assign({ reasoningEffort: process.env.ASSET_RETRIEVAL_REASONING_EFFORT || "medium", telemetryComponent: "retrieval" }, opts || {});
+  if (o.assertLiveAuditFresh !== undefined) {
+    if (typeof o.assertLiveAuditFresh !== "function") throw new TypeError("assertLiveAuditFresh must be a function");
+    // Validate before consulting the prompt cache so an expired live audit
+    // receipt cannot keep serving a previously cached palette.
+    o.assertLiveAuditFresh();
+  }
   const log = o.log || (() => {});
   const usePrefilter = _usePrefilter(o);
   const db = loadDB();
@@ -544,7 +570,12 @@ async function retrieve(scene, opts) {
     if (usePrefilter) {
       try {
         const { prefilterCategory } = require("./asset-retrieval-db");
-        const pref = await prefilterCategory(r.id, plan, { ...o, topK: PREFILTER_TOP_K, log });
+        const pref = await prefilterCategory(r.id, plan, {
+          ...o,
+          topK: PREFILTER_TOP_K,
+          log,
+          assetSnapshotRevision: revision,
+        });
         if (pref.retrieval) trace.prefilterTelemetry[r.id] = pref.retrieval;
         const seenIds = new Set();
         const compact = [];
@@ -723,7 +754,8 @@ async function buildPromptBlock(scene, mode, opts) {
 
 async function buildPromptBlockWithPolicy(scene, policyInput, opts) {
   const policy = _asAssetPolicy(policyInput);
-  const revision = () => getAssetSnapshotRevision(_cache, opts);
+  const runtimeOptions = policy.mode === "off" ? (opts || {}) : withVerifiedAssetRuntimeOptions(opts);
+  const revision = () => getAssetSnapshotRevision(_cache, runtimeOptions);
   if (policy.mode === "off") {
     return {
       promptBlock: "",
@@ -737,7 +769,7 @@ async function buildPromptBlockWithPolicy(scene, policyInput, opts) {
     };
   }
   try {
-    const promptBlock = await buildPromptBlock(scene, policy.mode, opts);
+    const promptBlock = await buildPromptBlock(scene, policy.mode, runtimeOptions);
     return {
       promptBlock,
       metadata: {
@@ -771,4 +803,5 @@ module.exports = {
   resolveAssetPolicy,
   retrieve,
   serializeAssetRetrievalError,
+  withVerifiedAssetRuntimeOptions,
 };

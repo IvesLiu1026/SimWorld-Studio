@@ -318,7 +318,8 @@ function qdrant(opts) {
 function pgPool(opts) {
   if (opts && opts.pgPool) return opts.pgPool;
   if (!_pool) {
-    if (!process.env.POSTGRES_URL) {
+    const connectionString = String(opts && opts.postgresUrl || process.env.POSTGRES_URL || "").trim();
+    if (!connectionString) {
       throw new AssetDependencyError(
         "postgres",
         "ASSET_DEPENDENCY_CONFIG_MISSING",
@@ -327,7 +328,7 @@ function pgPool(opts) {
       );
     }
     const { Pool } = require("pg");
-    _pool = new Pool({ connectionString: process.env.POSTGRES_URL });
+    _pool = new Pool({ connectionString });
   }
   return _pool;
 }
@@ -414,6 +415,17 @@ function resultPoints(result) {
   if (Array.isArray(result && result.points)) return result.points;
   if (Array.isArray(result && result.result)) return result.result;
   return [];
+}
+
+function assertAssetSnapshotFresh(opts) {
+  if (!opts || opts.assertLiveAuditFresh === undefined) return;
+  if (typeof opts.assertLiveAuditFresh !== "function") {
+    throw new TypeError("assertLiveAuditFresh must be a function");
+  }
+  // This deliberately runs outside dependency fallback try/catch blocks.  An
+  // expired or mismatched deployment receipt is a security/revision failure,
+  // not a Qdrant outage that may be hidden by a PostgreSQL fallback.
+  opts.assertLiveAuditFresh();
 }
 
 function compactFromPayload(payload, score) {
@@ -522,6 +534,7 @@ async function postgresFallbackCategory(category, plan, opts) {
 }
 
 async function prefilterCategory(category, plan, opts) {
+  assertAssetSnapshotFresh(opts);
   const log = opts && opts.log || (() => {});
   const causes = [];
   try {
@@ -555,6 +568,7 @@ async function prefilterCategory(category, plan, opts) {
 // (filling gaps / adding variety) instead of being limited to the pushed seed palette.
 async function searchAssets({ query, category, k } = {}, opts) {
   const o = opts || {};
+  assertAssetSnapshotFresh(o);
   const limit = Math.max(1, Math.min(parseInt(k, 10) || 12, 40));
   const text = String(query || "").trim() || "asset";
   const cat = category && String(category).trim() ? String(category).trim() : null;
@@ -636,6 +650,7 @@ module.exports = {
   AssetDependencyError,
   AssetRetrievalUnavailableError,
   RetrievalPrefilterError,
+  assertAssetSnapshotFresh,
   attachRetrievalTelemetry,
   buildQdrantFilter,
   dependencyTimeoutMs,
