@@ -94,6 +94,18 @@ function mockResponse() {
   };
 }
 
+function accountedIntent(summary, costUsd = 0) {
+  return async ({ onAccounting }) => {
+    onAccounting({
+      provider: "claude",
+      model: "claude-opus-4-8",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      costUsd,
+    });
+    return summary;
+  };
+}
+
 test("internal SSE client authenticates, parses CRLF frames, and requires done", async (t) => {
   let requestBody = null;
   let authorization = null;
@@ -259,7 +271,7 @@ test("text loop turns inner HTTP 401 into builder_error and never calls critic",
     internalChatTimeoutMs: 1000,
     env: { SCENE_LOOP_MAX_ROUNDS: "1" },
     intentStore: new Map(),
-    updateIntentSummary: async () => "build a scene",
+    updateIntentSummary: accountedIntent("build a scene"),
     criticRunner: async () => { criticCalls += 1; return { status: "PASS", issues: [], suggestions: [] }; },
   });
   const events = parseEvents(res.text());
@@ -315,7 +327,7 @@ test("text loop propagates canonical builder and correlation contract", async (t
     internalChatTimeoutMs: 1000,
     env: { SCENE_LOOP_MAX_ROUNDS: "1", CLAUDE_MODEL: "claude-opus-4-8" },
     intentStore,
-    updateIntentSummary: async () => "intent",
+    updateIntentSummary: accountedIntent("intent", 0.02),
     ueBroker: injectedUeBroker,
     criticRunner: async (options) => {
       assert.equal(options.ueBroker, injectedUeBroker);
@@ -330,7 +342,7 @@ test("text loop propagates canonical builder and correlation contract", async (t
   assert.equal(received.body.conversationId, "conversation-2");
   assert.equal(received.body.runId, "run-contract");
   assert.equal(received.body.useLoop, false);
-  assert.equal(received.body.maxBudgetUsd, 2);
+  assert.equal(received.body.maxBudgetUsd, 1.98);
   assert.equal(received.body.requireRealAssets, false);
   assert.equal(received.body.assetDegradedMode, "basic_geometry");
   assert.equal(Object.hasOwn(received.body, "runner"), false);
@@ -339,8 +351,18 @@ test("text loop propagates canonical builder and correlation contract", async (t
   assert.equal(done.isError, false);
   assert.equal(done.review.builderAgent, "codex");
   assert.equal(done.review.criticProvider, "claude");
-  assert.equal(done.budget.spent_usd, 0.15);
-  assert.equal(done.budget.remaining_usd, 1.85);
+  assert.equal(done.budget.spent_usd, 0.17);
+  assert.equal(done.budget.remaining_usd, 1.83);
+  assert.deepEqual(done.budget.stages.summarizer, {
+    observations: 1,
+    cost_usd: 0.02,
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    },
+  });
   const criticVerdict = parseEvents(res.text()).find((event) => event.name === "critic_verdict").data;
   assert.equal(criticVerdict.provider, "claude");
   assert.equal(criticVerdict.model, "claude-opus-4-8");
@@ -348,7 +370,52 @@ test("text loop propagates canonical builder and correlation contract", async (t
   assert.equal(criticVerdict.usage, null);
   assert.equal(criticVerdict.latency_ms, null);
   assert.equal(criticVerdict.cost_usd, 0.05);
-  assert.equal(criticVerdict.budget.spent_usd, 0.15);
+  assert.equal(criticVerdict.budget.spent_usd, 0.17);
+});
+
+test("Text and Visual Review stop before builder mutation when summarizer accounting is unknown", async () => {
+  for (const [mode, handler] of [["text", handleSceneLoop], ["visual", handleVisualSceneLoop]]) {
+    let builderCalls = 0;
+    const res = mockResponse();
+    await handler({
+      body: {
+        message: "build",
+        sessionId: `studio-${mode}`,
+        conversationId: `conversation-${mode}`,
+        agent: "claude",
+      },
+    }, res, {
+      STUDIO_SESSION: "studio-default",
+      runId: `run-summarizer-${mode}`,
+      accessToken: TOKEN,
+      env: { SCENE_LOOP_MAX_ROUNDS: "1" },
+      intentStore: new Map(),
+      updateIntentSummary: async () => {
+        throw Object.assign(new Error("terminal event missing"), {
+          code: "LLM_ONESHOT_PROTOCOL_ERROR",
+          providerAttempted: true,
+          accountingKnown: false,
+        });
+      },
+      requestInternalSse: async () => {
+        builderCalls += 1;
+        return { done: { isError: false, costUsd: 0 } };
+      },
+      criticRunner: async () => ({ status: "PASS", issues: [], suggestions: [], cost_usd: 0 }),
+      captureRunner: async () => [],
+      ueBroker: { send: async () => ({}) },
+    });
+
+    const events = parseEvents(res.text());
+    const loopDone = events.find((event) => event.name === "loop_done").data;
+    const done = events.find((event) => event.name === "done").data;
+    assert.equal(builderCalls, 0, mode);
+    assert.equal(loopDone.rounds, 0, mode);
+    assert.equal(loopDone.reason, "builder_error", mode);
+    assert.equal(loopDone.error.code, "LLM_ONESHOT_PROTOCOL_ERROR", mode);
+    assert.equal(done.isError, true, mode);
+    assert.equal(done.budget.spent_usd, 0, mode);
+  }
 });
 
 test("Text Review relays only allowlisted inner fields and never exposes builder host paths", async () => {
@@ -366,7 +433,7 @@ test("Text Review relays only allowlisted inner fields and never exposes builder
     accessToken: TOKEN,
     env: { SCENE_LOOP_MAX_ROUNDS: "1" },
     intentStore: new Map(),
-    updateIntentSummary: async () => "intent",
+    updateIntentSummary: accountedIntent("intent"),
     requestInternalSse: async ({ onEvent }) => {
       onEvent("text", {
         delta: "working from /data/secret, /workspace/x, /a/b/c, "
@@ -587,7 +654,7 @@ test("visual loop uses the same fail-closed inner SSE client", async (t) => {
     internalChatTimeoutMs: 1000,
     env: { SCENE_LOOP_MAX_ROUNDS: "1" },
     intentStore: new Map(),
-    updateIntentSummary: async () => "intent",
+    updateIntentSummary: accountedIntent("intent"),
     captureRunner: async () => { captureCalls += 1; return []; },
     criticRunner: async () => { criticCalls += 1; return { status: "PASS", issues: [], suggestions: [] }; },
     ueBroker: { send: async () => ({}) },

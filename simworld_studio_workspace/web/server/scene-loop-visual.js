@@ -16,6 +16,7 @@ const {
 } = require("./scene-critic");
 const { createRequestReviewBudget } = require("./review-budget");
 const { review: reviewWithProvider, validateMaxBudgetUsd } = require("./review-provider");
+const { runReviewIntentStage } = require("./review-intent-stage");
 const {
   requestInternalSse,
   requireStudioAccessToken,
@@ -670,25 +671,73 @@ async function handleVisualSceneLoop(req, res, deps) {
 
   emit("intent_start", {});
   const prior = (deps.intentStore && deps.intentStore.get(scopeId)) || "";
-  let intentSummary = prior;
-  try {
-    throwIfAborted(deps.signal, "Intent summarizer");
-    intentSummary = await updateIntentSummary({
-      priorSummary: prior, newPrompt: message,
-      model: contract.summarizerModel,
-      provider: contract.summarizerProvider,
-      timeoutMs: parseInt((deps.env || process.env).SUMMARIZER_TIMEOUT_MS || "60000", 10),
-      signal: deps.signal,
+  const intentStage = await runReviewIntentStage({
+    priorSummary: prior,
+    newPrompt: message,
+    model: contract.summarizerModel,
+    provider: contract.summarizerProvider,
+    timeoutMs: parseInt((deps.env || process.env).SUMMARIZER_TIMEOUT_MS || "60000", 10),
+    signal: deps.signal,
+    env: deps.env || process.env,
+    reviewBudget,
+    updateIntentSummary,
+  });
+  if (intentStage.status === "failed") {
+    log("vloop", `intent summarizer stopped Review (${intentStage.error.code})`);
+    emit("intent_error", { error: intentStage.error, budget: intentStage.budget });
+    const failedResult = {
+      finalStatus: "FAIL",
+      rounds: 0,
+      reason: intentStage.reason,
+      issues: [],
+      suggestions: [],
+      latestScreenshots: [],
+      builderResult: null,
+      mode: "visual_loop",
+      failureReason: intentStage.reason,
+      error: intentStage.error,
+      budget: intentStage.budget,
+    };
+    emit("loop_done", failedResult);
+    clearInterval(ping);
+    emit("done", {
+      sessionId: STUDIO_SESSION,
+      conversationId: conversationId || scopeId,
+      runId,
+      isError: true,
+      loop: {
+        reason: failedResult.reason,
+        rounds: 0,
+        finalStatus: "FAIL",
+        mode: "visual_loop",
+        budget: failedResult.budget,
+      },
+      failureReason: failedResult.failureReason,
+      error: failedResult.error,
+      review: {
+        builderAgent: contract.builderAgent,
+        builderModel: contract.builderModel,
+        criticProvider: contract.criticProvider,
+        criticModel: contract.criticModel,
+        budget: failedResult.budget,
+      },
+      budget: failedResult.budget,
+      latestScreenshot: null,
+      latestScreenshotRef: null,
     });
-    throwIfAborted(deps.signal, "Intent summarizer");
-    if (deps.intentStore) deps.intentStore.set(scopeId, intentSummary);
-    emit("intent_updated", { summary: intentSummary });
-    log("vloop", "intent summary updated (" + intentSummary.length + " chars)");
-  } catch (e) {
-    intentSummary = (prior ? prior + "\n\nNEW: " : "") + message;
-    log("vloop", "summarizer failed (" + e.message + ") — using fallback intent");
-    emit("intent_updated", { summary: intentSummary, fallback: true });
+    res.end();
+    return;
   }
+  const intentSummary = intentStage.summary;
+  if (!intentStage.fallback && deps.intentStore) deps.intentStore.set(scopeId, intentSummary);
+  emit("intent_updated", {
+    summary: intentSummary,
+    ...(intentStage.fallback ? { fallback: true } : {}),
+    budget: intentStage.budget,
+  });
+  log("vloop", intentStage.fallback
+    ? "intent provider unavailable before start — using deterministic fallback"
+    : "intent summary updated (" + intentSummary.length + " chars)");
 
   async function builderRunner({ prompt, intentSummary, feedback, visualFeedbackImages, round, maxBudgetUsd }) {
     const combinedPrompt =

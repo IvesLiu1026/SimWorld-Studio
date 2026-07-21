@@ -1,6 +1,6 @@
 "use strict";
 
-// Aggregate, per-run accounting for the builder/critic review loop. Money is
+// Aggregate, per-run accounting for the summarizer/builder/critic review loop. Money is
 // stored as integer micro-dollars so repeated rounds do not accumulate binary
 // floating-point drift.
 const DEFAULT_REVIEW_RUN_BUDGET_USD = 2;
@@ -8,7 +8,14 @@ const MIN_REVIEW_RUN_BUDGET_USD = 0.01;
 const MAX_REVIEW_RUN_BUDGET_USD = 100;
 const DEFAULT_STAGE_MINIMUM_USD = 0.01;
 const USD_SCALE = 1_000_000;
-const STAGES = Object.freeze(["builder", "critic"]);
+const STAGES = Object.freeze(["summarizer", "builder", "critic"]);
+const SUMMARIZER_USAGE_FIELDS = Object.freeze([
+  "input_tokens",
+  "output_tokens",
+  "cache_creation_input_tokens",
+  "cache_read_input_tokens",
+]);
+const MAX_REVIEW_USAGE_TOKENS = 1_000_000_000;
 
 class ReviewBudgetError extends Error {
   constructor(code, message, details = {}) {
@@ -119,11 +126,39 @@ function normalizeRound(value) {
   return round;
 }
 
+function normalizeStageRound(stageValue, roundValue) {
+  const stage = normalizeStage(stageValue);
+  const round = normalizeRound(roundValue);
+  if (stage === "summarizer" && round !== null) {
+    throw invalid("Review summarizer accounting must not carry a builder round");
+  }
+  return { stage, round };
+}
+
+function normalizeSummarizerUsage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalid("Observed summarizer usage metadata is required");
+  }
+  const normalized = {};
+  for (const field of SUMMARIZER_USAGE_FIELDS) {
+    const raw = value[field];
+    if (raw === undefined && ["input_tokens", "output_tokens"].includes(field)) {
+      throw invalid(`Observed summarizer usage.${field} is required`);
+    }
+    const amount = raw === undefined ? 0 : raw;
+    if (!Number.isSafeInteger(amount) || amount < 0 || amount > MAX_REVIEW_USAGE_TOKENS) {
+      throw invalid(`Observed summarizer usage.${field} is invalid`);
+    }
+    normalized[field] = amount;
+  }
+  return normalized;
+}
+
 function normalizeStageRequest(value, minimumUsd) {
   if (value && typeof value === "object") {
+    const normalized = normalizeStageRound(value.stage, value.round);
     return {
-      stage: normalizeStage(value.stage),
-      round: normalizeRound(value.round),
+      ...normalized,
       minimumUsd: value.minimumUsd,
     };
   }
@@ -145,8 +180,9 @@ class ReviewBudget {
       field: "Review stage minimum",
       minimum: MIN_REVIEW_RUN_BUDGET_USD,
     });
-    this._stageMicros = { builder: 0, critic: 0 };
-    this._stageObservations = { builder: 0, critic: 0 };
+    this._stageMicros = { summarizer: 0, builder: 0, critic: 0 };
+    this._stageObservations = { summarizer: 0, builder: 0, critic: 0 };
+    this._summarizerUsage = Object.fromEntries(SUMMARIZER_USAGE_FIELDS.map((field) => [field, 0]));
     this._rounds = new Map();
   }
 
@@ -170,16 +206,24 @@ class ReviewBudget {
     const request = value && typeof value === "object"
       ? value
       : { stage: value, costUsd, ...metadata };
-    const stage = normalizeStage(request.stage);
-    const round = normalizeRound(request.round);
+    const { stage, round } = normalizeStageRound(request.stage, request.round);
     const micros = usdToMicros(request.costUsd, {
       field: `Observed ${stage} cost`,
       minimum: 0,
       maximum: MAX_REVIEW_RUN_BUDGET_USD,
     });
+    const usage = stage === "summarizer" ? normalizeSummarizerUsage(request.usage) : null;
+    const nextSummarizerUsage = usage && Object.fromEntries(SUMMARIZER_USAGE_FIELDS.map((field) => {
+      const total = this._summarizerUsage[field] + usage[field];
+      if (!Number.isSafeInteger(total) || total > MAX_REVIEW_USAGE_TOKENS) {
+        throw invalid(`Aggregate summarizer usage.${field} is invalid`);
+      }
+      return [field, total];
+    }));
 
     this._stageMicros[stage] += micros;
     this._stageObservations[stage] += 1;
+    if (nextSummarizerUsage) this._summarizerUsage = nextSummarizerUsage;
     if (round != null) {
       const entry = this._rounds.get(round) || { builder: 0, critic: 0 };
       entry[stage] += micros;
@@ -217,7 +261,7 @@ class ReviewBudget {
   }
 
   _spentMicros() {
-    return this._stageMicros.builder + this._stageMicros.critic;
+    return this._stageMicros.summarizer + this._stageMicros.builder + this._stageMicros.critic;
   }
 
   _remainingMicros() {
@@ -242,6 +286,11 @@ class ReviewBudget {
       exhausted: remaining < this._minimumStageMicros,
       minimum_stage_usd: microsToUsd(this._minimumStageMicros),
       stages: Object.freeze({
+        summarizer: Object.freeze({
+          observations: this._stageObservations.summarizer,
+          cost_usd: microsToUsd(this._stageMicros.summarizer),
+          usage: Object.freeze({ ...this._summarizerUsage }),
+        }),
         builder: Object.freeze({
           observations: this._stageObservations.builder,
           cost_usd: microsToUsd(this._stageMicros.builder),

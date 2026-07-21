@@ -27,6 +27,8 @@ class LlmOneShotError extends Error {
     this.retryable = Boolean(details.retryable);
     this.provider = details.provider || null;
     this.model = details.model || null;
+    this.providerAttempted = details.providerAttempted === true;
+    this.accountingKnown = details.accountingKnown === true;
     if (details.cause) this.cause = details.cause;
   }
 }
@@ -55,7 +57,9 @@ function oneShotBudget(value) {
       `One-shot max budget must be between 0.01 and ${MAX_ONESHOT_MAX_BUDGET_USD.toFixed(2)} USD`,
     );
   }
-  return Math.round(amount * 10_000) / 10_000;
+  // This value becomes a hard CLI cap. Floor rather than round so a value such
+  // as 0.050051 can never authorize more than the operator configured.
+  return Math.floor((amount + Number.EPSILON) * 10_000) / 10_000;
 }
 
 function oneShotTokenLimit(value, { field, defaultValue, maximum }) {
@@ -74,34 +78,56 @@ function usageInteger(usage, field) {
   return value;
 }
 
-function validateClaudeUsageCost({ usage, costUsd }, limits) {
+function normalizeClaudeUsageCost({ usage, costUsd }) {
   if (!usage || typeof usage !== "object" || Array.isArray(usage)) {
     throw oneShotError("LLM_ONESHOT_USAGE_INVALID", "Claude one-shot returned no usage metadata");
   }
   const inputTokens = usageInteger(usage, "input_tokens");
   const outputTokens = usageInteger(usage, "output_tokens");
   let totalInputTokens = inputTokens;
+  const normalizedUsage = {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+  };
   for (const field of ["cache_creation_input_tokens", "cache_read_input_tokens"]) {
-    if (usage[field] !== undefined) totalInputTokens += usageInteger(usage, field);
-  }
-  if (!Number.isSafeInteger(totalInputTokens) || totalInputTokens > limits.maxInputTokens ||
-      outputTokens > limits.maxOutputTokens) {
-    throw oneShotError(
-      "LLM_ONESHOT_USAGE_LIMIT_EXCEEDED",
-      "Claude one-shot token usage exceeded its independent limit",
-    );
+    if (usage[field] !== undefined) {
+      const value = usageInteger(usage, field);
+      totalInputTokens += value;
+      normalizedUsage[field] = value;
+    }
   }
   const cost = costUsd === null || costUsd === undefined || costUsd === "" ? NaN : Number(costUsd);
   if (!Number.isFinite(cost) || cost < 0) {
     throw oneShotError("LLM_ONESHOT_COST_INVALID", "Claude one-shot returned no valid cost metadata");
   }
+  return Object.freeze({
+    usage: Object.freeze(normalizedUsage),
+    costUsd: Math.round(cost * 1_000_000) / 1_000_000,
+    totalInputTokens,
+    outputTokens,
+  });
+}
+
+function assertClaudeUsageCostLimits(accounting, limits) {
+  if (!Number.isSafeInteger(accounting.totalInputTokens)
+      || accounting.totalInputTokens > limits.maxInputTokens
+      || accounting.outputTokens > limits.maxOutputTokens) {
+    throw oneShotError(
+      "LLM_ONESHOT_USAGE_LIMIT_EXCEEDED",
+      "Claude one-shot token usage exceeded its independent limit",
+    );
+  }
+  const cost = accounting.costUsd;
   if (cost > limits.maxBudgetUsd) {
     throw oneShotError(
       "LLM_ONESHOT_COST_LIMIT_EXCEEDED",
       "Claude one-shot cost exceeded its independent budget",
     );
   }
-  return Object.freeze({ usage, costUsd: Math.round(cost * 1_000_000) / 1_000_000 });
+  return Object.freeze({
+    usage: accounting.usage,
+    costUsd: accounting.costUsd,
+  });
 }
 
 function normalizeProvider(v) {
@@ -165,6 +191,13 @@ function oneshotTextClaude(prompt, opts) {
     { field: "One-shot max output tokens", defaultValue: DEFAULT_ONESHOT_MAX_OUTPUT_TOKENS, maximum: 100_000 },
   );
   const signal = o.signal;
+  if (o.onAccounting != null && typeof o.onAccounting !== "function") {
+    throw oneShotError(
+      "LLM_ONESHOT_CONFIG_INVALID",
+      "One-shot accounting callback must be a function",
+      { provider: "claude", model },
+    );
+  }
   const args = [
     "-p",
     "--input-format", "text",
@@ -203,6 +236,8 @@ function oneshotTextClaude(prompt, opts) {
     let outBuf = "", assistantText = "", resultText = "", isErr = false;
     let stdoutBytes = 0, stderrBytes = 0;
     let resultEvents = 0, resultUsage = null, resultCostUsd = null;
+    let accountingKnown = false;
+    let providerStarted = false;
     let settled = false;
     let timer = null;
     let hardKillTimer = null;
@@ -220,6 +255,10 @@ function oneshotTextClaude(prompt, opts) {
       settled = true;
       if (terminateChild) terminate();
       cleanup();
+      if (error instanceof LlmOneShotError) {
+        error.providerAttempted = providerStarted || accountingKnown || resultEvents > 0 || stdoutBytes > 0;
+        error.accountingKnown = accountingKnown;
+      }
       reject(error);
     };
     const succeed = (value) => {
@@ -239,6 +278,7 @@ function oneshotTextClaude(prompt, opts) {
       { provider: "claude", model, retryable: true },
     ), true), timeoutMs);
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    proc.once("spawn", () => { providerStarted = true; });
     function handle(line) {
       let e; try { e = JSON.parse(String(line || "").trim()); } catch { return; }
       if (!e) return;
@@ -285,19 +325,15 @@ function oneshotTextClaude(prompt, opts) {
     proc.on("error", cause => fail(oneShotError("LLM_ONESHOT_SPAWN_FAILED", "Claude one-shot process failed", {
       provider: "claude", model, cause,
     })));
-    proc.stdin.on("error", cause => fail(oneShotError("LLM_ONESHOT_INPUT_FAILED", "Claude one-shot input failed", {
-      provider: "claude", model, cause,
-    }), true));
+    proc.stdin.on("error", cause => fail(oneShotError(
+      providerStarted ? "LLM_ONESHOT_INPUT_FAILED" : "LLM_ONESHOT_SPAWN_FAILED",
+      providerStarted ? "Claude one-shot input failed" : "Claude one-shot could not be started",
+      { provider: "claude", model, cause },
+    ), true));
     proc.on("close", code => {
       if (settled) return;
       if (outBuf.trim()) handle(outBuf);
       const raw = (resultText.trim() || assistantText.trim());
-      if (isErr || code !== 0) {
-        fail(oneShotError("LLM_ONESHOT_PROCESS_FAILED", `Claude one-shot exited unsuccessfully (${code})`, {
-          provider: "claude", model, retryable: true,
-        }));
-        return;
-      }
       if (resultEvents !== 1) {
         fail(oneShotError(
           "LLM_ONESHOT_PROTOCOL_ERROR",
@@ -308,12 +344,40 @@ function oneshotTextClaude(prompt, opts) {
       }
       let accounting;
       try {
-        accounting = validateClaudeUsageCost(
-          { usage: resultUsage, costUsd: resultCostUsd },
-          { maxBudgetUsd, maxInputTokens, maxOutputTokens },
-        );
+        accounting = normalizeClaudeUsageCost({ usage: resultUsage, costUsd: resultCostUsd });
       } catch (error) {
         fail(error);
+        return;
+      }
+      try {
+        if (o.onAccounting) {
+          o.onAccounting(Object.freeze({
+            provider: "claude",
+            model,
+            usage: accounting.usage,
+            costUsd: accounting.costUsd,
+            maxBudgetUsd,
+          }));
+        }
+        accountingKnown = true;
+      } catch (cause) {
+        fail(oneShotError(
+          "LLM_ONESHOT_ACCOUNTING_FAILED",
+          "Claude one-shot accounting could not be committed",
+          { provider: "claude", model, cause },
+        ));
+        return;
+      }
+      try {
+        assertClaudeUsageCostLimits(accounting, { maxBudgetUsd, maxInputTokens, maxOutputTokens });
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      if (isErr || code !== 0) {
+        fail(oneShotError("LLM_ONESHOT_PROCESS_FAILED", `Claude one-shot exited unsuccessfully (${code})`, {
+          provider: "claude", model, retryable: true,
+        }));
         return;
       }
       if (!raw) {
@@ -520,7 +584,9 @@ async function oneshotJSON(prompt, opts) {
 }
 
 module.exports = {
+  DEFAULT_ONESHOT_MAX_BUDGET_USD,
   LlmOneShotError,
+  MAX_ONESHOT_MAX_BUDGET_USD,
   oneshotText,
   oneshotJSON,
   extractJSON,
@@ -528,4 +594,5 @@ module.exports = {
   providerFromOpts,
   parseCodexJsonl,
   codexModel,
+  resolveOneShotBudget: oneShotBudget,
 };

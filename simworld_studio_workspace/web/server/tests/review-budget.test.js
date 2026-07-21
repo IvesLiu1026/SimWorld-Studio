@@ -57,6 +57,16 @@ test("request budgets can lower but never raise the operator ceiling", () => {
     exhausted: false,
     minimum_stage_usd: 0.02,
     stages: {
+      summarizer: {
+        observations: 0,
+        cost_usd: 0,
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
       builder: { observations: 0, cost_usd: 0 },
       critic: { observations: 0, cost_usd: 0 },
     },
@@ -86,24 +96,45 @@ test("builder stage budget is bounded by its server-side ceiling", () => {
   );
 });
 
-test("observed builder and critic costs aggregate exactly across rounds", () => {
+test("observed summarizer, builder, and critic costs aggregate exactly across rounds", () => {
   const budget = createReviewBudget({ limitUsd: 1, minimumStageUsd: 0.05 }, {});
+  budget.recordObservedCost({
+    stage: "summarizer",
+    costUsd: 0.01,
+    usage: {
+      input_tokens: 10,
+      output_tokens: 4,
+      cache_creation_input_tokens: 2,
+      cache_read_input_tokens: 3,
+      untrusted_future_key: "not retained",
+    },
+  });
   budget.recordObservedCost({ stage: "builder", round: 2, costUsd: 0.100001 });
   budget.recordObservedCost({ stage: "critic", round: 1, costUsd: 0.2 });
   budget.recordObservedCost("builder", 0.099999, { round: 1 });
   budget.recordObservedCost({ stage: "critic", round: 2, costUsd: 0.05 });
 
   assert.equal(budget.limitUsd, 1);
-  assert.equal(budget.spentUsd, 0.45);
-  assert.equal(budget.remainingUsd, 0.55);
+  assert.equal(budget.spentUsd, 0.46);
+  assert.equal(budget.remainingUsd, 0.54);
   assert.equal(budget.exhausted, false);
   assert.deepEqual(budget.snapshot(), {
     limit_usd: 1,
-    spent_usd: 0.45,
-    remaining_usd: 0.55,
+    spent_usd: 0.46,
+    remaining_usd: 0.54,
     exhausted: false,
     minimum_stage_usd: 0.05,
     stages: {
+      summarizer: {
+        observations: 1,
+        cost_usd: 0.01,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 4,
+          cache_creation_input_tokens: 2,
+          cache_read_input_tokens: 3,
+        },
+      },
       builder: { observations: 2, cost_usd: 0.2 },
       critic: { observations: 2, cost_usd: 0.25 },
     },
@@ -172,7 +203,14 @@ test("accounting inputs are validated without mutating prior totals", () => {
   const before = budget.snapshot();
 
   for (const request of [
-    { stage: "summarizer", round: 1, costUsd: 0.1 },
+    { stage: "retriever", round: 1, costUsd: 0.1 },
+    {
+      stage: "summarizer",
+      round: 1,
+      costUsd: 0.1,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+    { stage: "summarizer", costUsd: 0.1, usage: null },
     { stage: "critic", round: 0, costUsd: 0.1 },
     { stage: "critic", round: 1, costUsd: -0.1 },
     { stage: "critic", round: 1, costUsd: Number.NaN },

@@ -9,6 +9,7 @@ const { critique } = require("./scene-critic");
 const { getUeBroker } = require("./unreal-bridge");
 const { createRequestReviewBudget } = require("./review-budget");
 const { validateMaxBudgetUsd } = require("./review-provider");
+const { runReviewIntentStage } = require("./review-intent-stage");
 const {
   requestInternalSse,
   requireStudioAccessToken,
@@ -368,25 +369,72 @@ async function handleSceneLoop(req, res, deps) {
   // 1. Update rolling user-intent summary (recency-wins on contradictions).
   emit("intent_start", {});
   const prior = (deps.intentStore && deps.intentStore.get(scopeId)) || "";
-  let intentSummary = prior;
-  try {
-    throwIfAborted(deps.signal, "Intent summarizer");
-    intentSummary = await updateIntentSummary({
-      priorSummary: prior, newPrompt: message,
-      model: contract.summarizerModel,
-      provider: contract.summarizerProvider,
-      timeoutMs: parseInt((deps.env || process.env).SUMMARIZER_TIMEOUT_MS || "60000", 10),
-      signal: deps.signal,
+  const intentStage = await runReviewIntentStage({
+    priorSummary: prior,
+    newPrompt: message,
+    model: contract.summarizerModel,
+    provider: contract.summarizerProvider,
+    timeoutMs: parseInt((deps.env || process.env).SUMMARIZER_TIMEOUT_MS || "60000", 10),
+    signal: deps.signal,
+    env: deps.env || process.env,
+    reviewBudget,
+    updateIntentSummary,
+  });
+  if (intentStage.status === "failed") {
+    log("loop", `intent summarizer stopped Review (${intentStage.error.code})`);
+    emit("intent_error", { error: intentStage.error, budget: intentStage.budget });
+    const failedResult = {
+      finalStatus: "FAIL",
+      rounds: 0,
+      reason: intentStage.reason,
+      issues: [],
+      suggestions: [],
+      latestScreenshot: null,
+      latestScreenshotRef: null,
+      builderResult: null,
+      failureReason: intentStage.reason,
+      error: intentStage.error,
+      budget: intentStage.budget,
+    };
+    emit("loop_done", failedResult);
+    clearInterval(ping);
+    emit("done", {
+      sessionId: STUDIO_SESSION,
+      conversationId: conversationId || scopeId,
+      runId,
+      isError: true,
+      loop: {
+        reason: failedResult.reason,
+        rounds: 0,
+        finalStatus: "FAIL",
+        budget: failedResult.budget,
+      },
+      failureReason: failedResult.failureReason,
+      error: failedResult.error,
+      review: {
+        builderAgent: contract.builderAgent,
+        builderModel: contract.builderModel,
+        criticProvider: contract.criticProvider,
+        criticModel: contract.criticModel,
+        budget: failedResult.budget,
+      },
+      budget: failedResult.budget,
+      latestScreenshot: null,
+      latestScreenshotRef: null,
     });
-    throwIfAborted(deps.signal, "Intent summarizer");
-    if (deps.intentStore) deps.intentStore.set(scopeId, intentSummary);
-    emit("intent_updated", { summary: intentSummary });
-    log("loop", "intent summary updated (" + intentSummary.length + " chars)");
-  } catch (e) {
-    intentSummary = (prior ? prior + "\n\nNEW: " : "") + message;
-    log("loop", "summarizer failed (" + e.message + ") — using fallback intent");
-    emit("intent_updated", { summary: intentSummary, fallback: true });
+    res.end();
+    return;
   }
+  const intentSummary = intentStage.summary;
+  if (!intentStage.fallback && deps.intentStore) deps.intentStore.set(scopeId, intentSummary);
+  emit("intent_updated", {
+    summary: intentSummary,
+    ...(intentStage.fallback ? { fallback: true } : {}),
+    budget: intentStage.budget,
+  });
+  log("loop", intentStage.fallback
+    ? "intent provider unavailable before start — using deterministic fallback"
+    : "intent summary updated (" + intentSummary.length + " chars)");
 
   // 2. Per-round builder runner: POST /api/chat (useLoop:false) and relay SSE events.
   async function builderRunner({ prompt, intentSummary, feedback, round, maxBudgetUsd }) {

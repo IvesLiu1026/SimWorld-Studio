@@ -52,7 +52,7 @@ async function certifyEvidenceRoots(...roots) {
   assert.equal(report.status, "ready", JSON.stringify(report));
 }
 
-function fakeChildFactory(onInput) {
+function fakeChildFactory(onInput, { emitSpawn = true } = {}) {
   const calls = [];
   const spawnImpl = (binary, args, options) => {
     const child = new EventEmitter();
@@ -75,6 +75,7 @@ function fakeChildFactory(onInput) {
       },
     });
     calls.push({ child, binary, args, options, get input() { return input; } });
+    if (emitSpawn) queueMicrotask(() => child.emit("spawn"));
     return child;
   };
   return { spawnImpl, calls };
@@ -680,7 +681,7 @@ test("Claude one-shot uses the tool-free sandbox, strips ambient secrets, and en
     child.stdout.write(`${JSON.stringify({
       type: "result",
       result: "bounded summary",
-      usage: { input_tokens: 120, output_tokens: 8 },
+      usage: { input_tokens: 120, output_tokens: 8, untrusted_future_key: "not retained" },
       total_cost_usd: 0.01,
     })}\n`);
     child.emit("close", 0, null);
@@ -702,6 +703,7 @@ test("Claude one-shot uses the tool-free sandbox, strips ambient secrets, and en
     ANTHROPIC_AUTH_TOKEN: "must-not-reach-child",
     CLAUDE_CODE_OAUTH_TOKEN: "must-not-reach-child",
   };
+  let observedAccounting = null;
 
   const result = await oneshotText("summarize this", {
     provider: "claude",
@@ -710,9 +712,17 @@ test("Claude one-shot uses the tool-free sandbox, strips ambient secrets, and en
     spawnImpl: fake.spawnImpl,
     sandboxedSpawnImpl,
     maxBudgetUsd: 0.05,
+    onAccounting(value) { observedAccounting = value; },
   });
 
   assert.equal(result, "bounded summary");
+  assert.deepEqual(observedAccounting, {
+    provider: "claude",
+    model: "claude-opus-4-8",
+    usage: { input_tokens: 120, output_tokens: 8 },
+    costUsd: 0.01,
+    maxBudgetUsd: 0.05,
+  });
   assert.equal(sandboxCalls.length, 1);
   assert.equal(sandboxCalls[0].options.provider, "claude");
   assert.equal(fake.calls.length, 1);
@@ -744,16 +754,19 @@ test("Claude one-shot fails closed on missing or excessive usage/cost metadata",
       name: "missing usage",
       event: { total_cost_usd: 0.01 },
       code: "LLM_ONESHOT_USAGE_INVALID",
+      accountingKnown: false,
     },
     {
       name: "missing cost",
       event: { usage: { input_tokens: 10, output_tokens: 2 } },
       code: "LLM_ONESHOT_COST_INVALID",
+      accountingKnown: false,
     },
     {
       name: "cost exceeds budget",
       event: { usage: { input_tokens: 10, output_tokens: 2 }, total_cost_usd: 0.051 },
       code: "LLM_ONESHOT_COST_LIMIT_EXCEEDED",
+      accountingKnown: true,
     },
     {
       name: "cache-inclusive input exceeds limit",
@@ -763,6 +776,7 @@ test("Claude one-shot fails closed on missing or excessive usage/cost metadata",
       },
       maxInputTokens: 10,
       code: "LLM_ONESHOT_USAGE_LIMIT_EXCEEDED",
+      accountingKnown: true,
     },
   ];
 
@@ -776,6 +790,7 @@ test("Claude one-shot fails closed on missing or excessive usage/cost metadata",
         })}\n`);
         child.emit("close", 0, null);
       });
+      const accounting = [];
       await assert.rejects(
         oneshotText("summarize this", {
           provider: "claude",
@@ -784,10 +799,19 @@ test("Claude one-shot fails closed on missing or excessive usage/cost metadata",
           spawnImpl: fake.spawnImpl,
           sandboxedSpawnImpl: passthroughSandbox,
           maxBudgetUsd: 0.05,
+          onAccounting(value) { accounting.push(value); },
           ...(fixture.maxInputTokens ? { maxInputTokens: fixture.maxInputTokens } : {}),
         }),
-        (error) => error instanceof LlmOneShotError && error.code === fixture.code,
+        (error) => {
+          assert.ok(error instanceof LlmOneShotError);
+          assert.equal(error.code, fixture.code);
+          assert.equal(error.providerAttempted, true);
+          assert.equal(error.accountingKnown, fixture.accountingKnown);
+          return true;
+        },
       );
+      assert.equal(accounting.length, fixture.accountingKnown ? 1 : 0);
+      if (accounting.length) assert.equal(accounting[0].costUsd, fixture.event.total_cost_usd);
     });
   }
 });
@@ -874,12 +898,70 @@ test("Codex one-shots fail closed before spawn for summarizer and production wor
           assert.ok(error instanceof LlmOneShotError);
           assert.equal(error.code, "LLM_ONESHOT_PROVIDER_DISABLED");
           assert.equal(error.provider, "codex");
+          assert.equal(error.providerAttempted, false);
           return true;
         },
       );
       assert.equal(spawnCalls, 0);
     });
   }
+});
+
+test("Claude one-shot distinguishes a proven asynchronous failed exec from an attempted provider process", async () => {
+  const fake = fakeChildFactory(({ child }) => {
+    child.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+  }, { emitSpawn: false });
+  await assert.rejects(
+    oneshotText("summarize this", {
+      provider: "claude",
+      model: "claude-opus-4-8",
+      env: {},
+      spawnImpl: fake.spawnImpl,
+      sandboxedSpawnImpl: passthroughSandbox,
+    }),
+    (error) => {
+      assert.ok(error instanceof LlmOneShotError);
+      assert.equal(error.code, "LLM_ONESHOT_SPAWN_FAILED");
+      assert.equal(error.providerAttempted, false);
+      assert.equal(error.accountingKnown, false);
+      return true;
+    },
+  );
+  assert.equal(fake.calls.length, 1);
+});
+
+test("Claude one-shot commits valid terminal accounting before reporting a paid process failure", async () => {
+  const fake = fakeChildFactory(({ child }) => {
+    child.stdout.write(`${JSON.stringify({
+      type: "result",
+      is_error: true,
+      result: "provider failed",
+      usage: { input_tokens: 20, output_tokens: 3 },
+      total_cost_usd: 0.02,
+    })}\n`);
+    child.emit("close", 1, null);
+  });
+  const accounting = [];
+  await assert.rejects(
+    oneshotText("summarize this", {
+      provider: "claude",
+      model: "claude-opus-4-8",
+      env: {},
+      spawnImpl: fake.spawnImpl,
+      sandboxedSpawnImpl: passthroughSandbox,
+      maxBudgetUsd: 0.05,
+      onAccounting(value) { accounting.push(value); },
+    }),
+    (error) => {
+      assert.ok(error instanceof LlmOneShotError);
+      assert.equal(error.code, "LLM_ONESHOT_PROCESS_FAILED");
+      assert.equal(error.providerAttempted, true);
+      assert.equal(error.accountingKnown, true);
+      return true;
+    },
+  );
+  assert.equal(accounting.length, 1);
+  assert.equal(accounting[0].costUsd, 0.02);
 });
 
 test("Claude and Codex one-shots terminate on AbortSignal with a settled typed failure", async () => {

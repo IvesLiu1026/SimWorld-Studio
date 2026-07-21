@@ -88,6 +88,16 @@ function builderCost(message) {
   return value;
 }
 
+async function accountedIntentSummary({ newPrompt, onAccounting }) {
+  onAccounting({
+    provider: "claude",
+    model: "claude-opus-4-8",
+    usage: { input_tokens: 1, output_tokens: 1 },
+    costUsd: 0,
+  });
+  return newPrompt;
+}
+
 async function createHarness(t, options = {}) {
   const registry = new ReviewRunRegistry();
   const counters = { critic: 0, capture: 0 };
@@ -113,7 +123,7 @@ async function createHarness(t, options = {}) {
       internalPort: port,
       internalChatTimeoutMs: 40,
       intentStore: new Map(),
-      updateIntentSummary: options.updateIntentSummary || (async ({ newPrompt }) => newPrompt),
+      updateIntentSummary: options.updateIntentSummary || accountedIntentSummary,
       env: {
         SCENE_LOOP_MAX_ROUNDS: "1",
         REVIEW_RUN_MAX_BUDGET_USD: "1.00",
