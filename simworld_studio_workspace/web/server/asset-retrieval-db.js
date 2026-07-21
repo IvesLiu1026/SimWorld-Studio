@@ -1,5 +1,7 @@
 "use strict";
 
+const { resolveRuntimeSecret } = require("./asset-runtime-secret");
+
 const TOP_K = Math.max(1, parseInt(process.env.PREFILTER_TOP_K || "150", 10));
 const COLLECTION = process.env.QDRANT_COLLECTION || "assets";
 const QDRANT_URL = process.env.QDRANT_URL || "http://127.0.0.1:6333";
@@ -273,6 +275,58 @@ function runDependency(dependency, operation, opts, task) {
 let _qdrant = null;
 let _pool = null;
 
+function dependencySecret(opts, optionName, directName, fileName, minimumBytes = 1) {
+  if (opts && Object.prototype.hasOwnProperty.call(opts, optionName)) {
+    if (typeof opts[optionName] !== "string") {
+      throw new TypeError(`${optionName} must be a string`);
+    }
+    return resolveRuntimeSecret(
+      { [directName]: opts[optionName] },
+      directName,
+      fileName,
+      { minimumBytes },
+    ).value;
+  }
+  return resolveRuntimeSecret(
+    process.env,
+    directName,
+    fileName,
+    { minimumBytes },
+  ).value;
+}
+
+function buildQdrantClientOptions(opts) {
+  const apiKey = dependencySecret(
+    opts,
+    "qdrantApiKey",
+    "QDRANT_API_KEY",
+    "QDRANT_API_KEY_FILE",
+    32,
+  );
+  return {
+    url: (opts && opts.qdrantUrl) || QDRANT_URL,
+    checkCompatibility: false,
+    timeout: dependencyTimeoutMs("qdrant", opts),
+    ...(apiKey ? { apiKey } : {}),
+  };
+}
+
+function resolvePostgresConnectionString(opts) {
+  const value = dependencySecret(opts, "postgresUrl", "POSTGRES_URL", "POSTGRES_URL_FILE");
+  if (!value) return "";
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch (_error) {
+    throw new TypeError("PostgreSQL asset credential is not a valid DSN");
+  }
+  if (!new Set(["postgres:", "postgresql:"]).has(parsed.protocol)
+      || !parsed.hostname || !parsed.pathname || parsed.pathname === "/") {
+    throw new TypeError("PostgreSQL asset credential is not a valid DSN");
+  }
+  return value;
+}
+
 function cleanSettings(values) {
   const out = [];
   for (const v of Array.isArray(values) ? values : []) {
@@ -306,11 +360,7 @@ function qdrant(opts) {
   if (opts && opts.qdrantClient) return opts.qdrantClient;
   if (!_qdrant) {
     const { QdrantClient } = require("@qdrant/js-client-rest");
-    _qdrant = new QdrantClient({
-      url: (opts && opts.qdrantUrl) || QDRANT_URL,
-      checkCompatibility: false,
-      timeout: dependencyTimeoutMs("qdrant", opts),
-    });
+    _qdrant = new QdrantClient(buildQdrantClientOptions(opts));
   }
   return _qdrant;
 }
@@ -318,12 +368,12 @@ function qdrant(opts) {
 function pgPool(opts) {
   if (opts && opts.pgPool) return opts.pgPool;
   if (!_pool) {
-    const connectionString = String(opts && opts.postgresUrl || process.env.POSTGRES_URL || "").trim();
+    const connectionString = resolvePostgresConnectionString(opts);
     if (!connectionString) {
       throw new AssetDependencyError(
         "postgres",
         "ASSET_DEPENDENCY_CONFIG_MISSING",
-        "POSTGRES_URL is not set",
+        "PostgreSQL asset credential is not configured",
         { operation: "connect", retryable: false },
       );
     }
@@ -345,10 +395,20 @@ async function embedQuery(text, opts) {
     );
   }
   const serviceUrl = String(o.embedServiceUrl || EMBED_SERVICE_URL).replace(/\/$/, "");
+  const token = dependencySecret(
+    o,
+    "embedServiceToken",
+    "EMBED_SERVICE_TOKEN",
+    "EMBED_SERVICE_TOKEN_FILE",
+    32,
+  );
   return runDependency("embedding", "embed", o, async (signal) => {
     const resp = await fetchImpl(`${serviceUrl}/embed`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ texts: [String(text || "").trim() || "asset"] }),
       signal,
     });
@@ -653,6 +713,7 @@ module.exports = {
   assertAssetSnapshotFresh,
   attachRetrievalTelemetry,
   buildQdrantFilter,
+  buildQdrantClientOptions,
   dependencyTimeoutMs,
   embedQuery,
   excludedSettings,
@@ -661,6 +722,7 @@ module.exports = {
   preferredSettings,
   prefilterCategory,
   qdrantPrefilterCategory,
+  resolvePostgresConnectionString,
   searchAssets,
   serializeDependencyCause,
 };

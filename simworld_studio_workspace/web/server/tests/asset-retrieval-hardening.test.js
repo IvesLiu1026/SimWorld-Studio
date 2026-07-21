@@ -260,16 +260,20 @@ test("semantic operations reject an expired live-audit gate before any dependenc
 
 test("search_assets preserves a representative Chinese query for multilingual embedding", async () => {
   let embeddedText = null;
+  let authorization = null;
   const assets = await retrievalDb.searchAssets({ query: "黑色有輪子的辦公椅" }, {
     fetchImpl: async (_url, options) => {
       embeddedText = JSON.parse(options.body).texts[0];
+      authorization = options.headers.Authorization;
       return embedOk();
     },
+    embedServiceToken: "runtime-embedding-bearer-token".padEnd(40, "x"),
     qdrantClient: { query: async () => [qdrantPoint("chair-zh")] },
     pgPool: { query: async () => { throw new Error("postgres should not be called"); } },
     timeoutMs: 100,
   });
   assert.equal(embeddedText, "黑色有輪子的辦公椅");
+  assert.equal(authorization, `Bearer ${"runtime-embedding-bearer-token".padEnd(40, "x")}`);
   assert.equal(assets[0].id, "chair-zh");
   assert.equal(assets.retrieval.source, "qdrant");
 });

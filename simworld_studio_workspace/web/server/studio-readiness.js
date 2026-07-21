@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 
+const { resolveRuntimeSecret } = require("./asset-runtime-secret");
 const { createReadinessRegistry } = require("./readiness-registry");
 const { resolveReviewConfig } = require("./review-provider");
 const {
@@ -382,10 +383,15 @@ function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs, clock =
       ));
     }
 
-    if (!env.POSTGRES_URL && !env.POSTGRES_URL_FILE) {
+    try {
+      resolveRuntimeSecret(env, "POSTGRES_URL", "POSTGRES_URL_FILE", {
+        fsImpl,
+        required: true,
+      });
+    } catch (_error) {
       causes.push(publicCause(
         "ASSET_POSTGRES_CONFIG_MISSING",
-        "The PostgreSQL asset catalog connection is not configured.",
+        "The PostgreSQL asset catalog credential is missing or invalid.",
         false,
         "postgres",
       ));
@@ -398,10 +404,38 @@ function createRetrievalReadinessProbe({ env = process.env, fsImpl = fs, clock =
         "qdrant",
       ));
     }
+    try {
+      resolveRuntimeSecret(env, "QDRANT_API_KEY", "QDRANT_API_KEY_FILE", {
+        fsImpl,
+        required: true,
+        minimumBytes: 32,
+      });
+    } catch (_error) {
+      causes.push(publicCause(
+        "ASSET_QDRANT_CREDENTIAL_MISSING",
+        "The Qdrant asset index credential is missing or invalid.",
+        false,
+        "qdrant",
+      ));
+    }
     if (!env.EMBED_SERVICE_URL) {
       causes.push(publicCause(
         "ASSET_EMBED_CONFIG_MISSING",
         "The embedding service is not configured.",
+        false,
+        "embedding",
+      ));
+    }
+    try {
+      resolveRuntimeSecret(env, "EMBED_SERVICE_TOKEN", "EMBED_SERVICE_TOKEN_FILE", {
+        fsImpl,
+        required: true,
+        minimumBytes: 32,
+      });
+    } catch (_error) {
+      causes.push(publicCause(
+        "ASSET_EMBED_CREDENTIAL_MISSING",
+        "The embedding service credential is missing or invalid.",
         false,
         "embedding",
       ));

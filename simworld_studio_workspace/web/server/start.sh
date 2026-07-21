@@ -24,6 +24,21 @@ export VISTA_IMPORT_ARTIFACT_ROOT="${VISTA_IMPORT_ARTIFACT_ROOT:-${DEFAULT_STATE
 # Keep the variable exported for the Node process, but never provide or print a
 # credential-bearing fallback from this script.
 export POSTGRES_URL="${POSTGRES_URL:-}"
+export POSTGRES_URL_FILE="${POSTGRES_URL_FILE:-}"
+export QDRANT_API_KEY="${QDRANT_API_KEY:-}"
+export QDRANT_API_KEY_FILE="${QDRANT_API_KEY_FILE:-}"
+export EMBED_SERVICE_TOKEN="${EMBED_SERVICE_TOKEN:-}"
+export EMBED_SERVICE_TOKEN_FILE="${EMBED_SERVICE_TOKEN_FILE:-}"
+for pair in \
+  "POSTGRES_URL POSTGRES_URL_FILE" \
+  "QDRANT_API_KEY QDRANT_API_KEY_FILE" \
+  "EMBED_SERVICE_TOKEN EMBED_SERVICE_TOKEN_FILE"; do
+  read -r direct file_source <<< "$pair"
+  if [[ -n "${!direct}" && -n "${!file_source}" ]]; then
+    echo "Configure exactly one of ${direct} or ${file_source}." >&2
+    exit 2
+  fi
+done
 export QDRANT_URL="${QDRANT_URL:-http://127.0.0.1:6333}"
 export QDRANT_COLLECTION="${QDRANT_COLLECTION:-assets_ue58_qwen}"
 export EMBED_SERVICE_URL="${EMBED_SERVICE_URL:-http://127.0.0.1:7777}"
@@ -67,13 +82,29 @@ echo "  UCV broker : ${UNREAL_HOST}:${UCV_PORT}"
 echo "  Cirrus HTTP: ${CIRRUS_HTTP_PORT}   WS: ${CIRRUS_WS_PORT}"
 echo "  Asset DB   : ${ASSET_DB_DIR}"
 echo "  VISTA store: ${VISTA_IMPORT_ARTIFACT_ROOT}"
-if [[ -n "${POSTGRES_URL}" ]]; then
+if [[ -n "${POSTGRES_URL_FILE}" ]]; then
+  echo "  Postgres   : configured via POSTGRES_URL_FILE (path hidden)"
+elif [[ -n "${POSTGRES_URL}" ]]; then
   echo "  Postgres   : configured via POSTGRES_URL (value hidden)"
 else
-  echo "  Postgres   : not configured (set POSTGRES_URL via service secret)"
+  echo "  Postgres   : not configured (set POSTGRES_URL_FILE via service secret)"
 fi
 echo "  Qdrant     : configured via QDRANT_URL (value hidden) collection=${QDRANT_COLLECTION}"
+if [[ -n "${QDRANT_API_KEY_FILE}" ]]; then
+  echo "  Qdrant auth: configured via QDRANT_API_KEY_FILE (path hidden)"
+elif [[ -n "${QDRANT_API_KEY}" ]]; then
+  echo "  Qdrant auth: configured via QDRANT_API_KEY (value hidden)"
+else
+  echo "  Qdrant auth: not configured"
+fi
 echo "  Embeddings : configured via EMBED_SERVICE_URL (value hidden) version=${EMBED_VERSION}"
+if [[ -n "${EMBED_SERVICE_TOKEN_FILE}" ]]; then
+  echo "  Embed auth : configured via EMBED_SERVICE_TOKEN_FILE (path hidden)"
+elif [[ -n "${EMBED_SERVICE_TOKEN}" ]]; then
+  echo "  Embed auth : configured via EMBED_SERVICE_TOKEN (value hidden)"
+else
+  echo "  Embed auth : not configured"
+fi
 echo "  Asset mode : ${ASSET_RETRIEVAL_MODE}   topK=${PREFILTER_TOP_K}"
 echo "  Builder     : claude model=${CLAUDE_MODEL}"
 echo "  Review      : provider=${CRITIC_PROVIDER} model=${CRITIC_MODEL}"

@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { searchAssets: defaultSearchAssets } = require("./asset-retrieval-db");
+const { resolveRuntimeSecret } = require("./asset-runtime-secret");
 const {
   validateAssetLiveAuditReceipt,
   validateAssetSnapshotManifest,
@@ -12,7 +13,6 @@ const { createVistaAssetResolver } = require("./vista-asset-resolver");
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
-const MAX_SECRET_BYTES = 8 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 function flag(value) {
@@ -93,17 +93,10 @@ function requirePositiveInt(value, fallback, field, maximum) {
 }
 
 function resolvePostgresUrl(env, fsImpl) {
-  const direct = typeof env.POSTGRES_URL === "string" ? env.POSTGRES_URL.trim() : "";
-  const fileValue = typeof env.POSTGRES_URL_FILE === "string" ? env.POSTGRES_URL_FILE.trim() : "";
-  if (direct && fileValue) throw new TypeError("POSTGRES_URL and POSTGRES_URL_FILE are mutually exclusive");
-  let value = direct;
-  if (fileValue) {
-    const filename = requireAbsoluteFile(fileValue, "POSTGRES_URL_FILE");
-    value = readBoundedFile(filename, MAX_SECRET_BYTES, "POSTGRES_URL_FILE", fsImpl).toString("utf8").trim();
-  }
-  if (!value || /[\x00-\x20\x7f]/.test(value)) {
-    throw new TypeError("POSTGRES_URL or POSTGRES_URL_FILE is required and must contain one DSN");
-  }
+  const { value } = resolveRuntimeSecret(env, "POSTGRES_URL", "POSTGRES_URL_FILE", {
+    fsImpl,
+    required: true,
+  });
   let parsed;
   try { parsed = new URL(value); } catch (_error) {
     throw new TypeError("PostgreSQL DSN is invalid");
@@ -155,6 +148,18 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
   if (embeddingVersion !== manifest.embedding.version) throw new TypeError("EMBED_VERSION does not match the asset snapshot");
   if (ueContentRevision !== manifest.ue_content_revision) throw new TypeError("VISTA_UE_CONTENT_REVISION does not match the asset snapshot");
   const postgresUrl = resolvePostgresUrl(env, fsImpl);
+  const qdrantApiKey = resolveRuntimeSecret(
+    env,
+    "QDRANT_API_KEY",
+    "QDRANT_API_KEY_FILE",
+    { fsImpl, required: true, minimumBytes: 32 },
+  ).value;
+  const embedServiceToken = resolveRuntimeSecret(
+    env,
+    "EMBED_SERVICE_TOKEN",
+    "EMBED_SERVICE_TOKEN_FILE",
+    { fsImpl, required: true, minimumBytes: 32 },
+  ).value;
 
   const clock = typeof options.clock === "function" ? options.clock : () => new Date();
   const assertLiveAuditFresh = () => validateAssetLiveAuditReceipt(liveAuditReceipt, {
@@ -166,7 +171,7 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
   });
   assertLiveAuditFresh();
 
-  return Object.freeze({
+  const config = {
     enabled: true,
     manifest,
     manifestPath,
@@ -177,7 +182,6 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
     qdrantUrl: requireOrigin(env.QDRANT_URL, "QDRANT_URL"),
     qdrantCollection,
     embedServiceUrl: requireOrigin(env.EMBED_SERVICE_URL, "EMBED_SERVICE_URL"),
-    postgresUrl,
     embeddingVersion,
     ueContentRevision,
     minConfidence: requireConfidence(env.VISTA_ASSET_MIN_CONFIDENCE),
@@ -185,7 +189,13 @@ function resolveVistaAssetRuntimeConfig(env = process.env, options = {}) {
     timeoutMs: requirePositiveInt(env.VISTA_ASSET_SEARCH_TIMEOUT_MS, 5_000, "VISTA_ASSET_SEARCH_TIMEOUT_MS", 60_000),
     totalTimeoutMs: requirePositiveInt(env.VISTA_ASSET_TOTAL_TIMEOUT_MS, 30_000, "VISTA_ASSET_TOTAL_TIMEOUT_MS", 120_000),
     assertLiveAuditFresh,
+  };
+  Object.defineProperties(config, {
+    postgresUrl: { value: postgresUrl, enumerable: false },
+    qdrantApiKey: { value: qdrantApiKey, enumerable: false },
+    embedServiceToken: { value: embedServiceToken, enumerable: false },
   });
+  return Object.freeze(config);
 }
 
 function normalizeRetrievalCandidates(raw, snapshotId) {
@@ -243,6 +253,8 @@ function createVistaAssetRuntime(options = {}) {
       qdrantTimeoutMs: config.timeoutMs,
       postgresTimeoutMs: config.timeoutMs,
       postgresUrl: config.postgresUrl,
+      qdrantApiKey: config.qdrantApiKey,
+      embedServiceToken: config.embedServiceToken,
       assetSnapshotRevision: config.snapshotId,
       assertLiveAuditFresh: config.assertLiveAuditFresh,
     });

@@ -40,7 +40,9 @@ function enabledEnv(fixtureValue) {
     POSTGRES_URL: "postgresql://not-read-by-config/assets",
     QDRANT_URL: "http://127.0.0.1:6333",
     QDRANT_COLLECTION: value.qdrant.collection,
+    QDRANT_API_KEY: "q".repeat(40),
     EMBED_SERVICE_URL: "http://127.0.0.1:7777",
+    EMBED_SERVICE_TOKEN: "e".repeat(40),
     EMBED_VERSION: value.embedding.version,
     VISTA_UE_CONTENT_REVISION: value.ue_content_revision,
     VISTA_ASSET_MIN_CONFIDENCE: "0.5",
@@ -124,6 +126,9 @@ test("enabled runtime requires one matching verified snapshot across all depende
   assert.equal(config.qdrantCollection, manifest().qdrant.collection);
   assert.equal(config.ueContentRevision, manifest().ue_content_revision);
   assert.equal(config.postgresUrl, "postgresql://not-read-by-config/assets");
+  assert.equal(config.qdrantApiKey, "q".repeat(40));
+  assert.equal(config.embedServiceToken, "e".repeat(40));
+  assert.doesNotMatch(JSON.stringify(config), /not-read-by-config|q{40}|e{40}/);
 
   for (const [field, value] of [
     ["ASSET_READINESS_VERIFIED_REVISION", "stale"],
@@ -146,6 +151,31 @@ test("enabled runtime accepts a no-follow PostgreSQL DSN secret file", (t) => {
   assert.equal(config.postgresUrl, "postgresql://asset_user:secret@127.0.0.1/assets");
   assert.throws(
     () => resolveVistaAssetRuntimeConfig({ ...env, POSTGRES_URL: "postgresql://duplicate/db" }, { clock: () => NOW }),
+    /mutually exclusive/,
+  );
+});
+
+test("enabled runtime resolves Qdrant and embedding file secrets and rejects conflicts", (t) => {
+  const files = fixture(t);
+  const qdrantFile = path.join(files.root, "qdrant-api-key");
+  const embedFile = path.join(files.root, "embed-token");
+  fs.writeFileSync(qdrantFile, `${"Q".repeat(40)}\n`, { mode: 0o600 });
+  fs.writeFileSync(embedFile, `${"E".repeat(40)}\n`, { mode: 0o600 });
+  const env = enabledEnv(files);
+  delete env.QDRANT_API_KEY;
+  delete env.EMBED_SERVICE_TOKEN;
+  env.QDRANT_API_KEY_FILE = qdrantFile;
+  env.EMBED_SERVICE_TOKEN_FILE = embedFile;
+
+  const config = resolveVistaAssetRuntimeConfig(env, { clock: () => NOW });
+  assert.equal(config.qdrantApiKey, "Q".repeat(40));
+  assert.equal(config.embedServiceToken, "E".repeat(40));
+  assert.doesNotMatch(JSON.stringify(config), /Q{40}|E{40}|qdrant-api-key|embed-token/);
+  assert.throws(
+    () => resolveVistaAssetRuntimeConfig(
+      { ...env, QDRANT_API_KEY: "duplicate".repeat(5) },
+      { clock: () => NOW },
+    ),
     /mutually exclusive/,
   );
 });
@@ -196,6 +226,8 @@ test("verified search results bind exact asset IDs and UE paths without geometry
   assert.deepEqual(calls[0].request, { query: "black wheeled office chair", k: 8 });
   assert.equal(calls[0].options.collection, manifest().qdrant.collection);
   assert.equal(calls[0].options.assetSnapshotRevision, manifest().snapshot_id);
+  assert.equal(calls[0].options.qdrantApiKey, "q".repeat(40));
+  assert.equal(calls[0].options.embedServiceToken, "e".repeat(40));
 });
 
 test("a receipt that expires after startup blocks retrieval before dependencies are called", async (t) => {

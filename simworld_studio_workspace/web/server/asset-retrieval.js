@@ -336,6 +336,8 @@ function withVerifiedAssetRuntimeOptions(opts) {
     assetSnapshotRevision: _verifiedAssetRuntimeConfig.snapshotId,
     assertLiveAuditFresh: _verifiedAssetRuntimeConfig.assertLiveAuditFresh,
     postgresUrl: _verifiedAssetRuntimeConfig.postgresUrl,
+    qdrantApiKey: _verifiedAssetRuntimeConfig.qdrantApiKey,
+    embedServiceToken: _verifiedAssetRuntimeConfig.embedServiceToken,
   };
 }
 
