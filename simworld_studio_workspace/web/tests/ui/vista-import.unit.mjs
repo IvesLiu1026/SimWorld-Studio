@@ -5,8 +5,13 @@ import { fileURLToPath } from "node:url";
 
 import {
   commitVistaImport,
+  fetchVistaAnimationTimelineStatus,
   fetchVistaImportStatus,
+  preflightVistaAnimationTimeline,
   previewVistaImport,
+  replayVistaAnimationTimeline,
+  startVistaAnimationTimeline,
+  stopVistaAnimationTimeline,
 } from "../../src/api/appApi.js";
 import {
   createVistaImportRequest,
@@ -106,6 +111,34 @@ test("preview view model preserves the 0/2/5/9 beats and explicit unresolved sta
   assert.equal(formatVistaTimecode(2.25), "00:02.25");
 });
 
+test("preview accepts deterministic same-second compound actions and rejects reversed order", () => {
+  const request = createVistaImportRequest(DEFAULT_VISTA_IMPORT_SELECTION);
+  const scene = sceneFixture();
+  scene.timeline.splice(2, 1,
+    {
+      ...scene.timeline[2],
+      event_id: "beat-0003-brace",
+      source_pointer: "/Scene/Actions/2/brace",
+    },
+    {
+      ...scene.timeline[2],
+      event_id: "beat-0003-lift_foot",
+      action: "lift_foot",
+      source_pointer: "/Scene/Actions/2/lift_foot",
+    });
+
+  const ordered = summarizeVistaPreview(scene, request);
+  assert.equal(ordered.checks.find((check) => check.id === "timeline").passed, true);
+  assert.equal(ordered.canCommit, true);
+  assert.deepEqual(ordered.timeline.map((event) => event.atSec), [0, 2, 5, 5, 9]);
+
+  const reversed = structuredClone(scene);
+  [reversed.timeline[2], reversed.timeline[3]] = [reversed.timeline[3], reversed.timeline[2]];
+  const rejected = summarizeVistaPreview(reversed, request);
+  assert.equal(rejected.checks.find((check) => check.id === "timeline").passed, false);
+  assert.equal(rejected.canCommit, false);
+});
+
 test("UI summary accepts the real local mmg_040 importer contract", async () => {
   const fixtureRoot = fileURLToPath(new URL("../../server/tests/fixtures/vista/mmg_040", import.meta.url));
   const importer = createVistaImporter({
@@ -119,7 +152,8 @@ test("UI summary accepts the real local mmg_040 importer contract", async () => 
 
   assert.equal(summary.canCommit, true);
   assert.equal(summary.durationSec, 12);
-  assert.deepEqual(summary.timeline.map((beat) => beat.atSec), [0, 2, 5, 9]);
+  assert.deepEqual(summary.timeline.map((beat) => beat.atSec), [0, 2, 5, 5, 9]);
+  assert.deepEqual(summary.timeline.filter((beat) => beat.atSec === 5).map((beat) => beat.action), ["brace", "lift_foot"]);
   assert.equal(summary.entities.length, 4);
   assert.equal(summary.entities.every((entity) => entity.path === null), true);
   assert.equal(summary.unresolved.some((item) => item.reason_code === "no_asset_match"), true);
@@ -170,4 +204,53 @@ test("VISTA import API errors retain typed public failure details", async (t) =>
       && error.retryable === true
     ),
   );
+});
+
+test("VISTA animation API helpers preserve exact confirmations and encoded run identities", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return Response.json({ status: options.method === "POST" ? "pending" : "running" });
+  };
+  const importId = "vim_fixture/encoded";
+  const animationRunId = "vtr fixture/encoded";
+  const preflight = {
+    plan_id: "vsp-aaaaaaaaaaaaaaaaaaaaaaaa",
+    preflight_id: "vap-bbbbbbbbbbbbbbbbbbbbbbbb",
+    timeline_id: "vtl-cccccccccccccccccccccccc",
+    program_id: "vag-dddddddddddddddddddddddd",
+  };
+
+  await preflightVistaAnimationTimeline(importId, preflight.plan_id, "profile-1");
+  await startVistaAnimationTimeline(importId, preflight);
+  await fetchVistaAnimationTimelineStatus(importId, animationRunId);
+  await stopVistaAnimationTimeline(importId, animationRunId);
+  await replayVistaAnimationTimeline(importId, animationRunId, preflight);
+
+  const encodedImportId = encodeURIComponent(importId);
+  const encodedAnimationRunId = encodeURIComponent(animationRunId);
+  assert.deepEqual(calls.map((call) => call.url), [
+    `/api/vista/imports/${encodedImportId}/animation/preflight`,
+    `/api/vista/imports/${encodedImportId}/animation/start`,
+    `/api/vista/imports/${encodedImportId}/animation/runs/${encodedAnimationRunId}`,
+    `/api/vista/imports/${encodedImportId}/animation/runs/${encodedAnimationRunId}/stop`,
+    `/api/vista/imports/${encodedImportId}/animation/runs/${encodedAnimationRunId}/replay`,
+  ]);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    plan_id: preflight.plan_id,
+    profile_id: "profile-1",
+  });
+  const confirmation = {
+    plan_id: preflight.plan_id,
+    preflight_id: preflight.preflight_id,
+    timeline_id: preflight.timeline_id,
+    program_id: preflight.program_id,
+    confirm: true,
+  };
+  assert.deepEqual(JSON.parse(calls[1].options.body), confirmation);
+  assert.equal(calls[2].options.body, undefined);
+  assert.deepEqual(JSON.parse(calls[3].options.body), {});
+  assert.deepEqual(JSON.parse(calls[4].options.body), confirmation);
 });

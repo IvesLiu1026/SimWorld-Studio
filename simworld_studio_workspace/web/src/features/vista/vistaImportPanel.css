@@ -501,6 +501,260 @@
   gap: 6px;
 }
 
+.vista-animation-workbench {
+  margin: 8px 8px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-3);
+  overflow: hidden;
+}
+
+.vista-animation-header {
+  min-height: 58px;
+  padding: 10px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-2);
+}
+
+.vista-animation-header > div:first-child {
+  min-width: 0;
+}
+
+.vista-animation-header strong,
+.vista-animation-header > div:first-child > span {
+  display: block;
+}
+
+.vista-animation-header strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.vista-animation-header > div:first-child > span {
+  margin-top: 3px;
+  color: var(--ink-3);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.vista-animation-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.vista-animation-state > span {
+  color: var(--ink-3);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.vista-animation-readiness,
+.vista-animation-metrics {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.vista-animation-readiness > div,
+.vista-animation-metrics > div {
+  min-width: 0;
+  padding: 7px 9px;
+  border-right: 1px solid var(--line-soft);
+}
+
+.vista-animation-readiness > div:last-child,
+.vista-animation-metrics > div:last-child {
+  border-right: 0;
+}
+
+.vista-animation-readiness dt,
+.vista-animation-metrics span,
+.vista-animation-evidence dt {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink-3);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.vista-animation-readiness dd,
+.vista-animation-metrics strong,
+.vista-animation-evidence dd {
+  min-width: 0;
+  margin: 0;
+  display: block;
+  color: var(--ink-2);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vista-animation-progress {
+  height: 4px;
+  margin: 9px 9px 0;
+  border-radius: 2px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.vista-animation-progress > span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--blue);
+  transition: width 160ms linear;
+}
+
+.vista-animation-table-wrap {
+  margin: 9px 9px 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+
+.vista-animation-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: var(--ink-2);
+  font-size: 10px;
+}
+
+.vista-animation-table th,
+.vista-animation-table td {
+  padding: 6px 7px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.vista-animation-table th {
+  background: var(--panel-2);
+  color: var(--ink-3);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.vista-animation-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.vista-animation-table th:nth-child(1),
+.vista-animation-table td:nth-child(1),
+.vista-animation-table th:nth-child(3),
+.vista-animation-table td:nth-child(3),
+.vista-animation-table th:nth-child(4),
+.vista-animation-table td:nth-child(4) {
+  width: 72px;
+}
+
+.vista-animation-table th:nth-child(2),
+.vista-animation-table td:nth-child(2) {
+  width: 105px;
+}
+
+.vista-animation-table th:nth-child(5),
+.vista-animation-table td:nth-child(5) {
+  width: 100px;
+}
+
+.vista-animation-table th:nth-child(6),
+.vista-animation-table td:nth-child(6) {
+  width: 86px;
+}
+
+.vista-animation-evidence-state {
+  color: var(--ink-3);
+  font-size: 9px;
+}
+
+.vista-animation-evidence-state.failed {
+  color: var(--red);
+}
+
+.vista-animation-empty {
+  margin: 9px 9px 0;
+  padding: 14px 10px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  color: var(--ink-3);
+  font-size: 10px;
+  text-align: center;
+}
+
+.vista-animation-evidence {
+  margin: 9px 9px 0;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: minmax(165px, 0.7fr) minmax(0, 1.3fr);
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--green) 5%, var(--panel));
+}
+
+.vista-animation-evidence > div {
+  min-width: 0;
+}
+
+.vista-animation-evidence > div > strong,
+.vista-animation-evidence > div > code {
+  display: block;
+}
+
+.vista-animation-evidence > div > strong {
+  color: var(--ink-2);
+  font-size: 10px;
+}
+
+.vista-animation-evidence > div > code {
+  margin-top: 4px;
+  color: var(--ink-3);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vista-animation-evidence dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vista-animation-evidence dl > div {
+  min-width: 0;
+}
+
+.vista-animation-workbench > .vista-import-notice {
+  margin: 9px 9px 0;
+}
+
+.vista-animation-actions {
+  padding: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .vista-import-confirm-body {
   padding: 18px 20px;
   overflow: auto;
@@ -558,6 +812,29 @@
   }
 
   .vista-import-build-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vista-animation-readiness,
+  .vista-animation-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vista-animation-readiness > div:nth-child(2),
+  .vista-animation-metrics > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .vista-animation-readiness > div:nth-child(-n + 2),
+  .vista-animation-metrics > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .vista-animation-evidence {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vista-animation-evidence dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

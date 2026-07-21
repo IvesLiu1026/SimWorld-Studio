@@ -114,13 +114,24 @@ function checksForPreview(scene, expectedRequest) {
   const source = scene?.source || {};
   const timeline = Array.isArray(scene?.timeline) ? scene.timeline : [];
   const duration = Number(scene?.duration_sec);
-  const timestamps = timeline.map((event) => Number(event?.at_sec));
-  const ordered = timestamps.every((timestamp, index) => (
-    Number.isFinite(timestamp)
-    && timestamp >= 0
-    && timestamp <= duration
-    && (index === 0 || timestamp > timestamps[index - 1])
-  ));
+  const eventIds = new Set();
+  const ordered = timeline.every((event, index) => {
+    const timestamp = Number(event?.at_sec);
+    const eventId = typeof event?.event_id === "string" ? event.event_id : "";
+    const previous = timeline[index - 1];
+    const previousTimestamp = Number(previous?.at_sec);
+    const previousEventId = typeof previous?.event_id === "string" ? previous.event_id : "";
+    const valid = Number.isFinite(timestamp)
+      && timestamp >= 0
+      && timestamp <= duration
+      && eventId.length > 0
+      && !eventIds.has(eventId)
+      && (index === 0
+        || timestamp > previousTimestamp
+        || (timestamp === previousTimestamp && previousEventId.localeCompare(eventId) < 0));
+    eventIds.add(eventId);
+    return valid;
+  });
   const checksum = source.source_checksum || scene?.provenance?.source_checksum || "";
   const attempt = Number(source?.attempt?.index);
 
@@ -151,7 +162,7 @@ function checksForPreview(scene, expectedRequest) {
       id: "timeline",
       label: "Timeline order",
       passed: timeline.length > 0 && ordered,
-      detail: `${timeline.length} verified beats`,
+      detail: `${timeline.length} verified beats · deterministic same-frame order`,
     }),
     Object.freeze({
       id: "checksum",

@@ -541,3 +541,61 @@ export function fetchVistaSceneBuildStatus(runId, profileId, signal) {
   const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
   return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}/build${query}`, { signal });
 }
+
+export function preflightVistaAnimationTimeline(runId, planId, profileId, signal) {
+  return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}/animation/preflight`, {
+    method: "POST",
+    body: JSON.stringify({
+      plan_id: planId,
+      ...(profileId ? { profile_id: profileId } : {}),
+    }),
+    signal,
+  });
+}
+
+function vistaAnimationConfirmation(preflight) {
+  return {
+    plan_id: preflight.plan_id,
+    preflight_id: preflight.preflight_id,
+    timeline_id: preflight.timeline_id,
+    program_id: preflight.program_id,
+    confirm: true,
+  };
+}
+
+export function startVistaAnimationTimeline(runId, preflight, signal) {
+  return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}/animation/start`, {
+    method: "POST",
+    body: JSON.stringify(vistaAnimationConfirmation(preflight)),
+    signal,
+  });
+}
+
+export function fetchVistaAnimationTimelineStatus(runId, animationRunId, signal) {
+  return vistaImportJson(
+    `/vista/imports/${encodeURIComponent(runId)}/animation/runs/${encodeURIComponent(animationRunId)}`,
+    { signal },
+  );
+}
+
+export function stopVistaAnimationTimeline(runId, animationRunId, signal) {
+  return vistaImportJson(
+    `/vista/imports/${encodeURIComponent(runId)}/animation/runs/${encodeURIComponent(animationRunId)}/stop`,
+    {
+      method: "POST",
+      body: "{}",
+      signal,
+    },
+  );
+}
+
+export function replayVistaAnimationTimeline(runId, animationRunId, preflight, signal) {
+  return vistaImportJson(
+    `/vista/imports/${encodeURIComponent(runId)}/animation/runs/${encodeURIComponent(animationRunId)}/replay`,
+    {
+      method: "POST",
+      body: JSON.stringify(vistaAnimationConfirmation(preflight)),
+      signal,
+    },
+  );
+}

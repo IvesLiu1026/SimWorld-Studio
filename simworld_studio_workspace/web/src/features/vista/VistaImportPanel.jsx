@@ -2,11 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   commitVistaImport,
   executeVistaSceneBuild,
+  fetchVistaAnimationTimelineStatus,
   fetchVistaImportStatus,
   fetchVistaSceneBuildStatus,
+  preflightVistaAnimationTimeline,
   preflightVistaSceneBuild,
   prepareVistaSceneBuild,
   previewVistaImport,
+  replayVistaAnimationTimeline,
+  startVistaAnimationTimeline,
+  stopVistaAnimationTimeline,
 } from "../../api/appApi.js";
 import {
   Badge,
@@ -41,6 +46,82 @@ function waitForPoll(ms, signal) {
   });
 }
 
+const TERMINAL_ANIMATION_STATES = new Set(["completed", "failed", "cancelled"]);
+const ACTIVE_ANIMATION_STATES = new Set(["pending", "running", "stopping"]);
+
+function isSuccessfulSceneBuild(build) {
+  const state = build?.last_result?.status || build?.state;
+  return state === "succeeded" || state === "already_applied";
+}
+
+function animationStateVariant(state) {
+  if (state === "completed") return "green";
+  if (state === "failed") return "red";
+  if (state === "cancelled") return "orange";
+  if (ACTIVE_ANIMATION_STATES.has(state)) return "blue";
+  return "muted";
+}
+
+function eventStateVariant(state) {
+  if (state === "completed") return "green";
+  if (["failed", "timed_out"].includes(state)) return "red";
+  if (state === "cancelled") return "orange";
+  if (["running", "dispatched"].includes(state)) return "blue";
+  return "muted";
+}
+
+function formatAnimationSeconds(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? `${Math.max(0, seconds).toFixed(1)} s` : "—";
+}
+
+function formatAnimationDrift(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const drift = Number(value);
+  if (!Number.isFinite(drift)) return "—";
+  return `${drift > 0 ? "+" : ""}${Math.round(drift)} ms`;
+}
+
+function animationElapsed(status, nowMs) {
+  const run = status?.run;
+  if (!run) return 0;
+  const actual = Math.max(
+    0,
+    ...(run.events || []).map((event) => (
+      event.actual_sec !== null
+      && event.actual_sec !== undefined
+      && Number.isFinite(Number(event.actual_sec))
+        ? Number(event.actual_sec)
+        : 0
+    )),
+  );
+  const startedAt = Date.parse(run.started_at || "");
+  const endedAt = Date.parse(run.ended_at || "");
+  const wallElapsed = Number.isFinite(startedAt)
+    ? Math.max(0, ((Number.isFinite(endedAt) ? endedAt : nowMs) - startedAt) / 1000)
+    : 0;
+  const duration = Number(run.duration_sec);
+  const elapsed = Math.max(actual, wallElapsed);
+  return Number.isFinite(duration) && duration > 0 ? Math.min(duration, elapsed) : elapsed;
+}
+
+function evidenceByEvent(evidence) {
+  const result = new Map();
+  for (const checkpoint of evidence?.checkpoints || []) {
+    if (!checkpoint?.event_id) continue;
+    const current = result.get(checkpoint.event_id) || { artifacts: 0, assertion: null };
+    const artifacts = Array.isArray(checkpoint.evidence) ? checkpoint.evidence : [];
+    current.artifacts += artifacts.length;
+    if (artifacts.some((item) => item?.assertion === "fail")) current.assertion = "fail";
+    else if (current.assertion !== "fail" && artifacts.some((item) => item?.assertion === "pass")) {
+      current.assertion = "pass";
+    }
+    result.set(checkpoint.event_id, current);
+  }
+  return result;
+}
+
 function ErrorNotice({ error }) {
   if (!error) return null;
   return (
@@ -73,7 +154,7 @@ function SourceFields({ summary }) {
   );
 }
 
-function PreviewHeader({ icons, onPrepareCommit, summary }) {
+function PreviewHeader({ icons, locked, onPrepareCommit, summary }) {
   const blockingCount = summary.unresolved.filter((item) => item?.blocking).length;
   return (
     <div className="vista-import-preview-header">
@@ -89,7 +170,7 @@ function PreviewHeader({ icons, onPrepareCommit, summary }) {
       </div>
       <Btn
         data-testid="vista-import-prepare-commit"
-        disabled={!summary.canCommit}
+        disabled={!summary.canCommit || locked}
         onClick={onPrepareCommit}
         variant="primary"
       >
@@ -278,6 +359,7 @@ function SceneBuildStatus({
   build,
   buildError,
   busy,
+  locked,
   onExecute,
   onPrepare,
   onPreflight,
@@ -324,17 +406,256 @@ function SceneBuildStatus({
       ) : null}
       <ErrorNotice error={buildError} />
       <div className="vista-import-build-actions">
-        <Btn data-testid="vista-scene-build-prepare" disabled={Boolean(busy)} onClick={onPrepare} variant={plan ? "ghost" : "primary"}>
+        <Btn data-testid="vista-scene-build-prepare" disabled={Boolean(busy) || locked} onClick={onPrepare} variant={plan ? "ghost" : "primary"}>
           {busy === "plan" ? "Preparing" : plan ? "Recheck plan" : "Prepare 3D BuildPlan"}
         </Btn>
-        <Btn data-testid="vista-scene-build-preflight" disabled={!plan || Boolean(busy)} onClick={onPreflight} variant="ghost">
+        <Btn data-testid="vista-scene-build-preflight" disabled={!plan || Boolean(busy) || locked} onClick={onPreflight} variant="ghost">
           {busy === "preflight" ? "Checking UE" : "Run UE preflight"}
         </Btn>
-        <Btn data-testid="vista-scene-build-execute" disabled={!plan || !preflight?.ready || Boolean(busy)} onClick={onExecute} variant="primary">
+        <Btn data-testid="vista-scene-build-execute" disabled={!plan || !preflight?.ready || Boolean(busy) || locked} onClick={onExecute} variant="primary">
           {busy === "execute" ? "Building scene" : "Build scene in Unreal"}
         </Btn>
       </div>
     </section>
+  );
+}
+
+function AnimationTimelineWorkbench({
+  busy,
+  error,
+  nowMs,
+  onPreflight,
+  onRefresh,
+  onReplay,
+  onStart,
+  onStop,
+  polling,
+  preflight,
+  status,
+}) {
+  const state = status?.status || (preflight?.ready ? "ready" : "not_checked");
+  const run = status?.run;
+  const terminal = TERMINAL_ANIMATION_STATES.has(status?.status);
+  const active = ACTIVE_ANIMATION_STATES.has(status?.status);
+  const runEvents = new Map((run?.events || []).map((event) => [event.event_id, event]));
+  const eventEvidence = evidenceByEvent(status?.evidence);
+  const timelineEvents = (preflight?.events || []).map((event) => ({
+    ...event,
+    runtime: runEvents.get(event.event_id) || null,
+    evidence: eventEvidence.get(event.event_id) || null,
+  }));
+  const duration = Number(run?.duration_sec || preflight?.duration_sec || 12);
+  const elapsed = animationElapsed(status, nowMs);
+  const completedEvents = (run?.events || []).filter((event) => event.state === "completed").length;
+  const totalEvents = timelineEvents.length || run?.events?.length || 0;
+  const drifts = (run?.events || [])
+    .filter((event) => event.drift_ms !== null && event.drift_ms !== undefined)
+    .map((event) => Number(event.drift_ms))
+    .filter(Number.isFinite);
+  const peakDrift = drifts.length ? Math.max(...drifts.map(Math.abs)) : null;
+  const coverage = status?.evidence?.coverage;
+  const progress = duration > 0 ? Math.min(100, Math.max(0, elapsed / duration * 100)) : 0;
+  const readyAt = Date.parse(preflight?.expires_at || "");
+  const readyUntil = Number.isFinite(readyAt) ? new Date(readyAt).toLocaleTimeString() : "Not checked";
+
+  return (
+    <section className="vista-animation-workbench" data-testid="vista-animation-workbench">
+      <div className="vista-animation-header">
+        <div>
+          <div className="vista-import-kicker">12-second execution</div>
+          <strong>Verified animation timeline</strong>
+          <span>Fixed action program with runtime readiness, timing drift, cleanup, and evidence tracking.</span>
+        </div>
+        <div className="vista-animation-state">
+          {polling ? <span>Live status</span> : null}
+          <Badge variant={animationStateVariant(state)}>{state.replaceAll("_", " ")}</Badge>
+        </div>
+      </div>
+
+      <dl className="vista-animation-readiness" data-testid="vista-animation-readiness">
+        <div>
+          <dt>Runtime</dt>
+          <dd>{preflight?.ready ? "Verified" : "Not checked"}</dd>
+        </div>
+        <div>
+          <dt>Profile</dt>
+          <dd title={preflight?.profile_id}>{preflight?.profile_id || "—"}</dd>
+        </div>
+        <div>
+          <dt>Clock</dt>
+          <dd>{preflight?.fps ? `${preflight.fps} fps` : "—"}</dd>
+        </div>
+        <div>
+          <dt>Ready until</dt>
+          <dd title={preflight?.expires_at}>{readyUntil}</dd>
+        </div>
+      </dl>
+
+      <div className="vista-animation-metrics">
+        <div>
+          <span>Elapsed</span>
+          <strong data-testid="vista-animation-elapsed">{formatAnimationSeconds(elapsed)} / {formatAnimationSeconds(duration)}</strong>
+        </div>
+        <div>
+          <span>Events</span>
+          <strong>{completedEvents} / {totalEvents || "—"}</strong>
+        </div>
+        <div>
+          <span>Peak drift</span>
+          <strong data-testid="vista-animation-drift">{formatAnimationDrift(peakDrift)}</strong>
+        </div>
+        <div>
+          <span>Evidence</span>
+          <strong>{coverage ? (coverage.complete ? "Complete" : `${coverage.checkpoint_count} checkpoints`) : "Pending"}</strong>
+        </div>
+      </div>
+
+      <div
+        aria-label="Animation timeline progress"
+        aria-valuemax={duration}
+        aria-valuemin={0}
+        aria-valuenow={Number(elapsed.toFixed(1))}
+        className="vista-animation-progress"
+        role="progressbar"
+      >
+        <span style={{ width: `${progress}%` }} />
+      </div>
+
+      {timelineEvents.length ? (
+        <div className="vista-animation-table-wrap">
+          <table className="vista-animation-table">
+            <thead>
+              <tr>
+                <th>Planned</th>
+                <th>Action</th>
+                <th>Actual</th>
+                <th>Drift</th>
+                <th>State</th>
+                <th>Evidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {timelineEvents.map((event) => (
+                <tr data-testid={`vista-animation-event-${event.event_id}`} key={event.event_id}>
+                  <td className="vista-import-mono">{formatAnimationSeconds(event.at_sec)}</td>
+                  <td className="vista-import-mono">{event.action}</td>
+                  <td className="vista-import-mono">{formatAnimationSeconds(event.runtime?.actual_sec)}</td>
+                  <td className="vista-import-mono">{formatAnimationDrift(event.runtime?.drift_ms)}</td>
+                  <td>
+                    <Badge variant={eventStateVariant(event.runtime?.state)}>
+                      {(event.runtime?.state || "queued").replaceAll("_", " ")}
+                    </Badge>
+                  </td>
+                  <td>
+                    {event.evidence ? (
+                      <span className={`vista-animation-evidence-state ${event.evidence.assertion === "fail" ? "failed" : ""}`}>
+                        {event.evidence.assertion === "pass" ? "Verified" : `${event.evidence.artifacts} artifacts`}
+                      </span>
+                    ) : <span className="vista-animation-evidence-state">Pending</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="vista-animation-empty">Check the trusted runtime before starting the timeline.</div>
+      )}
+
+      {status?.evidence ? (
+        <div className="vista-animation-evidence" data-testid="vista-animation-evidence">
+          <div>
+            <strong>Evidence manifest</strong>
+            <code title={status.evidence.manifest_id}>{status.evidence.manifest_id}</code>
+          </div>
+          <dl>
+            <div><dt>Coverage</dt><dd>{coverage?.completed_event_count || 0}/{coverage?.required_event_count || 0} events</dd></div>
+            <div><dt>Checkpoints</dt><dd>{coverage?.checkpoint_count || 0}</dd></div>
+            <div><dt>Cleanup</dt><dd>{run?.cleanup?.state || "—"}</dd></div>
+            <div><dt>Run digest</dt><dd title={status.evidence.run_digest}>{shortVistaHash(status.evidence.run_digest, 14)}</dd></div>
+          </dl>
+        </div>
+      ) : null}
+
+      {status?.error ? (
+        <div className="vista-import-notice error">
+          <strong>{status.error.code || "ANIMATION_RUN_FAILED"}</strong>
+          <span>{status.error.message || "The animation run did not complete."}</span>
+        </div>
+      ) : null}
+      <ErrorNotice error={error} />
+
+      <div className="vista-animation-actions">
+        {!status ? (
+          <Btn
+            data-testid="vista-animation-preflight"
+            disabled={Boolean(busy)}
+            onClick={onPreflight}
+            variant={preflight?.ready ? "ghost" : "primary"}
+          >
+            {busy === "preflight" ? "Checking runtime" : preflight?.ready ? "Recheck runtime" : "Check runtime and timeline"}
+          </Btn>
+        ) : null}
+        {preflight?.ready && !status ? (
+          <Btn data-testid="vista-animation-start" disabled={Boolean(busy)} onClick={onStart} variant="primary">
+            Start 12-second execution
+          </Btn>
+        ) : null}
+        {status ? (
+          <Btn data-testid="vista-animation-refresh" disabled={Boolean(busy)} onClick={onRefresh} variant="ghost">
+            {busy === "refresh" ? "Refreshing" : "Refresh status"}
+          </Btn>
+        ) : null}
+        {active ? (
+          <Btn
+            data-testid="vista-animation-stop"
+            disabled={Boolean(busy) || status.status === "stopping"}
+            onClick={onStop}
+            variant="cancel"
+          >
+            {busy === "stop" ? "Stopping" : status.status === "stopping" ? "Stop requested" : "Stop execution"}
+          </Btn>
+        ) : null}
+        {terminal ? (
+          <Btn data-testid="vista-animation-replay" disabled={Boolean(busy)} onClick={onReplay} variant="primary">
+            {busy === "replay-preflight" ? "Checking replay" : "Replay 12-second execution"}
+          </Btn>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function AnimationConfirmDialog({ busy, mode, onClose, onConfirm, preflight, sourceRunId }) {
+  const replay = mode === "replay";
+  return (
+    <ModalOverlay maxWidth={660} onClose={busy ? undefined : onClose}>
+      <ModalHeader
+        onClose={busy ? undefined : onClose}
+        subtitle="The server will accept only this exact preflight, timeline, program, and verified Scene BuildPlan."
+        title={replay ? "Replay verified 12-second execution" : "Start verified 12-second execution"}
+      />
+      <div className="vista-import-confirm-body">
+        <div className="vista-import-confirm-grid">
+          <span>Plan</span><code>{preflight.plan_id}</code>
+          <span>Preflight</span><code>{preflight.preflight_id}</code>
+          <span>Timeline</span><code>{preflight.timeline_id}</code>
+          <span>Program</span><code>{preflight.program_id}</code>
+          <span>Schedule</span><strong>{preflight.duration_sec} seconds at {preflight.fps} fps</strong>
+          {replay ? <><span>Replay source</span><code>{sourceRunId}</code></> : null}
+        </div>
+        <div className="vista-import-notice warning">
+          <strong>Live Unreal execution</strong>
+          <span>{replay ? "A new run will execute the same verified revision." : "Character pose, IK contacts, object interactions, and recovery actions will execute in the active scene."} Stop remains available while the run is active.</span>
+        </div>
+      </div>
+      <ModalFooter>
+        <Btn disabled={busy} onClick={onClose} variant="cancel">Cancel</Btn>
+        <Btn data-testid="vista-animation-confirm" disabled={busy} onClick={onConfirm} variant="primary">
+          {busy ? (replay ? "Starting replay" : "Starting execution") : replay ? "Confirm exact replay" : "Confirm exact execution"}
+        </Btn>
+      </ModalFooter>
+    </ModalOverlay>
   );
 }
 
@@ -422,10 +743,29 @@ export default function VistaImportPanel({ icons }) {
   const [buildError, setBuildError] = useState(null);
   const [buildBusy, setBuildBusy] = useState(null);
   const [buildConfirmOpen, setBuildConfirmOpen] = useState(false);
+  const [animationPreflight, setAnimationPreflight] = useState(null);
+  const [animationStatus, setAnimationStatus] = useState(null);
+  const [animationError, setAnimationError] = useState(null);
+  const [animationBusy, setAnimationBusy] = useState(null);
+  const [animationPolling, setAnimationPolling] = useState(false);
+  const [animationConfirmMode, setAnimationConfirmMode] = useState(null);
+  const [animationNowMs, setAnimationNowMs] = useState(() => Date.now());
   const controllerRef = useRef(null);
+  const animationActionControllerRef = useRef(null);
+  const animationPollControllerRef = useRef(null);
   const generationRef = useRef(0);
 
-  useEffect(() => () => controllerRef.current?.abort(), []);
+  useEffect(() => () => {
+    controllerRef.current?.abort();
+    animationActionControllerRef.current?.abort();
+    animationPollControllerRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!ACTIVE_ANIMATION_STATES.has(animationStatus?.status)) return undefined;
+    const interval = setInterval(() => setAnimationNowMs(Date.now()), 250);
+    return () => clearInterval(interval);
+  }, [animationStatus?.status]);
 
   const revision = VISTA_IMPORT_CATALOG.find(
     (entry) => entry.revision === selection.datasetRevision,
@@ -436,6 +776,21 @@ export default function VistaImportPanel({ icons }) {
     () => (preview ? summarizeVistaPreview(preview, previewRequest) : null),
     [preview, previewRequest],
   );
+  const animationActive = ACTIVE_ANIMATION_STATES.has(animationStatus?.status);
+
+  function resetAnimationState() {
+    animationActionControllerRef.current?.abort();
+    animationActionControllerRef.current = null;
+    animationPollControllerRef.current?.abort();
+    animationPollControllerRef.current = null;
+    setAnimationPreflight(null);
+    setAnimationStatus(null);
+    setAnimationError(null);
+    setAnimationBusy(null);
+    setAnimationPolling(false);
+    setAnimationConfirmMode(null);
+    setAnimationNowMs(Date.now());
+  }
 
   function updateSelection(nextSelection) {
     generationRef.current += 1;
@@ -452,6 +807,7 @@ export default function VistaImportPanel({ icons }) {
     setBuildError(null);
     setBuildBusy(null);
     setBuildConfirmOpen(false);
+    resetAnimationState();
   }
 
   async function handlePreview() {
@@ -463,6 +819,11 @@ export default function VistaImportPanel({ icons }) {
     setError(null);
     setStatusError(null);
     setArtifact(null);
+    setBuild(null);
+    setBuildPreflight(null);
+    setBuildError(null);
+    setBuildConfirmOpen(false);
+    resetAnimationState();
     try {
       const request = createVistaImportRequest(selection);
       const result = await previewVistaImport(request, controller.signal);
@@ -527,6 +888,7 @@ export default function VistaImportPanel({ icons }) {
   async function handlePrepareBuild() {
     const artifactId = artifact?.artifact_id || artifact?.run_id;
     if (!artifactId) return;
+    resetAnimationState();
     const generation = generationRef.current;
     controllerRef.current?.abort();
     const controller = new AbortController();
@@ -578,6 +940,7 @@ export default function VistaImportPanel({ icons }) {
   async function handleBuildExecute() {
     const artifactId = artifact?.artifact_id || artifact?.run_id;
     if (!artifactId || !build?.plan?.plan_id || !buildPreflight?.ready) return;
+    resetAnimationState();
     const generation = generationRef.current;
     controllerRef.current?.abort();
     const controller = new AbortController();
@@ -626,6 +989,165 @@ export default function VistaImportPanel({ icons }) {
     }
   }
 
+  function monitorAnimationRun(artifactId, animationRunId, generation) {
+    animationPollControllerRef.current?.abort();
+    const controller = new AbortController();
+    animationPollControllerRef.current = controller;
+    setAnimationPolling(true);
+    void (async () => {
+      try {
+        for (let attempt = 0; attempt < 180; attempt += 1) {
+          const current = await fetchVistaAnimationTimelineStatus(
+            artifactId,
+            animationRunId,
+            controller.signal,
+          );
+          if (generation !== generationRef.current) return;
+          setAnimationStatus(current);
+          setAnimationNowMs(Date.now());
+          if (TERMINAL_ANIMATION_STATES.has(current.status)) return;
+          await waitForPoll(500, controller.signal);
+        }
+        const timeout = new Error("Animation status monitoring timed out. Refresh the run to continue.");
+        timeout.code = "ANIMATION_STATUS_TIMEOUT";
+        timeout.retryable = true;
+        throw timeout;
+      } catch (requestError) {
+        if (requestError?.name !== "AbortError" && generation === generationRef.current) {
+          setAnimationError(requestError);
+        }
+      } finally {
+        if (animationPollControllerRef.current === controller) {
+          animationPollControllerRef.current = null;
+          setAnimationPolling(false);
+        }
+      }
+    })();
+  }
+
+  async function requestAnimationPreflight(mode) {
+    const artifactId = artifact?.artifact_id || artifact?.run_id;
+    if (!artifactId || !build?.plan?.plan_id || !isSuccessfulSceneBuild(build)) return null;
+    const generation = generationRef.current;
+    animationActionControllerRef.current?.abort();
+    const controller = new AbortController();
+    animationActionControllerRef.current = controller;
+    setAnimationBusy(mode === "replay" ? "replay-preflight" : "preflight");
+    setAnimationError(null);
+    try {
+      const checked = await preflightVistaAnimationTimeline(
+        artifactId,
+        build.plan.plan_id,
+        build.profile_id,
+        controller.signal,
+      );
+      if (generation !== generationRef.current) return null;
+      setAnimationPreflight(checked);
+      setAnimationNowMs(Date.now());
+      return checked;
+    } catch (requestError) {
+      if (requestError?.name !== "AbortError" && generation === generationRef.current) {
+        setAnimationError(requestError);
+      }
+      return null;
+    } finally {
+      if (animationActionControllerRef.current === controller) {
+        animationActionControllerRef.current = null;
+        setAnimationBusy(null);
+      }
+    }
+  }
+
+  async function handleAnimationPreflight() {
+    await requestAnimationPreflight("start");
+  }
+
+  async function handleAnimationReplayPrepare() {
+    if (!TERMINAL_ANIMATION_STATES.has(animationStatus?.status)) return;
+    const checked = await requestAnimationPreflight("replay");
+    if (checked) setAnimationConfirmMode("replay");
+  }
+
+  async function handleAnimationLaunch() {
+    const artifactId = artifact?.artifact_id || artifact?.run_id;
+    if (!artifactId || !animationPreflight?.ready || !animationConfirmMode) return;
+    const generation = generationRef.current;
+    const mode = animationConfirmMode;
+    const sourceRunId = animationStatus?.run_id;
+    animationActionControllerRef.current?.abort();
+    const controller = new AbortController();
+    animationActionControllerRef.current = controller;
+    setAnimationBusy(mode === "replay" ? "replay" : "start");
+    setAnimationError(null);
+    try {
+      const accepted = mode === "replay"
+        ? await replayVistaAnimationTimeline(
+          artifactId,
+          sourceRunId,
+          animationPreflight,
+          controller.signal,
+        )
+        : await startVistaAnimationTimeline(artifactId, animationPreflight, controller.signal);
+      if (generation !== generationRef.current) return;
+      setAnimationStatus(accepted);
+      setAnimationConfirmMode(null);
+      setAnimationNowMs(Date.now());
+      monitorAnimationRun(artifactId, accepted.run_id, generation);
+    } catch (requestError) {
+      if (requestError?.name !== "AbortError" && generation === generationRef.current) {
+        setAnimationError(requestError);
+      }
+    } finally {
+      if (animationActionControllerRef.current === controller) {
+        animationActionControllerRef.current = null;
+        setAnimationBusy(null);
+      }
+    }
+  }
+
+  async function handleAnimationRefresh() {
+    const artifactId = artifact?.artifact_id || artifact?.run_id;
+    const animationRunId = animationStatus?.run_id;
+    if (!artifactId || !animationRunId) return;
+    const generation = generationRef.current;
+    setAnimationBusy("refresh");
+    setAnimationError(null);
+    try {
+      const current = await fetchVistaAnimationTimelineStatus(artifactId, animationRunId);
+      if (generation === generationRef.current) {
+        setAnimationStatus(current);
+        setAnimationNowMs(Date.now());
+      }
+    } catch (requestError) {
+      if (generation === generationRef.current) setAnimationError(requestError);
+    } finally {
+      if (generation === generationRef.current) setAnimationBusy(null);
+    }
+  }
+
+  async function handleAnimationStop() {
+    const artifactId = artifact?.artifact_id || artifact?.run_id;
+    const animationRunId = animationStatus?.run_id;
+    if (!artifactId || !animationRunId || !ACTIVE_ANIMATION_STATES.has(animationStatus?.status)) return;
+    const generation = generationRef.current;
+    setAnimationBusy("stop");
+    setAnimationError(null);
+    try {
+      const stopping = await stopVistaAnimationTimeline(artifactId, animationRunId);
+      if (generation === generationRef.current) {
+        setAnimationStatus(stopping);
+        setAnimationNowMs(Date.now());
+        if (!animationPollControllerRef.current && !TERMINAL_ANIMATION_STATES.has(stopping.status)) {
+          monitorAnimationRun(artifactId, animationRunId, generation);
+        }
+      }
+    } catch (requestError) {
+      if (generation === generationRef.current) setAnimationError(requestError);
+    } finally {
+      if (generation === generationRef.current) setAnimationBusy(null);
+    }
+  }
+
   return (
     <div className="vista-import-panel" data-testid="vista-import-panel">
       <div className="vista-import-toolbar">
@@ -637,7 +1159,7 @@ export default function VistaImportPanel({ icons }) {
           <span>Dataset revision</span>
           <select
             aria-label="VISTA dataset revision"
-            disabled={previewBusy || commitBusy || Boolean(buildBusy)}
+            disabled={previewBusy || commitBusy || Boolean(buildBusy) || Boolean(animationBusy) || animationActive}
             onChange={(event) => {
               const nextRevision = VISTA_IMPORT_CATALOG.find((entry) => entry.revision === event.target.value);
               const nextSample = nextRevision.samples[0];
@@ -658,7 +1180,7 @@ export default function VistaImportPanel({ icons }) {
           <span>Sample</span>
           <select
             aria-label="VISTA sample"
-            disabled={previewBusy || commitBusy || Boolean(buildBusy)}
+            disabled={previewBusy || commitBusy || Boolean(buildBusy) || Boolean(animationBusy) || animationActive}
             onChange={(event) => {
               const nextSample = revision.samples.find((entry) => entry.sampleId === event.target.value);
               updateSelection({
@@ -678,7 +1200,7 @@ export default function VistaImportPanel({ icons }) {
           <span>Selected attempt</span>
           <select
             aria-label="VISTA selected attempt"
-            disabled={previewBusy || commitBusy || Boolean(buildBusy)}
+            disabled={previewBusy || commitBusy || Boolean(buildBusy) || Boolean(animationBusy) || animationActive}
             onChange={(event) => updateSelection({ ...selection, attempt: Number(event.target.value) })}
             value={selection.attempt}
           >
@@ -689,7 +1211,7 @@ export default function VistaImportPanel({ icons }) {
         </label>
         <Btn
           data-testid="vista-import-preview"
-          disabled={previewBusy || commitBusy || Boolean(buildBusy)}
+          disabled={previewBusy || commitBusy || Boolean(buildBusy) || Boolean(animationBusy) || animationActive}
           onClick={handlePreview}
           variant="primary"
         >
@@ -712,6 +1234,7 @@ export default function VistaImportPanel({ icons }) {
         <div className="vista-import-preview" data-testid="vista-import-preview-result">
           <PreviewHeader
             icons={icons}
+            locked={animationActive || Boolean(animationBusy)}
             onPrepareCommit={() => setConfirmOpen(true)}
             summary={summary}
           />
@@ -727,10 +1250,26 @@ export default function VistaImportPanel({ icons }) {
               build={build}
               buildError={buildError}
               busy={buildBusy}
+              locked={animationActive || Boolean(animationBusy)}
               onExecute={() => setBuildConfirmOpen(true)}
               onPrepare={handlePrepareBuild}
               onPreflight={handleBuildPreflight}
               preflight={buildPreflight}
+            />
+          ) : null}
+          {artifact && isSuccessfulSceneBuild(build) ? (
+            <AnimationTimelineWorkbench
+              busy={animationBusy}
+              error={animationError}
+              nowMs={animationNowMs}
+              onPreflight={handleAnimationPreflight}
+              onRefresh={handleAnimationRefresh}
+              onReplay={handleAnimationReplayPrepare}
+              onStart={() => setAnimationConfirmMode("start")}
+              onStop={handleAnimationStop}
+              polling={animationPolling}
+              preflight={animationPreflight}
+              status={animationStatus}
             />
           ) : null}
           <div className="vista-import-grid">
@@ -758,6 +1297,17 @@ export default function VistaImportPanel({ icons }) {
           busy={buildBusy === "execute"}
           onClose={() => setBuildConfirmOpen(false)}
           onConfirm={handleBuildExecute}
+        />
+      ) : null}
+
+      {animationConfirmMode && animationPreflight?.ready ? (
+        <AnimationConfirmDialog
+          busy={animationBusy === "start" || animationBusy === "replay"}
+          mode={animationConfirmMode}
+          onClose={() => setAnimationConfirmMode(null)}
+          onConfirm={handleAnimationLaunch}
+          preflight={animationPreflight}
+          sourceRunId={animationStatus?.run_id}
         />
       ) : null}
     </div>
