@@ -7,12 +7,14 @@ Compose profile preloads them during application startup.
 """
 
 from contextlib import asynccontextmanager
+import math
 import os
 import pathlib
 import secrets
+import unicodedata
 
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from fastembed import SparseTextEmbedding, TextEmbedding
 import uvicorn
 
@@ -64,6 +66,11 @@ _sparse = None
 _observed_dense_size = None
 _dense_artifact = None
 _sparse_artifact = None
+
+MAX_EMBED_TEXTS = 4096
+MAX_EMBED_TEXT_BYTES = 16 * 1024
+MAX_EMBED_TOTAL_TEXT_BYTES = 4 * 1024 * 1024
+MAX_SPARSE_ENTRIES_PER_TEXT = 1_000_000
 
 
 def models():
@@ -118,23 +125,95 @@ app = FastAPI(lifespan=lifespan)
 
 
 class EmbedRequest(BaseModel):
-    texts: list[str]
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
+        strict=True,
+    )
+
+    texts: list[str] = Field(min_length=1, max_length=MAX_EMBED_TEXTS)
+
+    @field_validator("texts")
+    @classmethod
+    def validate_text_bounds(cls, texts: list[str]) -> list[str]:
+        total_bytes = 0
+        for text in texts:
+            if not text or any(
+                unicodedata.category(character) == "Cc" for character in text
+            ):
+                raise ValueError("embedding text is empty or contains control characters")
+            if not unicodedata.is_normalized("NFC", text):
+                raise ValueError("embedding text must already be Unicode NFC")
+            size = len(text.encode("utf-8"))
+            if size > MAX_EMBED_TEXT_BYTES:
+                raise ValueError("embedding text exceeds the per-item byte limit")
+            total_bytes += size
+            if total_bytes > MAX_EMBED_TOTAL_TEXT_BYTES:
+                raise ValueError("embedding request exceeds the total byte limit")
+        return texts
+
+
+def _finite_vector(values, *, expected_size: int) -> list[float]:
+    vector = values.tolist()
+    if len(vector) != expected_size:
+        raise RuntimeError("dense embedding output dimension is invalid")
+    normalized: list[float] = []
+    for value in vector:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RuntimeError("dense embedding output contains an invalid value")
+        number = float(value)
+        if not math.isfinite(number):
+            raise RuntimeError("dense embedding output contains a non-finite value")
+        normalized.append(number)
+    return normalized
+
+
+def _bounded_sparse_vector(result) -> dict[str, list[int] | list[float]]:
+    indices = result.indices.tolist()
+    values = result.values.tolist()
+    if (
+        len(indices) != len(values)
+        or len(indices) > MAX_SPARSE_ENTRIES_PER_TEXT
+    ):
+        raise RuntimeError("sparse embedding output shape is invalid")
+    normalized_indices: list[int] = []
+    normalized_values: list[float] = []
+    previous = -1
+    for index, value in zip(indices, values, strict=True):
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise RuntimeError("sparse embedding output contains an invalid index")
+        if index <= previous:
+            raise RuntimeError("sparse embedding indices must be strictly increasing")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RuntimeError("sparse embedding output contains an invalid value")
+        number = float(value)
+        if not math.isfinite(number):
+            raise RuntimeError("sparse embedding output contains a non-finite value")
+        normalized_indices.append(index)
+        normalized_values.append(number)
+        previous = index
+    return {"indices": normalized_indices, "values": normalized_values}
 
 
 def embed(req: EmbedRequest):
     dense, sparse = models()
-    dense_vecs = [v.tolist() for v in dense.embed(req.texts)]
+    expected_dense_size = _observed_dense_size or DENSE_SIZE
+    dense_results = list(dense.embed(req.texts))
     sparse_results = list(sparse.embed(req.texts))
-    sparse_vecs = [
-        {"indices": r.indices.tolist(), "values": r.values.tolist()}
-        for r in sparse_results
+    if len(dense_results) != len(req.texts) or len(sparse_results) != len(req.texts):
+        raise RuntimeError("embedding output count does not match the request")
+    dense_vecs = [
+        _finite_vector(result, expected_size=expected_dense_size)
+        for result in dense_results
     ]
+    sparse_vecs = [_bounded_sparse_vector(result) for result in sparse_results]
     return {
         "dense": dense_vecs,
         "sparse": sparse_vecs,
         "dense_model": DENSE_MODEL,
         "dense_revision": DENSE_REVISION,
-        "dense_size": _observed_dense_size or DENSE_SIZE,
+        "dense_size": expected_dense_size,
         "sparse_model": SPARSE_MODEL,
         "sparse_revision": SPARSE_REVISION,
         "version": EMBED_VERSION,

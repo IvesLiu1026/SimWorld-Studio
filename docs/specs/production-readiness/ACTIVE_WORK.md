@@ -2,9 +2,9 @@
 
 - Agent: Codex `/root`
 - Session: VISTA-world production completion
-- Worktree: `/home/yhliu/SimWorld-Studio-worktrees/vista-production`
-- Branch: `codex/vista-production-completion`
-- Base: `origin/codex/vista-loopback` at `7a20573a`
+- Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
+- Branch: `codex/semantic-production-adapter`
+- Base: production checkpoint `6b0d5046`
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -26,21 +26,42 @@
 
 | Agent | Worktree / branch | Owns | Must not touch | Runtime ownership |
 | --- | --- | --- | --- | --- |
-| Codex `/root` | `vista-production` / `codex/vista-production-completion` | Scene build orchestration, importer/API/UI integration, merge queue, final validation | Dirty source checkout and canonical datasets | Existing local web smoke only |
-| `animation-runtime` | `animation-runtime-v2` / `codex/vista-animation-runtime-v2` | New animation/IK/timeline adapter modules, schemas, focused tests, focused runbook section | Existing scene/import routes, `index.js`, UI, UE runtime | None; fake broker only |
-| `streaming-readiness` | `streaming-readiness-v2` / `codex/vista-streaming-readiness-v2` | New WebRTC readiness/evidence modules and focused tests | Existing gateway, Nginx, Compose, UI, live ports | None; no Coturn/Cirrus launch |
-| `review-provider` | `review-provider-v2` / `codex/vista-review-provider-v2` | New bounded provider smoke runner/CLI, schemas, focused tests | Existing chat/review routes, UI, provider credentials | None; no paid/provider call |
+| Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, embed-service hardening, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | None; offline code only |
+| `release_consistency_audit` | shared worktree, read-only | 21/20/24 schema closure and release consistency audit | All source/docs edits and runtime | None |
+| `service_contract_audit` | shared worktree, read-only | durable ordinary-phase service and ledger trust-boundary audit | All source/docs edits and runtime | None |
 
 The coordinator is the only merge owner. Workers must commit a single coherent
 change and report validation commands plus remaining live/admin gates.
 
 ## Runtime Ownership
 
-- The coordinator owns the existing loopback-only development smoke runtime.
-- Workers own no live runtime during source integration.
+- This work item owns no runtime, GPU, port, database, UE lease, or provider.
+- A separate isolated demo task owns GPU 1 and loopback ports
+  `3012/55570/8595/8596/8899`; this work item must not inspect, restart, bind,
+  or terminate those resources.
+- Production VISTA port `8000` is also outside this work item.
 - UE, model-provider, database, GPU, network, and public-ingress work remains
   gated until the relevant preflight is recorded.
 - No production deploy is authorized by this work item.
+
+## Current Offline Semantic-v2 Checkpoint
+
+- Formal release closure: 21 schemas, including the signed launcher
+  verification receipt.
+- Unregistered adapter digest surface: 20 schemas; the registry remains empty
+  and every execution gate returns `ADAPTER_NOT_REGISTERED`.
+- Closed-schema runtime corpus: 24 schemas.
+- Implemented offline: Ed25519 receipt verification, exact one-use verified
+  handoff composition, durable ordinary-phase prepare/result ledger, exact
+  replay, request/evidence/terminal ledger identity and revision binding, and
+  prepare-before-execute/commit-before-send service ordering.
+- Still required before Production registration: a separate durable control
+  ledger; independently pinned deployment wiring; isolated real executor
+  process-group deadline termination/reaping; seven real operation executors;
+  root-capability handoff evidence; live UE/PostgreSQL/Qdrant/embedding/provider
+  observations; cryptographic approval and worker-evidence provenance; a new
+  registered adapter revision that resolves the intentional false/true
+  capability gate; PA-01 through PA-21 evidence and explicit release approval.
 
 ## Validation
 
@@ -54,3 +75,5 @@ change and report validation commands plus remaining live/admin gates.
 
 - This file plus `tasks.md` and phase-specific evidence under
   `docs/specs/production-readiness/evidence/`
+- Current semantic-v2 code evidence:
+  `evidence/2026-07-21-semantic-index-v2-offline-checkpoint.md`

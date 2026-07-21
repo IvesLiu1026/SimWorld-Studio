@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-asset-index-job-v2.schema.json",
+  "title": "SimWorld reviewed semantic asset index job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source",
+    "reviewed_selection",
+    "recipe_contract",
+    "snapshot_target",
+    "resource_contract",
+    "data_owner_approval",
+    "execution_contract",
+    "serialization_contract",
+    "job_revision"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-asset-index-job/v2" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v1_job_schema",
+        "v1_job_sha256",
+        "v1_job_revision",
+        "preparation_receipt_schema",
+        "preparation_receipt_sha256",
+        "candidate_set_count",
+        "candidate_set_sha256",
+        "project",
+        "content",
+        "recipe_schema",
+        "recipe_sha256",
+        "recipe_revision",
+        "target_snapshot_revision"
+      ],
+      "properties": {
+        "v1_job_schema": { "const": "simworld-semantic-asset-index-job/v1" },
+        "v1_job_sha256": { "$ref": "#/$defs/sha256" },
+        "v1_job_revision": { "$ref": "#/$defs/sha256Revision" },
+        "preparation_receipt_schema": {
+          "const": "simworld-semantic-asset-index-job-preparation-receipt/v1"
+        },
+        "preparation_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "candidate_set_count": { "$ref": "#/$defs/candidateCount" },
+        "candidate_set_sha256": { "$ref": "#/$defs/sha256" },
+        "project": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "revision", "engine_version"],
+          "properties": {
+            "name": { "$ref": "#/$defs/slug" },
+            "revision": { "$ref": "#/$defs/revision" },
+            "engine_version": { "$ref": "#/$defs/boundedText" }
+          }
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mount_point", "revision"],
+          "properties": {
+            "mount_point": { "const": "/Game" },
+            "revision": { "$ref": "#/$defs/sha256Revision" }
+          }
+        },
+        "recipe_schema": { "const": "simworld-semantic-asset-index-recipe/v1" },
+        "recipe_sha256": { "$ref": "#/$defs/sha256" },
+        "recipe_revision": { "$ref": "#/$defs/revision" },
+        "target_snapshot_revision": { "$ref": "#/$defs/snapshotRevision" }
+      }
+    },
+    "reviewed_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selection",
+        "selection_approval_basis_sha256",
+        "candidate_set",
+        "accepted_set",
+        "rejected_set",
+        "rejection_ledger",
+        "partition_proof"
+      ],
+      "properties": {
+        "selection": { "const": "explicit_reviewed_partition" },
+        "selection_approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "candidate_set": { "$ref": "#/$defs/candidateSet" },
+        "accepted_set": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "assets_sha256", "assets"],
+          "properties": {
+            "count": { "$ref": "#/$defs/acceptedCount" },
+            "assets_sha256": { "$ref": "#/$defs/sha256" },
+            "assets": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4096,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/acceptedAsset" }
+            }
+          }
+        },
+        "rejected_set": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "assets_sha256", "assets"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "assets_sha256": { "$ref": "#/$defs/sha256" },
+            "assets": {
+              "type": "array",
+              "maxItems": 100000,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/rejectedAsset" }
+            }
+          }
+        },
+        "rejection_ledger": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema", "revision", "sha256"],
+          "properties": {
+            "schema": { "const": "simworld-semantic-index-rejection-ledger/v1" },
+            "revision": { "$ref": "#/$defs/sha256Revision" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "partition_proof": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "candidate_count",
+            "candidate_set_sha256",
+            "accepted_count",
+            "accepted_assets_sha256",
+            "rejected_count",
+            "rejected_assets_sha256",
+            "disjoint",
+            "complete",
+            "proof_sha256"
+          ],
+          "properties": {
+            "algorithm": { "const": "sorted-asset-id-partition-v1" },
+            "candidate_count": { "$ref": "#/$defs/candidateCount" },
+            "candidate_set_sha256": { "$ref": "#/$defs/sha256" },
+            "accepted_count": { "$ref": "#/$defs/acceptedCount" },
+            "accepted_assets_sha256": { "$ref": "#/$defs/sha256" },
+            "rejected_count": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "rejected_assets_sha256": { "$ref": "#/$defs/sha256" },
+            "disjoint": { "const": true },
+            "complete": { "const": true },
+            "proof_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
+    "recipe_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sha256",
+        "revision",
+        "unchanged_from_v1_job",
+        "accepted_set_only"
+      ],
+      "properties": {
+        "schema": { "const": "simworld-semantic-asset-index-recipe/v1" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "unchanged_from_v1_job": { "const": true },
+        "accepted_set_only": { "const": true }
+      }
+    },
+    "snapshot_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_snapshot_revision",
+        "postgres_schema_revision",
+        "qdrant_dense_vector_name",
+        "qdrant_sparse_vector_name",
+        "row_point_parity_required",
+        "fresh_live_audit_required",
+        "catalog_complete",
+        "snapshot_complete"
+      ],
+      "properties": {
+        "asset_snapshot_revision": { "$ref": "#/$defs/snapshotRevision" },
+        "postgres_schema_revision": { "type": "integer", "minimum": 2, "maximum": 3 },
+        "qdrant_dense_vector_name": { "$ref": "#/$defs/slug" },
+        "qdrant_sparse_vector_name": { "$ref": "#/$defs/slug" },
+        "row_point_parity_required": { "const": true },
+        "fresh_live_audit_required": { "const": true },
+        "catalog_complete": { "const": false },
+        "snapshot_complete": { "const": false }
+      }
+    },
+    "resource_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "computed_for_accepted_assets_sha256",
+        "limits",
+        "estimates",
+        "cost_authorized",
+        "state_change_authorized"
+      ],
+      "properties": {
+        "computed_for_accepted_assets_sha256": { "$ref": "#/$defs/sha256" },
+        "limits": { "$ref": "#/$defs/resourceShape" },
+        "estimates": { "$ref": "#/$defs/resourceShape" },
+        "cost_authorized": { "const": false },
+        "state_change_authorized": { "const": false }
+      }
+    },
+    "data_owner_approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema",
+        "receipt_id",
+        "receipt_sha256",
+        "approval_basis_sha256",
+        "approval_kind",
+        "accepted_assets_sha256",
+        "rejection_ledger_sha256",
+        "content_revision"
+      ],
+      "properties": {
+        "receipt_schema": { "const": "simworld-semantic-index-approval-receipt/v1" },
+        "receipt_id": { "$ref": "#/$defs/receiptId" },
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_kind": { "const": "data_owner_review" },
+        "accepted_assets_sha256": { "$ref": "#/$defs/sha256" },
+        "rejection_ledger_sha256": { "$ref": "#/$defs/sha256" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" }
+      }
+    },
+    "execution_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewed_only",
+        "production_authorized",
+        "cost_authorized",
+        "mutation_authorized",
+        "activation_authorized",
+        "legacy_runner_authorized",
+        "ambient_discovery_allowed",
+        "separate_v2_plan_required"
+      ],
+      "properties": {
+        "reviewed_only": { "const": true },
+        "production_authorized": { "const": false },
+        "cost_authorized": { "const": false },
+        "mutation_authorized": { "const": false },
+        "activation_authorized": { "const": false },
+        "legacy_runner_authorized": { "const": false },
+        "ambient_discovery_allowed": { "const": false },
+        "separate_v2_plan_required": { "const": true }
+      }
+    },
+    "serialization_contract": { "$ref": "#/$defs/serializationContract" },
+    "job_revision": { "$ref": "#/$defs/sha256Revision" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "revision": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]+$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "boundedText": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "receiptId": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 160,
+      "pattern": "^semantic-index-approval:[A-Za-z0-9][A-Za-z0-9._:@+\\-]{0,130}$"
+    },
+    "snapshotRevision": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 240,
+      "pattern": "^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,223}$"
+    },
+    "candidateCount": { "type": "integer", "minimum": 1, "maximum": 100000 },
+    "acceptedCount": { "type": "integer", "minimum": 1, "maximum": 4096 },
+    "candidateSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "assets_sha256"],
+      "properties": {
+        "count": { "$ref": "#/$defs/candidateCount" },
+        "assets_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "assetIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "ue_name",
+        "ue_path",
+        "asset_type",
+        "source_pack",
+        "content_revision"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[a-z0-9][a-z0-9_]*$"
+        },
+        "ue_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[A-Za-z0-9_+\\-]+$"
+        },
+        "ue_path": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 512,
+          "pattern": "^/Game(?:/[A-Za-z0-9_+\\-]+)+\\.[A-Za-z0-9_+\\-]{1,240}$"
+        },
+        "asset_type": { "enum": ["Blueprint", "StaticMesh"] },
+        "source_pack": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_+\\-]+$"
+        },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" }
+      }
+    },
+    "acceptedAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "ue_name",
+        "ue_path",
+        "asset_type",
+        "source_pack",
+        "content_revision",
+        "status"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetIdentity/properties/asset_id" },
+        "ue_name": { "$ref": "#/$defs/assetIdentity/properties/ue_name" },
+        "ue_path": { "$ref": "#/$defs/assetIdentity/properties/ue_path" },
+        "asset_type": { "$ref": "#/$defs/assetIdentity/properties/asset_type" },
+        "source_pack": { "$ref": "#/$defs/assetIdentity/properties/source_pack" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "status": { "const": "reviewed_accepted" }
+      }
+    },
+    "rejectedAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "ue_name",
+        "ue_path",
+        "asset_type",
+        "source_pack",
+        "content_revision",
+        "status",
+        "reason_code",
+        "ledger_entry_sha256"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetIdentity/properties/asset_id" },
+        "ue_name": { "$ref": "#/$defs/assetIdentity/properties/ue_name" },
+        "ue_path": { "$ref": "#/$defs/assetIdentity/properties/ue_path" },
+        "asset_type": { "$ref": "#/$defs/assetIdentity/properties/asset_type" },
+        "source_pack": { "$ref": "#/$defs/assetIdentity/properties/source_pack" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "status": { "const": "reviewed_rejected" },
+        "reason_code": { "$ref": "#/$defs/slug" },
+        "ledger_entry_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "resourceShape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assets",
+        "rendered_views",
+        "render_pixels",
+        "caption_calls",
+        "caption_output_tokens",
+        "catalog_bytes",
+        "embedding_batches",
+        "postgres_rows",
+        "qdrant_points",
+        "dense_vector_payload_bytes"
+      ],
+      "properties": {
+        "assets": { "$ref": "#/$defs/acceptedCount" },
+        "rendered_views": { "type": "integer", "minimum": 1, "maximum": 131072 },
+        "render_pixels": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "caption_calls": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "caption_output_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "catalog_bytes": { "type": "integer", "minimum": 1024, "maximum": 9007199254740991 },
+        "embedding_batches": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "postgres_rows": { "$ref": "#/$defs/acceptedCount" },
+        "qdrant_points": { "$ref": "#/$defs/acceptedCount" },
+        "dense_vector_payload_bytes": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "serializationContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "encoding",
+        "canonicalization",
+        "duplicate_keys",
+        "unicode_normalization",
+        "numbers",
+        "nonfinite_numbers",
+        "trailing_newline"
+      ],
+      "properties": {
+        "encoding": { "const": "utf-8" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "duplicate_keys": { "const": "reject" },
+        "unicode_normalization": { "const": "require_already_nfc" },
+        "numbers": { "const": "integers_only" },
+        "nonfinite_numbers": { "const": "reject" },
+        "trailing_newline": { "const": false }
+      }
+    }
+  }
+}

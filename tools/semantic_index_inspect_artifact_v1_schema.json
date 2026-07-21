@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-inspect-artifact-v1.schema.json",
+  "title": "SimWorld semantic index inspect artifact root",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "phase", "operation", "bindings", "root_recomputation", "chunks", "evidence", "semantic_validation", "serialization_contract"],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-inspect-artifact/v1" },
+    "phase": { "const": "inspect" },
+    "operation": { "const": "inspect_exact_assets" },
+    "bindings": { "$ref": "#/$defs/bindings" },
+    "root_recomputation": { "$ref": "#/$defs/rootRecomputation" },
+    "chunks": { "$ref": "#/$defs/chunks" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_revision", "unreal_runtime", "exact_asset_set", "disposable_scene", "records", "records_sha256", "scene_cleanup_state"],
+      "properties": {
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "unreal_runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deployment_identity", "runtime_image", "whoami_sha256", "runtime_attestation_sha256"],
+          "properties": {
+            "deployment_identity": { "$ref": "#/$defs/safeId" },
+            "runtime_image": { "$ref": "#/$defs/image" },
+            "whoami_sha256": { "$ref": "#/$defs/sha256" },
+            "runtime_attestation_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "exact_asset_set": { "$ref": "#/$defs/exactSet" },
+        "disposable_scene": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scene_id", "lease_id", "level_revision", "spawn_policy", "cleanup_policy"],
+          "properties": {
+            "scene_id": { "$ref": "#/$defs/safeId" },
+            "lease_id": { "$ref": "#/$defs/safeId" },
+            "level_revision": { "$ref": "#/$defs/sha256Revision" },
+            "spawn_policy": { "const": "one_asset_at_a_time_exact_transform_v1" },
+            "cleanup_policy": { "const": "destroy_and_observe_absence_before_next_asset_v1" }
+          }
+        },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/inspectRecord" }
+        },
+        "records_sha256": { "$ref": "#/$defs/sha256" },
+        "scene_cleanup_state": { "const": "destroyed_and_verified" }
+      }
+    },
+    "semantic_validation": { "$ref": "#/$defs/semanticValidation" },
+    "serialization_contract": { "$ref": "#/$defs/serializationContract" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$" },
+    "generationId": { "type": "string", "pattern": "^semantic-generation:[a-f0-9]{64}$" },
+    "assetId": { "type": "string", "minLength": 1, "maxLength": 240, "pattern": "^[a-z0-9][a-z0-9_]*$" },
+    "uePath": { "type": "string", "minLength": 8, "maxLength": 512, "pattern": "^/Game(?:/[A-Za-z0-9_+\\-]+)+\\.[A-Za-z0-9_+\\-]{1,240}$" },
+    "image": { "type": "string", "minLength": 72, "maxLength": 512, "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$" },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "job_revision", "reviewed_job_sha256", "execution_plan_sha256", "approval_basis_sha256", "generation_id", "request_sha256", "phase_evidence_schema_sha256"],
+      "properties": {
+        "run_id": { "type": "string", "pattern": "^semantic-index-run:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$", "maxLength": 160 },
+        "job_revision": { "$ref": "#/$defs/sha256Revision" },
+        "reviewed_job_sha256": { "$ref": "#/$defs/sha256" },
+        "execution_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "phase_evidence_schema_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "chunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "content_address", "canonical_sha256", "canonical_byte_count", "record_count", "records_sha256"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0, "maximum": 4095 },
+        "content_address": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "canonical_sha256": { "$ref": "#/$defs/sha256" },
+        "canonical_byte_count": { "type": "integer", "minimum": 2, "maximum": 16777216 },
+        "record_count": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "records_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "chunks": { "type": "array", "minItems": 1, "maxItems": 4096, "items": { "$ref": "#/$defs/chunk" } },
+    "rootRecomputation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "phase_evidence_sha256", "ordered_chunks_sha256", "chunk_count", "record_count", "payload_byte_count", "preimage_fields", "artifact_root_sha256"],
+      "properties": {
+        "algorithm": { "const": "sha256-jcs-nul-separated-semantic-phase-artifact-root-v1" },
+        "phase_evidence_sha256": { "$ref": "#/$defs/sha256" },
+        "ordered_chunks_sha256": { "$ref": "#/$defs/sha256" },
+        "chunk_count": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "record_count": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "payload_byte_count": { "type": "integer", "minimum": 2, "maximum": 68719476736 },
+        "preimage_fields": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "schema" }, { "const": "generation_id" }, { "const": "request_sha256" },
+            { "const": "phase_evidence_sha256" }, { "const": "ordered_chunks_sha256" }, { "const": "record_count" }
+          ],
+          "items": false, "minItems": 6, "maxItems": 6
+        },
+        "artifact_root_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "exactSet": {
+      "type": "object", "additionalProperties": false,
+      "required": ["count", "ordered_asset_ids_sha256", "asset_records_sha256"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "ordered_asset_ids_sha256": { "$ref": "#/$defs/sha256" },
+        "asset_records_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "inspectRecord": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ordinal", "asset_id", "ue_name", "ue_path", "asset_type", "class_path", "load", "spawn", "bounds_millimeters", "collision", "material_slots", "material_slots_sha256", "cleanup", "record_sha256"],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 0, "maximum": 4095 },
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "ue_name": { "type": "string", "minLength": 1, "maxLength": 240, "pattern": "^[A-Za-z0-9_+\\-]+$" },
+        "ue_path": { "$ref": "#/$defs/uePath" },
+        "asset_type": { "enum": ["Blueprint", "StaticMesh"] },
+        "class_path": { "$ref": "#/$defs/uePath" },
+        "load": { "type": "object", "additionalProperties": false, "required": ["succeeded", "observed_class_sha256"], "properties": { "succeeded": { "const": true }, "observed_class_sha256": { "$ref": "#/$defs/sha256" } } },
+        "spawn": { "type": "object", "additionalProperties": false, "required": ["succeeded", "actor_identity", "transform_sha256"], "properties": { "succeeded": { "const": true }, "actor_identity": { "$ref": "#/$defs/safeId" }, "transform_sha256": { "$ref": "#/$defs/sha256" } } },
+        "bounds_millimeters": {
+          "type": "object", "additionalProperties": false,
+          "required": ["origin_xyz", "extent_xyz", "nonzero"],
+          "properties": {
+            "origin_xyz": { "type": "array", "prefixItems": [{"type":"integer"},{"type":"integer"},{"type":"integer"}], "items": false, "minItems": 3, "maxItems": 3 },
+            "extent_xyz": { "type": "array", "prefixItems": [{"type":"integer","minimum":0},{"type":"integer","minimum":0},{"type":"integer","minimum":0}], "items": false, "minItems": 3, "maxItems": 3 },
+            "nonzero": { "const": true }
+          }
+        },
+        "collision": { "type": "object", "additionalProperties": false, "required": ["enabled", "primitive_count", "observation_sha256"], "properties": { "enabled": { "type": "boolean" }, "primitive_count": { "type": "integer", "minimum": 0, "maximum": 65535 }, "observation_sha256": { "$ref": "#/$defs/sha256" } } },
+        "material_slots": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/materialSlot" } },
+        "material_slots_sha256": { "$ref": "#/$defs/sha256" },
+        "cleanup": { "type": "object", "additionalProperties": false, "required": ["destroy_requested", "actor_absent_after_destroy"], "properties": { "destroy_requested": { "const": true }, "actor_absent_after_destroy": { "const": true } } },
+        "record_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "materialSlot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slot_index", "material_path", "base_color_texture", "normal_texture", "roughness_texture", "metallic_texture", "ambient_occlusion_texture", "pbr_dependency_set_sha256", "all_required_dependencies_resolved"],
+      "properties": {
+        "slot_index": { "type": "integer", "minimum": 0, "maximum": 63 },
+        "material_path": { "$ref": "#/$defs/uePath" },
+        "base_color_texture": { "$ref": "#/$defs/nullableUePath" },
+        "normal_texture": { "$ref": "#/$defs/nullableUePath" },
+        "roughness_texture": { "$ref": "#/$defs/nullableUePath" },
+        "metallic_texture": { "$ref": "#/$defs/nullableUePath" },
+        "ambient_occlusion_texture": { "$ref": "#/$defs/nullableUePath" },
+        "pbr_dependency_set_sha256": { "$ref": "#/$defs/sha256" },
+        "all_required_dependencies_resolved": { "const": true }
+      }
+    },
+    "nullableUePath": { "oneOf": [{ "$ref": "#/$defs/uePath" }, { "type": "null" }] },
+    "semanticValidation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["chunk_order", "chunk_uniqueness", "record_order", "record_uniqueness", "counts_and_digests_recomputed", "every_chunk_fetched"],
+      "properties": {
+        "chunk_order": { "const": "index_ascending_zero_based_without_gaps" },
+        "chunk_uniqueness": { "const": "executor_linear_unique_index_content_address_and_digest_v1" },
+        "record_order": { "const": "ordinal_then_asset_id_ascending" },
+        "record_uniqueness": { "const": "executor_linear_unique_asset_id_and_ue_path_v1" },
+        "counts_and_digests_recomputed": { "const": true },
+        "every_chunk_fetched": { "const": true }
+      }
+    },
+    "serializationContract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["encoding", "canonicalization", "duplicate_keys", "unicode_normalization", "numbers", "nonfinite_numbers", "bom", "trailing_newline"],
+      "properties": {
+        "encoding": { "const": "utf-8" }, "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "duplicate_keys": { "const": "reject" }, "unicode_normalization": { "const": "require_already_nfc" },
+        "numbers": { "const": "integers_only" }, "nonfinite_numbers": { "const": "reject" },
+        "bom": { "const": false }, "trailing_newline": { "const": false }
+      }
+    }
+  }
+}

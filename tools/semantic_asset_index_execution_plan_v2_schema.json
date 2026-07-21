@@ -1,0 +1,1283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-asset-index-execution-plan-v2.schema.json",
+  "title": "SimWorld sealed Production semantic asset index execution plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile",
+    "run_identity",
+    "reviewed_job",
+    "approval_basis",
+    "contract_digests",
+    "adapter",
+    "deployment_preflight",
+    "generation",
+    "worker",
+    "unreal",
+    "caption",
+    "embedding",
+    "storage",
+    "runtime_images",
+    "target_attestations",
+    "expected_sets",
+    "acceptance",
+    "credentials",
+    "phase_policy",
+    "approvals",
+    "activation_contract",
+    "serialization_contract"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-asset-index-execution-plan/v2" },
+    "profile": { "const": "production" },
+    "run_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "correlation_id",
+        "operator_id",
+        "service_owner_id",
+        "retention_class"
+      ],
+      "properties": {
+        "run_id": { "$ref": "#/$defs/runId" },
+        "correlation_id": { "$ref": "#/$defs/correlationId" },
+        "operator_id": { "$ref": "#/$defs/safeId" },
+        "service_owner_id": { "$ref": "#/$defs/safeId" },
+        "retention_class": { "enum": ["production_evidence_1y", "production_evidence_7y"] }
+      }
+    },
+    "reviewed_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sha256",
+        "revision",
+        "source_v1_job_sha256",
+        "preparation_receipt_sha256",
+        "accepted_asset_count",
+        "accepted_assets_sha256",
+        "rejected_asset_count",
+        "rejected_assets_sha256",
+        "rejection_ledger_sha256",
+        "content_revision",
+        "target_snapshot_revision"
+      ],
+      "properties": {
+        "schema": { "const": "simworld-semantic-asset-index-job/v2" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "revision": { "$ref": "#/$defs/sha256Revision" },
+        "source_v1_job_sha256": { "$ref": "#/$defs/sha256" },
+        "preparation_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "accepted_asset_count": { "$ref": "#/$defs/assetCount" },
+        "accepted_assets_sha256": { "$ref": "#/$defs/sha256" },
+        "rejected_asset_count": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "rejected_assets_sha256": { "$ref": "#/$defs/sha256" },
+        "rejection_ledger_sha256": { "$ref": "#/$defs/sha256" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "target_snapshot_revision": { "$ref": "#/$defs/snapshotRevision" }
+      }
+    },
+    "approval_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "revision",
+        "sha256",
+        "canonicalization"
+      ],
+      "properties": {
+        "schema": { "const": "simworld-semantic-index-production-approval-basis/v1" },
+        "revision": { "const": "semantic-index-production-approval-basis:v1" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" }
+      }
+    },
+    "contract_digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewed_job_schema_sha256",
+        "execution_plan_schema_sha256",
+        "approval_basis_schema_sha256",
+        "approval_receipt_schema_sha256",
+        "launcher_verification_receipt_schema_sha256",
+        "phase_request_schema_sha256",
+        "worker_result_schema_sha256",
+        "control_request_schema_sha256",
+        "control_result_schema_sha256",
+        "worker_artifact_root_schema_sha256",
+        "phase_evidence_schema_sha256",
+        "state_schema_sha256",
+        "terminal_receipt_schema_sha256",
+        "inspect_artifact_schema_sha256",
+        "render_artifact_schema_sha256",
+        "caption_artifact_schema_sha256",
+        "embed_artifact_schema_sha256",
+        "postgres_artifact_schema_sha256",
+        "qdrant_artifact_schema_sha256",
+        "reconcile_artifact_schema_sha256",
+        "adapter_contract_sha256",
+        "adapter_source_sha256",
+        "coordinator_source_closure_sha256",
+        "worker_protocol_sha256",
+        "worker_source_closure_sha256",
+        "dependency_lock_sha256",
+        "sql_bundle_sha256"
+      ],
+      "properties": {
+        "reviewed_job_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "execution_plan_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_basis_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_receipt_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "launcher_verification_receipt_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "phase_request_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_result_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "control_request_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "control_result_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_artifact_root_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "phase_evidence_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "state_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "terminal_receipt_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "inspect_artifact_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "render_artifact_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "caption_artifact_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "embed_artifact_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "postgres_artifact_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "qdrant_artifact_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "reconcile_artifact_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "adapter_contract_sha256": { "$ref": "#/$defs/sha256" },
+        "adapter_source_sha256": { "$ref": "#/$defs/sha256" },
+        "coordinator_source_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_protocol_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_source_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "dependency_lock_sha256": { "$ref": "#/$defs/sha256" },
+        "sql_bundle_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_id", "contract_revision", "production_capable", "registration"],
+      "properties": {
+        "adapter_id": { "const": "semantic-index-production-v2-uds" },
+        "contract_revision": { "const": "semantic-index-production-adapter/v2" },
+        "production_capable": { "const": true },
+        "registration": { "const": "static_reviewed_registry_only" }
+      }
+    },
+    "deployment_preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema",
+        "receipt_sha256",
+        "signature_sha256",
+        "deployment_identity",
+        "worker_image",
+        "endpoint_map_sha256",
+        "network_policy",
+        "whoami_contract_sha256",
+        "worker_attestation_sha256",
+        "issued_at",
+        "expires_at"
+      ],
+      "properties": {
+        "receipt_schema": { "const": "simworld-semantic-index-deployment-preflight-receipt/v1" },
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "signature_sha256": { "$ref": "#/$defs/sha256" },
+        "deployment_identity": { "$ref": "#/$defs/safeId" },
+        "worker_image": { "$ref": "#/$defs/image" },
+        "endpoint_map_sha256": { "$ref": "#/$defs/sha256" },
+        "network_policy": { "const": "uds_and_loopback_mtls_only_v1" },
+        "whoami_contract_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "issued_at": { "$ref": "#/$defs/rfc3339" },
+        "expires_at": { "$ref": "#/$defs/rfc3339" }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation_nonce",
+        "generation_nonce_sha256",
+        "generation_nonce_sha256_derivation",
+        "generation_id",
+        "derivation",
+        "reviewed_job_sha256",
+        "reviewed_job_revision",
+        "approval_basis_sha256",
+        "target_generation_identities_sha256",
+        "artifact_namespace",
+        "reservation",
+        "previous_active",
+        "active_generation_pointer",
+        "cleanup_policy"
+      ],
+      "properties": {
+        "generation_nonce": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[a-f0-9]{32}$"
+        },
+        "generation_nonce_sha256": { "$ref": "#/$defs/sha256" },
+        "generation_nonce_sha256_derivation": { "const": "sha256(decoded-lowercase-hex-16-bytes)-v1" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "derivation": {
+          "const": "sha256-ascii-nul-separated(simworld-semantic-index-generation-id/v1,reviewed_job_revision,approval_basis_sha256)-v1"
+        },
+        "reviewed_job_sha256": { "$ref": "#/$defs/sha256" },
+        "reviewed_job_revision": { "$ref": "#/$defs/sha256Revision" },
+        "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "target_generation_identities_sha256": { "$ref": "#/$defs/sha256" },
+        "artifact_namespace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "store_identity",
+            "workspace_root",
+            "workspace",
+            "layout",
+            "generation_name_policy",
+            "namespace_revision"
+          ],
+          "properties": {
+            "store_identity": { "$ref": "#/$defs/safeId" },
+            "workspace_root": { "$ref": "#/$defs/absolutePath" },
+            "workspace": { "$ref": "#/$defs/absolutePath" },
+            "layout": { "const": "content-addressed-sha256-no-replace-v1" },
+            "generation_name_policy": { "const": "semantic-generation-id-path-segment-v1" },
+            "namespace_revision": { "$ref": "#/$defs/sha256Revision" }
+          }
+        },
+        "reservation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "receipt_schema",
+            "receipt_sha256",
+            "reservation_id",
+            "mode",
+            "owner_identity",
+            "issued_at",
+            "expires_at"
+          ],
+          "properties": {
+            "receipt_schema": { "const": "simworld-semantic-index-generation-reservation/v1" },
+            "receipt_sha256": { "$ref": "#/$defs/sha256" },
+            "reservation_id": { "$ref": "#/$defs/safeId" },
+            "mode": { "const": "exclusive_create_only" },
+            "owner_identity": { "$ref": "#/$defs/safeId" },
+            "issued_at": { "$ref": "#/$defs/rfc3339" },
+            "expires_at": { "$ref": "#/$defs/rfc3339" }
+          }
+        },
+        "previous_active": { "$ref": "#/$defs/previousActive" },
+        "active_generation_pointer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["identity", "observed_epoch", "activation_mode", "activation_during_build"],
+          "properties": {
+            "identity": { "$ref": "#/$defs/safeId" },
+            "observed_epoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "activation_mode": { "const": "single_pointer_epoch_compare_and_swap" },
+            "activation_during_build": { "const": false }
+          }
+        },
+        "cleanup_policy": { "const": "quarantine_failed_unactivated_generation" }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "socket_path",
+        "socket_owner_uid",
+        "socket_owner_gid",
+        "protocol_revision",
+        "peer_deployment_identity",
+        "whoami_sha256",
+        "peer_attestation_sha256",
+        "runtime_attestation_sha256",
+        "host_boot_id_sha256",
+        "idempotency_ledger_identity",
+        "idempotency_ledger_revision",
+        "idempotency_ledger_mode",
+        "idempotency_incomplete_policy",
+        "peer_pid",
+        "process_start_time_ticks",
+        "process_start_token_sha256",
+        "socket_device",
+        "socket_inode",
+        "socket_inode_binding_sha256",
+        "max_frame_bytes",
+        "connect_timeout_ms",
+        "read_chunk_timeout_ms",
+        "write_timeout_ms",
+        "deadline_field",
+        "deadline_clock",
+        "phase_operations",
+        "control_operations"
+      ],
+      "properties": {
+        "transport": { "const": "launcher_attested_preconnected_af_unix_framed_canonical_json_v1" },
+        "socket_path": { "$ref": "#/$defs/unixSocketPath" },
+        "socket_owner_uid": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "socket_owner_gid": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "protocol_revision": { "const": "simworld-semantic-index-worker/v1" },
+        "peer_deployment_identity": { "$ref": "#/$defs/safeId" },
+        "whoami_sha256": { "$ref": "#/$defs/sha256" },
+        "peer_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "host_boot_id_sha256": { "$ref": "#/$defs/sha256" },
+        "idempotency_ledger_identity": { "$ref": "#/$defs/safeId" },
+        "idempotency_ledger_revision": { "$ref": "#/$defs/sha256Revision" },
+        "idempotency_ledger_mode": { "const": "append_only_prepare_result_fsync_no_replace_v1" },
+        "idempotency_incomplete_policy": { "const": "recovery_required_no_blind_retry_v1" },
+        "peer_pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "process_start_time_ticks": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "process_start_token_sha256": { "$ref": "#/$defs/sha256" },
+        "socket_device": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "socket_inode": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "socket_inode_binding_sha256": { "$ref": "#/$defs/sha256" },
+        "max_frame_bytes": { "const": 2097152 },
+        "connect_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 60000 },
+        "read_chunk_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 60000 },
+        "write_timeout_ms": { "type": "integer", "minimum": 1, "maximum": 60000 },
+        "deadline_field": { "const": "deadline_monotonic_ns" },
+        "deadline_clock": { "const": "host_shared_CLOCK_MONOTONIC" },
+        "phase_operations": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "inspect_exact_assets" },
+            { "const": "render_exact_views" },
+            { "const": "caption_exact_render_set" },
+            { "const": "embed_exact_text_set" },
+            { "const": "upsert_postgres_exact" },
+            { "const": "upsert_qdrant_exact" },
+            { "const": "reconcile_exact_snapshot" }
+          ],
+          "items": false,
+          "minItems": 7,
+          "maxItems": 7
+        },
+        "control_operations": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "query_phase_status" },
+            { "const": "recover_phase_receipt" },
+            { "const": "cancel_phase_work" },
+            { "const": "quarantine_generation" }
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    },
+    "unreal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_name",
+        "project_revision",
+        "content_revision",
+        "runtime_image",
+        "broker_identity",
+        "broker_operations",
+        "slot_id",
+        "lease_id",
+        "lease_issued_at",
+        "lease_expires_at",
+        "inspect_scope",
+        "render_scope"
+      ],
+      "properties": {
+        "project_name": { "$ref": "#/$defs/slug" },
+        "project_revision": { "$ref": "#/$defs/revision" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "runtime_image": { "$ref": "#/$defs/image" },
+        "broker_identity": { "$ref": "#/$defs/safeId" },
+        "broker_operations": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "inspect_asset_identity" },
+            { "const": "spawn_in_disposable_scene" },
+            { "const": "read_spawned_asset_properties" },
+            { "const": "render_fixed_views" },
+            { "const": "destroy_disposable_scene" }
+          ],
+          "items": false,
+          "minItems": 5,
+          "maxItems": 5
+        },
+        "slot_id": { "$ref": "#/$defs/safeId" },
+        "lease_id": { "$ref": "#/$defs/safeId" },
+        "lease_issued_at": { "$ref": "#/$defs/rfc3339" },
+        "lease_expires_at": { "$ref": "#/$defs/rfc3339" },
+        "inspect_scope": { "const": "ue_disposable_scene_inspect_spawn_cleanup" },
+        "render_scope": { "const": "ue_disposable_scene_render_staging_cleanup" }
+      }
+    },
+    "caption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_identity",
+        "project_identity",
+        "model_id",
+        "model_snapshot",
+        "endpoint_identity",
+        "prompt_bytes_sha256",
+        "output_schema_bytes_sha256",
+        "render_recipe_bytes_sha256",
+        "max_calls",
+        "max_output_tokens",
+        "currency",
+        "minor_unit_exponent",
+        "max_cost_minor_units",
+        "rounding_mode",
+        "retry_charge_policy",
+        "idempotency_policy",
+        "tools_allowed"
+      ],
+      "properties": {
+        "provider_identity": { "$ref": "#/$defs/safeId" },
+        "project_identity": { "$ref": "#/$defs/safeId" },
+        "model_id": { "$ref": "#/$defs/safeId" },
+        "model_snapshot": { "$ref": "#/$defs/revision" },
+        "endpoint_identity": { "$ref": "#/$defs/safeId" },
+        "prompt_bytes_sha256": { "$ref": "#/$defs/sha256" },
+        "output_schema_bytes_sha256": { "$ref": "#/$defs/sha256" },
+        "render_recipe_bytes_sha256": { "$ref": "#/$defs/sha256" },
+        "max_calls": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_output_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "currency": { "const": "USD" },
+        "minor_unit_exponent": { "const": 6 },
+        "max_cost_minor_units": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "rounding_mode": { "const": "ceiling_each_provider_charge_to_minor_unit" },
+        "retry_charge_policy": { "const": "all_provider_accepted_requests_counted" },
+        "idempotency_policy": { "const": "provider_key_or_worker_ledger_no_blind_retry" },
+        "tools_allowed": { "const": false }
+      }
+    },
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_identity",
+        "project_identity",
+        "dense_model_id",
+        "dense_model_revision",
+        "dense_artifact_manifest_sha256",
+        "dense_dimensions",
+        "sparse_model_id",
+        "sparse_model_revision",
+        "sparse_artifact_manifest_sha256",
+        "sparse_max_dimensions",
+        "batch_size"
+      ],
+      "properties": {
+        "endpoint_identity": { "$ref": "#/$defs/safeId" },
+        "project_identity": { "$ref": "#/$defs/safeId" },
+        "dense_model_id": { "$ref": "#/$defs/safeId" },
+        "dense_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "dense_artifact_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "dense_dimensions": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "sparse_model_id": { "$ref": "#/$defs/safeId" },
+        "sparse_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "sparse_artifact_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "sparse_max_dimensions": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+        "batch_size": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalog", "postgres", "qdrant"],
+      "properties": {
+        "catalog": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation_id", "namespace_revision", "active_target"],
+          "properties": {
+            "generation_id": { "$ref": "#/$defs/generationId" },
+            "namespace_revision": { "$ref": "#/$defs/sha256Revision" },
+            "active_target": { "const": false }
+          }
+        },
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "deployment_identity",
+            "database",
+            "schema_name",
+            "schema_revision",
+            "generation_id",
+            "generation_name_policy",
+            "active_target"
+          ],
+          "properties": {
+            "deployment_identity": { "$ref": "#/$defs/safeId" },
+            "database": { "$ref": "#/$defs/sqlIdentifier" },
+            "schema_name": { "$ref": "#/$defs/sqlIdentifier" },
+            "schema_revision": { "type": "integer", "minimum": 2, "maximum": 3 },
+            "generation_id": { "$ref": "#/$defs/generationId" },
+            "generation_name_policy": { "const": "semantic-generation-id-sql-identifiers-v1" },
+            "active_target": { "const": false }
+          }
+        },
+        "qdrant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cluster_identity",
+            "collection",
+            "dense_vector_name",
+            "sparse_vector_name",
+            "generation_id",
+            "generation_name_policy",
+            "active_target",
+            "point_id_policy",
+            "same_id_replay_policy"
+          ],
+          "properties": {
+            "cluster_identity": { "$ref": "#/$defs/safeId" },
+            "collection": { "$ref": "#/$defs/nonFloatingSlug" },
+            "dense_vector_name": { "$ref": "#/$defs/slug" },
+            "sparse_vector_name": { "$ref": "#/$defs/slug" },
+            "generation_id": { "$ref": "#/$defs/generationId" },
+            "generation_name_policy": { "const": "semantic-generation-id-qdrant-collection-v1" },
+            "active_target": { "const": false },
+            "point_id_policy": { "const": "sha256-generation-plus-asset-id-v1" },
+            "same_id_replay_policy": { "const": "allow_only_identical_payload_and_vector_digests" }
+          }
+        }
+      }
+    },
+    "runtime_images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unreal", "worker", "postgres", "qdrant", "embedding"],
+      "properties": {
+        "unreal": { "$ref": "#/$defs/image" },
+        "worker": { "$ref": "#/$defs/image" },
+        "postgres": { "$ref": "#/$defs/image" },
+        "qdrant": { "$ref": "#/$defs/image" },
+        "embedding": { "$ref": "#/$defs/image" }
+      }
+    },
+    "target_attestations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unreal", "caption", "embedding", "postgres", "qdrant"],
+      "properties": {
+        "unreal": { "$ref": "#/$defs/imageTargetAttestation" },
+        "caption": { "$ref": "#/$defs/captionTargetAttestation" },
+        "embedding": { "$ref": "#/$defs/imageTargetAttestation" },
+        "postgres": { "$ref": "#/$defs/imageTargetAttestation" },
+        "qdrant": { "$ref": "#/$defs/imageTargetAttestation" }
+      }
+    },
+    "expected_sets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assets",
+        "renders",
+        "catalog_records",
+        "dense_vectors",
+        "sparse_vectors",
+        "postgres_rows",
+        "qdrant_points"
+      ],
+      "properties": {
+        "assets": { "$ref": "#/$defs/expectedSet" },
+        "renders": { "$ref": "#/$defs/expectedRenderSet" },
+        "catalog_records": { "$ref": "#/$defs/expectedSet" },
+        "dense_vectors": { "$ref": "#/$defs/expectedSet" },
+        "sparse_vectors": { "$ref": "#/$defs/expectedSet" },
+        "postgres_rows": { "$ref": "#/$defs/expectedSet" },
+        "qdrant_points": { "$ref": "#/$defs/expectedSet" }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shadow_queries", "smoke_targets", "authoritative_snapshot_schema"],
+      "properties": {
+        "shadow_queries": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "contains": {
+            "allOf": [
+              { "$ref": "#/$defs/shadowQuery" },
+              { "properties": { "language": { "const": "zh-TW" } } }
+            ]
+          },
+          "minContains": 1,
+          "items": { "$ref": "#/$defs/shadowQuery" },
+          "allOf": [
+            {
+              "contains": {
+                "allOf": [
+                  { "$ref": "#/$defs/shadowQuery" },
+                  { "properties": { "language": { "const": "en" } } }
+                ]
+              },
+              "minContains": 1
+            }
+          ]
+        },
+        "smoke_targets": {
+          "type": "array",
+          "prefixItems": [
+            { "$ref": "#/$defs/blueprintSmokeTarget" },
+            { "$ref": "#/$defs/staticMeshSmokeTarget" }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "authoritative_snapshot_schema": { "const": "simworld-asset-snapshot-exact-set/v2" }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "json_contains_credential_bytes",
+        "ordinary_phases",
+        "reconcile",
+        "control_operations"
+      ],
+      "properties": {
+        "transport": { "const": "sealed_memfd_scm_rights_v1" },
+        "json_contains_credential_bytes": { "const": false },
+        "ordinary_phases": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inspect", "render", "caption", "embed", "postgres", "qdrant"],
+          "properties": {
+            "inspect": { "$ref": "#/$defs/inspectCapability" },
+            "render": { "$ref": "#/$defs/renderCapability" },
+            "caption": { "$ref": "#/$defs/captionCapability" },
+            "embed": { "$ref": "#/$defs/embedCapability" },
+            "postgres": { "$ref": "#/$defs/postgresCapability" },
+            "qdrant": { "$ref": "#/$defs/qdrantCapability" }
+          }
+        },
+        "reconcile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["postgres_read", "qdrant_read", "ue_runtime_read"],
+          "properties": {
+            "postgres_read": { "$ref": "#/$defs/reconcilePostgresCapability" },
+            "qdrant_read": { "$ref": "#/$defs/reconcileQdrantCapability" },
+            "ue_runtime_read": { "$ref": "#/$defs/reconcileUeCapability" }
+          }
+        },
+        "control_operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "query_phase_status",
+            "recover_phase_receipt",
+            "cancel_phase_work",
+            "quarantine_generation"
+          ],
+          "properties": {
+            "query_phase_status": { "$ref": "#/$defs/phaseStatusCapability" },
+            "recover_phase_receipt": { "$ref": "#/$defs/phaseReceiptRecoverCapability" },
+            "cancel_phase_work": { "$ref": "#/$defs/phaseWorkCancelCapability" },
+            "quarantine_generation": { "$ref": "#/$defs/generationQuarantineCapability" }
+          }
+        }
+      }
+    },
+    "phase_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_total_elapsed_seconds",
+        "deadline_clock",
+        "inspect",
+        "render",
+        "caption",
+        "embed",
+        "postgres",
+        "qdrant",
+        "reconcile"
+      ],
+      "properties": {
+        "max_total_elapsed_seconds": { "type": "integer", "minimum": 1, "maximum": 604800 },
+        "deadline_clock": { "const": "host_shared_CLOCK_MONOTONIC" },
+        "inspect": { "$ref": "#/$defs/inspectPhasePolicy" },
+        "render": { "$ref": "#/$defs/renderPhasePolicy" },
+        "caption": { "$ref": "#/$defs/captionPhasePolicy" },
+        "embed": { "$ref": "#/$defs/embedPhasePolicy" },
+        "postgres": { "$ref": "#/$defs/postgresPhasePolicy" },
+        "qdrant": { "$ref": "#/$defs/qdrantPhasePolicy" },
+        "reconcile": { "$ref": "#/$defs/reconcilePhasePolicy" }
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "data_owner_review",
+        "cost_owner",
+        "admin_state_change",
+        "deployment",
+        "runtime",
+        "rollback_readiness"
+      ],
+      "properties": {
+        "data_owner_review": { "$ref": "#/$defs/dataApprovalRef" },
+        "cost_owner": { "$ref": "#/$defs/costApprovalRef" },
+        "admin_state_change": { "$ref": "#/$defs/adminApprovalRef" },
+        "deployment": { "$ref": "#/$defs/deploymentApprovalRef" },
+        "runtime": { "$ref": "#/$defs/runtimeApprovalRef" },
+        "rollback_readiness": { "$ref": "#/$defs/rollbackApprovalRef" }
+      }
+    },
+    "activation_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "successful_build_state",
+        "activation_authorized",
+        "activation_is_separate_operation",
+        "activation_primitive",
+        "multi_system_atomicity_claimed",
+        "rollback_primitive"
+      ],
+      "properties": {
+        "successful_build_state": { "const": "snapshot_built_verified" },
+        "activation_authorized": { "const": false },
+        "activation_is_separate_operation": { "const": true },
+        "activation_primitive": { "const": "single_active_generation_pointer_epoch_cas" },
+        "multi_system_atomicity_claimed": { "const": false },
+        "rollback_primitive": { "const": "same_pointer_epoch_cas_to_previous_generation" }
+      }
+    },
+    "serialization_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "encoding",
+        "canonicalization",
+        "duplicate_keys",
+        "unicode_normalization",
+        "numbers",
+        "nonfinite_numbers",
+        "trailing_newline"
+      ],
+      "properties": {
+        "encoding": { "const": "utf-8" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "duplicate_keys": { "const": "reject" },
+        "unicode_normalization": { "const": "require_already_nfc" },
+        "numbers": { "const": "integers_only" },
+        "nonfinite_numbers": { "const": "reject" },
+        "trailing_newline": { "const": false }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "revision": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]+$"
+    },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "nonFloatingSlug": {
+      "allOf": [
+        { "$ref": "#/$defs/slug" },
+        {
+          "not": {
+            "pattern": "(^|[._-])([aA][cC][tT][iI][vV][eE]|[cC][uU][rR][rR][eE][nN][tT]|[dD][eE][vV]|[hH][eE][aA][dD]|[lL][aA][tT][eE][sS][tT]|[mM][aA][iI][nN]|[mM][aA][sS][tT][eE][rR]|[tT][rR][uU][nN][kK])([._-]|$)"
+          }
+        }
+      ]
+    },
+    "sqlIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "not": { "pattern": "(^|_)(active|current|latest|main|master|prod|production)($|_)" }
+    },
+    "image": {
+      "type": "string",
+      "minLength": 72,
+      "maxLength": 512,
+      "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+    },
+    "rfc3339": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 35,
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 23,
+      "maxLength": 160,
+      "pattern": "^semantic-index-run:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 27,
+      "maxLength": 160,
+      "pattern": "^semantic-index-correlation:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 84,
+      "maxLength": 84,
+      "pattern": "^semantic-generation:[a-f0-9]{64}$"
+    },
+    "snapshotRevision": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 240,
+      "pattern": "^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,223}$"
+    },
+    "previousActive": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation_id", "snapshot_revision"],
+          "properties": {
+            "generation_id": { "type": "null" },
+            "snapshot_revision": { "type": "null" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation_id", "snapshot_revision"],
+          "properties": {
+            "generation_id": { "$ref": "#/$defs/generationId" },
+            "snapshot_revision": { "$ref": "#/$defs/snapshotRevision" }
+          }
+        }
+      ]
+    },
+    "targetAttestationBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_identity",
+        "runtime_image",
+        "whoami_sha256",
+        "runtime_attestation_sha256"
+      ],
+      "properties": {
+        "runtime_identity": { "$ref": "#/$defs/revision" },
+        "runtime_image": {
+          "oneOf": [{ "$ref": "#/$defs/image" }, { "type": "null" }]
+        },
+        "whoami_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_attestation_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "imageTargetAttestation": {
+      "allOf": [
+        { "$ref": "#/$defs/targetAttestationBase" },
+        { "properties": { "runtime_image": { "$ref": "#/$defs/image" } } }
+      ]
+    },
+    "captionTargetAttestation": {
+      "allOf": [
+        { "$ref": "#/$defs/targetAttestationBase" },
+        { "properties": { "runtime_image": { "type": "null" } } }
+      ]
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 240,
+      "pattern": "^/(?!.*//)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._+\\-/]+$"
+    },
+    "unixSocketPath": {
+      "allOf": [
+        { "$ref": "#/$defs/absolutePath" },
+        { "maxLength": 107, "pattern": "\\.sock$" },
+        { "not": { "pattern": "^/(tmp|var/tmp)/" } }
+      ]
+    },
+    "assetCount": { "type": "integer", "minimum": 1, "maximum": 4096 },
+    "expectedSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sorted_ids_sha256", "canonicalization"],
+      "properties": {
+        "count": { "$ref": "#/$defs/assetCount" },
+        "sorted_ids_sha256": { "$ref": "#/$defs/sha256" },
+        "canonicalization": { "const": "sorted-utf8-nfc-lf-v1" }
+      }
+    },
+    "expectedRenderSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sorted_ids_sha256", "canonicalization"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1, "maximum": 131072 },
+        "sorted_ids_sha256": { "$ref": "#/$defs/sha256" },
+        "canonicalization": { "const": "sorted-utf8-nfc-lf-v1" }
+      }
+    },
+    "shadowQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query_id",
+        "language",
+        "query_text",
+        "query_text_sha256",
+        "normalization_revision",
+        "expected_asset_ids",
+        "minimum_rank"
+      ],
+      "properties": {
+        "query_id": { "$ref": "#/$defs/safeId" },
+        "language": { "enum": ["zh-TW", "en"] },
+        "query_text": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "query_text_sha256": { "$ref": "#/$defs/sha256" },
+        "normalization_revision": { "$ref": "#/$defs/sha256Revision" },
+        "expected_asset_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/assetId" }
+        },
+        "minimum_rank": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "assetId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[a-z0-9][a-z0-9_]*$"
+    },
+    "uePath": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 512,
+      "pattern": "^/Game(?:/[A-Za-z0-9_+\\-]+)+\\.[A-Za-z0-9_+\\-]{1,240}$"
+    },
+    "smokeTargetBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "ue_path", "asset_type"],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "ue_path": { "$ref": "#/$defs/uePath" },
+        "asset_type": { "enum": ["Blueprint", "StaticMesh"] }
+      }
+    },
+    "blueprintSmokeTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/smokeTargetBase" },
+        { "properties": { "asset_type": { "const": "Blueprint" } } }
+      ]
+    },
+    "staticMeshSmokeTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/smokeTargetBase" },
+        { "properties": { "asset_type": { "const": "StaticMesh" } } }
+      ]
+    },
+    "capabilityBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential_generation", "generation_id", "target_identity", "scope"],
+      "properties": {
+        "credential_generation": { "$ref": "#/$defs/sha256Revision" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "target_identity": { "$ref": "#/$defs/safeId" },
+        "scope": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "inspectCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "ue_disposable_scene_inspect_spawn_cleanup" } } }
+      ]
+    },
+    "renderCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "ue_disposable_scene_render_staging_cleanup" } } }
+      ]
+    },
+    "captionCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "caption_bounded_idempotent_call" } } }
+      ]
+    },
+    "embedCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "embedding_immutable_vector_staging" } } }
+      ]
+    },
+    "postgresCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "postgres_generation_write" } } }
+      ]
+    },
+    "qdrantCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "qdrant_generation_write" } } }
+      ]
+    },
+    "reconcilePostgresCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "postgres_generation_read_only" } } }
+      ]
+    },
+    "reconcileQdrantCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "qdrant_generation_read_only" } } }
+      ]
+    },
+    "reconcileUeCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "ue_runtime_read_only" } } }
+      ]
+    },
+    "phaseStatusCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "semantic_index_phase_status_read" } } }
+      ]
+    },
+    "phaseReceiptRecoverCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "semantic_index_phase_receipt_recover" } } }
+      ]
+    },
+    "phaseWorkCancelCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "semantic_index_phase_work_cancel" } } }
+      ]
+    },
+    "generationQuarantineCapability": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityBase" },
+        { "properties": { "scope": { "const": "semantic_index_generation_quarantine" } } }
+      ]
+    },
+    "phasePolicyBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "timeout_seconds", "max_attempts", "allowed_mutation_states"],
+      "properties": {
+        "operation": { "$ref": "#/$defs/safeId" },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "max_attempts": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "allowed_mutation_states": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "enum": ["none", "staged", "committed", "ambiguous"] }
+        }
+      }
+    },
+    "inspectPhasePolicy": {
+      "allOf": [
+        { "$ref": "#/$defs/phasePolicyBase" },
+        {
+          "properties": {
+            "operation": { "const": "inspect_exact_assets" },
+            "allowed_mutation_states": { "const": ["none", "ambiguous"] }
+          }
+        }
+      ]
+    },
+    "renderPhasePolicy": {
+      "allOf": [
+        { "$ref": "#/$defs/phasePolicyBase" },
+        {
+          "properties": {
+            "operation": { "const": "render_exact_views" },
+            "allowed_mutation_states": { "const": ["none", "staged", "ambiguous"] }
+          }
+        }
+      ]
+    },
+    "captionPhasePolicy": {
+      "allOf": [
+        { "$ref": "#/$defs/phasePolicyBase" },
+        {
+          "properties": {
+            "operation": { "const": "caption_exact_render_set" },
+            "allowed_mutation_states": { "const": ["none", "committed", "ambiguous"] }
+          }
+        }
+      ]
+    },
+    "embedPhasePolicy": {
+      "allOf": [
+        { "$ref": "#/$defs/phasePolicyBase" },
+        {
+          "properties": {
+            "operation": { "const": "embed_exact_text_set" },
+            "allowed_mutation_states": { "const": ["none", "staged", "ambiguous"] }
+          }
+        }
+      ]
+    },
+    "postgresPhasePolicy": {
+      "allOf": [
+        { "$ref": "#/$defs/phasePolicyBase" },
+        {
+          "properties": {
+            "operation": { "const": "upsert_postgres_exact" },
+            "allowed_mutation_states": { "const": ["none", "committed", "ambiguous"] }
+          }
+        }
+      ]
+    },
+    "qdrantPhasePolicy": {
+      "allOf": [
+        { "$ref": "#/$defs/phasePolicyBase" },
+        {
+          "properties": {
+            "operation": { "const": "upsert_qdrant_exact" },
+            "allowed_mutation_states": { "const": ["none", "staged", "committed", "ambiguous"] }
+          }
+        }
+      ]
+    },
+    "reconcilePhasePolicy": {
+      "allOf": [
+        { "$ref": "#/$defs/phasePolicyBase" },
+        {
+          "properties": {
+            "operation": { "const": "reconcile_exact_snapshot" },
+            "allowed_mutation_states": { "const": ["none"] }
+          }
+        }
+      ]
+    },
+    "approvalRefBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema",
+        "receipt_id",
+        "receipt_sha256",
+        "approval_kind",
+        "approval_basis_sha256",
+        "trust_bundle_sha256",
+        "issuer_key_id",
+        "issuer_key_revision",
+        "signature_algorithm",
+        "expires_at"
+      ],
+      "properties": {
+        "receipt_schema": { "const": "simworld-semantic-index-approval-receipt/v1" },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 160,
+          "pattern": "^semantic-index-approval:[A-Za-z0-9][A-Za-z0-9._:@+\\-]{0,130}$"
+        },
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_kind": {
+          "enum": [
+            "data_owner_review",
+            "cost_owner",
+            "admin_state_change",
+            "deployment",
+            "runtime",
+            "rollback_readiness"
+          ]
+        },
+        "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "trust_bundle_sha256": { "$ref": "#/$defs/sha256" },
+        "issuer_key_id": { "$ref": "#/$defs/safeId" },
+        "issuer_key_revision": { "$ref": "#/$defs/sha256Revision" },
+        "signature_algorithm": { "const": "ed25519" },
+        "expires_at": { "$ref": "#/$defs/rfc3339" }
+      }
+    },
+    "dataApprovalRef": {
+      "allOf": [
+        { "$ref": "#/$defs/approvalRefBase" },
+        { "properties": { "approval_kind": { "const": "data_owner_review" } } }
+      ]
+    },
+    "costApprovalRef": {
+      "allOf": [
+        { "$ref": "#/$defs/approvalRefBase" },
+        { "properties": { "approval_kind": { "const": "cost_owner" } } }
+      ]
+    },
+    "adminApprovalRef": {
+      "allOf": [
+        { "$ref": "#/$defs/approvalRefBase" },
+        { "properties": { "approval_kind": { "const": "admin_state_change" } } }
+      ]
+    },
+    "deploymentApprovalRef": {
+      "allOf": [
+        { "$ref": "#/$defs/approvalRefBase" },
+        { "properties": { "approval_kind": { "const": "deployment" } } }
+      ]
+    },
+    "runtimeApprovalRef": {
+      "allOf": [
+        { "$ref": "#/$defs/approvalRefBase" },
+        { "properties": { "approval_kind": { "const": "runtime" } } }
+      ]
+    },
+    "rollbackApprovalRef": {
+      "allOf": [
+        { "$ref": "#/$defs/approvalRefBase" },
+        { "properties": { "approval_kind": { "const": "rollback_readiness" } } }
+      ]
+    }
+  }
+}

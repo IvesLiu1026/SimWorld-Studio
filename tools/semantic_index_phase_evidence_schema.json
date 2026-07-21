@@ -1,0 +1,1671 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-phase-evidence-v1.schema.json",
+  "title": "SimWorld semantic index phase evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_id",
+    "run_identity",
+    "job_binding",
+    "plan_binding",
+    "phase",
+    "operation",
+    "operation_revision",
+    "idempotency",
+    "request",
+    "credentials_observed",
+    "target_attestation",
+    "prior_receipts",
+    "asset_set",
+    "outcome",
+    "started_at",
+    "completed_at",
+    "payload",
+    "worker_signature",
+    "serialization_contract"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-phase-evidence/v1" },
+    "evidence_id": {
+      "type": "string",
+      "minLength": 25,
+      "maxLength": 160,
+      "pattern": "^semantic-index-evidence:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "run_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "correlation_id",
+        "operator_id",
+        "service_owner_id",
+        "ue_slot_id",
+        "ue_lease_id",
+        "ue_lease_expires_at",
+        "retention_class"
+      ],
+      "properties": {
+        "run_id": { "$ref": "#/$defs/runId" },
+        "correlation_id": { "$ref": "#/$defs/correlationId" },
+        "operator_id": { "$ref": "#/$defs/safeId" },
+        "service_owner_id": { "$ref": "#/$defs/safeId" },
+        "ue_slot_id": { "$ref": "#/$defs/safeId" },
+        "ue_lease_id": { "$ref": "#/$defs/safeId" },
+        "ue_lease_expires_at": { "$ref": "#/$defs/rfc3339" },
+        "retention_class": { "enum": ["production_evidence_1y", "production_evidence_7y"] }
+      }
+    },
+    "job_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sha256",
+        "revision",
+        "accepted_asset_count",
+        "accepted_assets_sha256",
+        "content_revision",
+        "snapshot_revision"
+      ],
+      "properties": {
+        "schema": { "const": "simworld-semantic-asset-index-job/v2" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "revision": { "$ref": "#/$defs/sha256Revision" },
+        "accepted_asset_count": { "$ref": "#/$defs/assetCount" },
+        "accepted_assets_sha256": { "$ref": "#/$defs/sha256" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "snapshot_revision": { "$ref": "#/$defs/snapshotRevision" }
+      }
+    },
+    "plan_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sha256",
+        "approval_basis_sha256",
+        "generation_id",
+        "generation_nonce_sha256",
+        "reservation_receipt_sha256",
+        "worker_deployment_identity"
+      ],
+      "properties": {
+        "schema": { "const": "simworld-semantic-asset-index-execution-plan/v2" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "generation_nonce_sha256": { "$ref": "#/$defs/sha256" },
+        "reservation_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_deployment_identity": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "phase": {
+      "enum": ["inspect", "render", "caption", "embed", "postgres", "qdrant", "reconcile"]
+    },
+    "operation": {
+      "enum": [
+        "inspect_exact_assets",
+        "render_exact_views",
+        "caption_exact_render_set",
+        "embed_exact_text_set",
+        "upsert_postgres_exact",
+        "upsert_qdrant_exact",
+        "reconcile_exact_snapshot"
+      ]
+    },
+    "operation_revision": { "$ref": "#/$defs/sha256Revision" },
+    "idempotency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "request_sha256", "ledger_identity", "ledger_revision", "result"],
+      "properties": {
+        "key": { "$ref": "#/$defs/sha256Revision" },
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "ledger_identity": { "$ref": "#/$defs/safeId" },
+        "ledger_revision": { "$ref": "#/$defs/sha256Revision" },
+        "result": { "enum": ["applied", "replayed_identical", "recovered_immutable_receipt"] }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sha256",
+        "input_artifact_sha256",
+        "deadline_monotonic_ns",
+        "host_boot_id_sha256",
+        "credential_transport",
+        "json_contains_credential_bytes"
+      ],
+      "properties": {
+        "schema": { "const": "simworld-semantic-index-phase-request/v1" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "input_artifact_sha256": { "$ref": "#/$defs/sha256" },
+        "deadline_monotonic_ns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "host_boot_id_sha256": { "$ref": "#/$defs/sha256" },
+        "credential_transport": { "const": "sealed_memfd_scm_rights_v1" },
+        "json_contains_credential_bytes": { "const": false }
+      }
+    },
+    "credentials_observed": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/credentialObservation" }
+    },
+    "target_attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worker_deployment_identity",
+        "worker_image",
+        "deployment_preflight_sha256",
+        "worker_whoami_sha256",
+        "worker_runtime_attestation_sha256",
+        "targets"
+      ],
+      "properties": {
+        "worker_deployment_identity": { "$ref": "#/$defs/safeId" },
+        "worker_image": { "$ref": "#/$defs/image" },
+        "deployment_preflight_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_whoami_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_runtime_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/targetObservation" }
+        }
+      }
+    },
+    "prior_receipts": {
+      "type": "array",
+      "maxItems": 6,
+      "items": { "$ref": "#/$defs/priorReceipt" }
+    },
+    "asset_set": { "$ref": "#/$defs/exactSet" },
+    "outcome": {
+      "oneOf": [
+        { "$ref": "#/$defs/successOutcome" },
+        { "$ref": "#/$defs/failureOutcome" }
+      ]
+    },
+    "started_at": { "$ref": "#/$defs/rfc3339" },
+    "completed_at": { "$ref": "#/$defs/rfc3339" },
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/inspectPayload" },
+        { "$ref": "#/$defs/renderPayload" },
+        { "$ref": "#/$defs/captionPayload" },
+        { "$ref": "#/$defs/embedPayload" },
+        { "$ref": "#/$defs/postgresPayload" },
+        { "$ref": "#/$defs/qdrantPayload" },
+        { "$ref": "#/$defs/reconcilePayload" },
+        { "$ref": "#/$defs/failurePayload" }
+      ]
+    },
+    "worker_signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_revision", "signed_payload_sha256", "signature_sha256"],
+      "properties": {
+        "key_revision": { "$ref": "#/$defs/sha256Revision" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "signature_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "serialization_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "encoding",
+        "canonicalization",
+        "duplicate_keys",
+        "unicode_normalization",
+        "numbers",
+        "nonfinite_numbers",
+        "trailing_newline"
+      ],
+      "properties": {
+        "encoding": { "const": "utf-8" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "duplicate_keys": { "const": "reject" },
+        "unicode_normalization": { "const": "require_already_nfc" },
+        "numbers": { "const": "integers_only" },
+        "nonfinite_numbers": { "const": "reject" },
+        "trailing_newline": { "const": false }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "#/$defs/inspectPhaseContract" },
+    { "$ref": "#/$defs/renderPhaseContract" },
+    { "$ref": "#/$defs/captionPhaseContract" },
+    { "$ref": "#/$defs/embedPhaseContract" },
+    { "$ref": "#/$defs/postgresPhaseContract" },
+    { "$ref": "#/$defs/qdrantPhaseContract" },
+    { "$ref": "#/$defs/reconcilePhaseContract" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]+$"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 72,
+      "maxLength": 512,
+      "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+    },
+    "rfc3339": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 35,
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 23,
+      "maxLength": 160,
+      "pattern": "^semantic-index-run:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 27,
+      "maxLength": 160,
+      "pattern": "^semantic-index-correlation:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 84,
+      "maxLength": 84,
+      "pattern": "^semantic-generation:[a-f0-9]{64}$"
+    },
+    "snapshotRevision": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 240,
+      "pattern": "^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,223}$"
+    },
+    "previousActiveReadiness": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation_id", "snapshot_revision", "ready"],
+          "properties": {
+            "generation_id": { "type": "null" },
+            "snapshot_revision": { "type": "null" },
+            "ready": { "const": false }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generation_id", "snapshot_revision", "ready"],
+          "properties": {
+            "generation_id": { "$ref": "#/$defs/generationId" },
+            "snapshot_revision": { "$ref": "#/$defs/snapshotRevision" },
+            "ready": { "const": true }
+          }
+        }
+      ]
+    },
+    "assetCount": { "type": "integer", "minimum": 1, "maximum": 4096 },
+    "assetId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[a-z0-9][a-z0-9_]*$"
+    },
+    "uePath": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 512,
+      "pattern": "^/Game(?:/[A-Za-z0-9_+\\-]+)+\\.[A-Za-z0-9_+\\-]{1,240}$"
+    },
+    "exactSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sorted_ids_sha256", "canonicalization"],
+      "properties": {
+        "count": { "$ref": "#/$defs/assetCount" },
+        "sorted_ids_sha256": { "$ref": "#/$defs/sha256" },
+        "canonicalization": { "const": "sorted-utf8-nfc-lf-v1" }
+      }
+    },
+    "credentialObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "credential_generation", "generation_id", "target_identity"],
+      "properties": {
+        "scope": { "$ref": "#/$defs/safeId" },
+        "credential_generation": { "$ref": "#/$defs/sha256Revision" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "target_identity": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "targetObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "target_identity",
+        "runtime_identity",
+        "runtime_image",
+        "whoami_sha256",
+        "runtime_attestation_sha256"
+      ],
+      "properties": {
+        "component": { "enum": ["unreal", "caption", "embedding", "postgres", "qdrant"] },
+        "target_identity": { "$ref": "#/$defs/safeId" },
+        "runtime_identity": { "$ref": "#/$defs/revision" },
+        "runtime_image": {
+          "oneOf": [{ "$ref": "#/$defs/image" }, { "type": "null" }]
+        },
+        "whoami_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_attestation_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "inspectTargets": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            {
+              "properties": {
+                "component": { "const": "unreal" },
+                "runtime_image": { "$ref": "#/$defs/image" }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "renderTargets": { "$ref": "#/$defs/inspectTargets" },
+    "captionTargets": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            {
+              "properties": {
+                "component": { "const": "caption" },
+                "runtime_image": { "type": "null" }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "embeddingTargets": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            {
+              "properties": {
+                "component": { "const": "embedding" },
+                "runtime_image": { "$ref": "#/$defs/image" }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "postgresTargets": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            {
+              "properties": {
+                "component": { "const": "postgres" },
+                "runtime_image": { "$ref": "#/$defs/image" }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "qdrantTargets": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            {
+              "properties": {
+                "component": { "const": "qdrant" },
+                "runtime_image": { "$ref": "#/$defs/image" }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "reconcileTargets": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            { "properties": { "component": { "const": "postgres" }, "runtime_image": { "$ref": "#/$defs/image" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            { "properties": { "component": { "const": "qdrant" }, "runtime_image": { "$ref": "#/$defs/image" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/targetObservation" },
+            { "properties": { "component": { "const": "unreal" }, "runtime_image": { "$ref": "#/$defs/image" } } }
+          ]
+        }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "priorReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "evidence_id",
+        "evidence_sha256",
+        "asset_set_sha256",
+        "output_artifact_sha256"
+      ],
+      "properties": {
+        "phase": { "enum": ["inspect", "render", "caption", "embed", "postgres", "qdrant"] },
+        "evidence_id": {
+          "type": "string",
+          "minLength": 25,
+          "maxLength": 160,
+          "pattern": "^semantic-index-evidence:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+        },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" },
+        "asset_set_sha256": { "$ref": "#/$defs/sha256" },
+        "output_artifact_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "priorInspect": {
+      "allOf": [
+        { "$ref": "#/$defs/priorReceipt" },
+        { "properties": { "phase": { "const": "inspect" } } }
+      ]
+    },
+    "priorRender": {
+      "allOf": [
+        { "$ref": "#/$defs/priorReceipt" },
+        { "properties": { "phase": { "const": "render" } } }
+      ]
+    },
+    "priorCaption": {
+      "allOf": [
+        { "$ref": "#/$defs/priorReceipt" },
+        { "properties": { "phase": { "const": "caption" } } }
+      ]
+    },
+    "priorEmbed": {
+      "allOf": [
+        { "$ref": "#/$defs/priorReceipt" },
+        { "properties": { "phase": { "const": "embed" } } }
+      ]
+    },
+    "priorPostgres": {
+      "allOf": [
+        { "$ref": "#/$defs/priorReceipt" },
+        { "properties": { "phase": { "const": "postgres" } } }
+      ]
+    },
+    "priorQdrant": {
+      "allOf": [
+        { "$ref": "#/$defs/priorReceipt" },
+        { "properties": { "phase": { "const": "qdrant" } } }
+      ]
+    },
+    "successOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "mutation_state", "retryable", "error", "remote_receipt_recovered"],
+      "properties": {
+        "status": { "const": "success" },
+        "mutation_state": { "enum": ["none", "staged", "committed"] },
+        "retryable": { "const": false },
+        "error": { "type": "null" },
+        "remote_receipt_recovered": { "type": "boolean" }
+      }
+    },
+    "failureOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "mutation_state", "retryable", "error", "remote_receipt_recovered"],
+      "properties": {
+        "status": { "const": "failed" },
+        "mutation_state": { "enum": ["none", "staged", "committed", "ambiguous"] },
+        "retryable": { "type": "boolean" },
+        "error": { "$ref": "#/$defs/typedError" },
+        "remote_receipt_recovered": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "retryable": { "const": true } }, "required": ["retryable"] },
+          "then": { "properties": { "error": { "properties": { "retryable": { "const": true } } } } },
+          "else": { "properties": { "error": { "properties": { "retryable": { "const": false } } } } }
+        },
+        {
+          "if": { "properties": { "mutation_state": { "const": "none" } }, "required": ["mutation_state"] },
+          "then": { "properties": { "error": { "properties": { "mutation_state": { "const": "none" } } } } }
+        },
+        {
+          "if": { "properties": { "mutation_state": { "const": "staged" } }, "required": ["mutation_state"] },
+          "then": {
+            "properties": {
+              "retryable": { "const": false },
+              "error": { "properties": { "retryable": { "const": false }, "mutation_state": { "const": "staged" } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mutation_state": { "const": "committed" } }, "required": ["mutation_state"] },
+          "then": {
+            "properties": {
+              "retryable": { "const": false },
+              "error": { "properties": { "retryable": { "const": false }, "mutation_state": { "const": "committed" } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mutation_state": { "const": "ambiguous" } }, "required": ["mutation_state"] },
+          "then": {
+            "properties": {
+              "retryable": { "const": false },
+              "error": { "properties": { "retryable": { "const": false }, "mutation_state": { "const": "ambiguous" } } }
+            }
+          }
+        }
+      ]
+    },
+    "typedError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependency", "public_code", "retryable", "mutation_state", "redacted_message"],
+      "properties": {
+        "dependency": {
+          "enum": ["worker", "unreal", "caption", "embedding", "postgres", "qdrant", "evidence_store"]
+        },
+        "public_code": { "$ref": "#/$defs/safeId" },
+        "retryable": { "type": "boolean" },
+        "mutation_state": { "enum": ["none", "staged", "committed", "ambiguous"] },
+        "redacted_message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[A-Za-z0-9 ,.()_:\\-]{1,240}$",
+          "not": {
+            "pattern": "([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Bb][Ee][Aa][Rr][Ee][Rr]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Dd][Ss][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy])"
+          }
+        }
+      },
+      "allOf": [{ "$ref": "#/$defs/publicErrorIdentity" }]
+    },
+    "publicErrorIdentity": {
+      "oneOf": [
+        {
+          "properties": {
+            "dependency": { "const": "worker" },
+            "public_code": { "const": "WORKER_BUSY" },
+            "redacted_message": { "const": "Worker is temporarily busy" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "worker" },
+            "public_code": { "const": "WORKER_INTERNAL" },
+            "redacted_message": { "const": "Worker operation failed" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "worker" },
+            "public_code": { "const": "WORKER_LEDGER_CONFLICT" },
+            "redacted_message": { "const": "Worker idempotency ledger conflict" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "worker" },
+            "public_code": { "const": "WORKER_CANCELLED" },
+            "redacted_message": { "const": "Worker operation was cancelled" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "unreal" },
+            "public_code": { "const": "UNREAL_UNAVAILABLE" },
+            "redacted_message": { "const": "Unreal runtime is unavailable" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "unreal" },
+            "public_code": { "const": "UNREAL_OPERATION_FAILED" },
+            "redacted_message": { "const": "Unreal operation failed" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "caption" },
+            "public_code": { "const": "CAPTION_UNAVAILABLE" },
+            "redacted_message": { "const": "Caption provider is unavailable" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "caption" },
+            "public_code": { "const": "CAPTION_BUDGET_EXCEEDED" },
+            "redacted_message": { "const": "Caption budget was exceeded" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "caption" },
+            "public_code": { "const": "CAPTION_RESULT_INVALID" },
+            "redacted_message": { "const": "Caption result was invalid" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "caption" },
+            "public_code": { "const": "CAPTION_STATE_AMBIGUOUS" },
+            "redacted_message": { "const": "Caption request state is ambiguous" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "embedding" },
+            "public_code": { "const": "EMBEDDING_UNAVAILABLE" },
+            "redacted_message": { "const": "Embedding service is unavailable" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "embedding" },
+            "public_code": { "const": "EMBEDDING_RESULT_INVALID" },
+            "redacted_message": { "const": "Embedding result was invalid" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "postgres" },
+            "public_code": { "const": "POSTGRES_UNAVAILABLE" },
+            "redacted_message": { "const": "PostgreSQL is unavailable" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "postgres" },
+            "public_code": { "const": "POSTGRES_WRITE_FAILED" },
+            "redacted_message": { "const": "PostgreSQL generation write failed" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "qdrant" },
+            "public_code": { "const": "QDRANT_UNAVAILABLE" },
+            "redacted_message": { "const": "Qdrant is unavailable" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "qdrant" },
+            "public_code": { "const": "QDRANT_WRITE_FAILED" },
+            "redacted_message": { "const": "Qdrant generation write failed" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "evidence_store" },
+            "public_code": { "const": "EVIDENCE_STORE_UNAVAILABLE" },
+            "redacted_message": { "const": "Evidence store is unavailable" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        },
+        {
+          "properties": {
+            "dependency": { "const": "evidence_store" },
+            "public_code": { "const": "EVIDENCE_PUBLICATION_FAILED" },
+            "redacted_message": { "const": "Evidence publication failed" }
+          },
+          "required": ["dependency", "public_code", "redacted_message"]
+        }
+      ]
+    },
+    "failurePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "last_safe_artifact_sha256", "operator_action"],
+      "properties": {
+        "kind": { "const": "typed_failure/v1" },
+        "last_safe_artifact_sha256": {
+          "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "operator_action": {
+          "enum": ["none", "retry_same_key", "recover_receipt", "manual_reconcile", "quarantine_generation"]
+        }
+      }
+    },
+    "materialSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot_index", "material_path", "pbr_complete", "textures"],
+      "properties": {
+        "slot_index": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "material_path": { "$ref": "#/$defs/uePath" },
+        "pbr_complete": { "const": true },
+        "textures": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "ue_path", "content_sha256"],
+            "properties": {
+              "role": { "enum": ["BaseColor", "Normal", "Roughness", "Metallic", "AmbientOcclusion"] },
+              "ue_path": { "$ref": "#/$defs/uePath" },
+              "content_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      }
+    },
+    "inspectAssetRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "ue_path",
+        "asset_type",
+        "loaded",
+        "spawned",
+        "bounds_micrometers",
+        "collision",
+        "material_slots",
+        "cleanup_state"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "ue_path": { "$ref": "#/$defs/uePath" },
+        "asset_type": { "enum": ["Blueprint", "StaticMesh"] },
+        "loaded": { "const": true },
+        "spawned": { "const": true },
+        "bounds_micrometers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "z"],
+          "properties": {
+            "x": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+            "y": { "type": "integer", "minimum": 1, "maximum": 1000000000000 },
+            "z": { "type": "integer", "minimum": 1, "maximum": 1000000000000 }
+          }
+        },
+        "collision": { "enum": ["enabled", "disabled_by_asset_design"] },
+        "material_slots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/materialSlot" }
+        },
+        "cleanup_state": { "const": "disposable_spawn_destroyed" }
+      }
+    },
+    "inspectPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "content_revision",
+        "disposable_scene_id",
+        "records_sha256",
+        "records",
+        "scene_cleanup_state"
+      ],
+      "properties": {
+        "kind": { "const": "inspect_exact_assets/v1" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "disposable_scene_id": { "$ref": "#/$defs/safeId" },
+        "records_sha256": { "$ref": "#/$defs/sha256" },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/inspectAssetRecord" }
+        },
+        "scene_cleanup_state": { "const": "destroyed_and_verified" }
+      }
+    },
+    "renderRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "view_id",
+        "image_sha256",
+        "width_px",
+        "height_px",
+        "nonblank",
+        "source_inspect_record_sha256"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "view_id": { "$ref": "#/$defs/safeId" },
+        "image_sha256": { "$ref": "#/$defs/sha256" },
+        "width_px": { "type": "integer", "minimum": 64, "maximum": 8192 },
+        "height_px": { "type": "integer", "minimum": 64, "maximum": 8192 },
+        "nonblank": { "const": true },
+        "source_inspect_record_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "renderPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "render_recipe_sha256",
+        "ue_runtime_revision",
+        "render_set_count",
+        "render_set_sha256",
+        "render_manifest_sha256",
+        "records",
+        "scene_cleanup_state"
+      ],
+      "properties": {
+        "kind": { "const": "render_exact_views/v1" },
+        "render_recipe_sha256": { "$ref": "#/$defs/sha256" },
+        "ue_runtime_revision": { "$ref": "#/$defs/revision" },
+        "render_set_count": { "type": "integer", "minimum": 1, "maximum": 131072 },
+        "render_set_sha256": { "$ref": "#/$defs/sha256" },
+        "render_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 131072,
+          "items": { "$ref": "#/$defs/renderRecord" }
+        },
+        "scene_cleanup_state": { "const": "destroyed_and_verified" }
+      }
+    },
+    "captionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "render_subset_sha256",
+        "caption_record_sha256",
+        "caption_text_sha256",
+        "strict_schema_valid",
+        "provider_request_id",
+        "provider_idempotency_id",
+        "output_tokens"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "render_subset_sha256": { "$ref": "#/$defs/sha256" },
+        "caption_record_sha256": { "$ref": "#/$defs/sha256" },
+        "caption_text_sha256": { "$ref": "#/$defs/sha256" },
+        "strict_schema_valid": { "const": true },
+        "provider_request_id": { "$ref": "#/$defs/safeId" },
+        "provider_idempotency_id": { "$ref": "#/$defs/safeId" },
+        "output_tokens": { "type": "integer", "minimum": 1, "maximum": 65536 }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calls",
+        "input_tokens",
+        "output_tokens",
+        "currency",
+        "minor_unit_exponent",
+        "cost_minor_units",
+        "rounding_mode",
+        "retry_charge_policy",
+        "charged_retry_count"
+      ],
+      "properties": {
+        "calls": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "input_tokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "output_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "currency": { "const": "USD" },
+        "minor_unit_exponent": { "const": 6 },
+        "cost_minor_units": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "rounding_mode": { "const": "ceiling_each_provider_charge_to_minor_unit" },
+        "retry_charge_policy": { "const": "all_provider_accepted_requests_counted" },
+        "charged_retry_count": { "type": "integer", "minimum": 0, "maximum": 4096 }
+      }
+    },
+    "captionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "render_manifest_sha256",
+        "provider_identity",
+        "project_identity",
+        "model_snapshot",
+        "prompt_sha256",
+        "output_schema_sha256",
+        "strict_parse",
+        "catalog_sha256",
+        "records",
+        "usage"
+      ],
+      "properties": {
+        "kind": { "const": "caption_exact_render_set/v1" },
+        "render_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "provider_identity": { "$ref": "#/$defs/safeId" },
+        "project_identity": { "$ref": "#/$defs/safeId" },
+        "model_snapshot": { "$ref": "#/$defs/revision" },
+        "prompt_sha256": { "$ref": "#/$defs/sha256" },
+        "output_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "strict_parse": { "const": true },
+        "catalog_sha256": { "$ref": "#/$defs/sha256" },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/captionRecord" }
+        },
+        "usage": { "$ref": "#/$defs/usage" }
+      }
+    },
+    "vectorRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "source_caption_sha256",
+        "dense_vector_id",
+        "dense_vector_sha256",
+        "dense_dimensions",
+        "sparse_vector_id",
+        "sparse_vector_sha256",
+        "sparse_nonzero_count",
+        "finite"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "source_caption_sha256": { "$ref": "#/$defs/sha256" },
+        "dense_vector_id": { "$ref": "#/$defs/safeId" },
+        "dense_vector_sha256": { "$ref": "#/$defs/sha256" },
+        "dense_dimensions": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "sparse_vector_id": { "$ref": "#/$defs/safeId" },
+        "sparse_vector_sha256": { "$ref": "#/$defs/sha256" },
+        "sparse_nonzero_count": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+        "finite": { "const": true }
+      }
+    },
+    "embedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "catalog_sha256",
+        "dense_model_revision",
+        "dense_artifact_manifest_sha256",
+        "sparse_model_revision",
+        "sparse_artifact_manifest_sha256",
+        "vector_bundle_manifest_sha256",
+        "vector_set_sha256",
+        "records"
+      ],
+      "properties": {
+        "kind": { "const": "embed_exact_text_set/v1" },
+        "catalog_sha256": { "$ref": "#/$defs/sha256" },
+        "dense_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "dense_artifact_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "sparse_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "sparse_artifact_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "vector_bundle_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "vector_set_sha256": { "$ref": "#/$defs/sha256" },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/vectorRecord" }
+        }
+      }
+    },
+    "postgresRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "row_sha256", "catalog_record_sha256", "readback_sha256"],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "row_sha256": { "$ref": "#/$defs/sha256" },
+        "catalog_record_sha256": { "$ref": "#/$defs/sha256" },
+        "readback_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "postgresPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "deployment_identity",
+        "database",
+        "schema_name",
+        "schema_revision",
+        "generation_id",
+        "transaction_marker",
+        "catalog_sha256",
+        "row_set_sha256",
+        "rows",
+        "transaction_committed",
+        "readback_complete"
+      ],
+      "properties": {
+        "kind": { "const": "upsert_postgres_exact/v1" },
+        "deployment_identity": { "$ref": "#/$defs/safeId" },
+        "database": { "$ref": "#/$defs/safeId" },
+        "schema_name": { "$ref": "#/$defs/safeId" },
+        "schema_revision": { "type": "integer", "minimum": 2, "maximum": 3 },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "transaction_marker": { "$ref": "#/$defs/safeId" },
+        "catalog_sha256": { "$ref": "#/$defs/sha256" },
+        "row_set_sha256": { "$ref": "#/$defs/sha256" },
+        "rows": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/postgresRow" }
+        },
+        "transaction_committed": { "const": true },
+        "readback_complete": { "const": true }
+      }
+    },
+    "qdrantPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "point_id",
+        "payload_sha256",
+        "dense_vector_sha256",
+        "sparse_vector_sha256",
+        "readback_sha256"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "point_id": { "$ref": "#/$defs/sha256" },
+        "payload_sha256": { "$ref": "#/$defs/sha256" },
+        "dense_vector_sha256": { "$ref": "#/$defs/sha256" },
+        "sparse_vector_sha256": { "$ref": "#/$defs/sha256" },
+        "readback_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "qdrantPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "cluster_identity",
+        "collection",
+        "dense_vector_name",
+        "sparse_vector_name",
+        "generation_id",
+        "point_id_policy",
+        "same_id_replay_policy",
+        "point_set_sha256",
+        "points",
+        "readback_complete"
+      ],
+      "properties": {
+        "kind": { "const": "upsert_qdrant_exact/v1" },
+        "cluster_identity": { "$ref": "#/$defs/safeId" },
+        "collection": { "$ref": "#/$defs/safeId" },
+        "dense_vector_name": { "$ref": "#/$defs/safeId" },
+        "sparse_vector_name": { "$ref": "#/$defs/safeId" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "point_id_policy": { "const": "sha256-generation-plus-asset-id-v1" },
+        "same_id_replay_policy": { "const": "allow_only_identical_payload_and_vector_digests" },
+        "point_set_sha256": { "$ref": "#/$defs/sha256" },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": { "$ref": "#/$defs/qdrantPoint" }
+        },
+        "readback_complete": { "const": true }
+      }
+    },
+    "queryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query_id",
+        "language",
+        "query_text_sha256",
+        "normalization_revision",
+        "expected_asset_ids",
+        "returned_asset_ids",
+        "minimum_rank",
+        "best_expected_rank",
+        "passed"
+      ],
+      "properties": {
+        "query_id": { "$ref": "#/$defs/safeId" },
+        "language": { "enum": ["zh-TW", "en"] },
+        "query_text_sha256": { "$ref": "#/$defs/sha256" },
+        "normalization_revision": { "$ref": "#/$defs/sha256Revision" },
+        "expected_asset_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/assetId" }
+        },
+        "returned_asset_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/assetId" }
+        },
+        "minimum_rank": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "best_expected_rank": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "passed": { "const": true }
+      }
+    },
+    "smokeResultBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "asset_type",
+        "inspect_receipt_sha256",
+        "loaded",
+        "spawned",
+        "material_slots_verified",
+        "pbr_textures_verified",
+        "cleanup_state"
+      ],
+      "properties": {
+        "asset_id": { "$ref": "#/$defs/assetId" },
+        "asset_type": { "enum": ["Blueprint", "StaticMesh"] },
+        "inspect_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "loaded": { "const": true },
+        "spawned": { "const": true },
+        "material_slots_verified": { "const": true },
+        "pbr_textures_verified": { "const": true },
+        "cleanup_state": { "const": "disposable_spawn_destroyed" }
+      }
+    },
+    "blueprintSmokeResult": {
+      "allOf": [
+        { "$ref": "#/$defs/smokeResultBase" },
+        { "properties": { "asset_type": { "const": "Blueprint" } } }
+      ]
+    },
+    "staticMeshSmokeResult": {
+      "allOf": [
+        { "$ref": "#/$defs/smokeResultBase" },
+        { "properties": { "asset_type": { "const": "StaticMesh" } } }
+      ]
+    },
+    "runtimeAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "target_identity", "runtime_image", "attestation_sha256"],
+      "properties": {
+        "component": { "enum": ["unreal", "worker", "embedding", "postgres", "qdrant"] },
+        "target_identity": { "$ref": "#/$defs/safeId" },
+        "runtime_image": { "$ref": "#/$defs/image" },
+        "attestation_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "reconcilePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "authoritative_snapshot",
+        "compatibility_snapshot_v1_sha256",
+        "live_audit",
+        "catalog_sha256",
+        "postgres_row_set_sha256",
+        "qdrant_point_set_sha256",
+        "exact_set_parity",
+        "runtime_attestations",
+        "query_results",
+        "smoke_results",
+        "previous_active",
+        "rollback_readiness_receipt_sha256",
+        "active_generation_pointer",
+        "activation_performed"
+      ],
+      "properties": {
+        "kind": { "const": "reconcile_exact_snapshot/v1" },
+        "authoritative_snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema", "sha256", "snapshot_revision", "asset_set"],
+          "properties": {
+            "schema": { "const": "simworld-asset-snapshot-exact-set/v2" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "snapshot_revision": { "$ref": "#/$defs/snapshotRevision" },
+            "asset_set": { "$ref": "#/$defs/exactSet" }
+          }
+        },
+        "compatibility_snapshot_v1_sha256": { "$ref": "#/$defs/sha256" },
+        "live_audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema", "sha256", "manifest_sha256", "observations_sha256", "issued_at", "expires_at"],
+          "properties": {
+            "schema": { "const": "simworld-asset-live-audit/v1" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "manifest_sha256": { "$ref": "#/$defs/sha256" },
+            "observations_sha256": { "$ref": "#/$defs/sha256" },
+            "issued_at": { "$ref": "#/$defs/rfc3339" },
+            "expires_at": { "$ref": "#/$defs/rfc3339" }
+          }
+        },
+        "catalog_sha256": { "$ref": "#/$defs/sha256" },
+        "postgres_row_set_sha256": { "$ref": "#/$defs/sha256" },
+        "qdrant_point_set_sha256": { "$ref": "#/$defs/sha256" },
+        "exact_set_parity": { "const": true },
+        "runtime_attestations": {
+          "type": "array",
+          "prefixItems": [
+            { "allOf": [{ "$ref": "#/$defs/runtimeAttestation" }, { "properties": { "component": { "const": "unreal" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/runtimeAttestation" }, { "properties": { "component": { "const": "worker" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/runtimeAttestation" }, { "properties": { "component": { "const": "embedding" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/runtimeAttestation" }, { "properties": { "component": { "const": "postgres" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/runtimeAttestation" }, { "properties": { "component": { "const": "qdrant" } } }] }
+          ],
+          "items": false,
+          "minItems": 5,
+          "maxItems": 5
+        },
+        "query_results": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/queryResult" },
+          "contains": {
+            "allOf": [
+              { "$ref": "#/$defs/queryResult" },
+              { "properties": { "language": { "const": "zh-TW" } } }
+            ]
+          },
+          "minContains": 1,
+          "allOf": [
+            {
+              "contains": {
+                "allOf": [
+                  { "$ref": "#/$defs/queryResult" },
+                  { "properties": { "language": { "const": "en" } } }
+                ]
+              },
+              "minContains": 1
+            }
+          ]
+        },
+        "smoke_results": {
+          "type": "array",
+          "prefixItems": [
+            { "$ref": "#/$defs/blueprintSmokeResult" },
+            { "$ref": "#/$defs/staticMeshSmokeResult" }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "previous_active": { "$ref": "#/$defs/previousActiveReadiness" },
+        "rollback_readiness_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "active_generation_pointer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["identity", "observed_epoch", "unchanged"],
+          "properties": {
+            "identity": { "$ref": "#/$defs/safeId" },
+            "observed_epoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "unchanged": { "const": true }
+          }
+        },
+        "activation_performed": { "const": false }
+      }
+    },
+    "inspectPhaseContract": {
+      "if": { "properties": { "phase": { "const": "inspect" } }, "required": ["phase"] },
+      "then": {
+        "properties": {
+          "operation": { "const": "inspect_exact_assets" },
+          "prior_receipts": { "maxItems": 0 },
+          "target_attestation": { "properties": { "targets": { "$ref": "#/$defs/inspectTargets" } } },
+          "credentials_observed": {
+            "prefixItems": [
+              { "properties": { "scope": { "const": "ue_disposable_scene_inspect_spawn_cleanup" } } }
+            ],
+            "items": false,
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "outcome": {
+            "oneOf": [
+              { "allOf": [{ "$ref": "#/$defs/successOutcome" }, { "properties": { "mutation_state": { "const": "none" } } }] },
+              { "allOf": [{ "$ref": "#/$defs/failureOutcome" }, { "properties": { "mutation_state": { "enum": ["none", "ambiguous"] } } }] }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "outcome": { "properties": { "status": { "const": "success" } } } } },
+            "then": { "properties": { "payload": { "$ref": "#/$defs/inspectPayload" } } },
+            "else": { "properties": { "payload": { "$ref": "#/$defs/failurePayload" } } }
+          }
+        ]
+      }
+    },
+    "renderPhaseContract": {
+      "if": { "properties": { "phase": { "const": "render" } }, "required": ["phase"] },
+      "then": {
+        "properties": {
+          "operation": { "const": "render_exact_views" },
+          "prior_receipts": { "$ref": "#/$defs/chainAfterInspect" },
+          "target_attestation": { "properties": { "targets": { "$ref": "#/$defs/renderTargets" } } },
+          "credentials_observed": {
+            "prefixItems": [{ "properties": { "scope": { "const": "ue_disposable_scene_render_staging_cleanup" } } }],
+            "items": false,
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "outcome": {
+            "oneOf": [
+              { "allOf": [{ "$ref": "#/$defs/successOutcome" }, { "properties": { "mutation_state": { "const": "staged" } } }] },
+              { "allOf": [{ "$ref": "#/$defs/failureOutcome" }, { "properties": { "mutation_state": { "enum": ["none", "staged", "ambiguous"] } } }] }
+            ]
+          }
+        },
+        "allOf": [{ "$ref": "#/$defs/renderPayloadByOutcome" }]
+      }
+    },
+    "captionPhaseContract": {
+      "if": { "properties": { "phase": { "const": "caption" } }, "required": ["phase"] },
+      "then": {
+        "properties": {
+          "operation": { "const": "caption_exact_render_set" },
+          "prior_receipts": { "$ref": "#/$defs/chainAfterRender" },
+          "target_attestation": { "properties": { "targets": { "$ref": "#/$defs/captionTargets" } } },
+          "credentials_observed": {
+            "prefixItems": [{ "properties": { "scope": { "const": "caption_bounded_idempotent_call" } } }],
+            "items": false,
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "outcome": {
+            "oneOf": [
+              { "allOf": [{ "$ref": "#/$defs/successOutcome" }, { "properties": { "mutation_state": { "const": "committed" } } }] },
+              { "allOf": [{ "$ref": "#/$defs/failureOutcome" }, { "properties": { "mutation_state": { "enum": ["none", "committed", "ambiguous"] } } }] }
+            ]
+          }
+        },
+        "allOf": [{ "$ref": "#/$defs/captionPayloadByOutcome" }]
+      }
+    },
+    "embedPhaseContract": {
+      "if": { "properties": { "phase": { "const": "embed" } }, "required": ["phase"] },
+      "then": {
+        "properties": {
+          "operation": { "const": "embed_exact_text_set" },
+          "prior_receipts": { "$ref": "#/$defs/chainAfterCaption" },
+          "target_attestation": { "properties": { "targets": { "$ref": "#/$defs/embeddingTargets" } } },
+          "credentials_observed": {
+            "prefixItems": [{ "properties": { "scope": { "const": "embedding_immutable_vector_staging" } } }],
+            "items": false,
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "outcome": {
+            "oneOf": [
+              { "allOf": [{ "$ref": "#/$defs/successOutcome" }, { "properties": { "mutation_state": { "const": "staged" } } }] },
+              { "allOf": [{ "$ref": "#/$defs/failureOutcome" }, { "properties": { "mutation_state": { "enum": ["none", "staged", "ambiguous"] } } }] }
+            ]
+          }
+        },
+        "allOf": [{ "$ref": "#/$defs/embedPayloadByOutcome" }]
+      }
+    },
+    "postgresPhaseContract": {
+      "if": { "properties": { "phase": { "const": "postgres" } }, "required": ["phase"] },
+      "then": {
+        "properties": {
+          "operation": { "const": "upsert_postgres_exact" },
+          "prior_receipts": { "$ref": "#/$defs/chainAfterEmbed" },
+          "target_attestation": { "properties": { "targets": { "$ref": "#/$defs/postgresTargets" } } },
+          "credentials_observed": {
+            "prefixItems": [{ "properties": { "scope": { "const": "postgres_generation_write" } } }],
+            "items": false,
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "outcome": {
+            "oneOf": [
+              { "allOf": [{ "$ref": "#/$defs/successOutcome" }, { "properties": { "mutation_state": { "const": "committed" } } }] },
+              { "allOf": [{ "$ref": "#/$defs/failureOutcome" }, { "properties": { "mutation_state": { "enum": ["none", "committed", "ambiguous"] } } }] }
+            ]
+          }
+        },
+        "allOf": [{ "$ref": "#/$defs/postgresPayloadByOutcome" }]
+      }
+    },
+    "qdrantPhaseContract": {
+      "if": { "properties": { "phase": { "const": "qdrant" } }, "required": ["phase"] },
+      "then": {
+        "properties": {
+          "operation": { "const": "upsert_qdrant_exact" },
+          "prior_receipts": { "$ref": "#/$defs/chainAfterPostgres" },
+          "target_attestation": { "properties": { "targets": { "$ref": "#/$defs/qdrantTargets" } } },
+          "credentials_observed": {
+            "prefixItems": [{ "properties": { "scope": { "const": "qdrant_generation_write" } } }],
+            "items": false,
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "outcome": {
+            "oneOf": [
+              { "allOf": [{ "$ref": "#/$defs/successOutcome" }, { "properties": { "mutation_state": { "const": "committed" } } }] },
+              { "allOf": [{ "$ref": "#/$defs/failureOutcome" }, { "properties": { "mutation_state": { "enum": ["none", "staged", "committed", "ambiguous"] } } }] }
+            ]
+          }
+        },
+        "allOf": [{ "$ref": "#/$defs/qdrantPayloadByOutcome" }]
+      }
+    },
+    "reconcilePhaseContract": {
+      "if": { "properties": { "phase": { "const": "reconcile" } }, "required": ["phase"] },
+      "then": {
+        "properties": {
+          "operation": { "const": "reconcile_exact_snapshot" },
+          "prior_receipts": { "$ref": "#/$defs/chainAfterQdrant" },
+          "target_attestation": { "properties": { "targets": { "$ref": "#/$defs/reconcileTargets" } } },
+          "credentials_observed": {
+            "prefixItems": [
+              { "properties": { "scope": { "const": "postgres_generation_read_only" } } },
+              { "properties": { "scope": { "const": "qdrant_generation_read_only" } } },
+              { "properties": { "scope": { "const": "ue_runtime_read_only" } } }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "outcome": {
+            "oneOf": [
+              { "allOf": [{ "$ref": "#/$defs/successOutcome" }, { "properties": { "mutation_state": { "const": "none" } } }] },
+              { "allOf": [{ "$ref": "#/$defs/failureOutcome" }, { "properties": { "mutation_state": { "const": "none" } } }] }
+            ]
+          }
+        },
+        "allOf": [{ "$ref": "#/$defs/reconcilePayloadByOutcome" }]
+      }
+    },
+    "chainAfterInspect": {
+      "type": "array",
+      "prefixItems": [{ "$ref": "#/$defs/priorInspect" }],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "chainAfterRender": {
+      "type": "array",
+      "prefixItems": [{ "$ref": "#/$defs/priorInspect" }, { "$ref": "#/$defs/priorRender" }],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "chainAfterCaption": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/priorInspect" },
+        { "$ref": "#/$defs/priorRender" },
+        { "$ref": "#/$defs/priorCaption" }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "chainAfterEmbed": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/priorInspect" },
+        { "$ref": "#/$defs/priorRender" },
+        { "$ref": "#/$defs/priorCaption" },
+        { "$ref": "#/$defs/priorEmbed" }
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "chainAfterPostgres": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/priorInspect" },
+        { "$ref": "#/$defs/priorRender" },
+        { "$ref": "#/$defs/priorCaption" },
+        { "$ref": "#/$defs/priorEmbed" },
+        { "$ref": "#/$defs/priorPostgres" }
+      ],
+      "items": false,
+      "minItems": 5,
+      "maxItems": 5
+    },
+    "chainAfterQdrant": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/priorInspect" },
+        { "$ref": "#/$defs/priorRender" },
+        { "$ref": "#/$defs/priorCaption" },
+        { "$ref": "#/$defs/priorEmbed" },
+        { "$ref": "#/$defs/priorPostgres" },
+        { "$ref": "#/$defs/priorQdrant" }
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6
+    },
+    "renderPayloadByOutcome": {
+      "if": { "properties": { "outcome": { "properties": { "status": { "const": "success" } } } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/renderPayload" } } },
+      "else": { "properties": { "payload": { "$ref": "#/$defs/failurePayload" } } }
+    },
+    "captionPayloadByOutcome": {
+      "if": { "properties": { "outcome": { "properties": { "status": { "const": "success" } } } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/captionPayload" } } },
+      "else": { "properties": { "payload": { "$ref": "#/$defs/failurePayload" } } }
+    },
+    "embedPayloadByOutcome": {
+      "if": { "properties": { "outcome": { "properties": { "status": { "const": "success" } } } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/embedPayload" } } },
+      "else": { "properties": { "payload": { "$ref": "#/$defs/failurePayload" } } }
+    },
+    "postgresPayloadByOutcome": {
+      "if": { "properties": { "outcome": { "properties": { "status": { "const": "success" } } } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/postgresPayload" } } },
+      "else": { "properties": { "payload": { "$ref": "#/$defs/failurePayload" } } }
+    },
+    "qdrantPayloadByOutcome": {
+      "if": { "properties": { "outcome": { "properties": { "status": { "const": "success" } } } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/qdrantPayload" } } },
+      "else": { "properties": { "payload": { "$ref": "#/$defs/failurePayload" } } }
+    },
+    "reconcilePayloadByOutcome": {
+      "if": { "properties": { "outcome": { "properties": { "status": { "const": "success" } } } } },
+      "then": { "properties": { "payload": { "$ref": "#/$defs/reconcilePayload" } } },
+      "else": { "properties": { "payload": { "$ref": "#/$defs/failurePayload" } } }
+    }
+  }
+}

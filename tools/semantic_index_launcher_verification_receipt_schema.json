@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-launcher-verification-receipt-v1.schema.json",
+  "title": "SimWorld semantic index signed launcher verification receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "issuer",
+    "trust_bundle",
+    "launcher",
+    "handoff",
+    "pins",
+    "verification",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "signature",
+    "serialization_contract"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-launcher-verification-receipt/v1" },
+    "receipt_id": { "$ref": "#/$defs/receiptId" },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer_id", "role", "key_id", "key_revision"],
+      "properties": {
+        "issuer_id": { "$ref": "#/$defs/safeId" },
+        "role": { "const": "deployment_launcher_attestor" },
+        "key_id": { "$ref": "#/$defs/safeId" },
+        "key_revision": { "$ref": "#/$defs/sha256Revision" }
+      }
+    },
+    "trust_bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "revision",
+        "sha256",
+        "issuer_membership_sha256",
+        "issuer_public_key_sha256"
+      ],
+      "properties": {
+        "schema": { "const": "simworld-launcher-verification-trust-bundle/v1" },
+        "revision": { "$ref": "#/$defs/sha256Revision" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "issuer_membership_sha256": { "$ref": "#/$defs/sha256" },
+        "issuer_public_key_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "launcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["launcher_identity", "launcher_uid", "coordinator_uid"],
+      "properties": {
+        "launcher_identity": { "$ref": "#/$defs/safeId" },
+        "launcher_uid": { "$ref": "#/$defs/uid" },
+        "coordinator_uid": { "$ref": "#/$defs/uid" }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema",
+        "raw_receipt_sha256",
+        "opaque_connected_fd_handoff_verified"
+      ],
+      "properties": {
+        "receipt_schema": { "const": "simworld-semantic-index-launcher-handoff-receipt/v1" },
+        "raw_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "opaque_connected_fd_handoff_verified": { "const": true }
+      }
+    },
+    "pins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "interpreter_sha256",
+        "coordinator_source_closure_sha256",
+        "adapter_source_sha256",
+        "worker_protocol_sha256",
+        "worker_source_closure_sha256",
+        "schemas_bundle_sha256",
+        "dependency_lock_sha256",
+        "sql_bundle_sha256",
+        "plan_sha256",
+        "worker_image",
+        "worker_runtime_attestation_sha256"
+      ],
+      "properties": {
+        "interpreter_sha256": { "$ref": "#/$defs/sha256" },
+        "coordinator_source_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "adapter_source_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_protocol_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_source_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "schemas_bundle_sha256": { "$ref": "#/$defs/sha256" },
+        "dependency_lock_sha256": { "$ref": "#/$defs/sha256" },
+        "sql_bundle_sha256": { "$ref": "#/$defs/sha256" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_image": { "$ref": "#/$defs/image" },
+        "worker_runtime_attestation_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified_before_executor_start"],
+      "properties": {
+        "verified_before_executor_start": { "const": true }
+      }
+    },
+    "issued_at": { "$ref": "#/$defs/rfc3339Seconds" },
+    "not_before": { "$ref": "#/$defs/rfc3339Seconds" },
+    "expires_at": { "$ref": "#/$defs/rfc3339Seconds" },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "canonicalization",
+        "signed_payload_sha256",
+        "detached_signature_sha256",
+        "detached_signature_base64"
+      ],
+      "properties": {
+        "algorithm": { "const": "ed25519" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "detached_signature_sha256": { "$ref": "#/$defs/sha256" },
+        "detached_signature_base64": {
+          "type": "string",
+          "minLength": 88,
+          "maxLength": 88,
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    },
+    "serialization_contract": { "$ref": "#/$defs/serializationContract" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "receiptId": {
+      "type": "string",
+      "minLength": 37,
+      "maxLength": 160,
+      "pattern": "^semantic-index-launcher-verification:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "uid": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "rfc3339Seconds": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 20,
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 72,
+      "maxLength": 512,
+      "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+    },
+    "serializationContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "encoding",
+        "canonicalization",
+        "duplicate_keys",
+        "unicode_normalization",
+        "numbers",
+        "nonfinite_numbers",
+        "trailing_newline"
+      ],
+      "properties": {
+        "encoding": { "const": "utf-8" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "duplicate_keys": { "const": "reject" },
+        "unicode_normalization": { "const": "require_already_nfc" },
+        "numbers": { "const": "integers_only" },
+        "nonfinite_numbers": { "const": "reject" },
+        "trailing_newline": { "const": false }
+      }
+    }
+  }
+}

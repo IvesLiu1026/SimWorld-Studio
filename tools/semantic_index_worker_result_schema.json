@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-worker-result-v1.schema.json",
+  "title": "SimWorld semantic index ordinary phase worker result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "protocol",
+    "request_binding",
+    "status",
+    "mutation_state",
+    "metrics",
+    "artifact",
+    "error"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-worker-result/v1" },
+    "protocol": { "const": "simworld-semantic-index-worker/v1" },
+    "request_binding": { "$ref": "#/$defs/requestBinding" },
+    "status": { "enum": ["succeeded", "failed"] },
+    "mutation_state": { "enum": ["none", "staged", "committed", "ambiguous"] },
+    "metrics": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 3,
+      "additionalProperties": false,
+      "properties": {
+        "assets_inspected": { "$ref": "#/$defs/resultMetric" },
+        "assets_rendered": { "$ref": "#/$defs/resultMetric" },
+        "rendered_views": { "$ref": "#/$defs/resultMetric" },
+        "catalog_records": { "$ref": "#/$defs/resultMetric" },
+        "dense_vectors": { "$ref": "#/$defs/resultMetric" },
+        "sparse_vectors": { "$ref": "#/$defs/resultMetric" },
+        "postgres_rows": { "$ref": "#/$defs/resultMetric" },
+        "qdrant_points": { "$ref": "#/$defs/resultMetric" }
+      }
+    },
+    "artifact": {
+      "oneOf": [
+        { "$ref": "https://simworld.org/schemas/simworld-semantic-index-worker-artifact-root-v1.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "error": {
+      "oneOf": [{ "$ref": "#/$defs/remoteError" }, { "type": "null" }]
+    }
+  },
+  "allOf": [
+    { "$ref": "#/$defs/statusContract" },
+    { "$ref": "#/$defs/inspectContract" },
+    { "$ref": "#/$defs/renderContract" },
+    { "$ref": "#/$defs/captionContract" },
+    { "$ref": "#/$defs/embedContract" },
+    { "$ref": "#/$defs/postgresContract" },
+    { "$ref": "#/$defs/qdrantContract" },
+    { "$ref": "#/$defs/reconcileContract" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 84,
+      "maxLength": 84,
+      "pattern": "^semantic-generation:[a-f0-9]{64}$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 23,
+      "maxLength": 160,
+      "pattern": "^semantic-index-run:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 27,
+      "maxLength": 160,
+      "pattern": "^semantic-index-correlation:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "requestBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_sha256",
+        "request_id",
+        "operation",
+        "phase",
+        "idempotency_key",
+        "idempotency_ledger_identity",
+        "idempotency_ledger_revision",
+        "job_revision",
+        "reviewed_job_sha256",
+        "approval_basis_sha256",
+        "execution_plan_sha256",
+        "launcher_handoff_receipt_sha256",
+        "generation_id",
+        "generation_binding_sha256",
+        "host_boot_id_sha256",
+        "deadline_monotonic_ns"
+      ],
+      "properties": {
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "request_id": { "$ref": "#/$defs/safeId" },
+        "operation": {
+          "enum": [
+            "inspect_exact_assets",
+            "render_exact_views",
+            "caption_exact_render_set",
+            "embed_exact_text_set",
+            "upsert_postgres_exact",
+            "upsert_qdrant_exact",
+            "reconcile_exact_snapshot"
+          ]
+        },
+        "phase": {
+          "enum": ["inspect", "render", "caption", "embed", "postgres", "qdrant", "reconcile"]
+        },
+        "idempotency_key": { "$ref": "#/$defs/sha256Revision" },
+        "idempotency_ledger_identity": { "$ref": "#/$defs/safeId" },
+        "idempotency_ledger_revision": { "$ref": "#/$defs/sha256Revision" },
+        "job_revision": { "$ref": "#/$defs/sha256Revision" },
+        "reviewed_job_sha256": { "$ref": "#/$defs/sha256" },
+        "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "execution_plan_sha256": { "$ref": "#/$defs/sha256" },
+        "launcher_handoff_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "generation_binding_sha256": { "$ref": "#/$defs/sha256" },
+        "host_boot_id_sha256": { "$ref": "#/$defs/sha256" },
+        "deadline_monotonic_ns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      }
+    },
+    "resultMetric": { "type": "integer", "minimum": 0, "maximum": 100000 },
+    "inspectMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assets_inspected"],
+      "properties": { "assets_inspected": { "$ref": "#/$defs/resultMetric" } }
+    },
+    "renderMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assets_rendered", "rendered_views"],
+      "properties": {
+        "assets_rendered": { "$ref": "#/$defs/resultMetric" },
+        "rendered_views": { "$ref": "#/$defs/resultMetric" }
+      }
+    },
+    "captionMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalog_records"],
+      "properties": { "catalog_records": { "$ref": "#/$defs/resultMetric" } }
+    },
+    "embedMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dense_vectors", "sparse_vectors"],
+      "properties": {
+        "dense_vectors": { "$ref": "#/$defs/resultMetric" },
+        "sparse_vectors": { "$ref": "#/$defs/resultMetric" }
+      }
+    },
+    "postgresMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["postgres_rows"],
+      "properties": { "postgres_rows": { "$ref": "#/$defs/resultMetric" } }
+    },
+    "qdrantMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qdrant_points"],
+      "properties": { "qdrant_points": { "$ref": "#/$defs/resultMetric" } }
+    },
+    "reconcileMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalog_records", "postgres_rows", "qdrant_points"],
+      "properties": {
+        "catalog_records": { "$ref": "#/$defs/resultMetric" },
+        "postgres_rows": { "$ref": "#/$defs/resultMetric" },
+        "qdrant_points": { "$ref": "#/$defs/resultMetric" }
+      }
+    },
+    "remoteError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependency", "code", "retryable", "mutation_state"],
+      "properties": {
+        "dependency": {
+          "enum": ["worker", "unreal", "caption", "embedding", "postgres", "qdrant", "evidence_store"]
+        },
+        "code": { "$ref": "#/$defs/safeId" },
+        "retryable": { "type": "boolean" },
+        "mutation_state": { "enum": ["none", "staged", "committed", "ambiguous"] }
+      },
+      "allOf": [{ "$ref": "#/$defs/remoteErrorIdentity" }]
+    },
+    "remoteErrorIdentity": {
+      "oneOf": [
+        { "properties": { "dependency": { "const": "worker" }, "code": { "const": "WORKER_BUSY" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "worker" }, "code": { "const": "WORKER_INTERNAL" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "worker" }, "code": { "const": "WORKER_LEDGER_CONFLICT" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "worker" }, "code": { "const": "WORKER_CANCELLED" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "unreal" }, "code": { "const": "UNREAL_UNAVAILABLE" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "unreal" }, "code": { "const": "UNREAL_OPERATION_FAILED" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "caption" }, "code": { "const": "CAPTION_UNAVAILABLE" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "caption" }, "code": { "const": "CAPTION_BUDGET_EXCEEDED" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "caption" }, "code": { "const": "CAPTION_RESULT_INVALID" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "caption" }, "code": { "const": "CAPTION_STATE_AMBIGUOUS" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "embedding" }, "code": { "const": "EMBEDDING_UNAVAILABLE" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "embedding" }, "code": { "const": "EMBEDDING_RESULT_INVALID" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "postgres" }, "code": { "const": "POSTGRES_UNAVAILABLE" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "postgres" }, "code": { "const": "POSTGRES_WRITE_FAILED" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "qdrant" }, "code": { "const": "QDRANT_UNAVAILABLE" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "qdrant" }, "code": { "const": "QDRANT_WRITE_FAILED" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "evidence_store" }, "code": { "const": "EVIDENCE_STORE_UNAVAILABLE" } }, "required": ["dependency", "code"] },
+        { "properties": { "dependency": { "const": "evidence_store" }, "code": { "const": "EVIDENCE_PUBLICATION_FAILED" } }, "required": ["dependency", "code"] }
+      ]
+    },
+    "statusContract": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "artifact": { "$ref": "https://simworld.org/schemas/simworld-semantic-index-worker-artifact-root-v1.schema.json" },
+          "error": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "artifact": { "type": "null" },
+          "error": { "$ref": "#/$defs/remoteError" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "mutation_state": { "const": "none" } }, "required": ["mutation_state"] },
+            "then": {
+              "properties": {
+                "error": { "properties": { "mutation_state": { "const": "none" } } }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "mutation_state": { "const": "staged" } }, "required": ["mutation_state"] },
+            "then": {
+              "properties": {
+                "error": {
+                  "properties": {
+                    "mutation_state": { "const": "staged" },
+                    "retryable": { "const": false }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "mutation_state": { "const": "committed" } }, "required": ["mutation_state"] },
+            "then": {
+              "properties": {
+                "error": {
+                  "properties": {
+                    "mutation_state": { "const": "committed" },
+                    "retryable": { "const": false }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "mutation_state": { "const": "ambiguous" } }, "required": ["mutation_state"] },
+            "then": {
+              "properties": {
+                "error": {
+                  "properties": {
+                    "mutation_state": { "const": "ambiguous" },
+                    "retryable": { "const": false }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "inspectContract": {
+      "if": { "properties": { "request_binding": { "properties": { "operation": { "const": "inspect_exact_assets" } }, "required": ["operation"] } }, "required": ["request_binding"] },
+      "then": {
+        "properties": {
+          "request_binding": { "properties": { "phase": { "const": "inspect" } } },
+          "metrics": { "$ref": "#/$defs/inspectMetrics" }
+        },
+        "allOf": [{ "$ref": "#/$defs/inspectOutcome" }]
+      }
+    },
+    "renderContract": {
+      "if": { "properties": { "request_binding": { "properties": { "operation": { "const": "render_exact_views" } }, "required": ["operation"] } }, "required": ["request_binding"] },
+      "then": {
+        "properties": {
+          "request_binding": { "properties": { "phase": { "const": "render" } } },
+          "metrics": { "$ref": "#/$defs/renderMetrics" }
+        },
+        "allOf": [{ "$ref": "#/$defs/renderOutcome" }]
+      }
+    },
+    "captionContract": {
+      "if": { "properties": { "request_binding": { "properties": { "operation": { "const": "caption_exact_render_set" } }, "required": ["operation"] } }, "required": ["request_binding"] },
+      "then": {
+        "properties": {
+          "request_binding": { "properties": { "phase": { "const": "caption" } } },
+          "metrics": { "$ref": "#/$defs/captionMetrics" }
+        },
+        "allOf": [{ "$ref": "#/$defs/captionOutcome" }]
+      }
+    },
+    "embedContract": {
+      "if": { "properties": { "request_binding": { "properties": { "operation": { "const": "embed_exact_text_set" } }, "required": ["operation"] } }, "required": ["request_binding"] },
+      "then": {
+        "properties": {
+          "request_binding": { "properties": { "phase": { "const": "embed" } } },
+          "metrics": { "$ref": "#/$defs/embedMetrics" }
+        },
+        "allOf": [{ "$ref": "#/$defs/embedOutcome" }]
+      }
+    },
+    "postgresContract": {
+      "if": { "properties": { "request_binding": { "properties": { "operation": { "const": "upsert_postgres_exact" } }, "required": ["operation"] } }, "required": ["request_binding"] },
+      "then": {
+        "properties": {
+          "request_binding": { "properties": { "phase": { "const": "postgres" } } },
+          "metrics": { "$ref": "#/$defs/postgresMetrics" }
+        },
+        "allOf": [{ "$ref": "#/$defs/postgresOutcome" }]
+      }
+    },
+    "qdrantContract": {
+      "if": { "properties": { "request_binding": { "properties": { "operation": { "const": "upsert_qdrant_exact" } }, "required": ["operation"] } }, "required": ["request_binding"] },
+      "then": {
+        "properties": {
+          "request_binding": { "properties": { "phase": { "const": "qdrant" } } },
+          "metrics": { "$ref": "#/$defs/qdrantMetrics" }
+        },
+        "allOf": [{ "$ref": "#/$defs/qdrantOutcome" }]
+      }
+    },
+    "reconcileContract": {
+      "if": { "properties": { "request_binding": { "properties": { "operation": { "const": "reconcile_exact_snapshot" } }, "required": ["operation"] } }, "required": ["request_binding"] },
+      "then": {
+        "properties": {
+          "request_binding": { "properties": { "phase": { "const": "reconcile" } } },
+          "metrics": { "$ref": "#/$defs/reconcileMetrics" }
+        },
+        "allOf": [{ "$ref": "#/$defs/reconcileOutcome" }]
+      }
+    },
+    "inspectOutcome": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": { "properties": { "mutation_state": { "const": "none" } } },
+      "else": { "properties": { "mutation_state": { "enum": ["none", "ambiguous"] }, "error": { "properties": { "dependency": { "enum": ["worker", "unreal", "evidence_store"] } } } } }
+    },
+    "renderOutcome": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": { "properties": { "mutation_state": { "const": "staged" } } },
+      "else": { "properties": { "mutation_state": { "enum": ["none", "staged", "ambiguous"] }, "error": { "properties": { "dependency": { "enum": ["worker", "unreal", "evidence_store"] } } } } }
+    },
+    "captionOutcome": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": { "properties": { "mutation_state": { "const": "committed" } } },
+      "else": { "properties": { "mutation_state": { "enum": ["none", "committed", "ambiguous"] }, "error": { "properties": { "dependency": { "enum": ["worker", "caption", "evidence_store"] } } } } }
+    },
+    "embedOutcome": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": { "properties": { "mutation_state": { "const": "staged" } } },
+      "else": { "properties": { "mutation_state": { "enum": ["none", "staged", "ambiguous"] }, "error": { "properties": { "dependency": { "enum": ["worker", "embedding", "evidence_store"] } } } } }
+    },
+    "postgresOutcome": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": { "properties": { "mutation_state": { "const": "committed" } } },
+      "else": { "properties": { "mutation_state": { "enum": ["none", "committed", "ambiguous"] }, "error": { "properties": { "dependency": { "enum": ["worker", "postgres", "evidence_store"] } } } } }
+    },
+    "qdrantOutcome": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": { "properties": { "mutation_state": { "const": "committed" } } },
+      "else": { "properties": { "mutation_state": { "enum": ["none", "staged", "committed", "ambiguous"] }, "error": { "properties": { "dependency": { "enum": ["worker", "qdrant", "evidence_store"] } } } } }
+    },
+    "reconcileOutcome": {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": { "properties": { "mutation_state": { "const": "none" } } },
+      "else": { "properties": { "mutation_state": { "const": "none" }, "error": { "properties": { "dependency": { "enum": ["worker", "unreal", "postgres", "qdrant", "evidence_store"] } } } } }
+    }
+  }
+}

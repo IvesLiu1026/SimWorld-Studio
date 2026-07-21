@@ -3,10 +3,12 @@ from __future__ import annotations
 import pathlib
 import sys
 import unittest
+import math
 from types import SimpleNamespace
 from unittest import mock
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 
 TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -151,6 +153,88 @@ class EmbedServiceContractTests(unittest.TestCase):
             self.assertEqual(denied.exception.status_code, 401)
             self.assertNotIn(token, str(denied.exception.detail))
             embed_service.require_embed_authorization(f"Bearer {token}")
+
+    def test_request_contract_rejects_empty_oversized_and_unknown_input(self):
+        invalid = (
+            {"texts": []},
+            {"texts": [""]},
+            {"texts": ["line\nbreak"]},
+            {"texts": ["delete\u007fcontrol"]},
+            {"texts": ["Cafe\u0301"]},
+            {"texts": ["x" * (embed_service.MAX_EMBED_TEXT_BYTES + 1)]},
+            {"texts": ["ok"], "unexpected": True},
+        )
+        for payload in invalid:
+            with self.subTest(payload=list(payload)):
+                with self.assertRaises(ValidationError):
+                    embed_service.EmbedRequest.model_validate(payload)
+
+        oversized_batch = [
+            "x" * embed_service.MAX_EMBED_TEXT_BYTES
+            for _ in range(
+                embed_service.MAX_EMBED_TOTAL_TEXT_BYTES
+                // embed_service.MAX_EMBED_TEXT_BYTES
+                + 1
+            )
+        ]
+        with self.assertRaises(ValidationError):
+            embed_service.EmbedRequest(texts=oversized_batch)
+
+    def test_embedding_output_count_dimension_and_values_are_fail_closed(self):
+        class WrongCountDense:
+            def embed(self, _texts):
+                return []
+
+        embed_service._dense = WrongCountDense()
+        embed_service._sparse = FakeSparseRuntime()
+        embed_service._observed_dense_size = 2
+        with self.assertRaisesRegex(RuntimeError, "output count"):
+            embed_service.embed(embed_service.EmbedRequest(texts=["chair"]))
+
+        class WrongDimensionDense:
+            def embed(self, texts):
+                return [ListValue([0.1]) for _ in texts]
+
+        embed_service._dense = WrongDimensionDense()
+        with self.assertRaisesRegex(RuntimeError, "dimension"):
+            embed_service.embed(embed_service.EmbedRequest(texts=["chair"]))
+
+        class NonFiniteDense:
+            def embed(self, texts):
+                return [ListValue([0.1, math.nan]) for _ in texts]
+
+        embed_service._dense = NonFiniteDense()
+        with self.assertRaisesRegex(RuntimeError, "non-finite"):
+            embed_service.embed(embed_service.EmbedRequest(texts=["chair"]))
+
+    def test_sparse_output_must_have_sorted_unique_indices_and_finite_values(self):
+        class InvalidSparseRuntime:
+            def __init__(self, indices, values):
+                self.indices = indices
+                self.values = values
+
+            def embed(self, texts):
+                return [
+                    SimpleNamespace(
+                        indices=ListValue(self.indices),
+                        values=ListValue(self.values),
+                    )
+                    for _ in texts
+                ]
+
+        embed_service._dense = FakeDenseRuntime()
+        embed_service._observed_dense_size = 2
+        for indices, values, message in (
+            ([2, 2], [0.1, 0.2], "strictly increasing"),
+            ([2], [math.inf], "non-finite"),
+            ([2], [], "shape"),
+        ):
+            with self.subTest(indices=indices, values=values):
+                embed_service._sparse = InvalidSparseRuntime(indices, values)
+                with self.assertRaisesRegex(RuntimeError, message):
+                    embed_service.embed(
+                        embed_service.EmbedRequest(texts=["chair"])
+                    )
 
 
 if __name__ == "__main__":

@@ -11,6 +11,15 @@ a deterministic **pending semantic-index job**. It does not convert the
 candidate list into an authoritative catalog and it never reports a completed
 asset snapshot.
 
+The contracts and commands in this runbook are v1 and remain offline-only.
+Production work is tracked by
+`docs/specs/production-readiness/semantic-index-production-v2.md`, which adds a
+reviewed v2 selection, an independent approval-basis document, generation
+isolation, a pinned worker protocol, executor-owned evidence, and recovery
+semantics. A v1 plan or terminal receipt must never be upgraded, wrapped, or
+presented as v2 evidence. While the v2 adapter is unregistered, operators must
+stop at offline validation even if every v1 fixture test passes.
+
 ## 1. Safety boundary
 
 `tools/prepare_semantic_asset_index_job.py` has two behaviors:
@@ -273,11 +282,15 @@ uses the version-independent isolation flags there and additionally requires
 `sitecustomize`, and `usercustomize` processing outside the execution loader.
 These runtime checks still cannot attest the interpreter binary, native loader,
 entrypoint, or code already executed during startup. Those remain external
-release-launcher responsibilities. No external release attestation receipt is
-implemented in this repository, and no production adapter exists, so
-production execution remains unavailable rather than claiming that pre-launch
-attestation has completed. The minimal environment used for the child Git
-client protects only that Git client, not the parent Python loader.
+release-launcher responsibilities. The v2 work now includes a closed signed
+launcher-verification receipt schema, an explicit Ed25519 verifier, and an
+opaque exact binding between a verified receipt and the attested one-shot
+worker handoff. That is offline contract code, not evidence that a release
+launcher has run: no attested deployment environment, root-capability public
+handoff, or production adapter registration exists. Production execution
+therefore remains unavailable rather than claiming pre-launch attestation has
+completed. The minimal environment used for the child Git client protects only
+that Git client, not the parent Python loader.
 
 ### 6.1 Seal an execution plan
 
@@ -489,9 +502,13 @@ execution may produce `production_complete: true`.
 ## 7. Remaining live gates
 
 The deterministic coordinator, sealed plan, resume state, timeout/count checks,
-and terminal receipt now exist. The concrete production adapter and every live
-dependency observation still do not. Every published job therefore retains
-all seven pending gates:
+terminal receipt, v2 formal schema closure, launcher-receipt verifier, and
+durable ordinary-phase ledger/service now exist as offline code. The Production
+adapter registry remains empty. A durable control ledger, isolated real
+executor process with process-group deadline termination/reaping, seven real
+operation executors, root-capability handoff evidence, and every live dependency
+observation still do not. Every published job therefore retains all seven
+pending gates:
 
 1. Data owner approves the bounded object candidate slice and rejection
    ledger. AssetRegistry filtering is not semantic catalog review.

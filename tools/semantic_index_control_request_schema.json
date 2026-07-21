@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-control-request-v1.schema.json",
+  "title": "SimWorld semantic index fixed control request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "protocol",
+    "operation",
+    "operation_revision",
+    "request_id",
+    "job_revision",
+    "reviewed_job_sha256",
+    "approval_basis_sha256",
+    "execution_plan_sha256",
+    "launcher_handoff_receipt_sha256",
+    "generation_id",
+    "generation_binding_sha256",
+    "execution_binding",
+    "worker_binding",
+    "target_phase",
+    "phase_request_sha256",
+    "phase_idempotency_key",
+    "control_idempotency_key",
+    "idempotency_ledger_identity",
+    "idempotency_ledger_revision",
+    "credential_transport",
+    "deadline_monotonic_ns"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-control-request/v1" },
+    "protocol": { "const": "simworld-semantic-index-worker/v1" },
+    "operation": {
+      "enum": [
+        "query_phase_status",
+        "recover_phase_receipt",
+        "cancel_phase_work",
+        "quarantine_generation"
+      ]
+    },
+    "operation_revision": { "$ref": "#/$defs/sha256Revision" },
+    "request_id": { "$ref": "#/$defs/safeId" },
+    "job_revision": { "$ref": "#/$defs/sha256Revision" },
+    "reviewed_job_sha256": { "$ref": "#/$defs/sha256" },
+    "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+    "execution_plan_sha256": { "$ref": "#/$defs/sha256" },
+    "launcher_handoff_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "generation_id": { "$ref": "#/$defs/generationId" },
+    "generation_binding_sha256": { "$ref": "#/$defs/sha256" },
+    "execution_binding": { "$ref": "#/$defs/executionBinding" },
+    "worker_binding": { "$ref": "#/$defs/workerBinding" },
+    "target_phase": {
+      "enum": ["inspect", "render", "caption", "embed", "postgres", "qdrant", "reconcile"]
+    },
+    "phase_request_sha256": { "$ref": "#/$defs/sha256" },
+    "phase_idempotency_key": { "$ref": "#/$defs/sha256Revision" },
+    "control_idempotency_key": { "$ref": "#/$defs/sha256Revision" },
+    "idempotency_ledger_identity": { "$ref": "#/$defs/safeId" },
+    "idempotency_ledger_revision": { "$ref": "#/$defs/sha256Revision" },
+    "credential_transport": { "$ref": "#/$defs/credentialTransport" },
+    "deadline_monotonic_ns": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    }
+  },
+  "allOf": [
+    { "$ref": "#/$defs/queryContract" },
+    { "$ref": "#/$defs/recoverContract" },
+    { "$ref": "#/$defs/cancelContract" },
+    { "$ref": "#/$defs/quarantineContract" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 84,
+      "maxLength": 84,
+      "pattern": "^semantic-generation:[a-f0-9]{64}$"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 72,
+      "maxLength": 512,
+      "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$",
+      "not": { "pattern": "://" }
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 23,
+      "maxLength": 160,
+      "pattern": "^semantic-index-run:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 27,
+      "maxLength": 160,
+      "pattern": "^semantic-index-correlation:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "executionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "correlation_id", "owner_identity", "lease_id", "slot_id"],
+      "properties": {
+        "run_id": { "$ref": "#/$defs/runId" },
+        "correlation_id": { "$ref": "#/$defs/correlationId" },
+        "owner_identity": { "$ref": "#/$defs/safeId" },
+        "lease_id": { "$ref": "#/$defs/safeId" },
+        "slot_id": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "workerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_identity",
+        "runtime_image",
+        "whoami_sha256",
+        "peer_attestation_sha256",
+        "runtime_attestation_sha256",
+        "host_boot_id_sha256",
+        "peer_uid",
+        "peer_gid",
+        "peer_pid",
+        "process_start_time_ticks",
+        "process_start_token_sha256",
+        "socket_device",
+        "socket_inode",
+        "socket_inode_binding_sha256"
+      ],
+      "properties": {
+        "deployment_identity": { "$ref": "#/$defs/safeId" },
+        "runtime_image": { "$ref": "#/$defs/image" },
+        "whoami_sha256": { "$ref": "#/$defs/sha256" },
+        "peer_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "host_boot_id_sha256": { "$ref": "#/$defs/sha256" },
+        "peer_uid": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "peer_gid": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "peer_pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "process_start_time_ticks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "process_start_token_sha256": { "$ref": "#/$defs/sha256" },
+        "socket_device": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "socket_inode": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "socket_inode_binding_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "credentialDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fd_index",
+        "scope",
+        "credential_generation",
+        "generation_id",
+        "target_identity",
+        "byte_count"
+      ],
+      "properties": {
+        "fd_index": { "const": 0 },
+        "scope": { "$ref": "#/$defs/safeId" },
+        "credential_generation": { "$ref": "#/$defs/sha256Revision" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "target_identity": { "$ref": "#/$defs/safeId" },
+        "byte_count": { "type": "integer", "minimum": 16, "maximum": 16384 }
+      }
+    },
+    "credentialTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "json_contains_credential_bytes", "descriptors"],
+      "properties": {
+        "kind": { "const": "sealed_memfd_scm_rights_v1" },
+        "json_contains_credential_bytes": { "const": false },
+        "descriptors": {
+          "type": "array",
+          "prefixItems": [{ "$ref": "#/$defs/credentialDescriptor" }],
+          "items": false,
+          "minItems": 1,
+          "maxItems": 1
+        }
+      }
+    },
+    "queryContract": {
+      "if": { "properties": { "operation": { "const": "query_phase_status" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "operation_revision": { "const": "sha256:89ec2677006dbda7892dfd30b63d2ef4df173760ba7bae0f9f08510188573094" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "prefixItems": [{ "properties": { "scope": { "const": "semantic_index_phase_status_read" } } }]
+              }
+            }
+          }
+        }
+      }
+    },
+    "recoverContract": {
+      "if": { "properties": { "operation": { "const": "recover_phase_receipt" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "operation_revision": { "const": "sha256:c2618c4ab23112c05ff2697675b02224841818f11c2fddd164b0c97d5e68b1b2" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "prefixItems": [{ "properties": { "scope": { "const": "semantic_index_phase_receipt_recover" } } }]
+              }
+            }
+          }
+        }
+      }
+    },
+    "cancelContract": {
+      "if": { "properties": { "operation": { "const": "cancel_phase_work" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "operation_revision": { "const": "sha256:151239b83048b806e9c1940457b24d53880c3140df022bbbd6fa4eb714fc673f" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "prefixItems": [{ "properties": { "scope": { "const": "semantic_index_phase_work_cancel" } } }]
+              }
+            }
+          }
+        }
+      }
+    },
+    "quarantineContract": {
+      "if": { "properties": { "operation": { "const": "quarantine_generation" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "operation_revision": { "const": "sha256:76c589ba7651cf9b5fc6d899082f5742ff0b72c41bac5a80a618f83117edc62d" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "prefixItems": [{ "properties": { "scope": { "const": "semantic_index_generation_quarantine" } } }]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

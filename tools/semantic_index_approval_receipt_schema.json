@@ -1,0 +1,437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-approval-receipt-v1.schema.json",
+  "title": "SimWorld semantic index approval receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "approval_kind",
+    "decision",
+    "approval_basis_sha256",
+    "scope",
+    "authorization",
+    "issuer",
+    "trust_bundle",
+    "issued_at",
+    "expires_at",
+    "signature",
+    "serialization_contract"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-approval-receipt/v1" },
+    "receipt_id": { "$ref": "#/$defs/receiptId" },
+    "approval_kind": {
+      "enum": [
+        "data_owner_review",
+        "cost_owner",
+        "admin_state_change",
+        "deployment",
+        "runtime",
+        "rollback_readiness"
+      ]
+    },
+    "decision": { "const": "approved" },
+    "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+    "scope": {
+      "oneOf": [
+        { "$ref": "#/$defs/dataOwnerScope" },
+        { "$ref": "#/$defs/productionScope" }
+      ]
+    },
+    "authorization": {
+      "oneOf": [
+        { "$ref": "#/$defs/dataOwnerAuthorization" },
+        { "$ref": "#/$defs/costAuthorization" },
+        { "$ref": "#/$defs/adminAuthorization" },
+        { "$ref": "#/$defs/deploymentAuthorization" },
+        { "$ref": "#/$defs/runtimeAuthorization" },
+        { "$ref": "#/$defs/rollbackAuthorization" }
+      ]
+    },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer_id", "role", "key_id", "key_revision"],
+      "properties": {
+        "issuer_id": { "$ref": "#/$defs/safeId" },
+        "role": {
+          "enum": [
+            "data_owner",
+            "cost_owner",
+            "state_change_admin",
+            "deployment_attestor",
+            "runtime_owner",
+            "rollback_owner"
+          ]
+        },
+        "key_id": { "$ref": "#/$defs/safeId" },
+        "key_revision": { "$ref": "#/$defs/sha256Revision" }
+      }
+    },
+    "trust_bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "revision", "sha256", "issuer_membership_sha256"],
+      "properties": {
+        "schema": { "const": "simworld-approval-trust-bundle/v1" },
+        "revision": { "$ref": "#/$defs/sha256Revision" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "issuer_membership_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "issued_at": { "$ref": "#/$defs/rfc3339" },
+    "expires_at": { "$ref": "#/$defs/rfc3339" },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "canonicalization",
+        "signed_payload_sha256",
+        "detached_signature_sha256",
+        "detached_signature_base64"
+      ],
+      "properties": {
+        "algorithm": { "const": "ed25519" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "signed_payload_sha256": { "$ref": "#/$defs/sha256" },
+        "detached_signature_sha256": { "$ref": "#/$defs/sha256" },
+        "detached_signature_base64": {
+          "type": "string",
+          "minLength": 88,
+          "maxLength": 88,
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    },
+    "serialization_contract": { "$ref": "#/$defs/serializationContract" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "approval_kind": { "const": "data_owner_review" } }, "required": ["approval_kind"] },
+      "then": {
+        "properties": {
+          "scope": { "$ref": "#/$defs/dataOwnerScope" },
+          "authorization": { "$ref": "#/$defs/dataOwnerAuthorization" },
+          "issuer": { "properties": { "role": { "const": "data_owner" } } }
+        }
+      },
+      "else": { "properties": { "scope": { "$ref": "#/$defs/productionScope" } } }
+    },
+    {
+      "if": { "properties": { "approval_kind": { "const": "cost_owner" } }, "required": ["approval_kind"] },
+      "then": {
+        "properties": {
+          "authorization": { "$ref": "#/$defs/costAuthorization" },
+          "issuer": { "properties": { "role": { "const": "cost_owner" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "approval_kind": { "const": "admin_state_change" } }, "required": ["approval_kind"] },
+      "then": {
+        "properties": {
+          "authorization": { "$ref": "#/$defs/adminAuthorization" },
+          "issuer": { "properties": { "role": { "const": "state_change_admin" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "approval_kind": { "const": "deployment" } }, "required": ["approval_kind"] },
+      "then": {
+        "properties": {
+          "authorization": { "$ref": "#/$defs/deploymentAuthorization" },
+          "issuer": { "properties": { "role": { "const": "deployment_attestor" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "approval_kind": { "const": "runtime" } }, "required": ["approval_kind"] },
+      "then": {
+        "properties": {
+          "authorization": { "$ref": "#/$defs/runtimeAuthorization" },
+          "issuer": { "properties": { "role": { "const": "runtime_owner" } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "approval_kind": { "const": "rollback_readiness" } }, "required": ["approval_kind"] },
+      "then": {
+        "properties": {
+          "authorization": { "$ref": "#/$defs/rollbackAuthorization" },
+          "issuer": { "properties": { "role": { "const": "rollback_owner" } } }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "receiptId": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 160,
+      "pattern": "^semantic-index-approval:[A-Za-z0-9][A-Za-z0-9._:@+\\-]{0,130}$"
+    },
+    "rfc3339": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 35,
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 30,
+      "maxLength": 160,
+      "pattern": "^semantic-generation:[a-f0-9]{64}$"
+    },
+    "snapshotRevision": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 240,
+      "pattern": "^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,223}$"
+    },
+    "dataOwnerScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope_kind",
+        "source_v1_job_sha256",
+        "source_v1_job_revision",
+        "reviewed_selection_basis_sha256",
+        "accepted_assets_sha256",
+        "accepted_asset_count",
+        "rejection_ledger_sha256",
+        "content_revision"
+      ],
+      "properties": {
+        "scope_kind": { "const": "reviewed_selection" },
+        "source_v1_job_sha256": { "$ref": "#/$defs/sha256" },
+        "source_v1_job_revision": { "$ref": "#/$defs/sha256Revision" },
+        "reviewed_selection_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "accepted_assets_sha256": { "$ref": "#/$defs/sha256" },
+        "accepted_asset_count": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "rejection_ledger_sha256": { "$ref": "#/$defs/sha256" },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" }
+      }
+    },
+    "productionScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope_kind",
+        "reviewed_job_sha256",
+        "reviewed_job_revision",
+        "plan_approval_basis_sha256",
+        "generation_id",
+        "generation_nonce_sha256",
+        "target_snapshot_revision",
+        "worker_deployment_identity",
+        "active_generation_pointer_identity",
+        "expected_active_generation_epoch"
+      ],
+      "properties": {
+        "scope_kind": { "const": "production_build" },
+        "reviewed_job_sha256": { "$ref": "#/$defs/sha256" },
+        "reviewed_job_revision": { "$ref": "#/$defs/sha256Revision" },
+        "plan_approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "generation_nonce_sha256": { "$ref": "#/$defs/sha256" },
+        "target_snapshot_revision": { "$ref": "#/$defs/snapshotRevision" },
+        "worker_deployment_identity": { "$ref": "#/$defs/safeId" },
+        "active_generation_pointer_identity": { "$ref": "#/$defs/safeId" },
+        "expected_active_generation_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "dataOwnerAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reviewed_selection_approved", "production_execution_authorized"],
+      "properties": {
+        "kind": { "const": "data_owner_review" },
+        "reviewed_selection_approved": { "const": true },
+        "production_execution_authorized": { "const": false }
+      }
+    },
+    "costAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "max_caption_calls",
+        "max_output_tokens",
+        "currency",
+        "minor_unit_exponent",
+        "max_cost_minor_units",
+        "rounding_mode",
+        "retry_charge_policy"
+      ],
+      "properties": {
+        "kind": { "const": "cost_owner" },
+        "max_caption_calls": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_output_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "currency": { "const": "USD" },
+        "minor_unit_exponent": { "const": 6 },
+        "max_cost_minor_units": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "rounding_mode": { "const": "ceiling_each_provider_charge_to_minor_unit" },
+        "retry_charge_policy": { "const": "all_provider_accepted_requests_counted" }
+      }
+    },
+    "adminAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "allowed_mutating_phases",
+        "allowed_control_operations",
+        "activation_authorized"
+      ],
+      "properties": {
+        "kind": { "const": "admin_state_change" },
+        "allowed_mutating_phases": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "inspect" },
+            { "const": "render" },
+            { "const": "caption" },
+            { "const": "embed" },
+            { "const": "postgres" },
+            { "const": "qdrant" }
+          ],
+          "items": false,
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "allowed_control_operations": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "query_phase_status" },
+            { "const": "recover_phase_receipt" },
+            { "const": "cancel_phase_work" },
+            { "const": "quarantine_generation" }
+          ],
+          "items": false,
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "activation_authorized": { "const": false }
+      }
+    },
+    "deploymentAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "deployment_preflight_sha256", "worker_image", "worker_protocol_sha256"],
+      "properties": {
+        "kind": { "const": "deployment" },
+        "deployment_preflight_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_image": { "$ref": "#/$defs/image" },
+        "worker_protocol_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "runtimeAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ue_lease_id", "ue_lease_expires_at", "worker_deployment_identity"],
+      "properties": {
+        "kind": { "const": "runtime" },
+        "ue_lease_id": { "$ref": "#/$defs/safeId" },
+        "ue_lease_expires_at": { "$ref": "#/$defs/rfc3339" },
+        "worker_deployment_identity": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "rollbackAuthorization": {
+      "oneOf": [
+        { "$ref": "#/$defs/bootstrapRollbackAuthorization" },
+        { "$ref": "#/$defs/existingGenerationRollbackAuthorization" }
+      ]
+    },
+    "bootstrapRollbackAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "bootstrap",
+        "previous_generation_id",
+        "previous_snapshot_revision",
+        "rollback_readiness_receipt_sha256",
+        "active_generation_pointer_identity",
+        "expected_active_generation_epoch"
+      ],
+      "properties": {
+        "kind": { "const": "rollback_readiness" },
+        "bootstrap": { "const": true },
+        "previous_generation_id": { "type": "null" },
+        "previous_snapshot_revision": { "type": "null" },
+        "rollback_readiness_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "active_generation_pointer_identity": { "$ref": "#/$defs/safeId" },
+        "expected_active_generation_epoch": { "const": 0 }
+      }
+    },
+    "existingGenerationRollbackAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "bootstrap",
+        "previous_generation_id",
+        "previous_snapshot_revision",
+        "rollback_readiness_receipt_sha256",
+        "active_generation_pointer_identity",
+        "expected_active_generation_epoch"
+      ],
+      "properties": {
+        "kind": { "const": "rollback_readiness" },
+        "bootstrap": { "const": false },
+        "previous_generation_id": { "$ref": "#/$defs/generationId" },
+        "previous_snapshot_revision": { "$ref": "#/$defs/snapshotRevision" },
+        "rollback_readiness_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "active_generation_pointer_identity": { "$ref": "#/$defs/safeId" },
+        "expected_active_generation_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "image": {
+      "type": "string",
+      "minLength": 72,
+      "maxLength": 512,
+      "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+    },
+    "serializationContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "encoding",
+        "canonicalization",
+        "duplicate_keys",
+        "unicode_normalization",
+        "numbers",
+        "nonfinite_numbers",
+        "trailing_newline"
+      ],
+      "properties": {
+        "encoding": { "const": "utf-8" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "duplicate_keys": { "const": "reject" },
+        "unicode_normalization": { "const": "require_already_nfc" },
+        "numbers": { "const": "integers_only" },
+        "nonfinite_numbers": { "const": "reject" },
+        "trailing_newline": { "const": false }
+      }
+    }
+  }
+}

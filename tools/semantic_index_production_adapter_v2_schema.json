@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/semantic-index-production-adapter-v2.schema.json",
+  "title": "SimWorld static semantic index production adapter contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "adapter_id", "adapter_type", "contract_revision", "implementation_revision", "production_capable", "registration", "source_closure", "protocol_contract", "schema_digests", "launcher_handoff", "operations", "ambient_discovery", "commands", "lifecycle", "credential_transport", "release_gate", "serialization_contract"],
+  "properties": {
+    "schema": { "const": "semantic-index-production-adapter/v2" },
+    "adapter_id": { "const": "semantic-index-production-v2-uds" },
+    "adapter_type": { "const": "privilege_separated_preconnected_uds_exact_static_adapter_v2" },
+    "contract_revision": { "const": "semantic-index-production-adapter/v2" },
+    "implementation_revision": { "$ref": "#/$defs/sha256Revision" },
+    "production_capable": { "const": false },
+    "registration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "registered", "explicit_release_registration_required", "dynamic_registration_allowed", "monkeypatch_registration_allowed", "copied_instance_allowed"],
+      "properties": {
+        "mode": { "const": "not_registered_offline_contract_only" }, "registered": { "const": false },
+        "explicit_release_registration_required": { "const": true }, "dynamic_registration_allowed": { "const": false },
+        "monkeypatch_registration_allowed": { "const": false }, "copied_instance_allowed": { "const": false }
+      }
+    },
+    "source_closure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["adapter_source_sha256", "adapter_transitive_source_closure_sha256", "coordinator_source_closure_sha256", "worker_source_closure_sha256", "launcher_source_closure_sha256", "dependency_lock_sha256", "sql_bundle_sha256", "legacy_source_in_closure"],
+      "properties": {
+        "adapter_source_sha256": { "$ref": "#/$defs/sha256" }, "adapter_transitive_source_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "coordinator_source_closure_sha256": { "$ref": "#/$defs/sha256" }, "worker_source_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "launcher_source_closure_sha256": { "$ref": "#/$defs/sha256" }, "dependency_lock_sha256": { "$ref": "#/$defs/sha256" },
+        "sql_bundle_sha256": { "$ref": "#/$defs/sha256" }, "legacy_source_in_closure": { "const": false }
+      }
+    },
+    "protocol_contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "protocol_source_sha256", "wire_schema_bundle_sha256", "transport", "request_count_per_fd", "response_count_per_fd", "client_write_half_close_required", "worker_eof_before_execute_required", "worker_write_half_close_required", "client_eof_before_accept_required", "trailing_bytes_rejected", "fd_reuse_allowed"],
+      "properties": {
+        "revision": { "const": "simworld-semantic-index-worker/v1" }, "protocol_source_sha256": { "$ref": "#/$defs/sha256" },
+        "wire_schema_bundle_sha256": { "$ref": "#/$defs/sha256" }, "transport": { "const": "launcher_attested_preconnected_af_unix_framed_canonical_json_v1" },
+        "request_count_per_fd": { "const": 1 }, "response_count_per_fd": { "const": 1 }, "client_write_half_close_required": { "const": true },
+        "worker_eof_before_execute_required": { "const": true }, "worker_write_half_close_required": { "const": true }, "client_eof_before_accept_required": { "const": true },
+        "trailing_bytes_rejected": { "const": true }, "fd_reuse_allowed": { "const": false }
+      }
+    },
+    "schema_digests": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reviewed_job_v2", "execution_plan_v2", "approval_basis_v1", "approval_receipt_v1", "launcher_verification_receipt_v1", "phase_request_v1", "worker_result_v1", "worker_artifact_root_v1", "phase_evidence_v1", "control_request_v1", "control_result_v1", "execution_state_v2", "terminal_receipt_v2", "inspect_artifact_v1", "render_artifact_v1", "caption_artifact_v1", "embed_artifact_v1", "postgres_artifact_v1", "qdrant_artifact_v1", "reconcile_artifact_v1"],
+      "properties": {
+        "reviewed_job_v2": { "$ref": "#/$defs/sha256" }, "execution_plan_v2": { "$ref": "#/$defs/sha256" },
+        "approval_basis_v1": { "$ref": "#/$defs/sha256" }, "approval_receipt_v1": { "$ref": "#/$defs/sha256" },
+        "launcher_verification_receipt_v1": { "$ref": "#/$defs/sha256" },
+        "phase_request_v1": { "$ref": "#/$defs/sha256" }, "worker_result_v1": { "$ref": "#/$defs/sha256" },
+        "worker_artifact_root_v1": { "$ref": "#/$defs/sha256" }, "phase_evidence_v1": { "$ref": "#/$defs/sha256" },
+        "control_request_v1": { "$ref": "#/$defs/sha256" }, "control_result_v1": { "$ref": "#/$defs/sha256" },
+        "execution_state_v2": { "$ref": "#/$defs/sha256" }, "terminal_receipt_v2": { "$ref": "#/$defs/sha256" },
+        "inspect_artifact_v1": { "$ref": "#/$defs/sha256" }, "render_artifact_v1": { "$ref": "#/$defs/sha256" },
+        "caption_artifact_v1": { "$ref": "#/$defs/sha256" }, "embed_artifact_v1": { "$ref": "#/$defs/sha256" },
+        "postgres_artifact_v1": { "$ref": "#/$defs/sha256" }, "qdrant_artifact_v1": { "$ref": "#/$defs/sha256" }, "reconcile_artifact_v1": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "launcher_handoff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "launcher_attestation_receipt_required", "launcher_uid_distinct_from_coordinator_required", "connected_fd_only", "fd_transport", "opaque_to_executor", "path_reconnect_allowed", "socket_path_discovery_allowed", "peer_credential_verification", "peer_process_start_verification", "socket_inode_verification", "ownership_transferred", "close_on_every_exit"],
+      "properties": {
+        "mode": { "const": "externally_attested_opaque_connected_fd_handoff_v1" }, "launcher_attestation_receipt_required": { "const": true },
+        "launcher_uid_distinct_from_coordinator_required": { "const": true }, "connected_fd_only": { "const": true }, "fd_transport": { "const": "scm_rights_unix_socket_v1" },
+        "opaque_to_executor": { "const": true }, "path_reconnect_allowed": { "const": false }, "socket_path_discovery_allowed": { "const": false },
+        "peer_credential_verification": { "const": "so_peercred_uid_gid_pid_v1" }, "peer_process_start_verification": { "const": "boot_id_pid_start_token_v1" },
+        "socket_inode_verification": { "const": "device_inode_and_peer_binding_v1" }, "ownership_transferred": { "const": true }, "close_on_every_exit": { "const": true }
+      }
+    },
+    "operations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["phase", "control", "free_form_operation_allowed"],
+      "properties": {
+        "phase": { "type": "array", "prefixItems": [{"const":"inspect_exact_assets"},{"const":"render_exact_views"},{"const":"caption_exact_render_set"},{"const":"embed_exact_text_set"},{"const":"upsert_postgres_exact"},{"const":"upsert_qdrant_exact"},{"const":"reconcile_exact_snapshot"}], "items": false, "minItems": 7, "maxItems": 7 },
+        "control": { "type": "array", "prefixItems": [{"const":"query_phase_status"},{"const":"recover_phase_receipt"},{"const":"cancel_phase_work"},{"const":"quarantine_generation"}], "items": false, "minItems": 4, "maxItems": 4 },
+        "free_form_operation_allowed": { "const": false }
+      }
+    },
+    "ambient_discovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["environment", "filesystem", "network", "service_registry", "plugin", "endpoint", "workspace", "model", "collection", "runtime_image", "command"],
+      "properties": {
+        "environment": { "const": false }, "filesystem": { "const": false }, "network": { "const": false }, "service_registry": { "const": false },
+        "plugin": { "const": false }, "endpoint": { "const": false }, "workspace": { "const": false }, "model": { "const": false },
+        "collection": { "const": false }, "runtime_image": { "const": false }, "command": { "const": false }
+      }
+    },
+    "commands": {
+      "type": "object", "additionalProperties": false,
+      "required": ["shell", "subprocess", "python_eval", "ue_python", "sql_ddl", "compose", "legacy_runner", "caller_supplied_path", "redirect"],
+      "properties": {
+        "shell": { "const": false }, "subprocess": { "const": false }, "python_eval": { "const": false }, "ue_python": { "const": false },
+        "sql_ddl": { "const": false }, "compose": { "const": false }, "legacy_runner": { "const": false }, "caller_supplied_path": { "const": false }, "redirect": { "const": false }
+      }
+    },
+    "lifecycle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["starts_unreal", "starts_database", "starts_qdrant", "starts_embedding", "starts_caption_provider", "starts_container", "starts_coturn", "starts_cirrus", "opens_public_listener", "activates_generation", "rolls_back_generation", "destructive_cleanup"],
+      "properties": {
+        "starts_unreal": { "const": false }, "starts_database": { "const": false }, "starts_qdrant": { "const": false }, "starts_embedding": { "const": false },
+        "starts_caption_provider": { "const": false }, "starts_container": { "const": false }, "starts_coturn": { "const": false }, "starts_cirrus": { "const": false },
+        "opens_public_listener": { "const": false }, "activates_generation": { "const": false }, "rolls_back_generation": { "const": false }, "destructive_cleanup": { "const": false }
+      }
+    },
+    "credential_transport": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "json_contains_secret_bytes", "argv_contains_secret_bytes", "environment_contains_secret_bytes", "path_contains_secret_bytes", "per_request_exact_scope", "read_once", "close_after_request", "declared_secret_scan_policy", "undeclared_transform_coverage_claimed"],
+      "properties": {
+        "mode": { "const": "sealed_memfd_scm_rights_v1" }, "json_contains_secret_bytes": { "const": false }, "argv_contains_secret_bytes": { "const": false },
+        "environment_contains_secret_bytes": { "const": false }, "path_contains_secret_bytes": { "const": false }, "per_request_exact_scope": { "const": true },
+        "read_once": { "const": true }, "close_after_request": { "const": true },
+        "declared_secret_scan_policy": { "const": "declared-secret-bytes-percent1-8-base64-base64url-sha256-hex-capability-hex-v1" },
+        "undeclared_transform_coverage_claimed": { "const": false }
+      }
+    },
+    "release_gate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_state", "offline_pa01_pa21_required", "independent_security_review_required", "explicit_registration_change_required", "live_approval_implied", "activation_approval_implied"],
+      "properties": {
+        "contract_state": { "const": "offline_unregistered" }, "offline_pa01_pa21_required": { "const": true }, "independent_security_review_required": { "const": true },
+        "explicit_registration_change_required": { "const": true }, "live_approval_implied": { "const": false }, "activation_approval_implied": { "const": false }
+      }
+    },
+    "serialization_contract": { "$ref": "#/$defs/serializationContract" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "serializationContract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["encoding", "canonicalization", "duplicate_keys", "unicode_normalization", "numbers", "nonfinite_numbers", "bom", "trailing_newline"],
+      "properties": {
+        "encoding": { "const": "utf-8" }, "canonicalization": { "const": "rfc8785-jcs-v1" }, "duplicate_keys": { "const": "reject" },
+        "unicode_normalization": { "const": "require_already_nfc" }, "numbers": { "const": "integers_only" }, "nonfinite_numbers": { "const": "reject" },
+        "bom": { "const": false }, "trailing_newline": { "const": false }
+      }
+    }
+  }
+}

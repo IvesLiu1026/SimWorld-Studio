@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-production-approval-basis-v1.schema.json",
+  "title": "SimWorld semantic index Production approval basis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "revision",
+    "reviewed_job_sha256",
+    "reviewed_job_revision",
+    "commitments",
+    "generation_inputs",
+    "credential_targets",
+    "serialization_contract"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-production-approval-basis/v1" },
+    "revision": { "const": "semantic-index-production-approval-basis:v1" },
+    "reviewed_job_sha256": { "$ref": "#/$defs/sha256" },
+    "reviewed_job_revision": { "$ref": "#/$defs/sha256Revision" },
+    "commitments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_identity_sha256",
+        "reviewed_job_reference_sha256",
+        "contract_digests_sha256",
+        "adapter_sha256",
+        "deployment_preflight_sha256",
+        "worker_sha256",
+        "unreal_sha256",
+        "caption_sha256",
+        "embedding_sha256",
+        "runtime_images_sha256",
+        "target_attestations_sha256",
+        "expected_sets_sha256",
+        "acceptance_sha256",
+        "phase_policy_sha256",
+        "activation_contract_sha256"
+      ],
+      "properties": {
+        "run_identity_sha256": { "$ref": "#/$defs/sha256" },
+        "reviewed_job_reference_sha256": { "$ref": "#/$defs/sha256" },
+        "contract_digests_sha256": { "$ref": "#/$defs/sha256" },
+        "adapter_sha256": { "$ref": "#/$defs/sha256" },
+        "deployment_preflight_sha256": { "$ref": "#/$defs/sha256" },
+        "worker_sha256": { "$ref": "#/$defs/sha256" },
+        "unreal_sha256": { "$ref": "#/$defs/sha256" },
+        "caption_sha256": { "$ref": "#/$defs/sha256" },
+        "embedding_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_images_sha256": { "$ref": "#/$defs/sha256" },
+        "target_attestations_sha256": { "$ref": "#/$defs/sha256" },
+        "expected_sets_sha256": { "$ref": "#/$defs/sha256" },
+        "acceptance_sha256": { "$ref": "#/$defs/sha256" },
+        "phase_policy_sha256": { "$ref": "#/$defs/sha256" },
+        "activation_contract_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "generation_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation_nonce",
+        "generation_nonce_sha256",
+        "generation_nonce_sha256_derivation",
+        "derivation",
+        "target_generation_identities",
+        "generation_reservation_sha256",
+        "previous_active_sha256",
+        "active_generation_pointer_sha256",
+        "cleanup_policy"
+      ],
+      "properties": {
+        "generation_nonce": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[a-f0-9]{32}$"
+        },
+        "generation_nonce_sha256": { "$ref": "#/$defs/sha256" },
+        "generation_nonce_sha256_derivation": { "const": "sha256(decoded-lowercase-hex-16-bytes)-v1" },
+        "derivation": {
+          "const": "sha256-ascii-nul-separated(simworld-semantic-index-generation-id/v1,reviewed_job_revision,approval_basis_sha256)-v1"
+        },
+        "target_generation_identities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["artifact_store", "catalog", "postgres", "qdrant"],
+          "properties": {
+            "artifact_store": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "store_identity",
+                "workspace_root",
+                "layout",
+                "generation_name_policy",
+                "namespace_revision"
+              ],
+              "properties": {
+                "store_identity": { "$ref": "#/$defs/safeId" },
+                "workspace_root": { "$ref": "#/$defs/absolutePath" },
+                "layout": { "const": "content-addressed-sha256-no-replace-v1" },
+                "generation_name_policy": { "const": "semantic-generation-id-path-segment-v1" },
+                "namespace_revision": { "$ref": "#/$defs/sha256Revision" }
+              }
+            },
+            "catalog": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["namespace_revision"],
+              "properties": {
+                "namespace_revision": { "$ref": "#/$defs/sha256Revision" }
+              }
+            },
+            "postgres": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["deployment_identity", "schema_revision", "generation_name_policy"],
+              "properties": {
+                "deployment_identity": { "$ref": "#/$defs/safeId" },
+                "schema_revision": { "type": "integer", "minimum": 2, "maximum": 3 },
+                "generation_name_policy": { "const": "semantic-generation-id-sql-identifiers-v1" }
+              }
+            },
+            "qdrant": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cluster_identity",
+                "dense_vector_name",
+                "sparse_vector_name",
+                "generation_name_policy"
+              ],
+              "properties": {
+                "cluster_identity": { "$ref": "#/$defs/safeId" },
+                "dense_vector_name": { "$ref": "#/$defs/slug" },
+                "sparse_vector_name": { "$ref": "#/$defs/slug" },
+                "generation_name_policy": { "const": "semantic-generation-id-qdrant-collection-v1" }
+              }
+            }
+          }
+        },
+        "generation_reservation_sha256": { "$ref": "#/$defs/sha256" },
+        "previous_active_sha256": { "$ref": "#/$defs/sha256" },
+        "active_generation_pointer_sha256": { "$ref": "#/$defs/sha256" },
+        "cleanup_policy": { "const": "quarantine_failed_unactivated_generation" }
+      }
+    },
+    "credential_targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport", "ordinary_phases", "reconcile", "control_operations"],
+      "properties": {
+        "transport": { "const": "sealed_memfd_scm_rights_v1" },
+        "ordinary_phases": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inspect", "render", "caption", "embed", "postgres", "qdrant"],
+          "properties": {
+            "inspect": { "$ref": "#/$defs/inspectCredentialTarget" },
+            "render": { "$ref": "#/$defs/renderCredentialTarget" },
+            "caption": { "$ref": "#/$defs/captionCredentialTarget" },
+            "embed": { "$ref": "#/$defs/embedCredentialTarget" },
+            "postgres": { "$ref": "#/$defs/postgresCredentialTarget" },
+            "qdrant": { "$ref": "#/$defs/qdrantCredentialTarget" }
+          }
+        },
+        "reconcile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["postgres_read", "qdrant_read", "ue_runtime_read"],
+          "properties": {
+            "postgres_read": { "$ref": "#/$defs/reconcilePostgresCredentialTarget" },
+            "qdrant_read": { "$ref": "#/$defs/reconcileQdrantCredentialTarget" },
+            "ue_runtime_read": { "$ref": "#/$defs/reconcileUeCredentialTarget" }
+          }
+        },
+        "control_operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "query_phase_status",
+            "recover_phase_receipt",
+            "cancel_phase_work",
+            "quarantine_generation"
+          ],
+          "properties": {
+            "query_phase_status": { "$ref": "#/$defs/phaseStatusCredentialTarget" },
+            "recover_phase_receipt": { "$ref": "#/$defs/phaseReceiptRecoverCredentialTarget" },
+            "cancel_phase_work": { "$ref": "#/$defs/phaseWorkCancelCredentialTarget" },
+            "quarantine_generation": { "$ref": "#/$defs/generationQuarantineCredentialTarget" }
+          }
+        }
+      }
+    },
+    "serialization_contract": { "$ref": "#/$defs/serializationContract" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 240,
+      "pattern": "^/(?!.*//)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._+\\-/]+$"
+    },
+    "credentialTargetBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential_generation", "target_identity", "scope"],
+      "properties": {
+        "credential_generation": { "$ref": "#/$defs/sha256Revision" },
+        "target_identity": { "$ref": "#/$defs/safeId" },
+        "scope": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "inspectCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "ue_disposable_scene_inspect_spawn_cleanup" } } }
+      ]
+    },
+    "renderCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "ue_disposable_scene_render_staging_cleanup" } } }
+      ]
+    },
+    "captionCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "caption_bounded_idempotent_call" } } }
+      ]
+    },
+    "embedCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "embedding_immutable_vector_staging" } } }
+      ]
+    },
+    "postgresCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "postgres_generation_write" } } }
+      ]
+    },
+    "qdrantCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "qdrant_generation_write" } } }
+      ]
+    },
+    "reconcilePostgresCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "postgres_generation_read_only" } } }
+      ]
+    },
+    "reconcileQdrantCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "qdrant_generation_read_only" } } }
+      ]
+    },
+    "reconcileUeCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "ue_runtime_read_only" } } }
+      ]
+    },
+    "phaseStatusCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "semantic_index_phase_status_read" } } }
+      ]
+    },
+    "phaseReceiptRecoverCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "semantic_index_phase_receipt_recover" } } }
+      ]
+    },
+    "phaseWorkCancelCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "semantic_index_phase_work_cancel" } } }
+      ]
+    },
+    "generationQuarantineCredentialTarget": {
+      "allOf": [
+        { "$ref": "#/$defs/credentialTargetBase" },
+        { "properties": { "scope": { "const": "semantic_index_generation_quarantine" } } }
+      ]
+    },
+    "serializationContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "encoding",
+        "canonicalization",
+        "duplicate_keys",
+        "unicode_normalization",
+        "numbers",
+        "nonfinite_numbers",
+        "trailing_newline"
+      ],
+      "properties": {
+        "encoding": { "const": "utf-8" },
+        "canonicalization": { "const": "rfc8785-jcs-v1" },
+        "duplicate_keys": { "const": "reject" },
+        "unicode_normalization": { "const": "require_already_nfc" },
+        "numbers": { "const": "integers_only" },
+        "nonfinite_numbers": { "const": "reject" },
+        "trailing_newline": { "const": false }
+      }
+    }
+  }
+}

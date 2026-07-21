@@ -1,0 +1,526 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-index-phase-request-v1.schema.json",
+  "title": "SimWorld semantic index ordinary phase worker request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "protocol",
+    "operation",
+    "operation_revision",
+    "phase",
+    "request_id",
+    "job_revision",
+    "reviewed_job_sha256",
+    "approval_basis_sha256",
+    "execution_plan_sha256",
+    "launcher_handoff_receipt_sha256",
+    "generation_id",
+    "generation_binding_sha256",
+    "execution_binding",
+    "worker_binding",
+    "input_binding",
+    "expected_targets",
+    "expected_metrics",
+    "credential_transport",
+    "idempotency_key",
+    "idempotency_ledger_identity",
+    "idempotency_ledger_revision",
+    "deadline_monotonic_ns"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-index-phase-request/v1" },
+    "protocol": { "const": "simworld-semantic-index-worker/v1" },
+    "operation": {
+      "enum": [
+        "inspect_exact_assets",
+        "render_exact_views",
+        "caption_exact_render_set",
+        "embed_exact_text_set",
+        "upsert_postgres_exact",
+        "upsert_qdrant_exact",
+        "reconcile_exact_snapshot"
+      ]
+    },
+    "operation_revision": { "$ref": "#/$defs/sha256Revision" },
+    "phase": {
+      "enum": ["inspect", "render", "caption", "embed", "postgres", "qdrant", "reconcile"]
+    },
+    "request_id": { "$ref": "#/$defs/safeId" },
+    "job_revision": { "$ref": "#/$defs/sha256Revision" },
+    "reviewed_job_sha256": { "$ref": "#/$defs/sha256" },
+    "approval_basis_sha256": { "$ref": "#/$defs/sha256" },
+    "execution_plan_sha256": { "$ref": "#/$defs/sha256" },
+    "launcher_handoff_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "generation_id": { "$ref": "#/$defs/generationId" },
+    "generation_binding_sha256": { "$ref": "#/$defs/sha256" },
+    "execution_binding": { "$ref": "#/$defs/executionBinding" },
+    "worker_binding": { "$ref": "#/$defs/workerBinding" },
+    "input_binding": { "$ref": "#/$defs/inputBinding" },
+    "expected_targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/targetObservation" }
+    },
+    "expected_metrics": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 3,
+      "additionalProperties": false,
+      "properties": {
+        "assets_inspected": { "$ref": "#/$defs/expectedMetric" },
+        "assets_rendered": { "$ref": "#/$defs/expectedMetric" },
+        "rendered_views": { "$ref": "#/$defs/expectedMetric" },
+        "catalog_records": { "$ref": "#/$defs/expectedMetric" },
+        "dense_vectors": { "$ref": "#/$defs/expectedMetric" },
+        "sparse_vectors": { "$ref": "#/$defs/expectedMetric" },
+        "postgres_rows": { "$ref": "#/$defs/expectedMetric" },
+        "qdrant_points": { "$ref": "#/$defs/expectedMetric" }
+      }
+    },
+    "credential_transport": { "$ref": "#/$defs/credentialTransport" },
+    "idempotency_key": { "$ref": "#/$defs/sha256Revision" },
+    "idempotency_ledger_identity": { "$ref": "#/$defs/safeId" },
+    "idempotency_ledger_revision": { "$ref": "#/$defs/sha256Revision" },
+    "deadline_monotonic_ns": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    }
+  },
+  "allOf": [
+    { "$ref": "#/$defs/inspectContract" },
+    { "$ref": "#/$defs/renderContract" },
+    { "$ref": "#/$defs/captionContract" },
+    { "$ref": "#/$defs/embedContract" },
+    { "$ref": "#/$defs/postgresContract" },
+    { "$ref": "#/$defs/qdrantContract" },
+    { "$ref": "#/$defs/reconcileContract" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{1,239}$"
+    },
+    "generationId": {
+      "type": "string",
+      "minLength": 84,
+      "maxLength": 84,
+      "pattern": "^semantic-generation:[a-f0-9]{64}$"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 72,
+      "maxLength": 512,
+      "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$",
+      "not": { "pattern": "://" }
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 23,
+      "maxLength": 160,
+      "pattern": "^semantic-index-run:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "correlationId": {
+      "type": "string",
+      "minLength": 27,
+      "maxLength": 160,
+      "pattern": "^semantic-index-correlation:[A-Za-z0-9][A-Za-z0-9._:@+\\-]*$"
+    },
+    "executionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "correlation_id", "owner_identity", "lease_id", "slot_id"],
+      "properties": {
+        "run_id": { "$ref": "#/$defs/runId" },
+        "correlation_id": { "$ref": "#/$defs/correlationId" },
+        "owner_identity": { "$ref": "#/$defs/safeId" },
+        "lease_id": { "$ref": "#/$defs/safeId" },
+        "slot_id": { "$ref": "#/$defs/safeId" }
+      }
+    },
+    "workerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_identity",
+        "runtime_image",
+        "whoami_sha256",
+        "peer_attestation_sha256",
+        "runtime_attestation_sha256",
+        "host_boot_id_sha256",
+        "peer_uid",
+        "peer_gid",
+        "peer_pid",
+        "process_start_time_ticks",
+        "process_start_token_sha256",
+        "socket_device",
+        "socket_inode",
+        "socket_inode_binding_sha256"
+      ],
+      "properties": {
+        "deployment_identity": { "$ref": "#/$defs/safeId" },
+        "runtime_image": { "$ref": "#/$defs/image" },
+        "whoami_sha256": { "$ref": "#/$defs/sha256" },
+        "peer_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_attestation_sha256": { "$ref": "#/$defs/sha256" },
+        "host_boot_id_sha256": { "$ref": "#/$defs/sha256" },
+        "peer_uid": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "peer_gid": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "peer_pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "process_start_time_ticks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "process_start_token_sha256": { "$ref": "#/$defs/sha256" },
+        "socket_device": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "socket_inode": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "socket_inode_binding_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "inputBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "sha256", "item_count", "byte_count"],
+      "properties": {
+        "schema": { "$ref": "#/$defs/revision" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "item_count": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "byte_count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      }
+    },
+    "credentialDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fd_index",
+        "scope",
+        "credential_generation",
+        "generation_id",
+        "target_identity",
+        "byte_count"
+      ],
+      "properties": {
+        "fd_index": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "scope": { "$ref": "#/$defs/safeId" },
+        "credential_generation": { "$ref": "#/$defs/sha256Revision" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "target_identity": { "$ref": "#/$defs/safeId" },
+        "byte_count": { "type": "integer", "minimum": 16, "maximum": 16384 }
+      }
+    },
+    "credentialTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "json_contains_credential_bytes", "descriptors"],
+      "properties": {
+        "kind": { "const": "sealed_memfd_scm_rights_v1" },
+        "json_contains_credential_bytes": { "const": false },
+        "descriptors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/credentialDescriptor" }
+        }
+      }
+    },
+    "targetObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "scope",
+        "credential_generation",
+        "generation_id",
+        "target_identity",
+        "runtime_identity",
+        "runtime_image",
+        "whoami_sha256",
+        "runtime_attestation_sha256"
+      ],
+      "properties": {
+        "component": { "enum": ["unreal", "caption", "embedding", "postgres", "qdrant"] },
+        "scope": { "$ref": "#/$defs/safeId" },
+        "credential_generation": { "$ref": "#/$defs/sha256Revision" },
+        "generation_id": { "$ref": "#/$defs/generationId" },
+        "target_identity": { "$ref": "#/$defs/safeId" },
+        "runtime_identity": { "$ref": "#/$defs/safeId" },
+        "runtime_image": {
+          "oneOf": [{ "$ref": "#/$defs/image" }, { "type": "null" }]
+        },
+        "whoami_sha256": { "$ref": "#/$defs/sha256" },
+        "runtime_attestation_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "expectedMetric": { "type": "integer", "minimum": 1, "maximum": 100000 },
+    "singleDescriptor": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "singleTarget": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "inspectMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assets_inspected"],
+      "properties": { "assets_inspected": { "$ref": "#/$defs/expectedMetric" } }
+    },
+    "renderMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assets_rendered", "rendered_views"],
+      "properties": {
+        "assets_rendered": { "$ref": "#/$defs/expectedMetric" },
+        "rendered_views": { "$ref": "#/$defs/expectedMetric" }
+      }
+    },
+    "captionMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalog_records"],
+      "properties": { "catalog_records": { "$ref": "#/$defs/expectedMetric" } }
+    },
+    "embedMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dense_vectors", "sparse_vectors"],
+      "properties": {
+        "dense_vectors": { "$ref": "#/$defs/expectedMetric" },
+        "sparse_vectors": { "$ref": "#/$defs/expectedMetric" }
+      }
+    },
+    "postgresMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["postgres_rows"],
+      "properties": { "postgres_rows": { "$ref": "#/$defs/expectedMetric" } }
+    },
+    "qdrantMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qdrant_points"],
+      "properties": { "qdrant_points": { "$ref": "#/$defs/expectedMetric" } }
+    },
+    "reconcileMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalog_records", "postgres_rows", "qdrant_points"],
+      "properties": {
+        "catalog_records": { "$ref": "#/$defs/expectedMetric" },
+        "postgres_rows": { "$ref": "#/$defs/expectedMetric" },
+        "qdrant_points": { "$ref": "#/$defs/expectedMetric" }
+      }
+    },
+    "inspectContract": {
+      "if": { "properties": { "operation": { "const": "inspect_exact_assets" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "phase": { "const": "inspect" },
+          "operation_revision": { "const": "sha256:67e5f85b5a250bf9076fb519b5f08d62b5d0f07f8a57a9c950418265cf22147f" },
+          "expected_metrics": { "$ref": "#/$defs/inspectMetrics" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "allOf": [
+                  { "$ref": "#/$defs/singleDescriptor" },
+                  { "prefixItems": [{ "properties": { "fd_index": { "const": 0 }, "scope": { "const": "ue_disposable_scene_inspect_spawn_cleanup" } } }] }
+                ]
+              }
+            }
+          },
+          "expected_targets": {
+            "allOf": [
+              { "$ref": "#/$defs/singleTarget" },
+              { "prefixItems": [{ "properties": { "component": { "const": "unreal" }, "scope": { "const": "ue_disposable_scene_inspect_spawn_cleanup" }, "runtime_image": { "$ref": "#/$defs/image" } } }] }
+            ]
+          }
+        }
+      }
+    },
+    "renderContract": {
+      "if": { "properties": { "operation": { "const": "render_exact_views" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "phase": { "const": "render" },
+          "operation_revision": { "const": "sha256:334ce91e116ab4d2f333387c96b76359f3b8d89fe9756c0f8555663fb4938343" },
+          "expected_metrics": { "$ref": "#/$defs/renderMetrics" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "allOf": [
+                  { "$ref": "#/$defs/singleDescriptor" },
+                  { "prefixItems": [{ "properties": { "fd_index": { "const": 0 }, "scope": { "const": "ue_disposable_scene_render_staging_cleanup" } } }] }
+                ]
+              }
+            }
+          },
+          "expected_targets": {
+            "allOf": [
+              { "$ref": "#/$defs/singleTarget" },
+              { "prefixItems": [{ "properties": { "component": { "const": "unreal" }, "scope": { "const": "ue_disposable_scene_render_staging_cleanup" }, "runtime_image": { "$ref": "#/$defs/image" } } }] }
+            ]
+          }
+        }
+      }
+    },
+    "captionContract": {
+      "if": { "properties": { "operation": { "const": "caption_exact_render_set" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "phase": { "const": "caption" },
+          "operation_revision": { "const": "sha256:99240bfef19997a8e9a7362d47e54aff0d1f47f8b3567ee1edfe95a5a7d653cc" },
+          "expected_metrics": { "$ref": "#/$defs/captionMetrics" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "allOf": [
+                  { "$ref": "#/$defs/singleDescriptor" },
+                  { "prefixItems": [{ "properties": { "fd_index": { "const": 0 }, "scope": { "const": "caption_bounded_idempotent_call" } } }] }
+                ]
+              }
+            }
+          },
+          "expected_targets": {
+            "allOf": [
+              { "$ref": "#/$defs/singleTarget" },
+              { "prefixItems": [{ "properties": { "component": { "const": "caption" }, "scope": { "const": "caption_bounded_idempotent_call" }, "runtime_image": { "type": "null" } } }] }
+            ]
+          }
+        }
+      }
+    },
+    "embedContract": {
+      "if": { "properties": { "operation": { "const": "embed_exact_text_set" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "phase": { "const": "embed" },
+          "operation_revision": { "const": "sha256:1c85f27aa189c8db0cc004ee52f2a78eb52a9d41726d679834632f6f6a153f44" },
+          "expected_metrics": { "$ref": "#/$defs/embedMetrics" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "allOf": [
+                  { "$ref": "#/$defs/singleDescriptor" },
+                  { "prefixItems": [{ "properties": { "fd_index": { "const": 0 }, "scope": { "const": "embedding_immutable_vector_staging" } } }] }
+                ]
+              }
+            }
+          },
+          "expected_targets": {
+            "allOf": [
+              { "$ref": "#/$defs/singleTarget" },
+              { "prefixItems": [{ "properties": { "component": { "const": "embedding" }, "scope": { "const": "embedding_immutable_vector_staging" }, "runtime_image": { "$ref": "#/$defs/image" } } }] }
+            ]
+          }
+        }
+      }
+    },
+    "postgresContract": {
+      "if": { "properties": { "operation": { "const": "upsert_postgres_exact" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "phase": { "const": "postgres" },
+          "operation_revision": { "const": "sha256:8a6693f39701349f249364b417baff540d5758690ce7af478287972c33ee219e" },
+          "expected_metrics": { "$ref": "#/$defs/postgresMetrics" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "allOf": [
+                  { "$ref": "#/$defs/singleDescriptor" },
+                  { "prefixItems": [{ "properties": { "fd_index": { "const": 0 }, "scope": { "const": "postgres_generation_write" } } }] }
+                ]
+              }
+            }
+          },
+          "expected_targets": {
+            "allOf": [
+              { "$ref": "#/$defs/singleTarget" },
+              { "prefixItems": [{ "properties": { "component": { "const": "postgres" }, "scope": { "const": "postgres_generation_write" }, "runtime_image": { "$ref": "#/$defs/image" } } }] }
+            ]
+          }
+        }
+      }
+    },
+    "qdrantContract": {
+      "if": { "properties": { "operation": { "const": "upsert_qdrant_exact" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "phase": { "const": "qdrant" },
+          "operation_revision": { "const": "sha256:ee9f9f22a8d8a3a08f0987c5ffa547a2a71bc4f1d30515ba58bf8a3217af1aab" },
+          "expected_metrics": { "$ref": "#/$defs/qdrantMetrics" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "allOf": [
+                  { "$ref": "#/$defs/singleDescriptor" },
+                  { "prefixItems": [{ "properties": { "fd_index": { "const": 0 }, "scope": { "const": "qdrant_generation_write" } } }] }
+                ]
+              }
+            }
+          },
+          "expected_targets": {
+            "allOf": [
+              { "$ref": "#/$defs/singleTarget" },
+              { "prefixItems": [{ "properties": { "component": { "const": "qdrant" }, "scope": { "const": "qdrant_generation_write" }, "runtime_image": { "$ref": "#/$defs/image" } } }] }
+            ]
+          }
+        }
+      }
+    },
+    "reconcileContract": {
+      "if": { "properties": { "operation": { "const": "reconcile_exact_snapshot" } }, "required": ["operation"] },
+      "then": {
+        "properties": {
+          "phase": { "const": "reconcile" },
+          "operation_revision": { "const": "sha256:95f87f0fd9cdea2bb943a280e0e82fc75d0aebc42cbe046715eef6208a50e76a" },
+          "expected_metrics": { "$ref": "#/$defs/reconcileMetrics" },
+          "credential_transport": {
+            "properties": {
+              "descriptors": {
+                "type": "array",
+                "prefixItems": [
+                  { "properties": { "fd_index": { "const": 0 }, "scope": { "const": "postgres_generation_read_only" } } },
+                  { "properties": { "fd_index": { "const": 1 }, "scope": { "const": "qdrant_generation_read_only" } } },
+                  { "properties": { "fd_index": { "const": 2 }, "scope": { "const": "ue_runtime_read_only" } } }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          },
+          "expected_targets": {
+            "type": "array",
+            "prefixItems": [
+              { "properties": { "component": { "const": "postgres" }, "scope": { "const": "postgres_generation_read_only" }, "runtime_image": { "$ref": "#/$defs/image" } } },
+              { "properties": { "component": { "const": "qdrant" }, "scope": { "const": "qdrant_generation_read_only" }, "runtime_image": { "$ref": "#/$defs/image" } } },
+              { "properties": { "component": { "const": "unreal" }, "scope": { "const": "ue_runtime_read_only" }, "runtime_image": { "$ref": "#/$defs/image" } } }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3
+          }
+        }
+      }
+    }
+  }
+}
