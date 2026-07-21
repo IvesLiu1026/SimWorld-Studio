@@ -94,7 +94,7 @@ test("concurrent commits select exactly one immutable winner", async (t) => {
   assert.equal(new Set(results.map((item) => item.idempotency.key)).size, 1);
 });
 
-test("status enforces both owner and session", async (t) => {
+test("status is owner-bound and permits a new authenticated browser session to reattach", async (t) => {
   const { service } = fixture(t);
   const committed = await service.commit({
     datasetRevision: "revision-1",
@@ -104,15 +104,15 @@ test("status enforces both owner and session", async (t) => {
   const status = await service.status(committed.artifact_id, ACCESS);
   assert.equal(status.artifact_id, committed.artifact_id);
 
-  for (const access of [
-    { ownerId: "owner-2", sessionId: ACCESS.sessionId },
-    { ownerId: ACCESS.ownerId, sessionId: "session-2" },
-  ]) {
-    await assert.rejects(
-      service.status(committed.artifact_id, access),
-      (error) => error.code === "VISTA_IMPORT_ACCESS_DENIED" && error.statusCode === 403,
-    );
-  }
+  const reattached = await service.status(committed.artifact_id, {
+    ownerId: ACCESS.ownerId,
+    sessionId: "session-2",
+  });
+  assert.equal(reattached.artifact_id, committed.artifact_id);
+  await assert.rejects(
+    service.status(committed.artifact_id, { ownerId: "owner-2", sessionId: ACCESS.sessionId }),
+    (error) => error.code === "VISTA_IMPORT_ACCESS_DENIED" && error.statusCode === 403,
+  );
 });
 
 test("caller filesystem selectors are rejected before importer execution", async (t) => {

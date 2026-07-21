@@ -350,6 +350,16 @@ function _retryAfter(ms, msg) {
 
 class UeMcpBroker {
   constructor(opts = {}) {
+    const host = opts.host === undefined ? UE_MCP_HOST : String(opts.host).trim();
+    const port = opts.port === undefined ? UE_MCP_PORT : Number(opts.port);
+    if (!host || /[\x00-\x20\x7f/\\]/.test(host)) {
+      throw new TypeError('UE broker host is invalid');
+    }
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+      throw new TypeError('UE broker port is invalid');
+    }
+    this.host = host;
+    this.port = port;
     this.queue = [];
     this.pyQueue = [];
     this.inFlight = null;
@@ -376,8 +386,12 @@ class UeMcpBroker {
     const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : UE_DEFAULT_TIMEOUT_MS;
     const queueDeadlineMs = typeof opts.queueDeadlineMs === 'number'
       ? opts.queueDeadlineMs : Math.max(timeoutMs * 2, 15000);
+    const maxAttempts = opts.maxAttempts === undefined ? UE_DEFAULT_RETRIES : Number(opts.maxAttempts);
     const signal = opts.signal;
     return new Promise((resolve, reject) => {
+      if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 5) {
+        return reject(new TypeError('UE broker maxAttempts must be an integer from 1 to 5'));
+      }
       if (signal && signal.aborted) {
         const error = new Error(`UE command '${type}' was aborted`);
         error.name = 'AbortError'; error.code = 'UE_COMMAND_ABORTED';
@@ -410,7 +424,7 @@ class UeMcpBroker {
         if (this.inFlight !== job) this._pump();
       };
       job = {
-        type, params, timeoutMs, queueDeadlineMs, enqueuedAt: Date.now(),
+        type, params, timeoutMs, queueDeadlineMs, maxAttempts, enqueuedAt: Date.now(),
         resolve: safeResolve, reject: safeReject, signal, cancelled: false,
       };
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
@@ -499,7 +513,7 @@ class UeMcpBroker {
     this._lastCooldown = UE_COOLDOWN[job.type] || UE_COOLDOWN._default;
 
     Promise.resolve()
-      .then(() => this._execWithRetry(job.type, job.params, job.timeoutMs, UE_DEFAULT_RETRIES, job.signal))
+      .then(() => this._execWithRetry(job.type, job.params, job.timeoutMs, job.maxAttempts, job.signal))
       .then((r) => { if (!job.cancelled) { this.totalSent++; job.resolve(r); } })
       .catch((e) => { if (!job.cancelled) { this.totalErrors++; this.lastError = e && e.message; job.reject(e); } })
       .finally(() => { this._lastCmdEnd = Date.now(); this.inFlight = null; this._pump(); });
@@ -528,7 +542,7 @@ class UeMcpBroker {
       };
       const timer = setTimeout(() => finish(reject, new Error(`UE command '${type}' timed out after ${timeoutMs}ms`)), timeoutMs);
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
-      sock.connect(UE_MCP_PORT, UE_MCP_HOST, () => { sock.write(JSON.stringify({ type, params }) + '\n'); });
+      sock.connect(this.port, this.host, () => { sock.write(JSON.stringify({ type, params }) + '\n'); });
       sock.on('data', (d) => { buf += d.toString(); try { finish(resolve, JSON.parse(buf)); } catch {} });
       sock.on('error', (e) => finish(reject, new Error(`UE connection error: ${e.message}`)));
       sock.on('close', () => {

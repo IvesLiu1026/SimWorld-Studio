@@ -114,6 +114,7 @@ class FakeSceneBroker {
     this.calls = [];
     this.mutations = [];
     this.spawnCount = 0;
+    this.spawned = new Set();
   }
 
   async preflight(request) {
@@ -122,10 +123,14 @@ class FakeSceneBroker {
     const defaultActorState = this.options.defaultActorState || "absent";
     const actors = request.actors.map((actor) => {
       const state = (this.options.actorStates && this.options.actorStates[actor.actor_name]) || defaultActorState;
+      const exact = state === "exact_match";
       return {
         actor_name: actor.actor_name,
         state,
-        actual_fingerprint: state === "exact_match" ? actor.fingerprint : (state === "conflict" ? "vsa-conflicting00000000000000" : null),
+        actual_fingerprint: exact ? actor.fingerprint : (state === "conflict" ? "vsa-conflicting00000000000000" : null),
+        actual_operation_id: exact ? actor.operation_id : (state === "conflict" ? "vso-conflicting00000000000000" : null),
+        object_guid: exact || state === "conflict" ? "01234567-89ab-cdef-0123-456789abcdef" : null,
+        spec_matches: exact,
       };
     }).reverse();
     const assets = request.assets.map((asset, index) => ({
@@ -151,6 +156,7 @@ class FakeSceneBroker {
         class_path: request.player_start.class_path,
         state: playerState,
         current_transform: playerState === "unavailable" ? null : clone(PREVIOUS_PLAYER_TRANSFORM),
+        object_guid: playerState === "unavailable" ? null : "fedcba98-7654-3210-fedc-ba9876543210",
       },
     };
   }
@@ -160,14 +166,23 @@ class FakeSceneBroker {
     this.calls.push({ operation: "spawn_actor", actor: clone(actor) });
     this.mutations.push({ operation: "spawn_actor", actor_name: actor.actor_name });
     if (this.spawnCount === this.options.failSpawnAt) throw new Error("injected spawn failure");
-    return { status: "success", actor_name: actor.actor_name };
+    this.spawned.add(actor.actor_name);
+    return {
+      status: "success",
+      actor_name: actor.actor_name,
+      operation_id: actor.operation_id,
+      object_guid: `01234567-89ab-cdef-0123-${String(this.spawnCount).padStart(12, "0")}`,
+    };
   }
 
-  async deleteActor(actorName) {
-    this.calls.push({ operation: "delete_actor", actor_name: actorName });
+  async deleteActor(actor) {
+    const actorName = actor.actor_name;
+    this.calls.push({ operation: "delete_actor", actor: clone(actor), actor_name: actorName });
     this.mutations.push({ operation: "delete_actor", actor_name: actorName });
     if (this.options.failDeleteName === actorName) throw new Error("injected delete failure");
-    return { status: "success" };
+    if (!this.spawned.has(actorName)) return { status: "success", disposition: "absent" };
+    this.spawned.delete(actorName);
+    return { status: "success", disposition: "deleted" };
   }
 
   async setPlayerStart(input) {
@@ -224,6 +239,7 @@ test("preflight request exposes only exact pinned assets, fingerprints, and Play
   assert.equal(request.plan_id, plan.plan_id);
   assert.equal(request.actors.length, plan.actors.length);
   assert.ok(request.actors.every((actor) => /^vsa-[a-f0-9]{24}$/.test(actor.fingerprint)));
+  assert.ok(request.actors.every((actor) => /^vso-[a-f0-9]{24}$/.test(actor.operation_id)));
   assert.ok(request.assets.every((asset) => asset.ue_path.startsWith("/Game/") || asset.ue_path.startsWith("/Engine/")));
   assert.ok(request.assets.every((asset) => asset.class_path && asset.content_revision && asset.verification_revision));
   assert.equal(request.player_start.actor_name, "PlayerStart");
@@ -280,7 +296,10 @@ test("successful execution preserves full actor policy and emits a complete mani
   assert.ok(result.actor_manifest.every((entry) => entry.asset.ue_path && entry.asset.class_path));
   assert.ok(result.actor_manifest.every((entry) => entry.mobility && entry.collision.mode));
   assert.equal(result.player_start.disposition, "updated");
-  assert.equal(result.camera.perspective, "first_person");
+  assert.equal(result.player_start.applied.transform, true);
+  assert.equal(result.player_start.applied.pawn_class, false);
+  assert.equal(result.camera.requested.perspective, "first_person");
+  assert.equal(result.camera.application_status, "not_applied");
   assert.equal(result.evidence.length, 4);
   assert.ok(result.evidence.every((entry) => entry.status === "captured"));
   assert.deepEqual(evidence.calls, plan.evidence_requests.map((request) => request.evidence_id));
@@ -351,6 +370,23 @@ test("required evidence failure rolls back actors and restores the previous Play
     thrown.result.rollback.deleted_actor_names,
     [...plan.actors].reverse().map((actor) => actor.actor_name),
   );
+  assert.equal(thrown.result.rollback.restored_player_start, true);
+  const restore = broker.calls.find((call) => call.operation === "restore_player_start");
+  assert.deepEqual(restore.input.transform, PREVIOUS_PLAYER_TRANSFORM);
+});
+
+test("ambiguous PlayerStart response loss still restores the previous transform", async () => {
+  const plan = await loadPlan();
+  const broker = new FakeSceneBroker({ failPlayerStart: true });
+  const evidence = evidenceHooks();
+  let thrown;
+  try {
+    await makeExecutor(broker, evidence.hooks).execute(plan);
+  } catch (error) {
+    thrown = error;
+  }
+
+  expectExecutionError(thrown, "SCENE_BUILD_PLAYER_START_FAILED");
   assert.equal(thrown.result.rollback.restored_player_start, true);
   const restore = broker.calls.find((call) => call.operation === "restore_player_start");
   assert.deepEqual(restore.input.transform, PREVIOUS_PLAYER_TRANSFORM);

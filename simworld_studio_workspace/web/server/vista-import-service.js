@@ -221,6 +221,19 @@ function extractIdentity(preview) {
   });
 }
 
+function scopeIdentityToOwner(identity, ownerId) {
+  const digest = crypto.createHash("sha256")
+    .update("vista-import-owner-scope/v1\0", "utf8")
+    .update(ownerId, "utf8")
+    .update("\0", "utf8")
+    .update(identity.digest, "utf8")
+    .digest("hex");
+  return Object.freeze({
+    ...identity,
+    artifactId: `vim_${digest}`,
+  });
+}
+
 function normalizePrincipal(value, field) {
   const principal = typeof value === "string" ? value.trim() : "";
   if (!PRINCIPAL_PATTERN.test(principal)) {
@@ -307,8 +320,11 @@ function assertArtifactShape(artifact, expectedId) {
 }
 
 function assertArtifactAccess(artifact, access) {
-  if (artifact.access.owner_id !== access.ownerId || artifact.access.session_id !== access.sessionId) {
-    throw serviceError("VISTA_IMPORT_ACCESS_DENIED", "Import artifact is not available to this session", {
+  // The immutable artifact belongs to the authenticated browser principal, not
+  // to one short-lived UE lease.  The creating session remains provenance, but
+  // a restarted Studio may reattach the same owner through a new active lease.
+  if (artifact.access.owner_id !== access.ownerId) {
+    throw serviceError("VISTA_IMPORT_ACCESS_DENIED", "Import artifact is not available to this owner", {
       statusCode: 403,
     });
   }
@@ -381,7 +397,7 @@ class VistaImportService {
   async commit(request, context = {}) {
     const access = normalizeAccessContext(context);
     const preview = await this.preview(request);
-    const identity = extractIdentity(preview);
+    const identity = scopeIdentityToOwner(extractIdentity(preview), access.ownerId);
 
     await this._ensureArtifactRoot();
     const existing = await this._readArtifact(identity.artifactId, { allowMissing: true });

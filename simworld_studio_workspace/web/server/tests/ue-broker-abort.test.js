@@ -50,3 +50,25 @@ test('aborting an in-flight UE command propagates to the executor', async () => 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(broker.status().inFlight, null);
 });
+
+test('callers can disable transport retries for non-idempotent UE mutations', async () => {
+  let attempts = 0;
+  const broker = new UeMcpBroker({
+    host: '127.0.0.1',
+    port: 60001,
+    exec: async () => {
+      attempts += 1;
+      throw new Error('response lost after mutation');
+    },
+  });
+
+  await assert.rejects(
+    broker.send('execute_python_script', { script: 'fixed' }, { maxAttempts: 1 }),
+    /response lost/,
+  );
+  assert.equal(attempts, 1);
+  await assert.rejects(
+    broker.send('execute_python_script', { script: 'fixed' }, { maxAttempts: 0 }),
+    /maxAttempts/,
+  );
+});

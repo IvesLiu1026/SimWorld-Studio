@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   commitVistaImport,
+  executeVistaSceneBuild,
   fetchVistaImportStatus,
+  fetchVistaSceneBuildStatus,
+  preflightVistaSceneBuild,
+  prepareVistaSceneBuild,
   previewVistaImport,
 } from "../../api/appApi.js";
 import {
@@ -19,6 +23,23 @@ import {
   VISTA_IMPORT_CATALOG,
 } from "./vistaImportModel.js";
 import "./vistaImportPanel.css";
+
+function waitForPoll(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function ErrorNotice({ error }) {
   if (!error) return null;
@@ -253,6 +274,102 @@ function ArtifactStatus({ artifact, icons, onRefresh, statusBusy, statusError })
   );
 }
 
+function SceneBuildStatus({
+  build,
+  buildError,
+  busy,
+  onExecute,
+  onPrepare,
+  onPreflight,
+  preflight,
+}) {
+  const plan = build?.plan;
+  const result = build?.last_result;
+  const state = result?.status || build?.state || "not prepared";
+  return (
+    <section className="vista-import-build" data-testid="vista-scene-build-status">
+      <div className="vista-import-build-header">
+        <div>
+          <div className="vista-import-kicker">Unreal scene build</div>
+          <strong>{plan ? plan.plan_id : "No BuildPlan prepared"}</strong>
+          <span>
+            {plan
+              ? "Server-pinned assets, numeric transforms, strict preflight, and rollback."
+              : "Prepare an exact plan from the committed dataset artifact before touching Unreal."}
+          </span>
+        </div>
+        <Badge variant={state === "succeeded" || state === "already_applied" ? "green" : state === "failed" ? "red" : "muted"}>
+          {state.replaceAll("_", " ")}
+        </Badge>
+      </div>
+      {plan ? (
+        <dl className="vista-import-build-grid">
+          <div><dt>Actors</dt><dd>{plan.actors.length}</dd></div>
+          <div><dt>Layout</dt><dd title={plan.layout_revision}>{plan.layout_revision}</dd></div>
+          <div><dt>Asset snapshot</dt><dd title={plan.asset_snapshot_id}>{plan.asset_snapshot_id}</dd></div>
+          <div><dt>Content revision</dt><dd title={plan.content_revision}>{plan.content_revision}</dd></div>
+        </dl>
+      ) : null}
+      {preflight ? (
+        <div className="vista-import-notice success" data-testid="vista-scene-build-preflight-ready">
+          <strong>UE preflight ready</strong>
+          <span>{preflight.preflight?.assets?.length || 0} pinned assets and {preflight.preflight?.actors?.length || 0} deterministic actor names checked.</span>
+        </div>
+      ) : null}
+      {result?.rollback?.state && result.rollback.state !== "not_required" ? (
+        <div className={`vista-import-notice ${result.rollback.state === "completed" ? "success" : "warning"}`}>
+          <strong>Rollback {result.rollback.state}</strong>
+          <span>{result.rollback.deleted_actor_names?.length || 0} new actors removed.</span>
+        </div>
+      ) : null}
+      <ErrorNotice error={buildError} />
+      <div className="vista-import-build-actions">
+        <Btn data-testid="vista-scene-build-prepare" disabled={Boolean(busy)} onClick={onPrepare} variant={plan ? "ghost" : "primary"}>
+          {busy === "plan" ? "Preparing" : plan ? "Recheck plan" : "Prepare 3D BuildPlan"}
+        </Btn>
+        <Btn data-testid="vista-scene-build-preflight" disabled={!plan || Boolean(busy)} onClick={onPreflight} variant="ghost">
+          {busy === "preflight" ? "Checking UE" : "Run UE preflight"}
+        </Btn>
+        <Btn data-testid="vista-scene-build-execute" disabled={!plan || !preflight?.ready || Boolean(busy)} onClick={onExecute} variant="primary">
+          {busy === "execute" ? "Building scene" : "Build scene in Unreal"}
+        </Btn>
+      </div>
+    </section>
+  );
+}
+
+function BuildConfirmDialog({ busy, build, onClose, onConfirm }) {
+  const plan = build.plan;
+  return (
+    <ModalOverlay maxWidth={640} onClose={busy ? undefined : onClose}>
+      <ModalHeader
+        onClose={busy ? undefined : onClose}
+        subtitle="Only the exact preflighted BuildPlan will run. New actors are removed and PlayerStart is restored if a required step fails."
+        title="Build verified scene in Unreal"
+      />
+      <div className="vista-import-confirm-body">
+        <div className="vista-import-confirm-grid">
+          <span>Plan</span><code>{plan.plan_id}</code>
+          <span>Scene</span><strong>{plan.scene_id}</strong>
+          <span>Actors</span><strong>{plan.actors.length}</strong>
+          <span>Asset snapshot</span><code>{plan.asset_snapshot_id}</code>
+          <span>Content revision</span><code>{plan.content_revision}</code>
+        </div>
+        <div className="vista-import-notice warning">
+          <strong>Unreal scene mutation</strong>
+          <span>This operation spawns the listed actors, updates PlayerStart when needed, then captures collision, floating, actor, and viewport evidence.</span>
+        </div>
+      </div>
+      <ModalFooter>
+        <Btn disabled={busy} onClick={onClose} variant="cancel">Cancel</Btn>
+        <Btn data-testid="vista-scene-build-confirm" disabled={busy} onClick={onConfirm} variant="primary">
+          {busy ? "Building scene" : "Confirm exact BuildPlan"}
+        </Btn>
+      </ModalFooter>
+    </ModalOverlay>
+  );
+}
+
 function CommitDialog({ busy, onClose, onCommit, summary }) {
   const blockingCount = summary.unresolved.filter((item) => item?.blocking).length;
   return (
@@ -300,7 +417,13 @@ export default function VistaImportPanel({ icons }) {
   const [commitBusy, setCommitBusy] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [build, setBuild] = useState(null);
+  const [buildPreflight, setBuildPreflight] = useState(null);
+  const [buildError, setBuildError] = useState(null);
+  const [buildBusy, setBuildBusy] = useState(null);
+  const [buildConfirmOpen, setBuildConfirmOpen] = useState(false);
   const controllerRef = useRef(null);
+  const generationRef = useRef(0);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 
@@ -315,6 +438,7 @@ export default function VistaImportPanel({ icons }) {
   );
 
   function updateSelection(nextSelection) {
+    generationRef.current += 1;
     controllerRef.current?.abort();
     setSelection(nextSelection);
     setPreview(null);
@@ -323,9 +447,15 @@ export default function VistaImportPanel({ icons }) {
     setError(null);
     setStatusError(null);
     setConfirmOpen(false);
+    setBuild(null);
+    setBuildPreflight(null);
+    setBuildError(null);
+    setBuildBusy(null);
+    setBuildConfirmOpen(false);
   }
 
   async function handlePreview() {
+    const generation = generationRef.current;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -336,8 +466,10 @@ export default function VistaImportPanel({ icons }) {
     try {
       const request = createVistaImportRequest(selection);
       const result = await previewVistaImport(request, controller.signal);
-      setPreviewRequest(request);
-      setPreview(result);
+      if (generation === generationRef.current) {
+        setPreviewRequest(request);
+        setPreview(result);
+      }
     } catch (requestError) {
       if (requestError?.name !== "AbortError") setError(requestError);
     } finally {
@@ -349,15 +481,24 @@ export default function VistaImportPanel({ icons }) {
   async function refreshStatus(artifactOverride = artifact) {
     const artifactId = artifactOverride?.artifact_id || artifactOverride?.run_id;
     if (!artifactId) return;
+    const generation = generationRef.current;
     setStatusBusy(true);
     setStatusError(null);
     try {
       const result = await fetchVistaImportStatus(artifactId);
-      setArtifact((current) => ({
-        ...current,
-        ...result,
-        created: current?.created ?? artifactOverride?.created,
-      }));
+      if (generation === generationRef.current) {
+        setArtifact((current) => ({
+          ...current,
+          ...result,
+          created: current?.created ?? artifactOverride?.created,
+        }));
+      }
+      try {
+        const buildStatus = await fetchVistaSceneBuildStatus(artifactId, build?.profile_id);
+        if (generation === generationRef.current) setBuild(buildStatus);
+      } catch (buildStatusError) {
+        if (build?.plan && generation === generationRef.current) throw buildStatusError;
+      }
     } catch (requestError) {
       setStatusError(requestError);
     } finally {
@@ -383,6 +524,108 @@ export default function VistaImportPanel({ icons }) {
     }
   }
 
+  async function handlePrepareBuild() {
+    const artifactId = artifact?.artifact_id || artifact?.run_id;
+    if (!artifactId) return;
+    const generation = generationRef.current;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setBuildBusy("plan");
+    setBuildError(null);
+    setBuildPreflight(null);
+    try {
+      const prepared = await prepareVistaSceneBuild(artifactId, build?.profile_id, controller.signal);
+      if (generation === generationRef.current) setBuild(prepared);
+    } catch (requestError) {
+      if (requestError?.name !== "AbortError") setBuildError(requestError);
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setBuildBusy(null);
+      }
+    }
+  }
+
+  async function handleBuildPreflight() {
+    const artifactId = artifact?.artifact_id || artifact?.run_id;
+    if (!artifactId || !build?.plan?.plan_id) return;
+    const generation = generationRef.current;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setBuildBusy("preflight");
+    setBuildError(null);
+    setBuildPreflight(null);
+    try {
+      const checked = await preflightVistaSceneBuild(
+        artifactId,
+        build.plan.plan_id,
+        build.profile_id,
+        controller.signal,
+      );
+      if (generation === generationRef.current) setBuildPreflight(checked);
+    } catch (requestError) {
+      if (requestError?.name !== "AbortError") setBuildError(requestError);
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setBuildBusy(null);
+      }
+    }
+  }
+
+  async function handleBuildExecute() {
+    const artifactId = artifact?.artifact_id || artifact?.run_id;
+    if (!artifactId || !build?.plan?.plan_id || !buildPreflight?.ready) return;
+    const generation = generationRef.current;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setBuildBusy("execute");
+    setBuildError(null);
+    try {
+      const execution = await executeVistaSceneBuild(
+        artifactId,
+        build.plan.plan_id,
+        build.profile_id,
+        controller.signal,
+      );
+      if (generation !== generationRef.current) return;
+      setBuild((current) => ({ ...current, state: execution.status, last_result: execution.result }));
+      setBuildConfirmOpen(false);
+      setBuildPreflight(null);
+      let status = execution;
+      let executionState = execution.status;
+      for (let attempt = 0; executionState === "pending" && attempt < 180; attempt += 1) {
+        await waitForPoll(1_000, controller.signal);
+        status = await fetchVistaSceneBuildStatus(artifactId, build.profile_id, controller.signal);
+        executionState = status.state;
+        if (generation !== generationRef.current) return;
+        setBuild(status);
+      }
+      if (executionState === "pending") {
+        const timeout = new Error("Scene build is still running; refresh status to continue monitoring.");
+        timeout.code = "SCENE_BUILD_STATUS_TIMEOUT";
+        throw timeout;
+      }
+    } catch (requestError) {
+      if (requestError?.name !== "AbortError") setBuildError(requestError);
+      if (requestError?.name !== "AbortError" && requestError?.result) {
+        setBuild((current) => ({ ...current, state: "failed", last_result: requestError.result }));
+      }
+      if (requestError?.name !== "AbortError") {
+        setBuildConfirmOpen(false);
+        setBuildPreflight(null);
+      }
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setBuildBusy(null);
+      }
+    }
+  }
+
   return (
     <div className="vista-import-panel" data-testid="vista-import-panel">
       <div className="vista-import-toolbar">
@@ -394,7 +637,7 @@ export default function VistaImportPanel({ icons }) {
           <span>Dataset revision</span>
           <select
             aria-label="VISTA dataset revision"
-            disabled={previewBusy || commitBusy}
+            disabled={previewBusy || commitBusy || Boolean(buildBusy)}
             onChange={(event) => {
               const nextRevision = VISTA_IMPORT_CATALOG.find((entry) => entry.revision === event.target.value);
               const nextSample = nextRevision.samples[0];
@@ -415,7 +658,7 @@ export default function VistaImportPanel({ icons }) {
           <span>Sample</span>
           <select
             aria-label="VISTA sample"
-            disabled={previewBusy || commitBusy}
+            disabled={previewBusy || commitBusy || Boolean(buildBusy)}
             onChange={(event) => {
               const nextSample = revision.samples.find((entry) => entry.sampleId === event.target.value);
               updateSelection({
@@ -435,7 +678,7 @@ export default function VistaImportPanel({ icons }) {
           <span>Selected attempt</span>
           <select
             aria-label="VISTA selected attempt"
-            disabled={previewBusy || commitBusy}
+            disabled={previewBusy || commitBusy || Boolean(buildBusy)}
             onChange={(event) => updateSelection({ ...selection, attempt: Number(event.target.value) })}
             value={selection.attempt}
           >
@@ -446,7 +689,7 @@ export default function VistaImportPanel({ icons }) {
         </label>
         <Btn
           data-testid="vista-import-preview"
-          disabled={previewBusy || commitBusy}
+          disabled={previewBusy || commitBusy || Boolean(buildBusy)}
           onClick={handlePreview}
           variant="primary"
         >
@@ -479,6 +722,17 @@ export default function VistaImportPanel({ icons }) {
             statusBusy={statusBusy}
             statusError={statusError}
           />
+          {artifact ? (
+            <SceneBuildStatus
+              build={build}
+              buildError={buildError}
+              busy={buildBusy}
+              onExecute={() => setBuildConfirmOpen(true)}
+              onPrepare={handlePrepareBuild}
+              onPreflight={handleBuildPreflight}
+              preflight={buildPreflight}
+            />
+          ) : null}
           <div className="vista-import-grid">
             <ProvenanceSection summary={summary} />
             <ValidationSection summary={summary} />
@@ -495,6 +749,15 @@ export default function VistaImportPanel({ icons }) {
           onClose={() => setConfirmOpen(false)}
           onCommit={handleCommit}
           summary={summary}
+        />
+      ) : null}
+
+      {buildConfirmOpen && build?.plan ? (
+        <BuildConfirmDialog
+          build={build}
+          busy={buildBusy === "execute"}
+          onClose={() => setBuildConfirmOpen(false)}
+          onConfirm={handleBuildExecute}
         />
       ) : null}
     </div>

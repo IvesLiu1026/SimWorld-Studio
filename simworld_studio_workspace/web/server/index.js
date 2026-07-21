@@ -1,10 +1,17 @@
 "use strict";const{spawn}=require("child_process"),express=require("express"),path=require("path"),fs=require("fs"),{SkillRegistry}=require("./skills"),{SceneManager}=require("./scenes"),{CheckpointManager}=require("./checkpoints"),{ArenaManager}=require("./arena"),{AgentManager}=require("./agents"),{ContextManager}=require("./context-manager"),{AgentController}=require("./agent-controller"),PORT=parseInt(process.env.PORT||"3002",10),CLAUDE_BIN=process.env.CLAUDE_BIN||"claude",MCP_CONFIG=path.resolve(__dirname,"../mcp.json"),ARENA_ROOT=path.resolve(__dirname,"../.."),SCREENSHOT_DIR=path.join(ARENA_ROOT,"tmp","screens"),LOG_DIR=path.join(ARENA_ROOT,"logs"),CIRRUS_WS_PORT=parseInt(process.env.CIRRUS_WS_PORT||"8586",10),CIRRUS_HTTP_PORT=parseInt(process.env.CIRRUS_HTTP_PORT||"8585",10),UNREAL_HOST=process.env.UNREAL_HOST||"127.0.0.1",UNREAL_PORT=process.env.UNREAL_PORT||(()=>{try{return JSON.parse(fs.readFileSync(MCP_CONFIG,"utf-8")).mcpServers.simworld.env.UNREAL_PORT||"55559"}catch(_){return"55559"}})(),MOCK_MODE=process.env.MOCK_MODE==="1"||process.env.MOCK_MODE==="true",MOCK_FILE=process.env.MOCK_FILE?(path.isAbsolute(process.env.MOCK_FILE)?process.env.MOCK_FILE:path.join(ARENA_ROOT,process.env.MOCK_FILE)):path.join(ARENA_ROOT,"mock_responses.txt");function normalizeUnrealVersion(v){const s=String(v||"").trim();if(!s)return null;const m=s.match(/(?:UE\s*)?(\d+(?:\.\d+){1,2})/i);return m?m[1]:s}function versionFromPath(v){const s=String(v||"");const m=s.match(/(?:UE|Unreal(?:[_-]?Engine)?|Linux[_-]?Unreal[_-]?Engine)[_-]?(\d+(?:\.\d+){1,2})/i)||s.match(/(\d+\.\d+(?:\.\d+)?)/);return m?m[1]:null}function versionFromLog(){try{const p=path.join(LOG_DIR,"ue.log");if(!fs.existsSync(p))return null;const text=fs.readFileSync(p,"utf8").slice(-250000);const m=text.match(/Engine Version:\s*(\d+(?:\.\d+){1,2})/i)||text.match(/engineversion="(\d+(?:\.\d+){1,2})/i);return m?m[1]:null}catch{return null}}function getUnrealEngineVersion(){return normalizeUnrealVersion(process.env.UE_VERSION||process.env.UNREAL_VERSION||process.env.UNREAL_ENGINE_VERSION)||versionFromPath(process.env.UE_ROOT)||versionFromPath(process.env.UNREAL_ENGINE_ROOT)||versionFromPath(process.env.UE_EDITOR)||versionFromPath(process.env.UNREAL_EDITOR)||versionFromLog()}function getUnrealEngineHealthMeta(){const engineVersion=getUnrealEngineVersion();return{engineVersion,engineLabel:engineVersion?`UE ${engineVersion}`:"Unreal Engine"}}let mockReplay=null;let mockExecutor=null;if(MOCK_MODE){try{const{MockReplay:MockReplayClass}=require("./mock-replay");mockReplay=new MockReplayClass(MOCK_FILE);console.log(`[mock-replay] Mock mode enabled, using file: ${MOCK_FILE}`);console.log(`[mock-replay] Loaded ${mockReplay.messages.length} mock messages`);if(mockReplay.messages.length===0){console.error(`[mock-replay] WARNING: No messages loaded from ${MOCK_FILE}`)};({mockExecutor}=require("./mock-executor"))}catch(e){console.error(`[mock-replay] Failed to load mock-replay: ${e.message}`);console.error(e.stack)}}const crypto=require("crypto");const log=require("./logger");const{LearnedToolStore}=require("./learned-tools-store");const{getBroker:_getUcvBroker,getUeBroker:_getUeBroker}=require("./unreal-bridge");const{createVistaRuntimeBroker}=require("./vista-runtime-broker");const ctxManager=new ContextManager;const agentCtrl=new AgentController;const toolStore=new LearnedToolStore();const ucvBroker=_getUcvBroker();const ueBroker=_getUeBroker();const vistaRuntimeBroker=createVistaRuntimeBroker({ueBroker});const{MetricsHub}=require("./metrics-hub");const metricsHub=new MetricsHub(5000);metricsHub.init(agentCtrl);agentCtrl.setMetricsHub(metricsHub);const {SessionSkillManager}=require("./session-skills");const {generateSkills}=require("./skill-maker");const sessionSkillManager=new SessionSkillManager();const {handleSceneLoop}=require("./scene-loop");const {handleVisualSceneLoop}=require("./scene-loop-visual");const {handleCodexChat}=require("./chat-codex");const intentStore=new Map();
+const { UeMcpBroker } = require("./unreal-bridge");
 const { ReviewRunRegistry } = require("./review-run-registry");
 const reviewRunRegistry = new ReviewRunRegistry();
 const { readinessHttpStatus } = require("./readiness-registry");
 const { createStudioReadiness } = require("./studio-readiness");
 const { createVistaImportRouter } = require("./vista-import-routes");
 const { createVistaImportRuntime } = require("./vista-import-runtime");
+const { createVistaAssetRuntime } = require("./vista-asset-runtime");
+const { createVistaSceneBuildRouter } = require("./vista-scene-build-routes");
+const { createVistaSceneBuildRuntime } = require("./vista-scene-build-runtime");
+const { createVistaSceneExecutor } = require("./vista-scene-executor");
+const { createVistaSceneUeAdapter } = require("./vista-scene-ue-adapter");
+const { createVistaSlotBrokerResolver, resolveVistaSceneExecutorConfig } = require("./vista-scene-executor-runtime");
 const { redactLogLine } = require("./log-redaction");
 const studioReadiness = createStudioReadiness({
   env: process.env,
@@ -208,11 +215,47 @@ app.delete("/api/tools/:id",(s,e)=>{try{toolStore.archive(s.params.id);e.json({o
 
 // Stable session — doesn't change across Claude subprocess spawns
 SCREENSHOT_SEARCH_DIRS.push(path.join(ARENA_ROOT, "tmp", "visual_loop"));
-const vistaImportRuntime=createVistaImportRuntime({env:process.env,baseDir:__dirname});
+const vistaAssetRuntime=createVistaAssetRuntime({env:process.env});
+const vistaImportRuntime=createVistaImportRuntime({
+  env:process.env,
+  baseDir:__dirname,
+  assetResolver:vistaAssetRuntime.resolver,
+});
+const _resolveVistaIdentity=(request)=>studioStreaming.resolveActiveSession(request);
 app.use("/api/vista/imports",createVistaImportRouter({
   service:vistaImportRuntime.service,
-  ownerId:`studio:${STUDIO_SESSION}`,
-  sessionId:STUDIO_SESSION,
+  resolveIdentity:_resolveVistaIdentity,
+}));
+const _vistaSceneExecutorConfig=resolveVistaSceneExecutorConfig(process.env,{assetConfig:vistaAssetRuntime.config});
+let _vistaSceneExecutor=null;
+if(_vistaSceneExecutorConfig.enabled){
+  const _resolveVistaSlotBroker=createVistaSlotBrokerResolver({
+    studioStreaming,
+    defaultBroker:ueBroker,
+    BrokerClass:UeMcpBroker,
+  });
+  const _vistaSceneAdapter=createVistaSceneUeAdapter({
+    resolveUeBroker:_resolveVistaSlotBroker,
+    contentRevision:_vistaSceneExecutorConfig.contentRevision,
+    verificationRevision:_vistaSceneExecutorConfig.verificationRevision,
+    contentReceiptSha256:_vistaSceneExecutorConfig.contentReceiptSha256,
+    screenshotDir:SCREENSHOT_DIR,
+  });
+  _vistaSceneExecutor=createVistaSceneExecutor({
+    broker:_vistaSceneAdapter.broker,
+    evidenceHooks:_vistaSceneAdapter.evidenceHooks,
+  });
+}
+const vistaSceneBuildRuntime=createVistaSceneBuildRuntime({
+  env:process.env,
+  baseDir:__dirname,
+  importService:vistaImportRuntime.service,
+  executor:_vistaSceneExecutor,
+  defaultRecordRoot:path.join(path.dirname(vistaImportRuntime.config.artifactRoot),"vista-scene-builds"),
+});
+app.use("/api/vista/imports",createVistaSceneBuildRouter({
+  service:vistaSceneBuildRuntime.service,
+  resolveIdentity:_resolveVistaIdentity,
 }));
 app.get("/api/session",(s,e)=>{e.json({sessionId:STUDIO_SESSION})});
 

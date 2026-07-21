@@ -27,7 +27,11 @@ const UE_HOST     = process.env.UE_HOST     || '127.0.0.1';
 const UNREAL_PORT = parseInt(process.env.UNREAL_PORT || '55557', 10);
 const TIMEOUT_MS  = parseInt(process.env.TEST_TIMEOUT || '30000', 10);
 const SUITE       = process.argv[2] || 'all';
-let sessionCookie = '';
+const browserCookies = new Map();
+
+function cookieHeader() {
+  return [...browserCookies.entries()].map(([name, value]) => `${name}=${value}`).join('; ');
+}
 
 // ── Colors ──────────────────────────────────────────────────────────────────
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m',
@@ -51,7 +55,7 @@ function request(method, urlPath, body) {
       path: url.pathname + url.search, method,
       headers: {
         'Content-Type': 'application/json',
-        ...(sessionCookie ? { Cookie: sessionCookie } : {}),
+        ...(browserCookies.size ? { Cookie: cookieHeader() } : {}),
         ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
       },
     };
@@ -59,10 +63,15 @@ function request(method, urlPath, body) {
       let buf = '';
       const setCookie = res.headers['set-cookie'];
       if (Array.isArray(setCookie)) {
-        const value = setCookie.find(item => item.startsWith('vista_stream_session='));
-        if (value) {
+        for (const value of setCookie) {
           const pair = value.split(';', 1)[0];
-          sessionCookie = pair.endsWith('=') ? '' : pair;
+          const separator = pair.indexOf('=');
+          if (separator < 1) continue;
+          const name = pair.slice(0, separator);
+          if (!['vista_browser_principal', 'vista_stream_session'].includes(name)) continue;
+          const cookieValue = pair.slice(separator + 1);
+          if (cookieValue) browserCookies.set(name, cookieValue);
+          else browserCookies.delete(name);
         }
       }
       res.on('data', d => { buf += d; });

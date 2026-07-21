@@ -480,6 +480,7 @@ async function vistaImportJson(path, options = {}) {
     error.status = response.status;
     error.code = payload.code || "VISTA_IMPORT_REQUEST_FAILED";
     error.retryable = Boolean(payload.retryable);
+    if (payload.result && typeof payload.result === "object") error.result = payload.result;
     throw error;
   }
   return payload;
@@ -503,4 +504,40 @@ export function commitVistaImport(request, signal) {
 
 export function fetchVistaImportStatus(runId, signal) {
   return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}`, { signal });
+}
+
+export function prepareVistaSceneBuild(runId, profileId, signal) {
+  return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}/build/plan`, {
+    method: "POST",
+    body: JSON.stringify(profileId ? { profile_id: profileId } : {}),
+    signal,
+  });
+}
+
+export function preflightVistaSceneBuild(runId, planId, profileId, signal) {
+  return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}/build/preflight`, {
+    method: "POST",
+    body: JSON.stringify({
+      plan_id: planId,
+      ...(profileId ? { profile_id: profileId } : {}),
+    }),
+    signal,
+  });
+}
+
+export function executeVistaSceneBuild(runId, planId, profileId, signal) {
+  return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}/build/execute`, {
+    method: "POST",
+    body: JSON.stringify({
+      plan_id: planId,
+      confirm: true,
+      ...(profileId ? { profile_id: profileId } : {}),
+    }),
+    signal,
+  });
+}
+
+export function fetchVistaSceneBuildStatus(runId, profileId, signal) {
+  const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+  return vistaImportJson(`/vista/imports/${encodeURIComponent(runId)}/build${query}`, { signal });
 }

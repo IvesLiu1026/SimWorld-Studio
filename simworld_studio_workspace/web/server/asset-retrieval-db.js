@@ -387,11 +387,14 @@ async function embedQuery(text, opts) {
   });
 }
 
-function buildQdrantFilter(category, plan) {
+function buildQdrantFilter(category, plan, assetSnapshotRevision) {
   const exclude = excludedSettings(plan);
   const filter = {
     must: [{ key: "category", match: { value: category } }],
   };
+  if (assetSnapshotRevision) {
+    filter.must.push({ key: "asset_snapshot_revision", match: { value: assetSnapshotRevision } });
+  }
   if (exclude.length) {
     filter.must_not = [{ key: "setting", match: { any: exclude } }];
   }
@@ -428,6 +431,7 @@ function compactFromPayload(payload, score) {
     path: p.unreal_asset_path || "",
     assetType: p.asset_type || "",
     spawnTool: p.asset_type === "Blueprint" ? "spawn_blueprint_actor" : "spawn_actor",
+    asset_snapshot_revision: p.asset_snapshot_revision || "",
     _score: score,
   };
 }
@@ -435,7 +439,8 @@ function compactFromPayload(payload, score) {
 async function qdrantPrefilterCategory(category, plan, opts) {
   const topK = Math.max(1, parseInt((opts && opts.topK) || TOP_K, 10));
   const { dense, sparse } = await embedQuery(queryTextForPlan(plan), opts);
-  const filter = buildQdrantFilter(category, plan);
+  const assetSnapshotRevision = String(opts && opts.assetSnapshotRevision || "").trim() || null;
+  const filter = buildQdrantFilter(category, plan, assetSnapshotRevision);
   const prefetch = [
     { query: dense, using: "text_dense", filter, limit: topK },
   ];
@@ -449,7 +454,8 @@ async function qdrantPrefilterCategory(category, plan, opts) {
     limit: topK,
     with_payload: true,
   }));
-  return resultPoints(result).map(r => compactFromPayload(r.payload, r.score)).filter(a => a.id);
+  return resultPoints(result).map(r => compactFromPayload(r.payload, r.score))
+    .filter(a => a.id && (!assetSnapshotRevision || a.asset_snapshot_revision === assetSnapshotRevision));
 }
 
 async function postgresFallbackCategory(category, plan, opts) {
@@ -458,27 +464,30 @@ async function postgresFallbackCategory(category, plan, opts) {
   const preferred = preferredSettings(plan);
   const excluded = excludedSettings(plan);
   const terms = cleanTerms([...(plan && plan.must_terms || []), ...(plan && plan.semantic_query || "").split(/\s+/)]);
+  const assetSnapshotRevision = String(opts && opts.assetSnapshotRevision || "").trim() || null;
   const sql = `
     WITH q AS (SELECT websearch_to_tsquery('english', $2) AS query)
     SELECT
       asset_id, name, category, subcategory, short_description, tags, scene_types,
       setting, width_m, depth_m, height_m, unreal_asset_path, asset_type,
-      ts_rank_cd(search_tsv, q.query) AS text_rank,
+      asset_snapshot_revision,
+      ts_rank_cd(search_tsv, q.query, 32) AS text_rank,
       CASE WHEN setting = ANY($4::text[]) THEN 1 ELSE 0 END AS setting_rank,
       CASE WHEN scene_types && $5::text[] THEN 1 ELSE 0 END AS scene_rank,
       CASE WHEN tags && $5::text[] THEN 1 ELSE 0 END AS tag_rank
     FROM assets, q
     WHERE category = $1
       AND NOT (setting = ANY($3::text[]))
+      AND ($6::text IS NULL OR asset_snapshot_revision = $6)
     ORDER BY
       text_rank DESC,
       setting_rank DESC,
       scene_rank DESC,
       tag_rank DESC,
       name ASC
-    LIMIT $6
+    LIMIT $7
   `;
-  const values = [category, queryText, excluded, preferred, terms, topK];
+  const values = [category, queryText, excluded, preferred, terms, assetSnapshotRevision, topK];
   const pool = pgPool(opts);
   const res = await runDependency("postgres", "query", opts, (signal, timeoutMs) => pool.query({
     text: sql,
@@ -508,7 +517,8 @@ async function postgresFallbackCategory(category, plan, opts) {
     height_m: row.height_m,
     unreal_asset_path: row.unreal_asset_path,
     asset_type: row.asset_type,
-  }, Number(row.text_rank || 0) + Number(row.setting_rank || 0)));
+    asset_snapshot_revision: row.asset_snapshot_revision,
+  }, Number(row.text_rank || 0)));
 }
 
 async function prefilterCategory(category, plan, opts) {
@@ -548,7 +558,11 @@ async function searchAssets({ query, category, k } = {}, opts) {
   const limit = Math.max(1, Math.min(parseInt(k, 10) || 12, 40));
   const text = String(query || "").trim() || "asset";
   const cat = category && String(category).trim() ? String(category).trim() : null;
-  const filter = cat ? { must: [{ key: "category", match: { value: cat } }] } : undefined;
+  const assetSnapshotRevision = String(o.assetSnapshotRevision || "").trim() || null;
+  const must = [];
+  if (cat) must.push({ key: "category", match: { value: cat } });
+  if (assetSnapshotRevision) must.push({ key: "asset_snapshot_revision", match: { value: assetSnapshotRevision } });
+  const filter = must.length ? { must } : undefined;
   const causes = [];
   try {
     const { dense, sparse } = await embedQuery(text, o);
@@ -563,7 +577,8 @@ async function searchAssets({ query, category, k } = {}, opts) {
       limit,
       with_payload: true,
     }));
-    const out = resultPoints(result).map(r => compactFromPayload(r.payload, r.score)).filter(a => a.id && a.path);
+    const out = resultPoints(result).map(r => compactFromPayload(r.payload, r.score))
+      .filter(a => a.id && a.path && (!assetSnapshotRevision || a.asset_snapshot_revision === assetSnapshotRevision));
     if (out.length) return attachRetrievalTelemetry(out, { source: "qdrant" });
     causes.push(dependencyNoResults("qdrant", "query"));
   } catch (e) {
@@ -574,14 +589,16 @@ async function searchAssets({ query, category, k } = {}, opts) {
     WITH q AS (SELECT websearch_to_tsquery('english', $1) AS query)
     SELECT asset_id, name, category, subcategory, short_description, tags, scene_types,
            setting, width_m, depth_m, height_m, unreal_asset_path, asset_type,
-           ts_rank_cd(search_tsv, q.query) AS text_rank
+           asset_snapshot_revision,
+           ts_rank_cd(search_tsv, q.query, 32) AS text_rank
     FROM assets, q
     WHERE ($2::text IS NULL OR category = $2)
+      AND ($3::text IS NULL OR asset_snapshot_revision = $3)
     ORDER BY text_rank DESC, name ASC
-    LIMIT $3`;
+    LIMIT $4`;
   try {
     const pool = pgPool(o);
-    const values = [text, cat, limit];
+    const values = [text, cat, assetSnapshotRevision, limit];
     const res = await runDependency("postgres", "query", o, (signal, timeoutMs) => pool.query({
       text: sql,
       values,
@@ -601,6 +618,7 @@ async function searchAssets({ query, category, k } = {}, opts) {
       short_description: row.short_description, tags: row.tags, scene_types: row.scene_types, setting: row.setting,
       width_m: row.width_m, depth_m: row.depth_m, height_m: row.height_m,
       unreal_asset_path: row.unreal_asset_path, asset_type: row.asset_type,
+      asset_snapshot_revision: row.asset_snapshot_revision,
     }, Number(row.text_rank || 0))).filter(a => a.id && a.path);
     return attachRetrievalTelemetry(assets, { source: "postgres", causes });
   } catch (e) {

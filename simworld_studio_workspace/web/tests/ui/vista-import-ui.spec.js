@@ -65,10 +65,36 @@ function previewFixture() {
   };
 }
 
+function buildFixture() {
+  return {
+    schema: "vista-scene-build-plan-response/v1",
+    import_artifact_id: "vim_fixture",
+    profile_id: "mmg_040_static_office_v1",
+    state: "planned",
+    last_result: null,
+    updated_at: null,
+    plan: {
+      schema: "vista-scene-build-plan/v1",
+      plan_id: "vsp-aaaaaaaaaaaaaaaaaaaaaaaa",
+      scene_id: "mmg_040@bbbbbbbbbbbbbbbb",
+      layout_revision: "mmg-040-layout-r1",
+      asset_snapshot_id: "assets-r1",
+      content_revision: "ue-content-r1",
+      actors: [
+        { actor_id: "chair", actor_name: "VISTA_mmg040_chair" },
+        { actor_id: "cabinet", actor_name: "VISTA_mmg040_cabinet" },
+      ],
+    },
+  };
+}
+
 test("VISTA preview is allowlisted, reviewable, and explicitly confirmed before commit", async ({ page }) => {
   const previewBodies = [];
   const commitBodies = [];
   const statusIds = [];
+  const planBodies = [];
+  const preflightBodies = [];
+  const executeBodies = [];
 
   await page.route(
     (url) => url.origin === "http://127.0.0.1:4182" && url.pathname.startsWith("/api/"),
@@ -83,7 +109,7 @@ test("VISTA preview is allowlisted, reviewable, and explicitly confirmed before 
     await route.fulfill({ contentType: "application/json", json: previewFixture() });
   });
   await page.route(
-    (url) => url.pathname.startsWith("/api/vista/imports/vim_"),
+    (url) => url.pathname === "/api/vista/imports/vim_fixture",
     async (route) => {
       statusIds.push(new URL(route.request().url()).pathname.split("/").pop());
       await route.fulfill({
@@ -99,6 +125,40 @@ test("VISTA preview is allowlisted, reviewable, and explicitly confirmed before 
       });
     },
   );
+  await page.route("**/api/vista/imports/vim_fixture/build/plan", async (route) => {
+    planBodies.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", json: buildFixture() });
+  });
+  await page.route("**/api/vista/imports/vim_fixture/build/preflight", async (route) => {
+    preflightBodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        schema: "vista-scene-build-service-preflight/v1",
+        plan_id: buildFixture().plan.plan_id,
+        ready: true,
+        preflight: { ready: true, assets: [{}, {}], actors: [{}, {}] },
+      },
+    });
+  });
+  await page.route("**/api/vista/imports/vim_fixture/build/execute", async (route) => {
+    executeBodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        schema: "vista-scene-build-service-execution/v1",
+        plan_id: buildFixture().plan.plan_id,
+        status: "succeeded",
+        result: {
+          schema: "vista-scene-build-result/v1",
+          plan_id: buildFixture().plan.plan_id,
+          scene_id: buildFixture().plan.scene_id,
+          status: "succeeded",
+          rollback: { state: "not_required", deleted_actor_names: [] },
+        },
+      },
+    });
+  });
   await page.route(
     (url) => url.pathname === "/api/vista/imports",
     async (route) => {
@@ -160,4 +220,28 @@ test("VISTA preview is allowlisted, reviewable, and explicitly confirmed before 
   await expect(page.getByTestId("vista-import-artifact-status")).toContainText("vim_fixture");
   expect(commitBodies).toEqual(previewBodies);
   expect(statusIds).toEqual(["vim_fixture"]);
+
+  await expect(page.getByTestId("vista-scene-build-status")).toContainText("No BuildPlan prepared");
+  await page.getByTestId("vista-scene-build-prepare").click();
+  await expect(page.getByTestId("vista-scene-build-status")).toContainText(buildFixture().plan.plan_id);
+  expect(planBodies).toEqual([{}]);
+
+  await page.getByTestId("vista-scene-build-preflight").click();
+  await expect(page.getByTestId("vista-scene-build-preflight-ready")).toBeVisible();
+  expect(preflightBodies).toEqual([{
+    plan_id: buildFixture().plan.plan_id,
+    profile_id: buildFixture().profile_id,
+  }]);
+
+  expect(executeBodies).toHaveLength(0);
+  await page.getByTestId("vista-scene-build-execute").click();
+  await expect(page.getByText("Build verified scene in Unreal", { exact: true })).toBeVisible();
+  expect(executeBodies).toHaveLength(0);
+  await page.getByTestId("vista-scene-build-confirm").click();
+  await expect(page.getByTestId("vista-scene-build-status")).toContainText("succeeded");
+  expect(executeBodies).toEqual([{
+    plan_id: buildFixture().plan.plan_id,
+    confirm: true,
+    profile_id: buildFixture().profile_id,
+  }]);
 });
