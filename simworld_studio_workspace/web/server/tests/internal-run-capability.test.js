@@ -5,7 +5,10 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
 const { buildBuilderChildEnv } = require("../builder-runtime-authority");
-const { createInternalRunCapabilityRegistry } = require("../internal-run-capability");
+const {
+  createInternalRunCapabilityRegistry,
+  isInternalCapabilityCandidate,
+} = require("../internal-run-capability");
 
 function identity(slotId) {
   return Object.freeze({
@@ -58,14 +61,52 @@ test("two run capabilities dispatch to their exact lease brokers and ignore call
     channel: "ucv",
     body: { cmd: "vget /objects", sessionId: "session-0", UCV_PORT: 9017 },
   });
+  const selectedAssets = registry.authorize({
+    capability: first.capability,
+    runId: first.runId,
+    channel: "assets",
+    body: { query: "wooden chair", k: 4 },
+  });
   assert.equal(await selectedA.broker.send(), "ue-slot-0");
   assert.equal(await selectedB.broker.send(), "ucv-slot-1");
   assert.deepEqual(selectedA.identity, identities[0]);
   assert.deepEqual(selectedB.identity, identities[1]);
+  assert.equal(selectedAssets.broker, null);
+  assert.deepEqual(selectedAssets.identity, identities[0]);
   assert.throws(
     () => registry.authorize({ capability: first.capability, runId: second.runId, channel: "ue", body: {} }),
     (error) => error.code === "INTERNAL_RUN_CAPABILITY_INVALID",
   );
+});
+
+test("semantic asset broker is an exact capability candidate and operation-policy channel", () => {
+  const seen = [];
+  const { identities, registry } = fixture({
+    operationPolicy(context) {
+      seen.push(context);
+      return { allowed: context.channel === "assets" && context.body.query === "market stall" };
+    },
+  });
+  const issued = registry.issue({ identity: identities[0], runId: "run-assets", scopeId: "scope-assets" });
+  const request = {
+    method: "POST",
+    path: "/api/internal/assets",
+    headers: {
+      "x-simworld-run-capability": issued.capability,
+      "x-simworld-run-id": issued.runId,
+    },
+  };
+  assert.equal(isInternalCapabilityCandidate(request), true);
+  const authorized = registry.authorize({
+    capability: issued.capability,
+    runId: issued.runId,
+    channel: "assets",
+    body: { query: "market stall" },
+  });
+  assert.equal(authorized.scopeId, "scope-assets");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].channel, "assets");
+  assert.equal(isInternalCapabilityCandidate({ ...request, path: "/api/internal/assets/extra" }), false);
 });
 
 test("capabilities fail closed after lease revocation, process exit, explicit stop, and TTL", () => {

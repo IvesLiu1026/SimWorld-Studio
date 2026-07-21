@@ -8,27 +8,53 @@
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const {
+  SCOPED_SIMWORLD_TOOLS,
+  assertSafeBuilderArgv,
+  buildCodexSafetyArgs,
+  buildMinimalBuilderEnv,
+  resolveVisualFeedbackImages,
+} = require("./builder-process-policy");
+const { SANDBOX_WORKDIR, sandboxedSpawn } = require("./agent-sandbox");
+const { attachBuilderRuntimeProcess } = require("./builder-runtime-authority");
 
 const NL = String.fromCharCode(10);
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const CODEX_MODEL = process.env.CODEX_MODEL || "gpt-5.5";
 const CODEX_TIMEOUT_MS = parseInt(process.env.CODEX_TIMEOUT_MS || "900000", 10); // 15 min default
-const CODEX_SANDBOX = process.env.CODEX_SANDBOX || "/tmp/experiment_sandbox";
+const MCP_SERVER_JS = path.resolve(__dirname, "mcp-server.js");
+
+function tomlVal(value) {
+  if (Array.isArray(value)) return `[${value.map(tomlVal).join(",")}]`;
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return JSON.stringify(String(value));
+}
 
 // MCP config passed to Codex so it can call the same SimWorld MCP tools (spawn_blueprint_actor, etc.)
 function buildCodexMcpArgs(opts) {
-  const mcpServerJs = opts.mcpServerJs;
-  const uePort = opts.uePort || process.env.UNREAL_PORT || "55561";
-  const ueHost = opts.ueHost || process.env.UNREAL_HOST || "127.0.0.1";
-  const assetLib = opts.assetLibraryPath || process.env.ASSET_LIBRARY_PATH || "";
-  // The Codex process receives the bounded server environment and its MCP child
-  // inherits it.  Never duplicate DSNs, tokens, or receipt pins into CLI argv.
-  return [
-    "-c", `mcp_servers.simworld.command="node"`,
-    "-c", `mcp_servers.simworld.args=["${mcpServerJs}"]`,
-    "-c",
-    `mcp_servers.simworld.env={UNREAL_HOST="${ueHost}",UNREAL_PORT="${uePort}"${assetLib ? `,ASSET_LIBRARY_PATH="${assetLib}"` : ""}}`,
+  const mcpServerJs = path.resolve(String(opts.mcpServerJs || ""));
+  if (mcpServerJs !== MCP_SERVER_JS) {
+    throw new Error("Codex builder MCP script must be the scoped SimWorld server");
+  }
+  const runtime = opts.builderRuntime || null;
+  if (!runtime) throw new Error("Codex builder requires a lease-scoped run authority");
+  const configArgs = [
+    "-c", `mcp_servers.simworld.command=${tomlVal(process.execPath)}`,
+    "-c", `mcp_servers.simworld.args=${tomlVal([mcpServerJs])}`,
+    "-c", "mcp_servers.simworld.required=true",
+    "-c", `mcp_servers.simworld.enabled_tools=${tomlVal(SCOPED_SIMWORLD_TOOLS)}`,
+    "-c", 'mcp_servers.simworld.default_tools_approval_mode="approve"',
   ];
+  const port = Number(runtime.serverPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("Codex builder broker port is invalid");
+  }
+  configArgs.push(
+    "-c", 'mcp_servers.simworld.env.SIMWORLD_BROKER_HOST="127.0.0.1"',
+    "-c", `mcp_servers.simworld.env.PORT=${tomlVal(port)}`,
+    "-c", 'mcp_servers.simworld.env.SIMWORLD_INTERNAL_CAPABILITY_REQUIRED="1"',
+  );
+  return configArgs;
 }
 
 // Build the system + task prompt the same way the Claude path does (ARENA_SYSTEM_PROMPT + skills + feedback),
@@ -67,49 +93,57 @@ function normalizeCodexEvent(line) {
 function spawnCodexAgent(deps, body, options, emit, onDone) {
   const sessionId = body.sessionId || options.studioSession || "_global";
   const fullPrompt = buildPrompt(deps, body, options);
+  resolveVisualFeedbackImages(body.visualFeedbackImages);
+  const runtime = options.builderRuntime || deps && deps.BUILDER_RUNTIME || null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(CODEX_MODEL)) {
+    throw new Error("Codex builder model identifier is invalid");
+  }
+  const reasoningEffort = String(process.env.CODEX_BUILDER_REASONING_EFFORT || "high").trim();
+  if (!new Set(["minimal", "low", "medium", "high", "xhigh"]).has(reasoningEffort)) {
+    throw new Error("Codex builder reasoning effort is invalid");
+  }
+  const env = buildMinimalBuilderEnv(process.env, runtime, { provider: "codex" });
 
   const args = [
     "exec",
     "--json",
     "--skip-git-repo-check",
-    "--dangerously-bypass-approvals-and-sandbox",
-    "-C", CODEX_SANDBOX,
+    ...buildCodexSafetyArgs(),
+    "-C", SANDBOX_WORKDIR,
     "-m", CODEX_MODEL,
-    "-c", `model_reasoning_effort=${process.env.CODEX_BUILDER_REASONING_EFFORT || "high"}`,
+    "-c", `model_reasoning_effort=${reasoningEffort}`,
     ...buildCodexMcpArgs({
       mcpServerJs: options.mcpServerJs,
       uePort: options.uePort,
       ueHost: options.ueHost,
-      assetLibraryPath: options.assetLibraryPath,
+      builderRuntime: runtime,
     }),
   ];
-  const feedbackImages = (Array.isArray(body.visualFeedbackImages) ? body.visualFeedbackImages : [])
-    .map(p => String(p || ""))
-    .filter(p => p && fs.existsSync(p))
-    .slice(0, 8);
-  for (const p of feedbackImages) args.push("-i", p);
   args.push("-");
-
-  try { fs.mkdirSync(CODEX_SANDBOX, { recursive: true }); } catch (_e) {}
-  const env = Object.assign({}, process.env, { NO_COLOR: "1" });
-  // Don't propagate Claude-prefixed env vars (avoid auth confusion)
-  Object.keys(env).forEach((k) => { if (k.startsWith("CLAUDE")) delete env[k]; });
+  assertSafeBuilderArgv("codex", args);
 
   const log = options.logToFile || (() => {});
-  log("codex", `[builder] model=${CODEX_MODEL} sessionId=${sessionId} prompt_chars=${fullPrompt.length} images=${feedbackImages.length}`);
+  log("codex", `[builder] model=${CODEX_MODEL} sessionId=${sessionId} prompt_chars=${fullPrompt.length} images=0`);
 
-  const proc = spawn(CODEX_BIN, args, {
-    cwd: options.cwd || CODEX_SANDBOX,
+  const sandbox = sandboxedSpawn(CODEX_BIN, args, null, { env: process.env, provider: "codex" });
+  const proc = spawn(sandbox.cmd, sandbox.args, {
+    cwd: "/",
     env,
     stdio: ["pipe", "pipe", "pipe"],
   });
-
-  // Send the prompt over stdin and close
-  try {
-    proc.stdin.write(fullPrompt);
-    proc.stdin.end();
-  } catch (e) {
-    log("codex", `[builder] stdin write failed: ${e.message}`);
+  attachBuilderRuntimeProcess(runtime, proc);
+  const processMap = deps && deps._chatProcs;
+  const processKey = runtime ? runtime.scopeId : sessionId;
+  const clearTrackedProcess = () => {
+    if (processMap && processMap.get(processKey) === proc) processMap.delete(processKey);
+  };
+  if (processMap && typeof processMap.get === "function" && typeof processMap.set === "function") {
+    const prior = processMap.get(processKey);
+    if (prior && prior !== proc && !prior.killed) {
+      try { prior.kill("SIGTERM"); } catch (_error) {}
+    }
+    processMap.set(processKey, proc);
+    proc.on("exit", clearTrackedProcess);
   }
 
   let stdoutBuf = "";
@@ -118,6 +152,7 @@ function spawnCodexAgent(deps, body, options, emit, onDone) {
   let latestScreenshot = null;
   let finalText = "";
   let _usage = null;
+  let completed = false;
   const _t0 = Date.now();
   const toolInputs = new Map();      // tool_use_id -> { name, input }  for ctxManager hooks
   const startedTools = new Set();
@@ -291,14 +326,36 @@ function spawnCodexAgent(deps, body, options, emit, onDone) {
     if (exitErr) isError = true;
     try { require("./telemetry").record({ component: "builder", model: CODEX_MODEL, reasoning: process.env.CODEX_BUILDER_REASONING_EFFORT || "high", durationMs: Date.now() - _t0, usage: require("./telemetry").normUsage(_usage) }); } catch (_e) {}
     log("codex", `[builder] exited code=${code} isError=${isError} stderr_tail=${stderrBuf.slice(-200)}`);
-    onDone({ isError, latestScreenshot, finalText, returnCode: code });
+    if (!completed) {
+      completed = true;
+      onDone({ isError, latestScreenshot, finalText, returnCode: code });
+    }
   });
   proc.on("error", (e) => {
     clearInterval(idleTimer);
+    clearTrackedProcess();
     log("codex", `[builder] proc error: ${e.message}`);
     isError = true;
-    onDone({ isError, latestScreenshot, finalText, returnCode: -1, error: e.message });
+    if (!completed) {
+      completed = true;
+      onDone({ isError, latestScreenshot, finalText, returnCode: -1, error: e.message });
+    }
   });
+
+  proc.stdin.on("error", (error) => {
+    stderrBuf += `stdin: ${error.message}\n`;
+    log("codex", `[builder] stdin error: ${error.message}`);
+    try { proc.kill("SIGTERM"); } catch (_error) {}
+  });
+  try {
+    proc.stdin.end(fullPrompt);
+  } catch (error) {
+    stderrBuf += `stdin: ${error.message}\n`;
+    log("codex", `[builder] stdin write failed: ${error.message}`);
+    completed = true;
+    try { proc.kill("SIGTERM"); } catch (_error) {}
+    throw error;
+  }
 
   return proc;
 }
@@ -400,9 +457,11 @@ async function handleCodexChat(req, res, deps) {
     ueHost: process.env.UNREAL_HOST || "127.0.0.1",
     assetLibraryPath: process.env.ASSET_LIBRARY_PATH || "",
     screenshotDir: deps.screenshotDir,
+    builderRuntime: deps.BUILDER_RUNTIME || null,
   };
 
-  spawnCodexAgent(deps, body, options, emit, ({ isError, latestScreenshot, finalText, returnCode, error }) => {
+  try {
+    spawnCodexAgent(deps, body, options, emit, ({ isError, latestScreenshot, finalText, returnCode, error }) => {
     clearInterval(ping);
 
     // Best-effort: scan UE screenshots dir for the newest if we didn't capture one in-stream
@@ -426,8 +485,21 @@ async function handleCodexChat(req, res, deps) {
       error,
       latestScreenshot: latestScreenshot ? `/api/screenshot/file?path=${encodeURIComponent(latestScreenshot)}` : null,
     });
+      res.end();
+    });
+  } catch (error) {
+    clearInterval(ping);
+    if (deps.logToFile) deps.logToFile("codex", `[builder] start blocked: ${error.code || error.message}`);
+    emit("done", {
+      sessionId: deps.studioSession,
+      isError: true,
+      runner: "codex",
+      error: error.message,
+      errorCode: error.code || "BUILDER_START_BLOCKED",
+      latestScreenshot: null,
+    });
     res.end();
-  });
+  }
 }
 
-module.exports = { handleCodexChat, spawnCodexAgent, CODEX_MODEL };
+module.exports = { buildCodexMcpArgs, handleCodexChat, spawnCodexAgent, CODEX_MODEL };

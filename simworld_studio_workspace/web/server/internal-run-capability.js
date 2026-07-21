@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
-const CHANNELS = new Set(["ue", "ucv"]);
+const CHANNELS = new Set(["ue", "ucv", "assets"]);
 
 class InternalRunCapabilityError extends Error {
   constructor(code, message, statusCode = 401) {
@@ -69,7 +69,8 @@ function isInternalCapabilityCandidate(request) {
   const method = String(request && request.method || "").toUpperCase();
   const requestPath = String(request && (request.path || request.url) || "").split("?", 1)[0].replace(/\/+$/, "");
   return method === "POST"
-    && (requestPath === "/api/internal/ue" || requestPath === "/api/internal/ucv")
+    && (requestPath === "/api/internal/ue" || requestPath === "/api/internal/ucv" ||
+        requestPath === "/api/internal/assets")
     && CAPABILITY_PATTERN.test(capabilityHeader(request))
     && SAFE_ID.test(runIdHeader(request));
 }
@@ -223,13 +224,16 @@ function createInternalRunCapabilityRegistry({
       removeDigest(digest, "lease_revoked");
       fail("INTERNAL_RUN_LEASE_INVALID", "The Studio run lease is no longer active.", 409);
     }
-    const resolver = channel === "ue" ? resolveUeBroker : resolveUcvBroker;
-    const selected = channel === "ue" ? record.ueBroker : record.ucvBroker;
-    const current = resolver(record.identity);
-    if (!current || current !== selected || typeof current.send !== "function"
-        || (channel === "ue" && Number(current.port) !== record.identity.mcpPort)) {
-      removeDigest(digest, "broker_drift");
-      fail("INTERNAL_RUN_BROKER_INVALID", "The Studio run broker is no longer valid.", 409);
+    let current = null;
+    if (channel !== "assets") {
+      const resolver = channel === "ue" ? resolveUeBroker : resolveUcvBroker;
+      const selected = channel === "ue" ? record.ueBroker : record.ucvBroker;
+      current = resolver(record.identity);
+      if (!current || current !== selected || typeof current.send !== "function"
+          || (channel === "ue" && Number(current.port) !== record.identity.mcpPort)) {
+        removeDigest(digest, "broker_drift");
+        fail("INTERNAL_RUN_BROKER_INVALID", "The Studio run broker is no longer valid.", 409);
+      }
     }
     const decision = operationPolicy({ channel, body, identity: record.identity, runId: record.runId });
     if (!decision || decision.allowed !== true) {

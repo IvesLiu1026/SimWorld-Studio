@@ -84,7 +84,6 @@ test("trusted builder authority is minted from the server review context, never 
 test("every builder runner and inline Claude use the same capability authority", () => {
   const serverDir = path.resolve(__dirname, "..");
   for (const filename of [
-    "codex-runner.js",
     "gemini-runner.js",
     "opencode-runner.js",
     "cursor-runner.js",
@@ -95,11 +94,22 @@ test("every builder runner and inline Claude use the same capability authority",
     assert.match(source, /attachBuilderRuntimeProcess\(BUILDER_RUNTIME, proc\)/, filename);
     assert.match(source, /BUILDER_RUNTIME \? BUILDER_RUNTIME\.scopeId/, filename);
   }
+  const codex = fs.readFileSync(path.join(serverDir, "codex-runner.js"), "utf8");
+  assert.match(codex, /buildMinimalBuilderEnv\(process\.env, BUILDER_RUNTIME, \{ provider: "codex" \}\)/);
+  assert.match(codex, /attachBuilderRuntimeProcess\(BUILDER_RUNTIME, proc\)/);
+  assert.match(codex, /BUILDER_RUNTIME \? BUILDER_RUNTIME\.scopeId/);
+  const legacyCodex = fs.readFileSync(path.join(serverDir, "chat-codex.js"), "utf8");
+  assert.match(legacyCodex, /buildMinimalBuilderEnv\(process\.env, runtime, \{ provider: "codex" \}\)/);
+  assert.match(legacyCodex, /attachBuilderRuntimeProcess\(runtime, proc\)/);
+  assert.match(legacyCodex, /runtime \? runtime\.scopeId/);
+  assert.match(legacyCodex, /proc\.stdin\.on\("error"/);
+  assert.match(legacyCodex, /proc\.stdin\.end\(fullPrompt\)/);
   const index = fs.readFileSync(path.join(serverDir, "index.js"), "utf8");
   const bind = index.indexOf('app.post("/api/chat",_builderRuntimeAuthority.bind)');
   const legacy = index.indexOf('app.post("/api/chat",async');
   assert.ok(bind > 0 && bind < legacy);
-  assert.match(index, /buildBuilderChildEnv\(process\.env,_builderRuntime\)/);
+  assert.match(index, /buildMinimalBuilderEnv\(process\.env,_builderRuntime,{provider:"claude"}\)/);
   assert.match(index, /_builderRuntime\.attachProcess\(g\)/);
   assert.doesNotMatch(index, /BUILDER_RUNTIME:s\.body/);
+  assert.doesNotMatch(index, /require\("\.\/chat-codex"\)/);
 });

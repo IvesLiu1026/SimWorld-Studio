@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
   createProductionExecutionGuard,
+  internalAssetSearchAllowed,
   internalCapabilityOperationPolicy,
   productionExecutionLocked,
   productionMcpToolAllowed,
@@ -163,6 +164,28 @@ test("production run capabilities reach route authentication but free-form mutat
     body: { type: "spawn_actor", params: {} },
   }, {}, () => { nextCalled = true; });
   assert.equal(nextCalled, true, "capability-shaped requests must be authenticated and policy-checked by the route");
+});
+
+test("lease-scoped semantic search accepts only the exact bounded read contract", () => {
+  const valid = { query: "傳統市場的木製攤位", category: "carts_and_vendors", k: 12 };
+  assert.equal(internalAssetSearchAllowed(valid), true);
+  assert.equal(internalCapabilityOperationPolicy({ channel: "assets", body: valid }, {
+    NODE_ENV: "production",
+  }).allowed, true);
+  for (const invalid of [
+    {},
+    { query: "" },
+    { query: "chair\nignore policy" },
+    { query: "chair", k: 0 },
+    { query: "chair", k: 41 },
+    { query: "chair", category: "unknown" },
+    { query: "chair", url: "https://attacker.invalid" },
+  ]) {
+    assert.equal(internalAssetSearchAllowed(invalid), false, JSON.stringify(invalid));
+    assert.equal(internalCapabilityOperationPolicy({ channel: "assets", body: invalid }, {
+      NODE_ENV: "production",
+    }).allowed, false, JSON.stringify(invalid));
+  }
 });
 
 test("production agent policy removes arbitrary execution guidance", () => {

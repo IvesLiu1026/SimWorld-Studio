@@ -27,6 +27,14 @@ const PRODUCTION_INTERNAL_UE_READ_TYPES = new Set([
   "find_actors_by_name",
   "get_actors_in_level",
 ]);
+const ASSET_CATEGORIES = new Set([
+  "agricultural_props", "barriers_and_fencing", "building_pieces", "buildings",
+  "camping_outdoor", "carts_and_vendors", "decor_and_landmarks", "furniture_indoor",
+  "ground_and_road", "indoor_clutter", "industrial_goods", "lighting",
+  "litter_and_debris", "market_goods", "medieval_fantasy_props", "nature_terrain",
+  "pipes_tanks_infra", "religious_ritual", "sci_fi_props", "seating", "signage",
+  "tools_equipment", "vegetation", "vehicles", "waste_and_bins", "winter_snow_props",
+]);
 
 function productionExecutionLocked(env = process.env) {
   if (String(env.NODE_ENV || "").trim().toLowerCase() === "production") return true;
@@ -103,6 +111,14 @@ function internalUcvReadAllowed(body) {
   return true;
 }
 
+function internalAssetSearchAllowed(body) {
+  if (!isPlainObject(body) || !hasOnlyKeys(body, new Set(["query", "category", "k"]))) return false;
+  const query = typeof body.query === "string" ? body.query.trim() : "";
+  if (!query || query.length > 1000 || /[\u0000-\u001f\u007f]/.test(query)) return false;
+  if (body.category !== undefined && !ASSET_CATEGORIES.has(body.category)) return false;
+  return body.k === undefined || (Number.isSafeInteger(body.k) && body.k >= 1 && body.k <= 40);
+}
+
 function fixedCameraOperationAllowed(body) {
   if (!isPlainObject(body) || !hasOnlyKeys(body, new Set(["cmd", "args"]))) return false;
   const args = body.args === undefined ? [] : body.args;
@@ -124,7 +140,9 @@ function internalCapabilityOperationPolicy({ channel, body } = {}, env = process
   if (!productionExecutionLocked(env)) return Object.freeze({ allowed: true });
   const allowed = channel === "ue"
     ? internalUeReadAllowed(body)
-    : channel === "ucv" && internalUcvReadAllowed(body);
+    : channel === "ucv"
+      ? internalUcvReadAllowed(body)
+      : channel === "assets" && internalAssetSearchAllowed(body);
   if (allowed) return Object.freeze({ allowed: true });
   return Object.freeze({
     allowed: false,
@@ -158,6 +176,7 @@ function createProductionExecutionGuard({ env = process.env } = {}) {
 module.exports = {
   createProductionExecutionGuard,
   fixedCameraOperationAllowed,
+  internalAssetSearchAllowed,
   internalUcvReadAllowed,
   internalUeReadAllowed,
   internalCapabilityOperationPolicy,

@@ -28,12 +28,20 @@
 // the user message.
 
 const fs    = require("fs");
-const os    = require("os");
 const path  = require("path");
 const crypto= require("crypto");
 const { spawn } = require("child_process");
 const { stripToolPrefix } = require("./gemini-runner");
-const { attachBuilderRuntimeProcess, buildBuilderChildEnv } = require("./builder-runtime-authority");
+const { attachBuilderRuntimeProcess } = require("./builder-runtime-authority");
+const {
+  SCOPED_SIMWORLD_TOOLS,
+  assertSafeBuilderArgv,
+  assertScopedMcpConfig,
+  buildCodexSafetyArgs,
+  buildMinimalBuilderEnv,
+  resolveVisualFeedbackImages,
+} = require("./builder-process-policy");
+const { SANDBOX_WORKDIR, sandboxedSpawn } = require("./agent-sandbox");
 
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const CODEX_MODEL = process.env.CODEX_MODEL || ""; // empty → CLI/config default
@@ -49,26 +57,21 @@ function tomlVal(v) {
 
 // Build repeatable `-c mcp_servers.<name>...=<toml>` args mirroring web/mcp.json,
 // rewriting UNREAL_PORT to the live engine port.
-function buildMcpOverrideArgs(mcpConfigPath, unrealPort, logToFile) {
-  const out = [];
-  try {
-    const mcp = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8"));
-    for (const [name, cfg] of Object.entries(mcp.mcpServers || {})) {
-      if (cfg.command) out.push("-c", `mcp_servers.${name}.command=${tomlVal(cfg.command)}`);
-      if (Array.isArray(cfg.args)) out.push("-c", `mcp_servers.${name}.args=${tomlVal(cfg.args)}`);
-      const env = { ...(cfg.env || {}) };
-      if (unrealPort) env.UNREAL_PORT = String(unrealPort);
-      // Pass through provider/runtime env the scene-loop + verify_scene(codex) path needs.
-      for (const k of ['LLM_PROVIDER','CODEX_MODEL','CODEX_BIN','CODEX_HOME','HOME','PORT','CRITIC_TIMEOUT_MS']) {
-        if (process.env[k] && env[k] == null) env[k] = String(process.env[k]);
-      }
-      for (const [k, val] of Object.entries(env)) {
-        out.push("-c", `mcp_servers.${name}.env.${k}=${tomlVal(val)}`);
-      }
-    }
-  } catch (e) {
-    logToFile && logToFile("codex", `failed to read mcp config: ${e.message}`);
+function buildMcpOverrideArgs(mcpConfigPath, unrealPort) {
+  const scoped = assertScopedMcpConfig(mcpConfigPath);
+  if (unrealPort != null) {
+    throw new Error("Direct Unreal routing is forbidden for the real Codex builder");
   }
+  const out = [];
+  out.push("-c", `mcp_servers.simworld.command=${tomlVal(scoped.command)}`);
+  out.push("-c", `mcp_servers.simworld.args=${tomlVal(scoped.args)}`);
+  const env = { ...scoped.env };
+  for (const [key, value] of Object.entries(env)) {
+    out.push("-c", `mcp_servers.simworld.env.${key}=${tomlVal(value)}`);
+  }
+  out.push("-c", "mcp_servers.simworld.required=true");
+  out.push("-c", `mcp_servers.simworld.enabled_tools=${tomlVal(SCOPED_SIMWORLD_TOOLS)}`);
+  out.push("-c", 'mcp_servers.simworld.default_tools_approval_mode="approve"');
   return out;
 }
 
@@ -79,19 +82,20 @@ function buildMcpOverrideArgs(mcpConfigPath, unrealPort, logToFile) {
  */
 function runCodexChat({ req, res, body, systemPrompt, ctx }) {
   const { message, sessionId } = body || {};
-  const model = (body && body.model) || CODEX_MODEL;
+  const model = String((body && body.model) || CODEX_MODEL || "").trim();
+  if (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)) {
+    throw new Error("Codex builder model identifier is invalid");
+  }
   const {
     ctxManager, snapshotScene, STUDIO_SESSION,
     MCP_CONFIG, UNREAL_PORT, LOG_DIR, SCREENSHOT_DIR,
     _chatProcs, logToFile, MOCK_MODE, BUILDER_RUNTIME,
   } = ctx;
 
-  // Run codex from a neutral dir OUTSIDE the repo tree. Codex walks up the cwd tree
-  // looking for a project `.codex/config.toml`; the repo ships a legacy one that codex
-  // 0.133 rejects. We inject the MCP server via `-c` anyway, so cwd is irrelevant to
-  // scene tools. Auth/config still come from $CODEX_HOME (default ~/.codex).
-  const codexCwd = path.join(os.tmpdir(), "simworld-codex");
-  try { fs.mkdirSync(codexCwd, { recursive: true }); } catch {}
+  // Caller filesystem paths are never accepted as model image input. A future
+  // server-managed byte resolver can be installed explicitly; until then any
+  // non-empty visualFeedbackImages request fails before a process is spawned.
+  resolveVisualFeedbackImages(body && body.visualFeedbackImages);
 
   if (!res.headersSent) {
     res.setHeader("Content-Type", "text/event-stream");
@@ -113,36 +117,27 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     "exec",
     "--json",
     "--skip-git-repo-check",
-    // Bypass codex's internal sandbox + approval flow entirely. REQUIRED for MCP: codex 0.133
-    // raises an approval *elicitation* for every MCP tool call (ToolCallMcpElicitation feature),
-    // and in headless `exec` mode there is no responder, so codex auto-cancels it with
-    // "user cancelled MCP tool call" — before the server ever runs. `approval_policy="never"`
-    // does NOT suppress this (it only governs shell-command sandbox escalation), and the
-    // `features.*` toggles are ignored. Only this flag makes codex auto-approve MCP calls.
-    //
-    // SECURITY: this is safe because we're "externally sandboxed" exactly as the flag intends —
-    // agent-sandbox.js wraps this process in bwrap with the repo bound READ-ONLY, so the agent
-    // still cannot modify Studio's source. The OS sandbox is the real guardrail, not codex's.
-    "--dangerously-bypass-approvals-and-sandbox",
-    "-C", codexCwd,
-    ...buildMcpOverrideArgs(MCP_CONFIG, UNREAL_PORT, logToFile),
+    ...buildCodexSafetyArgs(),
+    "-C", SANDBOX_WORKDIR,
+    ...buildMcpOverrideArgs(MCP_CONFIG, UNREAL_PORT),
   ];
   if (model) args.push("-m", model);
-  args.push(fullPrompt);
+  // The prompt is untrusted request content. Keep it out of argv so a leading
+  // dash cannot become a CLI option and it is not exposed in the process list.
+  args.push("-");
+  assertSafeBuilderArgv("codex", args);
 
-  const env = buildBuilderChildEnv(process.env, BUILDER_RUNTIME);
-  // Don't let Claude session env vars leak into codex.
-  Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
+  const env = buildMinimalBuilderEnv(process.env, BUILDER_RUNTIME, { provider: "codex" });
 
   logToFile("codex", `User: "${String(message).slice(0, 200)}" model=${model || "default"} sessionId=${sessionId || "new"}`);
   try { fs.writeFileSync(path.join(LOG_DIR, "raw_latest.jsonl"), ""); } catch {}
 
-  // OS sandbox: repo read-only so the agent can't modify Studio source (see agent-sandbox.js).
-  const _sb = require("./agent-sandbox").sandboxedSpawn(CODEX_BIN, args, codexCwd);
+  // OS sandbox: empty mount namespace plus exact read-only runtime/config mounts.
+  const _sb = sandboxedSpawn(CODEX_BIN, args, null, { env: process.env, provider: "codex" });
   const proc = spawn(_sb.cmd, _sb.args, {
-    cwd: codexCwd,
+    cwd: "/",
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   attachBuilderRuntimeProcess(BUILDER_RUNTIME, proc);
 
@@ -150,7 +145,10 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
   const prior = _chatProcs.get(procKey);
   if (prior && !prior.killed) { try { prior.kill("SIGTERM"); } catch {} }
   _chatProcs.set(procKey, proc);
-  proc.on("exit", () => { if (_chatProcs.get(procKey) === proc) _chatProcs.delete(procKey); });
+  const clearTrackedProcess = () => {
+    if (_chatProcs.get(procKey) === proc) _chatProcs.delete(procKey);
+  };
+  proc.on("exit", clearTrackedProcess);
 
   // ---- per-call state ------------------------------------------------------
   let stdoutBuf      = "";
@@ -412,6 +410,29 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     }
   });
 
+  proc.on("error", error => {
+    clearTrackedProcess();
+    stderrBuf += `process: ${error.message}\n`;
+    logToFile("codex", `Process error: ${error.message}`);
+    if (!res.writableEnded) {
+      emit("text", { delta: `\n\n⚠️ Codex agent failed to start: ${error.message}\n` });
+      finish(true);
+    }
+  });
+  proc.stdin.on("error", error => {
+    stderrBuf += `stdin: ${error.message}\n`;
+    logToFile("codex", `stdin error: ${error.message}`);
+    try { proc.kill("SIGTERM"); } catch {}
+  });
+  try {
+    proc.stdin.end(fullPrompt);
+  } catch (error) {
+    stderrBuf += `stdin: ${error.message}\n`;
+    logToFile("codex", `stdin write failed: ${error.message}`);
+    try { proc.kill("SIGTERM"); } catch {}
+    finish(true);
+  }
+
   res.on("close", () => {
     if (!res.writableEnded) {
       clearInterval(idleTimer);
@@ -421,4 +442,4 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
   });
 }
 
-module.exports = { runCodexChat };
+module.exports = { buildMcpOverrideArgs, runCodexChat };

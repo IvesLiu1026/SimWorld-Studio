@@ -1,7 +1,12 @@
 'use strict';
 
 const { spawn } = require('child_process');
-const path = require('path');
+const {
+  assertSafeToolFreeClaudeArgv,
+  buildClaudeToolFreeSafetyArgs,
+  buildMinimalToolFreeEnv,
+} = require('./builder-process-policy');
+const { sandboxedSpawn } = require('./agent-sandbox');
 
 const NL = String.fromCharCode(10);
 
@@ -133,6 +138,9 @@ async function selectSkillsWithClaude(options) {
   const registry = opts.skillRegistry;
   const claudeBin = String(opts.claudeBin || process.env.CLAUDE_BIN || 'claude');
   const timeoutMs = Math.max(5000, Number(opts.timeoutMs || 60000));
+  const spawnImpl = opts.spawnImpl || spawn;
+  const sandboxedSpawnImpl = opts.sandboxedSpawnImpl || sandboxedSpawn;
+  const baseEnv = opts.env || process.env;
   const model =
     opts.model == null || opts.model === ''
       ? null
@@ -173,25 +181,27 @@ async function selectSkillsWithClaude(options) {
   const selectorPrompt = buildSelectorPrompt(prompt, availableSkills);
   const args = [
     '-p',
-    selectorPrompt,
+    '--input-format',
+    'text',
     '--output-format',
     'stream-json',
     '--include-partial-messages',
     '--verbose',
-    '--dangerously-skip-permissions',
+    ...buildClaudeToolFreeSafetyArgs(),
   ];
   if (model) args.push('--model', model);
+  assertSafeToolFreeClaudeArgv(args);
 
   return new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    delete env.CLAUDECODE;
-    delete env.CLAUDE_SESSION_ID;
-    delete env.CLAUDE_CODE_ENTRYPOINT;
-
-    const proc = spawn(claudeBin, args, {
-      cwd: path.resolve(__dirname, '..'),
+    const env = buildMinimalToolFreeEnv(baseEnv, { provider: 'claude' });
+    const sandbox = sandboxedSpawnImpl(claudeBin, args, null, {
+      env: baseEnv,
+      provider: 'claude',
+    });
+    const proc = spawnImpl(sandbox.cmd, sandbox.args, {
+      cwd: '/',
       env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     let stdoutBuffer = '';
@@ -236,6 +246,12 @@ async function selectSkillsWithClaude(options) {
       stderrBuffer += chunk.toString();
     });
 
+    proc.stdin.on('error', (err) => {
+      clearTimeout(timeout);
+      try { proc.kill('SIGTERM'); } catch {}
+      reject(err);
+    });
+
     proc.on('error', (err) => {
       clearTimeout(timeout);
       reject(err);
@@ -269,7 +285,15 @@ async function selectSkillsWithClaude(options) {
         rawText,
       });
     });
+
+    try {
+      proc.stdin.end(selectorPrompt);
+    } catch (error) {
+      clearTimeout(timeout);
+      try { proc.kill('SIGTERM'); } catch {}
+      reject(error);
+    }
   });
 }
 
-module.exports = { selectSkillsWithClaude };
+module.exports = { buildSelectorPrompt, selectSkillsWithClaude };
