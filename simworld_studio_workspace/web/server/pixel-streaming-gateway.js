@@ -12,12 +12,21 @@ const {
 } = require("./pixel-streaming-endpoint-registry");
 
 const SESSION_COOKIE = "vista_stream_session";
+const PRINCIPAL_COOKIE = "vista_browser_principal";
 const SESSION_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+const PRINCIPAL_SUBJECT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const PRINCIPAL_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const OWNER_ID_PATTERN = /^browser-[a-f0-9]{64}$/;
+const LEASE_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 const ENDPOINT_ID_PATTERN = /^ps1_[A-Za-z0-9_-]{43}$/;
 const MIN_ENDPOINT_TTL_MS = 5 * 60 * 1000;
 const MAX_ENDPOINT_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SESSION_HARD_MAX_MS = 60 * 60 * 1000;
+const DEFAULT_PRINCIPAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MIN_PRINCIPAL_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_PRINCIPAL_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const PRINCIPAL_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_UPGRADE_HEADER_BYTES = 16 * 1024;
 
 class PixelStreamingGatewayError extends Error {
@@ -84,6 +93,44 @@ function serializeSessionCookie(token, transport, { clear = false, maxAgeMs } = 
   return parts.join("; ");
 }
 
+function serializePrincipalCookie(value, transport, { clear = false, maxAgeMs } = {}) {
+  if (!transport || !transport.cookie) {
+    fail("PIXEL_STREAMING_GATEWAY_CONFIG_INVALID", "A resolved transport profile is required");
+  }
+  if (!clear && (typeof value !== "string" || value.length < 1 || value.length > 512 ||
+      /[^A-Za-z0-9._-]/.test(value))) {
+    fail("PIXEL_STREAMING_PRINCIPAL_COOKIE_INVALID", "Principal cookie value is invalid");
+  }
+  const parts = [
+    `${PRINCIPAL_COOKIE}=${clear ? "" : encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    `SameSite=${transport.cookie.sameSite}`,
+  ];
+  if (transport.cookie.secure) parts.push("Secure");
+  if (clear) {
+    parts.push("Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+  } else {
+    const seconds = Math.max(1, Math.floor(maxAgeMs / 1000));
+    parts.push(`Max-Age=${seconds}`);
+  }
+  return parts.join("; ");
+}
+
+function appendSetCookie(response, value) {
+  let existing;
+  if (response && typeof response.getHeader === "function") {
+    existing = response.getHeader("Set-Cookie");
+  } else if (response && response.headers) {
+    existing = response.headers["set-cookie"];
+  }
+  const values = existing === undefined
+    ? []
+    : Array.isArray(existing) ? existing.slice() : [String(existing)];
+  values.push(value);
+  response.setHeader("Set-Cookie", values);
+}
+
 function readSecretFile(candidate) {
   if (typeof candidate !== "string" || !candidate.trim()) return "";
   const value = fs.readFileSync(candidate.trim(), "utf8");
@@ -123,20 +170,100 @@ function resolveEndpointHmacKey(env, transport) {
     .digest();
 }
 
-function sessionBinding(record) {
-  if (!record || typeof record !== "object") return null;
-  if (!SESSION_TOKEN_PATTERN.test(String(record.token || "")) ||
-      typeof record.userId !== "string" || !record.userId ||
-      !Number.isSafeInteger(record.slotId) || record.slotId < 0 ||
-      typeof record.leaseId !== "string" || !record.leaseId) {
+function derivePrincipalHmacKey(endpointHmacKey) {
+  return crypto
+    .createHmac("sha256", endpointHmacKey)
+    .update("simworld/browser-principal/signing/v1")
+    .digest();
+}
+
+function principalOwnerId(subject, principalHmacKey) {
+  return `browser-${crypto
+    .createHmac("sha256", principalHmacKey)
+    .update("simworld/browser-principal/owner/v1\0")
+    .update(subject)
+    .digest("hex")}`;
+}
+
+function signPrincipalPayload(payload, principalHmacKey) {
+  return crypto.createHmac("sha256", principalHmacKey).update(payload).digest("base64url");
+}
+
+function sameSignature(left, right) {
+  if (!PRINCIPAL_SIGNATURE_PATTERN.test(String(left || "")) ||
+      !PRINCIPAL_SIGNATURE_PATTERN.test(String(right || ""))) {
+    return false;
+  }
+  const leftBytes = Buffer.from(left, "ascii");
+  const rightBytes = Buffer.from(right, "ascii");
+  return crypto.timingSafeEqual(leftBytes, rightBytes);
+}
+
+function createPrincipal(subject, principalHmacKey, now, ttlMs) {
+  if (!PRINCIPAL_SUBJECT_PATTERN.test(String(subject || "")) ||
+      !Number.isSafeInteger(now) || now < 0 ||
+      !Number.isSafeInteger(ttlMs) || ttlMs < MIN_PRINCIPAL_TTL_MS || ttlMs > MAX_PRINCIPAL_TTL_MS ||
+      !Number.isSafeInteger(now + ttlMs)) {
+    fail("PIXEL_STREAMING_PRINCIPAL_INVALID", "Browser principal cannot be issued");
+  }
+  const expiresAt = now + ttlMs;
+  const payload = `bp1.${subject}.${now}.${expiresAt}`;
+  return Object.freeze({
+    subject,
+    ownerId: principalOwnerId(subject, principalHmacKey),
+    issuedAt: now,
+    expiresAt,
+    value: `${payload}.${signPrincipalPayload(payload, principalHmacKey)}`,
+  });
+}
+
+function parsePrincipal(value, principalHmacKey, now) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 512 ||
+      !Number.isSafeInteger(now) || now < 0) {
     return null;
   }
+  const parts = value.split(".");
+  if (parts.length !== 5 || parts[0] !== "bp1" ||
+      !PRINCIPAL_SUBJECT_PATTERN.test(parts[1]) ||
+      !/^\d{1,16}$/.test(parts[2]) || !/^\d{1,16}$/.test(parts[3]) ||
+      !PRINCIPAL_SIGNATURE_PATTERN.test(parts[4])) {
+    return null;
+  }
+  const issuedAt = Number(parts[2]);
+  const expiresAt = Number(parts[3]);
+  if (!Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt) ||
+      issuedAt < 0 || expiresAt <= issuedAt ||
+      expiresAt - issuedAt > MAX_PRINCIPAL_TTL_MS ||
+      issuedAt > now + PRINCIPAL_CLOCK_SKEW_MS || expiresAt <= now) {
+    return null;
+  }
+  const payload = parts.slice(0, 4).join(".");
+  if (!sameSignature(parts[4], signPrincipalPayload(payload, principalHmacKey))) return null;
   return Object.freeze({
-    ownerId: record.userId,
-    sessionId: record.token,
-    slotId: record.slotId,
-    leaseId: record.leaseId,
+    subject: parts[1],
+    ownerId: principalOwnerId(parts[1], principalHmacKey),
+    issuedAt,
+    expiresAt,
+    value,
   });
+}
+
+function validSessionRecord(record, token, ownerId) {
+  return Boolean(record && typeof record === "object" &&
+    SESSION_TOKEN_PATTERN.test(String(token || "")) && record.token === token &&
+    OWNER_ID_PATTERN.test(String(ownerId || "")) && record.userId === ownerId &&
+    Number.isSafeInteger(record.slotId) && record.slotId >= 0 && record.slotId <= 65535 &&
+    LEASE_ID_PATTERN.test(String(record.leaseId || "")));
+}
+
+function hashedSessionId(record, principalHmacKey) {
+  return `session-${crypto
+    .createHmac("sha256", principalHmacKey)
+    .update("simworld/active-session/id/v1\0")
+    .update(record.token)
+    .update("\0")
+    .update(record.leaseId)
+    .digest("hex")}`;
 }
 
 function publicSession(record, manager, sessionTtlMs) {
@@ -251,9 +378,18 @@ function createStudioStreamingRuntime({
     MAX_ENDPOINT_TTL_MS,
     "STUDIO_PIXEL_STREAMING_ENDPOINT_TTL_MS",
   );
+  const principalTtlMs = positiveInteger(
+    env.STUDIO_BROWSER_PRINCIPAL_TTL_MS,
+    DEFAULT_PRINCIPAL_TTL_MS,
+    MIN_PRINCIPAL_TTL_MS,
+    MAX_PRINCIPAL_TTL_MS,
+    "STUDIO_BROWSER_PRINCIPAL_TTL_MS",
+  );
+  const endpointHmacKey = resolveEndpointHmacKey(env, transport);
+  const principalHmacKey = derivePrincipalHmacKey(endpointHmacKey);
   const proxyContext = Object.freeze({ capability: "pixel-streaming-loopback-proxy/v1" });
   const registry = createPixelStreamingEndpointRegistry({
-    endpointSecrets: { endpointHmacKey: resolveEndpointHmacKey(env, transport) },
+    endpointSecrets: { endpointHmacKey },
     trustedProxyContext: proxyContext,
     ttlMs: endpointTtlMs,
     pathPrefix: transport.streamingPathPrefix,
@@ -261,15 +397,61 @@ function createStudioStreamingRuntime({
   });
   const endpointBySessionToken = new Map();
 
-  function recordForRequest(request) {
-    const token = sessionTokenFromRequest(request);
-    return token ? sessionManager.touch(token) : null;
+  function currentTime() {
+    const now = Date.now();
+    if (!Number.isSafeInteger(now) || now < 0) {
+      fail("PIXEL_STREAMING_PRINCIPAL_CLOCK_INVALID", "Browser principal clock is invalid");
+    }
+    return now;
   }
 
-  function rememberEndpoint(record, endpoint) {
-    endpointBySessionToken.set(record.token, Object.freeze({
+  function principalFromRequest(request) {
+    const value = exactCookieValue(
+      request && request.headers && request.headers.cookie,
+      PRINCIPAL_COOKIE,
+    );
+    return parsePrincipal(value, principalHmacKey, currentTime());
+  }
+
+  function issuePrincipal(subject = crypto.randomBytes(32).toString("base64url")) {
+    return createPrincipal(subject, principalHmacKey, currentTime(), principalTtlMs);
+  }
+
+  function contextForRecord(record, token, principal) {
+    if (!principal || !validSessionRecord(record, token, principal.ownerId)) return null;
+    const binding = Object.freeze({
+      ownerId: principal.ownerId,
+      sessionId: hashedSessionId(record, principalHmacKey),
+      slotId: record.slotId,
+      leaseId: record.leaseId,
+    });
+    return Object.freeze({ record, principal, binding });
+  }
+
+  function activeContextForRequest(request) {
+    const principal = principalFromRequest(request);
+    const token = sessionTokenFromRequest(request);
+    if (!principal || !token) return null;
+    const record = sessionManager.touch(token);
+    return contextForRecord(record, token, principal);
+  }
+
+  function resolveActiveSession(request) {
+    const context = activeContextForRequest(request);
+    if (!context || context.record.mcpReady !== true) return null;
+    const mcpPort = context.record.uePorts && context.record.uePorts.mcpPort;
+    if (!Number.isSafeInteger(mcpPort) || mcpPort < 1 || mcpPort > 65535) return null;
+    if (Number.isSafeInteger(sessionManager.totalSlots) &&
+        (context.record.slotId < 0 || context.record.slotId >= sessionManager.totalSlots)) {
+      return null;
+    }
+    return Object.freeze({ ...context.binding, mcpPort });
+  }
+
+  function rememberEndpoint(context, endpoint) {
+    endpointBySessionToken.set(context.record.token, Object.freeze({
       endpoint,
-      binding: sessionBinding(record),
+      binding: context.binding,
     }));
   }
 
@@ -284,59 +466,76 @@ function createStudioStreamingRuntime({
     }
   }
 
+  function setPrincipalCookie(response, principal) {
+    appendSetCookie(
+      response,
+      serializePrincipalCookie(principal.value, transport, { maxAgeMs: principalTtlMs }),
+    );
+  }
+
   function setSessionCookie(response, token) {
-    response.setHeader(
-      "Set-Cookie",
+    appendSetCookie(
+      response,
       serializeSessionCookie(token, transport, { maxAgeMs: sessionHardMaxMs }),
     );
   }
 
   function clearSessionCookie(response) {
-    response.setHeader("Set-Cookie", serializeSessionCookie("", transport, { clear: true }));
+    appendSetCookie(response, serializeSessionCookie("", transport, { clear: true }));
   }
 
   async function acquireSession(request, response) {
-    let record = recordForRequest(request);
+    let principal = principalFromRequest(request);
+    let context = activeContextForRequest(request);
     try {
-      if (!record) {
-        const userId = `browser-${crypto.randomUUID()}`;
-        record = await sessionManager.acquire(userId);
+      if (!context) {
+        if (!principal) principal = issuePrincipal();
+        const record = await sessionManager.acquire(principal.ownerId);
+        context = contextForRecord(record, record && record.token, principal);
       }
-      if (!sessionBinding(record)) throw new Error("Session record does not meet the streaming contract");
-      setSessionCookie(response, record.token);
+      if (!context) throw new Error("Session record does not meet the streaming identity contract");
+      principal = issuePrincipal(principal.subject);
+      setPrincipalCookie(response, principal);
+      setSessionCookie(response, context.record.token);
       response.setHeader("Cache-Control", "no-store");
-      return response.json(publicSession(record, sessionManager, sessionTtlMs));
+      return response.json(publicSession(context.record, sessionManager, sessionTtlMs));
     } catch (error) {
+      const publicCode = /^[A-Z][A-Z0-9_]{0,63}$/.test(String(error.code || ""))
+        ? error.code
+        : "UNAVAILABLE";
+      logger("streaming", `${publicCode}: session acquisition failed`);
       return response.status(503).json({
-        error: error.message,
-        code: error.code || "UNAVAILABLE",
+        error: "Studio session is unavailable",
+        code: publicCode,
         queueLength: sessionManager.queueLength,
       });
     }
   }
 
   function heartbeatSession(request, response) {
-    const record = recordForRequest(request);
-    if (!record) {
+    const context = activeContextForRequest(request);
+    if (!context) {
       clearSessionCookie(response);
       return response.status(401).json({ code: "SESSION_EXPIRED", error: "Session expired or invalid" });
     }
-    setSessionCookie(response, record.token);
+    const principal = issuePrincipal(context.principal.subject);
+    setPrincipalCookie(response, principal);
+    setSessionCookie(response, context.record.token);
     response.setHeader("Cache-Control", "no-store");
     return response.json({
       schema: "studio-session-heartbeat/v2",
       ok: true,
-      slotId: record.slotId,
+      slotId: context.record.slotId,
       idleMs: 0,
       sessionTtlMs,
     });
   }
 
   function releaseSession(request, response) {
-    const token = sessionTokenFromRequest(request);
-    if (token) {
-      revokeToken(token);
-      sessionManager.release(token);
+    const context = activeContextForRequest(request);
+    if (context) {
+      revokeToken(context.record.token);
+      sessionManager.release(context.record.token);
     }
     clearSessionCookie(response);
     response.setHeader("Cache-Control", "no-store");
@@ -344,19 +543,18 @@ function createStudioStreamingRuntime({
   }
 
   function issueEndpoint(request, response) {
-    const record = recordForRequest(request);
-    const binding = sessionBinding(record);
-    if (!record || !binding) {
+    const context = activeContextForRequest(request);
+    if (!context) {
       clearSessionCookie(response);
       return response.status(401).json({
         code: "STREAMING_SESSION_REQUIRED",
         error: "An active Studio session is required",
       });
     }
-    const cirrusHttpPort = Number(record.uePorts && record.uePorts.cirrusHttp);
+    const cirrusHttpPort = Number(context.record.uePorts && context.record.uePorts.cirrusHttp);
     try {
-      const endpoint = registry.acquire({ ...binding, cirrusHttpPort });
-      rememberEndpoint(record, endpoint);
+      const endpoint = registry.acquire({ ...context.binding, cirrusHttpPort });
+      rememberEndpoint(context, endpoint);
       response.setHeader("Cache-Control", "no-store");
       return response.json({
         schema: "pixel-streaming-endpoint/v1",
@@ -387,14 +585,13 @@ function createStudioStreamingRuntime({
       return rejectUpgrade(socket, 404);
     }
 
-    const record = recordForRequest(request);
-    const binding = sessionBinding(record);
-    if (!record || !binding) return rejectUpgrade(socket, 401);
+    const context = activeContextForRequest(request);
+    if (!context) return rejectUpgrade(socket, 401);
 
     let upstream;
     let serializedRequest;
     try {
-      upstream = registry.resolveForProxy(parsed.pathname, binding, proxyContext);
+      upstream = registry.resolveForProxy(parsed.pathname, context.binding, proxyContext);
       serializedRequest = upstreamUpgradeRequest(request, upstream);
     } catch {
       return rejectUpgrade(socket, 404);
@@ -431,6 +628,7 @@ function createStudioStreamingRuntime({
     heartbeatSession,
     releaseSession,
     issueEndpoint,
+    resolveActiveSession,
     handleUpgrade,
     attach(server) {
       if (!server || typeof server.on !== "function") {
@@ -457,10 +655,12 @@ function createStudioStreamingRuntime({
 module.exports = {
   ENDPOINT_ID_PATTERN,
   PixelStreamingGatewayError,
+  PRINCIPAL_COOKIE,
   SESSION_COOKIE,
   createStudioStreamingRuntime,
   exactCookieValue,
   isStreamingEndpointPath,
+  serializePrincipalCookie,
   serializeSessionCookie,
   sessionTokenFromRequest,
   upstreamUpgradeRequest,
