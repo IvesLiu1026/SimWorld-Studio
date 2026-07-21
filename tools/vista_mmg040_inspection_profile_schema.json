@@ -342,9 +342,19 @@
           "maxLength": 500,
           "pattern": "^[A-Za-z0-9_+.-]+(?:/[A-Za-z0-9_+.-]+)*/?$",
           "not": {
-            "enum": [
-              "simworld_studio_workspace/web/server/assets.json",
-              "packaging/simworld_arena/server/assets.json"
+            "anyOf": [
+              {
+                "enum": [
+                  "simworld_studio_workspace/web/server/assets.json",
+                  "packaging/simworld_arena/server/assets.json"
+                ]
+              },
+              {
+                "pattern": "^Game/"
+              },
+              {
+                "pattern": "\\.\\."
+              }
             ]
           }
         },

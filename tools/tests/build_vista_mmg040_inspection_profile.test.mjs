@@ -232,10 +232,12 @@ test("schema fixes digests, both candidate/live branches, locator kinds, and rec
   assert.equal(schema.$defs.candidate.allOf.length, 2);
   assert.equal(schema.$defs.candidate.allOf[0].then.properties.filesystem_locator.pattern, "\\.uasset$");
   assert.equal(schema.$defs.candidate.allOf[1].then.properties.filesystem_locator.pattern, "/$");
-  assert.deepEqual(schema.$defs.candidate.properties.filesystem_locator.not.enum, [
+  assert.deepEqual(schema.$defs.candidate.properties.filesystem_locator.not.anyOf[0].enum, [
     "simworld_studio_workspace/web/server/assets.json",
     "packaging/simworld_arena/server/assets.json",
   ]);
+  assert.equal(schema.$defs.candidate.properties.filesystem_locator.not.anyOf[1].pattern, "^Game/");
+  assert.equal(schema.$defs.candidate.properties.filesystem_locator.not.anyOf[2].pattern, "\\.\\.");
   assert.equal(schema.$defs.liveInspection.properties.verified_at.pattern,
     "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$");
   assert.match(schema.$defs.liveInspection.$comment, /receipt verifier|sealed.*basis/i);
@@ -256,6 +258,15 @@ test("source binding drift, object-path claims, and upgraded evidence stages fai
     () => validateInspectionProfile(objectPath, candidateBasis),
     "ANIMATION_MMG040_CANDIDATE_SOURCE_INVALID",
   );
+
+  for (const locator of ["Game/Foo.uasset", "foo/../bar.uasset"]) {
+    const invalidLocator = buildInspectionProfile(candidateBasis);
+    invalidLocator.animation_source_candidates[0].filesystem_locator = locator;
+    expectProfileCode(
+      () => validateInspectionProfile(invalidLocator, candidateBasis),
+      "ANIMATION_MMG040_CANDIDATE_SOURCE_INVALID",
+    );
+  }
 
   const upgradedStage = buildInspectionProfile(candidateBasis);
   upgradedStage.filesystem_inventory_observation.evidence_stage = "asset_registry_verified";
