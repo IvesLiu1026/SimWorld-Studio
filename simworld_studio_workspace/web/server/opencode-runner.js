@@ -27,6 +27,7 @@ const os    = require("os");
 const path  = require("path");
 const { spawn } = require("child_process");
 const { stripToolPrefix } = require("./gemini-runner");
+const { attachBuilderRuntimeProcess, buildBuilderChildEnv } = require("./builder-runtime-authority");
 
 const OPENCODE_BIN   = process.env.OPENCODE_BIN   || "opencode";
 const OPENCODE_MODEL = process.env.OPENCODE_MODEL || ""; // provider/model form; empty → opencode default
@@ -78,7 +79,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
   const {
     ctxManager, snapshotScene, STUDIO_SESSION,
     MCP_CONFIG, UNREAL_PORT, LOG_DIR, SCREENSHOT_DIR,
-    _chatProcs, logToFile, MOCK_MODE,
+    _chatProcs, logToFile, MOCK_MODE, BUILDER_RUNTIME,
   } = ctx;
 
   const cwd = ensureOpenCodeWorkspace(MCP_CONFIG, UNREAL_PORT, logToFile);
@@ -106,7 +107,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
   if (model) args.push("--model", model);
   args.push(fullPrompt);
 
-  const env = { ...process.env };
+  const env = buildBuilderChildEnv(process.env, BUILDER_RUNTIME);
   Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
 
   logToFile("opencode", `User: "${String(message).slice(0, 200)}" model=${model || "default"} sessionId=${sessionId || "new"}`);
@@ -117,6 +118,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
     // OS sandbox: repo read-only so the agent can't modify Studio source (see agent-sandbox.js).
     const _sb = require("./agent-sandbox").sandboxedSpawn(OPENCODE_BIN, args, cwd);
     proc = spawn(_sb.cmd, _sb.args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    attachBuilderRuntimeProcess(BUILDER_RUNTIME, proc);
   } catch (e) {
     emit("text", { delta: `\n\n⚠️ Failed to launch OpenCode (\`${OPENCODE_BIN}\`): ${e.message}. Install the opencode CLI and set OPENCODE_BIN if needed.\n` });
     emit("done", { sessionId: STUDIO_SESSION, isError: true, latestScreenshot: null });
@@ -124,7 +126,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
     return;
   }
 
-  const procKey = sessionId || "_global";
+  const procKey = BUILDER_RUNTIME ? BUILDER_RUNTIME.scopeId : (sessionId || "_global");
   const prior = _chatProcs.get(procKey);
   if (prior && !prior.killed) { try { prior.kill("SIGTERM"); } catch {} }
   _chatProcs.set(procKey, proc);
@@ -326,7 +328,7 @@ function runOpenCodeChat({ req, res, body, systemPrompt, ctx }) {
       emit("done", { sessionId: STUDIO_SESSION, isError, costUsd: 0, latestScreenshot: latestShotUrl() });
       try { res.end(); } catch {}
     };
-    if (!MOCK_MODE) snapshotScene(STUDIO_SESSION).then(done).catch(() => done());
+    if (!MOCK_MODE) snapshotScene(STUDIO_SESSION, BUILDER_RUNTIME).then(done).catch(() => done());
     else done();
   }
 

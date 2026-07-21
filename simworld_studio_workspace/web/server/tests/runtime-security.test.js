@@ -186,6 +186,38 @@ test("transport middleware admits only the resolved loopback or trusted proxy au
   assert.equal(payload.code, "TRANSPORT_REQUEST_REJECTED");
 });
 
+test("internal run candidates bypass outer gates only over the actual loopback socket", () => {
+  const trusted = resolveTransportProfile({
+    STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
+    STUDIO_PUBLIC_ORIGIN: "https://studio.example.test",
+    STUDIO_TRUSTED_PROXY: "127.0.0.1",
+  });
+  const candidate = {
+    method: "POST",
+    path: "/api/internal/ue",
+    url: "/api/internal/ue",
+    headers: {
+      "x-simworld-run-capability": "c".repeat(43),
+      "x-simworld-run-id": "run-1",
+    },
+    socket: { remoteAddress: "127.0.0.1" },
+    body: { type: "get_actors_in_level", params: {} },
+  };
+  let calls = 0;
+  createTransportRequestGuard(trusted)(candidate, {}, () => { calls += 1; });
+  createAccessGuard(ACCESS_TOKEN, { transport: trusted })(candidate, {}, () => { calls += 1; });
+  createModelGate({ mode: "off" })(candidate, {}, () => { calls += 1; });
+  assert.equal(calls, 3);
+
+  let statusCode = null;
+  createAccessGuard(ACCESS_TOKEN, { transport: trusted })(
+    { ...candidate, socket: { remoteAddress: "203.0.113.9" } },
+    { status(code) { statusCode = code; return this; }, json() { return this; } },
+    () => assert.fail("non-loopback capability candidate must not bypass access auth"),
+  );
+  assert.equal(statusCode, 401);
+});
+
 test("screenshot files must resolve inside an approved realpath root", () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "studio-security-"));
   try {

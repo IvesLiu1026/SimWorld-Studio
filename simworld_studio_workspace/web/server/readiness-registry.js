@@ -1,7 +1,13 @@
 "use strict";
 
 const READINESS_SCHEMA = "simworld-readiness/v1";
-const FEATURE_NAMES = Object.freeze(["review", "retrieval", "streaming", "timeline"]);
+const FEATURE_NAMES = Object.freeze([
+  "review",
+  "retrieval",
+  "streaming",
+  "timeline",
+  "nlp_generation",
+]);
 const FEATURE_POLICIES = Object.freeze(["required", "optional", "disabled"]);
 const PROBE_STATUSES = new Set(["ready", "degraded", "not_ready"]);
 const MAX_PROBE_TIMEOUT_MS = 10_000;
@@ -195,7 +201,9 @@ function normalizeFeaturePolicy(featurePolicy) {
 
   const policy = {};
   for (const name of FEATURE_NAMES) {
-    const value = featurePolicy[name] === undefined ? "optional" : featurePolicy[name];
+    const value = featurePolicy[name] === undefined
+      ? (name === "nlp_generation" ? "disabled" : "optional")
+      : featurePolicy[name];
     if (!FEATURE_POLICIES.includes(value)) {
       throw new TypeError(`${name} readiness policy must be required, optional, or disabled`);
     }

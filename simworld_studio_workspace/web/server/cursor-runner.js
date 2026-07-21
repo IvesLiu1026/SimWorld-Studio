@@ -28,6 +28,7 @@ const path  = require("path");
 const crypto= require("crypto");
 const { spawn } = require("child_process");
 const { stripToolPrefix } = require("./gemini-runner");
+const { attachBuilderRuntimeProcess, buildBuilderChildEnv } = require("./builder-runtime-authority");
 
 const CURSOR_BIN  = process.env.CURSOR_BIN  || "cursor-agent";
 const CURSOR_MODEL = process.env.CURSOR_MODEL || ""; // empty → CLI/account default
@@ -68,7 +69,7 @@ function runCursorChat({ req, res, body, systemPrompt, ctx }) {
   const {
     ctxManager, snapshotScene, STUDIO_SESSION,
     MCP_CONFIG, UNREAL_PORT, LOG_DIR, SCREENSHOT_DIR,
-    _chatProcs, logToFile, MOCK_MODE,
+    _chatProcs, logToFile, MOCK_MODE, BUILDER_RUNTIME,
   } = ctx;
 
   const cursorCwd = ensureCursorWorkspace(MCP_CONFIG, UNREAL_PORT, logToFile);
@@ -107,7 +108,7 @@ function runCursorChat({ req, res, body, systemPrompt, ctx }) {
   if (model) args.push("--model", model);
   args.push(fullPrompt); // positional prompt — must be last
 
-  const env = { ...process.env };
+  const env = buildBuilderChildEnv(process.env, BUILDER_RUNTIME);
   // Don't let Claude session env vars leak into cursor-agent.
   Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
   // The cursor-agent installer drops a stable symlink in ~/.local/bin, which a tmux-launched
@@ -125,8 +126,9 @@ function runCursorChat({ req, res, body, systemPrompt, ctx }) {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  attachBuilderRuntimeProcess(BUILDER_RUNTIME, proc);
 
-  const procKey = sessionId || "_global";
+  const procKey = BUILDER_RUNTIME ? BUILDER_RUNTIME.scopeId : (sessionId || "_global");
   const prior = _chatProcs.get(procKey);
   if (prior && !prior.killed) { try { prior.kill("SIGTERM"); } catch {} }
   _chatProcs.set(procKey, proc);
@@ -368,7 +370,7 @@ function runCursorChat({ req, res, body, systemPrompt, ctx }) {
         try { res.end(); } catch {}
       };
       if (!MOCK_MODE) {
-        snapshotScene(STUDIO_SESSION).then(finish).catch(err => {
+        snapshotScene(STUDIO_SESSION, BUILDER_RUNTIME).then(finish).catch(err => {
           logToFile("ctx", `cursor snapshotScene error: ${err.message}`);
           finish();
         });

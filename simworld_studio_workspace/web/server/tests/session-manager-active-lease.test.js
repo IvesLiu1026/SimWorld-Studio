@@ -29,6 +29,10 @@ test("active lease lookup returns only an exact non-secret ready binding", async
     assert.deepEqual(active, identity);
     assert.equal(Object.isFrozen(active), true);
     assert.equal(Object.hasOwn(active, "token"), false);
+    assert.deepEqual(manager.resolveActiveLeaseRuntime(identity), {
+      ...identity,
+      ucvPort: record.uePorts.ucvPort,
+    });
 
     for (const altered of [
       { ...identity, ownerId: `browser-${"b".repeat(64)}` },

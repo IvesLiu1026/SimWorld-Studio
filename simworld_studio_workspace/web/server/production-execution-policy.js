@@ -1,10 +1,27 @@
 "use strict";
 
+const { isInternalCapabilityCandidate } = require("./internal-run-capability");
+
 const PRODUCTION_SAFETY_VALUES = new Set(["1", "true", "enforced"]);
 const DISABLED_SAFETY_VALUES = new Set(["", "0", "false"]);
 const PRODUCTION_MCP_BLOCKED_TOOLS = new Set([
   "execute_python_script",
   "read_job_log",
+]);
+const PRODUCTION_NLP_MUTATION_TOOLS = new Set([
+  "spawn_blueprint_actor",
+  "spawn_actor",
+  "delete_actor",
+  "delete_all_spawned",
+  "set_actor_transform",
+  "setup_environment",
+  "spawn_agent",
+  "agent_stop",
+  "agent_rotate",
+  "agent_action",
+  "set_camera",
+  "set_actor_color",
+  "save_scene_as",
 ]);
 const PRODUCTION_INTERNAL_UE_READ_TYPES = new Set([
   "find_actors_by_name",
@@ -20,8 +37,28 @@ function productionExecutionLocked(env = process.env) {
   throw new Error("SIMWORLD_PRODUCTION_SAFETY must be 1, true, enforced, 0, or false");
 }
 
+function productionMcpToolDecision(name, env = process.env) {
+  if (!productionExecutionLocked(env)) return Object.freeze({ allowed: true });
+  const toolName = String(name || "");
+  if (PRODUCTION_NLP_MUTATION_TOOLS.has(toolName)) {
+    return Object.freeze({
+      allowed: false,
+      code: "NLP_TYPED_MUTATION_UNAVAILABLE",
+      message: "Free-form NLP scene mutation is unavailable until a typed mutation adapter is installed.",
+    });
+  }
+  if (PRODUCTION_MCP_BLOCKED_TOOLS.has(toolName)) {
+    return Object.freeze({
+      allowed: false,
+      code: "GENERIC_UE_EXECUTION_DISABLED",
+      message: "Generic Unreal execution is unavailable in production",
+    });
+  }
+  return Object.freeze({ allowed: true });
+}
+
 function productionMcpToolAllowed(name, env = process.env) {
-  return !productionExecutionLocked(env) || !PRODUCTION_MCP_BLOCKED_TOOLS.has(String(name || ""));
+  return productionMcpToolDecision(name, env).allowed;
 }
 
 function normalizedRequestPath(req) {
@@ -83,6 +120,20 @@ function denyGenericExecution(res) {
   });
 }
 
+function internalCapabilityOperationPolicy({ channel, body } = {}, env = process.env) {
+  if (!productionExecutionLocked(env)) return Object.freeze({ allowed: true });
+  const allowed = channel === "ue"
+    ? internalUeReadAllowed(body)
+    : channel === "ucv" && internalUcvReadAllowed(body);
+  if (allowed) return Object.freeze({ allowed: true });
+  return Object.freeze({
+    allowed: false,
+    code: "NLP_TYPED_MUTATION_UNAVAILABLE",
+    message: "Free-form NLP scene mutation is unavailable until a typed mutation adapter is installed.",
+    statusCode: 403,
+  });
+}
+
 function createProductionExecutionGuard({ env = process.env } = {}) {
   const locked = productionExecutionLocked(env);
   return function productionExecutionGuard(req, res, next) {
@@ -93,6 +144,7 @@ function createProductionExecutionGuard({ env = process.env } = {}) {
     if (requestPath === "/api/camera" && !fixedCameraOperationAllowed(req.body)) {
       return denyGenericExecution(res);
     }
+    if (isInternalCapabilityCandidate(req)) return next();
     if (requestPath === "/api/internal/ue" && !internalUeReadAllowed(req.body)) {
       return denyGenericExecution(res);
     }
@@ -108,6 +160,8 @@ module.exports = {
   fixedCameraOperationAllowed,
   internalUcvReadAllowed,
   internalUeReadAllowed,
+  internalCapabilityOperationPolicy,
   productionExecutionLocked,
   productionMcpToolAllowed,
+  productionMcpToolDecision,
 };

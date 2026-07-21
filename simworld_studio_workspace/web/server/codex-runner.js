@@ -33,6 +33,7 @@ const path  = require("path");
 const crypto= require("crypto");
 const { spawn } = require("child_process");
 const { stripToolPrefix } = require("./gemini-runner");
+const { attachBuilderRuntimeProcess, buildBuilderChildEnv } = require("./builder-runtime-authority");
 
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const CODEX_MODEL = process.env.CODEX_MODEL || ""; // empty → CLI/config default
@@ -82,7 +83,7 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
   const {
     ctxManager, snapshotScene, STUDIO_SESSION,
     MCP_CONFIG, UNREAL_PORT, LOG_DIR, SCREENSHOT_DIR,
-    _chatProcs, logToFile, MOCK_MODE,
+    _chatProcs, logToFile, MOCK_MODE, BUILDER_RUNTIME,
   } = ctx;
 
   // Run codex from a neutral dir OUTSIDE the repo tree. Codex walks up the cwd tree
@@ -129,7 +130,7 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
   if (model) args.push("-m", model);
   args.push(fullPrompt);
 
-  const env = { ...process.env };
+  const env = buildBuilderChildEnv(process.env, BUILDER_RUNTIME);
   // Don't let Claude session env vars leak into codex.
   Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
 
@@ -143,8 +144,9 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  attachBuilderRuntimeProcess(BUILDER_RUNTIME, proc);
 
-  const procKey = sessionId || "_global";
+  const procKey = BUILDER_RUNTIME ? BUILDER_RUNTIME.scopeId : (sessionId || "_global");
   const prior = _chatProcs.get(procKey);
   if (prior && !prior.killed) { try { prior.kill("SIGTERM"); } catch {} }
   _chatProcs.set(procKey, proc);
@@ -391,7 +393,7 @@ function runCodexChat({ req, res, body, systemPrompt, ctx }) {
       try { res.end(); } catch {}
     };
     if (!MOCK_MODE) {
-      snapshotScene(STUDIO_SESSION).then(done).catch(err => {
+      snapshotScene(STUDIO_SESSION, BUILDER_RUNTIME).then(done).catch(err => {
         logToFile("ctx", `codex snapshotScene error: ${err.message}`);
         done();
       });

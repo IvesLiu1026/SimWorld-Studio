@@ -22,7 +22,13 @@ const {
   verifyWebRtcReadinessReceipt,
 } = require("./webrtc-readiness-receipt");
 
-const FEATURE_NAMES = Object.freeze(["review", "retrieval", "streaming", "timeline"]);
+const FEATURE_NAMES = Object.freeze([
+  "review",
+  "retrieval",
+  "streaming",
+  "timeline",
+  "nlp_generation",
+]);
 const POLICY_VALUES = new Set(["required", "optional", "disabled"]);
 
 function envFlag(value) {
@@ -61,6 +67,7 @@ function resolveStudioFeaturePolicy(env = process.env) {
     retrieval: explicitPolicy(env, "retrieval", requireRealAssets ? "required" : "optional"),
     streaming: explicitPolicy(env, "streaming", transportProfile === "public_webrtc" ? "required" : "optional"),
     timeline: explicitPolicy(env, "timeline", envFlag(env.TIMELINE_REQUIRED) ? "required" : "optional"),
+    nlp_generation: production ? "required" : "optional",
   });
 }
 
@@ -693,6 +700,25 @@ function createTimelineReadinessProbe({ animationUeProbe } = {}) {
   };
 }
 
+function createNlpGenerationReadinessProbe() {
+  return async function probeNlpGeneration() {
+    return {
+      status: "not_ready",
+      revision: {
+        schema: "simworld-nlp-scene/v1",
+        free_form_typed_mutation: "unavailable",
+        vista_scene_build_plan: "available",
+      },
+      causes: [publicCause(
+        "NLP_TYPED_MUTATION_UNAVAILABLE",
+        "Free-form NLP generation has no trusted typed mutation adapter; verified VISTA SceneBuildPlan execution remains available.",
+        false,
+        "nlp_typed_mutation",
+      )],
+    };
+  };
+}
+
 function createStudioReadiness({
   env = process.env,
   claudeBin,
@@ -728,6 +754,7 @@ function createStudioReadiness({
       fsImpl,
     }),
     timeline: probeOverrides.timeline || createTimelineReadinessProbe({ animationUeProbe }),
+    nlp_generation: probeOverrides.nlp_generation || createNlpGenerationReadinessProbe(),
   };
   return createReadinessRegistry({
     revision: revision || { build: buildRevision },
@@ -738,6 +765,7 @@ function createStudioReadiness({
 }
 
 module.exports = {
+  createNlpGenerationReadinessProbe,
   createRetrievalReadinessProbe,
   createReviewReadinessProbe,
   createStreamingReadinessProbe,

@@ -7,6 +7,7 @@ const {
   assertTransportRequest,
   buildPixelStreamingCsp,
 } = require("./pixel-streaming-config");
+const { isInternalCapabilityCandidate } = require("./internal-run-capability");
 
 const LOOPBACK_BIND_HOSTS = new Set(["127.0.0.1", "::1"]);
 const LOOPBACK_REQUEST_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -132,6 +133,7 @@ function createTransportBrowserHeaders(transport, options = {}) {
 
 function createTransportRequestGuard(transport) {
   return function transportRequestGuard(req, res, next) {
+    if (isInternalCapabilityCandidate(req) && requestRemoteIsLoopback(req)) return next();
     try {
       assertTransportRequest(req, transport);
       return next();
@@ -148,6 +150,7 @@ function createAccessGuard(accessToken, options = {}) {
   resolveAccessToken({ STUDIO_ACCESS_TOKEN: accessToken });
   const secureCookie = Boolean(options.transport && options.transport.cookie && options.transport.cookie.secure);
   return function accessGuard(req, res, next) {
+    if (isInternalCapabilityCandidate(req) && requestRemoteIsLoopback(req)) return next();
     const authorization = String(req.headers.authorization || "");
     const bearer = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
     const cookie = cookieValue(req.headers.cookie, "vista_studio_access");
@@ -214,6 +217,15 @@ function requestIsLoopback(req) {
   }
 }
 
+function requestRemoteIsLoopback(req) {
+  const address = String(
+    req && req.socket && req.socket.remoteAddress
+      || req && req.connection && req.connection.remoteAddress
+      || "",
+  ).toLowerCase();
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
 function requestLoopbackGuard(req, res, next) {
   if (requestIsLoopback(req)) return next();
   return res.status(403).json({
@@ -270,6 +282,7 @@ function createModelGate({
   return function modelGate(req, res, next) {
     const method = String(req.method || "GET").toUpperCase();
     const requestPath = String(req.path || req.url || "").split("?", 1)[0];
+    if (isInternalCapabilityCandidate(req) && requestRemoteIsLoopback(req)) return next();
 
     if (
       mode !== "live" &&
@@ -328,6 +341,7 @@ module.exports = {
   createTransportRequestGuard,
   LOOPBACK_BROWSER_CSP,
   requestIsLoopback,
+  requestRemoteIsLoopback,
   requestLoopbackGuard,
   resolveAccessToken,
   resolveBindHost,

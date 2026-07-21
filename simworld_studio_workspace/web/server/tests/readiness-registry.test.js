@@ -16,6 +16,7 @@ function disabledExcept(feature, policy = "required") {
     retrieval: "disabled",
     streaming: "disabled",
     timeline: "disabled",
+    nlp_generation: "disabled",
     [feature]: policy,
   };
 }
@@ -327,4 +328,23 @@ test("configuration validation rejects unbounded or ambiguous policy", async () 
 
   const registry = createReadinessRegistry();
   await assert.rejects(() => registry.getReadiness({ signal: {} }), /AbortSignal/);
+});
+
+test("generic registries disable NLP generation unless a caller explicitly owns its gate", async () => {
+  let calls = 0;
+  const registry = createReadinessRegistry({
+    probes: {
+      nlp_generation: () => {
+        calls += 1;
+        return { status: "ready" };
+      },
+    },
+    now: () => FIXED_TIME,
+  });
+
+  const report = await registry.getReadiness();
+  assert.equal(calls, 0);
+  assert.equal(report.features.nlp_generation.policy, "disabled");
+  assert.equal(report.features.nlp_generation.status, "disabled");
+  assert.equal(report.features.nlp_generation.ready, true);
 });

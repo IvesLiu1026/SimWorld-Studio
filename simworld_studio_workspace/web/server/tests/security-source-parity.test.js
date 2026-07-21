@@ -112,9 +112,10 @@ test("Review mode, UE evidence, and vanilla subprocesses stay lease-scoped in pu
   const source = fs.readFileSync(path.resolve(__dirname, "../index.js"), "utf8");
   const coordinatorRoute = source.indexOf('app.post("/api/chat",reviewLoopCoordinator.handleChat)');
   const authorityRoute = source.indexOf('app.post("/api/chat",reviewLoopCoordinator.bindVanillaChat)');
+  const builderAuthorityRoute = source.indexOf('app.post("/api/chat",_builderRuntimeAuthority.bind)');
   const legacyRoute = source.indexOf('app.post("/api/chat",async(s,e)=>');
   assert.ok(coordinatorRoute >= 0 && coordinatorRoute < authorityRoute);
-  assert.ok(authorityRoute < legacyRoute);
+  assert.ok(authorityRoute < builderAuthorityRoute && builderAuthorityRoute < legacyRoute);
   assert.match(source, /createScopedReviewModeStore\(\{\s*transportProfile:STUDIO_TRANSPORT\.profile/);
   assert.match(source, /defaultMode:\(\{scope\}\)=>reviewModeStore\.get\(scope\)/);
   assert.match(
@@ -123,7 +124,8 @@ test("Review mode, UE evidence, and vanilla subprocesses stay lease-scoped in pu
   );
   assert.match(source, /isActiveSessionBinding:\(identity\)=>studioStreaming\.isActiveSessionBinding\(identity\)/);
   assert.match(source, /if\(!requestedRunId\|\|cancelled\)\{/);
-  assert.match(source, /if\(_chatProcs\.get\(n\|\|"_global"\)===g\)_chatProcs\.delete\(n\|\|"_global"\)/);
+  assert.match(source, /const _procKey=_builderRuntime\?_builderRuntime\.scopeId:\(n\|\|"_global"\)/);
+  assert.match(source, /if\(_chatProcs\.get\(_procKey\)===g\)_chatProcs\.delete\(_procKey\)/);
   assert.doesNotMatch(source, /let sceneLoopMode|let sceneLoopEnabled/);
 });
 

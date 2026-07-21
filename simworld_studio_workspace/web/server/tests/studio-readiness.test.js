@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const {
+  createNlpGenerationReadinessProbe,
   createRetrievalReadinessProbe,
   createReviewReadinessProbe,
   createStreamingReadinessProbe,
@@ -151,11 +152,42 @@ test("feature policy makes production retrieval and public streaming blocking", 
     NODE_ENV: "production",
     ASSET_REQUIRE_REAL_ASSETS: "true",
     STUDIO_TRANSPORT_PROFILE: "trusted_proxy",
+    READINESS_NLP_GENERATION_POLICY: "disabled",
   });
   assert.equal(policy.retrieval, "required");
   assert.equal(policy.streaming, "required");
   assert.equal(policy.review, "required");
   assert.equal(policy.timeline, "optional");
+  assert.equal(policy.nlp_generation, "required");
+});
+
+test("NLP typed mutation readiness is fail-closed and cannot be enabled by legacy flags", async () => {
+  const policy = resolveStudioFeaturePolicy({
+    NODE_ENV: "development",
+    NLP_TYPED_MUTATION_VERIFIED: "true",
+    NLP_GENERATION_READY: "true",
+    READINESS_NLP_GENERATION_POLICY: "required",
+  });
+  assert.equal(policy.nlp_generation, "optional");
+
+  const report = await createNlpGenerationReadinessProbe({
+    env: {
+      NLP_TYPED_MUTATION_VERIFIED: "true",
+      NLP_GENERATION_READY: "true",
+    },
+  })();
+  assert.equal(report.status, "not_ready");
+  assert.deepEqual(report.revision, {
+    schema: "simworld-nlp-scene/v1",
+    free_form_typed_mutation: "unavailable",
+    vista_scene_build_plan: "available",
+  });
+  assert.deepEqual(report.causes, [{
+    code: "NLP_TYPED_MUTATION_UNAVAILABLE",
+    message: "Free-form NLP generation has no trusted typed mutation adapter; verified VISTA SceneBuildPlan execution remains available.",
+    retryable: false,
+    dependency: "nlp_typed_mutation",
+  }]);
 });
 
 test("review readiness ignores the legacy flag and requires a matching, current provider receipt", async (t) => {
@@ -478,10 +510,37 @@ test("studio registry remains live while optional dependencies are degraded", as
       retrieval: unavailable,
       streaming: ready,
       timeline: unavailable,
+      nlp_generation: unavailable,
     },
   });
   assert.equal(registry.getLiveness().status, "live");
   const report = await registry.getReadiness();
   assert.equal(report.ready, true);
   assert.equal(report.status, "degraded");
+});
+
+test("production Studio readiness is blocked by missing free-form typed NLP mutations", async () => {
+  const ready = async () => ({ status: "ready", causes: [] });
+  const registry = createStudioReadiness({
+    env: { NODE_ENV: "production" },
+    probeOverrides: {
+      review: ready,
+      retrieval: ready,
+      streaming: ready,
+      timeline: ready,
+    },
+  });
+
+  const report = await registry.getReadiness();
+  assert.equal(report.ready, false);
+  assert.equal(report.status, "not_ready");
+  assert.equal(report.features.nlp_generation.policy, "required");
+  assert.equal(report.features.nlp_generation.blocking, true);
+  assert.equal(report.features.nlp_generation.causes[0].code, "NLP_TYPED_MUTATION_UNAVAILABLE");
+  assert.equal(
+    report.causes.some((cause) => cause.feature === "nlp_generation"
+      && cause.code === "NLP_TYPED_MUTATION_UNAVAILABLE"
+      && cause.blocking === true),
+    true,
+  );
 });

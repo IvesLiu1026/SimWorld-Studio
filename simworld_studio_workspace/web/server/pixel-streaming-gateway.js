@@ -501,6 +501,28 @@ function createStudioStreamingRuntime({
     );
   }
 
+  function resolveActiveSessionRuntime(identity) {
+    const requested = activeBindingInput(identity);
+    if (!requested || !isActiveSessionBinding(requested)
+        || typeof sessionManager.resolveActiveLeaseRuntime !== "function") return null;
+    let runtime;
+    try {
+      runtime = sessionManager.resolveActiveLeaseRuntime({
+        ownerId: requested.ownerId,
+        slotId: requested.slotId,
+        leaseId: requested.leaseId,
+        mcpPort: requested.mcpPort,
+      });
+    } catch {
+      return null;
+    }
+    const ucvPort = Number(runtime && runtime.ucvPort);
+    if (!runtime || runtime.ownerId !== requested.ownerId || runtime.slotId !== requested.slotId
+        || runtime.leaseId !== requested.leaseId || runtime.mcpPort !== requested.mcpPort
+        || !Number.isSafeInteger(ucvPort) || ucvPort < 1 || ucvPort > 65535) return null;
+    return Object.freeze({ ...requested, ucvPort });
+  }
+
   function resolveActiveSession(request) {
     const context = activeContextForRequest(request);
     if (!context || context.record.mcpReady !== true) return null;
@@ -741,6 +763,7 @@ function createStudioStreamingRuntime({
     readTelemetry,
     getTelemetrySummary: () => telemetryRegistry.summary(),
     resolveActiveSession,
+    resolveActiveSessionRuntime,
     isActiveSessionBinding,
     handleUpgrade,
     attach(server) {

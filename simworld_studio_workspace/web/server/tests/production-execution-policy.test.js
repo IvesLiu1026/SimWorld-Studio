@@ -7,8 +7,10 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
   createProductionExecutionGuard,
+  internalCapabilityOperationPolicy,
   productionExecutionLocked,
   productionMcpToolAllowed,
+  productionMcpToolDecision,
 } = require("../production-execution-policy");
 const {
   buildPanelAgentRuleLines,
@@ -133,6 +135,36 @@ test("development behavior remains compatible while the explicit safety gate is 
   );
 });
 
+test("production run capabilities reach route authentication but free-form mutations have one typed denial", () => {
+  const env = { NODE_ENV: "production" };
+  assert.deepEqual(productionMcpToolDecision("spawn_actor", env), {
+    allowed: false,
+    code: "NLP_TYPED_MUTATION_UNAVAILABLE",
+    message: "Free-form NLP scene mutation is unavailable until a typed mutation adapter is installed.",
+  });
+  assert.equal(productionMcpToolDecision("save_scene_as", env).code, "NLP_TYPED_MUTATION_UNAVAILABLE");
+  assert.equal(internalCapabilityOperationPolicy({
+    channel: "ue",
+    body: { type: "get_actors_in_level", params: {} },
+  }, env).allowed, true);
+  assert.equal(internalCapabilityOperationPolicy({
+    channel: "ue",
+    body: { type: "spawn_actor", params: { name: "Cube" } },
+  }, env).code, "NLP_TYPED_MUTATION_UNAVAILABLE");
+
+  let nextCalled = false;
+  createProductionExecutionGuard({ env })({
+    method: "POST",
+    path: "/api/internal/ue",
+    headers: {
+      "x-simworld-run-capability": "c".repeat(43),
+      "x-simworld-run-id": "run-1",
+    },
+    body: { type: "spawn_actor", params: {} },
+  }, {}, () => { nextCalled = true; });
+  assert.equal(nextCalled, true, "capability-shaped requests must be authenticated and policy-checked by the route");
+});
+
 test("production agent policy removes arbitrary execution guidance", () => {
   const unsafeFlag = { SIMWORLD_ALLOW_UNSAFE_UE_EXECUTION: "true" };
   const production = buildSceneAgentRuntimeAppendix({ env: { NODE_ENV: "production", ...unsafeFlag } });
@@ -178,17 +210,33 @@ test("production MCP hides and rejects arbitrary Python and job-log tools", asyn
     method: "tools/call",
     params: { name: "read_job_log", arguments: { log_path: secretLog } },
   });
-  await mcp.waitFor([2, 3, 4]);
+  mcp.send({
+    jsonrpc: "2.0",
+    id: 5,
+    method: "tools/call",
+    params: { name: "spawn_actor", arguments: { name: "Cube", static_mesh: "/Engine/BasicShapes/Cube.Cube", location: [0, 0, 0] } },
+  });
+  mcp.send({
+    jsonrpc: "2.0",
+    id: 6,
+    method: "tools/call",
+    params: { name: "save_scene_as", arguments: { name: "BlockedScene" } },
+  });
+  await mcp.waitFor([2, 3, 4, 5, 6]);
 
   const names = mcp.responses.get(2).result.tools.map((tool) => tool.name);
   assert.equal(names.includes("execute_python_script"), false);
   assert.equal(names.includes("read_job_log"), false);
+  assert.equal(names.includes("spawn_actor"), false);
+  assert.equal(names.includes("save_scene_as"), false);
   for (const id of [3, 4]) {
     const response = mcp.responses.get(id);
     assert.equal(response.result.isError, true);
     assert.match(response.result.content[0].text, /GENERIC_UE_EXECUTION_DISABLED/);
     assert.doesNotMatch(JSON.stringify(response), new RegExp(secret));
   }
+  assert.match(mcp.responses.get(5).result.content[0].text, /NLP_TYPED_MUTATION_UNAVAILABLE/);
+  assert.match(mcp.responses.get(6).result.content[0].text, /NLP_TYPED_MUTATION_UNAVAILABLE/);
   assert.doesNotMatch(mcp.stderr(), new RegExp(secret));
 });
 

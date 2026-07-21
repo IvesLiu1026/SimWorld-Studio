@@ -39,7 +39,17 @@ const DEFAULT_RETRIES = 3;
 const DEFAULT_QUEUE_DEADLINE_MS = 30000;
 
 class UcvBroker {
-  constructor() {
+  constructor(opts = {}) {
+    const host = opts.host === undefined ? UCV_HOST : String(opts.host).trim();
+    const port = opts.port === undefined ? UCV_PORT : Number(opts.port);
+    if (!host || /[\x00-\x20\x7f/\\]/.test(host)) {
+      throw new TypeError('UCV broker host is invalid');
+    }
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+      throw new TypeError('UCV broker port is invalid');
+    }
+    this.host = host;
+    this.port = port;
     this.sock = null;
     this.connecting = false;
     this.connected = false;
@@ -126,7 +136,7 @@ class UcvBroker {
     this.gotBanner = false;
     this.buf = Buffer.alloc(0);
 
-    log.agent('debug', `[ucv-broker] connecting to ${UCV_HOST}:${UCV_PORT}`);
+    log.agent('debug', `[ucv-broker] connecting to ${this.host}:${this.port}`);
     const sock = new net.Socket();
     this.sock = sock;
 
@@ -145,7 +155,7 @@ class UcvBroker {
       this._onDisconnect(`error: ${err.message}`);
     });
 
-    sock.connect(UCV_PORT, UCV_HOST);
+    sock.connect(this.port, this.host);
   }
 
   _onDisconnect(reason) {

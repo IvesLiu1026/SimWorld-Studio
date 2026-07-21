@@ -1,11 +1,20 @@
 ﻿"use strict";const net=require("net"),fs=require("fs"),path=require("path"),readline=require("readline"),UE_HOST=process.env.UNREAL_HOST||"127.0.0.1",UE_PORT=parseInt(process.env.UNREAL_PORT||"55559",10),SCREENSHOT_DIR=path.resolve(__dirname,"../../tmp/screens"),ASSETS=JSON.parse(fs.readFileSync(path.resolve(__dirname,process.env.SIMWORLD_ASSETS_FILE||"assets_full.json"),"utf-8"));fs.mkdirSync(SCREENSHOT_DIR,{recursive:!0});const spawnedActors=new Set,cmdQueue=[];let cmdRunning=!1;
-const { productionMcpToolAllowed } = require("./production-execution-policy");
+const { productionMcpToolAllowed, productionMcpToolDecision } = require("./production-execution-policy");
 
 const STUDIO_ACCESS_TOKEN=String(process.env.STUDIO_ACCESS_TOKEN||"");
+const INTERNAL_RUN_CAPABILITY=String(process.env.SIMWORLD_INTERNAL_RUN_CAPABILITY||"").trim();
+const INTERNAL_RUN_ID=String(process.env.SIMWORLD_INTERNAL_RUN_ID||"").trim();
+const INTERNAL_CAPABILITY_REQUIRED=process.env.SIMWORLD_INTERNAL_CAPABILITY_REQUIRED==="1";
 const _mcpRequireRealAssets=/^(?:1|true|yes|on)$/i.test(String(process.env.ASSET_REQUIRE_REAL_ASSETS||process.env.REQUIRE_REAL_ASSETS||""));
 const _mcpVistaAssetRuntime=require("./vista-asset-runtime").createVistaAssetRuntime({env:process.env});
 if(_mcpRequireRealAssets&&!_mcpVistaAssetRuntime.config.enabled){const error=new Error("Verified VISTA asset runtime is required when real assets are mandatory");error.code="VISTA_ASSET_RUNTIME_DISABLED";throw error;}
 function internalHttpHeaders(headers={}){
+  if(/^[A-Za-z0-9_-]{43}$/.test(INTERNAL_RUN_CAPABILITY)&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(INTERNAL_RUN_ID)){
+    return {...headers,"X-SimWorld-Run-Capability":INTERNAL_RUN_CAPABILITY,"X-SimWorld-Run-Id":INTERNAL_RUN_ID};
+  }
+  if(INTERNAL_CAPABILITY_REQUIRED){
+    throw Object.assign(new Error("Internal run capability is unavailable to the SimWorld MCP subprocess"),{code:"INTERNAL_RUN_CAPABILITY_REQUIRED"});
+  }
   if(STUDIO_ACCESS_TOKEN.length<32){
     throw new Error("STUDIO_ACCESS_TOKEN is unavailable to the SimWorld MCP subprocess");
   }
@@ -37,7 +46,7 @@ let _lastCmdEnd=0,_lastCooldown=50;
 // ueCommand now funnels through the main-process UeMcpBroker (loopback RPC) so
 // ALL per-session mcp-server subprocesses share ONE global serial queue at UE.
 // (Local cmdQueue/processQueue/_execOnce/_execWithRetry below are retired/unused.)
-function ueCommand(type,params,timeoutMs=3e4){return(async()=>{let res;try{res=await fetch(UE_BROKER_URL,{method:"POST",headers:internalHttpHeaders({"Content-Type":"application/json"}),body:JSON.stringify({type,params,timeoutMs})})}catch(err){throw new Error(`UE broker unreachable at ${UE_BROKER_URL}: ${err.message}`)}let json;try{json=await res.json()}catch{json={ok:!1,error:`broker non-JSON (HTTP ${res.status})`}}if(res.status===429){const ra=parseInt(res.headers.get("Retry-After")||"1",10);throw Object.assign(new Error(`UE busy (backpressure), retry after ${ra}s`),{retryAfterMs:ra*1e3})}if(!json.ok)throw new Error(json.error||"UE error");return json.result})()}
+function ueCommand(type,params,timeoutMs=3e4){return(async()=>{let res;try{res=await fetch(UE_BROKER_URL,{method:"POST",headers:internalHttpHeaders({"Content-Type":"application/json"}),body:JSON.stringify({type,params,timeoutMs})})}catch(err){if(err&&err.code)throw err;throw new Error(`UE broker unreachable at ${UE_BROKER_URL}: ${err.message}`)}let json;try{json=await res.json()}catch{json={ok:!1,error:`broker non-JSON (HTTP ${res.status})`}}if(res.status===429){const ra=parseInt(res.headers.get("Retry-After")||"1",10);throw Object.assign(new Error(`UE busy (backpressure), retry after ${ra}s`),{retryAfterMs:ra*1e3})}if(!json.ok)throw Object.assign(new Error(json.error||"UE error"),{code:json.code});return json.result})()}
 
 function processQueue(){
   if(cmdRunning||cmdQueue.length===0)return;
@@ -374,12 +383,13 @@ async function ucvCommand(cmd,timeout=10000,opts={}){
       body:JSON.stringify({cmd,timeoutMs:timeout,retries,queueDeadlineMs}),
     });
   }catch(err){
+    if(err&&err.code)throw err;
     throw new Error(`UCV broker unreachable at ${BROKER_URL}: ${err.message}`);
   }
   let json;
   try{json=await res.json()}catch{json={ok:false,error:`broker returned non-JSON (HTTP ${res.status})`}}
   if(!json.ok){
-    throw new Error(`UCV ${cmd.slice(0,60)}: ${json.error||"unknown error"}`);
+    throw Object.assign(new Error(`UCV ${cmd.slice(0,60)}: ${json.error||"unknown error"}`),{code:json.code});
   }
   return json.result;
 }
@@ -774,7 +784,7 @@ TOOL_DEFS.push({
 });
 TOOL_HANDLERS.read_job_log=toolReadJobLog;function sendResponse(e,t){const s=JSON.stringify({jsonrpc:"2.0",id:e,result:t});process.stdout.write(s+`
 `)}function sendError(e,t,s){const n=JSON.stringify({jsonrpc:"2.0",id:e,error:{code:t,message:s}});process.stdout.write(n+`
-`)}async function handleRequest(e){const{id:t,method:s,params:n}=e;if(s==="initialize")return sendResponse(t,{protocolVersion:"2024-11-05",capabilities:{tools:{listChanged:!1}},serverInfo:{name:"simworld-arena-mcp",version:"1.0.0"}});if(s!=="notifications/initialized"){if(s==="tools/list")return sendResponse(t,{tools:TOOL_DEFS.filter(o=>productionMcpToolAllowed(o.name,process.env))});if(s==="tools/call"){const o=n?.name,r=n?.arguments||{};if(!productionMcpToolAllowed(o,process.env))return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:"Generic Unreal execution is unavailable in production",code:"GENERIC_UE_EXECUTION_DISABLED"})}],isError:!0});const c=TOOL_HANDLERS[o];if(!c)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:`Unknown tool: ${o}`})}],isError:!0});try{const a=await c(r);return sendResponse(t,{content:[{type:"text",text:JSON.stringify(a,null,2)}],isError:!1})}catch(a){return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:a.message})}],isError:!0})}}if(s==="resources/list")return sendResponse(t,{resources:[]});if(s==="prompts/list")return sendResponse(t,{prompts:[]});t!==void 0&&sendError(t,-32601,`Method not found: ${s}`)}}const rl=readline.createInterface({input:process.stdin,terminal:!1});rl.on("line",e=>{const t=e.trim();if(t)try{const s=JSON.parse(t);handleRequest(s).catch(n=>{process.stderr.write(`[mcp-server] Error: ${n.message}
+`)}async function handleRequest(e){const{id:t,method:s,params:n}=e;if(s==="initialize")return sendResponse(t,{protocolVersion:"2024-11-05",capabilities:{tools:{listChanged:!1}},serverInfo:{name:"simworld-arena-mcp",version:"1.0.0"}});if(s!=="notifications/initialized"){if(s==="tools/list")return sendResponse(t,{tools:TOOL_DEFS.filter(o=>productionMcpToolAllowed(o.name,process.env))});if(s==="tools/call"){const o=n?.name,r=n?.arguments||{},decision=productionMcpToolDecision(o,process.env);if(!decision.allowed)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:decision.message,code:decision.code})}],isError:!0});const c=TOOL_HANDLERS[o];if(!c)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:`Unknown tool: ${o}`})}],isError:!0});try{const a=await c(r);return sendResponse(t,{content:[{type:"text",text:JSON.stringify(a,null,2)}],isError:!1})}catch(a){return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:a.message,code:a.code})}],isError:!0})}}if(s==="resources/list")return sendResponse(t,{resources:[]});if(s==="prompts/list")return sendResponse(t,{prompts:[]});t!==void 0&&sendError(t,-32601,`Method not found: ${s}`)}}const rl=readline.createInterface({input:process.stdin,terminal:!1});rl.on("line",e=>{const t=e.trim();if(t)try{const s=JSON.parse(t);handleRequest(s).catch(n=>{process.stderr.write(`[mcp-server] Error: ${n.message}
 `),s.id!==void 0&&sendError(s.id,-32603,n.message)})}catch{process.stderr.write(`[mcp-server] Invalid JSON: ${t.slice(0,100)}
 `)}}),process.stderr.write(`[mcp-server] SimWorld Studio MCP server started (stdio)
 `);

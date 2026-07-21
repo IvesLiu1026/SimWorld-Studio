@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 
 const {
   createVistaSlotBrokerResolver,
+  createVistaSlotUcvBrokerResolver,
   resolveVistaSceneExecutorConfig,
 } = require("../vista-scene-executor-runtime");
 
@@ -12,6 +13,39 @@ const COMPLETE = Object.freeze({
   VISTA_UE_CONTENT_REVISION: "content-r1",
   VISTA_ASSET_VERIFICATION_REVISION: "verification-r1",
   VISTA_UE_CONTENT_RECEIPT_SHA256: "a".repeat(64),
+});
+
+test("slot UCV broker resolver revalidates runtime bindings and pins the exact loopback port", () => {
+  let active = true;
+  let checks = 0;
+  const created = [];
+  class FakeUcvBroker {
+    constructor(options) {
+      Object.assign(this, options);
+      this.send = async () => ({});
+      created.push(options);
+    }
+  }
+  const defaultBroker = { port: 9017, send: async () => ({}) };
+  const resolve = createVistaSlotUcvBrokerResolver({
+    studioStreaming: {
+      resolveActiveSessionRuntime(binding) {
+        checks += 1;
+        if (!active) return null;
+        return { ...binding, ucvPort: 9017 + binding.slotId };
+      },
+    },
+    defaultBroker,
+    BrokerClass: FakeUcvBroker,
+  });
+  const base = { ownerId: "owner", sessionId: "session", leaseId: "lease-1", slotId: 0, mcpPort: 55559 };
+  assert.equal(resolve(base), defaultBroker);
+  const second = resolve({ ...base, slotId: 1, leaseId: "lease-2", mcpPort: 55561 });
+  assert.equal(second, resolve({ ...base, slotId: 1, leaseId: "lease-2", mcpPort: 55561 }));
+  assert.deepEqual(created, [{ host: "127.0.0.1", port: 9018 }]);
+  active = false;
+  assert.equal(resolve(base), null);
+  assert.equal(checks, 4);
 });
 
 test("scene executor config is disabled by default and treats its three trust pins atomically", () => {

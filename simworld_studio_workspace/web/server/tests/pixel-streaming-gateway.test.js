@@ -35,7 +35,7 @@ class FakeSessionManager extends EventEmitter {
       leaseId: "lease-gateway-test",
       userId: null,
       slotId: 1,
-      uePorts: { cirrusHttp: cirrusHttpPort, mcpPort },
+      uePorts: { cirrusHttp: cirrusHttpPort, mcpPort, ucvPort: 9018 },
       mcpReady: true,
       lastActivity: Date.now(),
     };
@@ -67,6 +67,11 @@ class FakeSessionManager extends EventEmitter {
       leaseId: this.record.leaseId,
       mcpPort,
     });
+  }
+
+  resolveActiveLeaseRuntime(identity) {
+    const active = this.resolveActiveLease(identity);
+    return active ? Object.freeze({ ...active, ucvPort: this.record.uePorts.ucvPort }) : null;
   }
 
   release(token) {
@@ -413,6 +418,7 @@ test("server-internal binding revalidation rejects stale, altered, and reacquire
     const identity = runtime.resolveActiveSession(cookieRequest(cookies));
     assert.ok(identity);
     assert.equal(runtime.isActiveSessionBinding(identity), true);
+    assert.deepEqual(runtime.resolveActiveSessionRuntime(identity), { ...identity, ucvPort: 9018 });
     assert.notEqual(identity.sessionId, manager.record.token);
 
     for (const altered of [

@@ -23,6 +23,7 @@ const path  = require("path");
 const os    = require("os");
 const crypto= require("crypto");
 const { spawn } = require("child_process");
+const { attachBuilderRuntimeProcess, buildBuilderChildEnv } = require("./builder-runtime-authority");
 
 const GEMINI_BIN   = process.env.GEMINI_BIN   || "gemini";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || ""; // empty → cli default ("auto")
@@ -117,7 +118,7 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
   const {
     ctxManager, snapshotScene, STUDIO_SESSION,
     MCP_CONFIG, LOG_DIR, SCREENSHOT_DIR,
-    _chatProcs, logToFile, MOCK_MODE,
+    _chatProcs, logToFile, MOCK_MODE, BUILDER_RUNTIME,
   } = ctx;
 
   const geminiCwd = path.resolve(__dirname, "..");
@@ -163,7 +164,7 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
   ];
   if (model) args.push("--model", model);
 
-  const env = { ...process.env };
+  const env = buildBuilderChildEnv(process.env, BUILDER_RUNTIME);
   // Don't let Claude session env vars leak into gemini.
   Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
   if (systemMdPath) env.GEMINI_SYSTEM_MD = systemMdPath;
@@ -179,9 +180,10 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  attachBuilderRuntimeProcess(BUILDER_RUNTIME, proc);
 
   // Replace any prior chat process for this session (matches Claude behavior).
-  const procKey = sessionId || "_global";
+  const procKey = BUILDER_RUNTIME ? BUILDER_RUNTIME.scopeId : (sessionId || "_global");
   const prior = _chatProcs.get(procKey);
   if (prior && !prior.killed) { try { prior.kill("SIGTERM"); } catch {} }
   _chatProcs.set(procKey, proc);
@@ -376,7 +378,7 @@ function runGeminiChat({ req, res, body, systemPrompt, ctx }) {
         if (systemMdPath) { try { fs.unlinkSync(systemMdPath); } catch {} }
       };
       if (!MOCK_MODE) {
-        snapshotScene(STUDIO_SESSION).then(finish).catch(err => {
+        snapshotScene(STUDIO_SESSION, BUILDER_RUNTIME).then(finish).catch(err => {
           logToFile("ctx", `gemini snapshotScene error: ${err.message}`);
           finish();
         });

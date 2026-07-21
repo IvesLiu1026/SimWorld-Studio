@@ -38,23 +38,33 @@ function buildMcpRuntimeConfig(env = process.env, baseDir = __dirname) {
   });
 }
 
-function ensureMcpRuntimeConfig(options = {}) {
-  const env = options.env || process.env;
-  const fsImpl = options.fsImpl || fs;
-  const baseDir = path.resolve(options.baseDir || __dirname);
-  const config = buildMcpRuntimeConfig(env, baseDir);
-  const port = String(env.PORT || "3002").trim();
-  if (!SAFE_PORT.test(port) || Number(port) > 65535) throw new TypeError("PORT must be a valid TCP port");
-  const target = requireAbsoluteTarget(env.SIMWORLD_MCP_CONFIG, baseDir, port);
+function buildBrokeredMcpRuntimeConfig(env = process.env, baseDir = __dirname) {
+  const serverScript = path.resolve(baseDir, "mcp-server.js");
+  const port = normalizePort(env.PORT || "3002");
+  return Object.freeze({
+    mcpServers: Object.freeze({
+      simworld: Object.freeze({
+        command: process.execPath,
+        args: Object.freeze([serverScript]),
+        env: Object.freeze({
+          SIMWORLD_BROKER_HOST: "127.0.0.1",
+          PORT: port,
+          SIMWORLD_INTERNAL_CAPABILITY_REQUIRED: "1",
+        }),
+      }),
+    }),
+  });
+}
+
+function writeRuntimeConfig({ fsImpl, target, config }) {
   const directory = path.dirname(target);
   fsImpl.mkdirSync(directory, { recursive: true, mode: 0o700 });
   try { fsImpl.chmodSync(directory, 0o700); } catch (_error) {}
-
   const serialized = `${JSON.stringify(config, null, 2)}\n`;
   let unchanged = false;
   try {
     const stat = fsImpl.lstatSync(target);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new TypeError("SIMWORLD_MCP_CONFIG must be a regular file");
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new TypeError("MCP runtime config must be a regular file");
     unchanged = fsImpl.readFileSync(target, "utf8") === serialized;
   } catch (error) {
     if (error && error.code !== "ENOENT") throw error;
@@ -73,7 +83,30 @@ function ensureMcpRuntimeConfig(options = {}) {
   return Object.freeze({ path: target, config });
 }
 
+function ensureMcpRuntimeConfig(options = {}) {
+  const env = options.env || process.env;
+  const fsImpl = options.fsImpl || fs;
+  const baseDir = path.resolve(options.baseDir || __dirname);
+  const config = buildMcpRuntimeConfig(env, baseDir);
+  const port = String(env.PORT || "3002").trim();
+  if (!SAFE_PORT.test(port) || Number(port) > 65535) throw new TypeError("PORT must be a valid TCP port");
+  const target = requireAbsoluteTarget(env.SIMWORLD_MCP_CONFIG, baseDir, port);
+  return writeRuntimeConfig({ fsImpl, target, config });
+}
+
+function ensureBrokeredMcpRuntimeConfig(options = {}) {
+  const env = options.env || process.env;
+  const fsImpl = options.fsImpl || fs;
+  const baseDir = path.resolve(options.baseDir || __dirname);
+  const config = buildBrokeredMcpRuntimeConfig(env, baseDir);
+  const port = normalizePort(env.PORT || "3002");
+  const target = path.resolve(baseDir, "../.runtime", `mcp-brokered-${port}.json`);
+  return writeRuntimeConfig({ fsImpl, target, config });
+}
+
 module.exports = {
   buildMcpRuntimeConfig,
+  buildBrokeredMcpRuntimeConfig,
+  ensureBrokeredMcpRuntimeConfig,
   ensureMcpRuntimeConfig,
 };

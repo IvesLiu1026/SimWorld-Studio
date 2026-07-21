@@ -123,6 +123,76 @@ test('MCP UE and UCV broker requests propagate the Studio bearer token', async (
   assert.doesNotMatch(stderr, new RegExp(TOKEN), 'the bearer token must not be logged to stderr');
 });
 
+test('MCP capability mode sends only run authority and never the root Studio bearer', async (t) => {
+  const capability = 'c'.repeat(43);
+  const runId = 'run-capability-1';
+  const requests = [];
+  const broker = http.createServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      requests.push({
+        authorization: req.headers.authorization || '',
+        capability: req.headers['x-simworld-run-capability'] || '',
+        runId: req.headers['x-simworld-run-id'] || '',
+        body: JSON.parse(body),
+      });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, result: { actors: [] } }));
+    });
+  });
+  const port = await listen(broker);
+  t.after(() => new Promise((resolve) => broker.close(resolve)));
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'simworld-internal-capability-'));
+  const learnedTools = path.join(tmp, 'learned_tools.json');
+  fs.writeFileSync(learnedTools, '[]\n', 'utf8');
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const proc = spawn(process.execPath, [MCP_SERVER], {
+    env: {
+      ...process.env,
+      LEARNED_TOOLS_FILE: learnedTools,
+      PORT: String(port),
+      SIMWORLD_BROKER_HOST: '127.0.0.1',
+      SIMWORLD_INTERNAL_RUN_CAPABILITY: capability,
+      SIMWORLD_INTERNAL_RUN_ID: runId,
+      SIMWORLD_INTERNAL_CAPABILITY_REQUIRED: '1',
+      STUDIO_ACCESS_TOKEN: TOKEN,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  t.after(() => { if (!proc.killed) proc.kill('SIGTERM'); });
+  const responses = new Map();
+  let stdout = '';
+  let stderr = '';
+  proc.stdout.on('data', (chunk) => {
+    stdout += chunk.toString();
+    const lines = stdout.split('\n');
+    stdout = lines.pop() || '';
+    for (const line of lines) {
+      try {
+        const response = JSON.parse(line);
+        if (Object.prototype.hasOwnProperty.call(response, 'id')) responses.set(response.id, response);
+      } catch {}
+    }
+  });
+  proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+  proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+  proc.stdin.write(`${JSON.stringify({
+    jsonrpc: '2.0', id: 2, method: 'tools/call',
+    params: { name: 'get_actors_in_level', arguments: {} },
+  })}\n`);
+  await waitFor(() => responses.has(2));
+  assert.equal(responses.get(2).result.isError, false, stderr);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].authorization, '');
+  assert.equal(requests[0].capability, capability);
+  assert.equal(requests[0].runId, runId);
+  assert.doesNotMatch(stderr, new RegExp(capability));
+  assert.doesNotMatch(stderr, new RegExp(TOKEN));
+});
+
 test('MCP broker calls fail closed before the network when the token is missing', async (t) => {
   let requestCount = 0;
   const broker = http.createServer((_req, res) => {

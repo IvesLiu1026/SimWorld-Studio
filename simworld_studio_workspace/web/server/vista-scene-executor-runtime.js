@@ -83,7 +83,39 @@ function createVistaSlotBrokerResolver(options = {}) {
   };
 }
 
+function createVistaSlotUcvBrokerResolver(options = {}) {
+  const studioStreaming = options.studioStreaming;
+  const defaultBroker = options.defaultBroker;
+  const BrokerClass = options.BrokerClass;
+  if (!studioStreaming || typeof studioStreaming.resolveActiveSessionRuntime !== "function") {
+    throw new TypeError("studioStreaming.resolveActiveSessionRuntime is required");
+  }
+  if (!defaultBroker || typeof defaultBroker.send !== "function"
+      || !Number.isSafeInteger(defaultBroker.port)) {
+    throw new TypeError("default UCV broker with a fixed port is required");
+  }
+  if (typeof BrokerClass !== "function") throw new TypeError("UCV BrokerClass is required");
+  const brokers = new Map();
+
+  return function resolveVistaSlotUcvBroker(context) {
+    let runtime;
+    try { runtime = studioStreaming.resolveActiveSessionRuntime(context); } catch (_error) { return null; }
+    const port = Number(runtime && runtime.ucvPort);
+    const slotId = Number(runtime && runtime.slotId);
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535
+        || !Number.isSafeInteger(slotId) || slotId < 0 || slotId > 1023) return null;
+    const key = `${slotId}:${port}`;
+    if (!brokers.has(key)) {
+      brokers.set(key, defaultBroker.port === port
+        ? defaultBroker
+        : new BrokerClass({ host: "127.0.0.1", port }));
+    }
+    return brokers.get(key);
+  };
+}
+
 module.exports = {
   createVistaSlotBrokerResolver,
+  createVistaSlotUcvBrokerResolver,
   resolveVistaSceneExecutorConfig,
 };

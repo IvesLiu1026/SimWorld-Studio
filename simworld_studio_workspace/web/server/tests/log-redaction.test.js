@@ -8,9 +8,10 @@ const { redactLogLine } = require("../log-redaction");
 test("request log redaction removes credentials and server paths", () => {
   const output = redactLogLine(
     'POST /api/vista/imports body={"token":"abc","sourcePath":"/home/user/private/bundle/manifest.json"} '
-      + "Authorization: Bearer top.secret postgres://admin:pw@db.local/assets?password=pw",
+      + 'Authorization: Bearer top.secret X-SimWorld-Run-Capability: abc_def-123 {"capability":"raw-cap"} '
+      + "postgres://admin:pw@db.local/assets?password=pw",
   );
-  for (const secret of ["abc", "top.secret", "admin:pw", "password=pw", "/home/user/private"]) {
+  for (const secret of ["abc", "top.secret", "abc_def-123", "raw-cap", "admin:pw", "password=pw", "/home/user/private"]) {
     assert.equal(output.includes(secret), false);
   }
   assert.match(output, /\[redacted\]/);

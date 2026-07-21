@@ -17,6 +17,7 @@ const SWEEP_INTERVAL   = 60_000;
 const UE_BASE_MCP      = parseInt(process.env.UE_BASE_MCP_PORT    || '55559', 10);
 const UE_BASE_CIRRUS_H = parseInt(process.env.UE_BASE_CIRRUS_HTTP || '8585',  10);
 const UE_BASE_CIRRUS_W = parseInt(process.env.UE_BASE_CIRRUS_WS   || '8586',  10);
+const UE_BASE_UCV      = parseInt(process.env.UE_BASE_UCV         || '9017',  10);
 const UE_PORT_STRIDE   = parseInt(process.env.UE_PORT_STRIDE       || '2',     10);
 const LEASE_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 const OWNER_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
@@ -48,6 +49,7 @@ function uePortsForSlot(slotId) {
     mcpPort:    UE_BASE_MCP      + slotId * UE_PORT_STRIDE,
     cirrusHttp: UE_BASE_CIRRUS_H + slotId * UE_PORT_STRIDE,
     cirrusWs:   UE_BASE_CIRRUS_W + slotId * UE_PORT_STRIDE,
+    ucvPort:    UE_BASE_UCV      + slotId,
   };
 }
 
@@ -181,6 +183,20 @@ class SessionManager extends EventEmitter {
           mcpPort,
         });
       }
+    }
+    return null;
+  }
+
+  /** Resolve internal per-slot ports for a previously validated lease. */
+  resolveActiveLeaseRuntime(identity) {
+    const active = this.resolveActiveLease(identity);
+    if (!active) return null;
+    for (const rec of this._sessions.values()) {
+      if (rec.userId !== active.ownerId || rec.slotId !== active.slotId ||
+          rec.leaseId !== active.leaseId || rec.uePorts.mcpPort !== active.mcpPort) continue;
+      const ucvPort = Number(rec.uePorts && rec.uePorts.ucvPort);
+      if (!Number.isSafeInteger(ucvPort) || ucvPort < 1 || ucvPort > 65535) return null;
+      return Object.freeze({ ...active, ucvPort });
     }
     return null;
   }

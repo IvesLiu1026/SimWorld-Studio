@@ -46,6 +46,7 @@ const path  = require("path");
 const crypto= require("crypto");
 const { spawn } = require("child_process");
 const { stripToolPrefix } = require("./gemini-runner");
+const { attachBuilderRuntimeProcess, buildBuilderChildEnv } = require("./builder-runtime-authority");
 
 const GROK_BIN  = process.env.GROK_BIN  || "grok";
 const GROK_MODEL = process.env.GROK_MODEL || ""; // empty → CLI/account default
@@ -94,7 +95,7 @@ function runGrokChat({ req, res, body, systemPrompt, ctx }) {
   const {
     ctxManager, snapshotScene, STUDIO_SESSION,
     MCP_CONFIG, UNREAL_PORT, LOG_DIR, SCREENSHOT_DIR,
-    _chatProcs, logToFile, MOCK_MODE,
+    _chatProcs, logToFile, MOCK_MODE, BUILDER_RUNTIME,
   } = ctx;
 
   const grokCwd = ensureGrokWorkspace(MCP_CONFIG, UNREAL_PORT, logToFile);
@@ -121,7 +122,7 @@ function runGrokChat({ req, res, body, systemPrompt, ctx }) {
   if (model) args.push("-m", model);
   args.push("stdio");
 
-  const env = { ...process.env };
+  const env = buildBuilderChildEnv(process.env, BUILDER_RUNTIME);
   // Don't let Claude session env vars leak into grok. XAI_API_KEY (if set) is preserved.
   Object.keys(env).forEach(k => { if (k.startsWith("CLAUDE")) delete env[k]; });
   // The grok installer drops the binary in ~/.local/bin — prepend it so GROK_BIN resolves under tmux.
@@ -133,8 +134,9 @@ function runGrokChat({ req, res, body, systemPrompt, ctx }) {
 
   const _sb = require("./agent-sandbox").sandboxedSpawn(GROK_BIN, args, grokCwd);
   const proc = spawn(_sb.cmd, _sb.args, { cwd: grokCwd, env, stdio: ["pipe", "pipe", "pipe"] });
+  attachBuilderRuntimeProcess(BUILDER_RUNTIME, proc);
 
-  const procKey = sessionId || "_global";
+  const procKey = BUILDER_RUNTIME ? BUILDER_RUNTIME.scopeId : (sessionId || "_global");
   const prior = _chatProcs.get(procKey);
   if (prior && !prior.killed) { try { prior.kill("SIGTERM"); } catch {} }
   _chatProcs.set(procKey, proc);
@@ -315,7 +317,7 @@ function runGrokChat({ req, res, body, systemPrompt, ctx }) {
       try { proc.kill("SIGTERM"); } catch {} // ACP agent is persistent — stop it after the turn
     };
     if (!MOCK_MODE) {
-      snapshotScene(STUDIO_SESSION).then(finish).catch(err => {
+      snapshotScene(STUDIO_SESSION, BUILDER_RUNTIME).then(finish).catch(err => {
         logToFile("ctx", `grok snapshotScene error: ${err.message}`);
         finish();
       });
