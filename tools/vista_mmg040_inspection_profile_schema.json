@@ -1,0 +1,556 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.local/schemas/vista-mmg040-inspection-profile-v1.json",
+  "title": "VISTA mmg_040 candidate and live-inspection profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile_id",
+    "profile_revision",
+    "sample_id",
+    "source_contract_sha256",
+    "candidate_source_sha256",
+    "verification_status",
+    "start_allowed",
+    "runtime_ready",
+    "source_lineage_status",
+    "source_binding",
+    "filesystem_inventory_observation",
+    "excluded_unbound_catalog_claims",
+    "scene_object_candidates",
+    "animation_source_candidates",
+    "derived_targets",
+    "live_inspection",
+    "proof_boundary"
+  ],
+  "properties": {
+    "schema": {
+      "const": "vista-mmg040-inspection-profile/v1"
+    },
+    "profile_id": {
+      "const": "vista_mmg040"
+    },
+    "profile_revision": {
+      "const": "mmg040_project_content_r1"
+    },
+    "sample_id": {
+      "const": "mmg_040"
+    },
+    "source_contract_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidate_source_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "verification_status": {
+      "enum": [
+        "candidate_unverified",
+        "live_verified"
+      ]
+    },
+    "start_allowed": {
+      "const": false
+    },
+    "runtime_ready": {
+      "const": false
+    },
+    "source_lineage_status": {
+      "const": "candidate_unverified"
+    },
+    "source_binding": {
+      "$ref": "#/$defs/sourceBinding"
+    },
+    "filesystem_inventory_observation": {
+      "$ref": "#/$defs/filesystemObservation"
+    },
+    "excluded_unbound_catalog_claims": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/excludedCatalog"
+        },
+        {
+          "$ref": "#/$defs/excludedCatalog"
+        }
+      ],
+      "items": false
+    },
+    "scene_object_candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    },
+    "animation_source_candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    },
+    "derived_targets": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "items": {
+        "$ref": "#/$defs/derivedTarget"
+      }
+    },
+    "live_inspection": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/liveInspection"
+        }
+      ]
+    },
+    "proof_boundary": {
+      "$ref": "#/$defs/proofBoundary"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verification_status": {
+            "const": "candidate_unverified"
+          }
+        },
+        "required": [
+          "verification_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "live_inspection": {
+            "type": "null"
+          },
+          "derived_targets": {
+            "items": {
+              "properties": {
+                "content_status": {
+                  "const": "not_authored_or_unverified"
+                },
+                "verification_status": {
+                  "const": "candidate_unverified"
+                },
+                "live_receipt_evidence": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "live_inspection": {
+            "$ref": "#/$defs/liveInspection"
+          },
+          "derived_targets": {
+            "items": {
+              "properties": {
+                "content_status": {
+                  "const": "live_inspection_verified"
+                },
+                "verification_status": {
+                  "const": "live_verified"
+                },
+                "live_receipt_evidence": {
+                  "$ref": "#/$defs/liveReceiptEvidence"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,119}$"
+    },
+    "checkName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,119}$"
+    },
+    "sourceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "dataset_revision",
+        "archive_name",
+        "archive_size_bytes",
+        "archive_sha256",
+        "project_name",
+        "project_patch",
+        "project_revision",
+        "content_revision"
+      ],
+      "properties": {
+        "repository": {
+          "const": "SimWorld-AI/SimWorld-Studio"
+        },
+        "dataset_revision": {
+          "const": "26bdd2ca18f06ab455023b0a602ede60b3afb243"
+        },
+        "archive_name": {
+          "const": "SimWorld-Studio-Minimal.tar.gz"
+        },
+        "archive_size_bytes": {
+          "const": 15170703068
+        },
+        "archive_sha256": {
+          "const": "806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f"
+        },
+        "project_name": {
+          "const": "gym_citynav"
+        },
+        "project_patch": {
+          "const": "51426e97354477dca1635217455e644e9ca98976"
+        },
+        "project_revision": {
+          "const": "source-patch:51426e97354477dca1635217455e644e9ca98976"
+        },
+        "content_revision": {
+          "const": "sha256:806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f"
+        }
+      }
+    },
+    "filesystemObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_stage",
+        "package_file_count",
+        "count_semantics",
+        "audit_document",
+        "asset_registry_bundle"
+      ],
+      "properties": {
+        "evidence_stage": {
+          "const": "filesystem_filename_only"
+        },
+        "package_file_count": {
+          "const": 2937
+        },
+        "count_semantics": {
+          "const": "uasset_plus_umap_not_catalog_count"
+        },
+        "audit_document": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "const": "docs/specs/production-readiness/evidence/2026-07-21-official-minimal-content-audit.md"
+            },
+            "sha256": {
+              "const": "e591be51470c2e4a4c390916f3cead810409daedbdeae84e7e28ffc5dac7015f"
+            }
+          }
+        },
+        "asset_registry_bundle": {
+          "type": "null"
+        }
+      }
+    },
+    "excludedCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "reason",
+        "allowed_as_evidence"
+      ],
+      "properties": {
+        "path": {
+          "enum": [
+            "simworld_studio_workspace/web/server/assets.json",
+            "packaging/simworld_arena/server/assets.json"
+          ]
+        },
+        "reason": {
+          "const": "static_catalog_not_bound_to_archive_revision"
+        },
+        "allowed_as_evidence": {
+          "const": false
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "source_scope_id",
+        "locator_kind",
+        "filesystem_locator",
+        "possible_roles",
+        "possible_target_asset_ids",
+        "unresolved_checks",
+        "candidate_status"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "source_scope_id": {
+          "const": "official_minimal_content"
+        },
+        "locator_kind": {
+          "enum": [
+            "content_relative_file",
+            "content_relative_prefix"
+          ]
+        },
+        "filesystem_locator": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 500,
+          "pattern": "^[A-Za-z0-9_+.-]+(?:/[A-Za-z0-9_+.-]+)*/?$"
+        },
+        "possible_roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/checkName"
+          }
+        },
+        "possible_target_asset_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safeId"
+          }
+        },
+        "unresolved_checks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/checkName"
+          }
+        },
+        "candidate_status": {
+          "const": "candidate_unverified"
+        }
+      }
+    },
+    "derivedTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "role",
+        "target_object_path",
+        "expected_class",
+        "source_candidate_ids",
+        "authoring_required",
+        "required_live_checks",
+        "content_status",
+        "verification_status",
+        "source_lineage_status",
+        "live_receipt_evidence"
+      ],
+      "properties": {
+        "asset_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "role": {
+          "$ref": "#/$defs/safeId"
+        },
+        "target_object_path": {
+          "type": "string",
+          "pattern": "^/Game/VISTA/MMG040/"
+        },
+        "expected_class": {
+          "type": "string",
+          "pattern": "^/Script/"
+        },
+        "source_candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safeId"
+          }
+        },
+        "authoring_required": {
+          "const": true
+        },
+        "required_live_checks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/checkName"
+          }
+        },
+        "content_status": {
+          "enum": [
+            "not_authored_or_unverified",
+            "live_inspection_verified"
+          ]
+        },
+        "verification_status": {
+          "enum": [
+            "candidate_unverified",
+            "live_verified"
+          ]
+        },
+        "source_lineage_status": {
+          "const": "candidate_unverified"
+        },
+        "live_receipt_evidence": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/liveReceiptEvidence"
+            }
+          ]
+        }
+      }
+    },
+    "liveReceiptEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "package_sha256",
+        "loaded",
+        "observed_class",
+        "observed_object_path"
+      ],
+      "properties": {
+        "package_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "loaded": {
+          "const": true
+        },
+        "observed_class": {
+          "type": "string",
+          "pattern": "^/Script/"
+        },
+        "observed_object_path": {
+          "type": "string",
+          "pattern": "^/Game/VISTA/MMG040/"
+        }
+      }
+    },
+    "liveInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "receipt_sha256",
+        "receipt_id",
+        "verified_at",
+        "operator_id",
+        "method",
+        "engine_version",
+        "project_revision",
+        "project_descriptor_sha256",
+        "content_revision",
+        "content_digest",
+        "verified_target_total",
+        "verified_action_total"
+      ],
+      "properties": {
+        "schema": {
+          "const": "vista-animation-content-inspection-receipt/v1"
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "verified_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "operator_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "method": {
+          "const": "ue53_disposable_live_inspection_v1"
+        },
+        "engine_version": {
+          "const": "5.3.2"
+        },
+        "project_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "project_descriptor_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "content_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "content_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verified_target_total": {
+          "const": 13
+        },
+        "verified_action_total": {
+          "const": 7
+        }
+      }
+    },
+    "proofBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filesystem_only_candidates_not_registry_proof",
+        "static_catalogs_excluded",
+        "semantic_snapshot_verified",
+        "runtime_capability_challenge_verified",
+        "executable_profile_emitted"
+      ],
+      "properties": {
+        "filesystem_only_candidates_not_registry_proof": {
+          "const": true
+        },
+        "static_catalogs_excluded": {
+          "const": true
+        },
+        "semantic_snapshot_verified": {
+          "const": false
+        },
+        "runtime_capability_challenge_verified": {
+          "const": false
+        },
+        "executable_profile_emitted": {
+          "const": false
+        }
+      }
+    }
+  }
+}

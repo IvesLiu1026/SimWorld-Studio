@@ -1,0 +1,579 @@
+{
+  "schema": "vista-mmg040-candidate-sources/v1",
+  "source_set_id": "official-minimal-gym-citynav-filename-audit-r1",
+  "profile_id": "vista_mmg040",
+  "profile_revision": "mmg040_project_content_r1",
+  "sample_id": "mmg_040",
+  "source_binding": {
+    "repository": "SimWorld-AI/SimWorld-Studio",
+    "dataset_revision": "26bdd2ca18f06ab455023b0a602ede60b3afb243",
+    "archive_name": "SimWorld-Studio-Minimal.tar.gz",
+    "archive_size_bytes": 15170703068,
+    "archive_sha256": "806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f",
+    "project_name": "gym_citynav",
+    "project_patch": "51426e97354477dca1635217455e644e9ca98976",
+    "project_revision": "source-patch:51426e97354477dca1635217455e644e9ca98976",
+    "content_revision": "sha256:806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f"
+  },
+  "filesystem_inventory_observation": {
+    "evidence_stage": "filesystem_filename_only",
+    "package_file_count": 2937,
+    "count_semantics": "uasset_plus_umap_not_catalog_count",
+    "audit_document": {
+      "path": "docs/specs/production-readiness/evidence/2026-07-21-official-minimal-content-audit.md",
+      "sha256": "e591be51470c2e4a4c390916f3cead810409daedbdeae84e7e28ffc5dac7015f"
+    },
+    "asset_registry_bundle": null
+  },
+  "excluded_unbound_catalog_claims": [
+    {
+      "path": "simworld_studio_workspace/web/server/assets.json",
+      "reason": "static_catalog_not_bound_to_archive_revision",
+      "allowed_as_evidence": false
+    },
+    {
+      "path": "packaging/simworld_arena/server/assets.json",
+      "reason": "static_catalog_not_bound_to_archive_revision",
+      "allowed_as_evidence": false
+    }
+  ],
+  "scene_object_candidates": [
+    {
+      "candidate_id": "scene_sm_chair_b",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "CityDatabase/meshes/SM_chair_b.uasset",
+      "possible_roles": [
+        "chair",
+        "gaze_target",
+        "hand_contact_target",
+        "draggable"
+      ],
+      "possible_target_asset_ids": [],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "loadable",
+        "spawnable",
+        "bounds",
+        "collision",
+        "material_slots",
+        "caster_physics"
+      ]
+    },
+    {
+      "candidate_id": "scene_bp_box",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "CityDatabase/blueprints/BP_Box.uasset",
+      "possible_roles": [
+        "box",
+        "hand_contact_target",
+        "draggable"
+      ],
+      "possible_target_asset_ids": [],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "loadable",
+        "spawnable",
+        "bounds",
+        "collision",
+        "material_slots",
+        "caster_physics"
+      ]
+    },
+    {
+      "candidate_id": "scene_bp_box2",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "CityDatabase/blueprints/BP_Box2.uasset",
+      "possible_roles": [
+        "box",
+        "hand_contact_target",
+        "draggable"
+      ],
+      "possible_target_asset_ids": [],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "loadable",
+        "spawnable",
+        "bounds",
+        "collision",
+        "material_slots",
+        "caster_physics"
+      ]
+    },
+    {
+      "candidate_id": "scene_bp_box3",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "CityDatabase/blueprints/BP_Box3.uasset",
+      "possible_roles": [
+        "box",
+        "hand_contact_target",
+        "draggable"
+      ],
+      "possible_target_asset_ids": [],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "loadable",
+        "spawnable",
+        "bounds",
+        "collision",
+        "material_slots",
+        "caster_physics"
+      ]
+    }
+  ],
+  "animation_source_candidates": [
+    {
+      "candidate_id": "anim_bp_human_base",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Human_Avatar/Blueprint/BP_Human_Base.uasset",
+      "possible_roles": [
+        "pawn_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "pawn_class"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "pawn_inheritance",
+        "skeletal_mesh_binding",
+        "anim_blueprint_binding",
+        "spawnable"
+      ]
+    },
+    {
+      "candidate_id": "anim_bp_default_human",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Human_Avatar/DefaultCharacter/Blueprint/BP_DefaultHuman.uasset",
+      "possible_roles": [
+        "pawn_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "pawn_class"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "pawn_inheritance",
+        "skeletal_mesh_binding",
+        "anim_blueprint_binding",
+        "spawnable"
+      ]
+    },
+    {
+      "candidate_id": "anim_bp_default_character",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Human_Avatar/DefaultCharacter/Blueprint/BP_Default_Character.uasset",
+      "possible_roles": [
+        "pawn_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "pawn_class"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "pawn_inheritance",
+        "skeletal_mesh_binding",
+        "anim_blueprint_binding",
+        "spawnable"
+      ]
+    },
+    {
+      "candidate_id": "anim_skm_manny",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Characters/Mannequins/Meshes/SKM_Manny.uasset",
+      "possible_roles": [
+        "skeletal_mesh_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "skeletal_mesh"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "skeleton_binding",
+        "loadable"
+      ]
+    },
+    {
+      "candidate_id": "anim_abp_human_base",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Human_Avatar/Blueprint/ABP_Human_Base.uasset",
+      "possible_roles": [
+        "anim_blueprint_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "anim_blueprint"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "target_skeleton",
+        "loadable"
+      ]
+    },
+    {
+      "candidate_id": "anim_abp_default_character",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Human_Avatar/DefaultCharacter/Blueprint/ABP_Default_Character.uasset",
+      "possible_roles": [
+        "anim_blueprint_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "anim_blueprint"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "target_skeleton",
+        "loadable"
+      ]
+    },
+    {
+      "candidate_id": "anim_abp_manny",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Characters/Mannequins/Animations/ABP_Manny.uasset",
+      "possible_roles": [
+        "anim_blueprint_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "anim_blueprint"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "generated_class",
+        "target_skeleton",
+        "loadable"
+      ]
+    },
+    {
+      "candidate_id": "anim_cr_default_character",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Human_Avatar/DefaultCharacter/Blueprint/CR_Default_Character.uasset",
+      "possible_roles": [
+        "control_rig_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "control_rig"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "target_skeleton",
+        "gaze_controls",
+        "hand_controls",
+        "foot_controls"
+      ]
+    },
+    {
+      "candidate_id": "anim_cr_mannequin_basic_foot_ik",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Characters/Mannequins/Rigs/CR_Mannequin_BasicFootIK.uasset",
+      "possible_roles": [
+        "control_rig_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "control_rig"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "target_skeleton",
+        "gaze_controls",
+        "hand_controls",
+        "foot_controls"
+      ]
+    },
+    {
+      "candidate_id": "anim_ik_mannequin",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Characters/Mannequins/Rigs/IK_Mannequin.uasset",
+      "possible_roles": [
+        "ik_rig_authoring_source"
+      ],
+      "possible_target_asset_ids": [
+        "ik_rig"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "target_skeleton",
+        "preview_mesh",
+        "retarget_compatibility"
+      ]
+    },
+    {
+      "candidate_id": "anim_liftset",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_prefix",
+      "filesystem_locator": "Human_Avatar/Animation/LiftSet/",
+      "possible_roles": [
+        "look_reference",
+        "pickup_reference",
+        "put_aside_reference",
+        "idle_reference"
+      ],
+      "possible_target_asset_ids": [
+        "look_at_montage",
+        "drag_montage",
+        "pause_montage"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_paths",
+        "asset_classes",
+        "skeleton_binding",
+        "montage_slots",
+        "root_motion",
+        "required_notifies",
+        "exact_action_behavior"
+      ]
+    },
+    {
+      "candidate_id": "anim_mm_fall_loop",
+      "source_scope_id": "official_minimal_content",
+      "locator_kind": "content_relative_file",
+      "filesystem_locator": "Characters/Mannequins/Animations/Manny/MM_Fall_Loop.uasset",
+      "possible_roles": [
+        "fall_reference"
+      ],
+      "possible_target_asset_ids": [
+        "fall_montage"
+      ],
+      "unresolved_checks": [
+        "asset_registry_object_path",
+        "asset_class",
+        "skeleton_binding",
+        "root_motion",
+        "collision_transition",
+        "landed_pose",
+        "required_notify"
+      ]
+    }
+  ],
+  "target_source_links": [
+    {
+      "target_asset_id": "pawn_class",
+      "source_candidate_ids": [
+        "anim_bp_human_base",
+        "anim_bp_default_human",
+        "anim_bp_default_character"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "generated_class_match",
+        "pawn_spawnable",
+        "skeletal_mesh_binding",
+        "anim_blueprint_binding"
+      ]
+    },
+    {
+      "target_asset_id": "skeletal_mesh",
+      "source_candidate_ids": [
+        "anim_skm_manny"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "skeleton",
+      "source_candidate_ids": [],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "dependency_closure",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "anim_blueprint",
+      "source_candidate_ids": [
+        "anim_abp_human_base",
+        "anim_abp_default_character",
+        "anim_abp_manny"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "generated_class_match",
+        "target_skeleton",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "control_rig",
+      "source_candidate_ids": [
+        "anim_cr_default_character",
+        "anim_cr_mannequin_basic_foot_ik"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "target_skeleton",
+        "gaze_controls",
+        "hand_controls",
+        "foot_controls",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "ik_rig",
+      "source_candidate_ids": [
+        "anim_ik_mannequin"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "target_skeleton",
+        "preview_mesh",
+        "retarget_compatibility",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "look_at_montage",
+      "source_candidate_ids": [
+        "anim_liftset"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "required_notify",
+        "root_motion_policy",
+        "constrained_gaze",
+        "completion_notify",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "brace_montage",
+      "source_candidate_ids": [],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "required_notify",
+        "root_motion_policy",
+        "both_hand_contact",
+        "feet_planted",
+        "completion_notify",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "drag_montage",
+      "source_candidate_ids": [
+        "anim_liftset"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "required_notify",
+        "root_motion_policy",
+        "hand_contact",
+        "root_motion",
+        "caster_physics",
+        "completion_notify",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "lift_foot_montage",
+      "source_candidate_ids": [],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "required_notify",
+        "root_motion_policy",
+        "foot_contact",
+        "no_penetration",
+        "completion_notify",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "pause_montage",
+      "source_candidate_ids": [
+        "anim_liftset"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "required_notify",
+        "root_motion_policy",
+        "pose_hold",
+        "completion_notify",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "fall_montage",
+      "source_candidate_ids": [
+        "anim_mm_fall_loop"
+      ],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "required_notify",
+        "root_motion_policy",
+        "collision_transition",
+        "landed_pose",
+        "completion_notify",
+        "package_digest"
+      ]
+    },
+    {
+      "target_asset_id": "recover_montage",
+      "source_candidate_ids": [],
+      "authoring_required": true,
+      "required_live_checks": [
+        "asset_load",
+        "class_match",
+        "skeleton_binding",
+        "required_notify",
+        "root_motion_policy",
+        "root_alignment",
+        "capsule_alignment",
+        "completion_notify",
+        "package_digest"
+      ]
+    }
+  ]
+}

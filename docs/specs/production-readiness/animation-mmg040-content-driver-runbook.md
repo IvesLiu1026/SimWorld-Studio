@@ -114,6 +114,32 @@ caller 不會傳入 montage path 或 function name。
 
 ## Live receipt workflow
 
+Before launching UE, the revision-bound filename candidates can be rendered as
+a planning-only inspection profile:
+
+```bash
+CONTRACT="$(realpath unreal_plugins/VistaAnimationContentApi/ContentProfiles/vista-mmg040-project-profile-source-v1.json)"
+CANDIDATES="$(realpath tools/assets/vista_mmg_040_gym_citynav_candidate_sources_v1.json)"
+
+node tools/build_vista_mmg040_inspection_profile.mjs \
+  --contract "$CONTRACT" \
+  --candidates "$CANDIDATES"
+```
+
+This does not prove an AssetRegistry object path, source-to-target retarget
+lineage, authored montage, runtime plugin, or behavior. The 2,937 package-file
+observation is never called `asset_count`, and the two static `assets.json`
+catalogs are forbidden as proof. The output must remain
+`candidate_unverified`, `runtime_ready=false`, and `start_allowed=false`.
+
+Once step 2 below produces a real protected receipt, add
+`--receipt /absolute/protected/mmg040-inspection-receipt.json`. The wrapper uses
+the same `validateInspectionReceipt` function as profile preparation, records
+the receipt SHA/content revision/content digest, and may then report
+`verification_status=live_verified`. Even in that branch, candidate source
+lineage remains unverified and runtime/start stay false; run the separate
+profile preparation and live plugin capability gates below before execution.
+
 ### 1. 先確認 repository state 仍是 blocked
 
 ```bash
@@ -219,8 +245,10 @@ Preflight error 不得改寫成 walk、generic montage、timer success、Cube、
 node --test \
   unreal_plugins/VistaAnimationContentApi/Tests/offline-contract.test.mjs \
   unreal_plugins/VistaAnimationContentApi/Tests/mmg040-content-profile.test.mjs
+node --test tools/tests/build_vista_mmg040_inspection_profile.test.mjs
 node --check \
   unreal_plugins/VistaAnimationContentApi/Scripts/prepare-content-profile.mjs
+node --check tools/build_vista_mmg040_inspection_profile.mjs
 sh -n unreal_plugins/VistaAnimationContentApi/Scripts/install-plugin.sh
 sh -n unreal_plugins/VistaAnimationContentApi/Scripts/build-plugin.sh
 git diff --check

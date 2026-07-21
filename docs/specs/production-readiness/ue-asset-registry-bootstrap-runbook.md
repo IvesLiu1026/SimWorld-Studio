@@ -210,6 +210,60 @@ copies. Therefore the inventory is sufficient to drive a small inspection
 matrix, but not sufficient to register an executable production animation
 content profile.
 
+### Revision-bound mmg_040 inspection profile
+
+The filename-only findings above are encoded in a non-executable, byte-pinned
+source file:
+
+```text
+tools/assets/vista_mmg_040_gym_citynav_candidate_sources_v1.json
+```
+
+It separates scene object candidates (`SM_chair_b`, `BP_Box*`) from character,
+animation, IK, and Control Rig authoring candidates. Its `package_file_count` is
+the 2,937-file `.uasset` + `.umap` observation; there is deliberately no
+`asset_count` field because that number is not a semantic catalog count. The
+source also lists both checked-in static `assets.json` files only as excluded,
+revision-unbound claims. Neither file can be passed to the builder as evidence.
+
+Build the candidate view without UE, network, database, or filesystem writes:
+
+```bash
+CONTRACT="$(realpath unreal_plugins/VistaAnimationContentApi/ContentProfiles/vista-mmg040-project-profile-source-v1.json)"
+CANDIDATES="$(realpath tools/assets/vista_mmg_040_gym_citynav_candidate_sources_v1.json)"
+
+node tools/build_vista_mmg040_inspection_profile.mjs \
+  --contract "$CONTRACT" \
+  --candidates "$CANDIDATES"
+```
+
+The output conforms to
+`tools/vista_mmg040_inspection_profile_schema.json`. Without a receipt, the tool
+derives `verification_status=candidate_unverified`, `start_allowed=false`,
+`runtime_ready=false`, and `live_inspection=null`. All 13 `/Game/VISTA/MMG040/`
+targets come from the pinned project profile contract, not from inferred
+`/Game` paths for the filename candidates. `authoring_required=true` records
+that the source packages are only possible inputs for project-owned assets.
+
+After an operator obtains an exact protected receipt through the disposable UE
+5.3.2 workflow, the same read-only wrapper can bind it:
+
+```bash
+node tools/build_vista_mmg040_inspection_profile.mjs \
+  --contract "$CONTRACT" \
+  --candidates "$CANDIDATES" \
+  --receipt /absolute/protected/mmg040-inspection-receipt.json
+```
+
+The live branch delegates validation to the existing
+`validateInspectionReceipt` implementation. Only a fully verified receipt with
+the exact 13 assets, seven actions, canonical content digest, and engine 5.3.2
+is accepted. Its `live_verified` status describes that content receipt only:
+`source_lineage_status` remains `candidate_unverified`, and both
+`runtime_ready` and `start_allowed` remain false until the independent plugin
+capability challenge and server runtime gates pass. This wrapper never emits an
+executable content profile.
+
 ## Remaining independent gates
 
 Each of the following still needs separate administrator or cost approval and
