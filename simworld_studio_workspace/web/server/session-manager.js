@@ -18,6 +18,30 @@ const UE_BASE_MCP      = parseInt(process.env.UE_BASE_MCP_PORT    || '55559', 10
 const UE_BASE_CIRRUS_H = parseInt(process.env.UE_BASE_CIRRUS_HTTP || '8585',  10);
 const UE_BASE_CIRRUS_W = parseInt(process.env.UE_BASE_CIRRUS_WS   || '8586',  10);
 const UE_PORT_STRIDE   = parseInt(process.env.UE_PORT_STRIDE       || '2',     10);
+const LEASE_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+const OWNER_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
+
+function positiveDuration(value, fallback, field) {
+  const resolved = value === undefined ? fallback : Number(value);
+  if (!Number.isSafeInteger(resolved) || resolved < 1) {
+    throw new TypeError(`${field} must be a positive safe integer`);
+  }
+  return resolved;
+}
+
+function activeLeaseInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const expected = ['leaseId', 'mcpPort', 'ownerId', 'slotId'];
+  const keys = Object.keys(value).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) return null;
+  if (typeof value.ownerId !== 'string' || !OWNER_ID_PATTERN.test(value.ownerId) ||
+      typeof value.leaseId !== 'string' || !LEASE_ID_PATTERN.test(value.leaseId) ||
+      !Number.isSafeInteger(value.slotId) || value.slotId < 0 || value.slotId > 65535 ||
+      !Number.isSafeInteger(value.mcpPort) || value.mcpPort < 1 || value.mcpPort > 65535) {
+    return null;
+  }
+  return value;
+}
 
 function uePortsForSlot(slotId) {
   return {
@@ -33,9 +57,23 @@ class SessionManager extends EventEmitter {
    * @param {object} [opts.slotPool] Optional SlotPool that actually starts/stops
    *   UE per slot. If omitted, sessions still get assigned a slot id + ports
    *   (legacy single-UE / dev mode), but no UE process is spawned.
+   * @param {Function} [opts.clock] Injectable millisecond clock for validation.
+   * @param {number} [opts.sessionTtlMs] Sliding idle lease duration.
+   * @param {number} [opts.sessionHardMaxMs] Absolute lease duration.
    */
   constructor(opts = {}) {
     super();
+    this._clock = opts.clock === undefined ? Date.now : opts.clock;
+    if (typeof this._clock !== 'function') throw new TypeError('clock must be a function');
+    this._sessionTtlMs = positiveDuration(opts.sessionTtlMs, SESSION_TTL_MS, 'sessionTtlMs');
+    this._sessionHardMaxMs = positiveDuration(
+      opts.sessionHardMaxMs,
+      SESSION_HARD_MAX,
+      'sessionHardMaxMs',
+    );
+    if (this._sessionHardMaxMs < this._sessionTtlMs) {
+      throw new TypeError('sessionHardMaxMs must be greater than or equal to sessionTtlMs');
+    }
     /** @type {Map<string, object>} token → record */
     this._sessions  = new Map();
     /** @type {Set<number>} available slot IDs */
@@ -77,10 +115,12 @@ class SessionManager extends EventEmitter {
    * @returns {Promise<object>} session record
    */
   async acquire(userId) {
+    const now = this._now();
+    this._expireSessions(now);
     // Reuse existing session for same user
     for (const rec of this._sessions.values()) {
       if (rec.userId === userId) {
-        rec.lastActivity = Date.now();
+        rec.lastActivity = now;
         return rec;
       }
     }
@@ -97,7 +137,7 @@ class SessionManager extends EventEmitter {
     }
 
     return new Promise((resolve, reject) => {
-      this._queue.push({ userId, resolve, reject, enqueuedAt: Date.now() });
+      this._queue.push({ userId, resolve, reject, enqueuedAt: now });
       this.emit('queued', { userId, position: this._queue.length });
     });
   }
@@ -110,8 +150,39 @@ class SessionManager extends EventEmitter {
   touch(token) {
     const rec = this._sessions.get(token);
     if (!rec) return null;
-    rec.lastActivity = Date.now();
+    const now = this._now();
+    const reason = this._expirationReason(rec, now);
+    if (reason) {
+      this._evict(token, reason);
+      return null;
+    }
+    rec.lastActivity = now;
     return rec;
+  }
+
+  /**
+   * Resolve an exact active UE lease without accepting or returning its raw
+   * browser session token. The check does not renew the lease.
+   */
+  resolveActiveLease(identity) {
+    const requested = activeLeaseInput(identity);
+    if (!requested || requested.slotId >= this.totalSlots) return null;
+    const now = this._now();
+    this._expireSessions(now);
+    for (const rec of this._sessions.values()) {
+      const mcpPort = rec.uePorts && rec.uePorts.mcpPort;
+      if (rec.mcpReady === true && rec.userId === requested.ownerId &&
+          rec.slotId === requested.slotId && rec.leaseId === requested.leaseId &&
+          mcpPort === requested.mcpPort) {
+        return Object.freeze({
+          ownerId: rec.userId,
+          slotId: rec.slotId,
+          leaseId: rec.leaseId,
+          mcpPort,
+        });
+      }
+    }
+    return null;
   }
 
   /** Release a slot explicitly (user logout / tab close). */
@@ -121,7 +192,7 @@ class SessionManager extends EventEmitter {
 
   /** Admin snapshot for health endpoint. */
   snapshot() {
-    const now = Date.now();
+    const now = this._now();
     return [...this._sessions.values()].map(r => ({
       token:    r.token.slice(0, 8) + '…',
       slotId:   r.slotId,
@@ -146,7 +217,7 @@ class SessionManager extends EventEmitter {
   _assign(userId) {
     const slotId = [...this._freeSlots][0];
     this._freeSlots.delete(slotId);
-    const now = Date.now();
+    const now = this._now();
     const rec = {
       token:        crypto.randomBytes(32).toString('hex'),
       leaseId:      crypto.randomBytes(24).toString('base64url'),
@@ -213,15 +284,33 @@ class SessionManager extends EventEmitter {
     }
   }
 
-  _sweep() {
-    const now = Date.now();
-    for (const [token, rec] of this._sessions) {
-      const idle = now - rec.lastActivity;
-      const age  = now - rec.acquiredAt;
-      if (idle > SESSION_TTL_MS || age > SESSION_HARD_MAX) {
-        this._evict(token, idle > SESSION_TTL_MS ? 'idle_timeout' : 'hard_limit');
-      }
+  _now() {
+    const now = this._clock();
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error('Session clock is invalid');
+    return now;
+  }
+
+  _expirationReason(rec, now) {
+    if (!rec || !Number.isSafeInteger(rec.acquiredAt) || !Number.isSafeInteger(rec.lastActivity) ||
+        rec.acquiredAt < 0 || rec.lastActivity < rec.acquiredAt ||
+        rec.acquiredAt > now || rec.lastActivity > now) {
+      return 'invalid_session_state';
     }
+    if (now - rec.lastActivity > this._sessionTtlMs) return 'idle_timeout';
+    if (now - rec.acquiredAt > this._sessionHardMaxMs) return 'hard_limit';
+    return null;
+  }
+
+  _expireSessions(now) {
+    for (const [token, rec] of this._sessions) {
+      const reason = this._expirationReason(rec, now);
+      if (reason) this._evict(token, reason);
+    }
+  }
+
+  _sweep() {
+    const now = this._now();
+    this._expireSessions(now);
     // Evict stuck waiters (> 5 min in queue)
     const WAIT_MAX = 5 * 60 * 1000;
     this._queue = this._queue.filter(w => {

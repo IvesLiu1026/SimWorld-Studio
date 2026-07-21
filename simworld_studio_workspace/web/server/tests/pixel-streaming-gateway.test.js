@@ -29,6 +29,7 @@ class FakeSessionManager extends EventEmitter {
     this.freeSlots = 3;
     this.queueLength = 0;
     this.acquireUserIds = [];
+    this.leaseExpired = false;
     this.record = {
       token,
       leaseId: "lease-gateway-test",
@@ -50,9 +51,22 @@ class FakeSessionManager extends EventEmitter {
   }
 
   touch(token) {
-    if (!this.active || token !== this.record.token) return null;
+    if (!this.active || this.leaseExpired || token !== this.record.token) return null;
     this.record.lastActivity = Date.now();
     return this.record;
+  }
+
+  resolveActiveLease(identity) {
+    if (!this.active || this.leaseExpired || this.record.mcpReady !== true) return null;
+    const mcpPort = this.record.uePorts && this.record.uePorts.mcpPort;
+    if (identity.ownerId !== this.record.userId || identity.slotId !== this.record.slotId ||
+        identity.leaseId !== this.record.leaseId || identity.mcpPort !== mcpPort) return null;
+    return Object.freeze({
+      ownerId: this.record.userId,
+      slotId: this.record.slotId,
+      leaseId: this.record.leaseId,
+      mcpPort,
+    });
   }
 
   release(token) {
@@ -385,6 +399,72 @@ test("active-session resolver fails closed on cookie, owner, lease, readiness, s
     assert.equal(runtime.resolveActiveSession(cookieRequest(validCookies)), null);
     manager.record.slotId = originalSlot;
     assert.ok(runtime.resolveActiveSession(cookieRequest(validCookies)));
+  } finally {
+    runtime.destroy();
+  }
+});
+
+test("server-internal binding revalidation rejects stale, altered, and reacquired leases", async () => {
+  const manager = new FakeSessionManager();
+  const runtime = createStudioStreamingRuntime({ env: env(), sessionManager: manager });
+  try {
+    const acquired = await acquireCookies(runtime);
+    const cookies = cookieHeader(acquired.principal, acquired.session);
+    const identity = runtime.resolveActiveSession(cookieRequest(cookies));
+    assert.ok(identity);
+    assert.equal(runtime.isActiveSessionBinding(identity), true);
+    assert.notEqual(identity.sessionId, manager.record.token);
+
+    for (const altered of [
+      { ...identity, ownerId: `browser-${"1".repeat(64)}` },
+      { ...identity, sessionId: `session-${"2".repeat(64)}` },
+      { ...identity, sessionId: manager.record.token },
+      { ...identity, slotId: identity.slotId + 1 },
+      { ...identity, leaseId: "lease-gateway-wrong" },
+      { ...identity, mcpPort: identity.mcpPort + 1 },
+      { ...identity, callerControlled: true },
+    ]) {
+      assert.equal(runtime.isActiveSessionBinding(altered), false);
+    }
+
+    manager.record.mcpReady = false;
+    assert.equal(runtime.isActiveSessionBinding(identity), false);
+    manager.record.mcpReady = true;
+
+    manager.record.uePorts.mcpPort += 2;
+    assert.equal(runtime.isActiveSessionBinding(identity), false);
+    assert.equal(runtime.isActiveSessionBinding({
+      ...identity,
+      mcpPort: manager.record.uePorts.mcpPort,
+    }), false);
+    manager.record.uePorts.mcpPort = identity.mcpPort;
+
+    manager.leaseExpired = true;
+    assert.equal(runtime.isActiveSessionBinding(identity), false);
+    manager.leaseExpired = false;
+
+    const released = responseHarness();
+    runtime.releaseSession(cookieRequest(cookies), released);
+    assert.equal(runtime.isActiveSessionBinding(identity), false);
+
+    manager.record.token = "f".repeat(64);
+    manager.record.leaseId = "lease-gateway-reacquired";
+    manager.record.userId = null;
+    const reacquired = await acquireCookies(runtime, cookieRequest(acquired.principal));
+    const nextIdentity = runtime.resolveActiveSession(cookieRequest(cookieHeader(
+      reacquired.principal,
+      reacquired.session,
+    )));
+    assert.ok(nextIdentity);
+    assert.equal(nextIdentity.ownerId, identity.ownerId);
+    assert.notEqual(nextIdentity.sessionId, identity.sessionId);
+    assert.notEqual(nextIdentity.leaseId, identity.leaseId);
+    assert.equal(runtime.isActiveSessionBinding(identity), false);
+    assert.equal(runtime.isActiveSessionBinding({
+      ...nextIdentity,
+      sessionId: identity.sessionId,
+    }), false);
+    assert.equal(runtime.isActiveSessionBinding(nextIdentity), true);
   } finally {
     runtime.destroy();
   }

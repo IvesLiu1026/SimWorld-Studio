@@ -17,6 +17,7 @@ const SESSION_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const PRINCIPAL_SUBJECT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PRINCIPAL_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const OWNER_ID_PATTERN = /^browser-[a-f0-9]{64}$/;
+const SESSION_ID_PATTERN = /^session-[a-f0-9]{64}$/;
 const LEASE_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 const ENDPOINT_ID_PATTERN = /^ps1_[A-Za-z0-9_-]{43}$/;
 const MIN_ENDPOINT_TTL_MS = 5 * 60 * 1000;
@@ -257,13 +258,35 @@ function validSessionRecord(record, token, ownerId) {
 }
 
 function hashedSessionId(record, principalHmacKey) {
+  // Bind the public-safe session id to the server-owned lease, never to the
+  // browser's raw session capability.
+  const mcpPort = record.uePorts && record.uePorts.mcpPort;
   return `session-${crypto
     .createHmac("sha256", principalHmacKey)
-    .update("simworld/active-session/id/v1\0")
-    .update(record.token)
-    .update("\0")
-    .update(record.leaseId)
+    .update("simworld/active-session/id/v2\0")
+    .update(JSON.stringify([record.userId, record.slotId, record.leaseId, mcpPort]))
     .digest("hex")}`;
+}
+
+function activeBindingInput(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const expected = ["leaseId", "mcpPort", "ownerId", "sessionId", "slotId"];
+  const keys = Object.keys(value).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) return null;
+  if (typeof value.ownerId !== "string" || !OWNER_ID_PATTERN.test(value.ownerId) ||
+      typeof value.sessionId !== "string" || !SESSION_ID_PATTERN.test(value.sessionId) ||
+      typeof value.leaseId !== "string" || !LEASE_ID_PATTERN.test(value.leaseId) ||
+      !Number.isSafeInteger(value.slotId) || value.slotId < 0 || value.slotId > 65535 ||
+      !Number.isSafeInteger(value.mcpPort) || value.mcpPort < 1 || value.mcpPort > 65535) {
+    return null;
+  }
+  return value;
+}
+
+function sameSessionId(left, right) {
+  if (!SESSION_ID_PATTERN.test(String(left || "")) ||
+      !SESSION_ID_PATTERN.test(String(right || ""))) return false;
+  return crypto.timingSafeEqual(Buffer.from(left, "ascii"), Buffer.from(right, "ascii"));
 }
 
 function publicSession(record, manager, sessionTtlMs) {
@@ -349,7 +372,8 @@ function createStudioStreamingRuntime({
   registryOptions = {},
 } = {}) {
   if (!sessionManager || typeof sessionManager.acquire !== "function" ||
-      typeof sessionManager.touch !== "function" || typeof sessionManager.release !== "function") {
+      typeof sessionManager.touch !== "function" || typeof sessionManager.release !== "function" ||
+      typeof sessionManager.resolveActiveLease !== "function") {
     fail("PIXEL_STREAMING_GATEWAY_CONFIG_INVALID", "A session manager is required");
   }
   if (webRtcFps !== 30 && webRtcFps !== 60) {
@@ -436,6 +460,38 @@ function createStudioStreamingRuntime({
     return contextForRecord(record, token, principal);
   }
 
+  // Server-internal, non-renewing revalidation for identities previously
+  // emitted by resolveActiveSession. Never source this value from req.body.
+  function isActiveSessionBinding(identity) {
+    const requested = activeBindingInput(identity);
+    if (!requested) return false;
+    let activeLease;
+    try {
+      activeLease = sessionManager.resolveActiveLease({
+        ownerId: requested.ownerId,
+        slotId: requested.slotId,
+        leaseId: requested.leaseId,
+        mcpPort: requested.mcpPort,
+      });
+    } catch {
+      return false;
+    }
+    if (!activeLease || activeLease.ownerId !== requested.ownerId ||
+        activeLease.slotId !== requested.slotId || activeLease.leaseId !== requested.leaseId ||
+        activeLease.mcpPort !== requested.mcpPort) {
+      return false;
+    }
+    return sameSessionId(
+      requested.sessionId,
+      hashedSessionId({
+        userId: activeLease.ownerId,
+        slotId: activeLease.slotId,
+        leaseId: activeLease.leaseId,
+        uePorts: { mcpPort: activeLease.mcpPort },
+      }, principalHmacKey),
+    );
+  }
+
   function resolveActiveSession(request) {
     const context = activeContextForRequest(request);
     if (!context || context.record.mcpReady !== true) return null;
@@ -445,7 +501,8 @@ function createStudioStreamingRuntime({
         (context.record.slotId < 0 || context.record.slotId >= sessionManager.totalSlots)) {
       return null;
     }
-    return Object.freeze({ ...context.binding, mcpPort });
+    const identity = Object.freeze({ ...context.binding, mcpPort });
+    return isActiveSessionBinding(identity) ? identity : null;
   }
 
   function rememberEndpoint(context, endpoint) {
@@ -629,6 +686,7 @@ function createStudioStreamingRuntime({
     releaseSession,
     issueEndpoint,
     resolveActiveSession,
+    isActiveSessionBinding,
     handleUpgrade,
     attach(server) {
       if (!server || typeof server.on !== "function") {
