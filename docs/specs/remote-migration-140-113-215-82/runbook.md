@@ -1,252 +1,832 @@
-# Runbook: remote SimWorld continuation
+# Runbook: continue VISTA production on 140.113.215.82
 
-Updated: 2026-07-15
+Updated: 2026-07-21 Asia/Taipei
+
 Target: `yhliu@140.113.215.82`
 
-## Start here for the remote Codex agent
+Source: `git@github.com:IvesLiu1026/SimWorld-Studio.git`, branch
+`codex/vista-production-completion`
 
-Use GPT-5.6 Sol Ultra as coordinator if that profile is available, but verify the actual CLI/model configuration instead of assuming it from the prompt. Begin with:
+## 0. Stop rule and remote-agent prompt
+
+The last read-only SSH retry on 2026-07-21 failed with `No route to host`. No session was established
+and no remote command ran. Do not infer current host state from the 2026-07-15 ledger. Start this
+runbook only after the route is restored.
+
+Give the remote Codex coordinator this prompt:
 
 ```text
-You are the migration integrator on 140.113.215.82.
-Read /home/yhliu/SimWorld-Studio-src/AGENTS.md and every file under
-/home/yhliu/SimWorld-Studio-src/docs/specs/remote-migration-140-113-215-82/.
-Then read docs/specs/production-readiness/{requirements,design,tasks}.md.
+You are the integration coordinator on 140.113.215.82. Read AGENTS.md and all
+files under docs/specs/remote-migration-140-113-215-82, then the referenced
+production-readiness runbooks. Preserve /home/yhliu/SimWorld-Studio-src and
+/home/yhliu/SimWorld as historical dirty migration evidence.
 
-The dirty filesystem state is intentional and is the source of truth. Do not
-git pull, reset, checkout, clean, stage, commit, reformat broadly, or discard
-untracked files. Do not use sudo, alter Docker groups, touch ports 80/443/14500,
-copy or print secrets, call a paid model, start a public listener, mutate UE
-content, or run asset indexing without the corresponding explicit gate.
+Source sync is GitHub-only from IvesLiu1026/SimWorld-Studio branch
+codex/vista-production-completion. Resolve and record the exact remote SHA;
+never copy a dirty checkout and never edit the detached activation generation.
 
-First execute only the read-only preflight and offline validation sections of
-this runbook. Record evidence in HANDOFF.md before asking to run the stateful UE
-smoke. Use /home/yhliu/.local/bin before the system PATH.
+Run only the read-only inventory first. Every sudo/admin, model download,
+database/index write, UE/plugin/scene mutation, provider call, service restart,
+DNS/TLS/firewall/Coturn/public listener, or external test keeps its separate
+gate. Do not print secrets. Keep assets/animation/review/WebRTC not_ready until
+their exact live receipts exist.
 ```
 
-## Known target facts
+## 1. Read-only first contact
 
-- Host: Ubuntu 24.04 x86_64, 2×RTX5090, NVIDIA driver580.105.08.
-- RAM:125 GiB; free disk at audit: approximately670 GiB.
-- User Node22.23.1/npm10.9.8: `/home/yhliu/.local/bin`.
-- Codex/Claude are installed in`~/.local/bin`; Hermes was not found. Migration installed the verified user-localuv0.11.0 binary and rebuilt the Python environment.
-- Docker/Compose binaries exist but`yhliu` cannot access the daemon.
--80/443/14500 are occupied. Do not kill or replace those listeners.
-- At audit,3002/55559/6333/7777/8585/8586 were free; recheck before launch.
-
-## Read-only preflight
+The first recovered SSH session runs only these commands. Save output through the operator's approved
+terminal capture; do not write inside Git, install anything, or start a service.
 
 ```bash
+set -eu
 export PATH="$HOME/.local/bin:$PATH"
-hostname
+date --iso-8601=seconds
+hostname --fqdn
 id
+uname -a
+sed -n '1,20p' /etc/os-release
+git --version
 node --version
 npm --version
-git --version
+uv --version
+claude --version
+codex --version
 nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader
-df -h "$HOME"
-ss -ltn
+free -h
+df -h "$HOME" /tmp
+findmnt -T "$HOME"
+ss -lntup
+systemctl --no-pager --type=service --state=running | grep -Ei 'simworld|unreal|cirrus|turn|coturn|nginx|docker|postgres|qdrant' || true
+docker version || true
+docker compose version || true
+docker info || true
+command -v vulkaninfo || true
+find "$HOME/.local/share/simworld-studio" -maxdepth 3 -type d -print 2>/dev/null | sort
 ```
 
-Expected source/runtime paths after transfer:
+Inventory the migrated runtime without launching it:
 
 ```bash
-test -d /home/yhliu/SimWorld-Studio-src/.git
-test -d /home/yhliu/SimWorld/.git
-test -f /home/yhliu/.local/share/simworld-studio/downloads/SimWorld-Studio-Minimal-806e869a.tar.gz
-test -x /home/yhliu/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a/Engine/Binaries/Linux/UnrealEditor
-test -f /home/yhliu/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a/gym_citynav/gym_citynav.uproject
+RUNTIME="$HOME/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a"
+test -x "$RUNTIME/Engine/Binaries/Linux/UnrealEditor"
+test -f "$RUNTIME/gym_citynav/gym_citynav.uproject"
+find "$RUNTIME/Engine/Build" -maxdepth 3 -name 'Build.version' -o -name 'RunUAT.sh' 2>/dev/null
+find "$RUNTIME/gym_citynav/Plugins" -maxdepth 2 -name '*.uplugin' -print 2>/dev/null | sort
+sha256sum "$RUNTIME/gym_citynav/gym_citynav.uproject"
 ```
 
-## Integrity checks
+Stop if the route is unstable, disk is insufficient, GPU/driver is unhealthy, a target path has unknown
+ownership, or any intended port/GPU/service already has another owner. Do not kill or replace it.
+
+## 2. Publish and materialize an exact GitHub checkpoint
+
+The coordinator must first push the reviewed integration branch. On the target, create a new checkout
+generation. These commands never use the historical dirty tree.
 
 ```bash
-stat -c '%s %n' /home/yhliu/.local/share/simworld-studio/downloads/SimWorld-Studio-Minimal-806e869a.tar.gz
-sha256sum /home/yhliu/.local/share/simworld-studio/downloads/SimWorld-Studio-Minimal-806e869a.tar.gz
-git -C /home/yhliu/SimWorld-Studio-src branch --show-current
-git -C /home/yhliu/SimWorld-Studio-src rev-parse HEAD
-git -C /home/yhliu/SimWorld-Studio-src status --short --branch
-git -C /home/yhliu/SimWorld status --short --branch
-```
-
-Expected archive:
-
-```text
-bytes  15170703068
-sha256 806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f
-```
-
-Expected Studio identity:
-
-```text
-branch codex/vista-loopback
-HEAD   caf6d9309ad4fe256a6ba1e212d8bb1fb1fa7f7b
-dirty  48 tracked modified + 69 untracked in the accepted migration snapshot
-```
-
-Do not demand a clean status. A clean target would mean progress was lost.
-
-## Source materialization from the migration snapshot
-
-The transferred snapshot root is recorded in`HANDOFF.md`. Materialize Studio without staging the dirty patch:
-
-```bash
-MIGRATION_ROOT=/home/yhliu/SimWorld-Migration/20260715T163851-simworld-to-140-113-215-82
-STUDIO_PARTIAL=/home/yhliu/SimWorld-Studio-src.partial-20260715
-test ! -e /home/yhliu/SimWorld-Studio-src
-test ! -e "$STUDIO_PARTIAL"
-git clone "$MIGRATION_ROOT/studio/studio-all.bundle" "$STUDIO_PARTIAL"
-git -C "$STUDIO_PARTIAL" switch codex/vista-loopback
-git -C "$STUDIO_PARTIAL" apply --check "$MIGRATION_ROOT/studio/studio-dirty-tracked.patch"
-git -C "$STUDIO_PARTIAL" apply "$MIGRATION_ROOT/studio/studio-dirty-tracked.patch"
-tar --extract --gzip --file="$MIGRATION_ROOT/studio/studio-untracked.tar.gz" --directory="$STUDIO_PARTIAL" --no-same-owner
-git -C "$STUDIO_PARTIAL" status --short --branch
-```
-
-After comparing against the status/manifest in`HANDOFF.md`, promote with one same-filesystem rename:
-
-```bash
-mv "$STUDIO_PARTIAL" /home/yhliu/SimWorld-Studio-src
-```
-
-Materialize the Python/bridge repo the same way using`simworld/simworld-all.bundle`,`simworld-dirty-tracked.patch` and`simworld-untracked.tar.gz`. Expected base HEAD is`0921180909105158a7ff87445eb032706b10113e`. Do not repair the misspelled upstream URL until parity is recorded.
-
-## Offline dependency rebuild
-
-These commands write only dependency/build directories and make no provider/UE/DB call:
-
-```bash
+set -eu
 export PATH="$HOME/.local/bin:$PATH"
-cd /home/yhliu/SimWorld-Studio-src/simworld_studio_workspace/web
+export REPO_URL='git@github.com:IvesLiu1026/SimWorld-Studio.git'
+export INTEGRATION_BRANCH='codex/vista-production-completion'
+export CHECKOUT_ROOT="$HOME/.local/share/simworld-studio/checkouts"
+export STATE_ROOT="$HOME/.local/state/simworld-studio"
+
+install -d -m 0700 "$CHECKOUT_ROOT" "$STATE_ROOT/checkpoints"
+REMOTE_LINE="$(git ls-remote --exit-code "$REPO_URL" "refs/heads/$INTEGRATION_BRANCH")"
+REMOTE_SHA="$(printf '%s\n' "$REMOTE_LINE" | awk 'NR==1 {print $1}')"
+printf '%s\n' "$REMOTE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+PARTIAL="$CHECKOUT_ROOT/.partial-$STAMP"
+CHECKOUT="$CHECKOUT_ROOT/$REMOTE_SHA"
+test ! -e "$PARTIAL"
+test ! -e "$CHECKOUT"
+
+git clone --no-tags --single-branch --branch "$INTEGRATION_BRANCH" "$REPO_URL" "$PARTIAL"
+test "$(git -C "$PARTIAL" rev-parse HEAD)" = "$REMOTE_SHA"
+test "$(git -C "$PARTIAL" remote get-url origin)" = "$REPO_URL"
+test -z "$(git -C "$PARTIAL" status --porcelain)"
+git -C "$PARTIAL" fsck --full
+git -C "$PARTIAL" switch --detach "$REMOTE_SHA"
+mv "$PARTIAL" "$CHECKOUT"
+
+umask 077
+CHECKPOINT_FILE="$STATE_ROOT/checkpoints/source-$STAMP.env"
+printf 'REPO_URL=%s\nINTEGRATION_BRANCH=%s\nCHECKPOINT=%s\nCHECKOUT=%s\n' \
+  "$REPO_URL" "$INTEGRATION_BRANCH" "$REMOTE_SHA" "$CHECKOUT" > "$CHECKPOINT_FILE"
+chmod 0600 "$CHECKPOINT_FILE"
+printf 'CHECKPOINT=%s\nCHECKOUT=%s\nCHECKPOINT_FILE=%s\n' \
+  "$REMOTE_SHA" "$CHECKOUT" "$CHECKPOINT_FILE"
+```
+
+Before continuing, compare `REMOTE_SHA` to the coordinator-announced reviewed SHA. If the branch moved
+during clone, resolve again and create another generation; do not silently deploy an unreviewed HEAD.
+
+For a remote-only code fix, never edit `CHECKOUT`:
+
+```bash
+WORK_BRANCH="codex/remote-82-<bounded-task>"
+WORKTREE="$HOME/SimWorld-Studio-worktrees/remote-82-<bounded-task>"
+git -C "$CHECKOUT" worktree add -b "$WORK_BRANCH" "$WORKTREE" "$REMOTE_SHA"
+# Read rules, declare owned paths, edit, test, stage specific files, commit.
+git -C "$WORKTREE" push --set-upstream origin "$WORK_BRANCH"
+```
+
+Wait for coordinator integration and create a new checkout generation from the updated integration
+branch. Never scp/rsync the worktree as a release.
+
+## 3. Ownership checkpoint before each stateful phase
+
+Create one secret-free private record. Replace placeholders; do not record tokens, DSNs or credentials.
+
+```bash
+set -eu
+PHASE='<ue-plugin|vista-stage|asset-index|scene|animation|review|webrtc>'
+RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_ROOT="$STATE_ROOT/checkpoints/$REMOTE_SHA-$PHASE-$RUN_STAMP"
+install -d -m 0700 "$RUN_ROOT"
+umask 077
+printf 'schema=simworld-remote-ownership/v1\nphase=%s\ngit_sha=%s\ncheckout=%s\nowner=%s\ngpu=%s\nslot=%s\nports=%s\ngate_reference=%s\nrollback_generation=%s\n' \
+  "$PHASE" "$REMOTE_SHA" "$CHECKOUT" '<human-or-agent>' '<none-or-index>' \
+  '<none-or-slot>' '<none-or-list>' '<approval-record>' '<prior-generation>' \
+  > "$RUN_ROOT/ownership.txt"
+chmod 0600 "$RUN_ROOT/ownership.txt"
+```
+
+Only that owner starts/stops the recorded processes or writers. If ownership changes, close the old
+checkpoint and create a new one.
+
+## 4. Offline dependency and acceptance checks
+
+These commands use the exact clean generation and do not contact UE/provider/DB. `npm ci` may access
+the package registry if caches are incomplete; obtain normal dependency-download approval first.
+
+```bash
+set -eu
+export PATH="$HOME/.local/bin:$PATH"
+cd "$CHECKOUT/simworld_studio_workspace/web"
 npm ci
 cd server
 npm ci
-```
+node --test tests/*.test.js
+cd ..
+npm run build
 
-After installation, verify lockfiles did not change:
-
-```bash
-git -C /home/yhliu/SimWorld-Studio-src diff -- \
+cd "$CHECKOUT"
+uv sync --project tools --frozen
+uv run --project tools --frozen python -m unittest discover -s tools/tests -p 'test_*.py' -v
+node --test unreal_plugins/VistaAnimationContentApi/Tests/offline-contract.test.mjs
+sh -n unreal_plugins/VistaAnimationContentApi/Scripts/install-plugin.sh
+sh -n unreal_plugins/VistaAnimationContentApi/Scripts/build-plugin.sh
+bash -n deploy/aws/scripts/slot-launcher.sh
+git diff --check
+git diff --exit-code -- \
   simworld_studio_workspace/web/package-lock.json \
-  simworld_studio_workspace/web/server/package-lock.json
+  simworld_studio_workspace/web/server/package-lock.json \
+  tools/uv.lock
+test -z "$(git status --porcelain)"
 ```
 
-The Python repo has legacy`setup.py` rather than`pyproject.toml`. Do not copy the old Python3.10 venv. Afteruv is installed at user scope or approved by the administrator:
+Record exact totals and failures. Do not patch a detached generation. A passing suite proves code
+contracts only; it does not satisfy any live gate.
+
+## 5. Administrator prerequisite checklist
+
+Ask the administrator for only the missing items demonstrated by Phase 1 inventory:
+
+1. Network route/ACL permitting the approved SSH path.
+2. `vulkan-tools` for `vulkaninfo`; render/video group access only if a real device permission error is
+   captured.
+3. An exact Linux UE 5.3.2 full build root containing executable
+   `Engine/Build/BatchFiles/RunUAT.sh`, `Engine/Binaries/Linux/UnrealEditor`, headers and its expected
+   compiler/toolchain. Install `clang`/`cmake`/`ninja` only if that build reports them missing.
+4. Rootless Docker, an explicitly reviewed docker-group grant, or managed Postgres/Qdrant/embedding.
+   Docker group is root-equivalent.
+5. Private model/config/secret/backup directories with reviewed ownership and capacity.
+6. Existing 80/443 ingress ownership plus DNS/TLS/Coturn/firewall decisions; never launch competing
+   Nginx/Coturn first.
+
+Verification after the admin change is still read-only:
 
 ```bash
-cd /home/yhliu/SimWorld
-uv venv --python 3.12
-uv pip install -e '.[dev]'
-uv run python -c 'import simworld; print(simworld.__file__)'
+vulkaninfo --summary
+test -x "$UE_ENGINE_ROOT/Engine/Build/BatchFiles/RunUAT.sh"
+test -x "$UE_ENGINE_ROOT/Engine/Binaries/Linux/UnrealEditor"
+docker info
+ss -lntup
 ```
 
-## Offline validation
+## 6. Rebuild and load the UE plugin against 5.3.2
+
+### 6.1 Exact-engine and offline checks
+
+Set `UE_ENGINE_ROOT` to the administrator-provided full build, not automatically to the migrated runtime.
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-cd /home/yhliu/SimWorld-Studio-src/simworld_studio_workspace/web
-npm run test:server:unit
-node --test tests/ui/review-runtime.unit.mjs tests/ui/vista-import.unit.mjs
-npx vite build --mode development
-npx playwright test --config tests/ui/review.playwright.config.js
-npx playwright test --config tests/ui/vista-import.playwright.config.js
+set -eu
+export UE_ENGINE_ROOT='/absolute/admin-approved/UE_5.3.2'
+export PLUGIN_ROOT="$CHECKOUT/unreal_plugins/VistaAnimationContentApi"
+export PLUGIN_BUILD_ROOT="$HOME/.local/share/simworld-studio/plugin-packages"
+
+test -x "$UE_ENGINE_ROOT/Engine/Build/BatchFiles/RunUAT.sh"
+test -x "$UE_ENGINE_ROOT/Engine/Binaries/Linux/UnrealEditor"
+test -f "$UE_ENGINE_ROOT/Engine/Build/Build.version"
+node - "$UE_ENGINE_ROOT/Engine/Build/Build.version" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+const actual = `${v.MajorVersion}.${v.MinorVersion}.${v.PatchVersion}`;
+if (actual !== '5.3.2') throw new Error(`expected UE 5.3.2, got ${actual}`);
+process.stdout.write(`${actual}\n`);
+NODE
+node --test "$PLUGIN_ROOT/Tests/offline-contract.test.mjs"
 ```
 
-Run the exact accepted server contract selection from the repository root; do not add `ue-broker-integration.test.js` unless its local mock port is intentionally owned:
+### 6.2 BuildPlugin — state/admin gate
+
+Dry-run first. The apply command compiles and may consume substantial CPU/disk; run it only after the
+recorded gate.
 
 ```bash
-cd /home/yhliu/SimWorld-Studio-src
-set -- $(git ls-files --others --exclude-standard \
-  simworld_studio_workspace/web/server/tests | \
-  grep '\.test\.js$' | sort) \
-  simworld_studio_workspace/web/server/tests/runtime-security.test.js \
-  simworld_studio_workspace/web/server/tests/security-source-parity.test.js \
-  simworld_studio_workspace/web/server/tests/vista-runtime-broker.test.js
-node --test "$@"
+CHECKPOINT12="$(printf '%s' "$REMOTE_SHA" | cut -c1-12)"
+export VISTA_ANIMATION_PLUGIN_BUILD_ID="ue532-$CHECKPOINT12-build001"
+PACKAGE="$PLUGIN_BUILD_ROOT/$VISTA_ANIMATION_PLUGIN_BUILD_ID"
+test ! -e "$PACKAGE"
+
+"$PLUGIN_ROOT/Scripts/build-plugin.sh" \
+  --engine-root "$UE_ENGINE_ROOT" \
+  --output "$PACKAGE" \
+  --platform Linux
 ```
 
-For this snapshot the command expands to24 files and230 tests. Broader legacy tests are diagnostic only; see `HANDOFF.md` for the two current portability failures.
-
-Expected migrated baseline from source host:
-
-- Relevant Node contracts:230 passed.
-- Existing server unit:11 passed,18 integration/pipeline skipped.
-- UI unit:11 passed.
-- Mock browser E2E: Review1 + VISTA Import1 passed.
-- Vite development build:1879 modules.
-- Six Draft2020-12 schemas and two sanitized fixtures validated.
-
-Record differences rather than forcing the output to match.
-
-## Runtime environment contract
-
-Set paths explicitly; do not reuse source-host absolute paths:
+After reviewing the printed command and obtaining the State/Admin approval:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-export SIMWORLD_REPO=/home/yhliu/SimWorld-Studio-src
-export SIMWORLD_WEB_DIR="$SIMWORLD_REPO/simworld_studio_workspace/web"
-export UE_ENGINE_DIR=/home/yhliu/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a
-export UE_EDITOR="$UE_ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor"
-export UE_PROJECT_FILE="$UE_ENGINE_DIR/gym_citynav/gym_citynav.uproject"
-export CIRRUS_JS="$UE_ENGINE_DIR/Engine/Plugins/Media/PixelStreaming/Resources/WebServers/SignallingWebServer/cirrus.js"
-export XDG_DATA_HOME=/home/yhliu/.local/share
-export XDG_STATE_HOME=/home/yhliu/.local/state
-export PORT=3002
-export UNREAL_HOST=127.0.0.1
-export UNREAL_PORT=55559
-export CIRRUS_HTTP_PORT=8585
-export CIRRUS_WS_PORT=8586
-export STUDIO_MODEL_MODE=off
-export ASSET_REQUIRE_REAL_ASSETS=true
-export ASSET_DEGRADED_MODE=disabled
+"$PLUGIN_ROOT/Scripts/build-plugin.sh" \
+  --engine-root "$UE_ENGINE_ROOT" \
+  --output "$PACKAGE" \
+  --platform Linux \
+  --apply 2>&1 | tee "$RUN_ROOT/build-plugin.log"
+
+PLUGIN_BINARY="$(find "$PACKAGE" -type f -name 'libUnrealEditor-VistaAnimationContentApi.so' -print -quit)"
+test -n "$PLUGIN_BINARY"
+test -f "$PLUGIN_BINARY"
+MANIFEST="$PACKAGE/vista-animation-plugin-artifact.json"
+umask 077
+node "$PLUGIN_ROOT/Scripts/create-artifact-manifest.mjs" \
+  --binary "$PLUGIN_BINARY" \
+  --build-id "$VISTA_ANIMATION_PLUGIN_BUILD_ID" \
+  --engine-version 5.3.2 \
+  --target-platform linux-x86_64 > "$MANIFEST"
+chmod 0600 "$MANIFEST"
+sha256sum "$PLUGIN_BINARY" "$MANIFEST"
 ```
 
-Generate`STUDIO_ACCESS_TOKEN` remotely and store it outside Git. Never paste it into`HANDOFF.md`, shell history or issue text.
+This file is a build-output candidate, not yet the server trust anchor. The administrator must install an
+independent protected copy, verify its raw-file SHA again, and point the service at that copy.
 
-## Stateful UE smoke — requires an explicit continuation decision
+### 6.3 Disposable project and live load — separate UE State gate
 
-Before launch:
+Do not mutate the canonical archive or run `deploy/aws/scripts/slot-launcher.sh` unchanged: its default
+project name/paths do not match this migrated runtime, and the target-specific launcher must first be
+reviewed against the current slot registry, NOWRITE policy and project generation.
 
-1. Recheck ports and unknown process ownership.
-2. Confirm no other agent owns runtime lifecycle.
-3. Create one unique tmux session and one slot state directory.
-4. Use GPU0 only.
-5. Keep Studio, MCP and Cirrus loopback-only.
-6. Keepmodel-off,`-NOWRITE`,`-RenderOffScreen`, isolated`Saved`/`Intermediate` and state/log directories.
+Create a writable disposable project generation only after capacity review. The package root is the
+directory containing `VistaAnimationContentApi.uplugin`.
 
-Do not use `deploy/aws/scripts/slot-launcher.sh` unchanged. It assumes`SimWorld.uproject`, `/opt`/`/var/lib` paths, writes an older Cirrus config, and does not yet integrate the newprocess/port and opaque-endpoint registries. Adapt it in a reviewed change or create a bounded user-owned launcher. The extracted archive contains stock Cirrus; after explicit state-change approval apply`tools/patch_cirrus_loopback.py`, verify patched SHA`133a12cf843c69914263a41c3ea3d7f09914ad9241125358850ea0318e55300e`, and retain its receipt before any Cirrus launch.
+```bash
+RUNTIME="$HOME/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a"
+SOURCE_PROJECT="$RUNTIME/gym_citynav"
+PROJECT_GENERATIONS="$HOME/.local/share/simworld-studio/ue-project-generations"
+CONTENT_REVISION='<immutable-content-revision>'
+PROJECT="$PROJECT_GENERATIONS/$REMOTE_SHA-$CONTENT_REVISION"
+PARTIAL_PROJECT="$PROJECT.partial-$RUN_STAMP"
+PACKAGED_UPLUGIN="$(find "$PACKAGE" -type f -name 'VistaAnimationContentApi.uplugin' -print -quit)"
+PACKAGED_PLUGIN="$(dirname "$PACKAGED_UPLUGIN")"
 
-Minimum acceptance sequence:
+test -f "$SOURCE_PROJECT/gym_citynav.uproject"
+test -n "$PACKAGED_UPLUGIN"
+test ! -e "$PARTIAL_PROJECT"
+test ! -e "$PROJECT"
+install -d -m 0700 "$PROJECT_GENERATIONS"
+cp -a --reflink=auto "$SOURCE_PROJECT" "$PARTIAL_PROJECT"
+test ! -e "$PARTIAL_PROJECT/Plugins/VistaAnimationContentApi"
+install -d -m 0700 "$PARTIAL_PROJECT/Plugins/VistaAnimationContentApi"
+cp -a "$PACKAGED_PLUGIN/." "$PARTIAL_PROJECT/Plugins/VistaAnimationContentApi/"
+mv "$PARTIAL_PROJECT" "$PROJECT"
+```
 
-1. Cirrus HTTP and Streamer listeners are only`127.0.0.1:8585/8586`.
-2. UE starts and MCP becomes ready only on`127.0.0.1:55559`.
-3. Studio starts only on`127.0.0.1:3002` with access guard.
-4. Unauthenticated Studio/Cirrus request is denied.
-5. Authenticated health identifies UE/MCP correctly; readiness keepsassets not-ready.
-6. Browser receives decoded Pixel Streaming frames through an SSH tunnel or approved existing ingress.
-7. Read-only screenshot works.
-8. Fixed VISTA setup/state/stop contract works; no arbitrary Python input.
-9. Stop all migration-owned processes and confirm the three port families arefree.
+The project owner must review/commit the `.uproject` plugin enablement, private-listener exact dispatch,
+and concrete `IVistaAnimationContentDriver` on a GitHub branch before live proof. Loading only the
+abstract packaged plugin is not content readiness.
 
-Do not call Claude or create the scene during this smoke.
+Use one registered slot owner to launch this exact project with `-RenderOffScreen -NOWRITE`, one GPU,
+loopback-only MCP/Cirrus/UnrealCV and a unique state directory. Record PID start token and ports before
+the process becomes ready. Acceptance checks:
 
-## Gates for the remote administrator
+```bash
+grep -F 'VistaAnimationContentApi' "$RUN_ROOT/ue.log"
+ss -lntup | grep -E '127\.0\.0\.1:<(recorded-mcp|cirrus|ucv-port)>'
+sha256sum "$PLUGIN_BINARY" "$MANIFEST"
+READY_HTTP="$(curl --silent --show-error --config "$CURL_AUTH_CONFIG" --cookie "$COOKIE_JAR" \
+  --output "$RUN_ROOT/readiness.json" --write-out '%{http_code}' \
+  "$STUDIO_BASE/api/health/ready")"
+case "$READY_HTTP" in 200|503) ;; *) exit 1 ;; esac
+```
 
-Request only what is needed:
+The live nonce response must match plugin manifest, content profile, process instance, owner/session/
+slot/lease/scene and all fixed operation fingerprints. Unknown `vista_animation_*` must terminal-reject;
+mutation timeout/disconnect must not retry. Stop only the recorded process through the same lifecycle
+owner and prove all recorded listeners are gone. Overall readiness may correctly remain HTTP `503` while
+assets, content, Review or WebRTC gates are still open; inspect the animation component rather than
+requiring an overall `200`.
 
-1. Install`vulkan-tools` for`vulkaninfo` and diagnose NVIDIA ICD; add`render` group only if a real DRM permission failure is demonstrated.
-2. Choose eitherrootless Docker, reviewed`docker` group access, or managed Postgres/Qdrant/embed services. Docker group is root-equivalent and must be an explicit decision.
-3. Reuse the existing80/443 ingress owner for HTTPS/WSS; do not launch a competing Nginx. Coturn/firewall/relay ports need a separate network design.
-4. Installclang/cmake/ninja only if the team decides to compile UE; the packaged runtime path does not require an engine source build.
+## 7. Stage one authoritative VISTA sample
 
-## Cost and mutation gates
+This phase is offline. The Data owner supplies an immutable verified projection and exact selected files.
+The command defaults to dry-run and must be byte-identical when later approved with `--apply`.
 
-- Real Claude/Codex/other provider call: explicit cost approval, exact model, max budget and evidence retention policy.
-- Scene mutation or timeline action: disposable/NOWRITE scene and exact adapter allowlist.
-- Asset index/database import: snapshot revision, dry-run counts and admin/data approval.
-- Public WebRTC: ingress/TLS/Coturn/firewall approval plus external normal/forced-relay tests.
+```bash
+set -eu
+DATASET_ROOT='/data/VISTA_VERIFIED'
+DATASET_REVISION='<immutable-verified-dataset-revision>'
+BUNDLE_ROOT="$HOME/.local/share/simworld-studio/vista-import-bundles"
+BUNDLE="$BUNDLE_ROOT/$DATASET_REVISION/mmg_040-attempt-007"
+install -d -m 0700 "$BUNDLE_ROOT" "$BUNDLE_ROOT/$DATASET_REVISION"
 
-## Rollback
+cd "$CHECKOUT"
+uv run --project tools --frozen python tools/stage_vista_import_bundle.py \
+  --dataset-root "$DATASET_ROOT" \
+  --verified-source verified/round1.jsonl \
+  --verified-format jsonl \
+  --dataset-revision "$DATASET_REVISION" \
+  --sample-id mmg_040 \
+  --provider sora2 \
+  --attempt 7 \
+  --render-script pipeline_v2/media/mmg_040/attempt_007/render_script.yaml \
+  --dialogue-no-oracle verified/dialogue/mmg_040.attempt_007.no-oracle.json \
+  --media pipeline_v2/media/mmg_040/attempt_007/video.mp4 \
+  --output-dir "$BUNDLE" > "$RUN_ROOT/vista-stage-dry-run.json"
+```
 
-Only stop PIDs recorded by the migration-owned tmux/slot. Never use broad`pkill` or kill a listener just because its port conflicts. For file rollback, rename migration paths to`.failed-<timestamp>` after verifying ownership. Leave the source host untouched until remote acceptance is signed off.
+Review the `vista-import-staging-result/v1`: exact row/attempt identity, checksums/bytes, 12-second
+duration, strictly increasing source timestamps, media dimensions, no-oracle join, restricted-field
+absence, bundle digest and registry snippet. The dry-run must not create `BUNDLE`.
+
+After Data/State approval, repeat the exact arguments with `--apply` and then verify:
+
+```bash
+uv run --project tools --frozen python tools/stage_vista_import_bundle.py \
+  --dataset-root "$DATASET_ROOT" \
+  --verified-source verified/round1.jsonl \
+  --verified-format jsonl \
+  --dataset-revision "$DATASET_REVISION" \
+  --sample-id mmg_040 \
+  --provider sora2 \
+  --attempt 7 \
+  --render-script pipeline_v2/media/mmg_040/attempt_007/render_script.yaml \
+  --dialogue-no-oracle verified/dialogue/mmg_040.attempt_007.no-oracle.json \
+  --media pipeline_v2/media/mmg_040/attempt_007/video.mp4 \
+  --output-dir "$BUNDLE" \
+  --apply > "$RUN_ROOT/vista-stage-apply.json"
+
+test "$(stat -c '%a' "$BUNDLE")" = 700
+find "$BUNDLE" -type f -printf '%m %p\n' | \
+  awk '$1 != "600" { print; bad=1 } END { exit bad }'
+test -z "$(find "$BUNDLE" -type l -print -quit)"
+uv run --project tools --frozen python -m unittest tools.tests.test_stage_vista_import_bundle -v
+```
+
+A second apply must return `idempotent`. Install `registry-snippet.json` through protected service config;
+never put a server path in the public import request. See
+[the detailed staging runbook](../production-readiness/vista-raw-staging-runbook.md).
+
+## 8. Provision Postgres/Qdrant/embedding and audit the snapshot
+
+Follow [asset-stack-operations.md](../production-readiness/asset-stack-operations.md) in full. The
+commands below are the phase checkpoints, not blanket authorization.
+
+### 8.1 Pin model artifacts and run offline preflight
+
+Model download/cache population and image pull/build require prior Data/Admin approval. Once immutable
+directories exist, capture then verify their exact manifests:
+
+```bash
+cd "$CHECKOUT"
+export ASSET_DB_DIR='/srv/simworld/asset-db'
+export ASSET_SNAPSHOT_REVISION='<immutable-asset-snapshot-revision>'
+export UE_CONTENT_REVISION='<immutable-ue-content-revision>'
+export VISTA_UE_CONTENT_REVISION="$UE_CONTENT_REVISION"
+export EMBED_DENSE_MODEL='BAAI/bge-large-en-v1.5'
+export EMBED_SPARSE_MODEL='Qdrant/bm25'
+export EMBED_DENSE_MODEL_DIR_HOST='/opt/simworld-models/dense/<artifact-revision>'
+export EMBED_SPARSE_MODEL_DIR_HOST='/opt/simworld-models/sparse/<artifact-revision>'
+export EMBED_DENSE_SIZE=1024
+
+uv run --project tools --frozen python tools/embedding_model_artifact.py capture \
+  --model-dir "$EMBED_DENSE_MODEL_DIR_HOST" --kind dense \
+  --model-id "$EMBED_DENSE_MODEL" --dense-size "$EMBED_DENSE_SIZE"
+uv run --project tools --frozen python tools/embedding_model_artifact.py capture \
+  --model-dir "$EMBED_SPARSE_MODEL_DIR_HOST" --kind sparse \
+  --model-id "$EMBED_SPARSE_MODEL"
+
+export EMBED_DENSE_REVISION='sha256:<dense-artifact-manifest-digest>'
+export EMBED_SPARSE_REVISION='sha256:<sparse-artifact-manifest-digest>'
+uv run --project tools --frozen python tools/embedding_model_artifact.py verify \
+  --model-dir "$EMBED_DENSE_MODEL_DIR_HOST" --kind dense \
+  --model-id "$EMBED_DENSE_MODEL" --dense-size "$EMBED_DENSE_SIZE" \
+  --revision "$EMBED_DENSE_REVISION"
+uv run --project tools --frozen python tools/embedding_model_artifact.py verify \
+  --model-dir "$EMBED_SPARSE_MODEL_DIR_HOST" --kind sparse \
+  --model-id "$EMBED_SPARSE_MODEL" --revision "$EMBED_SPARSE_REVISION"
+```
+
+Set only approved pinned image digests and file-backed secrets; values below are identifiers/paths, not
+secret contents:
+
+```bash
+export ASSET_STACK_PROFILE=local
+export POSTGRES_IMAGE='postgres@sha256:<approved-digest>'
+export QDRANT_IMAGE='qdrant/qdrant@sha256:<approved-digest>'
+export ASSET_TOOLS_PYTHON_IMAGE='python@sha256:<approved-digest>'
+export ASSET_TOOLS_UV_IMAGE='ghcr.io/astral-sh/uv@sha256:<approved-digest>'
+export EMBED_SERVICE_IMAGE='<registry/image>@sha256:<approved-digest>'
+export POSTGRES_DB=asset_db
+export POSTGRES_USER=simworld
+export POSTGRES_PASSWORD_FILE_HOST='/etc/simworld/secrets/postgres_password'
+export POSTGRES_URL_FILE='/etc/simworld/secrets/postgres_url'
+export QDRANT_API_KEY_FILE='/etc/simworld/secrets/qdrant_api_key'
+export EMBED_SERVICE_TOKEN_FILE_HOST='/etc/simworld/secrets/embed_service_token'
+export EMBED_SERVICE_TOKEN_FILE="$EMBED_SERVICE_TOKEN_FILE_HOST"
+export EMBED_VERSION='<immutable-embedding-recipe-version>'
+export QDRANT_URL='http://127.0.0.1:6333'
+export QDRANT_COLLECTION='<immutable-snapshot-specific-collection>'
+export EMBED_SERVICE_URL='http://127.0.0.1:7777'
+export ASSET_BACKUP_ROOT='/srv/backups/simworld/asset-stack'
+export ASSET_BACKUP_RETENTION_DAYS=30
+export ASSET_BACKUP_MIN_FREE_BYTES=107374182400
+
+uv run --project tools --frozen python tools/asset_stack_preflight.py \
+  --output "$ASSET_DB_DIR/deployment-preflight.json"
+docker compose --profile asset-stack config --quiet
+```
+
+Preflight `ready_for_admin_gates` is only offline coherence.
+
+### 8.2 Start/migrate/index — Admin/Data/State gate
+
+Only inside the approved maintenance window:
+
+```bash
+docker compose --profile asset-stack up -d
+docker compose --profile asset-stack ps
+
+POSTGRES_URL_FILE="$POSTGRES_URL_FILE" \
+  uv run --project tools --frozen python tools/apply_schema.py
+
+uv run --project tools --frozen python tools/migrate_to_postgres.py \
+  --asset-db-dir "$ASSET_DB_DIR" \
+  --snapshot-revision "$ASSET_SNAPSHOT_REVISION" \
+  --dry-run
+```
+
+Review exact catalog count. Then obtain the separate import approval and remove only `--dry-run`:
+
+```bash
+POSTGRES_URL_FILE="$POSTGRES_URL_FILE" \
+  uv run --project tools --frozen python tools/migrate_to_postgres.py \
+  --asset-db-dir "$ASSET_DB_DIR" \
+  --snapshot-revision "$ASSET_SNAPSHOT_REVISION" \
+  --fail-fast
+
+POSTGRES_URL_FILE="$POSTGRES_URL_FILE" \
+QDRANT_API_KEY_FILE="$QDRANT_API_KEY_FILE" \
+QDRANT_URL='http://127.0.0.1:6333' \
+QDRANT_COLLECTION='<immutable-collection-name>' \
+EMBED_DENSE_MODEL_PATH="$EMBED_DENSE_MODEL_DIR_HOST" \
+EMBED_SPARSE_MODEL_PATH="$EMBED_SPARSE_MODEL_DIR_HOST" \
+  uv run --project tools --frozen python tools/build_qdrant_index.py --dry-run
+```
+
+Review pending count and model/dimension/revision identity. Approve the full embedding/index cost, then
+rerun the same command without `--dry-run`. Do not use `--force` unless a separately reviewed rebuild
+requires it.
+
+Prove the pinned Qdrant/embed services reject unauthenticated requests and accept the secret-backed
+health/query path. Do not paste keys/tokens into curl argv; use a mode-`0600` curl config or service test.
+
+### 8.3 Live audit and restore
+
+After one matching Blueprint and one StaticMesh PBR UE probe succeeds:
+
+```bash
+export QDRANT_URL='http://127.0.0.1:6333'
+export QDRANT_COLLECTION='<immutable-collection-name>'
+export EMBED_SERVICE_URL='http://127.0.0.1:7777'
+
+uv run --project tools --frozen python tools/verify_asset_snapshot.py capture \
+  --output "$ASSET_DB_DIR/snapshot-manifest.json" \
+  --receipt-output "$ASSET_DB_DIR/snapshot-live-audit.json" \
+  --receipt-ttl-seconds 300
+uv run --project tools --frozen python tools/verify_asset_snapshot.py verify \
+  --manifest "$ASSET_DB_DIR/snapshot-manifest.json" \
+  --receipt-output "$ASSET_DB_DIR/snapshot-live-audit.json" \
+  --receipt-ttl-seconds 300 \
+  --replace
+```
+
+Pin the printed snapshot ID, manifest SHA and live receipt SHA in protected deployment config. Complete
+the exact backup bundle and disposable restore commands in `asset-stack-operations.md`, then repeat the
+live audit against the restored services. Until that passes, keep assets `not_ready`.
+
+## 9. Typed SceneSpec -> BuildPlan -> disposable UE proof
+
+Prerequisites: active asset live receipt, production layout profile with no fixture/demo/BasicShapes
+surface, approved disposable UE generation, one current Studio slot and protected auth/session files.
+
+Use a mode-`0600` curl config (`CURL_AUTH_CONFIG`) containing the Studio Authorization header; do not put
+the token in argv. Use a mode-`0600` cookie jar. The following request JSON contains no secret:
+
+```bash
+set -eu
+export STUDIO_BASE='http://127.0.0.1:3002'
+export CURL_AUTH_CONFIG='/run/user/<uid>/simworld-curl-auth.conf'
+export COOKIE_JAR="$RUN_ROOT/studio.cookies"
+chmod 0600 "$CURL_AUTH_CONFIG"
+umask 077
+
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie-jar "$COOKIE_JAR" --request POST "$STUDIO_BASE/api/session/acquire" \
+  > "$RUN_ROOT/session-acquire.json"
+
+printf '%s\n' '{"datasetRevision":"<immutable-verified-dataset-revision>","sampleId":"mmg_040","attempt":7,"scenarioType":"multimodal_grounded"}' \
+  > "$RUN_ROOT/import-request.json"
+
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" \
+  --header 'Content-Type: application/json' \
+  --data-binary "@$RUN_ROOT/import-request.json" \
+  "$STUDIO_BASE/api/vista/imports/preview" > "$RUN_ROOT/import-preview.json"
+
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" \
+  --header 'Content-Type: application/json' \
+  --data-binary "@$RUN_ROOT/import-request.json" \
+  "$STUDIO_BASE/api/vista/imports" > "$RUN_ROOT/import-commit.json"
+
+IMPORT_ID="$(node -e 'const x=require(process.argv[1]); if(!x.artifact_id) process.exit(2); process.stdout.write(x.artifact_id)' "$RUN_ROOT/import-commit.json")"
+```
+
+Inspect the preview/commit before planning. All required assets must resolve to the active snapshot.
+
+```bash
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' \
+  --data-binary '{}' \
+  "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/build/plan" > "$RUN_ROOT/build-plan.json"
+PLAN_ID="$(node -e 'const x=require(process.argv[1]); if(!x.plan?.plan_id) process.exit(2); process.stdout.write(x.plan.plan_id)' "$RUN_ROOT/build-plan.json")"
+
+printf '{"plan_id":"%s"}\n' "$PLAN_ID" > "$RUN_ROOT/build-preflight-request.json"
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' \
+  --data-binary "@$RUN_ROOT/build-preflight-request.json" \
+  "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/build/preflight" > "$RUN_ROOT/build-preflight.json"
+```
+
+Require `ready:true`, exact Blueprint/StaticMesh paths, material/PBR/content evidence and zero fallback.
+Then obtain the Scene State gate and execute only the exact plan:
+
+```bash
+printf '{"plan_id":"%s","confirm":true}\n' "$PLAN_ID" > "$RUN_ROOT/build-execute-request.json"
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' \
+  --data-binary "@$RUN_ROOT/build-execute-request.json" \
+  "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/build/execute" > "$RUN_ROOT/build-execute.json"
+
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/build" \
+  > "$RUN_ROOT/build-status.json"
+```
+
+Acceptance requires a single scene digest across actor snapshot, collision/floating reports and screenshot;
+all actor classes/assets and every material slot are verified `/Game` paths with current content receipt.
+Then test backend lifecycle, never browser toolbar coordinates:
+
+```bash
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' --data-binary '{}' \
+  "$STUDIO_BASE/api/vista/setup_vista_play_mode" > "$RUN_ROOT/pie-start.json"
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" "$STUDIO_BASE/api/vista/get_vista_state" > "$RUN_ROOT/pie-state-live.json"
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' --data-binary '{}' \
+  "$STUDIO_BASE/api/vista/stop_vista_play_mode" > "$RUN_ROOT/pie-stop.json"
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" "$STUDIO_BASE/api/vista/get_vista_state" > "$RUN_ROOT/pie-state-stopped.json"
+```
+
+Verify confirmed possession/live state and confirmed stopped/ended PIE. Also run stale-plan, revoked-lease,
+mesh/material/content-receipt drift and rollback probes; they must fail before unsafe continuation.
+
+## 10. Character driver and 12-second timeline
+
+This phase cannot begin with only the abstract plugin. The project content owner must first publish:
+
+- reviewed `IVistaAnimationContentDriver` implementation;
+- verified pawn/skeleton/AnimBP or Control Rig;
+- hand/foot anchors, draggable chair/caster physics;
+- look-at, brace, drag, lift-foot, pause, directional fall and explicit recover assets/notifies;
+- immutable `vista-animation-content-profile/v1` and receipt;
+- root-owned UE 5.3.2 plugin artifact manifest and exact hashes.
+
+Configure the service with all required fields together:
+
+```bash
+export VISTA_ANIMATION_TIMELINE_ENABLED=1
+export VISTA_ANIMATION_CONTENT_PROFILE_FILE='/etc/simworld/config/vista-animation-content-profile.json'
+export VISTA_ANIMATION_CONTENT_PROFILE_SHA256='<exact-file-sha256>'
+export VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_FILE='/etc/simworld/config/vista-animation-plugin-artifact.json'
+export VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_SHA256='<exact-file-sha256>'
+export VISTA_ANIMATION_RECORD_ROOT='/var/lib/simworld/vista-animation'
+export VISTA_ANIMATION_UE_PROBE_TIMEOUT_MS=5000
+```
+
+With the exact scene still built and the same active lease, run preflight:
+
+```bash
+printf '{"plan_id":"%s"}\n' "$PLAN_ID" > "$RUN_ROOT/animation-preflight-request.json"
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' \
+  --data-binary "@$RUN_ROOT/animation-preflight-request.json" \
+  "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/animation/preflight" \
+  > "$RUN_ROOT/animation-preflight.json"
+
+PREFLIGHT_ID="$(node -e 'const x=require(process.argv[1]); if(!x.preflight_id)process.exit(2); process.stdout.write(x.preflight_id)' "$RUN_ROOT/animation-preflight.json")"
+TIMELINE_ID="$(node -e 'const x=require(process.argv[1]); if(!x.timeline_id)process.exit(2); process.stdout.write(x.timeline_id)' "$RUN_ROOT/animation-preflight.json")"
+PROGRAM_ID="$(node -e 'const x=require(process.argv[1]); if(!x.program_id)process.exit(2); process.stdout.write(x.program_id)' "$RUN_ROOT/animation-preflight.json")"
+```
+
+Inspect that every event/action is verified and the plugin/content/process/lease revisions are exact. After
+the Animation State gate, explicitly confirm all four IDs:
+
+```bash
+printf '{"plan_id":"%s","preflight_id":"%s","timeline_id":"%s","program_id":"%s","confirm":true}\n' \
+  "$PLAN_ID" "$PREFLIGHT_ID" "$TIMELINE_ID" "$PROGRAM_ID" \
+  > "$RUN_ROOT/animation-start-request.json"
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' \
+  --data-binary "@$RUN_ROOT/animation-start-request.json" \
+  "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/animation/start" \
+  > "$RUN_ROOT/animation-start.json"
+ANIMATION_RUN_ID="$(node -e 'const x=require(process.argv[1]); if(!x.run_id)process.exit(2); process.stdout.write(x.run_id)' "$RUN_ROOT/animation-start.json")"
+
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" \
+  "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/animation/runs/$ANIMATION_RUN_ID" \
+  > "$RUN_ROOT/animation-status.json"
+```
+
+For the Stop test, use only the exact current lease/run:
+
+```bash
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  --cookie "$COOKIE_JAR" --header 'Content-Type: application/json' --data-binary '{}' \
+  "$STUDIO_BASE/api/vista/imports/$IMPORT_ID/animation/runs/$ANIMATION_RUN_ID/stop" \
+  > "$RUN_ROOT/animation-stop.json"
+```
+
+Acceptance is not merely terminal `completed`: evidence must cover 0/2/5/9/12 seconds, pose, hand/foot
+contact, chair interaction/casters, fall collision, explicit recovery/root alignment, screenshot, engine
+time/drift, terminal scene validation, confirmed cleanup and ended PIE. Repeat in disposable generations
+for notify timeout, Stop race, disconnect/outcome-unknown and restart/recovery-required. Never retry a
+mutation after uncertain delivery.
+
+## 11. Exactly two real Review provider smokes
+
+Follow [review-provider-smoke-runbook.md](../production-readiness/review-provider-smoke-runbook.md).
+Before either command, obtain approval for exactly two tool-free `claude-opus-4-8` calls, no retry,
+USD 0.05 maximum each / USD 0.10 total, 120-second timeout and the listed token ceilings.
+
+Use shared-broker canonical before/after scene digests. A Visual digest change is terminal failure.
+
+```bash
+cd "$CHECKOUT/simworld_studio_workspace/web"
+umask 077
+BUILD_REVISION="$(git rev-parse HEAD)"
+CLAUDE_VERSION="$(claude --version | awk 'NR==1 {print $1}')"
+BEFORE_SHA='<shared-broker-scene-before-sha256>'
+AFTER_SHA='<shared-broker-scene-after-sha256>'
+
+node server/review-provider-smoke-cli.js \
+  --review-type text --provider claude --model claude-opus-4-8 \
+  --build-revision "$BUILD_REVISION" \
+  --scene-digest-before "$BEFORE_SHA" --scene-digest-after "$AFTER_SHA" \
+  --prompt-file /managed/evidence/mmg_040-review-request.txt \
+  --image /managed/evidence/mmg_040-text.png \
+  --cli-name claude-code --cli-version "$CLAUDE_VERSION" \
+  --max-budget-usd 0.05 --timeout-ms 120000 \
+  --max-input-tokens 50000 --max-output-tokens 2048 \
+  --receipt-ttl-seconds 3600 \
+  --receipt /run/simworld/review-smoke-text.json
+
+node server/review-provider-smoke-cli.js \
+  --review-type visual --provider claude --model claude-opus-4-8 \
+  --build-revision "$BUILD_REVISION" \
+  --scene-digest-before "$BEFORE_SHA" --scene-digest-after "$AFTER_SHA" \
+  --prompt-file /managed/evidence/mmg_040-review-request.txt \
+  --image /managed/evidence/mmg_040-visual.png \
+  --cli-name claude-code --cli-version "$CLAUDE_VERSION" \
+  --max-budget-usd 0.05 --timeout-ms 120000 \
+  --max-input-tokens 50000 --max-output-tokens 2048 \
+  --receipt-ttl-seconds 3600 \
+  --receipt /run/simworld/review-smoke-visual.json
+```
+
+No retry. Pin both receipt paths and exact file SHA-256 values with provider/model/build in protected
+service config. A fake/single/expired/mismatched receipt must leave review `not_ready`.
+
+## 12. DNS/TLS/Coturn/firewall and forced relay
+
+Follow [webrtc-coturn-runbook.md](../production-readiness/webrtc-coturn-runbook.md). This phase is entirely
+Admin/Public/State gated. First record decisions for:
+
+- `studio.<domain>` and `turn.<domain>` ownership;
+- existing 80/443 ingress and certificate renewal;
+- Coturn public/private IP, realm, REST/HMAC secret, quota/monitoring;
+- public 3478 UDP/TCP, 5349 TLS and approved bounded UDP relay range;
+- separate IP/LB if TURN/TLS must use 443;
+- at least two external client networks and credential-rotation mode.
+
+After administrators install secrets outside Git, materialize/validate Coturn and same-origin gateway
+using the exact integration generation:
+
+```bash
+cd "$CHECKOUT"
+node deploy/aws/scripts/materialize-coturn-config.js \
+  --template deploy/aws/templates/coturn.conf \
+  --output /etc/turnserver.conf
+nginx -t
+ss -lntup
+```
+
+The actual materializer consumes administrator-provided environment/secret-file paths. Never pass the
+shared secret value on argv. Public listeners may be only managed ingress and Coturn; Node/Cirrus
+HttpPort/StreamerPort/SFU/MCP/UnrealCV remain loopback and externally unreachable.
+
+Run one live E2E proving authenticated WSS `101`, streamer registration, advancing frames, keyboard/mouse
+data channel, reconnect, copied-path denial and cross-slot denial. Then, from at least two external
+network classes, run normal ICE and forced UDP/TCP/TLS relay for at least 12 minutes per required row.
+Store only the redacted schema—never SDP, IP, port, TURN username/password, cookie, token or opaque path.
+
+After normal/forced-relay and an approved live credential-rotation drill, create the bounded receipt:
+
+```bash
+cd "$CHECKOUT/simworld_studio_workspace/web/server"
+node webrtc-readiness-cli.js \
+  --input /secure/evidence/webrtc-probes.redacted.json \
+  --expect-build-revision "$REMOTE_SHA" \
+  --expect-deployment-fingerprint "$WEBRTC_DEPLOYMENT_FINGERPRINT" \
+  --expect-origin "$STUDIO_PUBLIC_ORIGIN" \
+  --expect-certificate-fingerprint "$WEBRTC_CERTIFICATE_SHA256" \
+  --output /secure/evidence/webrtc-readiness-receipt.json
+```
+
+Pin the receipt's raw-file SHA with exact build/deployment/origin/certificate. Browser telemetry or
+`PUBLIC_WEBRTC_EXTERNAL_VERIFIED` cannot replace this external receipt.
+
+## 13. Release, rollback, and Git checkpoint commands
+
+Before any activation, record prior code/plugin/project/content/model/index/config generations and exact
+owned PIDs/services. Activation points at a verified immutable generation; it never edits one in place.
+
+Rollback rules:
+
+- Source/test failure: leave current active generation unchanged; rename only the new owned generation
+  to `.failed-<timestamp>` if needed.
+- UE/plugin/scene/timeline: Stop through the exact lease/lifecycle owner, verify PID start token, end PIE,
+  release ports, preserve evidence, then select the prior project/plugin generation.
+- Asset stack: stop only approved writers; restore prior backup to disposable DB/Qdrant first and repeat
+  live audit before switching. Never relabel a partial index.
+- Review: record safe failure code; no automatic retry and no receipt.
+- WebRTC: close only newly approved rules/listeners, restore prior pinned config/secret generation, rerun
+  listener and forced-relay audits.
+
+Never use broad `pkill`, delete an unknown path, kill a port owner, `git reset --hard`, or overwrite the
+historical dirty snapshots.
+
+Remote development handoff uses GitHub:
+
+```bash
+git -C "$WORKTREE" status --short --branch
+git -C "$WORKTREE" diff --check
+git -C "$WORKTREE" add <specific-owned-files>
+git -C "$WORKTREE" commit -m '<type>: <one logical change>'
+git -C "$WORKTREE" push --set-upstream origin "$WORK_BRANCH"
+```
+
+The coordinator reviews/cherry-picks or merges to `codex/vista-production-completion`, runs the full
+suite, pushes a new integration checkpoint, and announces its exact SHA. The target then repeats Phase 2
+and creates a new clean generation. Do not hardcode or predict the eventual branch HEAD.
+
+Production-ready may be declared only when every unchecked live/admin/data/cost/public task in
+[tasks.md](tasks.md) has current evidence and rollback/user/admin sign-off.

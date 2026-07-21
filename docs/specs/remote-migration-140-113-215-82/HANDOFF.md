@@ -1,108 +1,197 @@
-# Handoff: SimWorld on 140.113.215.82
+# Handoff: VISTA production continuation on 140.113.215.82
 
-Status: Migration and offline validation complete; stateful runtime smoke gated
-Updated: 2026-07-15 Asia/Taipei
+Status: code-ready foundation documented; target continuation blocked on connectivity and live/admin
+evidence
+
+Updated: 2026-07-21 Asia/Taipei
 
 ## Objective
 
-Continue the approved staged migration, validate the copied dirty source exactly, rebuild disposable dependencies, then obtain a separate decision before launching a loopback UE smoke. Do not interpret the presence of source files as Production readiness.
+Continue from the GitHub integration branch to one real, PBR VISTA 3D scene on the RTX 5090 target,
+then close character animation/IK/fall, two real Review smokes, and public Coturn/WebRTC without weakening
+the fail-closed contracts. Do not interpret transferred files, offline tests, fake receipts, or UI state as
+Production readiness.
 
-## Source of truth
+## Immediate blocker
 
-- Studio: `/home/yhliu/SimWorld-Studio-src`, branch`codex/vista-loopback`, HEAD`caf6d9309ad4fe256a6ba1e212d8bb1fb1fa7f7b` plus dirty layer.
-- Python/bridge: `/home/yhliu/SimWorld`, branch`main` plus dirty layer.
-- UE: canonical archive SHA-256`806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f`.
-- Product/technical intent: `../production-readiness/` and this migration spec directory.
+On 2026-07-21 a read-only SSH retry to `yhliu@140.113.215.82` failed with:
 
-## Current product progress included in the dirty layer
+```text
+No route to host
+```
 
-- Review pipeline: authenticated internal requests, strict provider/verdict contract, cancellation, budget isolation and read-only visual capture foundation.
-- Asset retrieval: fail-closed policy, readiness/snapshot schema/audit foundation; real Postgres/Qdrant/embed snapshot is still missing.
-- VISTA importer: sanitized`mmg_040` golden fixture, deterministic SceneSpec, preview/commit/status service and professional workbench UI.
-- Timeline: schema/compiler/scheduler, strict unsupported-action preflight, monotonic clock, timeout/Stop/Replay contracts; realUE action adapters/UI are missing.
-- Streaming: loopback/trusted-proxy profile, Cirrus/TURN config builder and opaque endpoint registry; existing runtime route/player/ingress are not yet wired to it.
-- Process lifecycle: registry foundation exists but startup/heartbeat/shutdown integration is missing.
+The TCP/SSH session was not established. Authentication did not run and **no remote command was
+executed**. No file, process, service, database, UE scene, provider, firewall or network state changed.
+Network/host owner must restore the approved route before Phase 1 of [runbook.md](runbook.md).
 
-## Important truth about the accepted Opus scene
+## Current source of truth
 
-The2026-07-14 run used one authorized`claude-opus-4-8` call and created16 actors, followed by non-model scale/spacing corrections. The UE process used`-NOWRITE`; therefore the exact live scene is not a saved map and cannot be migrated as a persistent UE asset. Sanitized screenshots, metadata, prompt and acceptance evidence are transferable. Recreating the scene requires a new disposable runtime and explicit model/state approval, or a deterministic non-model SceneSpec/adapter implementation.
+- Repository: `git@github.com:IvesLiu1026/SimWorld-Studio.git`
+- Integration branch: `codex/vista-production-completion`
+- Deployment commit: **not hardcoded**. Resolve from GitHub with `git ls-remote`, compare to the
+  coordinator-announced reviewed checkpoint, and record the exact 40-character SHA at execution time.
+- Authoring observation only: this refresh was branched from the local integration checkout at
+  `ceabc14c` (`feat: stage verified VISTA import bundles`). It is not a promise of the eventual remote
+  branch HEAD and must not be used instead of `git ls-remote`.
+- Historical target checkout: `/home/yhliu/SimWorld-Studio-src`, branch `codex/vista-loopback`, old HEAD
+  plus its dirty migration layer. Preserve it as evidence; do not pull, clean, merge, copy or deploy it.
+- Historical Python/bridge tree: `/home/yhliu/SimWorld`, also preserved and not a current source sync path.
 
-## Target audit summary
+The coordinator must push the reviewed integration branch before remote continuation. New target source
+generations live under `~/.local/share/simworld-studio/checkouts/<exact-sha>` and are clean/detached.
+Remote changes go to `codex/remote-82-*` branches and return through GitHub.
 
-- Hardware is sufficient: 2×RTX5090,125 GiB RAM, roughly670 GiB free.
-- Source andUE runtime were absent at audit.
-- User Node22, Codex and Claude exist under`~/.local/bin`; noninteractivePATH must be fixed.
-- Docker daemon is inaccessible to`yhliu`; assets remain blocked without an admin decision.
-- NVIDIA Vulkan libraries exist;`vulkaninfo` is missing.
-- Ports80/443/14500 are occupied and out of scope. Initialloopback ports werefree but must be rechecked.
+## What the integration branch provides
 
-## Transfer ledger
+These are code capabilities, not target live evidence:
 
-Update this table only after target-side verification.
+- `claude-opus-4-8` builder production default/policy, with lease-scoped capabilities and no root token
+  or direct UE ports exposed to the child runtime.
+- Server-owned Studio session/slot/lease identity, process/port registry, exact broker revalidation and
+  backend-authoritative PIE setup/state/stop.
+- Authoritative verified VISTA raw staging, typed import/SceneSpec, owner-bound commit/status, semantic
+  resolution and deterministic 12-second `mmg_040` timeline.
+- Typed Scene BuildPlan/preflight/execute/rollback; production rejects BasicShapes/fallback surfaces,
+  unverified `/Game` assets, missing exact material slots/PBR evidence and stale content receipts.
+- Fixed animation action/transport/readiness/runtime contracts, UI/routes and portable
+  `VistaAnimationContentApi` source. A UE 5.7.3 package was built as source/compile evidence only.
+- Full semantic stack deployment tooling: pinned model manifests/images, file secrets, schema/migration/
+  index, snapshot/live audit, backup manifest and fail-closed runtime readiness.
+- Isolated Review coordinator, tool-free strict provider adapter, fake HTTP failure matrix, bounded live
+  smoke CLI and separate Text/Visual receipt readiness.
+- Trusted-proxy WebRTC path: secure session cookie, opaque same-origin WSS endpoint, loopback Cirrus,
+  short-lived TURN REST credentials, redacted telemetry and external readiness receipt verifier.
 
-| Unit | Target | Transfer | Integrity | Promotion |
-| --- | --- | --- | --- | --- |
-| Studio dirty source | `/home/yhliu/SimWorld-Studio-src` | complete | bundle/patch/tar SHA, HEAD, dirty diff and file-count parity verified | promoted |
-| Python/bridge dirty source | `/home/yhliu/SimWorld` | complete | bundle/patch/tar SHA, HEAD, dirty diff and file-count parity verified | promoted |
-| UE archive | `~/.local/share/simworld-studio/downloads/SimWorld-Studio-Minimal-806e869a.tar.gz` | complete | exact bytes and full target-side SHA-256 verified | promoted |
-| Extracted UE runtime | `~/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a` | complete | UnrealEditor/uproject/Cirrus fixed-path hashes verified | promoted, stock Cirrus intentionally unpatched |
-| Sanitized evidence | `~/.local/share/simworld-studio/evidence/20260714T120039-simworld-opus` | complete | archive SHA verified; 29 files extracted; forbidden runtime/token paths absent | promoted |
+Production generic free-form UE mutation remains intentionally blocked. NLP scene generation must compile
+into the typed SceneSpec/BuildPlan route.
+
+## What is still missing
+
+| Area | Missing external/live evidence | Current truthful state |
+| --- | --- | --- |
+| Connectivity | working route to target and fresh inventory | blocked |
+| Source | pushed reviewed integration SHA and clean target generation | not synchronized |
+| UE plugin | exact UE 5.3.2 build, project install/load, listener exact dispatch, nonce/process receipt | not ready |
+| VISTA data | dataset-owner verified projection and approved staged bundle | not staged on current target generation |
+| Assets | immutable model files, pinned services, full Postgres/Qdrant index, live audit, restore drill | not ready |
+| 3D scene | production layout/content profile and live Blueprint + StaticMesh PBR disposable build | not proven |
+| Character | real pawn/skeleton/AnimBP/Control Rig, hand/foot IK, drag, fall/recover montages/notifies | not ready |
+| Timeline | 0/2/5/9/12 live evidence plus timeout/Stop/disconnect/restart matrix | not proven |
+| Review | exactly one real Text and one read-only Visual `PASS`, same scene digest, current receipts | not ready |
+| WebRTC | DNS/TLS/ingress, Coturn/firewall, two-network normal/forced relay and rotation receipt | not ready |
+| Operations | unified durable artifacts/retention, observability, backup/restore and rollback sign-off | incomplete |
+
+## Historical 2026-07-15 transfer ledger
+
+This table is retained as provenance only. It does not show current integration-branch deployment.
+
+| Unit | Historical target | 2026-07-15 result | Current use |
+| --- | --- | --- | --- |
+| Studio dirty source | `/home/yhliu/SimWorld-Studio-src` | bundle/patch/tar parity verified and promoted | preserve; never use as new source release |
+| Python/bridge dirty source | `/home/yhliu/SimWorld` | parity verified; two `wget-log*` files intentionally excluded | preserve; not current code sync |
+| UE archive | `~/.local/share/simworld-studio/downloads/SimWorld-Studio-Minimal-806e869a.tar.gz` | 15,170,703,068 bytes; SHA-256 `806e869ad1c65b298f05a39854b28e4188bb50817f539744451849e054990e2f` | re-inventory; immutable base only |
+| Extracted runtime | `~/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a` | key paths/hashes verified; approximately 21 GiB | re-inventory version/toolchain; do not mutate in place |
+| Sanitized Opus evidence | `~/.local/share/simworld-studio/evidence/20260714T120039-simworld-opus` | 29 files; forbidden token/runtime paths absent | historical visual evidence only |
+
+Historical accepted run facts:
+
+- one authorized `claude-opus-4-8` call created 16 actors, followed by non-model scale/spacing fixes;
+- UE ran with `-NOWRITE`, so the live scene was not a persistent map asset;
+- screenshots/metadata/prompt evidence were transferred, but recreating the scene needs the current typed
+  path and a separately approved disposable runtime;
+- old stock Cirrus/runtime or old test totals do not satisfy current WebRTC/runtime readiness.
+
+## Historical target facts requiring refresh
+
+The following were verified on 2026-07-15 and are stale until Phase 1 inventory repeats them:
+
+- Ubuntu 24.04, 2x RTX 5090 32 GiB, 125 GiB RAM, about 670 GiB free;
+- user-local Node 22.23.1/npm 10.9.8, uv 0.11.0/Python 3.12.3, Codex and Claude;
+- Docker/Compose binaries installed but `yhliu` denied daemon access;
+- NVIDIA libraries present, `vulkaninfo` absent;
+- ports 80/443/14500 occupied; candidate loopback ports were then free;
+- historical source/runtime transfer and that snapshot's offline suites passed;
+- no live asset DB, provider, public WebRTC, UE animation/content proof or production deploy was run.
+
+Do not act on any item without refreshing it read-only.
 
 ## First remote-agent actions
 
-1. Read`AGENTS.md`, this entire spec directory and`../production-readiness/`.
-2. Run onlyread-only preflight and integrity checks in`runbook.md`.
-3. Compare dirty status; do not clean it.
-4. Rebuild Node dependencies and run offline tests.
-5. Record versions, test totals and any deviation below.
-6. Stop and ask beforeUE/runtime launch, model, DB, Docker, sudo or public network changes.
+1. Read `AGENTS.md`, this entire directory, then:
+   - `../production-readiness/asset-stack-operations.md`
+   - `../production-readiness/vista-raw-staging-runbook.md`
+   - `../production-readiness/animation-ue-plugin-readiness.md`
+   - `../production-readiness/animation-runtime-contract.md`
+   - `../production-readiness/review-provider-smoke-runbook.md`
+   - `../production-readiness/webrtc-coturn-runbook.md`
+2. Run only `runbook.md` Phase 1 read-only inventory.
+3. Resolve owners for host, listeners, GPU/slot, source checkout, UE/project/content, asset migration,
+   provider budget and public network.
+4. Confirm the coordinator has pushed and announced the exact integration SHA.
+5. Create/verify a clean GitHub checkout generation; never copy the dirty snapshot.
+6. Run offline tests and record results; do not patch the detached checkout.
+7. Request one bounded gate at a time in dependency order:
+   UE 5.3.2 toolchain/plugin -> VISTA staging -> asset stack -> typed scene -> content/timeline ->
+   provider smokes -> public WebRTC -> release.
 
-## Validation ledger
+## Live evidence ledger
 
-| Check | Expected | Actual | Status |
+Do not pre-fill `Actual` or mark pass without an artifact path and digest.
+
+| Check | Required evidence | Actual | Status |
 | --- | --- | --- | --- |
-| Archive bytes |15170703068 |15170703068 | pass |
-| Archive SHA-256 |`806e869a...990e2f` |`806e869a...990e2f` | pass |
-| Studio branch/HEAD |`codex/vista-loopback` / `caf6d930...` |`codex/vista-loopback` / `caf6d930...` | pass |
-| Studio dirty parity |48 modified +69 untracked in migration snapshot |48 modified +69 untracked; diff SHA `049e919a...e4dd31` | pass |
-| Python dirty parity |5 modified +104 untracked at discovery |5 modified +102 included; two `wget-log*` files deliberately excluded; diff SHA `acaa2967...929ce6` | pass |
-| Node selected |v22.23.1 user-local |v22.23.1 / npm10.9.8 | pass |
-| Relevant Node contracts |230 source-host baseline |230 pass /0 fail /0 skip across24 files | pass |
-| Server unit |11 pass /18 skip baseline |11 pass /18 intentional skip | pass |
-| UI unit/E2E |11 unit +2 E2E baseline |11 unit pass; Review1 pass; VISTA Import1 pass | pass |
-| Vite build |1879 modules baseline |1879 modules transformed | pass |
-| Python environment |fresh Python3.12 environment |uv0.11.0, Python3.12.3,37 packages, import smoke and `uv pip check` pass | pass |
+| Connectivity | successful read-only session + timestamp | none after 2026-07-21 no-route | blocked |
+| Source | GitHub URL/branch/exact SHA, clean status, fsck | none for refreshed branch | pending |
+| Offline suite | exact generation + command/totals/build output | none on target for refreshed branch | pending |
+| UE 5.3.2 plugin | build log, binary/manifest SHA, load and nonce receipts | UE 5.7.3 compile only | pending |
+| VISTA source | dry-run/apply result and bundle digest | code fixture only | pending |
+| Models/services | model/image/config digests + unauthorized/authorized probes | none | pending |
+| Asset snapshot | counts/revisions/live receipt + restore proof | none | pending |
+| Typed scene | import/plan/preflight/result + exact PBR/content evidence | none | pending |
+| Animation | content/plugin/live receipts + 0/2/5/9/12 matrix | none | pending |
+| Text Review | current tool-free `PASS` receipt | none | pending |
+| Visual Review | current zero-diff tool-free `PASS` receipt | none | pending |
+| Public WebRTC | deployment/probe/readiness receipts + rotation drill | none | pending |
+| Rollback/release | executed drill + user/admin sign-off | none | pending |
 
-## Blockers requiring a decision
+## Administrator request summary
 
-- Asset snapshot/catalog plus Postgres/Qdrant/embed provisioning.
-- Docker/rootless/managed service strategy.
-- Vulkan diagnostic package and possible render-group access.
-- Real provider smoke/cost approval.
-- UE adapters for drag/brace/lift-foot and timeline UI/runtime wiring.
-- Existing ingress owner, DNS/TLS, Coturn and firewall for public WebRTC.
+Do not send secret values in the request. Ask for decisions/capabilities:
 
-## Remote notes
+1. restore approved SSH route;
+2. provide exact UE 5.3.2 full build root/toolchain and Vulkan diagnostics if missing;
+3. choose rootless Docker, explicit root-equivalent docker-group access, or managed services;
+4. allocate private secret/model/DB/backup/config storage with correct ownership/modes;
+5. provide authoritative VISTA verified projection and matching UE Content/asset catalog revision;
+6. approve service/image/model provenance and database/index/backup windows;
+7. assign current 80/443 ingress owner, Studio/TURN DNS, TLS/cert renewal, Coturn IP/realm/quota,
+   firewall/NAT/relay range and external test networks;
+8. identify release and rollback approvers.
 
-Append dated notes here. Never paste secrets, raw provider output or private infrastructure credentials.
+## Git and rollback contract
 
-### 2026-07-15 — Verified transfer
+- Integration: `codex/vista-production-completion` on `IvesLiu1026/SimWorld-Studio`.
+- Remote work: one bounded `codex/remote-82-*` branch/worktree, explicit owned paths, atomic commits.
+- Sync: push remote branch, coordinator integrates, integration branch is pushed, target resolves a new
+  exact SHA and creates a new clean generation.
+- Activation: point service config at one verified immutable code/plugin/project/content/model/index
+  generation; do not edit it in place.
+- Rollback: stop only exact registry/checkpoint-owned PID/service, reconcile PIE/actions, select prior
+  verified generation, rerun readiness. Never broad-kill, broad-delete, reset dirty evidence, or take over
+  unknown ports.
 
-- Migration package: `/home/yhliu/SimWorld-Migration/20260715T163851-simworld-to-140-113-215-82`.
-- Studio was reconstructed in a unique partial directory from `studio-all.bundle`, the binary dirty patch and the reviewed untracked archive. `git fsck --full` passed; two harmless dangling commits remain exactly as in the source object database.
-- Python/bridge was reconstructed the same way. Its three pre-existing trailing-whitespace warnings in `simworld/communicator.py` were retained for source parity rather than silently rewritten.
-- Runtime archive was transferred as `.partial`, checked on the target, renamed, extracted to a unique partial directory, verified, then promoted. The extracted runtime is 21 GiB. Key hashes: UnrealEditor `4294c00a...52efcfd`, uproject `134f3a14...a6c21`, stock Cirrus `92298e88...be29a4`.
-- The stock Cirrus binary must not be launched. The loopback/token patch remains a separate stateful runtime gate; expected patched hash is `133a12cf...5300e`.
-- Studio keeps the snapshot as `migration-bundle` and now uses `https://github.com/SimWorld-AI/SimWorld-Studio.git` as `origin`. A target-side fetch confirmed `origin/main=d2d439ea3785d205a77e845604135added7d2cc7` and the working branch is0 behind /12 ahead. Python/bridge still keeps its migration bundle as `origin` because the intended external URL has not been confirmed.
-- No API/OAuth/Studio token, provider home, raw provider log, SSH material, live PID or mutable session state was transferred.
+## Append-only remote notes
 
-### 2026-07-15 — Offline dependency and test validation
+Add dated, secret-free notes below after target execution. Include the exact Git SHA and evidence digest;
+never paste credentials, DSNs, raw provider output, SDP/candidate addresses, private signed URLs or
+absolute restricted dataset paths.
 
-- Target runtime tools: Node22.23.1, npm10.9.8, uv0.11.0 and Python3.12.3. The uv binary was copied through a restricted partial path; source and target SHA-256 are `0a6ec289b04da0352d8b439cb0b05fbe43dff1face7707bd5764fdd4478c1561`.
-- `npm ci` installed585 web and111 server packages. Both lockfile hashes were identical before and after: web `40a212d1...55dd`, server `02ea9742...cf7`.
-- npm reported existing dependency audit debt: web4 findings (1 low,2 moderate,1 high) and server5 findings (3 moderate,2 high). No automatic `npm audit fix` was run because that would change the reviewed dependency graph.
-- Chromium was installed only in the user Playwright cache with `npx playwright install chromium`; no sudo or host package changes were used.
-- Exact results: production contracts230/230 pass; server unit11 pass and18 intentional skip; UI unit11 pass; Vite1879 modules; Review mock E2E1 pass; VISTA Import mock E2E1 pass.
-- Python/bridge created a fresh gitignored `.venv`, installed37 packages with `uv pip install -e '.[dev]'`, passed `uv pip check`, and imported simworld/OpenCV/Gymnasium/Numpy/Pillow/Requests/YAML. The project has no lockfile, so current broad dependency ranges are a reproducibility risk even though this smoke passed.
-- A broader, non-gating31-file server diagnostic produced258 pass /2 fail. Both are existing portability defects outside the approved230 baseline: `mcp-server.test.js` hard-codes `/data/jingtian/.../mcp-server.js`; `skills.test.js` ignores its intended test directory and discovers the17 workspace skills. These should be repaired before treating the full suite as host-independent.
-- No Studio server, UE, Cirrus, provider, database, Docker container or public listener was started. No test process remains active.
+### 2026-07-21 — Handoff refresh
+
+- Converted ongoing source synchronization from old dirty-snapshot transfer to GitHub-only immutable
+  integration checkpoints.
+- Reconciled the handoff with the current code-ready runtime, raw staging, asset, typed scene, animation,
+  Review and WebRTC architecture.
+- Preserved the 2026-07-15 transfer/test facts strictly as historical provenance.
+- Recorded the read-only SSH failure as `No route to host`; no target command or state change occurred.
+- Left all UE, dataset, asset, provider, public-network, operations and release gates open.

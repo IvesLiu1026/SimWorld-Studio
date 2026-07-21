@@ -1,202 +1,260 @@
-# Design: SimWorld migration to 140.113.215.82
+# Design: GitHub checkpoint to live VISTA production evidence
 
-Status: Approved for staged execution
-Updated: 2026-07-15
-Depends on: `requirements.md`
+Status: Approved design; remote execution blocked on connectivity and independent gates
 
-## Summary
+Updated: 2026-07-21 Asia/Taipei
 
-Migration採五個可獨立驗證的unit，而不是複製整個`/home/yhliu`：Studio dirty source、Python/bridge dirty source、canonical packaged UE runtime archive、sanitized run evidence、以及新建的operator state/config roots。每個unit先進`.partial-20260715`，通過checksum/parity後才promote。Dependencies與secrets不複製，分別由lockfile重建及遠端重新建立。
+Depends on: [requirements.md](requirements.md)
 
-首次啟動只做loopback、model-off、asset fail-closed smoke。DB、真實model、public WebRTC與system integration保留為後續gate。
+## 1. Design decision
 
-## Observed environment
+後續不再把 2026-07-15 的 dirty migration tree 當作 active source。它保留為不可覆寫的
+historical evidence；新程式碼只從 GitHub branch
+`codex/vista-production-completion` 建立 immutable checkout generation。每次 execution
+動態解析 branch 的 exact SHA，建立新 generation，驗證後才讓 runtime 指向它。Remote
+changes 走獨立 branch/worktree再 push，不直接修改 activation checkout。
 
-### Source host
+Runtime completion採「code-ready foundation + external evidence adapters」：不為了讓 UI 顯示
+綠燈而放寬 generic MCP、BasicShapes、test fixtures、legacy env flags或 fake receipts。缺任何
+真實 asset、content、provider、TURN證據時，對應 subsystem保持 `not_ready`。
 
-| Unit | Current source | Observation |
+## 2. Current boundary
+
+下表是本 spec 撰寫時對 integration branch 已提交程式的判定。它是 source capability，
+不是 target live status。
+
+| Area | Code-ready in integration branch | Still requires target/external evidence |
 | --- | --- | --- |
-| Studio source | `/home/yhliu/SimWorld-Studio-src` | 約1.1 GiB含dependencies/evidence；branch `codex/vista-loopback`; HEAD `caf6d930...`; migration spec加入後為48 tracked modified + 69 untracked files；0 staged |
-| Python/bridge | `/home/yhliu/SimWorld` | 約802 MiB含308 MiB venv；`main`; HEAD `0921180909105158a7ff87445eb032706b10113e`; 5 tracked modified + 104 untracked；實驗影片約443 MiB |
-| UE runtime tree | `/mnt/NAS2/yhliu/SimWorldStudio/0.2.0-806e869a/runtime/SimWorld-Studio-Minimal-806e869a` | 約21 GiB；包含Engine與`gym_citynav` project |
-| UE canonical archive | `/mnt/NAS2/yhliu/SimWorldStudio/0.2.0-806e869a/downloads/SimWorld-Studio-Minimal.tar.gz` | 15,170,703,068 bytes；SHA-256 `806e869a...990e2f` |
-| Accepted run | `/home/yhliu/SimWorld-Studio-runs/20260714T120039-simworld-opus` | model-off Studio +一個已核准Opus call；scene為NOWRITE live state，非持久化asset |
+| Git/runtime identity | slot/process/port leases、owner/session/slot/lease broker resolution、backend PIE lifecycle、lease-scoped builder capabilities | target listener/process inventory；single lifecycle owner；live restart/reconcile |
+| VISTA source | authoritative verified-source staging CLI、checksums/media/oracle boundary、typed importer/SceneSpec、preview/commit/status | real dataset-owner projection；dry-run review；approved atomic apply |
+| Scene build | server-pinned BuildPlan、production surface/PBR/content receipt checks、TOCTOU revalidation、typed UE adapter/rollback | authoritative layout profile、matching `/Game` assets、live Blueprint+StaticMesh build and screenshot |
+| Assets | pinned images/model artifact contracts、secret-file handling、preflight、schema/migration/index/audit/backup tooling | actual model files、Postgres/Qdrant/embed services、full index、matching UE Content revision、restore drill |
+| Animation | fixed action registry、dedicated transport、server scheduler、backend Start/Stop/Replay、plugin source、UE 5.7.3 compile/package evidence | UE 5.3.2 rebuild/load、listener exact dispatch、project content driver、IK/montage/notifies、12-second live evidence |
+| Review | isolated coordinator、tool-free strict provider adapter、fake HTTP matrix、two-receipt smoke runner/readiness | cost approval、one Text and one Visual live `PASS` receipt、Visual scene zero-diff |
+| WebRTC | trusted-proxy profile、opaque session endpoint、same-origin WSS gateway、Cirrus/TURN config builder、redacted telemetry、external receipt validator | DNS/TLS/ingress owner、Coturn/firewall/NAT、live Cirrus/UE、two-network normal/forced-relay and rotation receipt |
+| Persistence/ops | bounded per-feature records and runtime registries exist | unified durable artifact revisions/retention, backup/restore, dashboards/alerts, release sign-off |
 
-### Target host
+Builder production default/policy pins `claude-opus-4-8`, but no live call has been performed by this
+handoff. Production generic NLP mutation remains intentionally unavailable; NLP must compile into the
+typed SceneSpec/BuildPlan path.
 
-| Area | Observation | Consequence |
-| --- | --- | --- |
-| Compute | Ubuntu 24.04, 2×RTX 5090 32 GiB, 125 GiB RAM, 670 GiB free | 足以執行binary與雙slot，但先單GPU smoke |
-| Node | system v18.19.1；`~/.local/bin/node` v22.23.1 | 所有runbook先prepend user PATH |
-| Agents | Claude Code 2.1.209、Codex CLI 0.144.4在`~/.local/bin`; Hermes absent | Codex可接手；不要假設Hermes或provider profile已登入 |
-| Docker | Docker 29/Compose 5 installed；user無daemon權限 | Postgres/Qdrant/embed需admin或rootless/managed替代 |
-| Vulkan | NVIDIA ICD/libs存在；`vulkaninfo`缺 | 可以傳binary；UE launch前保留Vulkan smoke/admin gate |
-| Network | 80/443/14500 occupied；3002/55559/6333/7777/8585/8586 free at audit | 只用loopback free ports；public ingress另案整合 |
-| SimWorld | source/runtime/data均不存在 | 可安全使用新partial/canonical paths |
-
-## Target layout
+## 3. Target layout and generations
 
 ```text
 /home/yhliu/
-  SimWorld-Studio-src/                         # dirty Studio checkout, .git included
-  SimWorld/                                    # dirty Python/bridge checkout, .git included
-  .config/simworld-studio/                     # non-secret operator config
+  SimWorld-Studio-src/                         # 2026-07-15 dirty snapshot; historical, do not overwrite
+  SimWorld/                                    # historical Python/bridge snapshot; do not overwrite
   .local/share/simworld-studio/
-    downloads/
-      SimWorld-Studio-Minimal-806e869a.tar.gz
+    checkouts/
+      <exact-git-sha>/                          # clean detached GitHub generation
     binary/
-      SimWorld-Studio-Minimal-806e869a/
+      SimWorld-Studio-Minimal-806e869a/         # migrated UE runtime; inventory before use
+    ue-builds/
+      ue-5.3.2/                                 # matching full build root if admin provides it
+    ue-project-generations/
+      <git-sha>-<content-revision>/             # disposable writable project generation
+    plugin-packages/
+      <build-id>/                               # exact UE 5.3.2 BuildPlugin output + manifest
+    vista-import-bundles/
+      <dataset-revision>/<sample-attempt>/
+    asset-models/
+      dense/<artifact-revision>/
+      sparse/<artifact-revision>/
+    asset-db/                                   # catalog/snapshot manifests; data service volumes are admin-owned
     evidence/
-      20260714T120039-simworld-opus/
-    asset-db/                                  # empty until snapshot/data gate
+      production-readiness/<checkpoint>/<phase>/
   .local/state/simworld-studio/
-    logs/
-    slots/0/
+    checkpoints/                               # mode 0700 dir, 0600 non-secret ledgers
+    runtime-registry/
     vista-imports/
-    secrets/                                   # mode 0700 dir; files mode 0600
+    vista-scene-builds/
+    vista-animation/
+    logs/
 ```
 
-Temporary paths append `.partial-20260715`; promotion usessame-filesystem `mv` only after validation.
+System deployments may use `/opt`, `/var/lib`, `/etc/simworld`, and `/run/simworld` instead. Those
+paths are administrator-owned and must map to the same immutable Git/config/content generations.
+Secrets never live beneath Git checkout or evidence roots.
 
-## Transfer inclusion and exclusion
+## 4. Source synchronization design
 
-### Studio source
+### 4.1 Release generation
 
-Include `.git`, tracked files, current tracked modifications, and untracked source/spec/tests. Exclude only disposable or local-sensitive content:
+The coordinator first pushes a reviewed integration checkpoint. The target then:
+
+1. runs `git ls-remote` for the exact branch;
+2. records the remote SHA without assuming a future HEAD;
+3. clones that branch into a unique `.partial-<timestamp>` path;
+4. verifies HEAD equals the earlier remote SHA, status is clean, remote URL is correct, and `git fsck`
+   succeeds;
+5. renames the checkout to `checkouts/<full-sha>`;
+6. runs offline validation from that generation;
+7. only after phase-specific approval, binds runtime config to that absolute generation.
+
+An existing generation is immutable. If `checkouts/<sha>` already exists, compare it and reuse only
+when clean/exact; never overwrite. A branch update creates another generation.
+
+### 4.2 Remote development
+
+Remote Codex creates a worktree/branch named `codex/remote-82-<bounded-task>` from the recorded
+checkpoint. It owns explicit paths, commits one logical unit, pushes it to GitHub, and hands the SHA
+to the coordinator. The coordinator integrates it into `codex/vista-production-completion`; target
+activation waits for a new integration checkpoint. No scp/rsync of source changes is allowed.
+
+## 5. Runtime trust graph
 
 ```text
-**/node_modules/**
-**/.venv/**
-**/__pycache__/**
-**/.pytest_cache/**
-**/.ruff_cache/**
-**/dist/**
-**/build/**
-simworld_studio_workspace/logs/**
-simworld_studio_workspace/tmp/**
-simworld_studio_workspace/web/test-results/**
-simworld_studio_workspace/web/playwright-report/**
-simworld_studio_workspace/web/.runtime/**
-.claude/settings.local.json
-.codex/config.toml
-.env
-.env.*
-*.pem
-*.key
+authoritative verified VISTA row
+  -> private staged vista-import-source/v1 bundle
+  -> owner-bound vista-simworld-scene/v1 artifact
+  -> exact asset snapshot + manual/semantic bindings
+  -> server-pinned vista-scene-build-plan/v1
+  -> active Studio lease + exact slot broker
+  -> disposable UE scene + immutable content receipt/PBR evidence
+  -> backend PIE + dedicated animation transport/content driver
+  -> timeline artifact + 0/2/5/9/12 evidence
 ```
 
-Primary transfer is a three-layer snapshot:
+Every arrow validates its upstream revision/digest again. The browser, Claude, NLP prompt, or public
+request cannot provide owner IDs, slot ports, `/Game` paths, plugin identities, animation functions,
+or arbitrary script bodies. Session/slot/lease come from server state; asset/content/plugin pins come
+from operator-controlled files.
 
-1. `git bundle --all` preserves committed objects, local branch and the 12 commits not present on GitHub.
-2. `git diff --binary HEAD` preserves the 48 tracked but unstaged modifications.
-3. A reviewed tar from `git ls-files --others --exclude-standard` preserves 69 untracked files, including this migration package.
+## 6. Phase design
 
-Do not use `git archive`: it would discard the dirty layer. Do not use `git apply --index`: source modifications were not staged. Do not use `git pull` on target before recording parity. Direct rsync is only a fallback and must apply the exclusion list above without `--delete`.
+### 6.1 Connectivity, inventory, and ownership
 
-### Python/bridge repo
+The first recovered SSH session is read-only. It refreshes stale 2026-07-15 facts and records current
+listeners, Docker access, GPU/driver, UE version/paths, toolchain, disk, permissions and services. Any
+unknown listener or directory blocks that resource. An ownership/checkpoint file is written only after
+the operator chooses a phase and owner.
 
-Include `.git`, modified package source, `docs/`, `scripts/`, `ue_plugin/`, and `experiments/` includingofficial reference videos. Exclude `.venv/`, Python caches, `dist/`, `*.egg-info/`, `wget-log*`, local `.env*`, keys and credentials.
+### 6.2 UE 5.3.2 plugin and project generation
 
-### Unreal runtime
+There are three distinct proofs:
 
-Transfer the canonical archive as one immutable file. Do not rsync a filtered Engine tree. Verify exact byte count and SHA-256 before extracting. Extract into a new partial directory and verify at minimum:
+1. **Portable source/offline contract:** already code-ready.
+2. **Exact-engine package:** rebuild with the target's full UE 5.3.2 `RunUAT.sh`, record UHT/build logs,
+   binary SHA and artifact manifest. The UE 5.7.3 package cannot cross this boundary.
+3. **Project live proof:** install into a disposable project generation, exact-dispatch the four reserved
+   commands before the generic bridge, load the module, answer a nonce challenge from the active lease,
+   and preserve a process-specific receipt.
 
-- `Engine/Binaries/Linux/UnrealEditor` executable exists;
-- `gym_citynav/gym_citynav.uproject` exists;
-- Pixel Streaming `SignallingWebServer/cirrus.js` exists;
-- runtime root size is plausible (source observation approximately21 GiB).
+The packaged runtime/archive remains immutable. Writable project content is copied/reflinked into a
+new generation after disk review. Rollback switches to the prior project/plugin generation; it does
+not edit the archive in place.
 
-The archive contains one top-level directory named`SimWorld-Studio-Minimal/`. Extract with`--no-same-owner` into a user-owned partial directory, verify it, then rename that top-level directory to`SimWorld-Studio-Minimal-806e869a` during promotion.
+### 6.3 VISTA staging and asset stack
 
-The archive contains stock Cirrus SHA-256`92298e881c9240ebe76adfdf0fda39310cc28f5fd5934070194940cca7be29a4`, which must not be exposed or launched as the final signalling service. After an explicit runtime state-change gate, apply`tools/patch_cirrus_loopback.py`; expected patched SHA-256 is`133a12cf843c69914263a41c3ea3d7f09914ad9241125358850ea0318e55300e` and the tool must produce its receipt.
+Raw staging is a filesystem-only adapter and precedes any service. The dataset owner names every input;
+default invocation is dry-run. Approved apply creates an immutable private bundle and registry snippet.
 
-### Evidence
+Asset provisioning then pins five identities before any index write:
 
-Include `run-metadata.json`, `evidence/`, final screenshots, acceptance/audit artifacts, `prompt.txt`, `system-prompt.txt` and source receipt. Exclude raw provider stream/stderr, run-local `mcp-config.json`, any token-bearing config, copied `node_modules`, caches and live PIDs.
+- UE Content revision;
+- catalog/snapshot revision;
+- dense model artifact revision and dimension;
+- sparse model artifact revision;
+- PostgreSQL schema/image and Qdrant/embedding image digests.
 
-## Configuration mapping
+Services stay loopback. Order is preflight -> service config -> approved start -> schema -> migration
+dry-run/apply -> Qdrant dry-run/apply -> Blueprint/StaticMesh UE probe -> snapshot capture/verify ->
+backup/restore. Readiness consumes a short-lived digest-bound live-audit receipt.
 
-| Logical value | Target value |
+### 6.4 Typed scene proof
+
+The Studio session is acquired first so all later calls resolve the same owner/session/slot/lease.
+The staged bundle is previewed and committed. Scene build then requires:
+
+1. a production layout profile pinned by raw-file SHA;
+2. all required asset bindings resolved against the active snapshot;
+3. plan and preflight IDs from server output;
+4. explicit exact-plan confirmation;
+5. UE result with actor class/asset/material paths, object GUIDs, content receipt, collision/floating
+   reports and screenshot bound to one scene digest;
+6. a second live digest check immediately before backend PIE.
+
+The scene is disposable and rollback-capable. Any fallback asset, `/Engine/BasicShapes/*`, empty/PBR-
+ineligible material slot, stale lease/content receipt, or changed digest prevents Start.
+
+### 6.5 Project character content and timeline
+
+The project owner implements `IVistaAnimationContentDriver` inside reviewed UE project code. A pinned
+`vista-animation-content-profile/v1` maps the seven fixed actions to packaged implementation assets and
+completion signals. The HTTP/NLP side only sees opaque binding/action IDs.
+
+Live acceptance uses the same scene build proof, plugin manifest, content profile, active lease and UE
+process instance. Required matrices cover normal completion, notify timeout, Stop race, disconnect with
+outcome unknown, server restart/recovery-required state, fall collision, recover alignment, hand/foot
+contact, caster physics, and terminal scene zero-diff. Browser controls never act as the clock or click
+UE toolbar coordinates.
+
+### 6.6 Review and public WebRTC
+
+Review is enabled only after two separately approved, tool-free calls produce build-bound receipts.
+Visual capture goes through the shared read-only UE broker and must leave the canonical scene digest
+unchanged.
+
+Public streaming preserves private data-plane listeners:
+
+```text
+browser HTTPS/WSS -> existing managed ingress -> Node session gateway
+                                      -> loopback Cirrus HttpPort
+UE streamer --------------------------> loopback Cirrus StreamerPort
+browser ICE <--------------------------> public Coturn -> bounded UDP relay range
+```
+
+The release receipt combines listener/firewall audit, DNS/certificate/config fingerprints, session-
+isolation probes, decoded frames/input/reconnect, normal ICE and forced UDP/TCP/TLS relay from external
+networks, plus one approved credential-rotation drill.
+
+## 7. Evidence layout
+
+Each phase writes beneath a new checkpoint directory outside Git:
+
+```text
+<checkpoint>/
+  source.json                  # repo URL, branch, exact SHA, clean status
+  ownership.json               # owner, phase, paths, slot/GPU/ports, gate reference
+  inventory/                   # redacted read-only host reports
+  ue-plugin/                   # build logs, hashes, artifact/load/capability receipts
+  vista-source/                # safe staging report and bundle digest
+  assets/                      # model/image/config digests, audit and restore receipts
+  scene/                       # import/plan/preflight/result and safe visual evidence
+  animation/                   # content/plugin/live/run/evidence receipts
+  review/                      # safe Text/Visual receipts only
+  webrtc/                      # listener/probe/readiness receipts; no SDP/IP secrets
+  rollback.json                # prior generations and executed result
+```
+
+Mode is `0700` for directories and `0600` for files. Raw prompts, provider stderr, credentials, absolute
+private media paths, SDP/candidate addresses, or secret-bearing configs are excluded.
+
+## 8. Rollback model
+
+| Failure | Rollback |
 | --- | --- |
-| `SIMWORLD_REPO` | `/home/yhliu/SimWorld-Studio-src` |
-| `SIMWORLD_WEB_DIR` | `/home/yhliu/SimWorld-Studio-src/simworld_studio_workspace/web` |
-| `UE_ENGINE_DIR` | `/home/yhliu/.local/share/simworld-studio/binary/SimWorld-Studio-Minimal-806e869a` |
-| `UE_EDITOR` | `$UE_ENGINE_DIR/Engine/Binaries/Linux/UnrealEditor` |
-| `UE_PROJECT_FILE` | `$UE_ENGINE_DIR/gym_citynav/gym_citynav.uproject` |
-| `CIRRUS_JS` | `$UE_ENGINE_DIR/Engine/Plugins/Media/PixelStreaming/Resources/WebServers/SignallingWebServer/cirrus.js` |
-| Studio | `127.0.0.1:3002` |
-| MCP | `127.0.0.1:55559` |
-| Cirrus HTTP/Streamer | `127.0.0.1:8585` / `127.0.0.1:8586` |
-| State | `/home/yhliu/.local/state/simworld-studio` |
-| Asset data | `/home/yhliu/.local/share/simworld-studio/asset-db` |
+| Source validation | delete/rename only the new partial checkout; keep prior generation active |
+| Dependency/test | keep failed generation as evidence; do not alter active runtime |
+| Plugin build/load | unload/stop only owned disposable UE process; switch to prior project/plugin generation |
+| Asset migration/index | stop approved writers; restore prior DB/Qdrant backup into disposable targets; do not relabel partial index ready |
+| Scene/timeline | Stop via exact lease, reconcile PIE/actions, preserve failed run; discard only the owned disposable scene generation |
+| Review | write safe failure code; no automatic retry and no receipt |
+| WebRTC | close newly approved rules/listeners, restore prior pinned config/secret generation, repeat listener audit |
 
-`web/mcp.json` is source input only. Runtime shall generate a config with target host/ports; it shall not copy a local run token or hardcoded3022/55570 value.
+Rollback never uses `git reset --hard`, broad deletion, broad `pkill`, or an unknown listener/service.
+Production activation is a pointer/config switch to a previously verified immutable generation, followed
+by readiness and rollback verification.
 
-## Activation flow
+## 9. Traceability
 
-1. Validate target paths absent and ports free.
-2. Materialize source units from bundle + binary patch + reviewed untracked tar intopartial paths; verify Git status parity.
-3. Rsync archive into a`.partial` filename; verify size/SHA; rename.
-4. Extract into `binary/.extracting-20260715`; verify fixed files; rename.
-5. Prepend`~/.local/bin`; run `npm ci` forweb andserver; use `uv` for Python only afteruv is provisioned.
-6. Run offline unit/contract/UI/build suite.
-7. Create a fresh random Studio token remotely; keep model mode off.
-8. Launch single GPU/slot with isolated state, loopback Cirrus/MCP/Studio, no public ingress.
-9. Verify MCP/health/streaming/read-only screenshot and controlledstop.
-10. Only then open separate tasks for asset services, real review, timeline/UE adapters and public WebRTC.
+- RMT-001/003/012 -> immutable GitHub checkout, ownership checkpoint, generation rollback.
+- RMT-002/004 -> read-only first contact, secret/evidence separation.
+- RMT-005/009 -> exact UE 5.3.2 plugin, content driver, backend PIE/timeline evidence.
+- RMT-006 -> authoritative raw staging and privilege boundary.
+- RMT-007/008 -> full semantic stack and typed PBR scene build.
+- RMT-010 -> two real provider receipts.
+- RMT-011 -> managed public WebRTC/Coturn and external forced relay.
 
-## Security and secret handling
-
-- Never rsync `$HOME/.claude*`, `$HOME/.codex`, `$HOME/.ssh`, `.env*`, provider logs or database dumps without an explicit reviewed manifest.
-- The existing user-local Claude/Codex installation may use remote host login state already present; migration does not inspect or depend on it.
-- `STUDIO_ACCESS_TOKEN` is generated on target and never printed in docs/logs.
-- Public browser access remains SSH tunnel or existing authenticated ingress after an admin-ownedproxy change; direct `0.0.0.0:3002` is forbidden.
-- Asset retrieval stays fail-closed until a matching `simworld-asset-snapshot/v1` is audited.
-
-## Failure handling and rollback
-
-- Transfer interruption: rerun same rsync into the samepartial path with `--partial`; never remove source.
-- Parity failure: keep partial path, write comparison report, do not promote.
-- Extract failure: remove only `.extracting-20260715` after confirming it is the migration-owned path; retain archive.
-- Runtime smoke failure: terminate only recorded migration PIDs/tmux session; keep all files for diagnostics.
-- Port conflict: choose a new approved loopback slot; do not kill unknown listener.
-- Full rollback: rename canonical migration paths to`.failed-<timestamp>`; do not touch original host or target 80/443/14500.
-
-## Testing strategy
-
-### Offline, no UE/provider/DB
-
-- `npm ci` using committed lockfiles.
-- Relevant `node --test` contracts, existing server unit suite, UI unit suite.
-- `npx vite build --mode development`.
-- Review and VISTA Import Playwright mock E2E.
-- JSON schema checks and `mmg_040` 0/2/5/9/12 timeline golden tests.
-
-### Local UE smoke, stateful gate
-
-- NVIDIA/Vulkan preflight.
-- Single UE process, single Cirrus, single Studio; all loopback.
-- MCP ready, authenticated health, decoded Pixel Streaming frame.
-- Read-only screenshot and fixed VISTA setup/state/stop contract.
-- Clean stop with no remaining owned listener/PID.
-
-### Deferred admin/network tests
-
-- Docker or managed Postgres/Qdrant/embed and audited snapshot.
-- Existing 80/443 ingress WSS proxy, Coturn, firewall and forced-relay test.
-- Systemd/restart/backup/restore.
-
-## Tradeoffs
-
-- Bundle + patch + reviewed untracked tar is chosen over committing a mixed checkpoint because the current changes span several logical units and staging them would violate repository discipline. It preserves provenance without inventing a commit or copying host-specific dependency trees.
-- Canonical archive transfer is chosen over filtered runtime-tree rsync because it is independently checksummed, smaller in transit and less likely to omit Engine/Content files.
-- Dependencies are rebuilt because copying host-specific `node_modules`/venvs is slower, less auditable and can carry ABI/path incompatibility.
-
-## Traceability
-
-- MIG-001/002/006 -> partial-path rsync, `.git` retention, parity checks.
-- MIG-003/004/007 -> target layout, archive extraction, dependency rebuild.
-- MIG-005 -> exclusion policy and target-generated secrets.
-- MIG-008/009 -> fail-closed readiness and staged testing.
-- MIG-010/011 -> admin matrix, runbook and handoff.
-- MIG-012 -> rollback and no-impact rules.
+Detailed command sequences are in [runbook.md](runbook.md); live status is recorded only in
+[HANDOFF.md](HANDOFF.md).
