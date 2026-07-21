@@ -1,4 +1,4 @@
-import React, { forwardRef, useState, useEffect, useRef, useCallback, useImperativeHandle } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 /**
  * PixelStreamPlayer
@@ -6,7 +6,7 @@ import React, { forwardRef, useState, useEffect, useRef, useCallback, useImperat
  * - Keepalive via postMessage from iframe (sw-keepalive / sw-stream-connected)
  * - No status badge, no config overlay, no click-to-control gate
  */
-const PixelStreamPlayer = forwardRef(function PixelStreamPlayer({ playerUrl, onStreamReadyChange }, ref) {
+export default function PixelStreamPlayer({ playerUrl, onStreamReadyChange }) {
   const iframeRef      = useRef(null);
   const reconnectTimer = useRef(null);
   const pingTimer      = useRef(null);
@@ -17,22 +17,6 @@ const PixelStreamPlayer = forwardRef(function PixelStreamPlayer({ playerUrl, onS
   const [streamReady, setStreamReady] = useState(false);
 
   const effectiveUrl = useCallback(() => playerUrl || null, [playerUrl]);
-
-  useImperativeHandle(ref, () => ({
-    playVistaDemo() {
-      const frame = iframeRef.current;
-      if (!streamReady || !frame?.contentWindow) return false;
-      frame.contentWindow.postMessage({ type: "sw-vista-play" }, window.location.origin);
-      frame.focus();
-      return true;
-    },
-    stopVistaDemo() {
-      const frame = iframeRef.current;
-      if (!streamReady || !frame?.contentWindow) return false;
-      frame.contentWindow.postMessage({ type: "sw-vista-stop" }, window.location.origin);
-      return true;
-    },
-  }), [streamReady]);
 
   useEffect(() => {
     onStreamReadyChange?.(streamReady);
@@ -194,6 +178,4 @@ const PixelStreamPlayer = forwardRef(function PixelStreamPlayer({ playerUrl, onS
       )}
     </div>
   );
-});
-
-export default PixelStreamPlayer;
+}

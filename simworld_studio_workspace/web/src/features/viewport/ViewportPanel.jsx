@@ -240,7 +240,7 @@ function validRuntimeState(payload, expectedPawnClass) {
       "schema", "pie", "possessed", "pawn_class", "location", "rotation",
       "velocity", "on_ground", "engine_time",
     ]) &&
-    payload?.schema === "vista-runtime-state/v1" &&
+    payload?.schema === "vista-runtime-state/v2" &&
     payload?.pie === true &&
     payload?.possessed === true &&
     typeof expectedPawnClass === "string" &&
@@ -260,7 +260,7 @@ function validStoppedState(payload) {
       "schema", "pie", "possessed", "pawn_class", "location", "rotation",
       "velocity", "on_ground", "engine_time",
     ]) &&
-    payload?.schema === "vista-runtime-state/v1" &&
+    payload?.schema === "vista-runtime-state/v2" &&
     payload?.pie === false &&
     payload?.possessed === false &&
     payload?.pawn_class === null &&
@@ -275,13 +275,16 @@ function validStoppedState(payload) {
 function validStopResponse(payload) {
   return Boolean(
     hasExactKeys(payload, [
-      "schema", "phase", "stop_requested", "was_playing", "retry_after_ms",
+      "schema", "phase", "stop_requested", "was_playing", "confirmed_stopped",
+      "ended_pie", "binding_cleaned",
     ]) &&
-    payload?.schema === "vista-runtime-stop/v1" &&
-    payload?.phase === "stop_requested" &&
+    payload?.schema === "vista-runtime-stop/v2" &&
+    payload?.phase === "stopped" &&
     payload?.stop_requested === true &&
-    typeof payload?.was_playing === "boolean" &&
-    retryDelayMs(payload)
+    (typeof payload?.was_playing === "boolean" || payload?.was_playing === null) &&
+    payload?.confirmed_stopped === true &&
+    typeof payload?.ended_pie === "boolean" &&
+    typeof payload?.binding_cleaned === "boolean"
   );
 }
 
@@ -310,29 +313,16 @@ export default function ViewportPanel({ health, icons, latestScreenshot, session
   const [playerUrl, setPlayerUrl] = useState(null);
   const intervalRef = useRef(null);
   const screenshotObjectUrlRef = useRef(null);
-  const pixelPlayerRef = useRef(null);
-  const vistaPollTimerRef = useRef(null);
   const vistaRunRef = useRef(0);
-  const vistaExpectedPawnRef = useRef(null);
-  const vistaGraceUntilRef = useRef(0);
-  const vistaLiveRef = useRef(false);
   const vistaPlayDispatchedRef = useRef(false);
-  const vistaPlayLeaseRef = useRef(false);
   const vistaReconciledRef = useRef(false);
   const [pixelStreamReady, setPixelStreamReady] = useState(false);
   const [vistaDemo, setVistaDemo] = useState({ phase: "idle", text: "Waiting for viewport stream" });
   const engineLabel = health?.engineLabel || (health?.engineVersion ? `UE ${health.engineVersion}` : "Unreal Engine");
 
-  const clearVistaPoll = useCallback(() => {
-    if (!vistaPollTimerRef.current) return;
-    clearTimeout(vistaPollTimerRef.current);
-    vistaPollTimerRef.current = null;
-  }, []);
-
   useEffect(() => () => {
     vistaRunRef.current += 1;
-    clearVistaPoll();
-  }, [clearVistaPoll]);
+  }, []);
 
   useEffect(() => {
     if (vistaDemo.phase !== "idle") return;
@@ -377,17 +367,13 @@ export default function ViewportPanel({ health, icons, latestScreenshot, session
         }
         if (validStoppedState(payload)) {
           vistaReconciledRef.current = true;
-          vistaExpectedPawnRef.current = null;
           vistaPlayDispatchedRef.current = false;
-          vistaPlayLeaseRef.current = false;
           setVistaDemo({ phase: "idle", text: "Simulation ready" });
           return;
         }
         if (typeof payload?.pawn_class === "string" && validRuntimeState(payload, payload.pawn_class)) {
           vistaReconciledRef.current = true;
-          vistaExpectedPawnRef.current = payload.pawn_class;
           vistaPlayDispatchedRef.current = true;
-          vistaLiveRef.current = true;
           setMode("pixelstream");
           setVistaDemo({ phase: "live", text: "Simulation already running — controls recovered" });
           return;
@@ -395,11 +381,11 @@ export default function ViewportPanel({ health, icons, latestScreenshot, session
         throw new Error("UE Play state could not be reconciled");
       } catch (error) {
         if (!cancelled) {
-          vistaPlayDispatchedRef.current = true;
+          vistaPlayDispatchedRef.current = false;
           setMode("pixelstream");
           setVistaDemo({
-            phase: "play_error",
-            text: `${error.message || "State reconciliation failed"} — Stop is available`,
+            phase: "error",
+            text: `${error.message || "State reconciliation failed"} — rebuild or retry verification`,
           });
         }
       }
@@ -421,9 +407,8 @@ export default function ViewportPanel({ health, icons, latestScreenshot, session
     if (
       !pixelStreamReady &&
       vistaPlayDispatchedRef.current &&
-      (vistaDemo.phase === "grace" || vistaDemo.phase === "live")
+      vistaDemo.phase === "live"
     ) {
-      vistaLiveRef.current = false;
       setVistaDemo({
         phase: "play_error",
         text: "Live stream disconnected — Stop remains available",
@@ -432,90 +417,12 @@ export default function ViewportPanel({ health, icons, latestScreenshot, session
   }, [pixelStreamReady, vistaDemo.phase]);
 
   const startVistaDemo = useCallback(async () => {
-    if (!pixelStreamReady || !pixelPlayerRef.current) return;
-    clearVistaPoll();
+    if (!pixelStreamReady) return;
     const runId = vistaRunRef.current + 1;
-    let expectedPawnClass = null;
-    let stateProbeAttempts = 0;
     vistaRunRef.current = runId;
-    vistaExpectedPawnRef.current = null;
-    vistaGraceUntilRef.current = 0;
-    vistaLiveRef.current = false;
     vistaPlayDispatchedRef.current = false;
-    vistaPlayLeaseRef.current = false;
     setMode("pixelstream");
-    setVistaDemo({ phase: "preparing", text: "Preparing simulation..." });
-
-    const scheduleProbe = (delayMs) => {
-      clearVistaPoll();
-      setVistaDemo({
-        phase: "grace",
-        text: `Entering Play mode — verifying after ${Math.ceil(delayMs / 1000)}s`,
-      });
-      vistaPollTimerRef.current = setTimeout(probeState, delayMs);
-    };
-
-    const probeState = async () => {
-      vistaPollTimerRef.current = null;
-      if (vistaRunRef.current !== runId) return;
-      try {
-        stateProbeAttempts += 1;
-        if (stateProbeAttempts > 10) throw new Error("VISTA Play verification timed out");
-        const { response, payload } = await fetchJsonWithTimeout(
-          `${API_BASE}/vista/get_vista_state`,
-          {
-            method: "GET",
-            credentials: "same-origin",
-            cache: "no-store",
-            headers: { Accept: "application/json" },
-          },
-          20_000,
-        );
-        if (vistaRunRef.current !== runId) return;
-        if (response.status === 425 || response.status === 429 || response.status === 503) {
-          const retryMs = retryDelayMs(payload) || (response.status === 503 ? 1_000 : null);
-          if (
-            !retryMs ||
-            (response.status === 425 && payload?.code !== "VISTA_PLAY_START_GRACE")
-          ) {
-            throw new Error("Invalid VISTA grace response");
-          }
-          scheduleProbe(retryMs);
-          return;
-        }
-        if (
-          response.status === 502 &&
-          payload?.code === "VISTA_RUNTIME_PROTOCOL_ERROR"
-        ) {
-          scheduleProbe(retryDelayMs(payload) || 1_000);
-          return;
-        }
-        if (!response.ok) throw new Error(responseError(payload, `State check failed (${response.status})`));
-        if (validStoppedState(payload)) {
-          vistaExpectedPawnRef.current = null;
-          vistaPlayDispatchedRef.current = false;
-          vistaPlayLeaseRef.current = false;
-          setVistaDemo({ phase: "stopped", text: "Simulation remained stopped — Play was not toggled twice" });
-          return;
-        }
-        const observedPawnClass = expectedPawnClass || payload?.pawn_class;
-        if (!validRuntimeState(payload, observedPawnClass)) {
-          throw new Error("VISTA runtime is not possessed");
-        }
-        expectedPawnClass = observedPawnClass;
-        vistaExpectedPawnRef.current = observedPawnClass;
-        vistaReconciledRef.current = true;
-        vistaLiveRef.current = true;
-        setVistaDemo({ phase: "live", text: "Simulation running — WASD / arrows / mouse / Space" });
-      } catch (error) {
-        if (vistaRunRef.current === runId) {
-          setVistaDemo({
-            phase: vistaPlayDispatchedRef.current || vistaPlayLeaseRef.current ? "play_error" : "error",
-            text: error.message || "VISTA state check failed",
-          });
-        }
-      }
-    };
+    setVistaDemo({ phase: "preparing", text: "Starting verified simulation on the server..." });
 
     try {
       const { response, payload } = await fetchJsonWithTimeout(
@@ -526,171 +433,72 @@ export default function ViewportPanel({ health, icons, latestScreenshot, session
         },
         35_000,
       );
-      if (response.status === 409 && payload?.code === "VISTA_PLAY_LEASE_HELD") {
-        vistaPlayDispatchedRef.current = true;
-        scheduleProbe(retryDelayMs(payload) || 500);
-        return;
-      }
       if (!response.ok) throw new Error(responseError(payload, `VISTA setup failed (${response.status})`));
-      const retryMs = retryDelayMs(payload);
-      expectedPawnClass = payload?.pawn_class;
       if (
         !hasExactKeys(payload, [
-          "schema", "phase", "prepared", "game_mode_class", "pawn_class",
-          "player_start_present", "requires_operator_play", "retry_after_ms",
-          "state_probe_grace_ms", "play_lease_granted",
+          "schema", "phase", "prepared", "play_requested", "already_playing",
+          "pie", "possessed", "game_mode_class", "pawn_class",
+          "player_start_present", "scene_proof_digest", "play_lease_granted",
         ]) ||
-        payload?.schema !== "vista-runtime-setup/v1" ||
-        payload?.phase !== "prepared" ||
+        payload?.schema !== "vista-runtime-setup/v2" ||
+        payload?.phase !== "live" ||
         payload?.prepared !== true ||
-        payload?.requires_operator_play !== true ||
+        typeof payload?.play_requested !== "boolean" ||
+        typeof payload?.already_playing !== "boolean" ||
+        payload?.pie !== true || payload?.possessed !== true ||
         payload?.play_lease_granted !== true ||
-        typeof expectedPawnClass !== "string" ||
-        !retryMs ||
-        payload.state_probe_grace_ms !== retryMs
+        typeof payload?.pawn_class !== "string" ||
+        !/^[a-f0-9]{64}$/.test(payload?.scene_proof_digest || "")
       ) {
         throw new Error("Invalid VISTA setup response");
       }
       if (vistaRunRef.current !== runId) return;
-      vistaExpectedPawnRef.current = expectedPawnClass;
-      vistaGraceUntilRef.current = Date.now() + retryMs;
-      vistaPlayLeaseRef.current = true;
-      if (!pixelPlayerRef.current?.playVistaDemo()) throw new Error("Live stream is not ready for Play");
       vistaPlayDispatchedRef.current = true;
-      scheduleProbe(retryMs);
+      vistaReconciledRef.current = true;
+      setVistaDemo({ phase: "live", text: "Simulation running — WASD / arrows / mouse / Space" });
     } catch (error) {
       if (vistaRunRef.current === runId) {
         setVistaDemo({
-          phase: vistaPlayDispatchedRef.current || vistaPlayLeaseRef.current ? "play_error" : "error",
+          phase: "error",
           text: error.message || "VISTA setup failed",
         });
       }
     }
-  }, [clearVistaPoll, pixelStreamReady]);
+  }, [pixelStreamReady]);
 
   const stopVistaDemo = useCallback(async () => {
     vistaRunRef.current += 1;
     const runId = vistaRunRef.current;
-    clearVistaPoll();
-    // Escape is a low-latency best effort. The fixed same-origin backend Stop
-    // remains authoritative and works even after the WebRTC input channel drops.
-    pixelPlayerRef.current?.stopVistaDemo();
-    const expectedPawnClass = vistaExpectedPawnRef.current;
-    vistaLiveRef.current = false;
-    const deadline = Date.now() + 45_000;
-    let fixedStopAttempts = 0;
-    setVistaDemo({ phase: "stopping", text: "Stop sent — verifying UE Play mode ended..." });
-
-    const scheduleStopProbe = (delayMs) => {
-      clearVistaPoll();
-      vistaPollTimerRef.current = setTimeout(probeStopped, delayMs);
-    };
-
-    const requestFixedStop = async () => {
-      fixedStopAttempts += 1;
-      try {
-        const { response, payload } = await fetchJsonWithTimeout(
-          `${API_BASE}/vista/stop_vista_play_mode`,
-          {
-            method: "POST",
-            credentials: "same-origin",
-          },
-          20_000,
-        );
-        if (response.ok) {
-          if (!validStopResponse(payload)) throw new Error("Invalid VISTA Stop response");
-          return retryDelayMs(payload);
-        }
-        if (
-          response.status === 429 ||
-          response.status === 502 ||
-          response.status === 503
-        ) {
-          return retryDelayMs(payload) || 1_000;
-        }
-        throw new Error(responseError(payload, `VISTA Stop failed (${response.status})`));
-      } catch (error) {
-        if (fixedStopAttempts >= 3) throw error;
-        return 1_000;
-      }
-    };
-
-    const probeStopped = async () => {
-      vistaPollTimerRef.current = null;
-      if (vistaRunRef.current !== runId) return;
-      if (Date.now() >= deadline) {
-        setVistaDemo({ phase: "stop_error", text: "VISTA Stop was not confirmed — retry Stop" });
-        return;
-      }
-      try {
-        const { response, payload } = await fetchJsonWithTimeout(
-          `${API_BASE}/vista/get_vista_state`,
-          {
-            method: "GET",
-            credentials: "same-origin",
-            cache: "no-store",
-            headers: { Accept: "application/json" },
-          },
-          20_000,
-        );
-        if (vistaRunRef.current !== runId) return;
-        if (
-          response.status === 425 ||
-          response.status === 429 ||
-          response.status === 502 ||
-          response.status === 503
-        ) {
-          scheduleStopProbe(retryDelayMs(payload) || 1_000);
-          return;
-        }
-        if (!response.ok) throw new Error(responseError(payload, `Stop check failed (${response.status})`));
-        if (validStoppedState(payload)) {
-          vistaExpectedPawnRef.current = null;
-          vistaGraceUntilRef.current = 0;
-          vistaPlayDispatchedRef.current = false;
-          vistaPlayLeaseRef.current = false;
-          vistaReconciledRef.current = true;
-          setVistaDemo({ phase: "stopped", text: "Simulation stopped — UE confirmed" });
-          return;
-        }
-        if (validRuntimeState(payload, expectedPawnClass)) {
-          const retryMs = fixedStopAttempts < 3 ? await requestFixedStop() : 600;
-          scheduleStopProbe(retryMs || 600);
-          return;
-        }
-        throw new Error("Invalid VISTA Stop state");
-      } catch (error) {
-        if (vistaRunRef.current === runId) {
-          setVistaDemo({
-            phase: "stop_error",
-            text: `${error.message || "VISTA Stop verification failed"} — retry Stop`,
-          });
-        }
-      }
-    };
+    setVistaDemo({ phase: "stopping", text: "Stopping simulation on the server..." });
 
     try {
-      const retryMs = await requestFixedStop();
-      if (vistaRunRef.current === runId) scheduleStopProbe(retryMs || 600);
+      const { response, payload } = await fetchJsonWithTimeout(
+        `${API_BASE}/vista/stop_vista_play_mode`,
+        { method: "POST", credentials: "same-origin" },
+        35_000,
+      );
+      if (!response.ok) throw new Error(responseError(payload, `VISTA Stop failed (${response.status})`));
+      if (!validStopResponse(payload)) throw new Error("Invalid VISTA Stop response");
+      if (vistaRunRef.current !== runId) return;
+      vistaPlayDispatchedRef.current = false;
+      vistaReconciledRef.current = true;
+      setVistaDemo({ phase: "stopped", text: "Simulation stopped — UE confirmed" });
     } catch (error) {
       if (vistaRunRef.current === runId) {
-        // The fixed command may have executed before its marker/transport was
-        // lost, so still verify state once before exposing a retry.
-        scheduleStopProbe(600);
+        setVistaDemo({ phase: "stop_error", text: `${error.message || "VISTA Stop failed"} — retry Stop` });
       }
     }
-  }, [clearVistaPoll]);
+  }, []);
 
   const vistaOwnsViewport = [
     "preparing",
     "reconciling",
-    "grace",
     "live",
     "play_error",
     "stopping",
     "stop_error",
   ].includes(vistaDemo.phase);
-  const canStopVista = ["grace", "live", "play_error", "stop_error"].includes(vistaDemo.phase);
+  const canStopVista = ["live", "play_error", "stop_error"].includes(vistaDemo.phase);
   const vistaDemoHasError = ["error", "play_error", "stop_error"].includes(vistaDemo.phase);
 
   // Auto-connect the agent camera to the LATEST RUNNING UE: poll the datahub and, while a run
@@ -976,7 +784,6 @@ export default function ViewportPanel({ health, icons, latestScreenshot, session
       <div className="viewport-stage">
         <div className="viewport-pixelstream-mount" style={{ display: mode === "pixelstream" ? "block" : "none" }}>
           <PixelStreamPlayer
-            ref={pixelPlayerRef}
             playerUrl={playerUrl}
             onStreamReadyChange={setPixelStreamReady}
           />
