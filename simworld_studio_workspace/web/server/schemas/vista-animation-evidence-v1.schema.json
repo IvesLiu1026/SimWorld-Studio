@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-animation-evidence-v1.schema.json",
+  "title": "VISTA animation evidence manifest",
+  "description": "Frame-ordered, digest-bound pose, IK/object interaction, screenshot, rollback, and terminal scene-validation evidence for one terminal timeline run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "manifest_id",
+    "program_id",
+    "run_id",
+    "timeline_id",
+    "scene_revision",
+    "content_revision",
+    "fps",
+    "duration_sec",
+    "run_state",
+    "created_at",
+    "finalized_at",
+    "run_digest",
+    "checkpoints",
+    "coverage"
+  ],
+  "properties": {
+    "schema": { "const": "vista-animation-evidence/v1" },
+    "manifest_id": { "type": "string", "pattern": "^vae-[a-f0-9]{24}$" },
+    "program_id": { "type": "string", "pattern": "^vag-[a-f0-9]{24}$" },
+    "run_id": { "$ref": "#/$defs/opaqueId" },
+    "timeline_id": { "type": "string", "pattern": "^vtl-[a-f0-9]{24}$" },
+    "scene_revision": { "$ref": "#/$defs/opaqueId" },
+    "content_revision": { "$ref": "#/$defs/opaqueId" },
+    "fps": { "type": "integer", "minimum": 1, "maximum": 240 },
+    "duration_sec": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+    "run_state": { "enum": ["completed", "failed", "cancelled"] },
+    "created_at": { "type": "string", "format": "date-time" },
+    "finalized_at": { "type": "string", "format": "date-time" },
+    "run_digest": { "$ref": "#/$defs/sha256" },
+    "checkpoints": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3001,
+      "items": { "$ref": "#/$defs/checkpoint" }
+    },
+    "coverage": { "$ref": "#/$defs/coverage" }
+  },
+  "$defs": {
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_id",
+        "phase",
+        "event_id",
+        "action",
+        "attempt",
+        "at_sec",
+        "at_frame",
+        "frame_order",
+        "captured_at",
+        "evidence"
+      ],
+      "properties": {
+        "checkpoint_id": { "type": "string", "pattern": "^vek-[a-f0-9]{20}$" },
+        "phase": { "enum": ["before", "after", "rollback", "terminal"] },
+        "event_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^beat-[0-9]{4}(?:-[a-z0-9_-]+)?$" }
+          ]
+        },
+        "action": {
+          "oneOf": [
+            { "type": "null" },
+            { "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"] }
+          ]
+        },
+        "attempt": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "at_sec": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "at_frame": { "type": "integer", "minimum": 0, "maximum": 864000 },
+        "frame_order": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "captured_at": { "type": "string", "format": "date-time" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "evidence_id", "artifact_ref", "sha256", "assertion"],
+      "properties": {
+        "kind": { "enum": ["pose_snapshot", "interaction_state", "screenshot", "scene_validation"] },
+        "evidence_id": { "$ref": "#/$defs/opaqueId" },
+        "artifact_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/@-]*$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "assertion": {
+          "oneOf": [
+            { "type": "null" },
+            { "enum": ["pass", "fail"] }
+          ]
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_event_count",
+        "completed_event_count",
+        "checkpoint_count",
+        "missing",
+        "complete"
+      ],
+      "properties": {
+        "required_event_count": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "completed_event_count": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "checkpoint_count": { "type": "integer", "minimum": 1, "maximum": 3001 },
+        "missing": {
+          "type": "array",
+          "maxItems": 2001,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        },
+        "complete": { "type": "boolean" }
+      }
+    }
+  }
+}

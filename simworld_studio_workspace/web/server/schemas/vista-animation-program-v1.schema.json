@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-animation-program-v1.schema.json",
+  "title": "Deterministic VISTA animation program",
+  "description": "Strict timeline lowered to a stable frame/time order after live capability preflight. Cross-field ordering and identity invariants are enforced by vista-animation-contract.js.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "program_id",
+    "timeline_id",
+    "scene_revision",
+    "source_checksum",
+    "capability_preflight_id",
+    "profile_revision",
+    "content_revision",
+    "registry_revision",
+    "fps",
+    "duration_sec",
+    "duration_frame",
+    "events",
+    "checkpoints"
+  ],
+  "properties": {
+    "schema": { "const": "vista-animation-program/v1" },
+    "program_id": { "type": "string", "pattern": "^vag-[a-f0-9]{24}$" },
+    "timeline_id": { "type": "string", "pattern": "^vtl-[a-f0-9]{24}$" },
+    "scene_revision": { "$ref": "#/$defs/opaqueId" },
+    "source_checksum": { "$ref": "#/$defs/sha256" },
+    "capability_preflight_id": { "type": "string", "pattern": "^vap-[a-f0-9]{24}$" },
+    "profile_revision": { "$ref": "#/$defs/safeId" },
+    "content_revision": { "$ref": "#/$defs/opaqueId" },
+    "registry_revision": { "$ref": "#/$defs/safeId" },
+    "fps": { "type": "integer", "minimum": 1, "maximum": 240 },
+    "duration_sec": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+    "duration_frame": { "type": "integer", "minimum": 1, "maximum": 864000 },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/event" }
+    },
+    "checkpoints": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 1001,
+      "items": { "$ref": "#/$defs/checkpoint" }
+    }
+  },
+  "$defs": {
+    "safeId": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,119}$" },
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nullableSafeId": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/safeId" }
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "order",
+        "at_sec",
+        "at_frame",
+        "frame_order",
+        "action",
+        "actor_binding_id",
+        "target_binding_id",
+        "adapter_id",
+        "bridge_action_id",
+        "parameters"
+      ],
+      "properties": {
+        "event_id": { "type": "string", "pattern": "^beat-[0-9]{4}(?:-[a-z0-9_-]+)?$" },
+        "order": { "type": "integer", "minimum": 0, "maximum": 999 },
+        "at_sec": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "at_frame": { "type": "integer", "minimum": 0, "maximum": 864000 },
+        "frame_order": { "type": "integer", "minimum": 0, "maximum": 999 },
+        "action": {
+          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+        },
+        "actor_binding_id": { "$ref": "#/$defs/safeId" },
+        "target_binding_id": { "$ref": "#/$defs/nullableSafeId" },
+        "adapter_id": { "$ref": "#/$defs/safeId" },
+        "bridge_action_id": { "$ref": "#/$defs/safeId" },
+        "parameters": { "type": "object", "maxProperties": 8 }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoint_id", "kind", "event_id", "at_sec", "at_frame", "frame_order"],
+      "properties": {
+        "checkpoint_id": { "type": "string", "pattern": "^vac-[a-f0-9]{16}$" },
+        "kind": { "enum": ["event", "terminal"] },
+        "event_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^beat-[0-9]{4}(?:-[a-z0-9_-]+)?$" }
+          ]
+        },
+        "at_sec": { "type": "number", "minimum": 0, "maximum": 3600 },
+        "at_frame": { "type": "integer", "minimum": 0, "maximum": 864000 },
+        "frame_order": { "type": "integer", "minimum": 0, "maximum": 1000 }
+      }
+    }
+  }
+}

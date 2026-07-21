@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-animation-content-profile-v1.schema.json",
+  "title": "Verified VISTA animation content profile",
+  "description": "Server-owned receipt that pins the UE pawn, skeleton, and fixed action implementations. Presence in this document does not replace live broker preflight.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile_id",
+    "revision",
+    "content_revision",
+    "content_digest",
+    "pawn_class_path",
+    "skeleton_path",
+    "verification",
+    "actions"
+  ],
+  "properties": {
+    "schema": { "const": "vista-animation-content-profile/v1" },
+    "profile_id": { "$ref": "#/$defs/safeId" },
+    "revision": { "$ref": "#/$defs/safeId" },
+    "content_revision": { "$ref": "#/$defs/opaqueId" },
+    "content_digest": { "$ref": "#/$defs/sha256" },
+    "pawn_class_path": { "$ref": "#/$defs/contentPath" },
+    "skeleton_path": { "$ref": "#/$defs/contentPath" },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "receipt_id", "verified_at"],
+      "properties": {
+        "status": { "const": "verified" },
+        "receipt_id": { "$ref": "#/$defs/opaqueId" },
+        "verified_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 7,
+      "items": { "$ref": "#/$defs/action" }
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,119}$"
+    },
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "contentPath": {
+      "type": "string",
+      "pattern": "^/Game/[A-Za-z0-9_./-]{1,500}$"
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "adapter_id",
+        "version",
+        "bridge_action_id",
+        "implementation_asset",
+        "completion_signal",
+        "timeout_ms"
+      ],
+      "properties": {
+        "action": {
+          "enum": ["look_at", "brace", "drag", "lift_foot", "pause", "fall", "recover"]
+        },
+        "adapter_id": { "$ref": "#/$defs/safeId" },
+        "version": { "const": "1.0.0" },
+        "bridge_action_id": { "$ref": "#/$defs/safeId" },
+        "implementation_asset": { "$ref": "#/$defs/contentPath" },
+        "completion_signal": { "$ref": "#/$defs/safeId" },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 60000
+        }
+      }
+    }
+  }
+}
