@@ -4,9 +4,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  canonicalize,
   ContentProfileContractError,
   PINNED_SOURCE_CONTRACT_SHA256,
+  parseStrictJson,
   readSecureJson,
+  sha256Bytes,
   validateInspectionReceipt,
   validateSourceContract,
 } from "../unreal_plugins/VistaAnimationContentApi/Scripts/prepare-content-profile.mjs";
@@ -18,6 +21,7 @@ export const PINNED_CANDIDATE_SOURCE_SHA256 = "fc03861ddb92f71e23efa6794f9814545
 const SAFE_ID = /^[a-z][a-z0-9_]{0,119}$/;
 const SAFE_CHECK = /^[a-z][a-z0-9_]{0,119}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const CONTENT_RELATIVE = /^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*\/?$/;
 const PROFILE_ID = "vista_mmg040";
 const PROFILE_REVISION = "mmg040_project_content_r1";
@@ -60,6 +64,12 @@ const PROOF_BOUNDARY = Object.freeze({
   executable_profile_emitted: false,
 });
 
+// An inspection basis is intentionally property-free. Authoritative builders
+// recover protected raw bytes only through this module-owned WeakMap, recompute
+// every digest, and run the exact source/receipt validators again immediately
+// before producing or authorizing an output profile.
+const INSPECTION_BASIS_STATES = new WeakMap();
+
 export class Mmg040InspectionProfileError extends Error {
   constructor(code, message) {
     super(message);
@@ -90,6 +100,22 @@ function requireString(value, pattern, label) {
     fail("ANIMATION_MMG040_CANDIDATE_SOURCE_INVALID", `${label} is invalid`);
   }
   return value;
+}
+
+function isExactUtcTimestamp(value) {
+  if (typeof value !== "string" || !ISO_UTC.test(value)) return false;
+  const milliseconds = Date.parse(value);
+  if (Number.isNaN(milliseconds)) return false;
+  const normalized = new Date(milliseconds).toISOString();
+  return value.includes(".") ? normalized === value : normalized.replace(".000Z", "Z") === value;
+}
+
+function validateExactReceipt(contract, contractSha256, receipt) {
+  const validated = validateInspectionReceipt(contract, contractSha256, receipt);
+  if (!isExactUtcTimestamp(validated.verification.verified_at)) {
+    fail("ANIMATION_MMG040_INSPECTION_PROFILE_INVALID", "receipt verified_at must be an exact valid UTC timestamp");
+  }
+  return validated;
 }
 
 function requireUniqueStrings(value, pattern, label, { allowEmpty = false } = {}) {
@@ -202,7 +228,7 @@ function validateCandidate(candidate, label, contractAssetIds) {
   return candidate;
 }
 
-export function validateCandidateSource(source, rawSha256, contract) {
+function validateCandidateSourceDocument(source, rawSha256, contract) {
   rejectAssetCountField(source);
   exactKeys(source, [
     "schema",
@@ -306,6 +332,138 @@ function outputCandidate(candidate) {
   };
 }
 
+function exactBasisOptions(value, keys, label) {
+  if (!isObject(value)) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", `${label} must be an object`);
+  }
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || expected.some((key, index) => key !== actual[index])) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", `${label} has an invalid shape`);
+  }
+  const copied = Object.create(null);
+  for (const key of keys) {
+    const pathValue = value[key];
+    if (typeof pathValue !== "string" || pathValue.length === 0) {
+      fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", `${label}.${key} must be a path string`);
+    }
+    copied[key] = pathValue;
+  }
+  return copied;
+}
+
+function sealInspectionBasis({
+  contractBytes,
+  contractSha256,
+  candidateBytes,
+  candidateSha256,
+  receiptBytes = null,
+  receiptSha256 = null,
+}) {
+  const basis = Object.freeze(Object.create(null));
+  INSPECTION_BASIS_STATES.set(basis, Object.freeze({
+    contractBytes: Buffer.from(contractBytes),
+    contractSha256,
+    candidateBytes: Buffer.from(candidateBytes),
+    candidateSha256,
+    receiptBytes: receiptBytes === null ? null : Buffer.from(receiptBytes),
+    receiptSha256,
+  }));
+  return basis;
+}
+
+function requireInspectionBasis(basis) {
+  const state = INSPECTION_BASIS_STATES.get(basis);
+  if (!state) {
+    fail(
+      "ANIMATION_MMG040_INSPECTION_BASIS_INVALID",
+      "an opaque inspection basis created by this module is required",
+    );
+  }
+  return state;
+}
+
+function materializeInspectionBasis(basis) {
+  const state = requireInspectionBasis(basis);
+  const contractBytes = Buffer.from(state.contractBytes);
+  const candidateBytes = Buffer.from(state.candidateBytes);
+  const contractSha256 = sha256Bytes(contractBytes);
+  const candidateSha256 = sha256Bytes(candidateBytes);
+  if (contractSha256 !== state.contractSha256 || contractSha256 !== PINNED_SOURCE_CONTRACT_SHA256) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_MISMATCH", "sealed source contract bytes no longer match their pin");
+  }
+  if (candidateSha256 !== state.candidateSha256 || candidateSha256 !== PINNED_CANDIDATE_SOURCE_SHA256) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_MISMATCH", "sealed candidate source bytes no longer match their pin");
+  }
+
+  const contract = validateSourceContract(parseStrictJson(contractBytes), contractSha256);
+  const candidates = validateCandidateSourceDocument(
+    parseStrictJson(candidateBytes),
+    candidateSha256,
+    contract,
+  );
+  let receipt = null;
+  let receiptSha256 = null;
+  if (state.receiptBytes !== null) {
+    const receiptBytes = Buffer.from(state.receiptBytes);
+    receiptSha256 = sha256Bytes(receiptBytes);
+    if (receiptSha256 !== state.receiptSha256) {
+      fail("ANIMATION_MMG040_INSPECTION_BASIS_MISMATCH", "sealed inspection receipt bytes no longer match their hash");
+    }
+    receipt = validateExactReceipt(
+      contract,
+      contractSha256,
+      parseStrictJson(receiptBytes),
+    );
+  } else if (state.receiptSha256 !== null) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_MISMATCH", "sealed receipt hash exists without receipt bytes");
+  }
+  return { contract, candidates, candidateSha256, receipt, receiptSha256 };
+}
+
+export function loadInspectionProfileBasis(options) {
+  if (arguments.length !== 1) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", "profile basis loader accepts one options object");
+  }
+  const paths = exactBasisOptions(options, ["contractPath", "candidatesPath"], "profile basis options");
+  const source = readSecureJson(paths.contractPath, "source contract");
+  const contract = validateSourceContract(source.value, source.sha256);
+  const candidateInput = readSecureJson(paths.candidatesPath, "candidate source");
+  validateCandidateSourceDocument(candidateInput.value, candidateInput.sha256, contract);
+  return sealInspectionBasis({
+    contractBytes: source.bytes,
+    contractSha256: source.sha256,
+    candidateBytes: candidateInput.bytes,
+    candidateSha256: candidateInput.sha256,
+  });
+}
+
+export function loadInspectionReceiptBasis(candidateBasis, options) {
+  if (arguments.length !== 2) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", "receipt basis loader accepts a basis and one options object");
+  }
+  const paths = exactBasisOptions(options, ["receiptPath"], "receipt basis options");
+  const state = requireInspectionBasis(candidateBasis);
+  if (state.receiptBytes !== null) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", "receipt basis must be derived from a candidate-only basis");
+  }
+  const materialized = materializeInspectionBasis(candidateBasis);
+  const receiptInput = readSecureJson(paths.receiptPath, "inspection receipt");
+  validateExactReceipt(
+    materialized.contract,
+    PINNED_SOURCE_CONTRACT_SHA256,
+    receiptInput.value,
+  );
+  return sealInspectionBasis({
+    contractBytes: state.contractBytes,
+    contractSha256: state.contractSha256,
+    candidateBytes: state.candidateBytes,
+    candidateSha256: state.candidateSha256,
+    receiptBytes: receiptInput.bytes,
+    receiptSha256: receiptInput.sha256,
+  });
+}
+
 function buildDerivedTargets(contract, candidates, receipt) {
   const links = new Map(candidates.target_source_links.map((entry) => [entry.target_asset_id, entry]));
   const liveAssets = receipt ? new Map(receipt.assets.map((asset) => [asset.asset_id, asset])) : null;
@@ -352,14 +510,7 @@ function buildLiveInspection(receipt, receiptSha256) {
   };
 }
 
-export function buildInspectionProfile(contract, candidates, candidateSha256, receipt = null, receiptSha256 = null) {
-  validateCandidateSource(candidates, candidateSha256, contract);
-  if (receipt !== null) {
-    validateInspectionReceipt(contract, PINNED_SOURCE_CONTRACT_SHA256, receipt);
-    requireString(receiptSha256, SHA256, "receipt SHA-256");
-  } else if (receiptSha256 !== null) {
-    fail("ANIMATION_MMG040_INSPECTION_PROFILE_INVALID", "receipt SHA-256 cannot exist without a receipt");
-  }
+function createInspectionProfile({ contract, candidates, candidateSha256, receipt, receiptSha256 }) {
   const profile = {
     schema: INSPECTION_PROFILE_SCHEMA,
     profile_id: contract.profile_id,
@@ -383,7 +534,7 @@ export function buildInspectionProfile(contract, candidates, candidateSha256, re
     live_inspection: buildLiveInspection(receipt, receiptSha256),
     proof_boundary: { ...PROOF_BOUNDARY },
   };
-  return validateInspectionProfile(profile, contract);
+  return profile;
 }
 
 function validateOutputCandidate(candidate, label, contractAssetIds) {
@@ -415,14 +566,17 @@ function validateLiveInspection(value) {
     ["project_descriptor_sha256", value.project_descriptor_sha256],
     ["content_digest", value.content_digest],
   ]) requireString(valueToCheck, SHA256, `live_inspection.${field}`);
-  for (const field of ["receipt_id", "verified_at", "operator_id", "project_revision", "content_revision"]) {
+  if (!isExactUtcTimestamp(value.verified_at)) {
+    fail("ANIMATION_MMG040_INSPECTION_PROFILE_INVALID", "live_inspection.verified_at must be an exact UTC timestamp");
+  }
+  for (const field of ["receipt_id", "operator_id", "project_revision", "content_revision"]) {
     if (typeof value[field] !== "string" || value[field].length === 0 || value[field].length > 160) {
       fail("ANIMATION_MMG040_INSPECTION_PROFILE_INVALID", `live_inspection.${field} is invalid`);
     }
   }
 }
 
-export function validateInspectionProfile(profile, contract) {
+function validateInspectionProfileShape(profile, contract) {
   rejectAssetCountField(profile, "inspection profile");
   exactKeys(profile, [
     "schema", "profile_id", "profile_revision", "sample_id", "source_contract_sha256",
@@ -492,6 +646,38 @@ export function validateInspectionProfile(profile, contract) {
   return profile;
 }
 
+export function buildInspectionProfile(basis) {
+  if (arguments.length !== 1) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", "profile builder accepts exactly one opaque inspection basis");
+  }
+  const materialized = materializeInspectionBasis(basis);
+  const profile = createInspectionProfile(materialized);
+  return validateInspectionProfileShape(profile, materialized.contract);
+}
+
+export function validateInspectionProfile(profile, basis) {
+  if (arguments.length !== 2) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_INVALID", "profile validation requires an exact opaque inspection basis");
+  }
+  const materialized = materializeInspectionBasis(basis);
+  const claimsLive = isObject(profile) && profile.verification_status === "live_verified";
+  if (claimsLive && materialized.receipt === null) {
+    fail("ANIMATION_MMG040_LIVE_BASIS_REQUIRED", "live profile validation requires a sealed verified receipt basis");
+  }
+  validateInspectionProfileShape(profile, materialized.contract);
+  if (claimsLive && profile.live_inspection.receipt_sha256 !== materialized.receiptSha256) {
+    fail("ANIMATION_MMG040_RECEIPT_HASH_MISMATCH", "live profile receipt hash does not match the sealed receipt bytes");
+  }
+  const expected = validateInspectionProfileShape(
+    createInspectionProfile(materialized),
+    materialized.contract,
+  );
+  if (canonicalize(profile) !== canonicalize(expected)) {
+    fail("ANIMATION_MMG040_INSPECTION_BASIS_MISMATCH", "inspection profile does not exactly match its sealed basis");
+  }
+  return profile;
+}
+
 function parseArgs(argv) {
   const output = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -515,18 +701,14 @@ function parseArgs(argv) {
 
 export function main(argv) {
   const args = parseArgs(argv);
-  const source = readSecureJson(args.get("contract"), "source contract");
-  const contract = validateSourceContract(source.value, source.sha256);
-  const candidateInput = readSecureJson(args.get("candidates"), "candidate source");
-  const candidates = validateCandidateSource(candidateInput.value, candidateInput.sha256, contract);
-  let receipt = null;
-  let receiptSha256 = null;
+  let basis = loadInspectionProfileBasis({
+    contractPath: args.get("contract"),
+    candidatesPath: args.get("candidates"),
+  });
   if (args.has("receipt")) {
-    const receiptInput = readSecureJson(args.get("receipt"), "inspection receipt");
-    receipt = validateInspectionReceipt(contract, source.sha256, receiptInput.value);
-    receiptSha256 = receiptInput.sha256;
+    basis = loadInspectionReceiptBasis(basis, { receiptPath: args.get("receipt") });
   }
-  const profile = buildInspectionProfile(contract, candidates, candidateInput.sha256, receipt, receiptSha256);
+  const profile = buildInspectionProfile(basis);
   process.stdout.write(`${JSON.stringify(profile, null, 2)}\n`);
   return 0;
 }

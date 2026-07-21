@@ -2,6 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://simworld.local/schemas/vista-mmg040-inspection-profile-v1.json",
   "title": "VISTA mmg_040 candidate and live-inspection profile",
+  "description": "Closed structural schema for the pinned mmg_040 inspection profile. Schema validation alone is not evidence or authorization.",
+  "$comment": "Passing this schema is not proof of live inspection. Authoritative live validation additionally requires the exact receipt verifier and an opaque sealed basis derived from securely read receipt bytes.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -38,10 +40,12 @@
       "const": "mmg_040"
     },
     "source_contract_sha256": {
-      "$ref": "#/$defs/sha256"
+      "type": "string",
+      "const": "1b0aa6e48d251cb8dbeac4f34528ca8fa6084fb330fc2d150ef341f630528b1c"
     },
     "candidate_source_sha256": {
-      "$ref": "#/$defs/sha256"
+      "type": "string",
+      "const": "fc03861ddb92f71e23efa6794f98145455b22fdfef52e96b41fe11a299bf7c95"
     },
     "verification_status": {
       "enum": [
@@ -68,6 +72,7 @@
       "type": "array",
       "minItems": 2,
       "maxItems": 2,
+      "uniqueItems": true,
       "prefixItems": [
         {
           "$ref": "#/$defs/excludedCatalog"
@@ -147,8 +152,20 @@
             }
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification_status": {
+            "const": "live_verified"
+          }
+        },
+        "required": [
+          "verification_status"
+        ]
       },
-      "else": {
+      "then": {
         "properties": {
           "live_inspection": {
             "$ref": "#/$defs/liveInspection"
@@ -323,7 +340,13 @@
           "type": "string",
           "minLength": 2,
           "maxLength": 500,
-          "pattern": "^[A-Za-z0-9_+.-]+(?:/[A-Za-z0-9_+.-]+)*/?$"
+          "pattern": "^[A-Za-z0-9_+.-]+(?:/[A-Za-z0-9_+.-]+)*/?$",
+          "not": {
+            "enum": [
+              "simworld_studio_workspace/web/server/assets.json",
+              "packaging/simworld_arena/server/assets.json"
+            ]
+          }
         },
         "possible_roles": {
           "type": "array",
@@ -351,7 +374,47 @@
         "candidate_status": {
           "const": "candidate_unverified"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "locator_kind": {
+                "const": "content_relative_file"
+              }
+            },
+            "required": [
+              "locator_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "filesystem_locator": {
+                "pattern": "\\.uasset$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "locator_kind": {
+                "const": "content_relative_prefix"
+              }
+            },
+            "required": [
+              "locator_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "filesystem_locator": {
+                "pattern": "/$"
+              }
+            }
+          }
+        }
+      ]
     },
     "derivedTarget": {
       "type": "object",
@@ -456,6 +519,7 @@
       }
     },
     "liveInspection": {
+      "$comment": "This shape cannot authorize live_verified. The exact receipt verifier must validate securely read receipt bytes in a sealed basis and compare receipt_sha256 to those bytes.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -478,7 +542,8 @@
           "const": "vista-animation-content-inspection-receipt/v1"
         },
         "receipt_sha256": {
-          "$ref": "#/$defs/sha256"
+          "$ref": "#/$defs/sha256",
+          "$comment": "Authoritative validation compares this value with the SHA-256 of the exact sealed receipt bytes."
         },
         "receipt_id": {
           "type": "string",
@@ -487,7 +552,8 @@
         },
         "verified_at": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
         },
         "operator_id": {
           "type": "string",

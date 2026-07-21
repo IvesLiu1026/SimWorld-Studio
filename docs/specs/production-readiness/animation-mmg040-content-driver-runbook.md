@@ -140,6 +140,16 @@ the receipt SHA/content revision/content digest, and may then report
 lineage remains unverified and runtime/start stay false; run the separate
 profile preparation and live plugin capability gates below before execution.
 
+`tools/vista_mmg040_inspection_profile_schema.json` only validates the closed
+JSON shape; passing it is not live evidence or authorization. Programmatic
+callers must create an opaque basis with `loadInspectionProfileBasis`, add a
+receipt only through `loadInspectionReceiptBasis`, and pass that basis to
+`buildInspectionProfile`／`validateInspectionProfile`. Those entry points
+recompute the hashes from the securely read raw bytes and rerun the exact source
+contract, candidate, and receipt validators immediately before build or
+authorization. Parsed objects, caller-provided digests, copied basis objects,
+and a candidate-only basis cannot authorize `live_verified`.
+
 ### 1. 先確認 repository state 仍是 blocked
 
 ```bash

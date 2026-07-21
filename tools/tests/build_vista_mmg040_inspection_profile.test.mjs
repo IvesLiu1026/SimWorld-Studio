@@ -21,14 +21,17 @@ import {
   validateInspectionReceipt,
   validateSourceContract,
 } from "../../unreal_plugins/VistaAnimationContentApi/Scripts/prepare-content-profile.mjs";
-import {
+import * as inspectionProfileModule from "../build_vista_mmg040_inspection_profile.mjs";
+
+const {
   INSPECTION_PROFILE_SCHEMA,
   Mmg040InspectionProfileError,
   PINNED_CANDIDATE_SOURCE_SHA256,
   buildInspectionProfile,
-  validateCandidateSource,
+  loadInspectionProfileBasis,
+  loadInspectionReceiptBasis,
   validateInspectionProfile,
-} from "../build_vista_mmg040_inspection_profile.mjs";
+} = inspectionProfileModule;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(here, "../..");
@@ -47,7 +50,8 @@ const contractSha256 = sha256Bytes(contractBytes);
 const contract = validateSourceContract(parseStrictJson(contractBytes), contractSha256);
 const candidateBytes = readFileSync(candidatesPath);
 const candidateSha256 = sha256Bytes(candidateBytes);
-const candidates = validateCandidateSource(parseStrictJson(candidateBytes), candidateSha256, contract);
+const candidates = parseStrictJson(candidateBytes);
+const candidateBasis = loadInspectionProfileBasis({ contractPath, candidatesPath });
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -123,6 +127,20 @@ function expectProfileCode(callback, code) {
   });
 }
 
+function protectedDirectory(t) {
+  const temporary = mkdtempSync(path.join(os.homedir(), ".mmg040-inspection-test-"));
+  t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  chmodSync(temporary, 0o700);
+  return temporary;
+}
+
+function writeProtectedJson(directory, name, value) {
+  const target = path.join(directory, name);
+  writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(target, 0o600);
+  return target;
+}
+
 test("candidate source is byte-pinned to the official archive and filename-only evidence", () => {
   assert.equal(candidateSha256, PINNED_CANDIDATE_SOURCE_SHA256);
   assert.equal(candidates.source_binding.archive_sha256,
@@ -138,15 +156,17 @@ test("candidate source is byte-pinned to the official archive and filename-only 
   assert.ok(candidates.animation_source_candidates.every((entry) => !entry.filesystem_locator.startsWith("/Game/")));
   assert.ok(candidates.animation_source_candidates.every((entry) =>
     entry.locator_kind === "content_relative_prefix" ? entry.filesystem_locator.endsWith("/") : entry.filesystem_locator.endsWith(".uasset")));
+  assert.equal(inspectionProfileModule.validateCandidateSource, undefined);
+  assert.equal(inspectionProfileModule.validateInspectionProfileShape, undefined);
   expectProfileCode(
-    () => validateCandidateSource(candidates, "0".repeat(64), contract),
-    "ANIMATION_MMG040_CANDIDATE_SOURCE_MISMATCH",
+    () => buildInspectionProfile(contract, candidates, candidateSha256),
+    "ANIMATION_MMG040_INSPECTION_BASIS_INVALID",
   );
 });
 
 test("candidate mode derives all statuses and remains blocked without a live receipt", () => {
-  const profile = buildInspectionProfile(contract, candidates, candidateSha256);
-  assert.equal(validateInspectionProfile(profile, contract), profile);
+  const profile = buildInspectionProfile(candidateBasis);
+  assert.equal(validateInspectionProfile(profile, candidateBasis), profile);
   assert.equal(profile.schema, INSPECTION_PROFILE_SCHEMA);
   assert.equal(profile.verification_status, "candidate_unverified");
   assert.equal(profile.start_allowed, false);
@@ -168,9 +188,38 @@ test("candidate mode derives all statuses and remains blocked without a live rec
   assert.equal(profile.proof_boundary.executable_profile_emitted, false);
 });
 
-test("schema fixes the candidate/live split, thirteen targets, and false runtime gates", () => {
+test("opaque basis cannot be copied, property-mutated, or replaced with parsed caller data", () => {
+  assert.equal(Object.isFrozen(candidateBasis), true);
+  assert.equal(Object.getPrototypeOf(candidateBasis), null);
+  assert.deepEqual(Object.keys(candidateBasis), []);
+  assert.throws(() => {
+    candidateBasis.contract = contract;
+  }, TypeError);
+  expectProfileCode(
+    () => buildInspectionProfile({ ...candidateBasis }),
+    "ANIMATION_MMG040_INSPECTION_BASIS_INVALID",
+  );
+
+  const callerContract = clone(contract);
+  const callerCandidates = clone(candidates);
+  callerContract.assets[0].object_path = "/Game/Caller/Injected.Injected_C";
+  callerCandidates.source_binding.archive_sha256 = "0".repeat(64);
+  const profile = buildInspectionProfile(candidateBasis);
+  assert.equal(profile.derived_targets[0].target_object_path, contract.assets[0].object_path);
+  assert.equal(profile.source_binding.archive_sha256, candidates.source_binding.archive_sha256);
+  expectProfileCode(
+    () => validateInspectionProfile(profile, contract),
+    "ANIMATION_MMG040_INSPECTION_BASIS_INVALID",
+  );
+});
+
+test("schema fixes digests, both candidate/live branches, locator kinds, and receipt authority", () => {
   const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
   assert.equal(schema.properties.schema.const, INSPECTION_PROFILE_SCHEMA);
+  assert.match(schema.$comment, /schema.*not.*proof|not.*proof.*schema/i);
+  assert.equal(schema.properties.source_contract_sha256.const, contractSha256);
+  assert.equal(schema.properties.candidate_source_sha256.const, candidateSha256);
+  assert.equal(schema.properties.excluded_unbound_catalog_claims.uniqueItems, true);
   assert.equal(schema.properties.start_allowed.const, false);
   assert.equal(schema.properties.runtime_ready.const, false);
   assert.equal(schema.properties.source_lineage_status.const, "candidate_unverified");
@@ -178,46 +227,57 @@ test("schema fixes the candidate/live split, thirteen targets, and false runtime
   assert.equal(schema.properties.derived_targets.maxItems, 13);
   assert.equal(schema.allOf[0].if.properties.verification_status.const, "candidate_unverified");
   assert.equal(schema.allOf[0].then.properties.live_inspection.type, "null");
-  assert.equal(schema.allOf[0].else.properties.live_inspection.$ref, "#/$defs/liveInspection");
+  assert.equal(schema.allOf[1].if.properties.verification_status.const, "live_verified");
+  assert.equal(schema.allOf[1].then.properties.live_inspection.$ref, "#/$defs/liveInspection");
+  assert.equal(schema.$defs.candidate.allOf.length, 2);
+  assert.equal(schema.$defs.candidate.allOf[0].then.properties.filesystem_locator.pattern, "\\.uasset$");
+  assert.equal(schema.$defs.candidate.allOf[1].then.properties.filesystem_locator.pattern, "/$");
+  assert.deepEqual(schema.$defs.candidate.properties.filesystem_locator.not.enum, [
+    "simworld_studio_workspace/web/server/assets.json",
+    "packaging/simworld_arena/server/assets.json",
+  ]);
+  assert.equal(schema.$defs.liveInspection.properties.verified_at.pattern,
+    "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$");
+  assert.match(schema.$defs.liveInspection.$comment, /receipt verifier|sealed.*basis/i);
   assert.equal(hasKey(schema, "asset_count"), false);
 });
 
 test("source binding drift, object-path claims, and upgraded evidence stages fail closed", () => {
-  const bindingDrift = clone(candidates);
+  const bindingDrift = buildInspectionProfile(candidateBasis);
   bindingDrift.source_binding.archive_sha256 = "f".repeat(64);
   expectProfileCode(
-    () => validateCandidateSource(bindingDrift, candidateSha256, contract),
+    () => validateInspectionProfile(bindingDrift, candidateBasis),
     "ANIMATION_MMG040_SOURCE_BINDING_MISMATCH",
   );
 
-  const objectPath = clone(candidates);
+  const objectPath = buildInspectionProfile(candidateBasis);
   objectPath.animation_source_candidates[0].filesystem_locator = "/Game/Human_Avatar/BP_Human_Base";
   expectProfileCode(
-    () => validateCandidateSource(objectPath, candidateSha256, contract),
+    () => validateInspectionProfile(objectPath, candidateBasis),
     "ANIMATION_MMG040_CANDIDATE_SOURCE_INVALID",
   );
 
-  const upgradedStage = clone(candidates);
+  const upgradedStage = buildInspectionProfile(candidateBasis);
   upgradedStage.filesystem_inventory_observation.evidence_stage = "asset_registry_verified";
   expectProfileCode(
-    () => validateCandidateSource(upgradedStage, candidateSha256, contract),
+    () => validateInspectionProfile(upgradedStage, candidateBasis),
     "ANIMATION_MMG040_SOURCE_BINDING_MISMATCH",
   );
 });
 
 test("static assets.json files are exclusions and can never be supplied as proof", () => {
-  const enabledCatalog = clone(candidates);
+  const enabledCatalog = buildInspectionProfile(candidateBasis);
   enabledCatalog.excluded_unbound_catalog_claims[0].allowed_as_evidence = true;
   expectProfileCode(
-    () => validateCandidateSource(enabledCatalog, candidateSha256, contract),
+    () => validateInspectionProfile(enabledCatalog, candidateBasis),
     "ANIMATION_MMG040_STATIC_CATALOG_PROOF_FORBIDDEN",
   );
 
-  const catalogLocator = clone(candidates);
+  const catalogLocator = buildInspectionProfile(candidateBasis);
   catalogLocator.scene_object_candidates[0].filesystem_locator =
     "simworld_studio_workspace/web/server/assets.json";
   expectProfileCode(
-    () => validateCandidateSource(catalogLocator, candidateSha256, contract),
+    () => validateInspectionProfile(catalogLocator, candidateBasis),
     "ANIMATION_MMG040_CANDIDATE_SOURCE_INVALID",
   );
 
@@ -227,11 +287,18 @@ test("static assets.json files are exclusions and can never be supplied as proof
   }
 });
 
-test("live mode accepts only the existing exact receipt validator and still does not claim runtime readiness", () => {
+test("live mode requires sealed exact receipt bytes and still does not claim runtime readiness", (t) => {
+  const temporary = protectedDirectory(t);
   const receipt = makeReceipt();
   assert.equal(validateInspectionReceipt(contract, contractSha256, receipt), receipt);
-  const receiptSha256 = sha256Bytes(Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`));
-  const profile = buildInspectionProfile(contract, candidates, candidateSha256, receipt, receiptSha256);
+  const receiptPath = writeProtectedJson(temporary, "receipt.json", receipt);
+  const receiptSha256 = sha256Bytes(readFileSync(receiptPath));
+  const liveBasis = loadInspectionReceiptBasis(candidateBasis, { receiptPath });
+
+  receipt.verification.verified_at = "caller-mutated-after-seal";
+  receipt.assets[0].package_sha256 = "f".repeat(64);
+  const profile = buildInspectionProfile(liveBasis);
+  assert.equal(validateInspectionProfile(profile, liveBasis), profile);
   assert.equal(profile.verification_status, "live_verified");
   assert.equal(profile.start_allowed, false);
   assert.equal(profile.runtime_ready, false);
@@ -254,15 +321,71 @@ test("live mode accepts only the existing exact receipt validator and still does
 
   const wrongEngine = makeReceipt();
   wrongEngine.project.engine_version = "5.7.3";
+  const wrongEnginePath = writeProtectedJson(temporary, "wrong-engine.json", wrongEngine);
   assert.throws(
-    () => buildInspectionProfile(contract, candidates, candidateSha256, wrongEngine, receiptSha256),
+    () => loadInspectionReceiptBasis(candidateBasis, { receiptPath: wrongEnginePath }),
     (error) => error instanceof ContentProfileContractError && error.code === "ANIMATION_MMG040_RECEIPT_MISMATCH",
   );
   const unverified = makeReceipt();
   unverified.verification.status = "candidate";
+  const unverifiedPath = writeProtectedJson(temporary, "unverified.json", unverified);
   assert.throws(
-    () => buildInspectionProfile(contract, candidates, candidateSha256, unverified, receiptSha256),
+    () => loadInspectionReceiptBasis(candidateBasis, { receiptPath: unverifiedPath }),
     (error) => error instanceof ContentProfileContractError && error.code === "ANIMATION_MMG040_RECEIPT_UNVERIFIED",
+  );
+});
+
+test("authoritative validation rejects a forged live upgrade and a caller-supplied receipt digest", (t) => {
+  const temporary = protectedDirectory(t);
+  const candidateProfile = buildInspectionProfile(candidateBasis);
+  const receipt = makeReceipt();
+  const receiptPath = writeProtectedJson(temporary, "receipt.json", receipt);
+  const liveBasis = loadInspectionReceiptBasis(candidateBasis, { receiptPath });
+  const liveProfile = buildInspectionProfile(liveBasis);
+
+  expectProfileCode(
+    () => validateInspectionProfile(liveProfile, candidateBasis),
+    "ANIMATION_MMG040_LIVE_BASIS_REQUIRED",
+  );
+
+  const forgedDigest = clone(liveProfile);
+  forgedDigest.live_inspection.receipt_sha256 = "a".repeat(64);
+  expectProfileCode(
+    () => validateInspectionProfile(forgedDigest, liveBasis),
+    "ANIMATION_MMG040_RECEIPT_HASH_MISMATCH",
+  );
+
+  const malformedTimestamp = clone(liveProfile);
+  malformedTimestamp.live_inspection.verified_at = "2026-07-21 08:00:00";
+  expectProfileCode(
+    () => validateInspectionProfile(malformedTimestamp, liveBasis),
+    "ANIMATION_MMG040_INSPECTION_PROFILE_INVALID",
+  );
+
+  const impossibleTimestamp = makeReceipt();
+  impossibleTimestamp.verification.verified_at = "2026-02-31T08:00:00Z";
+  const impossibleTimestampPath = writeProtectedJson(temporary, "impossible-timestamp.json", impossibleTimestamp);
+  expectProfileCode(
+    () => loadInspectionReceiptBasis(candidateBasis, { receiptPath: impossibleTimestampPath }),
+    "ANIMATION_MMG040_INSPECTION_PROFILE_INVALID",
+  );
+
+  candidateProfile.verification_status = "live_verified";
+  expectProfileCode(
+    () => validateInspectionProfile(candidateProfile, candidateBasis),
+    "ANIMATION_MMG040_LIVE_BASIS_REQUIRED",
+  );
+});
+
+test("secure candidate loader rejects changed bytes instead of trusting a caller digest", (t) => {
+  const temporary = protectedDirectory(t);
+  const changedCandidates = clone(candidates);
+  changedCandidates.source_binding.archive_sha256 = "f".repeat(64);
+  const changedPath = writeProtectedJson(temporary, "changed-candidates.json", changedCandidates);
+  assert.throws(
+    () => loadInspectionProfileBasis({ contractPath, candidatesPath: changedPath }),
+    (error) => error instanceof Mmg040InspectionProfileError &&
+      error.code === "ANIMATION_MMG040_CANDIDATE_SOURCE_MISMATCH",
   );
 });
 
@@ -292,12 +415,9 @@ test("CLI derives mode from receipt presence and rejects caller-authored status 
     assert.match(rejected.stderr, /ANIMATION_MMG040_ARGUMENTS_INVALID/);
   }
 
-  const temporary = mkdtempSync(path.join(os.homedir(), ".mmg040-inspection-test-"));
-  t.after(() => rmSync(temporary, { recursive: true, force: true }));
-  chmodSync(temporary, 0o700);
+  const temporary = protectedDirectory(t);
   const receipt = makeReceipt();
-  const receiptPath = path.join(temporary, "receipt.json");
-  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  const receiptPath = writeProtectedJson(temporary, "receipt.json", receipt);
   const liveResult = spawnSync(process.execPath, [
     scriptPath,
     "--contract", contractPath,
