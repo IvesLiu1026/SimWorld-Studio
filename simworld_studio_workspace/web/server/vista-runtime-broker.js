@@ -17,6 +17,7 @@ const VISTA_CLEANUP_MARKER = "VISTA_CLEANUP_V1";
 const FIXED_NONCE_PLACEHOLDER = "VISTA_SERVER_NONCE_PLACEHOLDER_V2";
 const FIXED_BINDING_PLACEHOLDER = "VISTA_SERVER_BINDING_DIGEST_PLACEHOLDER_V2";
 const FIXED_SCENE_PLACEHOLDER = "VISTA_SERVER_SCENE_DIGEST_PLACEHOLDER_V2";
+const FIXED_SURFACE_PLACEHOLDER = "VISTA_SERVER_LIVE_SURFACE_DIGEST_PLACEHOLDER_V2";
 const VISTA_GAME_MODE_CLASS =
   "/Game/Human_Avatar/DefaultCharacter/ThirdPerson/Blueprints/" +
   "BP_ThirdPersonGameMode.BP_ThirdPersonGameMode_C";
@@ -43,6 +44,60 @@ const STATE_LIMITS = Object.freeze({
   velocity: 100_000,
   engineTime: 315_360_000,
 });
+
+// This probe is shared by setup and state reconciliation. It contains no
+// caller values: the only dynamic expectation is a server-derived SHA-256.
+// The digest binds actor identity to the live asset/class, every exact
+// MaterialInterface slot, and the checksum-pinned content revision receipt.
+const FIXED_LIVE_SURFACE_PROBE = [
+  `EXPECTED_SURFACE = ${JSON.stringify(FIXED_SURFACE_PLACEHOLDER)}`,
+  "receipt_path = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir() + 'Content/VISTA/Metadata/content-revision.json')",
+  "with open(receipt_path, 'rb') as receipt_handle: receipt_bytes = receipt_handle.read(65537)",
+  "if len(receipt_bytes) > 65536:",
+  "    raise RuntimeError('VISTA content revision receipt is oversized')",
+  "receipt = json.loads(receipt_bytes.decode('utf-8'))",
+  "if set(receipt.keys()) != {'schema', 'content_revision', 'verification_revision'} or receipt.get('schema') != 'simworld-ue-content-receipt/v1':",
+  "    raise RuntimeError('VISTA content revision receipt is invalid')",
+  "content_receipt = {'content_revision': str(receipt['content_revision']), 'receipt_sha256': hashlib.sha256(receipt_bytes).hexdigest(), 'schema': str(receipt['schema']), 'verification_revision': str(receipt['verification_revision'])}",
+  "surface_rows = []",
+  "for surface_actor in actor_subsystem.get_all_level_actors():",
+  "    surface_tags = [str(tag) for tag in list(surface_actor.get_editor_property('tags'))]",
+  "    fingerprint_tags = [tag.split('=', 1)[1] for tag in surface_tags if tag.startswith('VISTA_FINGERPRINT=')]",
+  "    operation_tags = [tag.split('=', 1)[1] for tag in surface_tags if tag.startswith('VISTA_OPERATION=')]",
+  "    if not fingerprint_tags and not operation_tags:",
+  "        continue",
+  "    if len(fingerprint_tags) != 1 or len(operation_tags) != 1:",
+  "        raise RuntimeError('VISTA actor identity tags are not unique')",
+  "    try: surface_name = str(surface_actor.get_actor_label())",
+  "    except Exception: surface_name = str(surface_actor.get_name())",
+  "    surface_class = str(surface_actor.get_class().get_path_name())",
+  "    surface_asset = surface_class",
+  "    if isinstance(surface_actor, unreal.StaticMeshActor):",
+  "        static_components = list(surface_actor.get_components_by_class(unreal.StaticMeshComponent))",
+  "        mesh_paths = sorted([str(component.get_editor_property('static_mesh').get_path_name()) for component in static_components if component.get_editor_property('static_mesh') is not None])",
+  "        surface_asset = mesh_paths[0] if len(mesh_paths) == 1 else None",
+  "    surface_materials = []",
+  "    mesh_components = sorted(list(surface_actor.get_components_by_class(unreal.MeshComponent)), key=lambda component: str(component.get_name()))",
+  "    for mesh_component in mesh_components:",
+  "        try: slot_count = int(mesh_component.get_num_materials())",
+  "        except Exception: slot_count = 0",
+  "        for slot_index in range(max(0, slot_count)):",
+  "            material = mesh_component.get_material(slot_index)",
+  "            material_path = str(material.get_path_name()) if material is not None else None",
+  "            material_class = str(material.get_class().get_path_name()) if material is not None else None",
+  "            pbr_eligible = bool(material is not None and isinstance(material, unreal.MaterialInterface) and material_path.startswith('/Game/') and '/Engine/EngineMaterials/DefaultMaterial' not in material_path)",
+  "            surface_materials.append({'component': str(mesh_component.get_name()), 'material_class': material_class, 'material_path': material_path, 'pbr_eligible': pbr_eligible, 'slot_index': slot_index})",
+  "    surface_materials.sort(key=lambda row: (row['component'], row['slot_index'], str(row['material_path']), str(row['material_class'])))",
+  "    if surface_asset is None or not surface_asset.startswith('/Game/') or not surface_materials or not all(row['pbr_eligible'] for row in surface_materials):",
+  "        raise RuntimeError('VISTA live asset/material surface is not production eligible')",
+  "    surface_rows.append({'actor_name': surface_name, 'asset_path': surface_asset, 'class_path': surface_class, 'fingerprint': fingerprint_tags[0], 'materials': surface_materials, 'object_guid': str(surface_actor.get_actor_guid()).strip('{}'), 'operation_id': operation_tags[0]})",
+  "surface_rows.sort(key=lambda row: (row['actor_name'], row['fingerprint'], row['operation_id'], row['object_guid']))",
+  "surface_payload = {'actors': surface_rows, 'content_receipt': content_receipt}",
+  "surface_json = json.dumps(surface_payload, separators=(',', ':'), sort_keys=True, allow_nan=False)",
+  "live_surface_digest = hashlib.sha256(surface_json.encode('utf-8')).hexdigest()",
+  "if not surface_rows or live_surface_digest != EXPECTED_SURFACE:",
+  "    raise RuntimeError('verified VISTA live asset/material surface has drifted')",
+];
 
 // Every UE program below is a fixed server artifact. Requests cannot provide
 // Python, paths, class names, functions, console commands, or filenames. The
@@ -80,6 +135,7 @@ const FIXED_SETUP_SCRIPT = [
   "world_settings = editor_world.get_world_settings()",
   "if world_settings is None:",
   "    raise RuntimeError('world settings are unavailable')",
+  ...FIXED_LIVE_SURFACE_PROBE,
   "configured_game_mode = world_settings.get_editor_property('default_game_mode')",
   "if configured_game_mode is None or configured_game_mode.get_path_name() != GAME_MODE_CLASS:",
   "    raise RuntimeError('verified scene does not configure the fixed VISTA game mode')",
@@ -147,6 +203,7 @@ const FIXED_SETUP_SCRIPT = [
 ].join("\n");
 
 const FIXED_STATE_SCRIPT = [
+  "import hashlib",
   "import json",
   "import unreal",
   `PAWN_CLASS = ${JSON.stringify(VISTA_PAWN_CLASS)}`,
@@ -154,8 +211,10 @@ const FIXED_STATE_SCRIPT = [
   `EXPECTED_SCENE = ${JSON.stringify(FIXED_SCENE_PLACEHOLDER)}`,
   "editor_subsystem = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)",
   "level_editor_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)",
-  "if editor_subsystem is None or level_editor_subsystem is None:",
+  "actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
+  "if editor_subsystem is None or level_editor_subsystem is None or actor_subsystem is None:",
   "    raise RuntimeError('required editor subsystem is unavailable')",
+  ...FIXED_LIVE_SURFACE_PROBE,
   "editor_world = editor_subsystem.get_editor_world()",
   "world_settings = editor_world.get_world_settings() if editor_world is not None else None",
   "pie_active = bool(level_editor_subsystem.is_in_play_in_editor())",
@@ -333,9 +392,10 @@ function replaceExactlyOnce(source, from, to, label) {
   return source.replace(from, to);
 }
 
-function bindFixedRuntimeScript(script, marker, nonce, bindingDigest, sceneDigest) {
+function bindFixedRuntimeScript(script, marker, nonce, bindingDigest, sceneDigest, liveSurfaceDigest) {
   if (!/^[a-f0-9]{32}$/.test(nonce)) throw new TypeError("VISTA server nonce must be 128-bit lowercase hex");
-  if (!SHA256_RE.test(bindingDigest) || !SHA256_RE.test(sceneDigest)) {
+  if (!SHA256_RE.test(bindingDigest) || !SHA256_RE.test(sceneDigest)
+      || !SHA256_RE.test(liveSurfaceDigest)) {
     throw new TypeError("VISTA runtime proof digests must be lowercase SHA-256");
   }
   let bound = replaceExactlyOnce(
@@ -345,7 +405,11 @@ function bindFixedRuntimeScript(script, marker, nonce, bindingDigest, sceneDiges
     "nonce placeholder",
   );
   bound = replaceExactlyOnce(bound, FIXED_BINDING_PLACEHOLDER, bindingDigest, "binding placeholder");
-  return replaceExactlyOnce(bound, FIXED_SCENE_PLACEHOLDER, sceneDigest, "scene placeholder");
+  bound = replaceExactlyOnce(bound, FIXED_SCENE_PLACEHOLDER, sceneDigest, "scene placeholder");
+  if (bound.includes(FIXED_SURFACE_PLACEHOLDER)) {
+    bound = replaceExactlyOnce(bound, FIXED_SURFACE_PLACEHOLDER, liveSurfaceDigest, "live surface placeholder");
+  }
+  return bound;
 }
 
 function pythonLogs(rawReply) {
@@ -468,6 +532,7 @@ function createVistaRuntimeSceneProof({
   semanticBindingDigest,
   materialPbrEvidenceDigest,
   evidenceBundleDigest,
+  liveSurfaceDigest,
 }) {
   const rows = normalizeManifestRows(actorManifest);
   const proof = {
@@ -482,6 +547,7 @@ function createVistaRuntimeSceneProof({
     semantic_binding_digest: String(semanticBindingDigest || ""),
     material_pbr_evidence_digest: String(materialPbrEvidenceDigest || ""),
     evidence_bundle_digest: String(evidenceBundleDigest || ""),
+    live_surface_digest: String(liveSurfaceDigest || ""),
     start_allowed: true,
   };
   return normalizeSceneProof(proof);
@@ -492,7 +558,7 @@ function normalizeSceneProof(value) {
     "schema", "plan_id", "scene_id", "actor_manifest_digest", "actor_count",
     "content_revision", "verification_revision", "asset_evidence_digest",
     "semantic_binding_digest", "material_pbr_evidence_digest",
-    "evidence_bundle_digest", "start_allowed",
+    "evidence_bundle_digest", "live_surface_digest", "start_allowed",
   ];
   if (!hasExactKeys(value, keys) || value.schema !== VISTA_SCENE_PROOF_SCHEMA
       || !PLAN_ID_RE.test(value.plan_id)
@@ -505,6 +571,7 @@ function normalizeSceneProof(value) {
       || !SHA256_RE.test(value.semantic_binding_digest)
       || !SHA256_RE.test(value.material_pbr_evidence_digest)
       || !SHA256_RE.test(value.evidence_bundle_digest)
+      || !SHA256_RE.test(value.live_surface_digest)
       || value.start_allowed !== true) {
     fail("VISTA_SCENE_PROOF_INVALID", "Verified scene surface/content proof is invalid", { status: 409 });
   }
@@ -728,6 +795,7 @@ class VistaRuntimeController {
       nonce,
       this.bindingDigest,
       sceneProof.actor_manifest_digest,
+      sceneProof.live_surface_digest,
     );
     const operationController = new AbortController();
     const abort = () => operationController.abort("runtime operation aborted");
@@ -1071,6 +1139,7 @@ module.exports = {
   FIXED_CLEANUP_SCRIPT,
   FIXED_NONCE_PLACEHOLDER,
   FIXED_SCENE_PLACEHOLDER,
+  FIXED_SURFACE_PLACEHOLDER,
   FIXED_SETUP_SCRIPT,
   FIXED_STATE_SCRIPT,
   FIXED_STOP_SCRIPT,

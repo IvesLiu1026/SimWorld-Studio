@@ -264,12 +264,16 @@ function runtimeProofFromBuild(resolved, result) {
   }
   const manifestByName = new Map(result.actor_manifest.map((entry) => [entry.actor_name, entry]));
   const materialNames = new Set();
+  const liveSurfaceActors = [];
   const materialEvidence = actorEvidence.actors.map((actor) => {
     const manifestActor = actor && manifestByName.get(actor.actor_name);
     if (!isPlainObject(actor) || !manifestActor || materialNames.has(actor.actor_name)
         || actor.fingerprint !== manifestActor.fingerprint
         || actor.operation_id !== manifestActor.operation_id
         || actor.object_guid !== manifestActor.object_guid
+        || actor.class_path !== manifestActor.asset.class_path
+        || actor.asset_path !== manifestActor.asset.ue_path
+        || !realGameAsset(actor.asset_path)
         || !Array.isArray(actor.materials) || actor.materials.length < 1
         || actor.materials.some((material) => !isPlainObject(material)
           || material.pbr_eligible !== true
@@ -282,6 +286,27 @@ function runtimeProofFromBuild(resolved, result) {
       });
     }
     materialNames.add(actor.actor_name);
+    const liveMaterials = actor.materials.map((material) => ({
+      component: material.component,
+      material_class: material.material_class,
+      material_path: material.material_path,
+      pbr_eligible: true,
+      slot_index: material.slot_index,
+    })).sort((left, right) => (
+      left.component.localeCompare(right.component)
+      || left.slot_index - right.slot_index
+      || left.material_path.localeCompare(right.material_path)
+      || left.material_class.localeCompare(right.material_class)
+    ));
+    liveSurfaceActors.push({
+      actor_name: actor.actor_name,
+      asset_path: actor.asset_path,
+      class_path: actor.class_path,
+      fingerprint: actor.fingerprint,
+      materials: liveMaterials,
+      object_guid: actor.object_guid,
+      operation_id: actor.operation_id,
+    });
     return {
       actor_name: actor.actor_name,
       materials: actor.materials.map((material) => ({
@@ -298,6 +323,31 @@ function runtimeProofFromBuild(resolved, result) {
       status: 409,
     });
   }
+  const receipt = actorEvidence.content_receipt;
+  if (!isPlainObject(receipt)
+      || receipt.schema !== "simworld-ue-content-receipt/v1"
+      || receipt.content_revision !== resolved.plan.content_revision
+      || receipt.verification_revision !== resolved.plan.verification_revision
+      || !/^[a-f0-9]{64}$/.test(String(receipt.receipt_sha256 || ""))) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "Immutable content revision receipt evidence is invalid", {
+      status: 409,
+    });
+  }
+  liveSurfaceActors.sort((left, right) => (
+    left.actor_name.localeCompare(right.actor_name)
+    || left.fingerprint.localeCompare(right.fingerprint)
+    || left.operation_id.localeCompare(right.operation_id)
+    || left.object_guid.localeCompare(right.object_guid)
+  ));
+  const liveSurface = {
+    actors: liveSurfaceActors,
+    content_receipt: {
+      content_revision: receipt.content_revision,
+      receipt_sha256: receipt.receipt_sha256,
+      schema: receipt.schema,
+      verification_revision: receipt.verification_revision,
+    },
+  };
   assetEvidence.sort((left, right) => left.actor_id.localeCompare(right.actor_id));
   semanticEvidence.sort((left, right) => left.actor_id.localeCompare(right.actor_id));
   materialEvidence.sort((left, right) => left.actor_name.localeCompare(right.actor_name));
@@ -317,6 +367,7 @@ function runtimeProofFromBuild(resolved, result) {
     semanticBindingDigest: proofDigest(semanticEvidence),
     materialPbrEvidenceDigest: proofDigest(materialEvidence),
     evidenceBundleDigest: proofDigest(evidenceBundle),
+    liveSurfaceDigest: proofDigest(liveSurface),
   });
 }
 

@@ -148,6 +148,12 @@ function validationBundle(overrides = {}) {
       world_actor_count: 0,
       excluded_class_terms: ["WorldSettings", "PlayerStart", "Volume", "Light", "Camera", "Sky"],
     },
+    content_receipt: {
+      schema: "simworld-ue-content-receipt/v1",
+      content_revision: CONTENT_REVISION,
+      verification_revision: VERIFICATION_REVISION,
+      receipt_sha256: CONTENT_RECEIPT_SHA256,
+    },
     scene_digest: "e".repeat(64),
     collisions: [],
     collision_count: 0,

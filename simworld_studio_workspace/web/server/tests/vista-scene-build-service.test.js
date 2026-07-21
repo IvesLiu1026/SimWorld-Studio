@@ -57,6 +57,8 @@ function successfulResult(plan) {
     fingerprint: actor.fingerprint,
     operation_id: actor.operation_id,
     object_guid: actor.object_guid,
+    class_path: actor.asset.class_path,
+    asset_path: actor.asset.ue_path,
     materials: [{
       component: "VerifiedMesh",
       slot_index: 0,
@@ -75,7 +77,17 @@ function successfulResult(plan) {
     evidence: [
       {
         kind: "actor_snapshot", required: true, status: "captured", error: null,
-        artifact: { schema: "vista-scene-actor-snapshot/v1", scene_digest: sceneDigest, actors: actorSnapshot },
+        artifact: {
+          schema: "vista-scene-actor-snapshot/v1",
+          scene_digest: sceneDigest,
+          content_receipt: {
+            schema: "simworld-ue-content-receipt/v1",
+            content_revision: plan.content_revision,
+            verification_revision: plan.verification_revision,
+            receipt_sha256: "7".repeat(64),
+          },
+          actors: actorSnapshot,
+        },
       },
       {
         kind: "collision_report", required: true, status: "captured", error: null,

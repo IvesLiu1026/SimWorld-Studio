@@ -35,6 +35,7 @@ const DIGESTS = Object.freeze({
   semantic: "c".repeat(64),
   material: "d".repeat(64),
   evidence: "e".repeat(64),
+  surface: "6".repeat(64),
 });
 
 function identity(overrides = {}) {
@@ -72,6 +73,7 @@ function proof(overrides = {}) {
     semantic_binding_digest: DIGESTS.semantic,
     material_pbr_evidence_digest: DIGESTS.material,
     evidence_bundle_digest: DIGESTS.evidence,
+    live_surface_digest: DIGESTS.surface,
     start_allowed: true,
     ...proofOverrides,
   };
@@ -179,6 +181,10 @@ test("fixed source starts/stops PIE without toolbar coordinates, caller code, or
   assert.match(FIXED_SETUP_SCRIPT, /hasattr\(level_editor_subsystem, 'editor_request_begin_play'\)/);
   assert.match(FIXED_SETUP_SCRIPT, /scene_manifest_digest/);
   assert.match(FIXED_SETUP_SCRIPT, /surface_count < 1/);
+  assert.match(FIXED_SETUP_SCRIPT, /live_surface_digest != EXPECTED_SURFACE/);
+  assert.match(FIXED_SETUP_SCRIPT, /content-revision\.json/);
+  assert.match(FIXED_SETUP_SCRIPT, /isinstance\(material, unreal\.MaterialInterface\)/);
+  assert.match(FIXED_STATE_SCRIPT, /live_surface_digest != EXPECTED_SURFACE/);
   assert.match(FIXED_SETUP_SCRIPT, /SIMWORLD_VISTA_RUNTIME_V2_BINDING=/);
   assert.match(FIXED_SETUP_SCRIPT, /binding_tags != \[expected_binding_tag\]/);
   assert.match(FIXED_STOP_SCRIPT, /editor_request_end_play\(\)/);
@@ -203,10 +209,12 @@ test("fixed script binding replaces only server nonce, lease digest, and scene d
     NONCE,
     runtimeBindingDigest(id),
     sceneProof.actor_manifest_digest,
+    sceneProof.live_surface_digest,
   );
   assert.match(bound, new RegExp(`${VISTA_SETUP_MARKER}:${NONCE}:`));
   assert.match(bound, new RegExp(runtimeBindingDigest(id)));
   assert.match(bound, new RegExp(sceneProof.actor_manifest_digest));
+  assert.match(bound, new RegExp(sceneProof.live_surface_digest));
   assert.doesNotMatch(bound, /PLACEHOLDER_V2/);
   assert.throws(() => bindFixedRuntimeScript(
     `${FIXED_SETUP_SCRIPT}\n${FIXED_SETUP_SCRIPT}`,
@@ -214,6 +222,7 @@ test("fixed script binding replaces only server nonce, lease digest, and scene d
     NONCE,
     runtimeBindingDigest(id),
     sceneProof.actor_manifest_digest,
+    sceneProof.live_surface_digest,
   ), /exactly one/);
 });
 
@@ -383,6 +392,10 @@ test("scene proof and marker contracts reject degraded, malformed, duplicate, or
   );
   assert.throws(
     () => normalizeSceneProof({ ...proof(), material_pbr_evidence_digest: "x" }),
+    (error) => error.code === "VISTA_SCENE_PROOF_INVALID",
+  );
+  assert.throws(
+    () => normalizeSceneProof({ ...proof(), live_surface_digest: "x" }),
     (error) => error.code === "VISTA_SCENE_PROOF_INVALID",
   );
   const valid = liveState();

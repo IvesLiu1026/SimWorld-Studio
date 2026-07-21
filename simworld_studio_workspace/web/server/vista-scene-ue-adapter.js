@@ -304,6 +304,11 @@ function evidenceScript(operation, nonce, manifest) {
     "items = REQUEST['manifest']",
     "subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)",
     "actors = list(subsystem.get_all_level_actors()) if subsystem else []",
+    "receipt_path = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir() + 'Content/VISTA/Metadata/content-revision.json')",
+    "with open(receipt_path, 'rb') as receipt_handle: receipt_bytes = receipt_handle.read(65537)",
+    "if len(receipt_bytes) > 65536: raise RuntimeError('content revision receipt is oversized')",
+    "receipt = json.loads(receipt_bytes.decode('utf-8'))",
+    "content_receipt = {'content_revision': str(receipt.get('content_revision', '')), 'receipt_sha256': hashlib.sha256(receipt_bytes).hexdigest(), 'schema': str(receipt.get('schema', '')), 'verification_revision': str(receipt.get('verification_revision', ''))}",
     "def actor_label(actor):",
     "    try: return str(actor.get_actor_label())",
     "    except Exception: return str(actor.get_name())",
@@ -390,9 +395,9 @@ function evidenceScript(operation, nonce, manifest) {
     "    if gap > 10.0: floating.append({'actor_name': row['name'], 'gap_cm': round(gap, 3)})",
     "world_snapshot = [{'actor_name': row['name'], 'class_path': row['class_path'], 'origin_cm': [float(row['origin'].x), float(row['origin'].y), float(row['origin'].z)], 'extent_cm': [float(row['extent'].x), float(row['extent'].y), float(row['extent'].z)]} for row in world_context]",
     "validation_scope = {'mode': 'generated_vs_generated_and_world_static', 'world_actor_count': len(world_snapshot), 'excluded_class_terms': ['WorldSettings', 'PlayerStart', 'Volume', 'Light', 'Camera', 'Sky']}",
-    "digest_payload = {'actor_snapshot': snapshot, 'world_snapshot': world_snapshot, 'collisions': collisions, 'floating': floating, 'validation_scope': validation_scope}",
+    "digest_payload = {'actor_snapshot': snapshot, 'content_receipt': content_receipt, 'world_snapshot': world_snapshot, 'collisions': collisions, 'floating': floating, 'validation_scope': validation_scope}",
     "scene_digest = hashlib.sha256(json.dumps(digest_payload, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()",
-    "RESULT = {'ok': True, 'actor_snapshot': snapshot, 'world_snapshot': world_snapshot, 'validation_scope': validation_scope, 'scene_digest': scene_digest, 'collisions': collisions, 'collision_count': len(collisions), 'floating': floating, 'floating_count': len(floating)}",
+    "RESULT = {'ok': True, 'actor_snapshot': snapshot, 'content_receipt': content_receipt, 'world_snapshot': world_snapshot, 'validation_scope': validation_scope, 'scene_digest': scene_digest, 'collisions': collisions, 'collision_count': len(collisions), 'floating': floating, 'floating_count': len(floating)}",
   ]);
 }
 
@@ -560,6 +565,11 @@ function createVistaSceneUeAdapter(options = {}) {
       nonce,
     ) => evidenceScript(operation, nonce, manifest), context).then((evidence) => {
       if (!SHA256_PATTERN.test(String(evidence.scene_digest || ""))
+          || !isPlainObject(evidence.content_receipt)
+          || evidence.content_receipt.schema !== "simworld-ue-content-receipt/v1"
+          || evidence.content_receipt.content_revision !== contentRevision
+          || evidence.content_receipt.verification_revision !== verificationRevision
+          || evidence.content_receipt.receipt_sha256 !== contentReceiptSha256
           || !isPlainObject(evidence.validation_scope)
           || evidence.validation_scope.mode !== "generated_vs_generated_and_world_static"
           || !Number.isSafeInteger(evidence.validation_scope.world_actor_count)
@@ -627,6 +637,7 @@ function createVistaSceneUeAdapter(options = {}) {
       return {
         schema: "vista-scene-actor-snapshot/v1",
         scene_digest: evidence.scene_digest,
+        content_receipt: evidence.content_receipt,
         validation_scope: evidence.validation_scope,
         actors: evidence.actor_snapshot,
       };
