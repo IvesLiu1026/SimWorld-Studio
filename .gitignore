@@ -41,6 +41,7 @@ simworld_studio_workspace/web/test-results/
 simworld_studio_workspace/web/playwright-report/
 .venv/
 tmp/
+/.runtime/
 
 claw-code/
 wandb/

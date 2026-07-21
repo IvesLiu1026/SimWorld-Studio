@@ -38,6 +38,10 @@ services:
       - ${TURN_SHARED_SECRET_FILE_HOST:?Set TURN_SHARED_SECRET_FILE_HOST}:/run/secrets/turn_shared_secret:ro
       - ${POSTGRES_URL_FILE_HOST:?Set POSTGRES_URL_FILE_HOST}:/run/secrets/postgres_url:ro
       - ${ASSET_DB_DIR_HOST:?Set ASSET_DB_DIR_HOST}:/srv/simworld/asset-db:ro
+      - ${VISTA_IMPORT_BUNDLE_ROOT_HOST:?Set VISTA_IMPORT_BUNDLE_ROOT_HOST}:/srv/simworld/vista-import:ro
+      - ${VISTA_SCENE_LAYOUT_PROFILE_FILE_HOST:?Set VISTA_SCENE_LAYOUT_PROFILE_FILE_HOST}:/run/simworld/config/vista-scene-layout.json:ro
+      - ${VISTA_ANIMATION_CONTENT_PROFILE_FILE_HOST:?Set VISTA_ANIMATION_CONTENT_PROFILE_FILE_HOST}:/run/simworld/config/vista-animation-content-profile.json:ro
+      - ${VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_FILE_HOST:?Set VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_FILE_HOST}:/run/simworld/config/vista-animation-plugin-artifact.json:ro
       - ${REVIEW_TEXT_SMOKE_RECEIPT_FILE_HOST:?Set REVIEW_TEXT_SMOKE_RECEIPT_FILE_HOST}:/run/simworld/evidence/review-smoke-text.json:ro
       - ${REVIEW_VISUAL_SMOKE_RECEIPT_FILE_HOST:?Set REVIEW_VISUAL_SMOKE_RECEIPT_FILE_HOST}:/run/simworld/evidence/review-smoke-visual.json:ro
       - ${WEBRTC_READINESS_RECEIPT_FILE_HOST:?Set WEBRTC_READINESS_RECEIPT_FILE_HOST}:/run/simworld/evidence/webrtc-readiness.json:ro
@@ -112,6 +116,23 @@ services:
       - QDRANT_COLLECTION=${QDRANT_COLLECTION:?Set the snapshot Qdrant collection}
       - EMBED_SERVICE_URL=${EMBED_SERVICE_URL:-http://127.0.0.1:7777}
       - EMBED_VERSION=${EMBED_VERSION:?Set the pinned embedding version}
+      - VISTA_IMPORT_DATASET_REVISION=${VISTA_IMPORT_DATASET_REVISION:?Set the immutable VISTA dataset revision}
+      - VISTA_IMPORT_BUNDLE_ROOT=/srv/simworld/vista-import
+      - VISTA_IMPORT_MANIFEST=${VISTA_IMPORT_MANIFEST:-manifest.json}
+      - VISTA_IMPORT_ARTIFACT_ROOT=/var/lib/simworld/vista-imports
+      - VISTA_SCENE_LAYOUT_PROFILE_ID=${VISTA_SCENE_LAYOUT_PROFILE_ID:?Set the verified scene layout profile id}
+      - VISTA_SCENE_LAYOUT_PROFILE_FILE=/run/simworld/config/vista-scene-layout.json
+      - VISTA_SCENE_LAYOUT_PROFILE_SHA256=${VISTA_SCENE_LAYOUT_PROFILE_SHA256:?Pin the exact scene layout profile bytes}
+      - VISTA_SCENE_BUILD_RECORD_ROOT=/var/lib/simworld/vista-scene-builds
+      - VISTA_ASSET_VERIFICATION_REVISION=${VISTA_ASSET_VERIFICATION_REVISION:?Set the exact scene spawn verification revision}
+      - VISTA_UE_CONTENT_RECEIPT_SHA256=${VISTA_UE_CONTENT_RECEIPT_SHA256:?Pin the exact verified UE content receipt}
+      - TIMELINE_REQUIRED=1
+      - VISTA_ANIMATION_TIMELINE_ENABLED=1
+      - VISTA_ANIMATION_CONTENT_PROFILE_FILE=/run/simworld/config/vista-animation-content-profile.json
+      - VISTA_ANIMATION_CONTENT_PROFILE_SHA256=${VISTA_ANIMATION_CONTENT_PROFILE_SHA256:?Pin the exact animation content profile bytes}
+      - VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_FILE=/run/simworld/config/vista-animation-plugin-artifact.json
+      - VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_SHA256=${VISTA_ANIMATION_UE_PLUGIN_ARTIFACT_SHA256:?Pin the exact loaded plugin artifact manifest bytes}
+      - VISTA_ANIMATION_RECORD_ROOT=/var/lib/simworld/vista-animation-runs
 
   # ── Reverse proxy ──────────────────────────────────────────────────────────
   nginx:
