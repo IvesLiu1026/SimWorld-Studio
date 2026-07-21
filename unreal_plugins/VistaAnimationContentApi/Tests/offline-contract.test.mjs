@@ -34,6 +34,10 @@ const subsystemHeader = readFileSync(path.join(
   pluginRoot,
   "Source/VistaAnimationContentApi/Public/VistaAnimationContentApiSubsystem.h",
 ), "utf8");
+const driverHeader = readFileSync(path.join(
+  pluginRoot,
+  "Source/VistaAnimationContentApi/Public/VistaAnimationContentDriver.h",
+), "utf8");
 const strictJsonSource = readFileSync(path.join(
   pluginRoot,
   "Source/VistaAnimationContentApi/Private/VistaAnimationStrictJson.cpp",
@@ -81,6 +85,70 @@ test("portable manifest exactly matches server capability, operation, action, an
   );
 });
 
+test("portable manifest reserves exactly the four dedicated transport commands", () => {
+  assert.deepEqual(contract.reserved_commands, [
+    {
+      command_type: "vista_animation_capabilities",
+      request_schema: "vista-animation-ue-capability-probe/v1",
+      response_schema: "vista-animation-ue-capability/v1",
+      retry_policy: "single_attempt",
+    },
+    {
+      command_type: "vista_animation_content_api",
+      request_schema: "vista-animation-ue-request/v1",
+      response_schema: "vista-animation-ue-response/v1",
+      retry_policy: "operation_bound",
+    },
+    {
+      command_type: "vista_animation_engine_time",
+      request_schema: "vista-animation-engine-time-request/v1",
+      response_schema: "vista-animation-engine-time-response/v1",
+      retry_policy: "single_attempt",
+    },
+    {
+      command_type: "vista_animation_evidence_capture",
+      request_schema: "vista-animation-evidence-capture-request/v1",
+      response_schema: "vista-animation-evidence-capture-response/v1",
+      retry_policy: "single_attempt",
+    },
+  ]);
+  assert.deepEqual(contract.engine_time, {
+    clock: "ue_process_monotonic",
+    request_keys: ["schema", "run_id", "timeline_id", "event_id", "slot_binding", "request_digest"],
+    response_keys: ["schema", "run_id", "timeline_id", "event_id", "slot_binding", "request_digest", "engine_time_sec"],
+    slot_binding_keys: ["owner_id", "session_id", "slot_id", "scene_revision"],
+    slot_binding_required: true,
+    request_digest_required: true,
+  });
+  assert.deepEqual(contract.evidence_capture.request_keys, [
+    "schema", "kind", "slot_binding", "context", "context_digest",
+  ]);
+  assert.deepEqual(contract.evidence_capture.response_keys, [
+    "schema", "kind", "context_digest", "evidence",
+  ]);
+  assert.deepEqual(contract.evidence_capture.slot_binding_keys, [
+    "owner_id", "session_id", "slot_id", "scene_revision",
+  ]);
+  assert.deepEqual(contract.evidence_capture.context_keys, [
+    "schema", "run_id", "timeline_id", "scene_revision", "event_id", "action",
+    "actor_binding_id", "target_binding_id", "planned_sec", "at_frame", "attempt",
+    "phase", "snapshot_id", "action_handle",
+  ]);
+  assert.deepEqual(contract.evidence_capture.evidence_keys, [
+    "evidence_id", "artifact_ref", "sha256", "assertion",
+  ]);
+  assert.deepEqual(contract.evidence_capture.kinds, [
+    "pose_snapshot",
+    "interaction_state",
+    "screenshot",
+    "scene_validation",
+  ]);
+  assert.equal(contract.evidence_capture.driver_descriptor_required, true);
+  for (const key of ["caller_paths", "caller_classes", "caller_functions", "caller_scripts"]) {
+    assert.equal(contract.evidence_capture[key], false);
+  }
+});
+
 test("compiled source pins every contract identifier and has no generic execution primitive", () => {
   const requiredLiterals = [
     contract.capability.operation_id,
@@ -93,8 +161,11 @@ test("compiled source pins every contract identifier and has no generic executio
       operation.response_schema,
     ]),
     ...contract.actions.flatMap((action) => [action.action, action.bridge_action_id]),
-    "vista_animation_capabilities",
-    "vista_animation_content_api",
+    ...contract.reserved_commands.flatMap((command) => [
+      command.command_type,
+      command.request_schema,
+      command.response_schema,
+    ]),
   ];
   for (const literal of requiredLiterals) assert.ok(subsystemSource.includes(literal), `missing C++ literal ${literal}`);
   for (const forbidden of [
@@ -111,6 +182,35 @@ test("compiled source pins every contract identifier and has no generic executio
   assert.match(strictJsonSource, /MaxDepth = 16/);
   assert.match(subsystemSource, /MaxReplayEntries = 4096/);
   assert.match(subsystemSource, /ANIMATION_MUTATION_OUTCOME_UNKNOWN/);
+});
+
+test("dispatcher, engine clock, and evidence driver remain fixed and fail closed", () => {
+  const dispatchCommands = [...subsystemSource.matchAll(
+    /CommandType == TEXT\("(vista_animation_[a-z_]+)"\)/g,
+  )].map((match) => match[1]);
+  assert.deepEqual(dispatchCommands, contract.reserved_commands.map((entry) => entry.command_type));
+  assert.match(subsystemSource, /EVistaAnimationFixedDispatchResult::RejectedUnknownCommand/);
+  assert.match(subsystemSource, /FPlatformTime::Seconds\(\) - ProcessMonotonicOriginSec/);
+  assert.match(subsystemSource, /ValidateRuntimeSlotBinding\(\*SlotBinding, SlotCanonical\)/);
+  assert.match(subsystemSource, /Sha256HexUtf8\(DigestInput\) != RequestDigest/);
+  assert.match(subsystemSource, /Sha256HexUtf8\(DigestInput\) != ContextDigest/);
+  assert.match(subsystemSource, /LocalDriver->CaptureEvidence\(Input, Output, DriverError\)/);
+  assert.match(subsystemSource, /IsSafeArtifactRef\(Output\.ArtifactRef\)/);
+  assert.match(subsystemSource, /IsLowerHex\(Output\.Sha256, 64\)/);
+  assert.equal(/Output\.Assertion\s*=(?!=)/.test(subsystemSource), false, "plugin must not synthesize evidence assertions");
+
+  const inputBlock = driverHeader.match(
+    /struct FVistaAnimationEvidenceCaptureInput \{([\s\S]*?)\n\};/,
+  );
+  assert.ok(inputBlock, "typed evidence input is missing");
+  for (const forbiddenField of ["Path", "Class", "Function", "Script", "Command"]) {
+    assert.equal(
+      new RegExp(`FString\\s+\\w*${forbiddenField}\\w*`, "i").test(inputBlock[1]),
+      false,
+      `caller-controlled ${forbiddenField} field is forbidden`,
+    );
+  }
+  assert.match(driverHeader, /virtual bool CaptureEvidence\(/);
 });
 
 test("server accepts a capability response with the portable fixed contract", () => {

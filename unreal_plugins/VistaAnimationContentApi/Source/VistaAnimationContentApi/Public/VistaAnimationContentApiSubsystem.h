@@ -61,8 +61,8 @@ public:
       FString &OutSafeErrorCode);
 
   /**
-   * Exact dispatcher for a private host listener. It handles only the two
-   * literal command types below and never falls through to a generic bridge.
+   * Exact dispatcher for a private host listener. It handles only the four
+   * literal reserved command types and never falls through to a generic bridge.
    */
   EVistaAnimationFixedDispatchResult
   DispatchFixedJsonCommand(const FString &CommandType,
@@ -73,6 +73,10 @@ public:
                                  FString &OutResponseJson);
   bool HandleContentRequestJson(const FString &RequestJson,
                                 FString &OutResponseJson);
+  bool HandleEngineTimeJson(const FString &RequestJson,
+                            FString &OutResponseJson);
+  bool HandleEvidenceCaptureJson(const FString &RequestJson,
+                                 FString &OutResponseJson);
 
 private:
   class FImplementation;

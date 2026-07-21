@@ -1,5 +1,55 @@
 {
   "schema": "vista-animation-ue-content-api/v1",
+  "reserved_commands": [
+    {
+      "command_type": "vista_animation_capabilities",
+      "request_schema": "vista-animation-ue-capability-probe/v1",
+      "response_schema": "vista-animation-ue-capability/v1",
+      "retry_policy": "single_attempt"
+    },
+    {
+      "command_type": "vista_animation_content_api",
+      "request_schema": "vista-animation-ue-request/v1",
+      "response_schema": "vista-animation-ue-response/v1",
+      "retry_policy": "operation_bound"
+    },
+    {
+      "command_type": "vista_animation_engine_time",
+      "request_schema": "vista-animation-engine-time-request/v1",
+      "response_schema": "vista-animation-engine-time-response/v1",
+      "retry_policy": "single_attempt"
+    },
+    {
+      "command_type": "vista_animation_evidence_capture",
+      "request_schema": "vista-animation-evidence-capture-request/v1",
+      "response_schema": "vista-animation-evidence-capture-response/v1",
+      "retry_policy": "single_attempt"
+    }
+  ],
+  "engine_time": {
+    "clock": "ue_process_monotonic",
+    "request_keys": ["schema", "run_id", "timeline_id", "event_id", "slot_binding", "request_digest"],
+    "response_keys": ["schema", "run_id", "timeline_id", "event_id", "slot_binding", "request_digest", "engine_time_sec"],
+    "slot_binding_keys": ["owner_id", "session_id", "slot_id", "scene_revision"],
+    "slot_binding_required": true,
+    "request_digest_required": true
+  },
+  "evidence_capture": {
+    "context_schema": "vista-animation-evidence-hook-context/v1",
+    "request_keys": ["schema", "kind", "slot_binding", "context", "context_digest"],
+    "response_keys": ["schema", "kind", "context_digest", "evidence"],
+    "slot_binding_keys": ["owner_id", "session_id", "slot_id", "scene_revision"],
+    "context_keys": ["schema", "run_id", "timeline_id", "scene_revision", "event_id", "action", "actor_binding_id", "target_binding_id", "planned_sec", "at_frame", "attempt", "phase", "snapshot_id", "action_handle"],
+    "evidence_keys": ["evidence_id", "artifact_ref", "sha256", "assertion"],
+    "kinds": ["pose_snapshot", "interaction_state", "screenshot", "scene_validation"],
+    "slot_binding_required": true,
+    "context_digest_required": true,
+    "driver_descriptor_required": true,
+    "caller_paths": false,
+    "caller_classes": false,
+    "caller_functions": false,
+    "caller_scripts": false
+  },
   "capability": {
     "request_schema": "vista-animation-ue-capability-probe/v1",
     "response_schema": "vista-animation-ue-capability/v1",

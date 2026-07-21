@@ -12,6 +12,26 @@ enum class EVistaAnimationAction : uint8 {
   Recover
 };
 
+enum class EVistaAnimationEvidenceKind : uint8 {
+  PoseSnapshot,
+  InteractionState,
+  Screenshot,
+  SceneValidation
+};
+
+enum class EVistaAnimationEvidencePhase : uint8 {
+  Before,
+  After,
+  Rollback,
+  Terminal
+};
+
+enum class EVistaAnimationEvidenceAssertion : uint8 {
+  NotApplicable,
+  Pass,
+  Fail
+};
+
 struct FVistaAnimationRuntimeBinding {
   FString BindingId;
   bool bAvailable = false;
@@ -80,6 +100,33 @@ struct FVistaAnimationRestoreOutput {
   double EngineTimeSec = 0.0;
 };
 
+struct FVistaAnimationEvidenceCaptureInput {
+  EVistaAnimationEvidenceKind Kind =
+      EVistaAnimationEvidenceKind::PoseSnapshot;
+  EVistaAnimationEvidencePhase Phase = EVistaAnimationEvidencePhase::Before;
+  FString ContextDigest;
+  FString RunId;
+  FString TimelineId;
+  FString SceneRevision;
+  TOptional<FString> EventId;
+  TOptional<EVistaAnimationAction> Action;
+  TOptional<FString> ActorBindingId;
+  TOptional<FString> TargetBindingId;
+  double PlannedSec = 0.0;
+  int32 AtFrame = 0;
+  int32 Attempt = 0;
+  TOptional<FString> SnapshotId;
+  TOptional<FString> ActionHandle;
+};
+
+struct FVistaAnimationEvidenceCaptureOutput {
+  FString EvidenceId;
+  FString ArtifactRef;
+  FString Sha256;
+  EVistaAnimationEvidenceAssertion Assertion =
+      EVistaAnimationEvidenceAssertion::NotApplicable;
+};
+
 /**
  * Trusted, project-owned content implementation.
  *
@@ -125,4 +172,16 @@ public:
   virtual bool Restore(const FString &SnapshotId, const FString &StateDigest,
                        FVistaAnimationRestoreOutput &Output,
                        FString &OutSafeErrorCode) = 0;
+
+  /**
+   * Capture a real project-owned artifact and return its immutable descriptor.
+   * The input contains only validated typed runtime context. The implementation
+   * must not accept or infer a caller class, function, script, console command,
+   * filesystem path, or /Game asset path, and must never manufacture a passing
+   * assertion without inspecting the requested live state.
+   */
+  virtual bool CaptureEvidence(
+      const FVistaAnimationEvidenceCaptureInput &Input,
+      FVistaAnimationEvidenceCaptureOutput &Output,
+      FString &OutSafeErrorCode) = 0;
 };

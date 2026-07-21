@@ -3,6 +3,7 @@
 #include "VistaAnimationStrictJson.h"
 
 #include "HAL/Platform.h"
+#include "HAL/PlatformTime.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeLock.h"
@@ -14,6 +15,8 @@ using namespace VistaAnimation::StrictJson;
 namespace {
 constexpr int32 MaxCapabilityRequestBytes = 131072;
 constexpr int32 MaxContentRequestBytes = 1048576;
+constexpr int32 MaxEngineTimeRequestBytes = 131072;
+constexpr int32 MaxEvidenceCaptureRequestBytes = 1048576;
 constexpr int32 MaxReplayEntries = 4096;
 constexpr int32 MaxJournalEntries = 2048;
 constexpr int32 MaxLifecycleEntries = 4096;
@@ -30,6 +33,16 @@ const TCHAR *ResponseEnvelopeSchema = TEXT("vista-animation-ue-response/v1");
 const TCHAR *NonceSchema = TEXT("vista-animation-ue-nonce-marker/v1");
 const TCHAR *SlotSchema = TEXT("vista-animation-ue-slot-binding/v1");
 const TCHAR *ContentProofSchema = TEXT("vista-animation-ue-content-proof/v1");
+const TCHAR *EngineTimeRequestSchema =
+    TEXT("vista-animation-engine-time-request/v1");
+const TCHAR *EngineTimeResponseSchema =
+    TEXT("vista-animation-engine-time-response/v1");
+const TCHAR *EvidenceCaptureRequestSchema =
+    TEXT("vista-animation-evidence-capture-request/v1");
+const TCHAR *EvidenceCaptureResponseSchema =
+    TEXT("vista-animation-evidence-capture-response/v1");
+const TCHAR *EvidenceContextSchema =
+    TEXT("vista-animation-evidence-hook-context/v1");
 const TCHAR *OperationAllowlistDigest =
     TEXT("851302cc75bd70e99536fa4e7adbf359ab95d94f104a369108bda91b8377c1a3");
 
@@ -174,6 +187,11 @@ bool IsPreflightId(const FString &Value) {
   return Value.StartsWith(TEXT("vap-")) && IsLowerHex(Value.RightChop(4), 24);
 }
 
+bool IsTimelineId(const FString &Value) {
+  return Value.StartsWith(TEXT("vtl-")) &&
+         IsLowerHex(Value.RightChop(4), 24);
+}
+
 bool IsEventId(const FString &Value) {
   if (!Value.StartsWith(TEXT("beat-")) || Value.Len() < 9)
     return false;
@@ -195,6 +213,50 @@ bool IsSafeErrorCode(const FString &Value) {
         Character != TEXT('_'))
       return false;
   }
+  return true;
+}
+
+bool IsSafeArtifactRef(const FString &Value) {
+  if (Value.IsEmpty() || Value.Len() > 512 ||
+      !IsAsciiAlphaNumeric(Value[0]) || Value.Contains(TEXT("..")) ||
+      Value.Contains(TEXT("//")))
+    return false;
+  for (const TCHAR Character : Value) {
+    if (!IsAsciiAlphaNumeric(Character) && Character != TEXT('.') &&
+        Character != TEXT('_') && Character != TEXT('/') &&
+        Character != TEXT('@') && Character != TEXT('-'))
+      return false;
+  }
+  return true;
+}
+
+bool ParseEvidenceKind(const FString &Name,
+                       EVistaAnimationEvidenceKind &OutKind) {
+  if (Name == TEXT("pose_snapshot"))
+    OutKind = EVistaAnimationEvidenceKind::PoseSnapshot;
+  else if (Name == TEXT("interaction_state"))
+    OutKind = EVistaAnimationEvidenceKind::InteractionState;
+  else if (Name == TEXT("screenshot"))
+    OutKind = EVistaAnimationEvidenceKind::Screenshot;
+  else if (Name == TEXT("scene_validation"))
+    OutKind = EVistaAnimationEvidenceKind::SceneValidation;
+  else
+    return false;
+  return true;
+}
+
+bool ParseEvidencePhase(const FString &Name,
+                        EVistaAnimationEvidencePhase &OutPhase) {
+  if (Name == TEXT("before"))
+    OutPhase = EVistaAnimationEvidencePhase::Before;
+  else if (Name == TEXT("after"))
+    OutPhase = EVistaAnimationEvidencePhase::After;
+  else if (Name == TEXT("rollback"))
+    OutPhase = EVistaAnimationEvidencePhase::Rollback;
+  else if (Name == TEXT("terminal"))
+    OutPhase = EVistaAnimationEvidencePhase::Terminal;
+  else
+    return false;
   return true;
 }
 
@@ -313,6 +375,7 @@ public:
         TEXT("vapi-") +
         FGuid::NewGuid().ToString(EGuidFormats::Digits).ToLower();
     SlotBindingJson = BuildSlotBindingJson(Config.SlotBinding);
+    RuntimeSlotBindingJson = BuildRuntimeSlotBindingJson(Config.SlotBinding);
     ContentProofJson = BuildContentProofJson(Config.ContentProof);
     bConfigured = true;
     return true;
@@ -332,6 +395,7 @@ public:
     LastPreflight = FPreflightState{};
     bPreflightInProgress = false;
     SlotBindingJson.Reset();
+    RuntimeSlotBindingJson.Reset();
     ContentProofJson.Reset();
     ProcessInstanceId.Reset();
   }
@@ -530,6 +594,204 @@ public:
     return true;
   }
 
+  bool EngineTime(const FString &RequestJson, FString &OutResponseJson) {
+    if (Utf8Bytes(RequestJson) > MaxEngineTimeRequestBytes) {
+      OutResponseJson = MakeError(TEXT("ANIMATION_ENGINE_TIME_REQUEST_TOO_LARGE"));
+      return false;
+    }
+    TSharedPtr<FValue> Root;
+    FString Error, Schema, RunId, TimelineId, EventId, RequestDigest;
+    if (!Parse(RequestJson, Root, Error) ||
+        !ExactKeys(*Root,
+                   {TEXT("schema"), TEXT("run_id"), TEXT("timeline_id"),
+                    TEXT("event_id"), TEXT("slot_binding"),
+                    TEXT("request_digest")},
+                   Error) ||
+        !ReadRequiredString(*Root, TEXT("schema"), Schema) ||
+        Schema != EngineTimeRequestSchema ||
+        !ReadRequiredString(*Root, TEXT("run_id"), RunId) ||
+        !IsOpaqueId(RunId) ||
+        !ReadRequiredString(*Root, TEXT("timeline_id"), TimelineId) ||
+        !IsTimelineId(TimelineId) ||
+        !ReadRequiredString(*Root, TEXT("event_id"), EventId) ||
+        !IsEventId(EventId) ||
+        !ReadRequiredString(*Root, TEXT("request_digest"), RequestDigest) ||
+        !IsLowerHex(RequestDigest, 64)) {
+      OutResponseJson = MakeError(TEXT("ANIMATION_ENGINE_TIME_PROTOCOL_INVALID"));
+      return false;
+    }
+    const FValue *SlotBinding = Field(*Root, TEXT("slot_binding"));
+    FString SlotCanonical;
+    if (!SlotBinding ||
+        !ValidateRuntimeSlotBinding(*SlotBinding, SlotCanonical)) {
+      OutResponseJson = MakeError(TEXT("ANIMATION_ENGINE_TIME_BINDING_INVALID"));
+      return false;
+    }
+    const FString DigestInput = FString::Printf(
+        TEXT("{\"event_id\":%s,\"run_id\":%s,\"schema\":%s,"
+             "\"slot_binding\":%s,\"timeline_id\":%s}"),
+        *Quote(EventId), *Quote(RunId), *Quote(Schema), *SlotCanonical,
+        *Quote(TimelineId));
+    if (Sha256HexUtf8(DigestInput) != RequestDigest) {
+      OutResponseJson = MakeError(TEXT("ANIMATION_ENGINE_TIME_DIGEST_INVALID"));
+      return false;
+    }
+
+    double EngineTimeSec = 0.0;
+    {
+      FScopeLock Guard(&Mutex);
+      if (!bConfigured) {
+        OutResponseJson = MakeError(TEXT("ANIMATION_CONTENT_API_UNCONFIGURED"));
+        return false;
+      }
+      if (RuntimeSlotBindingJson != SlotCanonical) {
+        OutResponseJson =
+            MakeError(TEXT("ANIMATION_ENGINE_TIME_BINDING_MISMATCH"));
+        return false;
+      }
+      const double Elapsed =
+          FPlatformTime::Seconds() - ProcessMonotonicOriginSec;
+      if (!FMath::IsFinite(Elapsed) || Elapsed < 0.0 ||
+          Elapsed > MaxEngineTimeSec) {
+        OutResponseJson = MakeError(TEXT("ANIMATION_ENGINE_TIME_UNAVAILABLE"),
+                                    true);
+        return false;
+      }
+      EngineTimeSec = FMath::Max(Elapsed, LastEngineTimeSec);
+      LastEngineTimeSec = EngineTimeSec;
+    }
+
+    OutResponseJson = FString::Printf(
+        TEXT("{\"schema\":%s,\"run_id\":%s,\"timeline_id\":%s,"
+             "\"event_id\":%s,\"slot_binding\":%s,\"request_digest\":%s,"
+             "\"engine_time_sec\":%.17g}"),
+        *Quote(EngineTimeResponseSchema), *Quote(RunId), *Quote(TimelineId),
+        *Quote(EventId), *SlotCanonical, *Quote(RequestDigest), EngineTimeSec);
+    return true;
+  }
+
+  bool EvidenceCapture(const FString &RequestJson, FString &OutResponseJson) {
+    if (Utf8Bytes(RequestJson) > MaxEvidenceCaptureRequestBytes) {
+      OutResponseJson =
+          MakeError(TEXT("ANIMATION_EVIDENCE_REQUEST_TOO_LARGE"));
+      return false;
+    }
+    TSharedPtr<FValue> Root;
+    FString Error, Schema, KindName, ContextDigest;
+    if (!Parse(RequestJson, Root, Error) ||
+        !ExactKeys(*Root,
+                   {TEXT("schema"), TEXT("kind"), TEXT("slot_binding"),
+                    TEXT("context"), TEXT("context_digest")},
+                   Error) ||
+        !ReadRequiredString(*Root, TEXT("schema"), Schema) ||
+        Schema != EvidenceCaptureRequestSchema ||
+        !ReadRequiredString(*Root, TEXT("kind"), KindName) ||
+        !ReadRequiredString(*Root, TEXT("context_digest"), ContextDigest) ||
+        !IsLowerHex(ContextDigest, 64)) {
+      OutResponseJson = MakeError(TEXT("ANIMATION_EVIDENCE_PROTOCOL_INVALID"));
+      return false;
+    }
+    FVistaAnimationEvidenceCaptureInput Input;
+    if (!ParseEvidenceKind(KindName, Input.Kind)) {
+      OutResponseJson = MakeError(TEXT("ANIMATION_EVIDENCE_KIND_INVALID"));
+      return false;
+    }
+    const FValue *SlotBinding = Field(*Root, TEXT("slot_binding"));
+    const FValue *Context = Field(*Root, TEXT("context"));
+    FString SlotCanonical;
+    if (!SlotBinding || !Context ||
+        !ValidateRuntimeSlotBinding(*SlotBinding, SlotCanonical) ||
+        !ValidateEvidenceContext(*Context, Input)) {
+      OutResponseJson =
+          MakeError(TEXT("ANIMATION_EVIDENCE_CONTEXT_INVALID"));
+      return false;
+    }
+    const FString DigestInput = FString::Printf(
+        TEXT("{\"context\":%s,\"kind\":%s,\"schema\":%s,"
+             "\"slot_binding\":%s}"),
+        *Canonicalize(*Context), *Quote(KindName), *Quote(Schema),
+        *SlotCanonical);
+    if (Sha256HexUtf8(DigestInput) != ContextDigest) {
+      OutResponseJson = MakeError(TEXT("ANIMATION_EVIDENCE_DIGEST_INVALID"));
+      return false;
+    }
+    Input.ContextDigest = ContextDigest;
+
+    TSharedPtr<IVistaAnimationContentDriver, ESPMode::ThreadSafe> LocalDriver;
+    {
+      FScopeLock Guard(&Mutex);
+      if (!bConfigured) {
+        OutResponseJson = MakeError(TEXT("ANIMATION_CONTENT_API_UNCONFIGURED"));
+        return false;
+      }
+      if (RuntimeSlotBindingJson != SlotCanonical ||
+          Input.SceneRevision != Config.SlotBinding.SceneRevision) {
+        OutResponseJson =
+            MakeError(TEXT("ANIMATION_EVIDENCE_BINDING_MISMATCH"));
+        return false;
+      }
+      if (!LastPreflight.bReady ||
+          (Input.Action.IsSet() &&
+           (!TrustedAction(Input.Action.GetValue()) ||
+            !LastPreflight.RequestedActions.Contains(
+                Input.Action.GetValue()))) ||
+          (Input.ActorBindingId.IsSet() &&
+           !LastPreflight.ActorBindings.Contains(
+               Input.ActorBindingId.GetValue())) ||
+          (Input.TargetBindingId.IsSet() &&
+           !LastPreflight.TargetBindings.Contains(
+               Input.TargetBindingId.GetValue()))) {
+        OutResponseJson = MakeError(TEXT("ANIMATION_EVIDENCE_UNVERIFIED"));
+        return false;
+      }
+      LocalDriver = Driver;
+    }
+
+    FVistaAnimationEvidenceCaptureOutput Output;
+    FString DriverError;
+    if (!LocalDriver ||
+        !LocalDriver->CaptureEvidence(Input, Output, DriverError)) {
+      OutResponseJson = MakeError(
+          IsSafeErrorCode(DriverError)
+              ? DriverError
+              : TEXT("ANIMATION_EVIDENCE_DRIVER_FAILED"),
+          true);
+      return false;
+    }
+    const bool bAssertionRequired =
+        Input.Kind == EVistaAnimationEvidenceKind::InteractionState ||
+        Input.Kind == EVistaAnimationEvidenceKind::SceneValidation;
+    const bool bAssertionProvided =
+        Output.Assertion == EVistaAnimationEvidenceAssertion::Pass ||
+        Output.Assertion == EVistaAnimationEvidenceAssertion::Fail;
+    const bool bAssertionKnown =
+        Output.Assertion ==
+            EVistaAnimationEvidenceAssertion::NotApplicable ||
+        bAssertionProvided;
+    if (!IsOpaqueId(Output.EvidenceId) ||
+        !IsSafeArtifactRef(Output.ArtifactRef) ||
+        !IsLowerHex(Output.Sha256, 64) ||
+        !bAssertionKnown || bAssertionRequired != bAssertionProvided) {
+      OutResponseJson =
+          MakeError(TEXT("ANIMATION_EVIDENCE_DRIVER_PROTOCOL_INVALID"));
+      return false;
+    }
+    const TCHAR *AssertionJson = TEXT("null");
+    if (Output.Assertion == EVistaAnimationEvidenceAssertion::Pass)
+      AssertionJson = TEXT("\"pass\"");
+    else if (Output.Assertion == EVistaAnimationEvidenceAssertion::Fail)
+      AssertionJson = TEXT("\"fail\"");
+
+    OutResponseJson = FString::Printf(
+        TEXT("{\"schema\":%s,\"kind\":%s,\"context_digest\":%s,"
+             "\"evidence\":{\"evidence_id\":%s,\"artifact_ref\":%s,"
+             "\"sha256\":%s,\"assertion\":%s}}"),
+        *Quote(EvidenceCaptureResponseSchema), *Quote(KindName),
+        *Quote(ContextDigest), *Quote(Output.EvidenceId),
+        *Quote(Output.ArtifactRef), *Quote(Output.Sha256), AssertionJson);
+    return true;
+  }
+
 private:
   struct FEnvelope {
     const FOperationContract *Operation = nullptr;
@@ -619,6 +881,141 @@ private:
         *Quote(Sha256HexUtf8(Identity)), *Quote(Slot.OwnerId),
         *Quote(Slot.SceneRevision), *Quote(SlotSchema), *Quote(Slot.SessionId),
         *Quote(Slot.SlotId));
+  }
+
+  FString BuildRuntimeSlotBindingJson(
+      const FVistaAnimationSlotBinding &Slot) const {
+    return FString::Printf(
+        TEXT("{\"owner_id\":%s,\"scene_revision\":%s,\"session_id\":%s,"
+             "\"slot_id\":%s}"),
+        *Quote(Slot.OwnerId), *Quote(Slot.SceneRevision),
+        *Quote(Slot.SessionId), *Quote(Slot.SlotId));
+  }
+
+  bool ValidateRuntimeSlotBinding(const FValue &Value,
+                                  FString &OutCanonical) const {
+    FString Error, OwnerId, SessionId, SlotId, SceneRevision;
+    if (!ExactKeys(Value,
+                   {TEXT("owner_id"), TEXT("session_id"), TEXT("slot_id"),
+                    TEXT("scene_revision")},
+                   Error) ||
+        !ReadRequiredString(Value, TEXT("owner_id"), OwnerId) ||
+        !IsOpaqueId(OwnerId) ||
+        !ReadRequiredString(Value, TEXT("session_id"), SessionId) ||
+        !IsOpaqueId(SessionId) ||
+        !ReadRequiredString(Value, TEXT("slot_id"), SlotId) ||
+        !IsOpaqueId(SlotId) ||
+        !ReadRequiredString(Value, TEXT("scene_revision"), SceneRevision) ||
+        !IsOpaqueId(SceneRevision))
+      return false;
+    OutCanonical = Canonicalize(Value);
+    return true;
+  }
+
+  bool ValidateEvidenceContext(
+      const FValue &Context,
+      FVistaAnimationEvidenceCaptureInput &OutInput) const {
+    FString Error, Schema, PhaseName;
+    TOptional<FString> ActionName;
+    double AtFrameNumber = 0.0;
+    double AttemptNumber = 0.0;
+    if (!ExactKeys(
+            Context,
+            {TEXT("schema"), TEXT("run_id"), TEXT("timeline_id"),
+             TEXT("scene_revision"), TEXT("event_id"), TEXT("action"),
+             TEXT("actor_binding_id"), TEXT("target_binding_id"),
+             TEXT("planned_sec"), TEXT("at_frame"), TEXT("attempt"),
+             TEXT("phase"), TEXT("snapshot_id"), TEXT("action_handle")},
+            Error) ||
+        !ReadRequiredString(Context, TEXT("schema"), Schema) ||
+        Schema != EvidenceContextSchema ||
+        !ReadRequiredString(Context, TEXT("run_id"), OutInput.RunId) ||
+        !IsOpaqueId(OutInput.RunId) ||
+        !ReadRequiredString(Context, TEXT("timeline_id"),
+                            OutInput.TimelineId) ||
+        !IsTimelineId(OutInput.TimelineId) ||
+        !ReadRequiredString(Context, TEXT("scene_revision"),
+                            OutInput.SceneRevision) ||
+        !IsOpaqueId(OutInput.SceneRevision) ||
+        !ReadRequiredNullableString(Context, TEXT("event_id"),
+                                    OutInput.EventId) ||
+        (OutInput.EventId.IsSet() &&
+         !IsEventId(OutInput.EventId.GetValue())) ||
+        !ReadRequiredNullableString(Context, TEXT("action"), ActionName) ||
+        !ReadRequiredNullableString(Context, TEXT("actor_binding_id"),
+                                    OutInput.ActorBindingId) ||
+        (OutInput.ActorBindingId.IsSet() &&
+         !IsSafeId(OutInput.ActorBindingId.GetValue())) ||
+        !ReadRequiredNullableString(Context, TEXT("target_binding_id"),
+                                    OutInput.TargetBindingId) ||
+        (OutInput.TargetBindingId.IsSet() &&
+         !IsSafeId(OutInput.TargetBindingId.GetValue())) ||
+        !ReadRequiredNumber(Context, TEXT("planned_sec"),
+                            OutInput.PlannedSec) ||
+        OutInput.PlannedSec < 0.0 || OutInput.PlannedSec > 3600.0 ||
+        !ReadRequiredNumber(Context, TEXT("at_frame"), AtFrameNumber) ||
+        AtFrameNumber < 0.0 || AtFrameNumber > 864000.0 ||
+        !ReadRequiredNumber(Context, TEXT("attempt"), AttemptNumber) ||
+        AttemptNumber < 0.0 || AttemptNumber > 100.0 ||
+        !ReadRequiredString(Context, TEXT("phase"), PhaseName) ||
+        !ParseEvidencePhase(PhaseName, OutInput.Phase) ||
+        !ReadRequiredNullableString(Context, TEXT("snapshot_id"),
+                                    OutInput.SnapshotId) ||
+        (OutInput.SnapshotId.IsSet() &&
+         !IsOpaqueId(OutInput.SnapshotId.GetValue())) ||
+        !ReadRequiredNullableString(Context, TEXT("action_handle"),
+                                    OutInput.ActionHandle) ||
+        (OutInput.ActionHandle.IsSet() &&
+         !IsOpaqueId(OutInput.ActionHandle.GetValue())))
+      return false;
+    OutInput.AtFrame = static_cast<int32>(AtFrameNumber);
+    OutInput.Attempt = static_cast<int32>(AttemptNumber);
+    if (AtFrameNumber != static_cast<double>(OutInput.AtFrame) ||
+        AttemptNumber != static_cast<double>(OutInput.Attempt))
+      return false;
+
+    const FActionContract *Action = nullptr;
+    if (ActionName.IsSet()) {
+      Action = FindActionByName(ActionName.GetValue());
+      if (!Action)
+        return false;
+      OutInput.Action = Action->Action;
+      if (!ValidateTargetPolicy(*Action, OutInput.TargetBindingId))
+        return false;
+    }
+
+    const bool bTerminal =
+        OutInput.Phase == EVistaAnimationEvidencePhase::Terminal;
+    if (bTerminal) {
+      if (OutInput.EventId.IsSet() || OutInput.Action.IsSet() ||
+          OutInput.ActorBindingId.IsSet() ||
+          OutInput.TargetBindingId.IsSet() || OutInput.SnapshotId.IsSet() ||
+          OutInput.ActionHandle.IsSet() || OutInput.Attempt != 0 ||
+          OutInput.Kind == EVistaAnimationEvidenceKind::InteractionState)
+        return false;
+    } else {
+      if (!OutInput.EventId.IsSet() || !OutInput.Action.IsSet() ||
+          !OutInput.ActorBindingId.IsSet() || !OutInput.SnapshotId.IsSet() ||
+          OutInput.Attempt < 1 ||
+          OutInput.Kind == EVistaAnimationEvidenceKind::SceneValidation)
+        return false;
+      if (OutInput.Phase == EVistaAnimationEvidencePhase::Before &&
+          OutInput.ActionHandle.IsSet())
+        return false;
+      if (OutInput.Phase == EVistaAnimationEvidencePhase::After &&
+          !OutInput.ActionHandle.IsSet())
+        return false;
+      if (OutInput.Kind == EVistaAnimationEvidenceKind::InteractionState &&
+          !OutInput.TargetBindingId.IsSet())
+        return false;
+      if (OutInput.Kind == EVistaAnimationEvidenceKind::Screenshot &&
+          OutInput.Phase == EVistaAnimationEvidencePhase::Before)
+        return false;
+    }
+    if (OutInput.Kind == EVistaAnimationEvidenceKind::SceneValidation &&
+        !bTerminal)
+      return false;
+    return true;
   }
 
   FString
@@ -919,7 +1316,10 @@ private:
   TSharedPtr<IVistaAnimationContentDriver, ESPMode::ThreadSafe> Driver;
   FString ProcessInstanceId;
   FString SlotBindingJson;
+  FString RuntimeSlotBindingJson;
   FString ContentProofJson;
+  const double ProcessMonotonicOriginSec = FPlatformTime::Seconds();
+  double LastEngineTimeSec = 0.0;
   TSet<FString> UsedNonces;
   TArray<FString> NonceOrder;
   TMap<FString, FJournalEntry> Journal;
@@ -1721,6 +2121,14 @@ UVistaAnimationContentApiSubsystem::DispatchFixedJsonCommand(
     HandleContentRequestJson(RequestJson, OutResponseJson);
     return EVistaAnimationFixedDispatchResult::Handled;
   }
+  if (CommandType == TEXT("vista_animation_engine_time")) {
+    HandleEngineTimeJson(RequestJson, OutResponseJson);
+    return EVistaAnimationFixedDispatchResult::Handled;
+  }
+  if (CommandType == TEXT("vista_animation_evidence_capture")) {
+    HandleEvidenceCaptureJson(RequestJson, OutResponseJson);
+    return EVistaAnimationFixedDispatchResult::Handled;
+  }
   OutResponseJson = MakeError(TEXT("ANIMATION_COMMAND_TYPE_FORBIDDEN"));
   return EVistaAnimationFixedDispatchResult::RejectedUnknownCommand;
 }
@@ -1741,6 +2149,24 @@ bool UVistaAnimationContentApiSubsystem::HandleContentRequestJson(
     return false;
   }
   return Implementation->Content(RequestJson, OutResponseJson);
+}
+
+bool UVistaAnimationContentApiSubsystem::HandleEngineTimeJson(
+    const FString &RequestJson, FString &OutResponseJson) {
+  if (!Implementation) {
+    OutResponseJson = MakeError(TEXT("ANIMATION_SUBSYSTEM_UNAVAILABLE"));
+    return false;
+  }
+  return Implementation->EngineTime(RequestJson, OutResponseJson);
+}
+
+bool UVistaAnimationContentApiSubsystem::HandleEvidenceCaptureJson(
+    const FString &RequestJson, FString &OutResponseJson) {
+  if (!Implementation) {
+    OutResponseJson = MakeError(TEXT("ANIMATION_SUBSYSTEM_UNAVAILABLE"));
+    return false;
+  }
+  return Implementation->EvidenceCapture(RequestJson, OutResponseJson);
 }
 
 #undef MakeError

@@ -7,16 +7,32 @@ live nonce challenge, verified content profile, binary manifest, and disposable-
 
 ## What this plugin closes
 
-The runtime module exposes one C++ `UEngineSubsystem` with exactly two JSON entry points:
+The runtime module exposes one C++ `UEngineSubsystem` with exactly four reserved JSON entry points:
 
 - `vista_animation_capabilities` for the read-only live capability challenge;
-- `vista_animation_content_api` for the seven fixed lifecycle operations.
+- `vista_animation_content_api` for the seven fixed lifecycle operations;
+- `vista_animation_engine_time` for a digest- and slot-bound sample of the UE process-local monotonic
+  clock;
+- `vista_animation_evidence_capture` for a digest- and slot-bound typed request to the trusted content
+  driver's real evidence capture implementation.
 
 The subsystem validates bounded ASCII JSON with exact object shapes, rejects duplicate keys, recomputes
-the canonical SHA-256 challenge/request digest, binds the active owner/session/slot/scene and content
-proof, and keeps bounded nonce and mutation-invocation journals. A mutation invocation is reserved before
-the trusted driver is called. A timeout or driver/protocol failure therefore remains outcome-unknown and
-cannot execute a second time.
+the canonical SHA-256 challenge/request/context digest, binds the active owner/session/slot/scene and
+content proof, and keeps bounded nonce and mutation-invocation journals. A mutation invocation is
+reserved before the trusted driver is called. A timeout or driver/protocol failure therefore remains
+outcome-unknown and cannot execute a second time.
+
+The engine-time request contains only `schema`, `run_id`, `timeline_id`, `event_id`, the four-field runtime
+slot binding, and `request_digest`. The response echoes every correlation field and obtains
+`engine_time_sec` directly from `FPlatformTime::Seconds()` relative to this plugin subsystem process
+instance; it does not accept browser time or a driver-supplied clock.
+
+The evidence request contains only a fixed evidence kind, the runtime slot binding, the exact typed
+checkpoint context, and its canonical `context_digest`. `IVistaAnimationContentDriver::CaptureEvidence`
+must capture the real project-owned artifact and return its immutable descriptor. The plugin never
+creates a screenshot, digest, evidence ID, or passing assertion itself. It rejects absolute/traversing
+artifact references, non-lowercase SHA-256 values, an assertion on pose/screenshot evidence, and a
+missing Pass/Fail result for interaction/scene-validation evidence.
 
 The only action identifiers compiled into the module are:
 
@@ -32,7 +48,8 @@ The only action identifiers compiled into the module are:
 
 Wire JSON cannot name an AnimBP, montage, Control Rig, class, function, `/Game` asset, filesystem path,
 Python body, console command, or generic bridge operation. The project-owned implementation of
-`IVistaAnimationContentDriver` maps the fixed enum to packaged content internally.
+`IVistaAnimationContentDriver` maps the fixed enum to packaged content internally. Its typed evidence
+input likewise contains no caller path, class, function, script, console command, or asset identifier.
 
 ## Deliberate boundary
 
@@ -76,7 +93,7 @@ if (!Api->ConfigureTrustedRuntime(Config, TrustedDriver.ToSharedRef(), SafeError
 }
 ```
 
-The private listener must exact-dispatch the two reserved command names before any generic MCP bridge.
+The private listener must exact-dispatch the four reserved command names before any generic MCP bridge.
 For a `vista_animation_*` name, `RejectedUnknownCommand` is terminal: it must never fall through to
 `Bridge->ExecuteCommand`, reflection, Python, console, or `vbp`.
 
@@ -92,7 +109,7 @@ if (CommandType.StartsWith(TEXT("vista_animation_")))
 
 The listener itself is intentionally not included: the Studio checkout only has an orphan generic MCP
 patch and no complete listener module/API to compile against. The deployment owner must add a dedicated,
-single-attempt transport adapter around these two methods.
+single-attempt transport adapter around these four methods.
 
 ## Build and install
 
@@ -138,8 +155,8 @@ Still-required live gates:
 
 1. Build with the exact target UE patch/platform and run UnrealHeaderTool/compiler successfully.
 2. Implement and review the project content driver with all requested actions and immutable content proof.
-3. Exact-dispatch through a no-retry dedicated transport; prove unknown reserved commands cannot reach the
-   generic bridge.
+3. Exact-dispatch all four reserved commands through a no-retry dedicated transport; prove unknown
+   `vista_animation_*` commands cannot reach the generic bridge.
 4. Load in a disposable project and pass capability, preflight, 12-second completion, Stop race, notify
    timeout, disconnect/outcome-unknown, restart/reconciliation, fall collision, recover alignment, IK
    contact, screenshot, pose, interaction, and scene-validation evidence.
