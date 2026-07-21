@@ -1,274 +1,150 @@
-# SimWorld Studio — Completion Status
-
-> Honest audit of what works vs what is a UI placeholder.
-> Last updated: 2026-05-11
-
----
-
-## TL;DR
-
-| Layer | Status |
-|-------|--------|
-| Scene Generation pipeline | **Complete** — real MCP + UE5 + VLM |
-| UI shell (4 modes, nav, themes) | **Complete** — functional frontend |
-| Embodied Agent panel | **Complete** — real SSE data |
-| Task Generation backend | **Missing** — UI stub only |
-| Agent Training backend | **Missing** — UI stub only |
-| Co-evolution orchestration | **Missing** — UI stub only |
-| Artifact chain persistence | **Partial** — ephemeral (lost on refresh) |
-
----
-
-## What Is Fully Working
-
-### 1. Scene Generation Pipeline ✅
-
-The core research contribution is **complete end-to-end**.
-
-```
-User prompt
-  → ChatPanel (SimCoder via Claude API)
-  → MCP tool calls (spawn_blueprint_actor, setup_environment, etc.)
-  → UE5 real-time scene modification (TCP port 55557)
-  → Pixel Streaming viewport (WebRTC, live)
-  → VLM verifier (Claude vision API)
-  → Scene Inspector (rule checks + semantic score)
-```
-
-- SimCoder chat with streaming SSE response
-- MCP tools: spawn, delete, transform, screenshot, setup_environment, verify_scene
-- Real UE5 Pixel Streaming viewport
-- Rule-based verifier: collision, vertical support, in-bounds
-- VLM semantic verifier: prompt fidelity, aesthetics score
-- Asset browser: real UE5 catalog
-- Scene save/load/version
-- Self-evolution: SimCoder writes new skills/tools from experience
-- Skills CRUD (builtin + custom + learned)
-- Tools CRUD
-
-### 2. Embodied Agent Panel ✅
-
-```
-SSE stream (every ~3s from server)
-  → AgentPanel: live position, heading, speed, action
-  → Trajectory visualization (SVG map)
-  → Collision counter
-  → AgentAggregatePanelTabs: leaderboard, metrics tabs
-```
-
-- Real agent state via SSE
-- Live trajectory map
-- Collision detection integration
-- Camera capture (agent POV screenshots)
-
-### 3. Arena ✅
-
-- Multi-agent battle logic (real backend)
-- Claude judge evaluates outcomes
-- Elo-based leaderboard (real persistence)
-- Vote UI
-
-### 4. UI Shell ✅
-
-- PipelineStepper (4-mode nav with arrows)
-- ArtifactChain (visual pipeline state)
-- Dark / Light theme (CSS variables, no hardcoded colors)
-- Mode-aware primary CTA button
-- Library section (Skills + Tools + Arena)
-- Results section (Gallery + Leaderboard)
-- Settings modal (theme + mode switcher)
-- All emoji replaced with SVG icons
-- Shared primitives: Badge, Btn, ToggleBtn, TagChip, ModalOverlay, PageHeader, etc.
-
----
-
-## What Is a UI Placeholder
-
-### 1. Task Generation ❌
-
-**UI exists.** Backend does not.
-
-| Feature | Status |
-|---------|--------|
-| TaskGenPanel (left) | UI stub — fields render, no API calls |
-| TaskInspectorPanel (right) | UI stub — hardcoded mock data |
-| NavMesh overlay on viewport | Not implemented |
-| Start/goal markers | Not implemented |
-| Episode sampler | Not implemented |
-| Path length filter | Not implemented |
-| NavMesh connectivity check | Not implemented |
-| Gym export | Not implemented |
-| `POST /api/tasks/generate` | Endpoint does not exist |
-| `GET /api/tasks/:id/episodes` | Endpoint does not exist |
-
-**What is needed:**
-- NavMesh query API in UE5 (via new MCP tool or Python script)
-- PointNav/ObjectNav episode sampler
-- Path validation (reachability, length filter)
-- Gymnasium-style environment export
-- New API endpoints: `/api/tasks/*`
-
-### 2. Agent Training ❌
-
-**UI exists.** Training engine does not.
-
-| Feature | Status |
-|---------|--------|
-| TrainingConfigPanel (left) | UI stub — no wiring |
-| Agent Monitor (right) | **Partially real** — reuses AgentPanel (live SSE) |
-| Reward curve chart | Stub — mock data only |
-| Success metrics (SPL, SoftSPL, nDTW) | Stub — hardcoded values |
-| First-person RGB view | Stub — no observation capture |
-| Depth view | Not implemented |
-| Trajectory replay | Not implemented |
-| Memory / rules accumulation | Partially real (self-evolution writes skills) |
-| `POST /api/training/runs` | Endpoint does not exist |
-| PPO / DAgger / BC training loop | Not implemented |
-
-**What is needed:**
-- Agent observation capture (RGB-D from UE5 camera)
-- Rollout executor (step-by-step action loop)
-- Trajectory logger (per-step state/action/reward)
-- Metric aggregator (SR, SPL, SoftSPL, nDTW computation)
-- Connect to actual RL framework (Habitat-baselines, SB3, or custom)
-- New API endpoints: `/api/training/*`
-
-### 3. Co-evolution Orchestration ❌
-
-**UI exists.** Closed-loop orchestration does not.
-
-| Feature | Status |
-|---------|--------|
-| CurriculumBuilderPanel (left) | UI stub — config fields render, no wiring |
-| RoundInspectorPanel (right) | UI stub — hardcoded round history |
-| Co-evolution loop canvas (center) | Static SVG diagram — no live updates |
-| Curriculum round manager | Not implemented |
-| Mastery gate (advance/hold) | Not implemented |
-| Difficulty adapter | Not implemented |
-| SimCoder feedback routing | Not implemented (SimCoder chat exists, routing does not) |
-| `POST /api/coevolve/runs` | Endpoint does not exist |
-
-**What is needed:**
-- Curriculum orchestrator: round lifecycle, mastery gating, difficulty schedule
-- Agent outcome → SimCoder prompt routing
-- SimCoder adaptation: parse failure patterns → regenerate scene with harder parameters
-- New API endpoints: `/api/coevolve/*`
-
-### 4. Artifact Chain Persistence ⚠️
-
-**Partially works.** State is ephemeral — lost on page refresh.
-
-| Feature | Status |
-|---------|--------|
-| ArtifactChain component | Renders correctly |
-| Scene artifact populated | Not wired (always null) |
-| Task artifact populated | Not wired |
-| Training artifact populated | Not wired |
-| Curriculum artifact populated | Not wired |
-| localStorage persistence | Not implemented |
-
-**What is needed:**
-- After successful scene generation: write `artifacts.scene` to state + localStorage
-- After task generation: write `artifacts.task`
-- After training run: write `artifacts.training`
-- After curriculum run: write `artifacts.coevolve`
-
----
-
-## Gap Analysis by Paper Contribution
-
-The paper describes: scene generation → task generation → embodied agent training → co-evolution.
-
-| Paper Component | Demo-ready | Production-ready |
-|----------------|-----------|-----------------|
-| Scene generation from prompt | ✅ Yes | ✅ Yes |
-| VLM scene verification | ✅ Yes | ✅ Yes |
-| Self-evolving skill library | ✅ Yes | ⚠️ Partial |
-| Task set generation (NavMesh/PointNav) | ❌ No | ❌ No |
-| Gym-style environment export | ❌ No | ❌ No |
-| Embodied agent rollouts | ❌ No | ❌ No |
-| SPL / SR / nDTW metrics | ❌ No | ❌ No |
-| Co-evolution feedback loop | ❌ No | ❌ No |
-| Curriculum difficulty adaptation | ❌ No | ❌ No |
-| Full pipeline artifact chain | ❌ No | ❌ No |
-
----
-
-## Recommended Implementation Order
-
-Based on `codex_tasks.md`, these are the shortest paths to making each mode real:
-
-### Phase 1 — Paper demo completeness (2–4 weeks)
-
-**1a. Artifact Chain persistence** (1 day)  
-Wire `onChatDone` → write scene artifact to `localStorage`.  
-Unblocks the visual pipeline story.
-
-**1b. Scene Inspector real data** (1–2 days)  
-Pull actor count from SSE `SceneContext`.  
-Show real verifier results instead of hardcoded mock.
-
-**1c. Co-evolution loop canvas** (2–3 days)  
-Replace static SVG with animated CSS loop diagram.  
-Shows the SimCoder ↔ Agent feedback cycle visually.  
-This is Figure 1 in the paper — must look good.
-
-### Phase 2 — Task Generation (2–3 weeks)
-
-**2a. NavMesh query MCP tool** (3–5 days)  
-New UE5 Python script to query NavMesh reachability.  
-Expose as `query_navmesh` MCP tool.
-
-**2b. Episode sampler** (3–5 days)  
-Sample start/goal pairs from NavMesh.  
-Filter by path length, reachability.  
-Return as `Episode[]` JSON.
-
-**2c. Task Gen API + UI wiring** (2–3 days)  
-`POST /api/tasks/generate` endpoint.  
-Wire `TaskGenPanel` Generate button.  
-Episode table in bottom drawer.
-
-### Phase 3 — Agent Training (3–6 weeks, depends on RL framework choice)
-
-**3a. Observation capture** (1 week)  
-RGB + Depth capture from UE5 agent camera.  
-Stream as base64 PNG per step.
-
-**3b. Rollout executor** (1–2 weeks)  
-Step loop: observe → agent decides → send action to UE5 → record.  
-Trajectory logging to disk/DB.
-
-**3c. Metric computation** (3–5 days)  
-SR, SPL, SoftSPL, nDTW from trajectory data.  
-Chart in Training bottom drawer.
-
-### Phase 4 — Co-evolution (4–8 weeks, most complex)
-
-**4a. Curriculum orchestrator** (1–2 weeks)  
-Round lifecycle: sample episodes → run training → check mastery → advance/hold.
-
-**4b. SimCoder feedback routing** (1–2 weeks)  
-Parse agent failure patterns → format as SimCoder prompt → regenerate scene.  
-This connects Scene Generation + Agent Training in a real loop.
-
-**4c. Difficulty adapter** (1 week)  
-Update difficulty axes (obstacle density, path length, etc.) based on mastery threshold.
-
----
-
-## For Paper Submission
-
-If the goal is a paper figure showing the full system:
-
-**Minimum viable demo:**
-1. ✅ Scene generation (already works)
-2. Add animated co-evolution loop canvas (Phase 1c above — 2–3 days)
-3. Add artifact chain showing "Scene v3 → TaskSet_500 → Run_042 → Curriculum_001" (Phase 1a — 1 day)
-4. Mock the TaskSet and TrainingRun artifacts with plausible data
-5. Screenshot each of the 4 modes → put in `docs/design/`
-
-This gives you a complete-looking 4-mode UI for Figure 1/3 purposes while the actual ML pipeline catches up.
-
-**For a live demo:**
-Phases 1–3 are needed. Phase 4 is the hardest and should be done last.
+# SimWorld Studio × VISTA — Completion Status
+
+Last updated: 2026-07-21
+Integration branch: `codex/vista-production-completion`
+
+This document separates three states that older project notes mixed together:
+
+- **Code verified**: deterministic contracts and offline tests pass in this checkout.
+- **Deployment gated**: implementation exists, but an administrator must provide data,
+  secrets, services, content, or public network configuration.
+- **Live verified**: the exact deployed revision has produced retained runtime evidence.
+
+Only the third state is sufficient for a Production-ready claim.
+
+## Executive status
+
+| Capability | Code | Deployment/live evidence | Honest status |
+| --- | --- | --- | --- |
+| `mmg_040` VISTA import and 12-second SceneSpec | Verified with sanitized golden data | Authoritative raw bundle staging still required | Code verified |
+| Semantic Postgres/Qdrant asset retrieval | Snapshot, audit, fallback and fail-closed code verified | Full catalog, model artifacts, DB/index and matching UE Content absent locally | Deployment gated |
+| Deterministic UE scene build | Typed BuildPlan, exact asset/material/content receipts and rollback verified offline | Real Blueprint + StaticMesh PBR build not yet run | Deployment gated |
+| Claude scene builder | Lease-scoped capability broker; Production model pinned to `claude-opus-4-8` | Real provider/build smoke still requires an approved session | Code verified, smoke gated |
+| Text / Visual Review | Tool-free strict provider adapter and fake HTTP matrix verified | One real Text and one read-only Visual receipt not yet captured | Cost/live gated |
+| 12-second timeline control | Backend-authoritative PIE, scheduler, Stop/Replay, drift and UI verified offline | Exact UE PIE APIs and live keyframes not yet proven | Deployment gated |
+| Character animation / IK / fall | Dedicated fixed protocol and packaged UE 5.7.3 plugin verified | Project content driver, skeleton, AnimBP/Control Rig, montages and notifies missing | Content gated |
+| Public Pixel Streaming / Coturn | Same-origin WSS, lease isolation, ICE config and receipt validators verified | DNS/TLS/Coturn/firewall and two-network forced-relay matrix absent | Admin/live gated |
+| Artifact revision/retention | Existing stores are owner-bound and mostly atomic | One unified revision journal, retention and restore drill are not yet release-proven | Partial |
+
+No current evidence supports calling the whole system Production-ready.
+
+## What is now real in the repository
+
+### VISTA dataset to deterministic build plan
+
+The importer validates an allowlisted dataset revision, sample ID, attempt,
+checksums, duration, dialogue/media joins and timestamps. It normalizes the source
+into `vista-simworld-scene/v1`, preserves reconstruction/evaluation privilege
+boundaries, exposes preview/commit/status APIs, and creates an idempotent artifact.
+
+For `mmg_040`, the checked-in sanitized fixture preserves the 0, 2, 5 and 9 second
+beats through a 12-second timeline. Missing asset matches remain explicit; the
+importer never silently substitutes cubes.
+
+The scene builder compiles only a committed artifact into a server-pinned BuildPlan.
+Production preflight requires exact `/Game` Blueprint or StaticMesh paths, every
+MaterialInterface slot, the matching asset snapshot/content revisions, and a
+checksum-pinned `Content/VISTA/Metadata/content-revision.json`. It rejects
+`/Engine/BasicShapes/*`, fixture revisions, floating/colliding output, stale plans,
+and receipt drift before or during execution. Failed execution rolls back only the
+actors it created and restores PlayerStart state.
+
+### Runtime authority and model isolation
+
+Studio sessions own an exact physical slot, lease, MCP/UCV ports and process start
+token. Port allocation is registered before spawn, heartbeated and released on
+shutdown. Queued and retried operations revalidate the exact lease.
+
+Builder subprocesses receive an opaque run capability instead of the root Studio
+token or direct UE ports. Capabilities are bound to owner/session/slot/lease/run,
+expire, and are revoked on process exit or lease loss. Production free-form UE
+mutation is deliberately unavailable; the supported path is typed VISTA
+SceneSpec → BuildPlan → fixed runtime operations.
+
+Production Claude building and skill selection ignore stale browser model choices
+and use the deployment pin `claude-opus-4-8`. Review has an independent pinned
+provider/model/budget policy.
+
+### Review correctness
+
+Text and Visual Review use a tool-free strict verdict provider. Internal HTTP/SSE
+auth, timeout, abort, non-2xx handling, malformed stream handling, run/session
+isolation and aggregate budget enforcement are covered by a real HTTP fake-provider
+matrix. Review Off makes no critic/VLM call. Visual evidence capture is read-only
+and must preserve canonical pre/post scene digests.
+
+This is not a live provider result. Production readiness still requires two bounded,
+approved calls—one Text and one Visual—whose receipts match the deployed build,
+provider, model, usage limits and unchanged Visual scene.
+
+### Timeline and character runtime
+
+The browser is no longer the clock or Play/Stop authority. Fixed backend routes bind
+PIE lifecycle to the active lease and exact scene proof. The timeline compiler,
+monotonic scheduler, engine-time sampling, bounded queue, event timeout, Stop,
+Replay, cleanup, restart quarantine, drift display and evidence UI are implemented.
+
+The repository also contains a dedicated four-command animation transport and a
+portable `VistaAnimationContentApi` plugin. A reproducible UE 5.7.3 BuildPlugin
+package exists. The plugin intentionally exposes an abstract content-driver
+boundary; it does not contain a project-specific human skeleton, IK rig or montage
+library. Therefore `drag`, `brace`, `lift_foot`, `fall` and `recover` must remain
+not-ready until the target UE project supplies and proves those assets and signals.
+
+### Public WebRTC transport
+
+The public design keeps Node, Cirrus, Streamer, SFU, MCP and UnrealCV on loopback.
+An authenticated opaque same-origin WSS path binds viewport and input to the active
+session/slot. Coturn REST/HMAC credentials are short-lived and secret-backed;
+browser ICE telemetry is bounded and redacted; deployment readiness depends on an
+external signed receipt rather than browser claims.
+
+No public listener was opened by the code work. DNS, certificates, Coturn service,
+NAT/firewall rules, credential rotation and forced UDP/TCP/TLS relay tests remain
+administrator-owned work.
+
+## Fastest path to a visible real VISTA 3D scene
+
+The shortest critical path is not more UI work. It is one controlled deployment on
+the 5090 host:
+
+1. Restore SSH/routing to `140.113.215.82` and check out the integration branch.
+2. Stage one authoritative `mmg_040` import bundle and verify its exact media/source
+   checksums without exposing oracle/review-only data to model input.
+3. Inventory the UE 5.3.2 project Content and create an immutable content revision.
+4. Provision pinned Postgres, Qdrant and embedding artifacts; build and audit one
+   matching semantic snapshot.
+5. Register a verified layout profile whose Blueprint/StaticMesh/PBR paths exist in
+   that exact Content revision.
+6. Run a disposable scene preflight, then one confirmed BuildPlan execution and
+   retain screenshots plus actor/material/content receipts.
+7. Rebuild/load the animation plugin for UE 5.3.2 and implement the project content
+   driver before enabling the 12-second action timeline.
+
+Steps 2–6 produce the first defensible, textured VISTA-world scene. Character IK,
+live Review and public WebRTC can then be proven independently without blocking the
+initial scene image.
+
+## Remaining external gates
+
+- Authoritative complete asset catalog and matching UE Content revision.
+- Pinned dense/sparse model artifacts and administrator-managed secret files.
+- Live Postgres/Qdrant/embedding provisioning, index build and backup/restore drill.
+- Real UE Blueprint/StaticMesh PBR spawn and immutable evidence capture.
+- UE 5.3.2 plugin rebuild/load plus a project-specific character content driver.
+- Disposable-scene Text/Visual provider calls with approved cost limits.
+- Public DNS, TLS, Coturn, firewall/NAT and two independent external test networks.
+- Writable Production save/restore, retention cleanup and rollback drill.
+- Release/admin sign-off on the exact Git, service, content and evidence revisions.
+
+## Other product modes
+
+Task Generation, Agent Training and Co-evolution have accumulated UI and backend
+code since the old May status document. Their old “complete”/“missing” table is no
+longer reliable. They are outside the current VISTA-world production slice and must
+receive a separate evidence-based audit before any demo-ready or Production-ready
+claim.
+
+The authoritative implementation checklist is
+`docs/specs/production-readiness/tasks.md`; operational gates and exact commands are
+in the runbooks beside it.
