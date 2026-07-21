@@ -20,6 +20,11 @@ const {
 } = require("./vista-animation-contract");
 const { validateBindings } = require("./vista-timeline-compiler");
 const { validateTimelineRunArtifact } = require("./vista-timeline-scheduler");
+const {
+  AGENT_ACTION_AUTHORIZATION_SCHEMA,
+  createVistaAnimationAgentActionPolicy,
+  isVistaLegacyAgentActionProfile,
+} = require("./vista-animation-agent-action-registry");
 
 const ANIMATION_EVIDENCE_SCHEMA = "vista-animation-evidence/v1";
 const SNAPSHOT_REQUEST_SCHEMA = "vista-animation-snapshot-request/v1";
@@ -704,6 +709,9 @@ function createVistaAnimationRuntime(options = {}) {
   exactKeys(options, ["broker", "contentProfile", "evidenceHooks", "clock", "fps"], ["broker", "contentProfile", "evidenceHooks"], "animation runtime options", "ANIMATION_RUNTIME_CONFIG_INVALID");
   const broker = validateBroker(options.broker);
   const contentProfile = validateContentProfile(options.contentProfile);
+  const agentActionPolicy = isVistaLegacyAgentActionProfile(contentProfile)
+    ? createVistaAnimationAgentActionPolicy({ contentProfile })
+    : null;
   const hooks = validateEvidenceHooks(options.evidenceHooks);
   const clock = options.clock === undefined ? (() => new Date().toISOString()) : options.clock;
   if (typeof clock !== "function") fail("ANIMATION_RUNTIME_CONFIG_INVALID", "Animation runtime clock must be a function", { status: 500 });
@@ -715,6 +723,15 @@ function createVistaAnimationRuntime(options = {}) {
   async function preflight(request) {
     exactKeys(request, ["sceneRevision", "bindings", "requestedActions", "signal"], ["sceneRevision", "bindings", "requestedActions"], "animation runtime preflight request");
     const bindings = validateBindings(request.bindings);
+    if (agentActionPolicy) {
+      agentActionPolicy.authorize({
+        schema: AGENT_ACTION_AUTHORIZATION_SCHEMA,
+        profile_id: contentProfile.profile_id,
+        profile_revision: contentProfile.revision,
+        content_digest: contentProfile.content_digest,
+        requested_actions: request.requestedActions,
+      });
+    }
     const outbound = makeAnimationPreflightRequest({
       contentProfile,
       sceneRevision: request.sceneRevision,
@@ -723,18 +740,34 @@ function createVistaAnimationRuntime(options = {}) {
     });
     const raw = await callBroker(broker, "preflightAnimation", outbound, request.signal, "ANIMATION_PREFLIGHT_UNAVAILABLE", "Animation runtime preflight is unavailable");
     const response = validateAnimationPreflightResponse(outbound, raw);
-    const artifact = buildAnimationPreflightArtifact({ request: outbound, response, contentProfile, bindings });
+    const artifact = buildAnimationPreflightArtifact({
+      request: outbound,
+      response,
+      contentProfile,
+      bindings,
+      registryBinding: agentActionPolicy ? agentActionPolicy.registry_binding : null,
+    });
     validateAnimationPreflightArtifact(artifact);
     const profiles = new Map(contentProfile.actions.map((entry) => [entry.action, entry]));
-    const adapters = artifact.supported_actions.map((action) => createAdapterDescriptor(
-      profiles.get(action),
-      makeLifecycle({ broker, actionProfile: profiles.get(action), preflight: artifact, recorder, activeStates }),
-    ));
-    const capabilityRegistry = Object.freeze({
-      schema: CAPABILITY_REGISTRY_SCHEMA,
-      revision: artifact.registry_revision,
-      adapters: Object.freeze(adapters),
-    });
+    const capabilityRegistry = agentActionPolicy
+      ? agentActionPolicy.createCapabilityRegistry({
+        artifact,
+        lifecycleFactory: (action) => makeLifecycle({
+          broker,
+          actionProfile: profiles.get(action),
+          preflight: artifact,
+          recorder,
+          activeStates,
+        }),
+      })
+      : Object.freeze({
+        schema: CAPABILITY_REGISTRY_SCHEMA,
+        revision: artifact.registry_revision,
+        adapters: Object.freeze(artifact.supported_actions.map((action) => createAdapterDescriptor(
+          profiles.get(action),
+          makeLifecycle({ broker, actionProfile: profiles.get(action), preflight: artifact, recorder, activeStates }),
+        ))),
+      });
     return Object.freeze({ artifact, capabilityRegistry });
   }
 

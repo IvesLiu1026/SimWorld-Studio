@@ -75,6 +75,39 @@ profile revision／digest／receipt proof。真實 Content API 必須在 UE plug
 HTTP、NLP、Claude 或 browser 指定 Python、Blueprint function、`vbp` command、montage
 path 或任意 asset path。
 
+## 既有 `agent_action` registry 的 typed bridge（T3.4 code-only）
+
+`vista-animation-agent-action-registry.js` 會 audit repo 內既有
+`agent-registry.json`，但不會 require／呼叫 `mcp-server.js`，也不會把其中的 `cmd`
+交給 timeline、NLP、browser 或 adapter transport。目前 audit 只有一個語意相符且可以
+繼續驗證的候選：
+
+| VISTA semantic action | Existing source | 結論 |
+| --- | --- | --- |
+| `pause` | `humanoid.stop_action` | candidate only；仍需 exact content/live proof |
+| `drag` | none | fail closed |
+| `brace` | none | fail closed |
+| `lift_foot` | none | fail closed |
+| `fall` | none | fail closed |
+
+這個 candidate 不是「StopAction 已在 Production 可用」的宣告。只有 content profile 的
+pawn class、implementation asset、completion signal、timeout 與 server-owned mapping
+完全一致，而且 live preflight 證明 actor 有 `hold_pose` capability 時，runtime 才會建立
+`vista_pause_pose_v1` adapter。Registry binding fingerprint 也會加入 capability registry
+revision，避免 source mapping 改變後沿用舊 timeline。
+
+呼叫端 authorization 只接受 schema、profile identity/content digest 與 semantic action
+清單；多出的 `command`、`code`、Python、Blueprint function 或 asset/path 欄位都會因
+exact-shape validation 被拒絕。通過後的 adapter 仍使用本文件既有的
+`precondition → execute → completion → timeout/cancel → cleanup` lifecycle；timeout cleanup
+必須依序 stop、release transient controls、restore exact snapshot。執行面仍只走 dedicated
+animation content API，不會退回 generic `vbp`。
+
+非 legacy pawn 的 project-owned verified content profile 仍使用既有 dedicated adapter
+registry；legacy `Base_User_Agent` profile 才會自動套用這個額外 fail-closed policy。Repo
+目前沒有可部署的 trusted legacy content driver／completion notify receipt，所以這一節只
+代表 registry wiring 與 failure semantics 已完成，不能解除 live UE/content gate。
+
 `brokerOptions` 是目前先行固定的 transport contract。所有 mutation（start、stop、
 release、restore）必定帶 `mutation: true` 與 `maxAttempts: 1`；transport 必須真的遵守，
 不得在 timeout、disconnect 或 marker missing 時內部重送。這些情況回報
@@ -136,7 +169,9 @@ normalized SceneSpec 允許同秒 event 以非遞減順序存在。
 - `mmg_040` 的 chair／cabinet／stool actors 尚未建立並驗證 gaze、hand-contact、
   foot-contact anchors；wheeled chair 尚未證明可安全 drag 且保留 caster physics。
 - 尚未把這些高階 broker 方法接到 single-owner UE bridge；現有 generic `agent_action`
-  registry 不是等價實作，不能當作 verified adapter。
+  registry 不是等價實作，不能當作 verified adapter。T3.4 已把其固定 `pause` candidate
+  接到 typed adapter policy，但不會執行 generic `vbp`；沒有 live driver proof 時仍
+  `start_allowed=false`。
 - Server-side immutable operation fingerprint registry 與 live capability/readiness contract
   已完成，但尚未有受信任、可編譯與已部署的 UE `invokeAnimationContentApi` plugin
   implementation。Repo audit、固定 plugin artifact 要求與管理員部署 gate 見
@@ -158,11 +193,13 @@ profile／broker 只驗證 contract 與 failure semantics，不能複製到 Prod
 
 ```bash
 node --test simworld_studio_workspace/web/server/tests/vista-animation-runtime.test.js
+node --test simworld_studio_workspace/web/server/tests/vista-animation-agent-action-registry.test.js
 node --test simworld_studio_workspace/web/server/tests/vista-animation-ue-adapter.test.js
 node --test simworld_studio_workspace/web/server/tests/vista-animation-ue-readiness.test.js
 node --test \
   simworld_studio_workspace/web/server/tests/vista-timeline-compiler.test.js \
   simworld_studio_workspace/web/server/tests/vista-timeline-scheduler.test.js \
+  simworld_studio_workspace/web/server/tests/vista-animation-agent-action-registry.test.js \
   simworld_studio_workspace/web/server/tests/vista-animation-runtime.test.js \
   simworld_studio_workspace/web/server/tests/vista-animation-ue-adapter.test.js \
   simworld_studio_workspace/web/server/tests/vista-animation-ue-readiness.test.js

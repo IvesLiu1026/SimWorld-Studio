@@ -463,9 +463,16 @@ function makeIssue(code, subject, message) {
   };
 }
 
-function buildAnimationPreflightArtifact({ request, response, contentProfile, bindings }) {
+function buildAnimationPreflightArtifact({ request, response, contentProfile, bindings, registryBinding = null }) {
   const profile = validateContentProfile(contentProfile);
   const normalizedBindings = validateBindings(bindings);
+  if (registryBinding !== null) {
+    requireString(registryBinding, "registryBinding", {
+      pattern: SAFE_ID_RE,
+      max: 120,
+      code: "ANIMATION_PREFLIGHT_INPUT_INVALID",
+    });
+  }
   const actionProfiles = new Map(profile.actions.map((entry) => [entry.action, entry]));
   const bindingActors = new Map(normalizedBindings.actors.map((entry) => [entry.binding_id, entry]));
   const bindingTargets = new Map(normalizedBindings.entities.map((entry) => [entry.binding_id, entry]));
@@ -510,6 +517,7 @@ function buildAnimationPreflightArtifact({ request, response, contentProfile, bi
     scene_revision: request.scene_revision,
     profile_revision: profile.revision,
     content_digest: profile.content_digest,
+    ...(registryBinding === null ? {} : { adapter_registry_binding: registryBinding }),
     supported_actions: supportedActions,
     actors: actors.map((entry) => ({ binding_id: entry.binding_id, capabilities: entry.capabilities, ready: entry.ready })),
     targets: targets.map((entry) => ({ binding_id: entry.binding_id, capabilities: entry.capabilities, anchor_kinds: entry.anchor_kinds, ready: entry.ready })),
