@@ -231,7 +231,7 @@ function spawnScript(nonce, actor) {
     "        component.set_mobility(mobility)",
     "        component.set_collision_enabled(collision)",
     "        component.set_collision_profile_name(item['collision']['profile_name'])",
-    "        component.set_generate_overlap_events(bool(item['collision']['generate_overlap_events']))",
+    "        component.set_editor_property('generate_overlap_events', bool(item['collision']['generate_overlap_events']))",
     "    created.set_editor_property('tags', [unreal.Name('VISTA_FINGERPRINT=' + item['fingerprint']), unreal.Name('VISTA_OPERATION=' + item['operation_id'])])",
     "    guid = str(created.get_actor_guid()).strip('{}')",
     "    if not guid: raise RuntimeError('spawned actor guid unavailable')",

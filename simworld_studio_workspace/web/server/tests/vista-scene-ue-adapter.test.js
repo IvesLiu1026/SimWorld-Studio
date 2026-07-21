@@ -226,6 +226,13 @@ test("spawn/delete/PlayerStart operations are fixed scripts with cleanup semanti
   ]);
   assert.equal(ueBroker.calls[0].params.script.includes("subsystem.destroy_actor(created)"), true);
   assert.equal(ueBroker.calls[0].params.script.includes("VISTA_FINGERPRINT="), true);
+  assert.equal(ueBroker.calls[0].params.script.includes("set_generate_overlap_events"), false);
+  assert.equal(
+    ueBroker.calls[0].params.script.includes(
+      "component.set_editor_property('generate_overlap_events', bool(item['collision']['generate_overlap_events']))",
+    ),
+    true,
+  );
 });
 
 test("required evidence rejects collisions/floating actors and screenshot exposes no server path", async (t) => {
