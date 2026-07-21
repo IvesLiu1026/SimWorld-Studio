@@ -1,0 +1,108 @@
+{
+  "schema": "simworld-ue-asset-registry-audit/v1",
+  "generated_at_utc": "2026-07-21T04:00:00+00:00",
+  "project_name": "gym_citynav",
+  "engine_version": "5.3.2-0+++UE5+Release-5.3",
+  "mount_point": "/Game",
+  "selected_classes": [
+    "AnimBlueprint",
+    "AnimMontage",
+    "AnimSequence",
+    "Blueprint",
+    "ControlRigBlueprint",
+    "IKRetargeter",
+    "IKRigDefinition",
+    "RigVMBlueprint",
+    "SkeletalMesh",
+    "Skeleton",
+    "StaticMesh"
+  ],
+  "asset_count": 17,
+  "assets": [
+    {
+      "package": "/Game/CityDatabase/meshes/SM_chair_b",
+      "name": "SM_chair_b",
+      "class": "StaticMesh"
+    },
+    {
+      "package": "/Game/CityDatabase/blueprints/BP_Box",
+      "name": "BP_Box",
+      "class": "Blueprint"
+    },
+    {
+      "package": "/Game/Architecture/Wall/SM_Wall_Panel",
+      "name": "SM_Wall_Panel",
+      "class": "StaticMesh"
+    },
+    {
+      "package": "/Game/Utility/BP_AssetSpawner",
+      "name": "BP_AssetSpawner",
+      "class": "Blueprint"
+    },
+    {
+      "package": "/Game/Textures/SM_ThumbnailChair",
+      "name": "SM_ThumbnailChair",
+      "class": "StaticMesh"
+    },
+    {
+      "package": "/Game/Human_Avatar/Blueprints/BP_HumanAvatar",
+      "name": "BP_HumanAvatar",
+      "class": "Blueprint"
+    },
+    {
+      "package": "/Game/Characters/Mannequins/Meshes/SKM_Manny",
+      "name": "SKM_Manny",
+      "class": "SkeletalMesh"
+    },
+    {
+      "package": "/Game/Human_Avatar/Animation/LiftSet/AS_Lift_Pickup_Mid",
+      "name": "AS_Lift_Pickup_Mid",
+      "class": "AnimSequence"
+    },
+    {
+      "package": "/Game/Human_Avatar/Animation/LiftSet/AM_Lift_Throw",
+      "name": "AM_Lift_Throw",
+      "class": "AnimMontage"
+    },
+    {
+      "package": "/Game/Characters/Mannequins/Animations/Manny/MM_Fall_Loop",
+      "name": "MM_Fall_Loop",
+      "class": "AnimSequence"
+    },
+    {
+      "package": "/Game/Characters/Mannequins/Animations/ABP_Manny",
+      "name": "ABP_Manny",
+      "class": "AnimBlueprint"
+    },
+    {
+      "package": "/Game/Characters/Mannequins/Rigs/CR_Mannequin_BasicFootIK",
+      "name": "CR_Mannequin_BasicFootIK",
+      "class": "ControlRigBlueprint"
+    },
+    {
+      "package": "/Game/Characters/Mannequins/Rigs/IK_Mannequin",
+      "name": "IK_Mannequin",
+      "class": "IKRigDefinition"
+    },
+    {
+      "package": "/Game/Characters/Mannequins/Rigs/RTG_Mannequin",
+      "name": "RTG_Mannequin",
+      "class": "IKRetargeter"
+    },
+    {
+      "package": "/Game/Human_Avatar/Rigs/RVM_LiftControls",
+      "name": "RVM_LiftControls",
+      "class": "RigVMBlueprint"
+    },
+    {
+      "package": "/Game/Characters/Mannequins/Meshes/SK_Mannequin",
+      "name": "SK_Mannequin",
+      "class": "Skeleton"
+    },
+    {
+      "package": "/Game/Industrial_Carts/Meshes/SM_Cart",
+      "name": "SM_Cart",
+      "class": "StaticMesh"
+    }
+  ]
+}

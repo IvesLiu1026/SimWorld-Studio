@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-ue-asset-registry-audit-v1.schema.json",
+  "title": "SimWorld read-only UE AssetRegistry audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "generated_at_utc",
+    "project_name",
+    "engine_version",
+    "mount_point",
+    "selected_classes",
+    "asset_count",
+    "assets"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-ue-asset-registry-audit/v1" },
+    "generated_at_utc": { "type": "string", "format": "date-time", "maxLength": 64 },
+    "project_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "engine_version": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "mount_point": { "const": "/Game" },
+    "selected_classes": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 11,
+      "maxItems": 11,
+      "items": {
+        "enum": [
+          "AnimBlueprint",
+          "AnimMontage",
+          "AnimSequence",
+          "Blueprint",
+          "ControlRigBlueprint",
+          "IKRetargeter",
+          "IKRigDefinition",
+          "RigVMBlueprint",
+          "SkeletalMesh",
+          "Skeleton",
+          "StaticMesh"
+        ]
+      }
+    },
+    "asset_count": { "type": "integer", "minimum": 0, "maximum": 100000 },
+    "assets": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["package", "name", "class"],
+        "properties": {
+          "package": {
+            "type": "string",
+            "pattern": "^/Game(?:/[A-Za-z0-9_.+-]+)+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "pattern": "^[A-Za-z0-9_.+-]+$"
+          },
+          "class": {
+            "enum": [
+              "AnimBlueprint",
+              "AnimMontage",
+              "AnimSequence",
+              "Blueprint",
+              "ControlRigBlueprint",
+              "IKRetargeter",
+              "IKRigDefinition",
+              "RigVMBlueprint",
+              "SkeletalMesh",
+              "Skeleton",
+              "StaticMesh"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
