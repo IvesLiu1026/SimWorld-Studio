@@ -1,0 +1,440 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-asset-index-job-v1.schema.json",
+  "title": "SimWorld prepared semantic asset index job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "input_contract",
+    "recipe_contract",
+    "snapshot_target",
+    "pending_objects",
+    "resource_contract",
+    "live_gates",
+    "execution_contract",
+    "catalog_complete",
+    "snapshot_complete",
+    "job_revision"
+  ],
+  "properties": {
+    "schema": { "const": "simworld-semantic-asset-index-job/v1" },
+    "input_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bootstrap_receipt_schema",
+        "bootstrap_receipt_sha256",
+        "bootstrap_bundle_revision",
+        "object_manifest_schema",
+        "object_manifest_revision",
+        "object_manifest_sha256",
+        "object_count",
+        "project",
+        "content",
+        "archive_receipt_sha256",
+        "registry_audit_sha256",
+        "manifest_kind",
+        "bootstrap_bundle_complete",
+        "candidate_manifest_reviewed",
+        "catalog_complete",
+        "snapshot_complete"
+      ],
+      "properties": {
+        "bootstrap_receipt_schema": { "const": "simworld-ue-asset-bootstrap-receipt/v1" },
+        "bootstrap_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "bootstrap_bundle_revision": { "$ref": "#/$defs/sha256Revision" },
+        "object_manifest_schema": { "const": "simworld-ue-object-manifest/v2" },
+        "object_manifest_revision": { "$ref": "#/$defs/sha256Revision" },
+        "object_manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "object_count": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "project": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "revision", "engine_version"],
+          "properties": {
+            "name": { "$ref": "#/$defs/slug" },
+            "revision": { "$ref": "#/$defs/revision" },
+            "engine_version": { "type": "string", "minLength": 1, "maxLength": 160 }
+          }
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mount_point", "revision"],
+          "properties": {
+            "mount_point": { "const": "/Game" },
+            "revision": { "$ref": "#/$defs/sha256Revision" }
+          }
+        },
+        "archive_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "registry_audit_sha256": { "$ref": "#/$defs/sha256" },
+        "manifest_kind": { "const": "asset_registry_object_candidates_not_catalog" },
+        "bootstrap_bundle_complete": { "const": true },
+        "candidate_manifest_reviewed": { "const": false },
+        "catalog_complete": { "const": false },
+        "snapshot_complete": { "const": false }
+      }
+    },
+    "recipe_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recipe_schema",
+        "recipe_sha256",
+        "caption_recipe_sha256",
+        "caption",
+        "embedding_recipe_sha256",
+        "embedding",
+        "storage"
+      ],
+      "properties": {
+        "recipe_schema": { "const": "simworld-semantic-asset-index-recipe/v1" },
+        "recipe_sha256": { "$ref": "#/$defs/sha256" },
+        "caption_recipe_sha256": { "$ref": "#/$defs/sha256" },
+        "caption": { "$ref": "#/$defs/captionRecipe" },
+        "embedding_recipe_sha256": { "$ref": "#/$defs/sha256" },
+        "embedding": { "$ref": "#/$defs/embeddingRecipe" },
+        "storage": { "$ref": "#/$defs/storageRecipe" }
+      }
+    },
+    "snapshot_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_snapshot_revision",
+        "postgres",
+        "qdrant",
+        "row_point_parity_required",
+        "live_audit_receipt_required",
+        "snapshot_complete"
+      ],
+      "properties": {
+        "asset_snapshot_revision": {
+          "type": "string",
+          "minLength": 18,
+          "maxLength": 240,
+          "pattern": "^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\\-]+$"
+        },
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema_revision",
+            "required_asset_snapshot_revision",
+            "planned_candidate_rows",
+            "observed_live"
+          ],
+          "properties": {
+            "schema_revision": { "const": 2 },
+            "required_asset_snapshot_revision": { "$ref": "#/$defs/revision" },
+            "planned_candidate_rows": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "observed_live": { "const": false }
+          }
+        },
+        "qdrant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "collection",
+            "dense_vector_name",
+            "sparse_vector_name",
+            "required_payload_asset_snapshot_revision",
+            "planned_candidate_points",
+            "observed_live"
+          ],
+          "properties": {
+            "collection": { "$ref": "#/$defs/slug" },
+            "dense_vector_name": { "$ref": "#/$defs/slug" },
+            "sparse_vector_name": { "$ref": "#/$defs/slug" },
+            "required_payload_asset_snapshot_revision": { "$ref": "#/$defs/revision" },
+            "planned_candidate_points": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "observed_live": { "const": false }
+          }
+        },
+        "row_point_parity_required": { "const": true },
+        "live_audit_receipt_required": { "const": true },
+        "snapshot_complete": { "const": false }
+      }
+    },
+    "pending_objects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "selection", "assets"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "selection": { "const": "all_unindexed_objects_in_pinned_bootstrap_manifest" },
+        "assets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100000,
+          "items": { "$ref": "#/$defs/pendingObject" }
+        }
+      }
+    },
+    "resource_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limits", "estimates", "cost_authorized"],
+      "properties": {
+        "limits": { "$ref": "#/$defs/resourceLimits" },
+        "estimates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pending_assets",
+            "rendered_views_upper_bound",
+            "render_pixels_upper_bound",
+            "caption_output_tokens_upper_bound",
+            "catalog_json_bytes_upper_bound",
+            "embedding_batches_upper_bound",
+            "postgres_rows_upper_bound",
+            "qdrant_points_upper_bound",
+            "dense_vector_payload_bytes_estimate",
+            "dense_vector_estimate_excludes"
+          ],
+          "properties": {
+            "pending_assets": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "rendered_views_upper_bound": { "$ref": "#/$defs/positiveSafeInteger" },
+            "render_pixels_upper_bound": { "$ref": "#/$defs/positiveSafeInteger" },
+            "caption_output_tokens_upper_bound": { "$ref": "#/$defs/positiveSafeInteger" },
+            "catalog_json_bytes_upper_bound": { "$ref": "#/$defs/positiveSafeInteger" },
+            "embedding_batches_upper_bound": { "$ref": "#/$defs/positiveSafeInteger" },
+            "postgres_rows_upper_bound": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "qdrant_points_upper_bound": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "dense_vector_payload_bytes_estimate": { "$ref": "#/$defs/positiveSafeInteger" },
+            "dense_vector_estimate_excludes": {
+              "const": [
+                "qdrant_payload",
+                "sparse_vectors",
+                "indexes",
+                "replication",
+                "storage_engine_overhead"
+              ]
+            }
+          }
+        },
+        "cost_authorized": { "const": false }
+      }
+    },
+    "live_gates": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gate", "category", "status", "required_evidence"],
+        "properties": {
+          "gate": { "$ref": "#/$defs/slug" },
+          "category": { "$ref": "#/$defs/slug" },
+          "status": { "const": "pending" },
+          "required_evidence": { "type": "string", "minLength": 1, "maxLength": 240 }
+        }
+      }
+    },
+    "execution_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prepared_only",
+        "default_behavior",
+        "apply_effect",
+        "explicit_operator_execution_required",
+        "legacy_full_asset_index_runner_authorized",
+        "reviewed_adapter_required_for_legacy_runner",
+        "prohibited_production_default_args",
+        "network_allowed_during_preparation",
+        "unreal_allowed_during_preparation",
+        "caption_provider_allowed_during_preparation",
+        "postgres_allowed_during_preparation",
+        "qdrant_allowed_during_preparation",
+        "embedding_allowed_during_preparation"
+      ],
+      "properties": {
+        "prepared_only": { "const": true },
+        "default_behavior": { "const": "dry_run" },
+        "apply_effect": { "const": "atomic_private_job_bundle_only" },
+        "explicit_operator_execution_required": { "const": true },
+        "legacy_full_asset_index_runner_authorized": { "const": false },
+        "reviewed_adapter_required_for_legacy_runner": { "const": true },
+        "prohibited_production_default_args": {
+          "const": ["--dangerously-bypass-approvals-and-sandbox"]
+        },
+        "network_allowed_during_preparation": { "const": false },
+        "unreal_allowed_during_preparation": { "const": false },
+        "caption_provider_allowed_during_preparation": { "const": false },
+        "postgres_allowed_during_preparation": { "const": false },
+        "qdrant_allowed_during_preparation": { "const": false },
+        "embedding_allowed_during_preparation": { "const": false }
+      }
+    },
+    "catalog_complete": { "const": false },
+    "snapshot_complete": { "const": false },
+    "job_revision": { "$ref": "#/$defs/sha256Revision" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sha256Revision": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "revision": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]+$"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]*$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "captionRecipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "model_id",
+        "model_revision",
+        "prompt_revision",
+        "output_schema_revision",
+        "render_recipe_revision",
+        "views_per_asset",
+        "image_width_px",
+        "image_height_px",
+        "max_output_tokens_per_asset",
+        "temperature_milli"
+      ],
+      "properties": {
+        "provider_id": { "$ref": "#/$defs/id" },
+        "model_id": { "$ref": "#/$defs/id" },
+        "model_revision": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 240,
+          "anyOf": [
+            { "$ref": "#/$defs/sha256Revision" },
+            { "pattern": "^provider-snapshot:[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{2,221}$" }
+          ]
+        },
+        "prompt_revision": { "$ref": "#/$defs/sha256Revision" },
+        "output_schema_revision": { "$ref": "#/$defs/sha256Revision" },
+        "render_recipe_revision": { "$ref": "#/$defs/sha256Revision" },
+        "views_per_asset": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "image_width_px": { "type": "integer", "minimum": 64, "maximum": 8192 },
+        "image_height_px": { "type": "integer", "minimum": 64, "maximum": 8192 },
+        "max_output_tokens_per_asset": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "temperature_milli": { "type": "integer", "minimum": 0, "maximum": 2000 }
+      }
+    },
+    "embeddingRecipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recipe_revision",
+        "dense_model_id",
+        "dense_model_revision",
+        "dense_size",
+        "sparse_model_id",
+        "sparse_model_revision",
+        "batch_size"
+      ],
+      "properties": {
+        "recipe_revision": { "$ref": "#/$defs/revision" },
+        "dense_model_id": { "$ref": "#/$defs/id" },
+        "dense_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "dense_size": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "sparse_model_id": { "$ref": "#/$defs/id" },
+        "sparse_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "batch_size": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "storageRecipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "postgres_schema_revision",
+        "qdrant_collection",
+        "qdrant_dense_vector_name",
+        "qdrant_sparse_vector_name"
+      ],
+      "properties": {
+        "postgres_schema_revision": { "const": 2 },
+        "qdrant_collection": { "$ref": "#/$defs/slug" },
+        "qdrant_dense_vector_name": { "$ref": "#/$defs/slug" },
+        "qdrant_sparse_vector_name": { "$ref": "#/$defs/slug" }
+      }
+    },
+    "resourceLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_assets",
+        "max_rendered_views",
+        "max_render_pixels",
+        "max_total_caption_output_tokens",
+        "max_catalog_record_bytes",
+        "max_total_catalog_bytes",
+        "max_postgres_rows",
+        "max_qdrant_points",
+        "max_dense_vector_payload_bytes_estimate"
+      ],
+      "properties": {
+        "max_assets": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_rendered_views": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_render_pixels": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_total_caption_output_tokens": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_catalog_record_bytes": { "type": "integer", "minimum": 1024, "maximum": 16777216 },
+        "max_total_catalog_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_postgres_rows": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_qdrant_points": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_dense_vector_payload_bytes_estimate": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "pendingObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "ue_name",
+        "ue_path",
+        "asset_type",
+        "source_pack",
+        "content_revision",
+        "status"
+      ],
+      "properties": {
+        "asset_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_]{0,239}$" },
+        "ue_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[A-Za-z0-9_+\\-]+$"
+        },
+        "ue_path": {
+          "type": "string",
+          "pattern": "^/Game(?:/[A-Za-z0-9_+\\-]+)+\\.[A-Za-z0-9_+\\-]{1,240}$"
+        },
+        "asset_type": { "enum": ["Blueprint", "StaticMesh"] },
+        "source_pack": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_+\\-]+$"
+        },
+        "content_revision": { "$ref": "#/$defs/sha256Revision" },
+        "status": { "const": "pending_live_semantic_index" }
+      }
+    }
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/simworld-semantic-asset-index-recipe-v1.schema.json",
+  "title": "SimWorld offline semantic asset index recipe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "caption", "embedding", "storage", "limits"],
+  "properties": {
+    "schema": { "const": "simworld-semantic-asset-index-recipe/v1" },
+    "caption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "model_id",
+        "model_revision",
+        "prompt_revision",
+        "output_schema_revision",
+        "render_recipe_revision",
+        "views_per_asset",
+        "image_width_px",
+        "image_height_px",
+        "max_output_tokens_per_asset",
+        "temperature_milli"
+      ],
+      "properties": {
+        "provider_id": { "$ref": "#/$defs/id" },
+        "model_id": { "$ref": "#/$defs/id" },
+        "model_revision": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 240,
+          "anyOf": [
+            { "$ref": "#/$defs/sha256Revision" },
+            { "pattern": "^provider-snapshot:[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{2,221}$" }
+          ]
+        },
+        "prompt_revision": { "$ref": "#/$defs/sha256Revision" },
+        "output_schema_revision": { "$ref": "#/$defs/sha256Revision" },
+        "render_recipe_revision": { "$ref": "#/$defs/sha256Revision" },
+        "views_per_asset": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "image_width_px": { "type": "integer", "minimum": 64, "maximum": 8192 },
+        "image_height_px": { "type": "integer", "minimum": 64, "maximum": 8192 },
+        "max_output_tokens_per_asset": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "temperature_milli": { "type": "integer", "minimum": 0, "maximum": 2000 }
+      }
+    },
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recipe_revision",
+        "dense_model_id",
+        "dense_model_revision",
+        "dense_size",
+        "sparse_model_id",
+        "sparse_model_revision",
+        "batch_size"
+      ],
+      "properties": {
+        "recipe_revision": { "$ref": "#/$defs/revision" },
+        "dense_model_id": { "$ref": "#/$defs/id" },
+        "dense_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "dense_size": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "sparse_model_id": { "$ref": "#/$defs/id" },
+        "sparse_model_revision": { "$ref": "#/$defs/sha256Revision" },
+        "batch_size": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "postgres_schema_revision",
+        "qdrant_collection",
+        "qdrant_dense_vector_name",
+        "qdrant_sparse_vector_name"
+      ],
+      "properties": {
+        "postgres_schema_revision": { "const": 2 },
+        "qdrant_collection": { "$ref": "#/$defs/slug" },
+        "qdrant_dense_vector_name": { "$ref": "#/$defs/slug" },
+        "qdrant_sparse_vector_name": { "$ref": "#/$defs/slug" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_assets",
+        "max_rendered_views",
+        "max_render_pixels",
+        "max_total_caption_output_tokens",
+        "max_catalog_record_bytes",
+        "max_total_catalog_bytes",
+        "max_postgres_rows",
+        "max_qdrant_points",
+        "max_dense_vector_payload_bytes_estimate"
+      ],
+      "properties": {
+        "max_assets": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_rendered_views": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_render_pixels": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_total_caption_output_tokens": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_catalog_record_bytes": { "type": "integer", "minimum": 1024, "maximum": 16777216 },
+        "max_total_catalog_bytes": { "$ref": "#/$defs/positiveSafeInteger" },
+        "max_postgres_rows": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_qdrant_points": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_dense_vector_payload_bytes_estimate": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]*$"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 240,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]+$"
+    },
+    "sha256Revision": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  }
+}
