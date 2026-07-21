@@ -345,13 +345,13 @@ def query_bridge(host: str, port: int, timeout: int, script: str) -> dict[str, A
     if not address.is_loopback or not 1 <= port <= 65535 or not 1 <= timeout <= 600:
         raise InspectionError("bridge endpoint or timeout is invalid")
     payload = {"type": "execute_python_script", "params": {"script": script}}
-    request = canonical_bytes(payload)
-    if len(request) > MAX_REQUEST_BYTES:
+    frame = canonical_bytes(payload) + b"\n"
+    if len(frame) >= MAX_REQUEST_BYTES:
         raise InspectionError("fixed UE request exceeds the legacy bridge framing bound")
     try:
         with socket.create_connection((host, port), timeout=min(timeout, 10)) as connection:
             connection.settimeout(timeout)
-            connection.sendall(request + b"\n")
+            connection.sendall(frame)
             response = bytearray()
             while True:
                 chunk = connection.recv(65536)

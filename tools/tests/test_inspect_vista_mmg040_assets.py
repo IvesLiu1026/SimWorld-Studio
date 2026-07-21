@@ -199,13 +199,13 @@ class VistaMmg040InspectorTests(unittest.TestCase):
             with self.subTest(candidate_id=item["candidate_id"]):
                 script = inspector.build_ue_script(item)
                 compile(script, f"<{item['candidate_id']}>", "exec")
-                request = inspector.canonical_bytes(
+                frame = inspector.canonical_bytes(
                     {
                         "type": "execute_python_script",
                         "params": {"script": script},
                     }
-                )
-                self.assertLessEqual(len(request), inspector.MAX_REQUEST_BYTES)
+                ) + b"\n"
+                self.assertLess(len(frame), inspector.MAX_REQUEST_BYTES)
                 self.assertIn("transient=True", script)
 
         with mock.patch.object(inspector.socket, "create_connection") as connector:
@@ -265,10 +265,10 @@ class VistaMmg040InspectorTests(unittest.TestCase):
 
             def fake_query(host: str, port: int, timeout: int, script: str) -> dict:
                 self.assertEqual((host, port, timeout), ("127.0.0.1", 55560, 30))
-                request = inspector.canonical_bytes(
+                frame = inspector.canonical_bytes(
                     {"type": "execute_python_script", "params": {"script": script}}
-                )
-                self.assertLessEqual(len(request), inspector.MAX_REQUEST_BYTES)
+                ) + b"\n"
+                self.assertLess(len(frame), inspector.MAX_REQUEST_BYTES)
                 return {"status": "success"}
 
             observed = iter(plan)
