@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed checkpoint: `f129cc32` (`feat: add isolated mmg040 semantic smoke catalog`)
+- Latest pushed checkpoint: `b38a2e1b` (`fix: reject unknown mmg040 animation revisions`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -30,9 +30,9 @@
 | Codex `/root` | `semantic-production-adapter` / `codex/semantic-production-adapter` | v2 semantic-index integration, docs, merge queue, final validation | Dirty source checkout, canonical datasets, legacy index runners | GPU 0; loopback `3010/55560/8585/8586/8889` for the bounded `mmg_040` live run |
 | `approval_aggregate` | shared worktree, completed | six-party opaque approval aggregate in new files only | Shared schemas/launcher/state/terminal and runtime | None |
 | `adapter_registration_audit` | shared worktree, completed read-only | real query/build/registration/source-closure inventory | All source/docs edits and runtime | None |
-| `commandlet_executor` | shared worktree, blocked draft | untracked commandlet-only Interchange executor and focused tests | Runtime, UE, network, docs and all other source | None; live apply prohibited by independent P0 review |
+| `commandlet_executor` | isolated branch `codex/interchange-commandlet-executor-draft`, pushed at `4011df14` | quarantined commandlet planner/executor draft and focused tests | Current semantic branch, runtime, UE, network, docs and all other source | None; every live-apply entry point is hard-disabled |
 | `semantic_smoke_catalog` | shared worktree, completed and pushed at `f129cc32` | isolated non-Production `mmg_040` three-record catalog preparer and focused tests | Existing source/docs, DB/network/runtime, and Production readiness claims | One private append-only file publication completed; no DB/network/UE |
-| `mmg040_animation_content_map` | shared worktree, active | `VistaAnimationContentApi` r2 PickUp parity slice and one new focused parity test | Runtime evidence, UE/GPU/ports, docs, commandlet/semantic files, and Production readiness claims | None |
+| `mmg040_animation_content_map` | isolated branch `codex/mmg040-pickup-r2-candidate`, pushed at `bed9aafa` | quarantined `VistaAnimationContentApi` r2 PickUp candidate | Current semantic branch, runtime evidence, UE/GPU/ports and Production compatibility | None; branch is explicitly do-not-merge/install |
 
 The coordinator is the only merge owner. Workers must commit a single coherent
 change and report validation commands plus remaining live/admin gates.
@@ -148,6 +148,24 @@ change and report validation commands plus remaining live/admin gates.
   live character mutation. The broker still hardcodes a different pawn class
   from the pinned `BP_MMG040Character_C`; exact live character content,
   montage/IK adapters and rendered fall/pick-up evidence remain required.
+- Read-only archive inspection identified Manny/Quinn source skeleton, AnimBP,
+  Control Rig, IK Rig, LiftSet pick-up montage and fall-loop candidates. They
+  remain source-only: `EndHandTrace` is not the required attachment signal and
+  the observed fall loop is not a landed/root-motion fall montage.
+- The typed plugin r2 PickUp slice is preserved on the isolated
+  `codex/mmg040-pickup-r2-candidate` branch at `bed9aafa`. It keeps r1 byte
+  compatibility and adds revision-aware r2 14-asset/eight-action contracts,
+  but is explicitly quarantined because the Production source manifest is
+  still r1 and no exact UE 5.3.2 build/load receipt exists.
+- Independent review found that an absent `vista_mmg040` compatibility policy
+  previously failed open. Commit `b38a2e1b` fixes the current server so any
+  unknown `vista_mmg040` revision is rejected before transport/runtime
+  construction, while exact r1 and unrelated profile behavior stay unchanged.
+  Combined focused validation passes 60/60.
+- The available UE 5.3.2 minimal runtime has UnrealEditor binaries but no
+  `RunUAT.sh`, UnrealBuildTool, Build.version or Engine Source, so it cannot
+  produce the required target-version plugin build receipt. A full UE 5.3.2
+  development/source installation remains an administrator gate.
 
 ## Current Review checkpoint
 
@@ -186,5 +204,7 @@ change and report validation commands plus remaining live/admin gates.
   `evidence/2026-07-22-mmg040-live-interchange-checkpoint.md`
 - Current isolated semantic smoke catalog follow-up:
   `evidence/2026-07-22-mmg040-semantic-smoke-catalog-checkpoint.md`
+- Current isolated PickUp r2 candidate follow-up:
+  `evidence/2026-07-22-mmg040-pickup-r2-candidate-checkpoint.md`
 - Current Review auth/CLI identity follow-up:
   `evidence/2026-07-22-review-cli-identity-checkpoint.md`
