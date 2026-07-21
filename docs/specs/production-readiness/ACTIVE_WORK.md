@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed implementation checkpoint: `e31ee835` (`feat: expand mmg040 official asset candidates`)
+- Latest pushed implementation checkpoint: `f9ac76f6` (`fix: bind review smoke to measured cli`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.

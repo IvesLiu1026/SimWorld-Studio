@@ -2,6 +2,8 @@
 
 Date: 2026-07-22
 
+Implementation revision: `f9ac76f60e669abef4fca02b9b7b422eb2513344`
+
 Status: offline/code evidence passed; live Text and Visual provider calls remain
 cost-gated and were not executed.
 
