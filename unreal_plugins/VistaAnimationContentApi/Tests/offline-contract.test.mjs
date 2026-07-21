@@ -197,6 +197,8 @@ test("dispatcher, engine clock, and evidence driver remain fixed and fail closed
   assert.match(subsystemSource, /LocalDriver->CaptureEvidence\(Input, Output, DriverError\)/);
   assert.match(subsystemSource, /IsSafeArtifactRef\(Output\.ArtifactRef\)/);
   assert.match(subsystemSource, /IsLowerHex\(Output\.Sha256, 64\)/);
+  assert.match(subsystemSource, /LastPreflight\.RequestedActions\.Contains\(\s*EvidenceAction->Name\)/);
+  assert.doesNotMatch(subsystemSource, /LastPreflight\.RequestedActions\.Contains\(\s*Input\.Action\.GetValue\(\)\)/);
   assert.equal(/Output\.Assertion\s*=(?!=)/.test(subsystemSource), false, "plugin must not synthesize evidence assertions");
 
   const inputBlock = driverHeader.match(

@@ -720,6 +720,8 @@ public:
     TSharedPtr<IVistaAnimationContentDriver, ESPMode::ThreadSafe> LocalDriver;
     {
       FScopeLock Guard(&Mutex);
+      const FActionContract *EvidenceAction =
+          Input.Action.IsSet() ? FindAction(Input.Action.GetValue()) : nullptr;
       if (!bConfigured) {
         OutResponseJson = MakeError(TEXT("ANIMATION_CONTENT_API_UNCONFIGURED"));
         return false;
@@ -732,9 +734,9 @@ public:
       }
       if (!LastPreflight.bReady ||
           (Input.Action.IsSet() &&
-           (!TrustedAction(Input.Action.GetValue()) ||
+           (!EvidenceAction || !TrustedAction(Input.Action.GetValue()) ||
             !LastPreflight.RequestedActions.Contains(
-                Input.Action.GetValue()))) ||
+                EvidenceAction->Name))) ||
           (Input.ActorBindingId.IsSet() &&
            !LastPreflight.ActorBindings.Contains(
                Input.ActorBindingId.GetValue())) ||
