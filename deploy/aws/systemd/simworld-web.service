@@ -30,6 +30,9 @@ Environment=UE_PORT_STRIDE=2
 Environment=UE_ENGINE_DIR=/opt/ue-engine
 Environment=UE_PROJECT_DIR_SHARED=/opt/simworld-project
 Environment=SLOTS_ROOT=/var/lib/simworld/slots
+Environment=PROCESS_PORT_REGISTRY_DIR=/var/lib/simworld/runtime-registry
+Environment=PROCESS_PORT_REGISTRY_REQUIRED=1
+Environment=PROCESS_PORT_REGISTRY_HEARTBEAT_MS=10000
 Environment=SESSION_TTL_MS=1800000
 Environment=SESSION_HARD_MAX_MS=10800000
 Environment=TURN_CREDENTIAL_RECONNECT_GRACE_SECONDS=600

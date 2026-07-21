@@ -13,10 +13,15 @@
  */
 
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const net = require('net');
 const path = require('path');
-const fs = require('fs');
 const { EventEmitter } = require('events');
+
+const PROCESS_REGISTRY_MODULE = path.resolve(
+  __dirname,
+  '../../../simworld_studio_workspace/web/server/process-port-registry.js',
+);
 
 const DEFAULTS = {
   poolSize:        parseInt(process.env.UE_POOL_SIZE || '3', 10),
@@ -31,6 +36,9 @@ const DEFAULTS = {
   launcher:        process.env.UE_SLOT_LAUNCHER ||
                    path.resolve(__dirname, 'slot-launcher.sh'),
   slotsRoot:       process.env.SLOTS_ROOT || '/var/lib/simworld/slots',
+  registryDirectory: process.env.PROCESS_PORT_REGISTRY_DIR || null,
+  registryRequired: /^(?:1|true|yes|on)$/i.test(process.env.PROCESS_PORT_REGISTRY_REQUIRED || ''),
+  registryHeartbeatMs: parseInt(process.env.PROCESS_PORT_REGISTRY_HEARTBEAT_MS || '10000', 10),
 };
 
 function portsForSlot(slotId, cfg = DEFAULTS) {
@@ -64,10 +72,58 @@ async function waitForPort(port, deadlineMs) {
   return false;
 }
 
+async function focusedTcpListenerProbe({ ports, signal }) {
+  if (!Array.isArray(ports) || ports.some((endpoint) => endpoint.protocol !== 'tcp')) {
+    throw new TypeError('slot listener probe accepts only explicit TCP endpoints');
+  }
+  const listeners = [];
+  for (const endpoint of ports) {
+    if (signal && signal.aborted) throw new Error('slot listener probe aborted');
+    if (await tcpProbe(endpoint.port, endpoint.host, 250)) listeners.push(endpoint);
+  }
+  return listeners;
+}
+
+function stableStackId(value) {
+  const source = String(value || 'unversioned');
+  return `simworld-${crypto.createHash('sha256').update(source).digest('hex').slice(0, 24)}`;
+}
+
+function registryEndpoints(ports) {
+  return Object.entries({
+    mcp: ports.mcp,
+    cirrus_http: ports.cirrusHttp,
+    cirrus_streamer: ports.cirrusWs,
+    cirrus_sfu: ports.cirrusSfu,
+    ucv: ports.ucv,
+  }).map(([name, port]) => ({ name, host: '127.0.0.1', protocol: 'tcp', port }));
+}
+
 class SlotPool extends EventEmitter {
   constructor(cfg = {}) {
     super();
     this.cfg = { ...DEFAULTS, ...cfg };
+    this._spawn = cfg.spawnImpl || spawn;
+    this._waitForPort = cfg.waitForPortImpl || waitForPort;
+    this._processProbe = cfg.processProbe || null;
+    this._registry = cfg.registry || null;
+    this._registryLeases = new Map();
+    this._registryHeartbeat = null;
+    if (!this._registry && this.cfg.registryDirectory) {
+      const { createProcessPortRegistry, defaultProcessProbe } = require(PROCESS_REGISTRY_MODULE);
+      this._processProbe = this._processProbe || defaultProcessProbe;
+      this._registry = createProcessPortRegistry({
+        directory: path.resolve(this.cfg.registryDirectory),
+        listenerProbe: focusedTcpListenerProbe,
+        policy: 'reject',
+      });
+    }
+    if (this._registry && !this._processProbe) {
+      this._processProbe = require(PROCESS_REGISTRY_MODULE).defaultProcessProbe;
+    }
+    if (this.cfg.registryRequired && !this._registry) {
+      throw new Error('PROCESS_PORT_REGISTRY_REQUIRED is set but PROCESS_PORT_REGISTRY_DIR is unavailable');
+    }
     /** @type {Map<number, {status, child, ports, startedAt, error}>} */
     this._slots = new Map();
     for (let i = 0; i < this.cfg.poolSize; i++) {
@@ -92,7 +148,79 @@ class SlotPool extends EventEmitter {
       ports: s.ports,
       ageMs: s.startedAt ? Date.now() - s.startedAt : null,
       error: s.error || null,
+      registryManaged: this._registryLeases.has(id),
     }));
+  }
+
+  async _acquireRegistryLease(slotId, ports) {
+    if (!this._registry) return null;
+    const existing = this._registryLeases.get(slotId);
+    if (existing) return existing.publicLease;
+    const identity = await this._processProbe(process.pid);
+    if (!identity || identity.alive !== true || !identity.startToken) {
+      const error = new Error('slot owner process identity is unavailable');
+      error.code = 'PROCESS_PORT_OWNER_IDENTITY_UNAVAILABLE';
+      throw error;
+    }
+    const acquired = await this._registry.acquire({
+      stackId: stableStackId(this.cfg.stackId || process.env.SIMWORLD_BUILD_REVISION),
+      slotId: `ue-slot-${slotId}`,
+      // A physical GPU may intentionally host multiple bounded slots.  The
+      // allocation id remains unique per slot while duplicate launches of the
+      // same slot still conflict on slot id and every exact endpoint.
+      gpuId: `gpu-${slotId % this.cfg.gpuCount}-slot-${slotId}`,
+      portFamily: 'simworld-ue-slot-v1',
+      ports: registryEndpoints(ports),
+      ownerPid: process.pid,
+      ownerStartToken: identity.startToken,
+    });
+    const lease = {
+      publicLease: acquired.lease,
+      owner: {
+        leaseId: acquired.lease.leaseId,
+        ownerPid: process.pid,
+        ownerStartToken: identity.startToken,
+      },
+    };
+    this._registryLeases.set(slotId, lease);
+    this._ensureRegistryHeartbeat();
+    return lease.publicLease;
+  }
+
+  _ensureRegistryHeartbeat() {
+    if (this._registryHeartbeat || !this._registry || this._registryLeases.size === 0) return;
+    const intervalMs = Number(this.cfg.registryHeartbeatMs);
+    if (!Number.isFinite(intervalMs) || intervalMs < 1000) return;
+    this._registryHeartbeat = setInterval(() => {
+      this._heartbeatRegistry().catch((error) => {
+        this._log('registry!', `heartbeat failed code=${error && error.code || 'PROCESS_PORT_REGISTRY_UNAVAILABLE'}`);
+      });
+    }, intervalMs);
+    if (typeof this._registryHeartbeat.unref === 'function') this._registryHeartbeat.unref();
+  }
+
+  async _heartbeatRegistry() {
+    if (!this._registry) return;
+    const outcomes = await Promise.allSettled(
+      [...this._registryLeases.values()].map((lease) => this._registry.heartbeat(lease.owner)),
+    );
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+    if (rejected) throw rejected.reason;
+  }
+
+  async _releaseRegistryLease(slotId) {
+    const lease = this._registryLeases.get(slotId);
+    if (!lease || !this._registry) return false;
+    this._registryLeases.delete(slotId);
+    try {
+      await this._registry.release(lease.owner);
+    } finally {
+      if (this._registryLeases.size === 0 && this._registryHeartbeat) {
+        clearInterval(this._registryHeartbeat);
+        this._registryHeartbeat = null;
+      }
+    }
+    return true;
   }
 
   /**
@@ -104,7 +232,12 @@ class SlotPool extends EventEmitter {
   async start(slotId) {
     const s = this._slots.get(slotId);
     if (!s) throw new Error(`unknown slot ${slotId}`);
-    if (s.status === 'up') return { slotId, ports: s.ports };
+    if (s.status === 'up') {
+      if (this._registry && !this._registryLeases.has(slotId)) {
+        throw new Error(`slot ${slotId} is up without a process registry lease`);
+      }
+      return { slotId, ports: s.ports };
+    }
     if (s.status === 'starting') {
       // Coalesce: wait for in-flight startup
       return new Promise((resolve, reject) => {
@@ -119,48 +252,74 @@ class SlotPool extends EventEmitter {
       });
     }
 
+    if (s.child) throw new Error(`slot ${slotId} still has a managed child`);
     s.status = 'starting';
     s.error = null;
     s.startedAt = Date.now();
+    try {
+      await this._acquireRegistryLease(slotId, s.ports);
+    } catch (error) {
+      s.status = 'failed';
+      s.error = String(error && error.code || 'PROCESS_PORT_REGISTRY_UNAVAILABLE');
+      this.emit('failed', slotId, error);
+      throw error;
+    }
     this._log(`slot-${slotId}`, `spawning ${this.cfg.launcher}`);
 
-    const child = spawn(this.cfg.launcher, ['--slot', String(slotId)], {
-      env: {
-        ...process.env,
-        UE_BASE_MCP:         String(this.cfg.baseMcp),
-        UE_BASE_CIRRUS_HTTP: String(this.cfg.baseCirrusHttp),
-        UE_BASE_CIRRUS_WS:   String(this.cfg.baseCirrusWs),
-        UE_BASE_CIRRUS_SFU:  String(this.cfg.baseCirrusSfu),
-        UE_BASE_UCV:         String(this.cfg.baseUcv),
-        UE_PORT_STRIDE:      String(this.cfg.portStride),
-        UE_GPU_COUNT:        String(this.cfg.gpuCount),
-        SLOTS_ROOT:          this.cfg.slotsRoot,
-      },
-      detached: false,
-      stdio:    ['ignore', 'pipe', 'pipe'],
-    });
+    let child;
+    try {
+      child = this._spawn(this.cfg.launcher, ['--slot', String(slotId)], {
+        env: {
+          ...process.env,
+          UE_BASE_MCP:         String(this.cfg.baseMcp),
+          UE_BASE_CIRRUS_HTTP: String(this.cfg.baseCirrusHttp),
+          UE_BASE_CIRRUS_WS:   String(this.cfg.baseCirrusWs),
+          UE_BASE_CIRRUS_SFU:  String(this.cfg.baseCirrusSfu),
+          UE_BASE_UCV:         String(this.cfg.baseUcv),
+          UE_PORT_STRIDE:      String(this.cfg.portStride),
+          UE_GPU_COUNT:        String(this.cfg.gpuCount),
+          SLOTS_ROOT:          this.cfg.slotsRoot,
+        },
+        detached: false,
+        stdio:    ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      s.status = 'failed';
+      s.error = 'launcher spawn failed';
+      await this._releaseRegistryLease(slotId);
+      this.emit('failed', slotId, error);
+      throw error;
+    }
     s.child = child;
 
     child.stdout.on('data', (b) => this._log(`slot-${slotId}`, b.toString().trimEnd()));
     child.stderr.on('data', (b) => this._log(`slot-${slotId}!`, b.toString().trimEnd()));
+    child.on('error', (error) => {
+      s.error = String(error && error.code || 'launcher spawn failed');
+      this._log(`slot-${slotId}!`, `launcher error code=${s.error}`);
+    });
 
     child.on('exit', (code, sig) => {
       this._log(`slot-${slotId}`, `child exited code=${code} sig=${sig}`);
       s.child = null;
       const wasStarting = s.status === 'starting';
       s.status = 'down';
-      if (wasStarting) {
-        s.error = `exit ${code}`;
-        this.emit('failed', slotId, new Error(`launcher exited code=${code} sig=${sig}`));
-      } else {
-        this.emit('down', slotId);
-      }
+      this._releaseRegistryLease(slotId).catch((error) => {
+        this._log(`slot-${slotId}!`, `registry release failed code=${error && error.code || 'PROCESS_PORT_REGISTRY_UNAVAILABLE'}`);
+      }).finally(() => {
+        if (wasStarting) {
+          s.error = `exit ${code}`;
+          this.emit('failed', slotId, new Error(`launcher exited code=${code} sig=${sig}`));
+        } else {
+          this.emit('down', slotId);
+        }
+      });
     });
 
     // Wait for MCP port to become ready, bounded by startup timeout
     const deadline = Date.now() + this.cfg.startupTimeout;
-    const ready = await waitForPort(s.ports.mcp, deadline);
-    if (!ready) {
+    const ready = await this._waitForPort(s.ports.mcp, deadline);
+    if (!ready || s.child !== child || s.status !== 'starting') {
       s.status = 'failed';
       s.error = `MCP port ${s.ports.mcp} not ready within ${this.cfg.startupTimeout}ms`;
       try { child.kill('SIGTERM'); } catch (_) {}
@@ -181,17 +340,25 @@ class SlotPool extends EventEmitter {
   async stop(slotId) {
     const s = this._slots.get(slotId);
     if (!s) return;
-    if (!s.child) { s.status = 'down'; return; }
+    if (!s.child) {
+      s.status = 'down';
+      await this._releaseRegistryLease(slotId);
+      return;
+    }
 
     const child = s.child;
     s.status = 'stopping';
     this._log(`slot-${slotId}`, `SIGTERM pid=${child.pid}`);
 
     await new Promise((resolve) => {
-      const exitHandler = () => resolve();
+      let forceTimer = null;
+      const exitHandler = () => {
+        if (forceTimer) clearTimeout(forceTimer);
+        resolve();
+      };
       child.once('exit', exitHandler);
       try { child.kill('SIGTERM'); } catch (_) { resolve(); return; }
-      setTimeout(() => {
+      forceTimer = setTimeout(() => {
         if (s.child) {
           try { child.kill('SIGKILL'); } catch (_) {}
         }
@@ -201,6 +368,7 @@ class SlotPool extends EventEmitter {
 
     s.status = 'down';
     s.child = null;
+    await this._releaseRegistryLease(slotId);
   }
 
   async stopAll() {

@@ -40,8 +40,8 @@ HTTPS   │  Nginx + Let's Encrypt + Basic Auth          │  :443
 │                │ controls                                │
 │  ┌─────────────▼─────────────────────────────────────┐ │
 │  │ SlotPool (slot-pool.js, in-process)               │ │
-│  │   acquire(slotId) → spawn slot-launcher.sh        │ │
-│  │   release(slotId) → SIGTERM child UE              │ │
+│  │   reserve exact process/port lease → spawn UE     │ │
+│  │   heartbeat lease → stop child → release lease    │ │
 │  └─────────────┬─────────────────────────────────────┘ │
 │       slot 0      slot 1      slot 2                    │
 │       ▼           ▼           ▼                          │
@@ -103,6 +103,7 @@ changes needed.
 | `scripts/stage-project-to-aws.sh` | Run on local dev box — rsyncs UE project skeleton to EC2 |
 | `scripts/slot-launcher.sh` | Launch one UE instance for a given slot |
 | `scripts/slot-pool.js` | Node module: child-process lifecycle for N slots |
+| `../../simworld_studio_workspace/web/server/process-port-registry.js` | Atomic PID/start-token and exact-port lease registry |
 | `scripts/session-shim.js` | Wires SlotPool into session-manager via env var |
 | `scripts/per-session-ports.js` | Routes internal UE calls from the HttpOnly Studio session cookie |
 | `scripts/bake-ami.sh` | Provision OS deps, NVIDIA driver, users, systemd units |
@@ -227,6 +228,10 @@ curl -u admin:pwd http://localhost:3002/api/session/status | jq
 journalctl -u simworld-web -f
 ls /var/lib/simworld/slots/0/Saved/Logs/
 
+# Audit active managed slot leases (mode 0600, simworld service account only)
+sudo -u simworld jq '{revision, updatedAt, leases: [.leases[] | {leaseId, stackId, slotId, gpuId, ports, heartbeatAt}]}' \
+  /var/lib/simworld/runtime-registry/process-port-registry.json
+
 # Force-kill a slot (e.g. UE wedged)
 sudo /opt/simworld-studio/deploy/aws/scripts/slot-launcher.sh --stop --slot 0
 
@@ -239,6 +244,7 @@ sudo /opt/simworld-studio/deploy/aws/scripts/slot-launcher.sh --stop --slot 0
 - **Single instance, not ECS fleet.** At 2–3 concurrent users, the orchestration tax of ECS isn't worth it; one box with 4 GPUs is simpler. Revisit if usage grows past 4 concurrent.
 - **OAuth shared across all sessions.** All slots share `/var/lib/simworld/claude-home/.claude/`. One Claude Code OAuth login = whole lab. Trade-off: no per-user cost attribution; add per-userId cost cap in the backend instead.
 - **Per-slot UE, not shared.** Each slot is its own UE process with its own Saved/Intermediate. Avoids actor-name collisions and viewport conflicts. Content directory is symlinked (read-only) so no disk multiplication.
+- **Fail-closed slot ownership.** Before a child is spawned, SlotPool atomically reserves the exact slot and loopback MCP/Cirrus/UCV ports against the parent PID start identity. Unmanaged listeners, duplicate slot leases, corrupt registry state, and unverifiable process identity block startup; shutdown never kills a process discovered only through the registry.
 - **Cirrus per slot, not multiplexed.** Simpler than one Cirrus handling N streamers; 4 node processes have negligible memory cost.
 - **TURN required.** Public users hit EC2 from arbitrary NATs; without TURN, WebRTC fails for ~30% of network conditions.
 
