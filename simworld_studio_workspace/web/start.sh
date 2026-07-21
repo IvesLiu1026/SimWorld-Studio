@@ -28,6 +28,7 @@ export CIRRUS_HTTP_PORT="${CIRRUS_HTTP_PORT:-8685}"
 export CIRRUS_WS_PORT="${CIRRUS_WS_PORT:-8686}"
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export NODE_ENV="${NODE_ENV:-production}"
+export CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-4-8}"
 $DEV && export NODE_ENV="development"
 
 echo "Config:"
@@ -36,6 +37,7 @@ echo "  UnrealCV     : $UCV_PORT"
 echo "  UnrealMCP    : $UNREAL_PORT"
 echo "  Cirrus HTTP  : $CIRRUS_HTTP_PORT"
 echo "  Mode         : $NODE_ENV"
+echo "  Builder      : claude model=$CLAUDE_MODEL"
 echo ""
 
 # ── Build frontend ─────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ WorkingDirectory=/opt/simworld-studio/simworld_studio_workspace/web/server
 # `systemctl edit simworld-web`.
 EnvironmentFile=-/etc/default/simworld
 Environment=NODE_ENV=production
+Environment=CLAUDE_MODEL=claude-opus-4-8
 Environment=PORT=3002
 Environment=UE_POOL_ENABLED=1
 Environment=UE_POOL_SIZE=3

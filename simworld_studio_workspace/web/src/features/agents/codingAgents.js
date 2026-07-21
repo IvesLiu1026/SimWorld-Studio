@@ -14,7 +14,7 @@ export function agentLabel(agentId) {
 export const DEFAULT_CODING_AGENTS = {
   claude: {
     label: "Claude Code",
-    defaultModel: "",
+    defaultModel: "claude-opus-4-8",
     models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "z-ai/glm-5.2"],
   },
   codex: {

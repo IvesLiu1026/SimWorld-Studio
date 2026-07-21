@@ -78,6 +78,7 @@ services:
 
     environment:
       - NODE_ENV=production
+      - CLAUDE_MODEL=claude-opus-4-8
       - UE_POOL_ENABLED=1
       - UE_POOL_SIZE=${UE_POOL_SIZE:-4}
       - UE_STARTUP_TIMEOUT_MS=${UE_STARTUP_TIMEOUT_MS:-180000}
