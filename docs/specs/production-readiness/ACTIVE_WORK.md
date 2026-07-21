@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed checkpoint: `3df767c2` (`fix: harden semantic process isolation`)
+- Latest pushed implementation checkpoint: `e31ee835` (`feat: expand mmg040 official asset candidates`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -67,6 +67,26 @@ change and report validation commands plus remaining live/admin gates.
   UE/PostgreSQL/Qdrant/embedding/provider observations; a new registered adapter
   revision that resolves the intentional false/true capability gate; PA-01
   through PA-21 evidence and explicit release approval.
+
+## Current `mmg_040` scene candidate checkpoint
+
+- The archive-bound scene candidate set now contains seven exact
+  Content-relative package locators: the official chair, three `BP_Box`
+  variants, `SM_SeatTable_01a`, `SM_Industrial_Carts_Static_Carts_1`, and
+  `SM_Industrial_Carts_Service_Carts_8`.
+- The seat-table is only a stable-step/seat candidate; the two cart meshes are
+  only high-storage/cabinet-surrogate candidates. Their source packages and
+  adjacent PBR families exist in the verified official archive, but no UE
+  class/load/spawn/bounds/collision/material or visual-role claim has been
+  made.
+- Candidate-source raw-byte pin:
+  `35aaf9741650d028f8f11e303035ab10168ef78d5244411c64d9f37db7cf9f4e`.
+  The generated profile remains `candidate_unverified`,
+  `start_allowed=false`, and `runtime_ready=false` until a live receipt exists.
+- Next authoritative action is a runtime-owner AssetRegistry and disposable
+  load/spawn/material/bounds/collision inspection of these seven objects. If
+  one step alternative and one high-storage candidate pass, a non-fixture
+  layout can be emitted without the separately gated CC0 download.
 
 ## Validation
 

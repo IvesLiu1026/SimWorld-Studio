@@ -7,7 +7,9 @@ Branch: `codex/semantic-production-adapter`
 Commits:
 
 - `a53896d9` — archival semantic control-plane checkpoint;
-- `3df767c2` — isolated executor hardening, pushed to `origin`.
+- `3df767c2` — isolated executor hardening, pushed to `origin`;
+- `e31ee835` — official-content `mmg_040` candidate-set expansion, pushed to
+  `origin`.
 
 ## Resource boundary
 
