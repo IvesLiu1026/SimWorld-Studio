@@ -112,7 +112,7 @@ function makeBindings(scene) {
       source_id: "camera_wearer",
       binding_id: "actor_camera_wearer",
       kind: "player",
-      capabilities: ["brace", "drag", "gaze", "wait"],
+      capabilities: ["brace", "drag", "gaze", "lift_foot", "wait"],
     }],
     entities: scene.entities.map((entity) => ({
       source_id: entity.id,
@@ -176,7 +176,7 @@ function makeRegistry(log, overrides = {}) {
   return {
     schema: CAPABILITY_REGISTRY_SCHEMA,
     revision: "scheduler_actions_v1",
-    adapters: ["look_at", "drag", "brace", "pause"].map((action) => makeAdapter(action, log, overrides[action] || {})),
+    adapters: ["look_at", "drag", "brace", "lift_foot", "pause"].map((action) => makeAdapter(action, log, overrides[action] || {})),
   };
 }
 
@@ -255,7 +255,7 @@ async function driveMmg040(clock, startMs = 0, secondBeatMs = startMs + 2000) {
   await flushTurns();
 }
 
-test("server monotonic scheduler records 0/2/5/9 beats, drift, engine time, and waits through second 12", async () => {
+test("server monotonic scheduler executes the ordered 5-second compound beat and waits through second 12", async () => {
   const scene = await loadMmg040();
   const harness = createHarness(scene);
   const initial = harness.scheduler.start(startRequest(harness.timeline));
@@ -263,17 +263,17 @@ test("server monotonic scheduler records 0/2/5/9 beats, drift, engine time, and 
   assert.equal(initial.schema, "vista-timeline-run/v1");
   assert.equal(initial.state, "ready");
   assert.equal(initial.clock, "server_monotonic");
-  assert.deepEqual(initial.events.map((event) => event.planned_sec), [0, 2, 5, 9]);
+  assert.deepEqual(initial.events.map((event) => event.planned_sec), [0, 2, 5, 5, 9]);
 
   await driveMmg040(harness.clock, 0, 2500);
   const final = await harness.scheduler.waitForRun(access(initial.run_id));
 
   assert.equal(final.state, "completed");
   assert.equal(final.ended_at, "2026-07-14T00:00:12.000Z");
-  assert.deepEqual(final.events.map((event) => event.state), ["completed", "completed", "completed", "completed"]);
-  assert.deepEqual(final.events.map((event) => event.actual_sec), [0, 2.5, 5, 9]);
-  assert.deepEqual(final.events.map((event) => event.drift_ms), [0, 500, 0, 0]);
-  assert.deepEqual(final.events.map((event) => event.engine_time), [100, 102.5, 105, 109]);
+  assert.deepEqual(final.events.map((event) => event.state), ["completed", "completed", "completed", "completed", "completed"]);
+  assert.deepEqual(final.events.map((event) => event.actual_sec), [0, 2.5, 5, 5, 9]);
+  assert.deepEqual(final.events.map((event) => event.drift_ms), [0, 500, 0, 0, 0]);
+  assert.deepEqual(final.events.map((event) => event.engine_time), [100, 102.5, 105, 105, 109]);
   assert.ok(final.events.every((event) => event.attempt === 1 && event.cleanup_state === "completed"));
   assert.deepEqual(final.cleanup, {
     state: "completed",
@@ -285,13 +285,14 @@ test("server monotonic scheduler records 0/2/5/9 beats, drift, engine time, and 
   assert.deepEqual(harness.engineSamples, [
     ["beat-0001", 0],
     ["beat-0002", 2500],
-    ["beat-0003", 5000],
+    ["beat-0003-brace", 5000],
+    ["beat-0003-lift_foot", 5000],
     ["beat-0004", 9000],
   ]);
-  assert.equal(harness.log.filter((entry) => entry[1] === "precondition").length, 4);
-  assert.equal(harness.log.filter((entry) => entry[1] === "execute").length, 4);
-  assert.equal(harness.log.filter((entry) => entry[1] === "completion").length, 4);
-  assert.equal(harness.log.filter((entry) => entry[1] === "cleanup").length, 4);
+  assert.equal(harness.log.filter((entry) => entry[1] === "precondition").length, 5);
+  assert.equal(harness.log.filter((entry) => entry[1] === "execute").length, 5);
+  assert.equal(harness.log.filter((entry) => entry[1] === "completion").length, 5);
+  assert.equal(harness.log.filter((entry) => entry[1] === "cleanup").length, 5);
   assert.equal(harness.log.some((entry) => entry[1] === "timeout" || entry[1] === "cancel"), false);
 });
 
@@ -346,7 +347,7 @@ test("Stop is idempotent, aborts the active adapter, and cancels every pending e
 
   assert.deepEqual(second, first);
   assert.equal(first.state, "cancelled");
-  assert.deepEqual(first.events.map((event) => event.state), ["cancelled", "cancelled", "cancelled", "cancelled"]);
+  assert.deepEqual(first.events.map((event) => event.state), ["cancelled", "cancelled", "cancelled", "cancelled", "cancelled"]);
   assert.equal(first.events[0].cleanup_state, "completed");
   assert.ok(first.events.slice(1).every((event) => event.cleanup_state === "not_required"));
   assert.equal(log.filter((entry) => entry[1] === "cancel").length, 1);
@@ -430,7 +431,7 @@ test("Replay creates a fresh run only after the original reaches a terminal stat
 
   assert.equal(replayFinal.state, "completed");
   assert.equal(replayFinal.started_at, "2026-07-14T00:00:12.000Z");
-  assert.deepEqual(replayFinal.events.map((event) => event.actual_sec), [0, 2, 5, 9]);
+  assert.deepEqual(replayFinal.events.map((event) => event.actual_sec), [0, 2, 5, 5, 9]);
   assert.deepEqual(harness.scheduler.getRun(access(firstInitial.run_id)), firstFinal);
 });
 
@@ -495,6 +496,6 @@ test("invalid engine-time evidence fails the dispatched event before adapter mut
   assert.equal(final.events[0].state, "failed");
   assert.match(final.events[0].error, /invalid value/);
   assert.equal(final.events[0].cleanup_state, "not_required");
-  assert.deepEqual(final.events.slice(1).map((event) => event.state), ["cancelled", "cancelled", "cancelled"]);
+  assert.deepEqual(final.events.slice(1).map((event) => event.state), ["cancelled", "cancelled", "cancelled", "cancelled"]);
   assert.deepEqual(log, [], "adapter handlers must not run without engine-time evidence");
 });

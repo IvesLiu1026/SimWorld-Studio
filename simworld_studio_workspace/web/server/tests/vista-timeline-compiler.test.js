@@ -181,7 +181,7 @@ test("fixed adapter validation requires the six lifecycle handlers and rejects c
   expectCompileError(() => validateActionAdapter({ ...valid, timeout_ms: 0 }), "TIMELINE_ADAPTER_INVALID");
 });
 
-test("mmg_040 strict preflight preserves 0/2/5/9 and blocks drag and brace before mutation", async () => {
+test("mmg_040 strict preflight preserves the ordered 5-second compound beat and blocks unsupported actions", async () => {
   const scene = await loadMmg040();
   const { calls, handlers } = makeLifecycleCounters();
   const before = JSON.stringify(scene);
@@ -191,15 +191,19 @@ test("mmg_040 strict preflight preserves 0/2/5/9 and blocks drag and brace befor
   assert.equal(timeline.policy, "strict");
   assert.equal(timeline.duration_sec, 12);
   assert.equal(timeline.start_allowed, false);
-  assert.deepEqual(timeline.events.map((event) => event.at_sec), [0, 2, 5, 9]);
-  assert.deepEqual(timeline.events.map((event) => event.action), ["look_at", "drag", "brace", "pause"]);
-  assert.deepEqual(timeline.events.map((event) => event.preflight_status), ["ready", "unsupported", "unsupported", "ready"]);
-  assert.deepEqual(timeline.events.map((event) => event.disposition), ["execute", "block", "block", "execute"]);
+  assert.deepEqual(timeline.events.map((event) => event.at_sec), [0, 2, 5, 5, 9]);
+  assert.deepEqual(timeline.events.map((event) => event.action), ["look_at", "drag", "brace", "lift_foot", "pause"]);
+  assert.deepEqual(timeline.events.map((event) => event.preflight_status), ["ready", "unsupported", "unsupported", "unsupported", "ready"]);
+  assert.deepEqual(timeline.events.map((event) => event.disposition), ["execute", "block", "block", "block", "execute"]);
   assert.deepEqual(
     timeline.issues.map((issue) => [issue.event_id, issue.code]),
-    [["beat-0002", "ACTION_UNSUPPORTED"], ["beat-0003", "ACTION_UNSUPPORTED"]],
+    [
+      ["beat-0002", "ACTION_UNSUPPORTED"],
+      ["beat-0003-brace", "ACTION_UNSUPPORTED"],
+      ["beat-0003-lift_foot", "ACTION_UNSUPPORTED"],
+    ],
   );
-  assert.deepEqual(timeline.summary, { total: 4, ready: 2, skipped: 0, blocked: 2, errors: 2, warnings: 0 });
+  assert.deepEqual(timeline.summary, { total: 5, ready: 2, skipped: 0, blocked: 3, errors: 3, warnings: 0 });
   assert.deepEqual(calls, Object.fromEntries(ACTION_ADAPTER_METHODS.map((method) => [method, 0])));
   assert.equal(JSON.stringify(scene), before, "compiler must not mutate SceneSpec");
   assert.equal(JSON.stringify(timeline).includes("precondition"), false, "runtime handlers must not enter artifacts");
@@ -237,13 +241,13 @@ test("lenient policy explicitly skips unsupported events without rewriting their
   const timeline = compile(scene, { policy: "lenient" });
 
   assert.equal(timeline.start_allowed, true);
-  assert.deepEqual(timeline.events.map((event) => event.action), ["look_at", "drag", "brace", "pause"]);
-  assert.deepEqual(timeline.events.map((event) => event.disposition), ["execute", "skip", "skip", "execute"]);
+  assert.deepEqual(timeline.events.map((event) => event.action), ["look_at", "drag", "brace", "lift_foot", "pause"]);
+  assert.deepEqual(timeline.events.map((event) => event.disposition), ["execute", "skip", "skip", "skip", "execute"]);
   assert.ok(timeline.issues.every((issue) => issue.severity === "warning"));
-  assert.deepEqual(timeline.summary, { total: 4, ready: 2, skipped: 2, blocked: 0, errors: 0, warnings: 2 });
+  assert.deepEqual(timeline.summary, { total: 5, ready: 2, skipped: 3, blocked: 0, errors: 0, warnings: 3 });
 });
 
-test("an unrelated move adapter is never used as a generic fallback for drag or brace", async () => {
+test("an unrelated move adapter is never used as a generic fallback for compound interaction actions", async () => {
   const scene = await loadMmg040();
   const adapters = [
     ...baselineAdapters(),
@@ -252,11 +256,14 @@ test("an unrelated move adapter is never used as a generic fallback for drag or 
   const timeline = compile(scene, { adapters });
   const drag = timeline.events.find((event) => event.action === "drag");
   const brace = timeline.events.find((event) => event.action === "brace");
+  const liftFoot = timeline.events.find((event) => event.action === "lift_foot");
 
   assert.equal(drag.preflight_status, "unsupported");
   assert.equal(drag.adapter, null);
   assert.equal(brace.preflight_status, "unsupported");
   assert.equal(brace.adapter, null);
+  assert.equal(liftFoot.preflight_status, "unsupported");
+  assert.equal(liftFoot.adapter, null);
   assert.equal(timeline.events.some((event) => event.adapter && event.adapter.adapter_id === "move_to_v1"), false);
 });
 
@@ -304,7 +311,7 @@ test("all-skipped lenient preflight remains blocked with a global no-executable 
 
   assert.equal(timeline.start_allowed, false);
   assert.equal(timeline.summary.ready, 0);
-  assert.equal(timeline.summary.skipped, 4);
+  assert.equal(timeline.summary.skipped, 5);
   assert.ok(timeline.issues.some((issue) => issue.code === "NO_EXECUTABLE_EVENTS" && issue.event_id === null));
 });
 
@@ -312,11 +319,11 @@ test("absolute timestamp bounds, stable event ids, and target references fail be
   const base = await loadMmg040();
 
   const exactlyAtEnd = clone(base);
-  exactlyAtEnd.timeline[3].at_sec = 12;
+  exactlyAtEnd.timeline.at(-1).at_sec = 12;
   assert.equal(compile(exactlyAtEnd).events.at(-1).at_sec, 12);
 
   const afterEnd = clone(base);
-  afterEnd.timeline[3].at_sec = 12.001;
+  afterEnd.timeline.at(-1).at_sec = 12.001;
   expectCompileError(() => compile(afterEnd), "TIMELINE_SCENE_INVALID");
 
   const negative = clone(base);
@@ -338,9 +345,15 @@ test("absolute timestamp bounds, stable event ids, and target references fail be
 
 test("events are ordered deterministically by absolute timestamp then stable id", async () => {
   const scene = clone(await loadMmg040());
-  scene.timeline = [scene.timeline[3], scene.timeline[1], scene.timeline[0], scene.timeline[2]];
+  scene.timeline = [scene.timeline[3], scene.timeline[4], scene.timeline[1], scene.timeline[0], scene.timeline[2]];
   const timeline = compile(scene, { policy: "lenient" });
 
-  assert.deepEqual(timeline.events.map((event) => event.at_sec), [0, 2, 5, 9]);
-  assert.deepEqual(timeline.events.map((event) => event.event_id), ["beat-0001", "beat-0002", "beat-0003", "beat-0004"]);
+  assert.deepEqual(timeline.events.map((event) => event.at_sec), [0, 2, 5, 5, 9]);
+  assert.deepEqual(timeline.events.map((event) => event.event_id), [
+    "beat-0001",
+    "beat-0002",
+    "beat-0003-brace",
+    "beat-0003-lift_foot",
+    "beat-0004",
+  ]);
 });

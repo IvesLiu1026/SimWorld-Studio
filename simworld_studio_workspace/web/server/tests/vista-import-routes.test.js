@@ -168,7 +168,7 @@ test("real curated runtime previews, commits idempotently, and returns session-b
   });
   assert.equal(preview.status, 200);
   assert.equal(preview.body.duration_sec, 12);
-  assert.deepEqual(preview.body.timeline.map((event) => event.at_sec), [0, 2, 5, 9]);
+  assert.deepEqual(preview.body.timeline.map((event) => event.at_sec), [0, 2, 5, 5, 9]);
   assert.equal(fs.existsSync(artifactRoot), false);
 
   const first = await jsonRequest(`${base}/api/vista/imports`, {

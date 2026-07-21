@@ -11,7 +11,7 @@ const path = require("path");
 const YAML = require("yaml");
 
 const IMPORTER_NAME = "vista-scene-importer";
-const IMPORTER_VERSION = "1.0.0";
+const IMPORTER_VERSION = "1.1.0";
 const SOURCE_SCHEMA = "vista-import-source/v1";
 const DIALOGUE_SCHEMA = "vista-dialogue-no-oracle/v1";
 const MEDIA_SCHEMA = "vista-media-reference/v1";
@@ -34,6 +34,9 @@ const TOP_LEVEL_SCENE_KEYS = Object.freeze([
 const UNSUPPORTED_RUNTIME_ACTIONS = new Set([
   "brace", "drag", "hesitate", "lift_foot", "unresolved_action",
 ]);
+
+const BRACE_ACTION_RE = /\b(?:brace|bracing)/;
+const LIFT_FOOT_ACTION_RE = /\b(?:lift|raise)\b[^.]{0,80}\bfoot\b|\bfoot\b[^.]{0,80}\b(?:lift|raise)/;
 
 const ORACLE_KEY_RE = /^(?:oracle(?:_|$)|ground[_-]?truth|target(?:_|$)|target_label|label|answer|review[_-]?note|review[_-]?decision|visible[_-]?evidence|dialogue[_-]?evidence|assist[_-]?steps?|intervention(?:_|$)|issue[_-]?summary|prediction(?:_|$)|seed(?:_|$))/i;
 
@@ -529,15 +532,24 @@ function uniqueId(base, used) {
 
 function inferAction(description) {
   const text = description.toLowerCase();
-  if (/\b(?:brace|bracing)/.test(text)) return "brace";
+  if (BRACE_ACTION_RE.test(text)) return "brace";
   if (/\b(?:drag|pull)/.test(text)) return "drag";
-  if (/\b(?:lift|raise)\b[^.]{0,80}\bfoot\b|\bfoot\b[^.]{0,80}\b(?:lift|raise)/.test(text)) return "lift_foot";
+  if (LIFT_FOOT_ACTION_RE.test(text)) return "lift_foot";
   if (/\b(?:pause|wait|stop|hold|hesitat)/.test(text)) return "pause";
   if (/\b(?:look|gaze|glance|view)\b/.test(text)) return "look_at";
   if (/\b(?:pick up|pickup|grasp|take)\b/.test(text)) return "pick_up";
   if (/\b(?:drop|release|put down)\b/.test(text)) return "drop";
   if (/\b(?:walk|approach|move|step toward)\b/.test(text)) return "move_to";
   return "unresolved_action";
+}
+
+function inferActionSequence(description) {
+  const text = description.toLowerCase();
+  const primary = inferAction(description);
+  if (primary === "brace" && BRACE_ACTION_RE.test(text) && LIFT_FOOT_ACTION_RE.test(text)) {
+    return Object.freeze(["brace", "lift_foot"]);
+  }
+  return Object.freeze([primary]);
 }
 
 function inferTarget(description, entities) {
@@ -611,29 +623,35 @@ function normalizeScene({ manifest, verifiedFiles, script, dialogue, dialogueRaw
     blocking: entity.required === true,
     candidates: Object.freeze([]),
   }));
-  const timeline = checked.parsedActions.map((parsed, index) => {
-    const action = inferAction(parsed.description);
-    if (UNSUPPORTED_RUNTIME_ACTIONS.has(action)) {
-      unresolved.push(Object.freeze({
-        mapping_id: `unresolved-action-${String(index + 1).padStart(4, "0")}`,
-        kind: "action",
-        source_pointer: `/Scene/Actions/${index}`,
-        reason_code: "unsupported_action",
-        message: `Action '${action}' requires an explicit verified runtime adapter`,
-        blocking: true,
-        candidates: Object.freeze([]),
-      }));
-    }
-    return Object.freeze({
-      event_id: `beat-${String(index + 1).padStart(4, "0")}`,
-      at_sec: parsed.at_sec,
-      action,
-      actor_id: "camera_wearer",
-      target_id: inferTarget(parsed.description, entities),
-      parameters: Object.freeze({}),
-      description: parsed.description,
-      source_pointer: `/Scene/Actions/${index}`,
-      privilege: "reconstruction_only",
+  const timeline = checked.parsedActions.flatMap((parsed, index) => {
+    const actions = inferActionSequence(parsed.description);
+    const compound = actions.length > 1;
+    const beat = String(index + 1).padStart(4, "0");
+    return actions.map((action) => {
+      const eventId = compound ? `beat-${beat}-${action}` : `beat-${beat}`;
+      const sourcePointer = compound ? `/Scene/Actions/${index}/${action}` : `/Scene/Actions/${index}`;
+      if (UNSUPPORTED_RUNTIME_ACTIONS.has(action)) {
+        unresolved.push(Object.freeze({
+          mapping_id: `unresolved-action-${eventId.slice("beat-".length)}`,
+          kind: "action",
+          source_pointer: sourcePointer,
+          reason_code: "unsupported_action",
+          message: `Action '${action}' requires an explicit verified runtime adapter`,
+          blocking: true,
+          candidates: Object.freeze([]),
+        }));
+      }
+      return Object.freeze({
+        event_id: eventId,
+        at_sec: parsed.at_sec,
+        action,
+        actor_id: "camera_wearer",
+        target_id: inferTarget(parsed.description, entities),
+        parameters: Object.freeze({}),
+        description: parsed.description,
+        source_pointer: sourcePointer,
+        privilege: "reconstruction_only",
+      });
     });
   });
   const files = [...verifiedFiles]
@@ -867,7 +885,7 @@ function validateSceneSpec(scene) {
     if (eventIds.has(eventId)) fail("VISTA_SCENE_INVALID", "Timeline event ids must be unique", { pointer });
     eventIds.add(eventId);
     const atSec = requireFiniteNumber(event.at_sec, `${pointer}.at_sec`, { min: 0, max: duration });
-    if (atSec <= previous) fail("VISTA_SCENE_INVALID", "Timeline timestamps must be strictly ordered", { pointer });
+    if (atSec < previous) fail("VISTA_SCENE_INVALID", "Timeline timestamps must be nondecreasing", { pointer });
     previous = atSec;
     requireString(event.action, `${pointer}.action`, { pattern: SAFE_ID_RE });
     requireString(event.actor_id, `${pointer}.actor_id`, { pattern: SAFE_ID_RE });

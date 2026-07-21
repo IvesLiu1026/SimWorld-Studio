@@ -118,14 +118,15 @@ coverage 中明列缺口，不會假裝完整。
 
 ## `mmg_040` 注意事項
 
-目前 importer 的 golden SceneSpec 是 0／2／5／9 秒：`look_at`、`drag`、`brace`、
-`pause`。來源的 5 秒描述同時包含 brace 與 lift-foot，但 importer 目前只輸出一個
-`brace` event。Runtime 已有獨立 `lift_foot` adapter contract；正式接線時必須由 importer
-或核准的 choreography expansion 產生 explicit `lift_foot` event，不得由 runtime 猜測
-自然語言或偷偷在 `brace` 內加動作。
+Importer 的 golden SceneSpec 現在是 0／2／5／5／9 秒：`look_at`、`drag`、`brace`、
+`lift_foot`、`pause`。來源的 5 秒描述明示 brace 與 lift-foot，因此 importer 依固定規則
+輸出 `beat-0003-brace` 後接 `beat-0003-lift_foot`；兩者保留同一時間戳，source pointer
+分別綁定 `/Scene/Actions/2/brace` 與 `/Scene/Actions/2/lift_foot`。句中其餘動詞不會被
+猜測成額外 event。原始 `Scene.Actions` 時間戳仍須嚴格遞增且唯一，只有經來源驗證後的
+normalized SceneSpec 允許同秒 event 以非遞減順序存在。
 
-30 FPS 的 `mmg_040` checkpoints 應至少對應 frame 0／60／150／270／360。若將
-brace 與 lift-foot 明確拆成同一個 5 秒 frame，依 stable event ID 取得 `frame_order`
+30 FPS 的 `mmg_040` checkpoints 應至少對應 frame 0／60／150／270／360。已明確拆成
+同一個 5 秒 frame 的 brace 與 lift-foot 依 stable event ID 取得 `frame_order`
 0／1，不依 JavaScript callback race 決定順序。
 
 ## 尚未解除的 Live UE／Content Gates

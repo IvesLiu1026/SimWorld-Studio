@@ -104,7 +104,7 @@ function collectKeys(value, output = new Set()) {
   return output;
 }
 
-test("mmg_040 golden preview preserves verified identity, evidence, and 12-second beats", async () => {
+test("mmg_040 golden preview preserves verified identity, evidence, and explicit compound beats", async () => {
   const importer = makeImporter();
   const scene = await importer.preview(REQUEST);
 
@@ -124,14 +124,27 @@ test("mmg_040 golden preview preserves verified identity, evidence, and 12-secon
   });
 
   assert.equal(scene.duration_sec, 12);
-  assert.deepEqual(scene.timeline.map((event) => event.at_sec), [0, 2, 5, 9]);
-  assert.deepEqual(scene.timeline.map((event) => event.action), ["look_at", "drag", "brace", "pause"]);
+  assert.deepEqual(scene.timeline.map((event) => event.at_sec), [0, 2, 5, 5, 9]);
+  assert.deepEqual(scene.timeline.map((event) => event.action), ["look_at", "drag", "brace", "lift_foot", "pause"]);
+  assert.deepEqual(scene.timeline.map((event) => event.event_id), [
+    "beat-0001",
+    "beat-0002",
+    "beat-0003-brace",
+    "beat-0003-lift_foot",
+    "beat-0004",
+  ]);
   assert.deepEqual(scene.timeline.map((event) => event.source_pointer), [
     "/Scene/Actions/0",
     "/Scene/Actions/1",
-    "/Scene/Actions/2",
+    "/Scene/Actions/2/brace",
+    "/Scene/Actions/2/lift_foot",
     "/Scene/Actions/3",
   ]);
+  assert.deepEqual(scene.timeline.slice(2, 4).map((event) => event.target_id), [
+    "wheeled_office_chair_with_visible_casters",
+    "wheeled_office_chair_with_visible_casters",
+  ]);
+  assert.equal(scene.timeline.filter((event) => event.at_sec === 5 && event.action === "pause").length, 0);
 
   assert.equal(scene.source.dataset_revision, REVISION);
   assert.equal(scene.source.source_row_id, SOURCE_ROW_ID);
@@ -142,7 +155,7 @@ test("mmg_040 golden preview preserves verified identity, evidence, and 12-secon
   assert.equal(scene.source.source_checksum, EXPECTED_SOURCE_CHECKSUM);
   assert.equal(scene.provenance.source_checksum, EXPECTED_SOURCE_CHECKSUM);
   assert.equal(scene.provenance.importer_name, "vista-scene-importer");
-  assert.equal(scene.provenance.importer_version, "1.0.0");
+  assert.equal(scene.provenance.importer_version, "1.1.0");
 
   const declarations = new Map(scene.source.files.map((file) => [file.role, file]));
   assert.equal(declarations.size, 3);
@@ -176,7 +189,7 @@ test("mmg_040 golden preview preserves verified identity, evidence, and 12-secon
   assert.equal(scene.unresolved.filter((item) => item.kind === "asset").length, scene.entities.length);
   assert.deepEqual(
     scene.unresolved.filter((item) => item.kind === "action").map((item) => item.source_pointer),
-    ["/Scene/Actions/1", "/Scene/Actions/2"],
+    ["/Scene/Actions/1", "/Scene/Actions/2/brace", "/Scene/Actions/2/lift_foot"],
   );
   assert.ok(scene.unresolved.filter((item) => item.kind === "action").every((item) => item.blocking));
 
