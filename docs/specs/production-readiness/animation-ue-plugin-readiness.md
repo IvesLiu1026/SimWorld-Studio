@@ -193,6 +193,17 @@ token 或任意設定）：
 7. 在 disposable project build、load、PIE、normal completion、timeout、disconnect、
    restart/reconciliation 全部驗證後，才可把 timeline policy 設成 required。
 
+`vista_mmg040/mmg040_project_content_r1` 另有 server-owned static compatibility policy。
+Runtime config loader 與 live readiness probe 會各自要求 plugin `1.1.0`、engine `5.3.2` 與
+`linux-x86_64`；任一不符都在連線／probe 前 fail closed。這個雙層 gate 明確排除歷史
+`1.0.0`／UE 5.7.3 artifact，也排除 UE 5.8 等跨 engine artifact。其他 profile 不會被這份
+mmg040-specific policy 改寫；新增 profile 必須另行定義自己的 compatibility binding。
+
+這仍不是 source-to-binary cryptographic proof。後續 artifact schema revision 必須加入
+`source_manifest_sha256` 與 `source_contract_sha256`，並由受控 build receipt及 live capability
+共同綁定；在那以前，static policy 只關閉「把已知不相容歷史 manifest 當 current expected
+artifact」的配置漏洞。
+
 ## UE plugin endpoint requirements
 
 Plugin 只保留四個固定 command types；名稱與 wire schema 由 portable contract 固定：

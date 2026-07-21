@@ -71,6 +71,17 @@ function contentProfile(overrides = {}) {
   };
 }
 
+function mmg040ContentProfile(overrides = {}) {
+  return contentProfile({
+    profile_id: "vista_mmg040",
+    revision: "mmg040_project_content_r1",
+    content_revision: "gym-citynav-mmg040-content-r1",
+    pawn_class_path: "/Game/VISTA/MMG040/Character/BP_MMG040Character.BP_MMG040Character_C",
+    skeleton_path: "/Game/VISTA/MMG040/Character/SKEL_MMG040Character.SKEL_MMG040Character",
+    ...overrides,
+  });
+}
+
 function pluginArtifact(overrides = {}) {
   return {
     schema: ANIMATION_UE_PLUGIN_ARTIFACT_SCHEMA,
@@ -213,6 +224,39 @@ test("pinned receipts reject checksum changes, symlinks, and production fixture 
     }),
     /not allowed in production/,
   );
+});
+
+test("runtime configuration rejects incompatible mmg040 plugin revisions before probing UE", (t) => {
+  const incompatible = [
+    pluginArtifact({ plugin_version: "1.0.0", engine_version: "5.7.3" }),
+    pluginArtifact({ plugin_version: "1.0.0", engine_version: "5.3.2" }),
+    pluginArtifact({ plugin_version: "1.1.0", engine_version: "5.7.3" }),
+    pluginArtifact({ plugin_version: "1.1.0", engine_version: "5.8.0" }),
+    pluginArtifact({ plugin_version: "1.1.0", engine_version: "5.3.2", target_platform: "win64" }),
+  ];
+  for (const artifact of incompatible) {
+    const root = temporaryRoot(t);
+    assert.throws(
+      () => resolveVistaAnimationTimelineConfig(runtimeEnv(root, mmg040ContentProfile(), artifact)),
+      hasCode("ANIMATION_RUNTIME_CONFIG_INVALID", 500),
+    );
+  }
+
+  const validRoot = temporaryRoot(t);
+  const valid = resolveVistaAnimationTimelineConfig(runtimeEnv(
+    validRoot,
+    mmg040ContentProfile(),
+    pluginArtifact({ plugin_version: "1.1.0", engine_version: "5.3.2" }),
+  ));
+  assert.equal(valid.configured, true);
+
+  const unrelatedRoot = temporaryRoot(t);
+  const unrelated = resolveVistaAnimationTimelineConfig(runtimeEnv(
+    unrelatedRoot,
+    contentProfile(),
+    pluginArtifact({ plugin_version: "1.0.0", engine_version: "5.8.0" }),
+  ));
+  assert.equal(unrelated.configured, true);
 });
 
 function capabilityResponse(request, artifact) {

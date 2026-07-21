@@ -24,6 +24,7 @@ const {
   ANIMATION_UE_PLUGIN_ARTIFACT_SCHEMA,
   ANIMATION_UE_PLUGIN_NAME,
   ANIMATION_UE_SOURCE_MANIFEST_SHA256,
+  CONTENT_PROFILE_PLUGIN_COMPATIBILITY,
   EXPECTED_PLUGIN_SOURCE_MANIFEST,
   EXPECTED_PLUGIN_SOURCE_FILES,
   MAX_PLUGIN_SOURCE_FILE_BYTES,
@@ -115,6 +116,17 @@ function makeProfile() {
       completion_signal: "vista_brace_complete",
       timeout_ms: 5000,
     }],
+  };
+}
+
+function makeMmg040Profile() {
+  return {
+    ...makeProfile(),
+    profile_id: "vista_mmg040",
+    revision: "mmg040_project_content_r1",
+    content_revision: "gym-citynav-mmg040-content-r1",
+    pawn_class_path: "/Game/VISTA/MMG040/Character/BP_MMG040Character.BP_MMG040Character_C",
+    skeleton_path: "/Game/VISTA/MMG040/Character/SKEL_MMG040Character.SKEL_MMG040Character",
   };
 }
 
@@ -646,6 +658,44 @@ test("a live plugin challenge proves artifact, slot, content, allowlist, and no-
   assert.equal(Object.hasOwn(request, "asset_path"), false);
   assert.equal(OPERATION_SET.operations.filter((entry) => entry.mutation).length, 4);
   assert.ok(OPERATION_SET.operations.filter((entry) => entry.mutation).every((entry) => entry.max_attempts === 1));
+});
+
+test("mmg040 profile statically rejects historical or cross-engine plugin artifacts", () => {
+  assert.deepEqual(CONTENT_PROFILE_PLUGIN_COMPATIBILITY, {
+    "vista_mmg040/mmg040_project_content_r1": {
+      plugin_version: "1.1.0",
+      engine_version: "5.3.2",
+      target_platform: "linux-x86_64",
+    },
+  });
+  assert.equal(Object.isFrozen(CONTENT_PROFILE_PLUGIN_COMPATIBILITY), true);
+
+  const incompatible = [
+    makeArtifact({ plugin_version: "1.0.0", engine_version: "5.7.3" }),
+    makeArtifact({ plugin_version: "1.0.0", engine_version: "5.3.2" }),
+    makeArtifact({ plugin_version: "1.1.0", engine_version: "5.7.3" }),
+    makeArtifact({ plugin_version: "1.1.0", engine_version: "5.8.0" }),
+    makeArtifact({ plugin_version: "1.1.0", target_platform: "win64" }),
+  ];
+  for (const expectedArtifact of incompatible) {
+    assert.throws(
+      () => makeProbe(null, { contentProfile: makeMmg040Profile(), expectedArtifact }),
+      (error) => error instanceof VistaAnimationUeReadinessError
+        && error.code === "ANIMATION_UE_PLUGIN_CONFIG_INVALID",
+    );
+  }
+
+  const compatible = makeProbe(null, {
+    contentProfile: makeMmg040Profile(),
+    expectedArtifact: makeArtifact({ plugin_version: "1.1.0" }),
+  });
+  assert.equal(typeof compatible, "function");
+
+  const unrelatedProfile = makeProbe(null, {
+    contentProfile: makeProfile(),
+    expectedArtifact: makeArtifact({ plugin_version: "1.0.0", engine_version: "5.8.0" }),
+  });
+  assert.equal(typeof unrelatedProfile, "function");
 });
 
 test("generic MCP, Python, and invoke-only transports cannot satisfy readiness", async () => {

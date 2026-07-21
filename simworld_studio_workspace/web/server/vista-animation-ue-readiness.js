@@ -43,6 +43,14 @@ const MAX_PLUGIN_SOURCE_FILE_BYTES = 1_048_576;
 const SOURCE_AUDIT_READ_CHUNK_BYTES = 64 * 1024;
 const PLUGIN_SOURCE_RELATIVE_ROOT = "Plugins/VistaAnimationContentApi";
 
+const CONTENT_PROFILE_PLUGIN_COMPATIBILITY = deepFreeze({
+  "vista_mmg040/mmg040_project_content_r1": {
+    plugin_version: "1.1.0",
+    engine_version: "5.3.2",
+    target_platform: "linux-x86_64",
+  },
+});
+
 const EXPECTED_PLUGIN_SOURCE_MANIFEST = deepFreeze([
   {
     path: `${PLUGIN_SOURCE_RELATIVE_ROOT}/VistaAnimationContentApi.uplugin`,
@@ -352,6 +360,16 @@ function normalizePluginArtifact(value, code = "ANIMATION_UE_PLUGIN_CONFIG_INVAL
   });
 }
 
+function pluginArtifactCompatibilityMismatch(contentProfile, pluginArtifact) {
+  const key = `${contentProfile.profile_id}/${contentProfile.revision}`;
+  const policy = CONTENT_PROFILE_PLUGIN_COMPATIBILITY[key];
+  if (!policy) return null;
+  for (const field of ["plugin_version", "engine_version", "target_platform"]) {
+    if (pluginArtifact[field] !== policy[field]) return field;
+  }
+  return null;
+}
+
 function normalizeSlotClaim(value) {
   const keys = ["owner_id", "session_id", "slot_id", "scene_revision"];
   validateShape(value, keys, keys, "slot binding", "ANIMATION_UE_PLUGIN_CONFIG_INVALID");
@@ -554,6 +572,13 @@ function createVistaAnimationUeReadinessProbe(options = {}) {
     contentProfile = validateContentProfile(options.contentProfile);
   } catch {
     fail("ANIMATION_UE_PLUGIN_CONFIG_INVALID", "a verified animation content profile is required");
+  }
+  const compatibilityMismatch = pluginArtifactCompatibilityMismatch(contentProfile, pluginArtifact);
+  if (compatibilityMismatch) {
+    fail(
+      "ANIMATION_UE_PLUGIN_CONFIG_INVALID",
+      `the pinned plugin artifact is incompatible with the content profile (${compatibilityMismatch})`,
+    );
   }
   const contentProof = createContentProof(contentProfile);
   const slotBinding = createSlotBinding(normalizeSlotClaim(options.slotBinding));
@@ -1344,6 +1369,7 @@ module.exports = {
   ANIMATION_UE_SLOT_BINDING_SCHEMA,
   ANIMATION_UE_SOURCE_AUDIT_SCHEMA,
   ANIMATION_UE_SOURCE_MANIFEST_SHA256,
+  CONTENT_PROFILE_PLUGIN_COMPATIBILITY,
   EXPECTED_PLUGIN_SOURCE_MANIFEST,
   EXPECTED_PLUGIN_SOURCE_FILES,
   MAX_PLUGIN_SOURCE_FILE_BYTES,
@@ -1352,5 +1378,6 @@ module.exports = {
   VistaAnimationUeReadinessError,
   createVistaAnimationUeReadinessProbe,
   inspectVistaAnimationUePluginSource,
+  pluginArtifactCompatibilityMismatch,
   validateCapabilityResponse,
 };

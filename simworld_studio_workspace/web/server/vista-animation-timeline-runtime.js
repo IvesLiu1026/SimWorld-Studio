@@ -19,6 +19,7 @@ const {
   ANIMATION_UE_PLUGIN_ARTIFACT_SCHEMA,
   ANIMATION_UE_PLUGIN_NAME,
   createVistaAnimationUeReadinessProbe,
+  pluginArtifactCompatibilityMismatch,
 } = require("./vista-animation-ue-readiness");
 const { validateVistaSceneBuildPlan } = require("./vista-scene-build-plan");
 const { BINDINGS_SCHEMA, validateBindings } = require("./vista-timeline-compiler");
@@ -279,6 +280,13 @@ function resolveVistaAnimationTimelineConfig(env = process.env, options = {}) {
     MAX_PLUGIN_ARTIFACT_BYTES,
     options.fsImpl || fs,
   ));
+  const compatibilityMismatch = pluginArtifactCompatibilityMismatch(contentProfile, pluginArtifact);
+  if (compatibilityMismatch) {
+    fail(
+      "ANIMATION_RUNTIME_CONFIG_INVALID",
+      `VISTA animation plugin artifact is incompatible with the content profile (${compatibilityMismatch})`,
+    );
+  }
   if (production) rejectProductionFixture(contentProfile, pluginArtifact, [contentProfileFile, pluginArtifactFile]);
   const probeTimeoutText = envText(env, "VISTA_ANIMATION_UE_PROBE_TIMEOUT_MS");
   const probeTimeoutMs = probeTimeoutText ? Number(probeTimeoutText) : DEFAULT_PROBE_TIMEOUT_MS;
