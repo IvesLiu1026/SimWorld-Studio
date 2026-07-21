@@ -331,6 +331,9 @@ function verifyReviewSmokeReceipt(receipt, {
   now = Date.now(),
 } = {}) {
   validateReviewSmokeReceipt(receipt);
+  if (receipt.verdict.status !== "PASS") {
+    fail("REVIEW_SMOKE_VERDICT_FAILED", "Review provider smoke verdict did not pass", "verdict.status");
+  }
   const nowMs = typeof now === "function" ? Number(now()) : Number(now);
   if (!Number.isFinite(nowMs)) fail("REVIEW_SMOKE_RECEIPT_INVALID", "Verification time is invalid");
   const recordedAt = Date.parse(receipt.recorded_at);

@@ -140,6 +140,18 @@ test("receipt verification binds provider, model, revision, type, and expiry", (
     () => verifyReviewSmokeReceipt(receipt, { now: NOW + 60 * 60 * 1000 }),
     (error) => error.code === "REVIEW_SMOKE_RECEIPT_EXPIRED",
   );
+  const nonPassingReceipt = createReviewSmokeReceipt(smokeInput({
+    verdict: {
+      status: "NEEDS_IMPROVEMENT",
+      issues: ["The smoke result is not ready."],
+      suggestions: ["Resolve the issue and run a newly approved smoke."],
+      raw_notes: "Not persisted.",
+    },
+  }));
+  assert.throws(
+    () => verifyReviewSmokeReceipt(nonPassingReceipt, { now: NOW + 1 }),
+    (error) => error.code === "REVIEW_SMOKE_VERDICT_FAILED",
+  );
 });
 
 test("scene digest is deterministic for object key order and rejects non-JSON values", () => {

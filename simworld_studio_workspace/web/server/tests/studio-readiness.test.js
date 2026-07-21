@@ -151,6 +151,22 @@ test("review readiness fails closed for receipt mismatch and expiry without prov
   })();
   assert.equal(expired.status, "not_ready");
   assert.equal(expired.causes[0].code, "REVIEW_SMOKE_RECEIPT_EXPIRED");
+
+  writeSmoke(receiptPath, {
+    verdict: {
+      status: "FAIL",
+      issues: ["Provider smoke did not pass."],
+      suggestions: ["Fix the evidence and run a newly approved smoke."],
+      raw_notes: "Not persisted.",
+    },
+  });
+  const failedVerdict = await createReviewReadinessProbe({
+    env: base,
+    claudeBin: process.execPath,
+    now: () => REVIEW_NOW + 1,
+  })();
+  assert.equal(failedVerdict.status, "not_ready");
+  assert.equal(failedVerdict.causes[0].code, "REVIEW_SMOKE_VERDICT_FAILED");
 });
 
 test("explicit demo and test overrides stay non-production only", async () => {

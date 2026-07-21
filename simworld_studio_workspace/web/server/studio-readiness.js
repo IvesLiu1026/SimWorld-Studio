@@ -207,6 +207,7 @@ function createReviewReadinessProbe({
         REVIEW_SMOKE_RECEIPT_MISMATCH: "The review provider smoke receipt does not match the running provider, model, source revision, or review type.",
         REVIEW_SMOKE_RECEIPT_NOT_YET_VALID: "The review provider smoke receipt timestamp is not yet valid.",
         REVIEW_SMOKE_SCENE_MUTATED: "The Visual Review smoke changed the scene digest and is not read-only.",
+        REVIEW_SMOKE_VERDICT_FAILED: "The review provider smoke verdict did not pass.",
         REVIEW_SMOKE_RECEIPT_SENSITIVE: "The review provider smoke receipt contains forbidden credential-like material.",
         REVIEW_SMOKE_RECEIPT_INVALID: "The review provider smoke receipt is invalid.",
       };
