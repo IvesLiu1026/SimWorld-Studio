@@ -22,9 +22,22 @@
 - Must not touch: canonical VISTA datasets, review ledgers, NAS outputs, or
   production VISTA port `8000`
 
+## Current Worker Assignments
+
+| Agent | Worktree / branch | Owns | Must not touch | Runtime ownership |
+| --- | --- | --- | --- | --- |
+| Codex `/root` | `vista-production` / `codex/vista-production-completion` | Scene build orchestration, importer/API/UI integration, merge queue, final validation | Dirty source checkout and canonical datasets | Existing local web smoke only |
+| `animation-runtime` | `animation-runtime-v2` / `codex/vista-animation-runtime-v2` | New animation/IK/timeline adapter modules, schemas, focused tests, focused runbook section | Existing scene/import routes, `index.js`, UI, UE runtime | None; fake broker only |
+| `streaming-readiness` | `streaming-readiness-v2` / `codex/vista-streaming-readiness-v2` | New WebRTC readiness/evidence modules and focused tests | Existing gateway, Nginx, Compose, UI, live ports | None; no Coturn/Cirrus launch |
+| `review-provider` | `review-provider-v2` / `codex/vista-review-provider-v2` | New bounded provider smoke runner/CLI, schemas, focused tests | Existing chat/review routes, UI, provider credentials | None; no paid/provider call |
+
+The coordinator is the only merge owner. Workers must commit a single coherent
+change and report validation commands plus remaining live/admin gates.
+
 ## Runtime Ownership
 
-- No live runtime is owned during source integration.
+- The coordinator owns the existing loopback-only development smoke runtime.
+- Workers own no live runtime during source integration.
 - UE, model-provider, database, GPU, network, and public-ingress work remains
   gated until the relevant preflight is recorded.
 - No production deploy is authorized by this work item.
