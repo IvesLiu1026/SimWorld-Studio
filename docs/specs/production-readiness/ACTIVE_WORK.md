@@ -5,7 +5,7 @@
 - Worktree: `/home/yhliu/SimWorld-Studio-worktrees/semantic-production-adapter`
 - Branch: `codex/semantic-production-adapter`
 - Base: production checkpoint `6b0d5046`
-- Latest pushed checkpoint: `c8ae8071` (`fix: isolate one-shot model helpers`)
+- Latest pushed implementation checkpoint: `58e5a546` (`fix: account for buffered one-shot results`)
 - Goal: Complete the approved production-readiness path from deterministic
   `mmg_040` scene construction through real asset retrieval, review, timeline
   animation, public WebRTC, and release evidence.
@@ -44,8 +44,11 @@ change and report validation commands plus remaining live/admin gates.
   that run, including the UE lease, Pixel Streaming stack, fixed
   `execute_python_script` asset inspection, deterministic `mmg_040` build,
   screenshot, and cleanup.
-- The run is model-off, loopback-only, and does not authorize a public listener,
-  provider call, PostgreSQL/Qdrant write, production deploy, or mutation of the
+- The UE run remains loopback-only. On 2026-07-22 the user additionally
+  authorized the runbook-bounded T1A.11 provider smoke: exactly one Text and
+  one read-only Visual `claude-opus-4-8` call, with no retry and the documented
+  aggregate/per-call cost ceilings. That authorization does not cover a public
+  listener, PostgreSQL/Qdrant write, production deploy, or mutation of the
   canonical archived UE project. A disposable staged workspace and append-only
   evidence paths must be used.
 - A separate isolated demo task owns GPU 1 and loopback ports
@@ -54,6 +57,10 @@ change and report validation commands plus remaining live/admin gates.
 - Production VISTA port `8000` is also outside this work item.
 - UE, model-provider, database, GPU, network, and public-ingress work remains
   gated until the relevant preflight is recorded.
+- The authorized 2026-07-22 launch preflight stopped before UE/provider spawn:
+  `yhliu` cannot access GPU 0's `/dev/dri/renderD128`, and
+  `AGENT_SANDBOX_AUTH_ROOT` is not configured. No paid provider call was sent,
+  no owned listener was started, and the five owned ports remained idle.
 - No production deploy is authorized by this work item.
 
 ## Current Offline Semantic-v2 Checkpoint
@@ -181,24 +188,33 @@ change and report validation commands plus remaining live/admin gates.
   is not reproduced by this branch's current wiring.
 - The real Claude adapter remains tool-free, strict-schema, image-over-stdin,
   budgeted, cancellable, and stripped of Studio/database credentials.
-- Commit `c8ae8071` closes a separate pre-critic summarizer leak: Claude
+- Commit `c8ae8071` closes the initial pre-critic summarizer isolation leak: Claude
   one-shots now use the existing bubblewrap/tool-free policy and a fresh
   allowlisted environment, require one usage/cost-bearing result, enforce an
   independent `--max-budget-usd`, and terminate at hard stdout/stderr limits.
   Codex one-shots fail before spawn for Production and summarizer workloads.
-- The one-shot cap is independent and is not yet recorded inside the
-  builder/critic aggregate Review budget snapshot. Production must either add
-  an explicit summarizer stage to that ledger or keep provider summarization
-  fail-closed; do not claim total Review cost closure from `c8ae8071` alone.
-- A live isolated summarizer also requires a service-owned mode-`0700`
-  `AGENT_SANDBOX_AUTH_ROOT/claude/`; missing Production auth configuration
-  fails closed to the existing deterministic intent fallback.
+- Commits `0164feb1` and `eda2b2f7` define and implement T1A.10c: summarizer,
+  builder, and critic now share one aggregate Review ledger. Text and Visual
+  gate the summarizer before builder/capture, floor the provider CLI cap to
+  run-remaining money, persist verified usage/cost, record known paid failures
+  and overspend, and stop before mutation when attempted-provider accounting
+  is unknown. Deterministic fallback is limited to a proven pre-spawn failure.
+- Commits `c8fb7b98` and `58e5a546` make terminal accounting exactly-once when
+  abort, timeout, process failure, and close race, including a complete final
+  JSON record without a trailing newline. Focused Review tests pass 101/101,
+  the complete backend suite passes 733/733, the Vite development build passes,
+  and independent P0/P1 re-review found no remaining high-priority defect in
+  this slice.
+- A live isolated summarizer requires a service-owned mode-`0700`
+  `AGENT_SANDBOX_AUTH_ROOT/claude/`; the 2026-07-22 preflight found that root
+  unconfigured. It must contain only the dedicated Claude service credential
+  and configuration; copying the human user's full `~/.claude` is forbidden.
 - Review smoke receipts no longer trust caller-supplied CLI identity. The
   runner measures the exact configured Claude binary with a bounded
   `--version` preflight and rejects a mismatch before any paid call.
 - Local read-only measurement reports Claude Code `2.1.215`; no model request
-  was sent. `T1A.11` still requires user approval for one real Text and one
-  read-only Visual `claude-opus-4-8` call.
+  was sent. The user has approved the bounded T1A.11 calls, but the missing
+  service auth root and unavailable GPU screenshot keep the live smoke blocked.
 
 ## Validation
 
@@ -228,3 +244,5 @@ change and report validation commands plus remaining live/admin gates.
   `evidence/2026-07-22-mmg040-animation-candidate-inspection-checkpoint.md`
 - Current Review auth/CLI identity follow-up:
   `evidence/2026-07-22-review-cli-identity-checkpoint.md`
+- Current aggregate Review accounting and authorized live-preflight follow-up:
+  `evidence/2026-07-22-review-aggregate-and-live-preflight-checkpoint.md`
