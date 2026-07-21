@@ -247,10 +247,34 @@ test("required evidence rejects collisions/floating actors and screenshot expose
         profile_name: item.collision.profile_name,
         generate_overlap_events: item.collision.generate_overlap_events,
       }],
+      materials: [{
+        component: "StaticMeshComponent0",
+        slot_index: 0,
+        material_path: "/Game/VISTA/Materials/M_ChairPBR.M_ChairPBR",
+        material_class: "/Script/Engine.MaterialInstanceConstant",
+        pbr_eligible: true,
+      }],
     }],
   }));
   const snapshot = await adapter.evidenceHooks.actor_snapshot(context);
   assert.equal(snapshot.actors[0].fingerprint, item.fingerprint);
+
+  ueBroker.set("VALIDATION_BEFORE", validationBundle({
+    actor_snapshot: [{
+      ...snapshot.actors[0],
+      materials: [{
+        component: "StaticMeshComponent0",
+        slot_index: 0,
+        material_path: "/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial",
+        material_class: "/Script/Engine.Material",
+        pbr_eligible: false,
+      }],
+    }],
+  }));
+  await assert.rejects(
+    adapter.evidenceHooks.actor_snapshot(context),
+    (error) => error instanceof VistaSceneUeAdapterError && error.code === "SCENE_BUILD_ACTOR_EVIDENCE_INVALID",
+  );
 
   ueBroker.set("VALIDATION_BEFORE", validationBundle({
     collisions: [{ actor_a: "a", actor_b: "b", scope: "generated_world_static" }],

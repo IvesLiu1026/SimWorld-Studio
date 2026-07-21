@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const { createVistaImporter, validateSceneSpec } = require("../vista-importer");
 const {
@@ -28,8 +29,68 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function profile() {
-  return JSON.parse(fs.readFileSync(path.join(FIXTURE_ROOT, "build-layout.v1.json"), "utf8"));
+function profile({ production = true } = {}) {
+  const value = JSON.parse(fs.readFileSync(path.join(FIXTURE_ROOT, "build-layout.v1.json"), "utf8"));
+  if (production) {
+    value.infrastructure[0].asset_pin = {
+      snapshot_id: value.asset_snapshot_id,
+      asset_id: "mmg040-verified-office-surface",
+      ue_path: "/Game/VISTA/Curated/MMG040/SM_OfficeSurface.SM_OfficeSurface",
+      confidence: 1,
+      verified: true,
+    };
+  }
+  return value;
+}
+
+function successfulResult(plan) {
+  const actorManifest = plan.actors.map((actor, index) => ({
+    ...clone(actor),
+    runtime_actor_name: actor.actor_name,
+    operation_id: `vso-${crypto.createHash("sha256").update(`${plan.plan_id}:${actor.actor_id}`).digest("hex").slice(0, 24)}`,
+    object_guid: `${String(index + 1).padStart(8, "0")}-89ab-cdef-0123-456789abcdef`,
+    disposition: "spawned",
+  }));
+  const sceneDigest = "9".repeat(64);
+  const actorSnapshot = actorManifest.map((actor) => ({
+    actor_name: actor.actor_name,
+    fingerprint: actor.fingerprint,
+    operation_id: actor.operation_id,
+    object_guid: actor.object_guid,
+    materials: [{
+      component: "VerifiedMesh",
+      slot_index: 0,
+      material_path: "/Game/VISTA/Materials/M_VerifiedPBR.M_VerifiedPBR",
+      material_class: "/Script/Engine.MaterialInstanceConstant",
+      pbr_eligible: true,
+    }],
+  }));
+  return {
+    schema: "vista-scene-build-result/v1",
+    plan_id: plan.plan_id,
+    scene_id: plan.scene_id,
+    status: "succeeded",
+    mutation_count: plan.actors.length,
+    actor_manifest: actorManifest,
+    evidence: [
+      {
+        kind: "actor_snapshot", required: true, status: "captured", error: null,
+        artifact: { schema: "vista-scene-actor-snapshot/v1", scene_digest: sceneDigest, actors: actorSnapshot },
+      },
+      {
+        kind: "collision_report", required: true, status: "captured", error: null,
+        artifact: { schema: "vista-scene-collision-report/v1", scene_digest: sceneDigest, collision_count: 0, collisions: [] },
+      },
+      {
+        kind: "floating_report", required: true, status: "captured", error: null,
+        artifact: { schema: "vista-scene-floating-report/v1", scene_digest: sceneDigest, floating_count: 0, floating: [] },
+      },
+      {
+        kind: "screenshot", required: true, status: "captured", error: null,
+        artifact: { schema: "vista-scene-screenshot/v1", scene_digest: sceneDigest, sha256: "8".repeat(64), bytes: 33 },
+      },
+    ],
+  };
 }
 
 function pin(profileValue, entityId) {
@@ -118,13 +179,7 @@ async function fixture(t, overrides = {}) {
     },
     async execute(plan, options) {
       executorCalls.push({ operation: "execute", plan, options });
-      return {
-        schema: "vista-scene-build-result/v1",
-        plan_id: plan.plan_id,
-        scene_id: plan.scene_id,
-        status: "succeeded",
-        mutation_count: plan.actors.length,
-      };
+      return successfulResult(plan);
     },
   });
   const importCalls = [];
@@ -244,4 +299,53 @@ test("missing executor and unresolved production bindings fail closed", async (t
     service.plan("vim_" + "b".repeat(64), {}, ACCESS),
     (error) => error.code === "SCENE_BUILD_ASSET_UNRESOLVED",
   );
+});
+
+test("fallback BasicShapes infrastructure is rejected before any UE preflight or mutation", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vista-scene-fallback-gate-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fallback = profile({ production: false });
+  const scene = await resolvedScene(fallback);
+  const calls = [];
+  const service = createVistaSceneBuildService({
+    importService: {
+      async status() {
+        return { artifact_id: "vim_" + "f".repeat(64), status: "committed", scene_spec: scene };
+      },
+    },
+    layoutProfiles: { [fallback.profile_id]: fallback },
+    recordRoot: root,
+    executor: {
+      async preflight() { calls.push("preflight"); return {}; },
+      async execute() { calls.push("execute"); return {}; },
+    },
+  });
+  const planned = await service.plan("vim_" + "f".repeat(64), {}, ACCESS);
+  await assert.rejects(
+    service.preflight("vim_" + "f".repeat(64), { plan_id: planned.plan.plan_id }, ACCESS),
+    hasCode("SCENE_BUILD_RUNTIME_PROOF_INVALID"),
+  );
+  await assert.rejects(
+    service.execute("vim_" + "f".repeat(64), {
+      plan_id: planned.plan.plan_id,
+      confirm: true,
+    }, ACCESS),
+    hasCode("SCENE_BUILD_RUNTIME_PROOF_INVALID"),
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("runtime proof is exact-lease process-local and requires verified semantic/PBR evidence", async (t) => {
+  const { artifact, service } = await fixture(t);
+  const planned = await service.plan(artifact.artifact_id, {}, ACCESS);
+  await service.execute(artifact.artifact_id, { plan_id: planned.plan.plan_id, confirm: true }, ACCESS);
+  const proof = service.resolveActiveRuntimeProof(ACCESS);
+  assert.equal(proof.schema, "vista-runtime-scene-proof/v1");
+  assert.equal(proof.plan_id, planned.plan.plan_id);
+  assert.equal(proof.actor_count, planned.plan.actors.length);
+  assert.equal(proof.start_allowed, true);
+  assert.equal(service.resolveActiveRuntimeProof({ ...ACCESS, leaseId: "another-lease" }), null);
+
+  const restarted = await fixture(t);
+  assert.equal(restarted.service.resolveActiveRuntimeProof(ACCESS), null, "restart must quarantine stale disk evidence");
 });

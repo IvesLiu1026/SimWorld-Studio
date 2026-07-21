@@ -334,7 +334,17 @@ function evidenceScript(operation, nonce, manifest) {
     "        collision_text = str(component.get_collision_enabled()).lower().replace('_', '')",
     "        collision_mode = 'query_and_physics' if 'queryandphysics' in collision_text else ('query_only' if 'queryonly' in collision_text else ('disabled' if 'nocollision' in collision_text else 'unknown'))",
     "        policies.append({'mobility': str(component.get_editor_property('mobility')).split('.')[-1].lower(), 'collision_mode': collision_mode, 'profile_name': str(component.get_collision_profile_name()), 'generate_overlap_events': bool(component.get_editor_property('generate_overlap_events'))})",
-    "    snapshot.append({'actor_name': row['name'], 'fingerprint': fingerprint, 'operation_id': operation_id, 'object_guid': str(actor.get_actor_guid()).strip('{}'), 'class_path': class_path, 'asset_path': asset_path, 'location_cm': [float(loc.x), float(loc.y), float(loc.z)], 'rotation_deg': [float(rot.pitch), float(rot.yaw), float(rot.roll)], 'scale': [float(scale.x), float(scale.y), float(scale.z)], 'component_policies': policies})",
+    "    materials = []",
+    "    for component in list(actor.get_components_by_class(unreal.MeshComponent)):",
+    "        try: slot_count = int(component.get_num_materials())",
+    "        except Exception: slot_count = 0",
+    "        for slot_index in range(max(0, slot_count)):",
+    "            material = component.get_material(slot_index)",
+    "            material_path = str(material.get_path_name()) if material is not None else None",
+    "            material_class = str(material.get_class().get_path_name()) if material is not None else None",
+    "            pbr_eligible = bool(material is not None and isinstance(material, unreal.MaterialInterface) and material_path.startswith('/Game/') and '/Engine/EngineMaterials/DefaultMaterial' not in material_path)",
+    "            materials.append({'component': str(component.get_name()), 'slot_index': slot_index, 'material_path': material_path, 'material_class': material_class, 'pbr_eligible': pbr_eligible})",
+    "    snapshot.append({'actor_name': row['name'], 'fingerprint': fingerprint, 'operation_id': operation_id, 'object_guid': str(actor.get_actor_guid()).strip('{}'), 'class_path': class_path, 'asset_path': asset_path, 'location_cm': [float(loc.x), float(loc.y), float(loc.z)], 'rotation_deg': [float(rot.pitch), float(rot.yaw), float(rot.roll)], 'scale': [float(scale.x), float(scale.y), float(scale.z)], 'component_policies': policies, 'materials': materials})",
     "selected_ids = {id(row['actor']) for row in selected}",
     "world_context = []",
     "for actor in actors:",
@@ -586,7 +596,16 @@ function createVistaSceneUeAdapter(options = {}) {
         || !closeVector(actual.rotation_deg, expected.transform.rotation_deg)
         || !closeVector(actual.scale, expected.transform.scale)
         || !Array.isArray(actual.component_policies)
-        || actual.component_policies.length < 1) return false;
+        || actual.component_policies.length < 1
+        || !Array.isArray(actual.materials)
+        || actual.materials.length < 1
+        || actual.materials.some((material) => !isPlainObject(material)
+          || !Number.isSafeInteger(material.slot_index) || material.slot_index < 0
+          || typeof material.component !== "string" || !material.component
+          || typeof material.material_path !== "string" || !material.material_path.startsWith("/Game/")
+          || /\/Engine\/EngineMaterials\/DefaultMaterial/i.test(material.material_path)
+          || typeof material.material_class !== "string" || !material.material_class
+          || material.pbr_eligible !== true)) return false;
     return actual.component_policies.every((policy) => (
       isPlainObject(policy)
       && policy.mobility === expected.mobility

@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { compileVistaSceneBuildPlan } = require("./vista-scene-build-plan");
+const { createVistaRuntimeSceneProof } = require("./vista-runtime-broker");
 
 const PLAN_RESPONSE_SCHEMA = "vista-scene-build-plan-response/v1";
 const PREFLIGHT_RESPONSE_SCHEMA = "vista-scene-build-service-preflight/v1";
@@ -76,6 +77,247 @@ function normalizeAccess(context) {
     fail("SCENE_BUILD_ACCESS_INVALID", "Scene build access context is invalid", { status: 400 });
   }
   return { ownerId, sessionId, leaseId, slotId, mcpPort };
+}
+
+function liveProofKey(access) {
+  return crypto.createHash("sha256").update(JSON.stringify({
+    owner_id: access.ownerId,
+    session_id: access.sessionId,
+    slot_id: access.slotId,
+    lease_id: access.leaseId,
+    mcp_port: access.mcpPort,
+  }), "utf8").digest("hex");
+}
+
+function proofDigest(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
+function realGameAsset(value) {
+  return typeof value === "string"
+    && /^\/Game\/[A-Za-z0-9_./-]+$/.test(value)
+    && !/\/Engine\/BasicShapes\//i.test(value)
+    && !/(?:^|[._/-])(?:cube|plane|sphere|cylinder|cone|runtime_ground|fallback|placeholder)(?:$|[._/-])/i.test(value);
+}
+
+function productionActorProvenance(resolved, planned) {
+  if (!isPlainObject(planned) || !isPlainObject(planned.asset)
+      || planned.asset.verified !== true
+      || !realGameAsset(planned.asset.ue_path)
+      || planned.asset.content_revision !== resolved.plan.content_revision
+      || planned.asset.verification_revision !== resolved.plan.verification_revision) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "BuildPlan contains an unverified or fallback production asset", {
+      status: 409,
+    });
+  }
+  if (planned.role === "infrastructure") {
+    if (planned.asset.binding_source !== "infrastructure"
+        || planned.source_entity_id !== null
+        || typeof planned.infrastructure_kind !== "string") {
+      fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "BuildPlan infrastructure provenance is invalid", { status: 409 });
+    }
+    return {
+      source_kind: "verified_layout_infrastructure",
+      source_entity_id: null,
+      infrastructure_kind: planned.infrastructure_kind,
+      snapshot_id: planned.asset.snapshot_id,
+      asset_id: planned.asset.asset_id,
+      ue_path: planned.asset.ue_path,
+      selected_by: "verified_layout_profile",
+    };
+  }
+  const entities = resolved.artifact.scene_spec.entities;
+  const entity = entities.find((candidate) => candidate && candidate.id === planned.source_entity_id);
+  const resolution = entity && entity.asset_resolution;
+  const binding = entity && entity.asset_binding;
+  if (!entity || !isPlainObject(resolution) || !isPlainObject(binding)
+      || !isPlainObject(resolution.selected_binding)
+      || resolution.selected_binding.asset_id !== binding.asset_id
+      || resolution.selected_binding.ue_path !== binding.ue_path
+      || resolution.selected_binding.snapshot_id !== binding.snapshot_id
+      || !realGameAsset(binding.ue_path)
+      || !new Set(["automatic", "manual_override"]).has(resolution.selected_by)
+      || (resolution.selected_by === "automatic"
+        && (!Array.isArray(resolution.candidates)
+          || !resolution.candidates.some((candidate) => candidate.origin === "search"
+            && candidate.asset_id === binding.asset_id && candidate.ue_path === binding.ue_path)))
+      || (resolution.selected_by === "manual_override"
+        && (!isPlainObject(resolution.manual_override)
+          || resolution.manual_override.confirmed !== true
+          || resolution.manual_override.asset_id !== binding.asset_id
+          || resolution.manual_override.ue_path !== binding.ue_path))) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "BuildPlan actor lacks a verified non-fallback semantic binding", {
+      status: 409,
+    });
+  }
+  return {
+    source_kind: planned.asset.binding_source === "curated_component"
+      ? "verified_semantic_component"
+      : "verified_semantic_binding",
+    source_entity_id: planned.source_entity_id,
+    infrastructure_kind: null,
+    snapshot_id: binding.snapshot_id,
+    asset_id: binding.asset_id,
+    ue_path: binding.ue_path,
+    selected_by: resolution.selected_by,
+  };
+}
+
+function assertProductionRuntimePlan(resolved) {
+  if (!isPlainObject(resolved) || !isPlainObject(resolved.plan)
+      || !isPlainObject(resolved.artifact) || !isPlainObject(resolved.artifact.scene_spec)
+      || !Array.isArray(resolved.artifact.scene_spec.entities)
+      || !Array.isArray(resolved.plan.actors) || resolved.plan.actors.length < 1) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "BuildPlan cannot establish production scene provenance", {
+      status: 409,
+    });
+  }
+  return new Map(resolved.plan.actors.map((planned) => [
+    planned.actor_id,
+    productionActorProvenance(resolved, planned),
+  ]));
+}
+
+function runtimeProofFromBuild(resolved, result) {
+  if (!isPlainObject(resolved.artifact) || !isPlainObject(resolved.artifact.scene_spec)
+      || !Array.isArray(resolved.artifact.scene_spec.entities)
+      || !Array.isArray(result.actor_manifest) || result.actor_manifest.length !== resolved.plan.actors.length) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "Successful scene build lacks an exact verified actor manifest", {
+      status: 500,
+    });
+  }
+  const provenanceById = assertProductionRuntimePlan(resolved);
+  const plannedById = new Map(resolved.plan.actors.map((actor) => [actor.actor_id, actor]));
+  const contentRevisions = new Set();
+  const verificationRevisions = new Set();
+  const assetEvidence = [];
+  const semanticEvidence = [];
+  for (const entry of result.actor_manifest) {
+    const planned = plannedById.get(entry && entry.actor_id);
+    const provenance = planned && provenanceById.get(planned.actor_id);
+    if (!planned || !isPlainObject(entry.asset)
+        || entry.actor_name !== planned.actor_name
+        || entry.fingerprint !== planned.fingerprint
+        || entry.runtime_actor_name !== planned.actor_name
+        || !/^vso-[a-f0-9]{24}$/.test(String(entry.operation_id || ""))
+        || !/^[A-Fa-f0-9-]{16,64}$/.test(String(entry.object_guid || ""))
+        || !new Set(["spawned", "reused"]).has(entry.disposition)
+        || entry.asset.asset_id !== planned.asset.asset_id
+        || entry.asset.ue_path !== planned.asset.ue_path
+        || entry.asset.binding_source !== planned.asset.binding_source
+        || entry.asset.snapshot_id !== planned.asset.snapshot_id
+        || entry.asset.content_revision !== resolved.plan.content_revision
+        || entry.asset.verification_revision !== resolved.plan.verification_revision
+        || entry.asset.verified !== true
+        || !realGameAsset(entry.asset.ue_path)
+        || !provenance) {
+      fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "Runtime actor is not backed by a verified non-fallback semantic /Game asset", {
+        status: 409,
+      });
+    }
+    contentRevisions.add(entry.asset.content_revision);
+    verificationRevisions.add(entry.asset.verification_revision);
+    assetEvidence.push({
+      actor_id: entry.actor_id,
+      asset_id: entry.asset.asset_id,
+      ue_path: entry.asset.ue_path,
+      content_revision: entry.asset.content_revision,
+      verification_revision: entry.asset.verification_revision,
+    });
+    semanticEvidence.push({ actor_id: planned.actor_id, ...provenance });
+  }
+  if (contentRevisions.size !== 1 || verificationRevisions.size !== 1) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "Successful scene build has mixed or missing content revisions", {
+      status: 500,
+    });
+  }
+  const evidenceByKind = new Map((result.evidence || []).map((entry) => [entry && entry.kind, entry]));
+  for (const kind of ["actor_snapshot", "collision_report", "floating_report", "screenshot"]) {
+    const entry = evidenceByKind.get(kind);
+    if (!isPlainObject(entry) || entry.required !== true || entry.status !== "captured"
+        || !isPlainObject(entry.artifact) || entry.error !== null) {
+      fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", `Required ${kind} evidence did not pass`, { status: 409 });
+    }
+  }
+  const actorEvidence = evidenceByKind.get("actor_snapshot").artifact;
+  const collisionEvidence = evidenceByKind.get("collision_report").artifact;
+  const floatingEvidence = evidenceByKind.get("floating_report").artifact;
+  const screenshotEvidence = evidenceByKind.get("screenshot").artifact;
+  if (actorEvidence.schema !== "vista-scene-actor-snapshot/v1"
+      || !Array.isArray(actorEvidence.actors) || actorEvidence.actors.length !== result.actor_manifest.length
+      || !/^[a-f0-9]{64}$/.test(actorEvidence.scene_digest)
+      || collisionEvidence.schema !== "vista-scene-collision-report/v1"
+      || collisionEvidence.scene_digest !== actorEvidence.scene_digest
+      || collisionEvidence.collision_count !== 0
+      || !Array.isArray(collisionEvidence.collisions) || collisionEvidence.collisions.length !== 0
+      || floatingEvidence.schema !== "vista-scene-floating-report/v1"
+      || floatingEvidence.scene_digest !== actorEvidence.scene_digest
+      || floatingEvidence.floating_count !== 0
+      || !Array.isArray(floatingEvidence.floating) || floatingEvidence.floating.length !== 0
+      || screenshotEvidence.schema !== "vista-scene-screenshot/v1"
+      || screenshotEvidence.scene_digest !== actorEvidence.scene_digest
+      || !/^[a-f0-9]{64}$/.test(screenshotEvidence.sha256)
+      || !Number.isSafeInteger(screenshotEvidence.bytes) || screenshotEvidence.bytes < 8) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "Scene validation evidence is incomplete or inconsistent", {
+      status: 409,
+    });
+  }
+  const manifestByName = new Map(result.actor_manifest.map((entry) => [entry.actor_name, entry]));
+  const materialNames = new Set();
+  const materialEvidence = actorEvidence.actors.map((actor) => {
+    const manifestActor = actor && manifestByName.get(actor.actor_name);
+    if (!isPlainObject(actor) || !manifestActor || materialNames.has(actor.actor_name)
+        || actor.fingerprint !== manifestActor.fingerprint
+        || actor.operation_id !== manifestActor.operation_id
+        || actor.object_guid !== manifestActor.object_guid
+        || !Array.isArray(actor.materials) || actor.materials.length < 1
+        || actor.materials.some((material) => !isPlainObject(material)
+          || material.pbr_eligible !== true
+          || !realGameAsset(material.material_path)
+          || !Number.isSafeInteger(material.slot_index) || material.slot_index < 0
+          || typeof material.component !== "string" || !material.component
+          || typeof material.material_class !== "string" || !material.material_class)) {
+      fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "Every runtime actor must pass real /Game material/PBR evidence", {
+        status: 409,
+      });
+    }
+    materialNames.add(actor.actor_name);
+    return {
+      actor_name: actor.actor_name,
+      materials: actor.materials.map((material) => ({
+        component: material.component,
+        slot_index: material.slot_index,
+        material_path: material.material_path,
+        material_class: material.material_class,
+        pbr_eligible: true,
+      })),
+    };
+  });
+  if (materialNames.size !== manifestByName.size) {
+    fail("SCENE_BUILD_RUNTIME_PROOF_INVALID", "Material/PBR evidence does not cover the exact actor manifest", {
+      status: 409,
+    });
+  }
+  assetEvidence.sort((left, right) => left.actor_id.localeCompare(right.actor_id));
+  semanticEvidence.sort((left, right) => left.actor_id.localeCompare(right.actor_id));
+  materialEvidence.sort((left, right) => left.actor_name.localeCompare(right.actor_name));
+  const evidenceBundle = {
+    scene_digest: actorEvidence.scene_digest,
+    screenshot_sha256: screenshotEvidence.sha256,
+    collision_count: 0,
+    floating_count: 0,
+  };
+  return createVistaRuntimeSceneProof({
+    planId: resolved.plan.plan_id,
+    sceneId: resolved.plan.scene_id,
+    actorManifest: result.actor_manifest,
+    contentRevision: [...contentRevisions][0],
+    verificationRevision: [...verificationRevisions][0],
+    assetEvidenceDigest: proofDigest(assetEvidence),
+    semanticBindingDigest: proofDigest(semanticEvidence),
+    materialPbrEvidenceDigest: proofDigest(materialEvidence),
+    evidenceBundleDigest: proofDigest(evidenceBundle),
+  });
 }
 
 function normalizeRegistry(registry) {
@@ -179,6 +421,10 @@ class VistaSceneBuildService {
       ? options.maxRecordBytes
       : MAX_RECORD_BYTES;
     this.activeExecutions = new Map();
+    // Runtime Play is intentionally process-local: after a server restart the
+    // caller must explicitly reconcile/rebuild rather than trusting a stale
+    // disk record as proof of the editor world's current contents.
+    this.liveRuntimeProofs = new Map();
   }
 
   async plan(importArtifactId, request = {}, context = {}) {
@@ -200,6 +446,7 @@ class VistaSceneBuildService {
     const resolved = await this._resolvePlan(importArtifactId, request.profile_id, context);
     this._assertPlanId(resolved.plan, request.plan_id);
     this._requireExecutor();
+    assertProductionRuntimePlan(resolved);
     const result = await this.executor.preflight(resolved.plan, {
       signal: context.signal,
       ownerId: resolved.access.ownerId,
@@ -235,12 +482,18 @@ class VistaSceneBuildService {
     return started.promise;
   }
 
+  resolveActiveRuntimeProof(context = {}) {
+    const access = normalizeAccess(context);
+    return this.liveRuntimeProofs.get(liveProofKey(access)) || null;
+  }
+
   async _beginExecution(importArtifactId, request = {}, context = {}) {
     exactKeys(request, ["plan_id", "profile_id", "confirm"], ["plan_id", "confirm"]);
     if (request.confirm !== true) fail("SCENE_BUILD_CONFIRMATION_REQUIRED", "Exact BuildPlan confirmation is required", { status: 428 });
     const resolved = await this._resolvePlan(importArtifactId, request.profile_id, context);
     this._assertPlanId(resolved.plan, request.plan_id);
     this._requireExecutor();
+    assertProductionRuntimePlan(resolved);
     const activeKey = `${resolved.access.ownerId}:${resolved.access.slotId}:${resolved.plan.plan_id}`;
     const active = this.activeExecutions.get(activeKey);
     if (active) return active;
@@ -281,6 +534,11 @@ class VistaSceneBuildService {
         resolved.plan,
       );
       const record = await this._writeRecord(resolved, result, operationId);
+      const runtimeProof = runtimeProofFromBuild(resolved, result);
+      this.liveRuntimeProofs.set(liveProofKey(resolved.access), runtimeProof);
+      while (this.liveRuntimeProofs.size > 128) {
+        this.liveRuntimeProofs.delete(this.liveRuntimeProofs.keys().next().value);
+      }
       return {
         schema: EXECUTION_RESPONSE_SCHEMA,
         import_artifact_id: resolved.importArtifactId,
@@ -291,6 +549,7 @@ class VistaSceneBuildService {
         result: record.result,
       };
     } catch (rawError) {
+      this.liveRuntimeProofs.delete(liveProofKey(resolved.access));
       const error = safeExecutionError(rawError);
       try {
         const result = error.result
@@ -355,7 +614,7 @@ class VistaSceneBuildService {
       fail("SCENE_BUILD_PROFILE_UNAVAILABLE", "The selected layout profile is not available for this VISTA sample", { status: 404 });
     }
     const plan = compileVistaSceneBuildPlan(artifact.scene_spec, profile);
-    return { access, importArtifactId: artifact.artifact_id || importArtifactId, profileId, plan };
+    return { access, artifact, importArtifactId: artifact.artifact_id || importArtifactId, profileId, plan };
   }
 
   async _readRecord(planId, access, { allowMissing }) {
