@@ -8,6 +8,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import stat
 import sys
 import tempfile
@@ -150,6 +151,9 @@ class Fixture:
     def prepare(self) -> preparation.PreparedJob:
         return preparation.build_job(**self.kwargs())
 
+    def bootstrap_json(self, filename: str) -> dict:
+        return json.loads((self.bundle_dir / filename).read_text(encoding="utf-8"))
+
     def cli_args(self, *, output_dir: pathlib.Path | None = None) -> list[str]:
         values = self.kwargs()
         args = [
@@ -275,6 +279,100 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
         self.fixture.receipt_path.chmod(0o600)
         self.assert_error("SEMANTIC_INDEX_BOOTSTRAP_REVISION_INVALID", self.fixture.prepare)
 
+    def test_bootstrap_cross_references_rebuild_exact_producer_contracts(self) -> None:
+        receipt = self.fixture.bootstrap_json("bootstrap-receipt.json")
+        registry = self.fixture.bootstrap_json("registry-audit.json")
+        manifest = self.fixture.bootstrap_json("object-manifest.json")
+        inventory = self.fixture.bootstrap_json("content-capabilities.json")
+        preparation.validate_bootstrap_cross_references(
+            receipt=receipt,
+            registry_audit=registry,
+            object_manifest=manifest,
+            capability_inventory=inventory,
+        )
+
+        invalid_registry = json.loads(json.dumps(registry))
+        invalid_registry["selected_classes"] = invalid_registry["selected_classes"][:-1]
+        self.assert_error(
+            "SEMANTIC_INDEX_BOOTSTRAP_CONTRACT_INVALID",
+            lambda: preparation.validate_bootstrap_cross_references(
+                receipt=receipt,
+                registry_audit=invalid_registry,
+                object_manifest=manifest,
+                capability_inventory=inventory,
+            ),
+        )
+
+    def test_manifest_and_capabilities_must_be_registry_members_and_disjoint(self) -> None:
+        receipt = self.fixture.bootstrap_json("bootstrap-receipt.json")
+        registry = self.fixture.bootstrap_json("registry-audit.json")
+        manifest = self.fixture.bootstrap_json("object-manifest.json")
+        inventory = self.fixture.bootstrap_json("content-capabilities.json")
+
+        forged_manifest = json.loads(json.dumps(manifest))
+        forged_manifest["assets"][0]["ue_name"] = "SM_Forged"
+        forged_manifest["assets"][0]["ue_path"] = "/Game/Forged/SM_Forged.SM_Forged"
+        self.assert_error(
+            "SEMANTIC_INDEX_MANIFEST_REGISTRY_MISMATCH",
+            lambda: preparation.validate_bootstrap_cross_references(
+                receipt=receipt,
+                registry_audit=registry,
+                object_manifest=forged_manifest,
+                capability_inventory=inventory,
+            ),
+        )
+
+        forged_inventory = json.loads(json.dumps(inventory))
+        candidate = forged_inventory["groups"]["animation_clips"]["candidates"][0]
+        candidate["ue_name"] = "AS_Forged"
+        candidate["ue_path"] = "/Game/Forged/AS_Forged.AS_Forged"
+        self.assert_error(
+            "SEMANTIC_INDEX_CAPABILITY_REGISTRY_MISMATCH",
+            lambda: preparation.validate_bootstrap_cross_references(
+                receipt=receipt,
+                registry_audit=registry,
+                object_manifest=manifest,
+                capability_inventory=forged_inventory,
+            ),
+        )
+
+        overlapping_inventory = json.loads(json.dumps(inventory))
+        candidate = overlapping_inventory["groups"]["character_blueprints"]["candidates"][0]
+        candidate.update(
+            {
+                "ue_name": "BP_Box",
+                "ue_path": "/Game/CityDatabase/blueprints/BP_Box.BP_Box",
+                "asset_class": "Blueprint",
+                "source_pack": "CityDatabase",
+                "signals": [],
+            }
+        )
+        self.assert_error(
+            "SEMANTIC_INDEX_CAPABILITY_OBJECT_OVERLAP",
+            lambda: preparation.validate_bootstrap_cross_references(
+                receipt=receipt,
+                registry_audit=registry,
+                object_manifest=manifest,
+                capability_inventory=overlapping_inventory,
+            ),
+        )
+
+    def test_receipt_capability_counts_reconcile_with_canonical_inventory(self) -> None:
+        receipt = self.fixture.bootstrap_json("bootstrap-receipt.json")
+        registry = self.fixture.bootstrap_json("registry-audit.json")
+        manifest = self.fixture.bootstrap_json("object-manifest.json")
+        inventory = self.fixture.bootstrap_json("content-capabilities.json")
+        receipt["capability_counts"]["animation_clips"] += 1
+        self.assert_error(
+            "SEMANTIC_INDEX_CAPABILITY_COUNT_MISMATCH",
+            lambda: preparation.validate_bootstrap_cross_references(
+                receipt=receipt,
+                registry_audit=registry,
+                object_manifest=manifest,
+                capability_inventory=inventory,
+            ),
+        )
+
     def test_duplicate_json_keys_are_rejected(self) -> None:
         self.fixture.recipe_path.write_bytes(
             b'{"schema":"simworld-semantic-asset-index-recipe/v1","schema":"duplicate"}'
@@ -350,14 +448,18 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
     def test_recipe_rejects_floating_revisions_generic_collection_and_insufficient_limits(self) -> None:
         cases = [
             ("caption", "model_revision", "provider-snapshot:latest"),
+            ("caption", "model_revision", "provider-snapshot:"),
             ("embedding", "recipe_revision", "latest"),
             ("storage", "qdrant_collection", "assets"),
+            ("storage", "qdrant_collection", "assets-v1-latest"),
             ("limits", "max_assets", 2),
         ]
         expected = [
             "SEMANTIC_INDEX_REVISION_FLOATING",
+            "SEMANTIC_INDEX_CAPTION_REVISION_INVALID",
             "SEMANTIC_INDEX_REVISION_FLOATING",
             "SEMANTIC_INDEX_QDRANT_COLLECTION_UNPINNED",
+            "SEMANTIC_INDEX_REVISION_FLOATING",
             "SEMANTIC_INDEX_RESOURCE_LIMIT_EXCEEDED",
         ]
         for (section, key, value), code in zip(cases, expected):
@@ -367,6 +469,13 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
                     fixture.recipe[section][key] = value
                     fixture.write_recipe()
                     self.assert_error(code, fixture.prepare)
+
+        kwargs = self.fixture.kwargs()
+        kwargs["asset_snapshot_revision"] = "asset-snapshot-"
+        self.assert_error(
+            "SEMANTIC_INDEX_SNAPSHOT_REVISION_INVALID",
+            lambda: preparation.build_job(**kwargs),
+        )
 
     def test_dry_run_is_default_and_writes_nothing(self) -> None:
         output = self.fixture.output_parent / "dry-run-would-be-output"
@@ -418,6 +527,33 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
         basis = {key: value for key, value in forged_job.items() if key != "job_revision"}
         forged_job["job_revision"] = "sha256:" + preparation.json_sha256(basis)
         forged = dataclasses.replace(prepared, job_bytes=preparation.canonical_json(forged_job))
+        self.assert_error(
+            "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
+            lambda: preparation.result(forged, status="dry_run"),
+        )
+
+    def test_same_count_pending_identity_forgery_cannot_replace_bound_manifest(self) -> None:
+        prepared = self.fixture.prepare()
+        forged_job = prepared.job
+        forged_asset = forged_job["pending_objects"]["assets"][0]
+        forged_asset.update(
+            {
+                "asset_id": "forged_asset_0000000000",
+                "ue_name": "SM_Forged",
+                "ue_path": "/Game/Forged/SM_Forged.SM_Forged",
+            }
+        )
+        forged_job["pending_objects"]["assets_sha256"] = preparation.json_sha256(
+            forged_job["pending_objects"]["assets"]
+        )
+        revision_basis = {
+            key: value for key, value in forged_job.items() if key != "job_revision"
+        }
+        forged_job["job_revision"] = "sha256:" + preparation.json_sha256(revision_basis)
+        forged = dataclasses.replace(
+            prepared,
+            job_bytes=preparation.canonical_json(forged_job),
+        )
         self.assert_error(
             "SEMANTIC_INDEX_PREPARED_JOB_INVALID",
             lambda: preparation.result(forged, status="dry_run"),
@@ -542,6 +678,36 @@ class SemanticAssetIndexJobTests(unittest.TestCase):
 
         self.assertTrue(all(ref.startswith("#/") for ref in refs(job_schema)))
         self.assertTrue(all(ref.startswith("#/") for ref in refs(recipe_schema)))
+
+        provider_patterns = [
+            recipe_schema["properties"]["caption"]["properties"]["model_revision"]["anyOf"][1][
+                "pattern"
+            ],
+            job_schema["$defs"]["captionRecipe"]["properties"]["model_revision"]["anyOf"][1][
+                "pattern"
+            ],
+        ]
+        for pattern in provider_patterns:
+            self.assertIsNone(re.fullmatch(pattern, "provider-snapshot:"))
+            self.assertIsNotNone(re.fullmatch(pattern, "provider-snapshot:r"))
+
+        snapshot_pattern = job_schema["properties"]["snapshot_target"]["properties"][
+            "asset_snapshot_revision"
+        ]["pattern"]
+        self.assertIsNone(re.fullmatch(snapshot_pattern, "asset-snapshot-"))
+        self.assertIsNotNone(re.fullmatch(snapshot_pattern, "asset-snapshot-r"))
+
+        collection_contracts = [
+            recipe_schema["properties"]["storage"]["properties"]["qdrant_collection"],
+            job_schema["$defs"]["storageRecipe"]["properties"]["qdrant_collection"],
+            job_schema["properties"]["snapshot_target"]["properties"]["qdrant"][
+                "properties"
+            ]["collection"],
+        ]
+        for contract in collection_contracts:
+            floating_pattern = contract["allOf"][1]["not"]["pattern"]
+            self.assertIsNotNone(re.search(floating_pattern, "assets-v1-latest"))
+            self.assertIsNone(re.search(floating_pattern, "assets-v1-r20260721"))
 
     def test_preparer_has_no_live_or_process_execution_imports(self) -> None:
         source = (TOOLS_DIR / "prepare_semantic_asset_index_job.py").read_text(encoding="utf-8")

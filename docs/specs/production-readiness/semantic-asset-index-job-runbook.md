@@ -20,10 +20,12 @@ asset snapshot.
   files. Publication is non-overwriting and requires a non-secret approval
   reference.
 
-The preparer uses only local file and JSON operations. It imports no socket,
-HTTP, subprocess, provider, database, Qdrant, embedding, or Unreal client. Its
-published receipt explicitly records all of those operations as false.
-`--apply` means **apply the evidence publication**, not execute indexing.
+The preparer uses only local file and JSON operations. It reuses the bootstrap
+producer's deterministic validation/build functions, but does not invoke or
+construct any transport, subprocess, provider, database, Qdrant, embedding, or
+Unreal client. Its published receipt explicitly records all of those operations
+as false. `--apply` means **apply the evidence publication**, not execute
+indexing.
 
 The contracts are:
 
@@ -60,12 +62,16 @@ all of these independently recorded pins:
 - raw recipe SHA-256;
 - a new immutable `asset-snapshot-*` target revision.
 
-The preparer re-derives the bootstrap bundle revision and object manifest
-revision, verifies every bootstrap member's exact byte descriptor (without
-parsing the capability inventory as semantic objects), and checks that
-the manifest, receipt, archive, every candidate, and the CLI pins all carry the
-same project/content binding. All object rows must still be `indexed: false`
-and must be deterministically ordered `Blueprint` or `StaticMesh` candidates.
+The preparer re-derives the bootstrap bundle revision, verifies every bootstrap
+member's exact byte descriptor, and applies the producer's complete registry,
+object-manifest, and capability-inventory validators. It then rebuilds the
+object manifest and capability inventory from the canonical registry audit and
+requires byte-independent structural equality. Exact path/class membership,
+receipt counts/revisions, and disjoint semantic-object versus capability paths
+are reconciled before a job can be prepared. The manifest, receipt, archive,
+every candidate, and the CLI pins must all carry the same project/content
+binding. All object rows must still be `indexed: false` and must be
+deterministically ordered `Blueprint` or `StaticMesh` candidates.
 
 ## 3. Pinned recipe
 
@@ -119,8 +125,10 @@ it for a real plan:
 }
 ```
 
-Hosted caption providers may use a reviewed `provider-snapshot:*` binding;
-local caption artifacts may use `sha256:*`. Dense and sparse embedding
+Hosted caption providers may use a reviewed `provider-snapshot:<nonempty>`
+binding; local caption artifacts may use `sha256:*`. Snapshot namespaces must
+have a nonempty revision, and floating tokens are rejected even when embedded
+in a collection name such as `assets-v1-latest`. Dense and sparse embedding
 revisions must be the SHA-256 bindings of the complete offline artifact
 manifests described in `asset-stack-operations.md`. Floating values such as
 `latest`, `main`, `dev`, or `unknown` are rejected.
@@ -193,12 +201,14 @@ preparation receipt marks only `bundle_complete: true`; execution, catalog,
 and snapshot completion remain false.
 
 Before writing, publication reparses the immutable canonical job bytes and
-revalidates their revision, source/recipe scalars, pending set, estimates,
-limits, live gates, and execution state. Mutating a caller's parsed job view
-cannot change the bytes or the receipt identity. The output lock remains open
-and is removed only when its complete metadata identity still matches, so a
-replaced foreign lock is preserved. If the atomic rename succeeds but the
-parent-directory `fsync` fails, the CLI returns the distinct
+revalidates their revision, source/recipe scalars, pending set and its separately
+bound SHA-256, estimates, limits, live gates, and execution state. A same-count
+replacement of valid-looking pending identities therefore fails even if the
+embedded asset digest and job revision are recomputed. Mutating a caller's
+parsed job view cannot change the bytes or the receipt identity. The output lock
+remains open and is removed only when its complete metadata identity still
+matches, so a replaced foreign lock is preserved. If the atomic rename succeeds
+but the parent-directory `fsync` fails, the CLI returns the distinct
 `SEMANTIC_INDEX_OUTPUT_COMMITTED_NOT_DURABLE` condition with
 `committed: true` and `durability_uncertain: true`; inspect that already
 committed path and do not retry it.
@@ -260,10 +270,12 @@ uv run --project tools --frozen python -m json.tool \
   tools/semantic_asset_index_job_schema.json >/dev/null
 ```
 
-The focused suite covers deterministic job bytes, exact external pins,
-manifest/receipt revision checks, duplicate JSON keys, weak/symlink/hard-link
-inputs, floating recipes, resource ceilings, default no-write behavior,
-private atomic publication, non-secret approvals, schema drift, absence of live
-client/process imports, immutable publication identity, metadata drift, lock
+The 25-test focused suite covers deterministic job bytes, exact external pins,
+producer-contract reprojection, registry/capability membership and separation,
+receipt count reconciliation, manifest/receipt revision checks, duplicate JSON
+keys, weak/symlink/hard-link inputs, empty or floating revisions and collection
+tokens, resource ceilings, default no-write behavior, private atomic
+publication, non-secret approvals, schema drift, absence of direct live
+client/process imports, immutable pending identity, metadata drift, lock
 replacement, committed-but-uncertain durability, and the legacy execution
 boundary.

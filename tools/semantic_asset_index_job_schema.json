@@ -112,9 +112,9 @@
       "properties": {
         "asset_snapshot_revision": {
           "type": "string",
-          "minLength": 18,
+          "minLength": 16,
           "maxLength": 240,
-          "pattern": "^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\\-]+$"
+          "pattern": "^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,223}$"
         },
         "postgres": {
           "type": "object",
@@ -144,7 +144,16 @@
             "observed_live"
           ],
           "properties": {
-            "collection": { "$ref": "#/$defs/slug" },
+            "collection": {
+              "allOf": [
+                { "$ref": "#/$defs/slug" },
+                {
+                  "not": {
+                    "pattern": "(^|[._-])([dD][eE][vV]|[hH][eE][aA][dD]|[lL][aA][tT][eE][sS][tT]|[mM][aA][iI][nN]|[mM][aA][sS][tT][eE][rR]|[tT][rR][uU][nN][kK]|[uU][nN][kK][nN][oO][wW][nN])([._-]|$)"
+                  }
+                }
+              ]
+            },
             "dense_vector_name": { "$ref": "#/$defs/slug" },
             "sparse_vector_name": { "$ref": "#/$defs/slug" },
             "required_payload_asset_snapshot_revision": { "$ref": "#/$defs/revision" },
@@ -160,10 +169,11 @@
     "pending_objects": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["count", "selection", "assets"],
+      "required": ["count", "selection", "assets_sha256", "assets"],
       "properties": {
         "count": { "type": "integer", "minimum": 1, "maximum": 100000 },
         "selection": { "const": "all_unindexed_objects_in_pinned_bootstrap_manifest" },
+        "assets_sha256": { "$ref": "#/$defs/sha256" },
         "assets": {
           "type": "array",
           "minItems": 1,
@@ -320,11 +330,11 @@
         "model_id": { "$ref": "#/$defs/id" },
         "model_revision": {
           "type": "string",
-          "minLength": 3,
+          "minLength": 19,
           "maxLength": 240,
           "anyOf": [
             { "$ref": "#/$defs/sha256Revision" },
-            { "pattern": "^provider-snapshot:[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{2,221}$" }
+            { "pattern": "^provider-snapshot:[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,221}$" }
           ]
         },
         "prompt_revision": { "$ref": "#/$defs/sha256Revision" },
@@ -370,7 +380,16 @@
       ],
       "properties": {
         "postgres_schema_revision": { "const": 2 },
-        "qdrant_collection": { "$ref": "#/$defs/slug" },
+        "qdrant_collection": {
+          "allOf": [
+            { "$ref": "#/$defs/slug" },
+            {
+              "not": {
+                "pattern": "(^|[._-])([dD][eE][vV]|[hH][eE][aA][dD]|[lL][aA][tT][eE][sS][tT]|[mM][aA][iI][nN]|[mM][aA][sS][tT][eE][rR]|[tT][rR][uU][nN][kK]|[uU][nN][kK][nN][oO][wW][nN])([._-]|$)"
+              }
+            }
+          ]
+        },
         "qdrant_dense_vector_name": { "$ref": "#/$defs/slug" },
         "qdrant_sparse_vector_name": { "$ref": "#/$defs/slug" }
       }

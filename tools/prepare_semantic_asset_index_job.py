@@ -25,6 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+try:
+    import build_ue_asset_registry_bootstrap as bootstrap_contract
+except ModuleNotFoundError:  # Imported as tools.prepare_semantic_asset_index_job.
+    from tools import build_ue_asset_registry_bootstrap as bootstrap_contract
+
 
 RECIPE_SCHEMA = "simworld-semantic-asset-index-recipe/v1"
 JOB_SCHEMA = "simworld-semantic-asset-index-job/v1"
@@ -33,6 +38,8 @@ RECEIPT_SCHEMA = "simworld-semantic-asset-index-job-preparation-receipt/v1"
 BOOTSTRAP_RECEIPT_SCHEMA = "simworld-ue-asset-bootstrap-receipt/v1"
 OBJECT_MANIFEST_SCHEMA = "simworld-ue-object-manifest/v2"
 OBJECT_FILTER_REVISION = "simworld-object-filter/2"
+REGISTRY_AUDIT_SCHEMA = "simworld-ue-asset-registry-audit/v1"
+CAPABILITY_INVENTORY_SCHEMA = "simworld-ue-content-capabilities/v1"
 
 MAX_RECEIPT_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024 * 1024
@@ -54,6 +61,12 @@ UE_PATH_RE = re.compile(
 OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 APPROVAL_RE = re.compile(
     r"^(?:APPROVAL|CHANGE|TICKET|VISTA)-[A-Za-z0-9][A-Za-z0-9._-]{2,95}$"
+)
+PROVIDER_SNAPSHOT_RE = re.compile(
+    r"^provider-snapshot:[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,221}$"
+)
+ASSET_SNAPSHOT_RE = re.compile(
+    r"^asset-snapshot-[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,223}$"
 )
 FLOATING_TOKENS = frozenset({"dev", "head", "latest", "main", "master", "trunk", "unknown"})
 OBJECT_TYPES = frozenset({"Blueprint", "StaticMesh"})
@@ -224,16 +237,20 @@ def _sha256(value: Any, *, pointer: str, prefixed: bool = False) -> str:
     return value
 
 
-def _pinned_revision(value: Any, *, pointer: str) -> str:
-    revision = _safe_string(value, pattern=SAFE_REVISION_RE, pointer=pointer)
-    tokens = set(filter(None, re.split(r"[:/@._+\-]+", revision.lower())))
+def _reject_floating_tokens(value: str, *, pointer: str) -> str:
+    tokens = set(filter(None, re.split(r"[:/@._+\-]+", value.lower())))
     if tokens.intersection(FLOATING_TOKENS):
         fail(
             "SEMANTIC_INDEX_REVISION_FLOATING",
             "Revision must be immutable and must not use a floating label",
             pointer=pointer,
         )
-    return revision
+    return value
+
+
+def _pinned_revision(value: Any, *, pointer: str) -> str:
+    revision = _safe_string(value, pattern=SAFE_REVISION_RE, pointer=pointer)
+    return _reject_floating_tokens(revision, pointer=pointer)
 
 
 def _rfc3339(value: Any, *, pointer: str) -> str:
@@ -584,7 +601,7 @@ def validate_object_manifest(value: Any, *, source_binding: Mapping[str, Any]) -
         required={"schema", "sha256", "row_count"},
         pointer="$/source_registry_audit",
     )
-    if source_audit["schema"] != "simworld-ue-asset-registry-audit/v1":
+    if source_audit["schema"] != REGISTRY_AUDIT_SCHEMA:
         fail(
             "SEMANTIC_INDEX_MANIFEST_SCHEMA_INVALID",
             "Registry audit schema is unsupported",
@@ -835,7 +852,7 @@ def validate_recipe(value: Any) -> dict[str, Any]:
     model_revision = _pinned_revision(caption["model_revision"], pointer="$/caption/model_revision")
     if not (
         SHA256_REVISION_RE.fullmatch(model_revision)
-        or model_revision.startswith("provider-snapshot:")
+        or PROVIDER_SNAPSHOT_RE.fullmatch(model_revision)
     ):
         fail(
             "SEMANTIC_INDEX_CAPTION_REVISION_INVALID",
@@ -915,6 +932,7 @@ def validate_recipe(value: Any) -> dict[str, Any]:
     collection = _safe_string(
         storage["qdrant_collection"], pattern=SAFE_SLUG_RE, pointer="$/storage/qdrant_collection"
     )
+    _reject_floating_tokens(collection, pointer="$/storage/qdrant_collection")
     if collection.lower() in {"asset", "assets", "default", "latest", "main"}:
         fail(
             "SEMANTIC_INDEX_QDRANT_COLLECTION_UNPINNED",
@@ -965,12 +983,153 @@ def validate_recipe(value: Any) -> dict[str, Any]:
     return recipe
 
 
+def validate_bootstrap_cross_references(
+    *,
+    receipt: Mapping[str, Any],
+    registry_audit: Any,
+    object_manifest: Mapping[str, Any],
+    capability_inventory: Any,
+) -> None:
+    """Require canonical producer outputs plus registry/receipt reconciliation."""
+
+    try:
+        source_binding = receipt["source_binding"]
+        project = source_binding["project"]
+        content = source_binding["content"]
+        archive = source_binding["archive"]
+        validated_registry = bootstrap_contract.validate_registry_audit(
+            registry_audit,
+            expected_project_name=project["name"],
+        )
+        if validated_registry != registry_audit:
+            fail(
+                "SEMANTIC_INDEX_REGISTRY_CONTRACT_INVALID",
+                "Registry audit is not the canonical validated producer output",
+                pointer="registry-audit.json",
+            )
+        validated_manifest = bootstrap_contract.validate_object_manifest(object_manifest)
+        validated_inventory = bootstrap_contract.validate_capability_inventory(
+            capability_inventory
+        )
+
+        registry_members = {
+            (f"{row['package']}.{row['name']}", row["class"])
+            for row in validated_registry["assets"]
+        }
+        object_members = {
+            (asset["ue_path"], asset["asset_type"])
+            for asset in validated_manifest["assets"]
+        }
+        capability_members = {
+            (candidate["ue_path"], candidate["asset_class"])
+            for group in validated_inventory["groups"].values()
+            for candidate in group["candidates"]
+        }
+        if not object_members.issubset(registry_members):
+            fail(
+                "SEMANTIC_INDEX_MANIFEST_REGISTRY_MISMATCH",
+                "An object manifest path or class is absent from the exact registry audit",
+                pointer="object-manifest.json",
+            )
+        if not capability_members.issubset(registry_members):
+            fail(
+                "SEMANTIC_INDEX_CAPABILITY_REGISTRY_MISMATCH",
+                "A capability path or class is absent from the exact registry audit",
+                pointer="content-capabilities.json",
+            )
+        object_paths = {path for path, _asset_class in object_members}
+        capability_paths = {path for path, _asset_class in capability_members}
+        if object_paths.intersection(capability_paths):
+            fail(
+                "SEMANTIC_INDEX_CAPABILITY_OBJECT_OVERLAP",
+                "Capability candidates and semantic object candidates must be path-disjoint",
+                pointer="bootstrap bundle",
+            )
+
+        binding = bootstrap_contract.SourceBinding(
+            project_name=project["name"],
+            project_revision=project["revision"],
+            content_revision=content["revision"],
+            archive=archive,
+        )
+        expected_manifest = bootstrap_contract.validate_object_manifest(
+            bootstrap_contract.build_object_manifest(validated_registry, binding)
+        )
+        if validated_manifest != expected_manifest:
+            fail(
+                "SEMANTIC_INDEX_MANIFEST_REGISTRY_MISMATCH",
+                "Object manifest is not the exact deterministic projection of the registry audit",
+                pointer="object-manifest.json",
+            )
+        limit_per_group = validated_inventory.get("limit_per_group")
+        if (
+            isinstance(limit_per_group, bool)
+            or not isinstance(limit_per_group, int)
+            or not 1 <= limit_per_group <= bootstrap_contract.MAX_INVENTORY_LIMIT
+        ):
+            fail(
+                "SEMANTIC_INDEX_CAPABILITY_CONTRACT_INVALID",
+                "Capability inventory limit is outside the producer contract",
+                pointer="content-capabilities.json",
+            )
+        expected_inventory = bootstrap_contract.validate_capability_inventory(
+            bootstrap_contract.build_capability_inventory(
+                validated_registry,
+                binding,
+                limit_per_group=limit_per_group,
+            )
+        )
+        if validated_inventory != expected_inventory:
+            fail(
+                "SEMANTIC_INDEX_CAPABILITY_CONTRACT_INVALID",
+                "Capability inventory is not the exact deterministic projection of the registry audit",
+                pointer="content-capabilities.json",
+            )
+    except SemanticIndexJobError:
+        raise
+    except bootstrap_contract.BootstrapError:
+        fail(
+            "SEMANTIC_INDEX_BOOTSTRAP_CONTRACT_INVALID",
+            "Bootstrap producer contract validation failed",
+            pointer="bootstrap bundle",
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
+        fail(
+            "SEMANTIC_INDEX_BOOTSTRAP_CONTRACT_INVALID",
+            "Bootstrap cross-reference structure is invalid",
+            pointer="bootstrap bundle",
+        )
+
+    expected_capability_counts = {
+        name: group["total_count"]
+        for name, group in expected_inventory["groups"].items()
+    }
+    if receipt["capability_counts"] != expected_capability_counts:
+        fail(
+            "SEMANTIC_INDEX_CAPABILITY_COUNT_MISMATCH",
+            "Bootstrap receipt capability counts differ from the canonical inventory",
+            pointer="bootstrap-receipt.json",
+        )
+    if (
+        receipt["object_count"] != expected_manifest["count"]
+        or receipt["object_manifest_revision"] != expected_manifest["manifest_revision"]
+        or receipt["capability_inventory_revision"]
+        != expected_inventory["inventory_revision"]
+    ):
+        fail(
+            "SEMANTIC_INDEX_BOOTSTRAP_CROSS_REFERENCE_MISMATCH",
+            "Bootstrap receipt revisions or counts differ from canonical members",
+            pointer="bootstrap-receipt.json",
+        )
+
+
 @dataclass(frozen=True)
 class PreparedJob:
     job_bytes: bytes
     bootstrap_receipt_sha256: str
     object_manifest_sha256: str
     recipe_sha256: str
+    pending_objects_sha256: str
 
     @property
     def job(self) -> dict[str, Any]:
@@ -1176,7 +1335,7 @@ def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
         snapshot["asset_snapshot_revision"], pointer="$/snapshot_target/asset_snapshot_revision"
     )
     if (
-        not snapshot_revision.startswith("asset-snapshot-")
+        ASSET_SNAPSHOT_RE.fullmatch(snapshot_revision) is None
         or snapshot["row_point_parity_required"] is not True
         or snapshot["live_audit_receipt_required"] is not True
         or snapshot["snapshot_complete"] is not False
@@ -1240,7 +1399,7 @@ def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
 
     pending = _require_exact_keys(
         job["pending_objects"],
-        required={"count", "selection", "assets"},
+        required={"count", "selection", "assets_sha256", "assets"},
         pointer="$/pending_objects",
     )
     if (
@@ -1251,6 +1410,8 @@ def _validated_prepared_job(prepared: PreparedJob) -> dict[str, Any]:
         != "all_unindexed_objects_in_pinned_bootstrap_manifest"
         or not isinstance(pending["assets"], list)
         or len(pending["assets"]) != pending["count"]
+        or pending["assets_sha256"] != prepared.pending_objects_sha256
+        or pending["assets_sha256"] != json_sha256(pending["assets"])
         or pending["count"] != input_contract["object_count"]
         or postgres_target["planned_candidate_rows"] != pending["count"]
         or qdrant_target["planned_candidate_points"] != pending["count"]
@@ -1464,7 +1625,7 @@ def build_job(
     _sha256(expected_content_revision, pointer="--expected-content-revision", prefixed=True)
     _sha256(expected_recipe_sha256, pointer="--expected-recipe-sha256")
     snapshot_revision = _pinned_revision(asset_snapshot_revision, pointer="--asset-snapshot-revision")
-    if not snapshot_revision.startswith("asset-snapshot-"):
+    if ASSET_SNAPSHOT_RE.fullmatch(snapshot_revision) is None:
         fail(
             "SEMANTIC_INDEX_SNAPSHOT_REVISION_INVALID",
             "Asset snapshot revision must use the asset-snapshot- namespace",
@@ -1561,7 +1722,7 @@ def build_job(
     )
     if (
         not isinstance(capability_inventory, dict)
-        or capability_inventory.get("schema") != "simworld-ue-content-capabilities/v1"
+        or capability_inventory.get("schema") != CAPABILITY_INVENTORY_SCHEMA
         or "assets" in capability_inventory
         or capability_inventory.get("source_binding") != receipt["source_binding"]
         or capability_inventory.get("inventory_revision")
@@ -1613,7 +1774,7 @@ def build_job(
     manifest = validate_object_manifest(manifest_value, source_binding=receipt["source_binding"])
     if (
         not isinstance(registry_audit, dict)
-        or registry_audit.get("schema") != "simworld-ue-asset-registry-audit/v1"
+        or registry_audit.get("schema") != REGISTRY_AUDIT_SCHEMA
         or registry_audit.get("project_name") != receipt["source_binding"]["project"]["name"]
         or registry_audit.get("engine_version") != receipt["source_binding"]["project"]["engine_version"]
         or registry_audit.get("mount_point") != "/Game"
@@ -1628,6 +1789,12 @@ def build_job(
             "Registry audit identity or count differs from the object manifest",
             pointer="registry-audit.json",
         )
+    validate_bootstrap_cross_references(
+        receipt=receipt,
+        registry_audit=registry_audit,
+        object_manifest=manifest,
+        capability_inventory=capability_inventory,
+    )
     _assert_expected_pin(
         manifest["manifest_revision"],
         receipt["object_manifest_revision"],
@@ -1798,6 +1965,7 @@ def build_job(
         "pending_objects": {
             "count": count,
             "selection": "all_unindexed_objects_in_pinned_bootstrap_manifest",
+            "assets_sha256": json_sha256(pending_assets),
             "assets": pending_assets,
         },
         "resource_contract": {
@@ -1877,6 +2045,7 @@ def build_job(
         bootstrap_receipt_sha256=hashlib.sha256(receipt_raw).hexdigest(),
         object_manifest_sha256=manifest_sha256,
         recipe_sha256=recipe_sha256,
+        pending_objects_sha256=json_sha256(pending_assets),
     )
 
 
@@ -2046,6 +2215,7 @@ def publish_job(prepared: PreparedJob, output_dir: Path, approval_ref: str) -> d
             "recipe_sha256": prepared.recipe_sha256,
             "asset_snapshot_revision": job["snapshot_target"]["asset_snapshot_revision"],
             "pending_object_count": job["pending_objects"]["count"],
+            "pending_objects_sha256": prepared.pending_objects_sha256,
             "approval_ref_sha256": approval_sha256,
             "prepared_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "publication_policy": "atomic_non_overwriting_private",
@@ -2104,6 +2274,7 @@ def result(prepared: PreparedJob, *, status: str) -> dict[str, Any]:
         "recipe_sha256": prepared.recipe_sha256,
         "asset_snapshot_revision": job["snapshot_target"]["asset_snapshot_revision"],
         "pending_object_count": job["pending_objects"]["count"],
+        "pending_objects_sha256": prepared.pending_objects_sha256,
         "resource_estimates": job["resource_contract"]["estimates"],
         "execution_started": False,
         "network_used": False,

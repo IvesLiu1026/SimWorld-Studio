@@ -28,11 +28,11 @@
         "model_id": { "$ref": "#/$defs/id" },
         "model_revision": {
           "type": "string",
-          "minLength": 3,
+          "minLength": 19,
           "maxLength": 240,
           "anyOf": [
             { "$ref": "#/$defs/sha256Revision" },
-            { "pattern": "^provider-snapshot:[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{2,221}$" }
+            { "pattern": "^provider-snapshot:[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,221}$" }
           ]
         },
         "prompt_revision": { "$ref": "#/$defs/sha256Revision" },
@@ -78,7 +78,16 @@
       ],
       "properties": {
         "postgres_schema_revision": { "const": 2 },
-        "qdrant_collection": { "$ref": "#/$defs/slug" },
+        "qdrant_collection": {
+          "allOf": [
+            { "$ref": "#/$defs/slug" },
+            {
+              "not": {
+                "pattern": "(^|[._-])([dD][eE][vV]|[hH][eE][aA][dD]|[lL][aA][tT][eE][sS][tT]|[mM][aA][iI][nN]|[mM][aA][sS][tT][eE][rR]|[tT][rR][uU][nN][kK]|[uU][nN][kK][nN][oO][wW][nN])([._-]|$)"
+              }
+            }
+          ]
+        },
         "qdrant_dense_vector_name": { "$ref": "#/$defs/slug" },
         "qdrant_sparse_vector_name": { "$ref": "#/$defs/slug" }
       }
