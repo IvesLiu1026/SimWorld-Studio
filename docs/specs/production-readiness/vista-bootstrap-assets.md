@@ -77,6 +77,12 @@ copy of the exact target project, the content owner still must:
 5. add only the verified resulting object paths to the catalog, then rebuild
    and attest the Postgres/Qdrant snapshot.
 
+The bounded offline preparation for steps 1–3 is documented in
+`docs/specs/production-readiness/vista-ue-interchange-import-job-runbook.md`.
+It verifies the acquisition receipt/tree and glTF dependency closure, records
+source POSITION bounds, and can publish a deterministic UE 5.3.2 Interchange
+job. It does not launch Unreal, import Content, or predict object paths.
+
 Until those steps pass, these files are `external_source_candidates`. They must
 not satisfy `ASSET-001`, semantic asset readiness, or the real-PBR scene gate.
 
