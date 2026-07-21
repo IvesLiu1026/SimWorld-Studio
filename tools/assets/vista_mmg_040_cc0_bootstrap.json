@@ -1,6 +1,6 @@
 {
   "schema": "simworld-external-asset-source/v1",
-  "revision": "vista-mmg-040-polyhaven-2026-07-21-v1",
+  "revision": "vista-mmg-040-polyhaven-2026-07-22-v2",
   "provider": "Poly Haven",
   "provider_url": "https://polyhaven.com/",
   "license": "CC0-1.0",
@@ -98,6 +98,53 @@
           "bytes": 205542,
           "md5": "b0044e2cc568cd2a7f906ca56f473542",
           "sha256": "d5d180b15c48ed6ab7b27a663de8f399f813ed0c32ff2706520d677a1e387cdc"
+        }
+      ]
+    },
+    {
+      "asset_id": "polyhaven_cardboard_box_01",
+      "source_asset_id": "cardboard_box_01",
+      "source_page": "https://polyhaven.com/a/cardboard_box_01",
+      "semantic_roles": [
+        "cardboard_box",
+        "retrievable_storage_box"
+      ],
+      "format": "gltf-2.0",
+      "files": [
+        {
+          "path": "cardboard_box_01/cardboard_box_01_1k.gltf",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/cardboard_box_01/cardboard_box_01_1k.gltf",
+          "bytes": 2903,
+          "md5": "84572b118cc3640acdd9e978869bb3ee",
+          "sha256": "6038bcc5bba5a08a5f6643a265977e37e3d14553e62981e144c33a89f10b78e1"
+        },
+        {
+          "path": "cardboard_box_01/cardboard_box_01.bin",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/4k/cardboard_box_01/cardboard_box_01.bin",
+          "bytes": 381936,
+          "md5": "64bea3a77434981017b8a06da4ccb0df",
+          "sha256": "7212d43b4cb56459e46d31ab34dc7c310fcfbe170f4a588416dea07ae5628a4b"
+        },
+        {
+          "path": "cardboard_box_01/textures/cardboard_box_01_diff_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cardboard_box_01/cardboard_box_01_diff_1k.jpg",
+          "bytes": 567741,
+          "md5": "a306e586325d1759ba3225d2b6ad5121",
+          "sha256": "122c7ba8c5935e289804a730b480677a4bffdf74a45c91970cba682df92e171c"
+        },
+        {
+          "path": "cardboard_box_01/textures/cardboard_box_01_nor_gl_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cardboard_box_01/cardboard_box_01_nor_gl_1k.jpg",
+          "bytes": 817424,
+          "md5": "24768abd73f71cfdd7f5be92b18634a7",
+          "sha256": "d2d1f529a851966b65411b5094510dd9eba03cd5c0a89921f79325c377a8e8eb"
+        },
+        {
+          "path": "cardboard_box_01/textures/cardboard_box_01_arm_1k.jpg",
+          "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/cardboard_box_01/cardboard_box_01_arm_1k.jpg",
+          "bytes": 398433,
+          "md5": "39ea452f95d71ec1362e47dff453c706",
+          "sha256": "5db63828d0f904c6a8d9c83afc912260b2a27261c15a28d06360519384574d2b"
         }
       ]
     }

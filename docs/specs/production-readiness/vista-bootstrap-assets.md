@@ -5,22 +5,25 @@ asset has been installed into UE Content.
 
 ## Purpose
 
-The official minimal SimWorld archive already contains a real
-`SM_chair_b`, several `BP_Box` variants, humanoid lift animations, a fall loop,
-IK Rig and Control Rig packages. A bounded filename audit did not identify a
-high cabinet/shelf or a stable step stool. The pinned source manifest
-`tools/assets/vista_mmg_040_cc0_bootstrap.json` fills only those two visual gaps:
+The official minimal SimWorld archive contains a real `SM_chair_b`, several
+`BP_Box` variants, humanoid lift animations, a fall loop, IK Rig and Control
+Rig packages. A live disposable-project inspection later proved that the
+three `BP_Box` classes construct collision helpers but no visible mesh or
+material. A bounded filename audit also did not identify a high cabinet/shelf
+or a stable step stool. The pinned source manifest
+`tools/assets/vista_mmg_040_cc0_bootstrap.json` fills those three visual gaps:
 
 - Poly Haven `painted_wooden_stool`, used as a candidate stable step stool;
 - Poly Haven `Shelf_01`, used as a candidate high storage shelf.
+- Poly Haven `cardboard_box_01`, used as the retrievable cardboard box.
 
-Both are human-authored CC0 models with glTF geometry plus 1K diffuse,
+All three are human-authored CC0 models with glTF geometry plus 1K diffuse,
 normal, and packed ARM PBR textures. `Shelf_01` is a shelf, not a closed
 cabinet; downstream labels and review must preserve that distinction.
 
 The manifest pins every direct download to its HTTPS origin, relative path,
 byte count, upstream MD5, and independently observed SHA-256. Total payload is
-2,480,281 bytes across ten files. It also retains the provider, source pages,
+4,648,718 bytes across fifteen files. It also retains the provider, source pages,
 CC0 license URL, and a display attribution. No binary is committed to Git.
 
 ## Safe acquisition
@@ -37,7 +40,7 @@ install -d -m 700 "$HOME/.simworld"
 install -d -m 700 "$HOME/.simworld/vendor-assets"
 
 uv run --project tools --frozen python tools/fetch_vista_bootstrap_assets.py \
-  --output-dir "$HOME/.simworld/vendor-assets/vista-mmg-040-polyhaven-v1"
+  --output-dir "$HOME/.simworld/vendor-assets/vista-mmg-040-polyhaven-v2"
 ```
 
 After an operator approves the external fetch and reviews the pinned CC0
@@ -45,7 +48,7 @@ source, acquisition is explicit:
 
 ```bash
 uv run --project tools --frozen python tools/fetch_vista_bootstrap_assets.py \
-  --output-dir "$HOME/.simworld/vendor-assets/vista-mmg-040-polyhaven-v1" \
+  --output-dir "$HOME/.simworld/vendor-assets/vista-mmg-040-polyhaven-v2" \
   --apply \
   --accept-license CC0-1.0
 ```
@@ -72,7 +75,7 @@ copy of the exact target project, the content owner still must:
    normal orientation, and the ambient-occlusion/roughness/metallic channels;
 3. record final StaticMesh and Material object paths, dimensions, material
    slots, source tree digest, UE Content revision and import settings;
-4. spawn both assets in the disposable `mmg_040` layout and capture visual,
+4. spawn all three assets in the disposable `mmg_040` layout and capture visual,
    floating, collision, and PBR evidence;
 5. add only the verified resulting object paths to the catalog, then rebuild
    and attest the Postgres/Qdrant snapshot.

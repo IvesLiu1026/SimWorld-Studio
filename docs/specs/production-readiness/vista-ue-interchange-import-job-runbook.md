@@ -43,7 +43,7 @@ This repository has not run that acquisition into a persistent asset
 directory. The examples below use an operator-selected placeholder:
 
 ```bash
-ACQUISITION_DIR="$HOME/.simworld/vendor-assets/vista-mmg-040-polyhaven-v1"
+ACQUISITION_DIR="$HOME/.simworld/vendor-assets/vista-mmg-040-polyhaven-v2"
 ```
 
 ## Offline dry run
@@ -138,7 +138,7 @@ the approved executor/reviewer must append evidence that:
 5. base color uses sRGB; packed ARM is non-sRGB with R=AO, G=roughness,
    B=metallic; and the OpenGL normal map's green-channel conversion is
    visually and numerically reviewed;
-6. both assets can be loaded and spawned in a disposable `mmg_040` scene with
+6. all imported assets can be loaded and spawned in a disposable `mmg_040` scene with
    screenshots for scale, contact/floating, collision and PBR appearance.
 
 Only a later AssetRegistry capture may establish final object paths. Only

@@ -101,9 +101,12 @@ class AcquisitionTests(unittest.TestCase):
         path = TOOLS_DIR / "assets" / "vista_mmg_040_cc0_bootstrap.json"
         manifest, _raw = acquisition.read_manifest(path)
         entries = [entry for asset in manifest["assets"] for entry in asset["files"]]
-        self.assertEqual([asset["source_asset_id"] for asset in manifest["assets"]], ["painted_wooden_stool", "Shelf_01"])
-        self.assertEqual(len(entries), 10)
-        self.assertEqual(sum(entry["bytes"] for entry in entries), 2_480_281)
+        self.assertEqual(
+            [asset["source_asset_id"] for asset in manifest["assets"]],
+            ["painted_wooden_stool", "Shelf_01", "cardboard_box_01"],
+        )
+        self.assertEqual(len(entries), 15)
+        self.assertEqual(sum(entry["bytes"] for entry in entries), 4_648_718)
         self.assertEqual({asset["format"] for asset in manifest["assets"]}, {"gltf-2.0"})
 
     def test_dry_run_builds_a_plan_without_network_or_output(self) -> None:
