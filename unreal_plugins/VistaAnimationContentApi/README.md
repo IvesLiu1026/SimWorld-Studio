@@ -1,9 +1,13 @@
 # VistaAnimationContentApi
 
-Status: **portable source artifact; offline contract checks only.** This checkout does not contain an
-Unreal project or Unreal Engine headers, so the plugin has not been compiled, loaded, exercised in PIE,
-or accepted as Production evidence. Installing this directory must not change Studio readiness until a
-live nonce challenge, verified content profile, binary manifest, and disposable-project run all pass.
+Status: **portable source artifact with an offline UE 5.7.3 BuildPlugin package; not live/content
+ready.** UHT, UnrealEditor Development, UnrealGame Development/Shipping, and package filtering passed
+on 2026-07-21 for build ID `ue573-9a5eb314-fourcmd2`; the Editor module SHA-256 was
+`d9b43eb89bcf50bdd185933a6d4a199b52cf0cf32ff8a123784ba795f0d58443`. It has not been installed into
+the target project, exact-dispatched by a project listener, loaded in a live UE process, or exercised
+with real character content. Installing this directory must not change Studio readiness until a live
+nonce challenge, verified content profile, root-owned binary manifest, and disposable-project run all
+pass.
 
 ## What this plugin closes
 

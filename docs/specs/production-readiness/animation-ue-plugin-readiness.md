@@ -1,40 +1,32 @@
 # VISTA Animation UE Plugin Capability / Readiness Contract
 
-狀態：**server-side contract 與 probe 已完成；UE plugin artifact 不存在，因此 Live UE
-仍是 `not_ready`。** 本次審查沒有啟動 Unreal Editor，也沒有把 generic MCP、Python、
-console 或 `vbp` 包裝成假的 Content API。
+狀態：**server-side contract、四命令 dedicated transport、portable UE plugin source 與
+UE 5.7.3 BuildPlugin package 已完成；project listener、真實 content driver 與 live-load
+receipt 尚未完成，因此 Live UE 仍是 `not_ready`。** 編譯流程沒有啟動 Unreal Editor、
+修改場景，或把 generic MCP、Python、console／`vbp` 包裝成假的 Content API。
 
 ## 結論
 
-目前這個 Studio checkout 無法安全實作或編譯
-`invokeAnimationContentApi` 的 UE 端點。缺少的是完整 UE plugin source/module，不是再加一個
-Node route 就能補上的小缺口。
+目前 checkout 已提供完整、可攜的
+`unreal_plugins/VistaAnimationContentApi` source/module、machine-readable contract、dry-run
+install/build scripts，以及 artifact-manifest helper。Server 也已把 timeline runtime 接到只有
+四個方法的 dedicated transport；mutation policy 由固定 operation fingerprint 推導，
+`UeMcpBroker` 在 queue wait 與每次 bounded read retry 前重驗 lease，所有 mutation 永遠
+`maxAttempts=1`。
 
-本次 local source audit 的可重現證據如下：
+2026-07-21 的可重現建置使用
+`/mnt/NAS2/yhliu/UE_5.7.3_prebuilt`。UHT、UnrealEditor Development、UnrealGame
+Development、UnrealGame Shipping 與 BuildPlugin package 全部成功。最終 Editor module
+SHA-256 為
+`d9b43eb89bcf50bdd185933a6d4a199b52cf0cf32ff8a123784ba795f0d58443`，compiled build ID
+為 `ue573-9a5eb314-fourcmd2`；完整證據見
+`evidence/2026-07-21-host-preflight.md`。
 
-- tracked UE/C++ build material 只有
-  `patches/MCPServerRunnable_fixed.cpp`；沒有 `.uplugin`、`.Build.cs`、`.uproject`、Public
-  headers 或完整 module source tree。
-- `SimWorld` 是 gitlink `d91058d1e88e4d7da1d84e1cb3527d90cafd3253`，目前 checkout
-  沒有可供 Studio build 的 plugin source。
-- `apply-mcp-fix.sh` 明確要求另一個外部 UE project 已經存在
-  `Plugins/UnrealMCP/Source/UnrealMCP/Private/MCPServerRunnable.cpp`，再把上述單一 `.cpp`
-  複製進去；這個 script 不是 plugin source distribution。
-- 該 `.cpp` 仍把 caller 提供的 `type` / `params` 交給 generic
-  `Bridge->ExecuteCommand(...)`，而且缺少其 header、bridge implementation 與 build
-  descriptor，不能據此建立可信的 fixed API。
-- 現有 `mcp-server.js` / `unreal-bridge.js` 仍提供 arbitrary
-  `execute_python_script`、generic `agent_action` / `vbp`，且 `UeMcpBroker` 以內部固定 retry
-  policy 執行，沒有落實 animation adapter 傳入的 mutation `maxAttempts: 1`。
-
-因此本 slice 依 fail-closed 決策只提供：
-
-1. 固定、可機器驗證的 capability response schema；
-2. live nonce/digest/slot challenge probe；
-3. expected UE source-tree audit；
-4. 管理員必須建置與部署的 artifact 契約。
-
-它不宣稱人物手腳 IK、fall/recover montage 或 12-second runtime 已在 UE 執行成功。
+這關閉的是 source／protocol／compile／package gate，不是 content／live gate。Plugin 仍只
+定義 abstract `IVistaAnimationContentDriver`；repo 沒有真實人物 skeleton、AnimBP／Control
+Rig、hand/foot anchors、drag physics、fall/recover montages、completion notify，也沒有把
+四個 reserved commands exact-dispatch 到實際 project listener。因此不能宣稱人物手腳 IK、
+跌倒／復原或 12 秒 timeline 已在 UE 執行成功。
 
 ## Server-side machine contract
 
@@ -140,9 +132,9 @@ token 或任意設定）：
   "schema": "vista-animation-ue-plugin-artifact/v1",
   "plugin_name": "VistaAnimationContentApi",
   "plugin_version": "1.0.0",
-  "plugin_build_id": "vista-animation-linux-ue5.3-build001",
+  "plugin_build_id": "ue573-9a5eb314-fourcmd2",
   "binary_sha256": "<64 lowercase hex>",
-  "engine_version": "5.3.2",
+  "engine_version": "5.7.3",
   "target_platform": "linux-x86_64",
   "api_schema": "vista-animation-ue-content-api/v1"
 }
@@ -165,19 +157,23 @@ token 或任意設定）：
 
 ## UE plugin endpoint requirements
 
-Plugin 最多新增兩個固定 command types；名稱與 wire schema 必須由 implementation spec
-固定：
+Plugin 只保留四個固定 command types；名稱與 wire schema 由 portable contract 固定：
 
 - `vista_animation_capabilities`：只處理
   `vista-animation-ue-capability-probe/v1`，read-only；
 - `vista_animation_content_api`：只處理 adapter 的
   `vista-animation-ue-request/v1` 七種 operations。
+- `vista_animation_engine_time`：只處理 slot-bound、digest-correlated 的 process monotonic
+  engine-time sample。
+- `vista_animation_evidence_capture`：只把 exact typed context 交給 trusted content driver，
+  並回傳 immutable artifact descriptor；plugin 不會合成 screenshot 或 `pass` assertion。
 
 即使共用既有 private listener，也必須在進入 generic
-`Bridge->ExecuteCommand(type, params)` **之前**做 exact dispatch；這兩個 types 不得落入
+`Bridge->ExecuteCommand(type, params)` **之前**做 exact dispatch；這四個 types 不得落入
 generic bridge、Python、console、Blueprint reflection 或 UnrealCV `vbp`。
 
-Plugin implementation 必須：
+Plugin implementation 已具備以下 protocol/state-machine 護欄；project listener 與 content
+driver 必須維持這些條件：
 
 - 使用 bounded UTF-8 JSON framing 與 exact key/type/range validation；拒絕 unknown fields、
   oversized payload、duplicate semantic mutation 與 malformed JSON。
@@ -196,28 +192,29 @@ Plugin implementation 必須：
 目前 orphan `MCPServerRunnable_fixed.cpp` 不符合上述要求，而且還會 log raw response；不得
 直接把 capability handler 塞進該檔案後宣稱完成。
 
-## Integration gate（尚未完成）
+## Integration gate（部分完成）
 
-這個 module 尚未改動 shared `studio-readiness.js` 或 routes。整合 owner 應在管理員部署真實
-artifact 後：
+Server-side 專用 transport、current lease/slot revalidation、root-owned artifact/content pins、
+timeline routes、global readiness proof expiry/revocation與 UI workbench 已接線；
+`TIMELINE_AUTOMATION_VERIFIED` 不能取代 live evidence。仍必須完成：
 
-1. 建立專用 transport，分別實作 `probeAnimationContentApi` 與
-   `invokeAnimationContentApi`；兩者都不能轉送 arbitrary generic command。
-2. 用 root-owned manifest、verified content profile、current owner/session/slot/scene 建立
-   `createVistaAnimationUeReadinessProbe(...)`。
-3. 將它作為 Studio readiness 的 `timeline` probe override；移除
-   `TIMELINE_AUTOMATION_VERIFIED` 作為 Production ready 證據。
-4. 只有 live challenge `ready` 時才建立/啟用 animation runtime adapter；readiness 失效要
-   fail closed，不能 fallback 到 basic action、generic montage 或 Python。
-5. 將 plugin build receipt、live capability receipt、content receipt 與 disposable UE
-   evidence 綁定同一 source/content/binary revision。
+1. 將 package 安裝到 disposable／正式 project，並在 private listener 對四個 reserved
+   commands exact-dispatch；任何 `vista_animation_*` unknown command 都 terminal reject。
+2. 實作 project-owned content driver，逐項綁定 verified pawn、skeleton、Control Rig／IK、
+   montage、notify、interaction assertion 與 screenshot／pose evidence。
+3. 以 root-owned manifest、verified content profile及 current owner/session/slot/scene 執行
+   live nonce challenge；readiness 失效必須立即 fail closed。
+4. 將 plugin package receipt、live capability receipt、content receipt與 disposable UE
+   0／2／5／9／12 秒 evidence 綁定同一 source/content/binary revision。
+5. 驗證 normal completion、timeout、Stop race、disconnect、restart reconciliation、fall
+   collision、recover alignment、hand/foot contact與 scene zero-diff review。
 
-在完成這五步以前，對外狀態應維持：
+在完成這些 live/content 步驟以前，對外狀態應維持：
 
 ```text
 timeline / character_animation = not_ready
 start_allowed = false
-cause = ANIMATION_UE_PLUGIN_TRANSPORT_MISSING
+cause = ANIMATION_UE_PLUGIN_LIVE_PROOF_MISSING
 ```
 
 ## Focused verification
@@ -230,7 +227,9 @@ node --test \
 git diff --check
 ```
 
-Focused tests cover exact schema/fingerprints, current-repo source absence, regular-file source audit,
+Focused tests cover exact schema/fingerprints, regular-file source audit, four-command dispatch,
 valid live challenge, forbidden generic transports, legacy env override rejection, nonce/digest/slot/
 artifact/content/security/operation mismatch, unknown fields, response bounds, credential-safe failures,
-timeout/cancellation and nonce replay.
+timeout/cancellation, nonce replay, queue-wait lease revocation and mutation no-retry behavior. The
+UE 5.7.3 package build is separately recorded as host evidence; tests do not substitute for live
+project/content evidence.
