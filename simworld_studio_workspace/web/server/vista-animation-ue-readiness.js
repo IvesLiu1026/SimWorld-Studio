@@ -166,6 +166,12 @@ const OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES = deepFreeze({
   Intermediate: "directory",
 });
 
+const AUDITED_PLUGIN_DIRECTORIES = Object.freeze(
+  Object.keys(AUDITED_PLUGIN_DIRECTORY_CHILDREN),
+);
+const EXPECTED_PLUGIN_SOURCE_FILE_SET = new Set(EXPECTED_PLUGIN_SOURCE_FILES);
+const LINUX_DIRECTORY_DESCRIPTOR_ROOT = "/proc/self/fd";
+
 const SECURITY_POLICY = deepFreeze({
   schema: ANIMATION_UE_SECURITY_POLICY_SCHEMA,
   json_only: true,
@@ -729,11 +735,26 @@ function stableStatValue(value) {
   return Number.isFinite(value) ? value : null;
 }
 
-function directorySnapshot(status) {
+function sourceEntryType(status) {
+  if (
+    !status
+    || typeof status.isSymbolicLink !== "function"
+    || typeof status.isDirectory !== "function"
+    || typeof status.isFile !== "function"
+  ) throw new SourceAuditFault("invalid_stat");
+  if (status.isSymbolicLink()) return "symlink";
+  if (status.isDirectory()) return "directory";
+  if (status.isFile()) return "file";
+  return "other";
+}
+
+function sourceEntrySnapshot(status) {
+  const type = sourceEntryType(status);
   for (const field of ["dev", "ino", "mode", "nlink", "size", "mtimeMs", "ctimeMs"]) {
     if (!hasStatValue(status[field])) throw new SourceAuditFault("invalid_stat");
   }
   return Object.freeze({
+    type,
     dev: statToken(status.dev),
     ino: statToken(status.ino),
     mode: stableStatValue(status.mode),
@@ -744,7 +765,7 @@ function directorySnapshot(status) {
   });
 }
 
-function sameDirectorySnapshot(left, right) {
+function sameSourceEntrySnapshot(left, right) {
   return Boolean(left && right && Object.keys(left).every((key) => left[key] === right[key]));
 }
 
@@ -754,8 +775,20 @@ function sameDirectoryIdentity(left, right) {
     && right
     && left.dev === right.dev
     && left.ino === right.ino
-    && left.mode === right.mode,
+    && left.mode === right.mode
+    && left.type === "directory"
+    && right.type === "directory",
   );
+}
+
+function sameDirectorySnapshot(left, right) {
+  return sameDirectoryIdentity(left, right) && sameSourceEntrySnapshot(left, right);
+}
+
+function directorySnapshot(status) {
+  const snapshot = sourceEntrySnapshot(status);
+  if (snapshot.type !== "directory") throw new SourceAuditFault("not_directory");
+  return snapshot;
 }
 
 function inspectCanonicalDirectory(fsImpl, directory) {
@@ -766,10 +799,10 @@ function inspectCanonicalDirectory(fsImpl, directory) {
   } catch (error) {
     throw new SourceAuditFault(sourceAuditReason(error));
   }
-  if (typeof status.isSymbolicLink !== "function" || status.isSymbolicLink()) {
+  if (sourceEntryType(status) === "symlink") {
     throw new SourceAuditFault("ancestor_symlink");
   }
-  if (typeof status.isDirectory !== "function" || !status.isDirectory()) {
+  if (sourceEntryType(status) !== "directory") {
     throw new SourceAuditFault("not_directory");
   }
   let canonical;
@@ -871,42 +904,253 @@ function hashOpenedSourceFile(fsImpl, descriptor, filepath, lexicalStatus) {
   return hasher.digest("hex");
 }
 
-function auditExpectedSourceFile(fsImpl, projectRoot, manifestEntry) {
-  let filepath;
-  try {
-    filepath = sourceAuditPath(projectRoot, manifestEntry.path);
-    inspectCanonicalDirectoryChain(fsImpl, path.dirname(filepath));
-  } catch (error) {
-    const reason = sourceAuditReason(error);
-    return reason === "missing"
-      ? { state: "missing" }
-      : { state: "mismatch", reason, actualSha256: null };
+function addPolicyViolation(policyViolations, relativePath, reason) {
+  const key = `${relativePath}\u0000${reason}`;
+  if (!policyViolations.keys.has(key)) {
+    policyViolations.keys.add(key);
+    policyViolations.values.push({ path: relativePath, reason });
+  }
+}
+
+function expectedDirectoryChildTypes(relativeDirectory) {
+  const expectedTypes = new Map();
+  for (const name of AUDITED_PLUGIN_DIRECTORY_CHILDREN[relativeDirectory]) {
+    const relativePath = `${relativeDirectory}/${name}`;
+    if (Object.prototype.hasOwnProperty.call(AUDITED_PLUGIN_DIRECTORY_CHILDREN, relativePath)) {
+      expectedTypes.set(name, "directory");
+    } else if (EXPECTED_PLUGIN_SOURCE_FILE_SET.has(relativePath)) {
+      expectedTypes.set(name, "file");
+    } else {
+      throw new SourceAuditFault("invalid_manifest");
+    }
+  }
+  if (relativeDirectory === PLUGIN_SOURCE_RELATIVE_ROOT) {
+    for (const [name, expectedType] of Object.entries(OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES)) {
+      expectedTypes.set(name, expectedType);
+    }
+  }
+  return expectedTypes;
+}
+
+function sanitizedUnexpectedEntry(relativeDirectory, name) {
+  const safeName = (
+    name !== "."
+    && name !== ".."
+    && /^[A-Za-z0-9._-]{1,160}$/.test(name)
+  ) ? name : "[invalid-entry]";
+  return `${relativeDirectory}/${safeName}`;
+}
+
+function validateOptionalEntry(fsImpl, projectRoot, relativePath, expectedType, status) {
+  if (expectedType === "directory") {
+    if (sourceEntryType(status) === "symlink") throw new SourceAuditFault("ancestor_symlink");
+    if (sourceEntryType(status) !== "directory") throw new SourceAuditFault("not_directory");
+    inspectCanonicalDirectoryChain(fsImpl, sourceAuditPath(projectRoot, relativePath));
+    return;
+  }
+  requireRegularSingleLink(status);
+}
+
+function captureAuditedPluginTreeSnapshot(fsImpl, projectRoot) {
+  const unexpectedEntries = new Set();
+  const allowedEntries = [];
+  const directories = new Map();
+  const directoryFailures = new Map();
+  const policyViolations = { keys: new Set(), values: [] };
+
+  for (const relativeDirectory of AUDITED_PLUGIN_DIRECTORIES) {
+    let directory;
+    let snapshot;
+    try {
+      directory = sourceAuditPath(projectRoot, relativeDirectory);
+      snapshot = inspectCanonicalDirectoryChain(fsImpl, directory);
+    } catch (error) {
+      const reason = sourceAuditReason(error);
+      directoryFailures.set(relativeDirectory, reason);
+      if (reason !== "missing") addPolicyViolation(policyViolations, relativeDirectory, reason);
+      continue;
+    }
+    const capturedDirectory = {
+      snapshot,
+      actualChildren: [],
+      children: new Map(),
+      childFailures: new Map(),
+      readFailure: null,
+    };
+    directories.set(relativeDirectory, capturedDirectory);
+
+    let actualChildren;
+    try {
+      actualChildren = fsImpl.readdirSync(directory).map(String).sort();
+    } catch (error) {
+      const reason = sourceAuditReason(error);
+      capturedDirectory.readFailure = reason;
+      addPolicyViolation(policyViolations, relativeDirectory, reason);
+      continue;
+    }
+    capturedDirectory.actualChildren = actualChildren;
+    const expectedTypes = expectedDirectoryChildTypes(relativeDirectory);
+    for (const name of actualChildren) {
+      if (!expectedTypes.has(name)) {
+        unexpectedEntries.add(sanitizedUnexpectedEntry(relativeDirectory, name));
+      }
+    }
+    for (const [name, expectedType] of expectedTypes) {
+      if (!actualChildren.includes(name)) continue;
+      const relativePath = `${relativeDirectory}/${name}`;
+      let status;
+      try {
+        status = fsImpl.lstatSync(sourceAuditPath(projectRoot, relativePath));
+        capturedDirectory.children.set(name, {
+          snapshot: sourceEntrySnapshot(status),
+          status,
+        });
+      } catch (error) {
+        const reason = sourceAuditReason(error);
+        capturedDirectory.childFailures.set(name, reason);
+        if (
+          expectedType === "directory"
+          || Object.prototype.hasOwnProperty.call(OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES, name)
+        ) {
+          addPolicyViolation(policyViolations, relativePath, reason);
+        }
+        continue;
+      }
+      if (
+        relativeDirectory === PLUGIN_SOURCE_RELATIVE_ROOT
+        && Object.prototype.hasOwnProperty.call(OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES, name)
+      ) {
+        try {
+          validateOptionalEntry(fsImpl, projectRoot, relativePath, expectedType, status);
+          allowedEntries.push(relativePath);
+        } catch (error) {
+          addPolicyViolation(policyViolations, relativePath, sourceAuditReason(error));
+        }
+      }
+    }
   }
 
-  let lexicalStatus;
+  return {
+    directories,
+    directoryFailures,
+    unexpectedEntries: [...unexpectedEntries].sort(),
+    allowedEntries: allowedEntries.sort(),
+    policyViolations: policyViolations.values.sort((left, right) => (
+      left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason)
+    )),
+  };
+}
+
+function assertAnchoredTraversalPlatform() {
+  const requiredConstants = [
+    fs.constants.O_RDONLY,
+    fs.constants.O_DIRECTORY,
+    fs.constants.O_NOFOLLOW,
+    fs.constants.O_NONBLOCK,
+  ];
+  if (process.platform !== "linux" || requiredConstants.some((value) => !Number.isInteger(value))) {
+    throw new SourceAuditFault("platform_unsupported");
+  }
+}
+
+function closeHeldDirectoryHandles(fsImpl, handles) {
+  let failed = false;
+  for (const handle of [...handles.values()].reverse()) {
+    try {
+      fsImpl.closeSync(handle.descriptor);
+    } catch {
+      failed = true;
+    }
+  }
+  handles.clear();
+  return failed;
+}
+
+function openHeldDirectoryHandles(fsImpl, projectRoot, treeSnapshot) {
+  const handles = new Map();
+  const flags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
   try {
-    lexicalStatus = fsImpl.lstatSync(filepath);
-    requireRegularSingleLink(lexicalStatus);
+    for (const relativeDirectory of AUDITED_PLUGIN_DIRECTORIES) {
+      const captured = treeSnapshot.directories.get(relativeDirectory);
+      if (!captured) continue;
+      const descriptor = fsImpl.openSync(
+        sourceAuditPath(projectRoot, relativeDirectory),
+        flags,
+      );
+      const anchorPath = `${LINUX_DIRECTORY_DESCRIPTOR_ROOT}/${descriptor}`;
+      handles.set(relativeDirectory, { anchorPath, descriptor });
+      const openedSnapshot = directorySnapshot(fsImpl.fstatSync(descriptor));
+      if (!sameDirectorySnapshot(captured.snapshot, openedSnapshot)) {
+        throw new SourceAuditFault("identity_changed");
+      }
+
+      let probeDescriptor;
+      try {
+        probeDescriptor = fsImpl.openSync(`${anchorPath}/.`, flags);
+        const probeSnapshot = directorySnapshot(fsImpl.fstatSync(probeDescriptor));
+        if (!sameDirectorySnapshot(openedSnapshot, probeSnapshot)) {
+          throw new SourceAuditFault("platform_unsupported");
+        }
+      } catch {
+        throw new SourceAuditFault("platform_unsupported");
+      } finally {
+        if (probeDescriptor !== undefined) {
+          try {
+            fsImpl.closeSync(probeDescriptor);
+          } catch {
+            throw new SourceAuditFault("platform_unsupported");
+          }
+        }
+      }
+    }
+    return handles;
   } catch (error) {
-    const reason = sourceAuditReason(error);
+    if (closeHeldDirectoryHandles(fsImpl, handles)) {
+      throw new SourceAuditFault("io_error");
+    }
+    throw error;
+  }
+}
+
+function auditExpectedSourceFile(fsImpl, treeSnapshot, directoryHandles, manifestEntry) {
+  const relativeDirectory = path.posix.dirname(manifestEntry.path);
+  const filename = path.posix.basename(manifestEntry.path);
+  const capturedDirectory = treeSnapshot.directories.get(relativeDirectory);
+  if (!capturedDirectory) {
+    const reason = treeSnapshot.directoryFailures.get(relativeDirectory) || "missing";
     return reason === "missing"
       ? { state: "missing" }
       : { state: "mismatch", reason, actualSha256: null };
   }
+  if (capturedDirectory.readFailure) {
+    return { state: "mismatch", reason: capturedDirectory.readFailure, actualSha256: null };
+  }
+  if (capturedDirectory.childFailures.has(filename)) {
+    const reason = capturedDirectory.childFailures.get(filename);
+    return reason === "missing"
+      ? { state: "missing" }
+      : { state: "mismatch", reason, actualSha256: null };
+  }
+  const capturedFile = capturedDirectory.children.get(filename);
+  if (!capturedFile) return { state: "missing" };
 
   let descriptor;
   let outcome;
   try {
-    const noFollow = fs.constants.O_NOFOLLOW;
-    const nonBlocking = fs.constants.O_NONBLOCK;
-    if (!Number.isInteger(noFollow) || !Number.isInteger(nonBlocking)) {
-      throw new SourceAuditFault("platform_unsupported");
+    requireRegularSingleLink(capturedFile.status);
+    const directoryHandle = directoryHandles.get(relativeDirectory);
+    if (!directoryHandle) throw new SourceAuditFault("platform_unsupported");
+    const anchoredPath = `${directoryHandle.anchorPath}/${filename}`;
+    const anchoredStatus = fsImpl.lstatSync(anchoredPath);
+    requireRegularSingleLink(anchoredStatus);
+    if (!sameSourceEntrySnapshot(capturedFile.snapshot, sourceEntrySnapshot(anchoredStatus))) {
+      throw new SourceAuditFault("identity_changed");
     }
     descriptor = fsImpl.openSync(
-      filepath,
-      fs.constants.O_RDONLY | noFollow | nonBlocking,
+      anchoredPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
     );
-    const actualSha256 = hashOpenedSourceFile(fsImpl, descriptor, filepath, lexicalStatus);
+    const actualSha256 = hashOpenedSourceFile(fsImpl, descriptor, anchoredPath, anchoredStatus);
     outcome = actualSha256 === manifestEntry.sha256
       ? { state: "present" }
       : { state: "mismatch", reason: "hash_mismatch", actualSha256 };
@@ -928,105 +1172,63 @@ function auditExpectedSourceFile(fsImpl, projectRoot, manifestEntry) {
   return outcome;
 }
 
-function addPolicyViolation(policyViolations, relativePath, reason) {
-  const key = `${relativePath}\u0000${reason}`;
-  if (!policyViolations.keys.has(key)) {
-    policyViolations.keys.add(key);
-    policyViolations.values.push({ path: relativePath, reason });
-  }
-}
-
-function inspectOptionalNonproductionEntry(
-  fsImpl,
-  projectRoot,
-  name,
-  expectedType,
-  policyViolations,
+function addTreeSnapshotDiagnostics(
+  treeSnapshot,
+  unexpectedEntries,
   allowedEntries,
+  policyViolations,
 ) {
-  const relativePath = `${PLUGIN_SOURCE_RELATIVE_ROOT}/${name}`;
-  let filepath;
-  try {
-    filepath = sourceAuditPath(projectRoot, relativePath);
-    if (expectedType === "directory") {
-      inspectCanonicalDirectoryChain(fsImpl, filepath);
-    } else {
-      inspectCanonicalDirectoryChain(fsImpl, path.dirname(filepath));
-      const status = fsImpl.lstatSync(filepath);
-      requireRegularSingleLink(status);
-    }
-    allowedEntries.push(relativePath);
-  } catch (error) {
-    addPolicyViolation(policyViolations, relativePath, sourceAuditReason(error));
+  for (const entry of treeSnapshot.unexpectedEntries) unexpectedEntries.add(entry);
+  for (const entry of treeSnapshot.allowedEntries) allowedEntries.add(entry);
+  for (const entry of treeSnapshot.policyViolations) {
+    addPolicyViolation(policyViolations, entry.path, entry.reason);
   }
 }
 
-function scanAuditedPluginTree(fsImpl, projectRoot) {
-  const unexpectedEntries = new Set();
-  const allowedEntries = [];
-  const directorySnapshots = new Map();
-  const policyViolations = { keys: new Set(), values: [] };
+function sameCapturedTreeEntry(left, right) {
+  if (!left || !right || left.snapshot.type !== right.snapshot.type) return false;
+  if (left.snapshot.type === "directory") {
+    return sameDirectoryIdentity(left.snapshot, right.snapshot);
+  }
+  return sameSourceEntrySnapshot(left.snapshot, right.snapshot);
+}
 
-  for (const [relativeDirectory, expectedChildren] of Object.entries(AUDITED_PLUGIN_DIRECTORY_CHILDREN)) {
-    let directory;
-    let snapshot;
-    try {
-      directory = sourceAuditPath(projectRoot, relativeDirectory);
-      snapshot = inspectCanonicalDirectoryChain(fsImpl, directory);
-    } catch (error) {
-      const reason = sourceAuditReason(error);
-      if (reason !== "missing") addPolicyViolation(policyViolations, relativeDirectory, reason);
+function sameExactChildren(left, right) {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+function compareAuditedPluginTreeSnapshots(before, after, policyViolations) {
+  for (const relativeDirectory of AUDITED_PLUGIN_DIRECTORIES) {
+    const left = before.directories.get(relativeDirectory);
+    const right = after.directories.get(relativeDirectory);
+    if (!left || !right) {
+      if (Boolean(left) !== Boolean(right)) {
+        addPolicyViolation(policyViolations, relativeDirectory, "identity_changed");
+      }
       continue;
     }
-    directorySnapshots.set(relativeDirectory, snapshot);
-
-    let actualChildren;
-    try {
-      actualChildren = fsImpl.readdirSync(directory).map(String).sort();
-    } catch (error) {
-      addPolicyViolation(policyViolations, relativeDirectory, sourceAuditReason(error));
-      continue;
+    if (!sameDirectorySnapshot(left.snapshot, right.snapshot)) {
+      addPolicyViolation(policyViolations, relativeDirectory, "identity_changed");
     }
-    const allowed = new Set(expectedChildren);
-    if (relativeDirectory === PLUGIN_SOURCE_RELATIVE_ROOT) {
-      for (const name of Object.keys(OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES)) allowed.add(name);
+    if (!sameExactChildren(left.actualChildren, right.actualChildren)) {
+      addPolicyViolation(policyViolations, relativeDirectory, "identity_changed");
     }
-    for (const name of actualChildren) {
-      if (!allowed.has(name)) unexpectedEntries.add(`${relativeDirectory}/${name}`);
-    }
-    if (relativeDirectory === PLUGIN_SOURCE_RELATIVE_ROOT) {
-      for (const [name, expectedType] of Object.entries(OPTIONAL_NONPRODUCTION_PLUGIN_ENTRIES)) {
-        if (actualChildren.includes(name)) {
-          inspectOptionalNonproductionEntry(
-            fsImpl,
-            projectRoot,
-            name,
-            expectedType,
-            policyViolations,
-            allowedEntries,
-          );
-        }
+    for (const name of expectedDirectoryChildTypes(relativeDirectory).keys()) {
+      const leftEntry = left.children.get(name);
+      const rightEntry = right.children.get(name);
+      if (Boolean(leftEntry) !== Boolean(rightEntry) || (
+        leftEntry
+        && rightEntry
+        && !sameCapturedTreeEntry(leftEntry, rightEntry)
+      )) {
+        addPolicyViolation(
+          policyViolations,
+          `${relativeDirectory}/${name}`,
+          "identity_changed",
+        );
       }
     }
   }
-
-  for (const [relativeDirectory, snapshot] of directorySnapshots) {
-    try {
-      const directory = sourceAuditPath(projectRoot, relativeDirectory);
-      const current = inspectCanonicalDirectoryChain(fsImpl, directory);
-      if (!sameDirectorySnapshot(snapshot, current)) throw new SourceAuditFault("identity_changed");
-    } catch (error) {
-      addPolicyViolation(policyViolations, relativeDirectory, sourceAuditReason(error));
-    }
-  }
-
-  return {
-    unexpectedEntries: [...unexpectedEntries].sort(),
-    allowedEntries: allowedEntries.sort(),
-    policyViolations: policyViolations.values.sort((left, right) => (
-      left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason)
-    )),
-  };
 }
 
 function inspectVistaAnimationUePluginSource(projectRoot, { fsImpl = fs } = {}) {
@@ -1049,13 +1251,20 @@ function inspectVistaAnimationUePluginSource(projectRoot, { fsImpl = fs } = {}) 
   const presentFiles = [];
   const missingFiles = [];
   const mismatchedFiles = [];
-  let treeDiagnostics = { unexpectedEntries: [], allowedEntries: [], policyViolations: [] };
+  const unexpectedEntries = new Set();
+  const allowedEntries = new Set();
+  const policyViolations = { keys: new Set(), values: [] };
+  let directoryHandles = new Map();
+  let fatalReason = null;
 
   try {
+    assertAnchoredTraversalPlatform();
     const projectRootChain = captureCanonicalDirectoryChain(fsImpl, canonicalProjectRoot);
-    treeDiagnostics = scanAuditedPluginTree(fsImpl, canonicalProjectRoot);
+    const before = captureAuditedPluginTreeSnapshot(fsImpl, canonicalProjectRoot);
+    addTreeSnapshotDiagnostics(before, unexpectedEntries, allowedEntries, policyViolations);
+    directoryHandles = openHeldDirectoryHandles(fsImpl, canonicalProjectRoot, before);
     for (const manifestEntry of EXPECTED_PLUGIN_SOURCE_MANIFEST) {
-      const outcome = auditExpectedSourceFile(fsImpl, canonicalProjectRoot, manifestEntry);
+      const outcome = auditExpectedSourceFile(fsImpl, before, directoryHandles, manifestEntry);
       if (outcome.state === "present") {
         presentFiles.push(manifestEntry.path);
       } else if (outcome.state === "missing") {
@@ -1069,33 +1278,41 @@ function inspectVistaAnimationUePluginSource(projectRoot, { fsImpl = fs } = {}) 
         });
       }
     }
+    const after = captureAuditedPluginTreeSnapshot(fsImpl, canonicalProjectRoot);
+    addTreeSnapshotDiagnostics(after, unexpectedEntries, allowedEntries, policyViolations);
+    compareAuditedPluginTreeSnapshots(before, after, policyViolations);
     const finalProjectRootChain = captureCanonicalDirectoryChain(fsImpl, canonicalProjectRoot);
     if (!sameDirectoryChain(projectRootChain, finalProjectRootChain)) {
       throw new SourceAuditFault("identity_changed");
     }
   } catch (error) {
+    fatalReason = sourceAuditReason(error);
+  } finally {
+    if (closeHeldDirectoryHandles(fsImpl, directoryHandles)) fatalReason = "io_error";
+  }
+
+  if (fatalReason) {
     presentFiles.length = 0;
     missingFiles.length = 0;
     mismatchedFiles.length = 0;
     missingFiles.push(...EXPECTED_PLUGIN_SOURCE_FILES);
-    treeDiagnostics.policyViolations.push({
-      path: ".",
-      reason: sourceAuditReason(error),
-    });
+    addPolicyViolation(policyViolations, ".", fatalReason);
   }
 
-  const sourceTreeComplete = (
-    presentFiles.length === EXPECTED_PLUGIN_SOURCE_MANIFEST.length
-    && missingFiles.length === 0
-    && mismatchedFiles.length === 0
-    && treeDiagnostics.unexpectedEntries.length === 0
-    && treeDiagnostics.policyViolations.length === 0
-  );
-  const policyViolations = treeDiagnostics.policyViolations
+  const finalUnexpectedEntries = [...unexpectedEntries].sort();
+  const finalAllowedEntries = [...allowedEntries].sort();
+  const finalPolicyViolations = policyViolations.values
     .map((entry) => ({ ...entry }))
     .sort((left, right) => (
       left.path.localeCompare(right.path) || left.reason.localeCompare(right.reason)
     ));
+  const sourceTreeComplete = (
+    presentFiles.length === EXPECTED_PLUGIN_SOURCE_MANIFEST.length
+    && missingFiles.length === 0
+    && mismatchedFiles.length === 0
+    && finalUnexpectedEntries.length === 0
+    && finalPolicyViolations.length === 0
+  );
   return deepFreeze({
     schema: ANIMATION_UE_SOURCE_AUDIT_SCHEMA,
     plugin_name: ANIMATION_UE_PLUGIN_NAME,
@@ -1106,9 +1323,9 @@ function inspectVistaAnimationUePluginSource(projectRoot, { fsImpl = fs } = {}) 
     present_files: presentFiles,
     missing_files: [...new Set(missingFiles)],
     mismatched_files: mismatchedFiles,
-    unexpected_entries: treeDiagnostics.unexpectedEntries,
-    allowed_nonproduction_entries: treeDiagnostics.allowedEntries,
-    policy_violations: policyViolations,
+    unexpected_entries: finalUnexpectedEntries,
+    allowed_nonproduction_entries: finalAllowedEntries,
+    policy_violations: finalPolicyViolations,
   });
 }
 

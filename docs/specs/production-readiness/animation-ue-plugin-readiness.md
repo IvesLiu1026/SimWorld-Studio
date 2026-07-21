@@ -148,6 +148,13 @@ regular file。任何 missing、hash mismatch、hardlink、FIFO、directory、un
 path replacement 或 TOCTOU identity change 都會令 `source_tree_complete=false`，並出現在
 `mismatched_files`／`policy_violations` diagnostics。
 
+Deterministic source audit 目前明確只支援 Linux：hash 前後都會遞迴 snapshot 全部 expected
+directories，逐項比較 directory/file identity、type 與 exact child allowlist；hash 期間持有每個
+expected directory 的 `O_DIRECTORY | O_NOFOLLOW` descriptor，並只經
+`/proc/self/fd/<dirfd>/<filename>` 開啟 manifest files。非 Linux、缺必要 open flags，或
+`/proc/self/fd` 無法證明 anchor 與 held descriptor 是同一 directory 時，一律回傳 sanitized
+`platform_unsupported` policy violation 且 `source_tree_complete=false`，不退回 lexical path audit。
+
 `Config/`、`ContentProfiles/`、`Contract/`、`Source/` 使用 recursive exact allowlist；任何額外
 entry（尤其 UBT 會自動編譯的 `.cpp`）都列入 `unexpected_entries` 並 fail closed。Plugin root
 只明確允許 optional non-production `.gitignore`、`README.md`、`Scripts/`、`Tests/`、

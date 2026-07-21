@@ -80,6 +80,14 @@ function installedManifestPath(fixture, entry) {
   return path.resolve(fixture.projectRoot, ...entry.path.split("/"));
 }
 
+function openPathTargets(filepath, target) {
+  try {
+    return path.resolve(fs.realpathSync(filepath)) === path.resolve(target);
+  } catch {
+    return false;
+  }
+}
+
 function mismatchFor(audit, relativePath) {
   return audit.mismatched_files.find((entry) => entry.path === relativePath);
 }
@@ -417,7 +425,7 @@ test("hardlinks, FIFOs, directories, unreadable files, and oversized files fail 
   const unreadableTarget = installedManifestPath(unreadableFixture, targetEntry);
   const unreadableFs = Object.create(fs);
   unreadableFs.openSync = (filepath, ...args) => {
-    if (path.resolve(filepath) === unreadableTarget) {
+    if (openPathTargets(filepath, unreadableTarget)) {
       const error = new Error("injected unreadable source");
       error.code = "EACCES";
       throw error;
@@ -451,7 +459,7 @@ test("open/read/fstat/lstat identity checks reject a same-byte path replacement"
   let replaced = false;
   raceFs.openSync = (filepath, ...args) => {
     const descriptor = fs.openSync(filepath, ...args);
-    if (path.resolve(filepath) === target) targetDescriptor = descriptor;
+    if (openPathTargets(filepath, target)) targetDescriptor = descriptor;
     return descriptor;
   };
   raceFs.readSync = (descriptor, ...args) => {
@@ -468,6 +476,114 @@ test("open/read/fstat/lstat identity checks reject a same-byte path replacement"
   assert.equal(replaced, true);
   assert.equal(audit.source_tree_complete, false);
   assert.equal(mismatchFor(audit, targetEntry.path).reason, "identity_changed");
+});
+
+test("post-hash snapshots reject an expected directory replaced during hashing", (t) => {
+  const fixture = makeInstalledPluginFixture();
+  t.after(() => removeFixture(fixture));
+  const triggerEntry = PINNED_SOURCE_MANIFEST[0];
+  const triggerTarget = installedManifestPath(fixture, triggerEntry);
+  const privateDirectory = path.join(
+    fixture.installedPluginRoot,
+    "Source/VistaAnimationContentApi/Private",
+  );
+  const displacedDirectory = path.join(fixture.projectRoot, "displaced-private");
+  const privateRelativePath = "Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private";
+  const raceFs = Object.create(fs);
+  let triggerDescriptor = null;
+  let anchoredOpenSeen = false;
+  let replaced = false;
+  raceFs.openSync = (filepath, ...args) => {
+    const descriptor = fs.openSync(filepath, ...args);
+    if (openPathTargets(filepath, triggerTarget)) {
+      triggerDescriptor = descriptor;
+      anchoredOpenSeen = String(filepath).startsWith("/proc/self/fd/");
+    }
+    return descriptor;
+  };
+  raceFs.readSync = (descriptor, ...args) => {
+    const bytesRead = fs.readSync(descriptor, ...args);
+    if (descriptor === triggerDescriptor && bytesRead > 0 && !replaced) {
+      replaced = true;
+      fs.renameSync(privateDirectory, displacedDirectory);
+      fs.cpSync(displacedDirectory, privateDirectory, { recursive: true });
+    }
+    return bytesRead;
+  };
+
+  const audit = inspectVistaAnimationUePluginSource(fixture.projectRoot, { fsImpl: raceFs });
+  assert.equal(anchoredOpenSeen, true);
+  assert.equal(replaced, true);
+  assert.equal(audit.source_tree_complete, false);
+  assert.deepEqual(audit.present_files, EXPECTED_PLUGIN_SOURCE_FILES);
+  assert.ok(audit.policy_violations.some((entry) => (
+    entry.path === privateRelativePath && entry.reason === "identity_changed"
+  )));
+  assert.equal(JSON.stringify(audit).includes(fixture.projectRoot), false);
+  assert.equal(JSON.stringify(audit).includes("displaced-private"), false);
+});
+
+test("post-hash snapshots reject an unexpected file created during hashing", (t) => {
+  const fixture = makeInstalledPluginFixture();
+  t.after(() => removeFixture(fixture));
+  const triggerEntry = PINNED_SOURCE_MANIFEST[0];
+  const triggerTarget = installedManifestPath(fixture, triggerEntry);
+  const unexpectedRelativePath = (
+    "Plugins/VistaAnimationContentApi/Source/VistaAnimationContentApi/Private/Injected.cpp"
+  );
+  const unexpectedPath = path.resolve(
+    fixture.projectRoot,
+    ...unexpectedRelativePath.split("/"),
+  );
+  const raceFs = Object.create(fs);
+  let triggerDescriptor = null;
+  let created = false;
+  raceFs.openSync = (filepath, ...args) => {
+    const descriptor = fs.openSync(filepath, ...args);
+    if (openPathTargets(filepath, triggerTarget)) triggerDescriptor = descriptor;
+    return descriptor;
+  };
+  raceFs.readSync = (descriptor, ...args) => {
+    const bytesRead = fs.readSync(descriptor, ...args);
+    if (descriptor === triggerDescriptor && bytesRead > 0 && !created) {
+      created = true;
+      fs.writeFileSync(unexpectedPath, "unexpected during source audit\n");
+    }
+    return bytesRead;
+  };
+
+  const audit = inspectVistaAnimationUePluginSource(fixture.projectRoot, { fsImpl: raceFs });
+  assert.equal(created, true);
+  assert.equal(audit.source_tree_complete, false);
+  assert.deepEqual(audit.present_files, EXPECTED_PLUGIN_SOURCE_FILES);
+  assert.deepEqual(audit.missing_files, []);
+  assert.deepEqual(audit.mismatched_files, []);
+  assert.deepEqual(audit.unexpected_entries, [unexpectedRelativePath]);
+});
+
+test("missing Linux directory-descriptor traversal fails closed", (t) => {
+  const fixture = makeInstalledPluginFixture();
+  t.after(() => removeFixture(fixture));
+  const unsupportedFs = Object.create(fs);
+  unsupportedFs.openSync = (filepath, ...args) => {
+    if (String(filepath).startsWith("/proc/self/fd/") && String(filepath).endsWith("/.")) {
+      const error = new Error("internal mount detail token=secret");
+      error.code = "ENOENT";
+      throw error;
+    }
+    return fs.openSync(filepath, ...args);
+  };
+
+  const audit = inspectVistaAnimationUePluginSource(fixture.projectRoot, { fsImpl: unsupportedFs });
+  assert.equal(audit.source_tree_complete, false);
+  assert.deepEqual(audit.present_files, []);
+  assert.deepEqual(audit.missing_files, EXPECTED_PLUGIN_SOURCE_FILES);
+  assert.deepEqual(audit.mismatched_files, []);
+  assert.ok(audit.policy_violations.some((entry) => (
+    entry.path === "." && entry.reason === "platform_unsupported"
+  )));
+  assert.equal(JSON.stringify(audit).includes("secret"), false);
+  assert.equal(JSON.stringify(audit).includes(fixture.projectRoot), false);
 });
 
 test("exact recursive allowlist rejects unexpected source, config, contract, and profile entries", (t) => {
