@@ -15,6 +15,7 @@ const {
   createVistaTimelineScheduler,
   validateTimelineRunArtifact,
 } = require("./vista-timeline-scheduler");
+const { normalizeSceneProof } = require("./vista-runtime-broker");
 
 const ANIMATION_PREFLIGHT_SERVICE_SCHEMA = "vista-animation-timeline-preflight-service/v1";
 const ANIMATION_START_SERVICE_SCHEMA = "vista-animation-timeline-start/v1";
@@ -426,6 +427,7 @@ function validateStoredRecord(record, expectedRunId, expectedOwnerId) {
 
 function schedulerStateToRecord(state) {
   if (TERMINAL_STATES.has(state)) return state;
+  if (new Set(["queued", "preflighting", "ready"]).has(state)) return "pending";
   return state === "stopping" ? "stopping" : "running";
 }
 
@@ -485,6 +487,18 @@ class VistaAnimationTimelineService {
     this.sceneBuildService = options.sceneBuildService;
     this.runtimeProvider = options.runtimeProvider;
     this.bindingResolver = options.bindingResolver;
+    this.runtimeLifecycle = options.runtimeLifecycle || null;
+    const lifecycleAllowedKeys = new Set([
+      "controllerFor", "exactIdentityFromRequest", "sceneProofFor",
+      "startForIdentity", "stateForIdentity", "stopForIdentity",
+    ]);
+    if (this.runtimeLifecycle !== null && (!isPlainObject(this.runtimeLifecycle)
+      || Object.keys(this.runtimeLifecycle).some((key) => !lifecycleAllowedKeys.has(key))
+      || typeof this.runtimeLifecycle.startForIdentity !== "function"
+      || typeof this.runtimeLifecycle.stateForIdentity !== "function"
+      || typeof this.runtimeLifecycle.stopForIdentity !== "function")) {
+      throw new TypeError("runtimeLifecycle must expose only exact start/state/stop identity methods");
+    }
     this.recordRoot = recordRoot;
     this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
     this.randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
@@ -535,6 +549,8 @@ class VistaAnimationTimelineService {
       timelineId: compiled.timeline.timeline_id,
       programId: compiled.program.program_id,
       runtimeRevisionDigest: compiled.readiness.stableDigest,
+      sceneRuntimeProofDigest: resolved.buildRuntimeProof
+        ? digest(resolved.buildRuntimeProof) : null,
       createdAtMs: nowMs,
       expiresAtMs: nowMs + this.preflightTtlMs,
       startedRunId: null,
@@ -655,6 +671,10 @@ class VistaAnimationTimelineService {
     this.startingSlots.add(slotKey);
     try {
       const resolved = await this._resolveScene(importId, confirmation.planId, prepared.profileId, identity);
+      if (this.runtimeLifecycle
+          && digest(resolved.buildRuntimeProof) !== prepared.sceneRuntimeProofDigest) {
+        fail("ANIMATION_PREFLIGHT_STALE", "Verified scene runtime proof changed after preflight", { status: 409 });
+      }
       const compiled = await this._compile(resolved, identity, context.signal);
       if (compiled.preflight.artifact.preflight_id !== confirmation.preflightId
           || compiled.timeline.timeline_id !== confirmation.timelineId
@@ -707,11 +727,36 @@ class VistaAnimationTimelineService {
     }
     const { plan, result } = validateSuccessfulSceneBuild(buildStatus, scene);
     if (plan.plan_id !== planId) fail("ANIMATION_PLAN_STALE", "Confirmed Scene BuildPlan is no longer current", { status: 409 });
+    let buildRuntimeProof = null;
+    if (this.runtimeLifecycle) {
+      try {
+        buildRuntimeProof = normalizeSceneProof(
+          this.sceneBuildService.resolveActiveRuntimeProof(identity),
+        );
+      } catch (error) {
+        throw safeDependencyError(
+          error,
+          "ANIMATION_SCENE_BUILD_RUNTIME_PROOF_INVALID",
+          "Live scene runtime proof is unavailable",
+          409,
+        );
+      }
+      if (!isPlainObject(buildRuntimeProof) || buildRuntimeProof.schema !== "vista-runtime-scene-proof/v1"
+          || buildRuntimeProof.plan_id !== plan.plan_id || buildRuntimeProof.scene_id !== scene.scene_id
+          || buildRuntimeProof.start_allowed !== true) {
+        fail(
+          "ANIMATION_SCENE_BUILD_RUNTIME_PROOF_REQUIRED",
+          "Rebuild the verified scene in this active Studio lease before animation",
+          { status: 409 },
+        );
+      }
+    }
     return {
       artifact,
       scene,
       plan,
       buildResult: result,
+      buildRuntimeProof,
       profileId: normalizeProfileId(buildStatus.profile_id),
     };
   }
@@ -849,6 +894,57 @@ class VistaAnimationTimelineService {
         })),
         idFactory: () => suffix,
         wallClock: () => nowIso(this.clock),
+        ...(this.runtimeLifecycle ? {
+          lifecycle: {
+            start: async ({ signal }) => {
+              const receipt = await this.runtimeLifecycle.startForIdentity(identity, {
+                sceneProof: resolved.buildRuntimeProof,
+                signal,
+              });
+              if (!isPlainObject(receipt) || receipt.schema !== "vista-runtime-setup/v2"
+                  || receipt.phase !== "live" || receipt.pie !== true || receipt.possessed !== true
+                  || receipt.scene_proof_digest !== resolved.buildRuntimeProof.actor_manifest_digest) {
+                fail("ANIMATION_RUNTIME_LIFECYCLE_INVALID", "Backend PIE Start was not confirmed for the exact scene", {
+                  status: 502,
+                });
+              }
+              const state = await this.runtimeLifecycle.stateForIdentity(identity, {
+                sceneProof: resolved.buildRuntimeProof,
+                signal,
+                force: true,
+              });
+              if (!isPlainObject(state) || state.schema !== "vista-runtime-state/v2"
+                  || state.pie !== true || state.possessed !== true) {
+                fail("ANIMATION_RUNTIME_LIFECYCLE_INVALID", "Backend PIE state did not confirm the exact live scene", {
+                  status: 502,
+                });
+              }
+              return { confirmed_live: true };
+            },
+            stop: async ({ signal }) => {
+              const receipt = await this.runtimeLifecycle.stopForIdentity(identity, { signal });
+              if (!isPlainObject(receipt) || receipt.schema !== "vista-runtime-stop/v2"
+                  || receipt.phase !== "stopped" || receipt.confirmed_stopped !== true
+                  || typeof receipt.ended_pie !== "boolean") {
+                fail("ANIMATION_RUNTIME_LIFECYCLE_INVALID", "Backend PIE Stop was not confirmed", {
+                  status: 502,
+                });
+              }
+              const state = await this.runtimeLifecycle.stateForIdentity(identity, {
+                sceneProof: resolved.buildRuntimeProof,
+                signal,
+                force: true,
+              });
+              if (!isPlainObject(state) || state.schema !== "vista-runtime-state/v2"
+                  || state.pie !== false || state.possessed !== false) {
+                fail("ANIMATION_RUNTIME_LIFECYCLE_INVALID", "Backend PIE state did not confirm Stop", {
+                  status: 502,
+                });
+              }
+              return { confirmed_stopped: true, ended_pie: receipt.ended_pie };
+            },
+          },
+        } : {}),
       });
       for (const method of ["start", "stop", "getRun", "waitForRun"]) {
         if (!scheduler || typeof scheduler[method] !== "function") throw new Error(`scheduler.${method} is unavailable`);

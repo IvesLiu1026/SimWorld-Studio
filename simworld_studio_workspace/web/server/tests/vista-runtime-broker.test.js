@@ -298,6 +298,55 @@ test("lost mutation receipts never fabricate ended_pie and recover only through 
   assert.equal(stopped.ended_pie, false);
 });
 
+test("authoritative Stop cannot overtake an unsettled backend Start mutation", async () => {
+  const id = identity();
+  const sceneProof = proof();
+  let releaseSetup;
+  let setupEntered;
+  const entered = new Promise((resolve) => { setupEntered = resolve; });
+  const setupBarrier = new Promise((resolve) => { releaseSetup = resolve; });
+  const states = [stoppedState(), liveState(), stoppedState()];
+  const calls = [];
+  const ue = {
+    calls,
+    async send(_type, params, options) {
+      calls.push(params.script);
+      assert.equal(await options.preSendAuthorize(), true);
+      if (params.script.includes(VISTA_SETUP_MARKER)) {
+        setupEntered();
+        await setupBarrier;
+        return markerFromScript(params.script, VISTA_SETUP_MARKER, setupPayload(sceneProof));
+      }
+      if (params.script.includes(VISTA_STOP_MARKER)) {
+        return markerFromScript(params.script, VISTA_STOP_MARKER, stopPayload());
+      }
+      if (params.script.includes(VISTA_CLEANUP_MARKER)) {
+        return markerFromScript(params.script, VISTA_CLEANUP_MARKER, cleanupPayload());
+      }
+      return markerFromScript(params.script, VISTA_STATE_MARKER, states.shift() || stoppedState());
+    },
+  };
+  const controller = createVistaRuntimeBroker({
+    identity: id,
+    sceneProof,
+    resolveUeBroker: () => ue,
+    isActiveSessionBinding: () => true,
+    nonceFactory: () => NONCE,
+    delay: async () => {},
+    pollIntervalMs: 1,
+  });
+  const starting = controller.start();
+  await entered;
+  const stopping = controller.stop();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.filter((script) => script.includes(VISTA_STOP_MARKER)).length, 0);
+  releaseSetup();
+  await assert.rejects(starting, (error) => error.code === "VISTA_SETUP_SUPERSEDED");
+  const stopped = await stopping;
+  assert.equal(stopped.confirmed_stopped, true);
+  assert.equal(calls.filter((script) => script.includes(VISTA_STOP_MARKER)).length, 1);
+});
+
 test("registry isolates two sessions/two slots and quarantines an old same-slot lease", async () => {
   const first = identity({ sessionId: "session-one", leaseId: "lease-runtime-00000001", slotId: 1, mcpPort: 55561 });
   const second = identity({ sessionId: "session-two", leaseId: "lease-runtime-00000002", slotId: 2, mcpPort: 55563 });

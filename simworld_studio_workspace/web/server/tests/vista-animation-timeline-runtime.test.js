@@ -164,6 +164,19 @@ test("partial production configuration fails closed at startup", () => {
   );
 });
 
+test("configured production runtime fails closed without the lease-bound PIE lifecycle", (t) => {
+  const root = temporaryRoot(t);
+  assert.throws(
+    () => createVistaAnimationTimelineRuntime({
+      env: runtimeEnv(root),
+      importService: { async status() { throw new Error("not used"); } },
+      sceneBuildService: { async status() { throw new Error("not used"); } },
+      transportResolver: async () => dedicatedTransport(pluginArtifact()),
+    }),
+    hasCode("ANIMATION_RUNTIME_CONFIG_INVALID", 500),
+  );
+});
+
 test("pinned receipts reject checksum changes, symlinks, and production fixture markers", (t) => {
   const root = temporaryRoot(t);
   const env = runtimeEnv(root);
@@ -268,6 +281,11 @@ function inertServices() {
   return {
     importService: { async status() { throw new Error("not used"); } },
     sceneBuildService: { async status() { throw new Error("not used"); } },
+    runtimeLifecycle: {
+      async startForIdentity() { throw new Error("not used"); },
+      async stateForIdentity() { throw new Error("not used"); },
+      async stopForIdentity() { throw new Error("not used"); },
+    },
   };
 }
 

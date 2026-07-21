@@ -842,7 +842,7 @@ class VistaRuntimeController {
       validateStatePayload,
       { mutation: false, signal },
     ).then((state) => {
-      if (generation === this.generation) {
+      if (generation === this.generation && !new Set(["starting", "stopping"]).has(this.phase)) {
         this.phase = state.pie ? "live" : "stopped";
         this.stateCache = { value: state, expiresAt: this.now() + this.stateCacheMs };
       }
@@ -956,11 +956,20 @@ class VistaRuntimeController {
     if (!this.sceneProof) {
       fail("VISTA_SCENE_PROOF_REQUIRED", "A verified scene proof is required to stop this runtime", { status: 409 });
     }
+    // Capture and invalidate Start synchronously, then use its settlement as a
+    // serialization barrier. Stop must never overtake a begin-PIE mutation
+    // whose transport receipt or exact live-state reconciliation is pending.
+    const starting = this.startInFlight;
     const generation = ++this.generation;
     this.phase = "stopping";
     this.stateCache = null;
     const proof = this.sceneProof;
     const operation = (async () => {
+      if (starting) await starting.catch(() => {});
+      await this.assertActive();
+      if (generation !== this.generation || this.phase !== "stopping") {
+        fail("VISTA_STOP_SUPERSEDED", "VISTA Stop ownership changed before dispatch", { status: 409 });
+      }
       let stopReceipt = null;
       try {
         stopReceipt = await this.execute(

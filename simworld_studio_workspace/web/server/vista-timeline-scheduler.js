@@ -21,7 +21,7 @@ const RUN_EVENT_STATES = new Set(["pending", "dispatched", "running", "completed
 const EVENT_CLEANUP_STATES = new Set(["not_required", "pending", "completed", "failed"]);
 const RUN_CLEANUP_STATES = new Set(["not_required", "pending", "completed", "partial", "failed"]);
 const RUN_TRANSITIONS = Object.freeze({
-  ready: Object.freeze(["running", "stopping"]),
+  ready: Object.freeze(["running", "stopping", "failed", "cancelled"]),
   running: Object.freeze(["stopping", "completed", "failed", "cancelled"]),
   stopping: Object.freeze(["cancelled", "failed"]),
   completed: Object.freeze([]),
@@ -308,7 +308,7 @@ function createVistaTimelineScheduler(options = {}) {
     options,
     [
       "capabilityRegistry", "engineTimeSampler", "clock", "wallClock", "idFactory",
-      "maxQueueSize", "maxConcurrentRuns", "maxRetainedRuns", "hookTimeoutMs",
+      "maxQueueSize", "maxConcurrentRuns", "maxRetainedRuns", "hookTimeoutMs", "lifecycle",
     ],
     ["capabilityRegistry", "engineTimeSampler"],
     "scheduler options",
@@ -335,6 +335,12 @@ function createVistaTimelineScheduler(options = {}) {
   const maxConcurrentRuns = requirePositiveInteger(options.maxConcurrentRuns === undefined ? DEFAULT_MAX_CONCURRENT_RUNS : options.maxConcurrentRuns, "maxConcurrentRuns", 256);
   const maxRetainedRuns = requirePositiveInteger(options.maxRetainedRuns === undefined ? DEFAULT_MAX_RETAINED_RUNS : options.maxRetainedRuns, "maxRetainedRuns", 10_000);
   const hookTimeoutMs = requirePositiveInteger(options.hookTimeoutMs === undefined ? DEFAULT_HOOK_TIMEOUT_MS : options.hookTimeoutMs, "hookTimeoutMs", 600_000);
+  const lifecycle = options.lifecycle === undefined ? null : options.lifecycle;
+  if (lifecycle !== null && (!isPlainObject(lifecycle)
+      || Object.keys(lifecycle).sort().join(",") !== "start,stop"
+      || typeof lifecycle.start !== "function" || typeof lifecycle.stop !== "function")) {
+    fail("TIMELINE_SCHEDULER_CONFIG_INVALID", "lifecycle must expose only fixed start and stop hooks");
+  }
   const adapters = new Map(registry.adapters.map((adapter) => [adapter.adapter_id, adapter]));
   const runs = new Map();
 
@@ -528,15 +534,33 @@ function createVistaTimelineScheduler(options = {}) {
     }
   }
 
-  async function callBoundedHook(handler, context, label) {
+  async function callBoundedHook(handler, context, label, externalSignal = null) {
     const controller = new AbortController();
-    const outcome = await raceWithDelay(() => handler(Object.freeze({ ...context, signal: controller.signal })), hookTimeoutMs, null);
-    if (outcome.timedOut) {
-      controller.abort(`${label} timeout`);
-      throw new Error(`${label} exceeded ${hookTimeoutMs}ms`);
+    const onAbort = () => controller.abort(externalSignal.reason || `${label} aborted`);
+    if (externalSignal) {
+      if (externalSignal.aborted) onAbort();
+      else externalSignal.addEventListener("abort", onAbort, { once: true });
     }
-    controller.abort(`${label} complete`);
-    return outcome.value;
+    try {
+      const outcome = await raceWithDelay(
+        () => handler(Object.freeze({ ...context, signal: controller.signal })),
+        hookTimeoutMs,
+        // The lifecycle hook receives the abort, but its promise remains the
+        // serialization barrier.  Letting the abortable timeout win the race
+        // would allow Stop to overtake an in-flight backend Start mutation.
+        // A compliant lifecycle settles after observing controller.signal;
+        // otherwise the normal bounded-hook timeout quarantines the run.
+        null,
+      );
+      if (outcome.timedOut) {
+        controller.abort(`${label} timeout`);
+        throw new Error(`${label} exceeded ${hookTimeoutMs}ms`);
+      }
+      return outcome.value;
+    } finally {
+      controller.abort(`${label} complete`);
+      if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
+    }
   }
 
   function validatePrecondition(value, eventId) {
@@ -701,20 +725,68 @@ function createVistaTimelineScheduler(options = {}) {
   function finalizeCleanup(run) {
     const pendingItems = [...run.cleanupFailures].sort();
     run.artifact.cleanup.pending_items = pendingItems;
-    run.artifact.cleanup.ended_pie = false;
-    run.artifact.cleanup.confirmed_stopped = pendingItems.length === 0 && run.artifact.events.every((event) => !new Set(["pending", "dispatched", "running"]).has(event.state));
+    const adaptersStopped = run.artifact.events.every((event) => !new Set(["pending", "dispatched", "running"]).has(event.state));
+    run.artifact.cleanup.confirmed_stopped = pendingItems.length === 0 && adaptersStopped
+      && (lifecycle === null || run.lifecycleStopConfirmed === true);
     if (pendingItems.length) {
       run.artifact.cleanup.state = "partial";
-      run.artifact.cleanup.error = `Adapter cleanup incomplete for: ${pendingItems.join(", ")}`.slice(0, 4000);
+      run.artifact.cleanup.error = run.artifact.cleanup.error
+        || `Cleanup incomplete for: ${pendingItems.join(", ")}`.slice(0, 4000);
     } else {
       run.artifact.cleanup.state = "completed";
       run.artifact.cleanup.error = null;
     }
   }
 
+  async function startRuntimeLifecycle(run) {
+    if (lifecycle === null) return;
+    const result = await callBoundedHook(lifecycle.start, {
+      run_id: run.artifact.run_id,
+      timeline_id: run.artifact.timeline_id,
+      scene_revision: run.artifact.scene_revision,
+      owner_id: run.artifact.owner_id,
+      session_id: run.artifact.session_id,
+      slot_id: run.artifact.slot_id,
+    }, "runtime lifecycle start", run.controller.signal);
+    if (!isPlainObject(result) || Object.keys(result).sort().join(",") !== "confirmed_live"
+        || result.confirmed_live !== true) {
+      throw new Error("Runtime lifecycle Start was not confirmed live");
+    }
+    run.lifecycleStartConfirmed = true;
+  }
+
+  async function stopRuntimeLifecycle(run, reason) {
+    if (lifecycle === null) return;
+    try {
+      const result = await callBoundedHook(lifecycle.stop, {
+        run_id: run.artifact.run_id,
+        timeline_id: run.artifact.timeline_id,
+        scene_revision: run.artifact.scene_revision,
+        owner_id: run.artifact.owner_id,
+        session_id: run.artifact.session_id,
+        slot_id: run.artifact.slot_id,
+        reason,
+      }, "runtime lifecycle stop");
+      if (!isPlainObject(result)
+          || Object.keys(result).sort().join(",") !== "confirmed_stopped,ended_pie"
+          || result.confirmed_stopped !== true || typeof result.ended_pie !== "boolean") {
+        throw new Error("Runtime lifecycle Stop was not confirmed");
+      }
+      run.lifecycleStopConfirmed = true;
+      run.artifact.cleanup.ended_pie = result.ended_pie;
+    } catch (error) {
+      run.lifecycleStopConfirmed = false;
+      run.artifact.cleanup.ended_pie = false;
+      run.cleanupFailures.add("runtime_lifecycle");
+      run.artifact.cleanup.error = `Runtime lifecycle cleanup failed: ${errorMessage(error)}`.slice(0, 4000);
+    }
+  }
+
   async function runTimeline(run) {
     let terminalState = null;
     try {
+      if (run.controller.signal.aborted) throw makeAbortError(run.stopReason);
+      await startRuntimeLifecycle(run);
       if (run.controller.signal.aborted) throw makeAbortError(run.stopReason);
       transitionRun(run, "running");
       run.artifact.started_at = nowIso();
@@ -741,6 +813,7 @@ function createVistaTimelineScheduler(options = {}) {
         terminalState = "failed";
       }
     } finally {
+      await stopRuntimeLifecycle(run, run.stopReason || terminalState || "timeline_finalized");
       finalizeCleanup(run);
       if (run.cleanupFailures.size) terminalState = "failed";
       transitionRun(run, terminalState || "failed");
@@ -789,6 +862,8 @@ function createVistaTimelineScheduler(options = {}) {
       stopPromise: null,
       active: null,
       cleanupFailures: new Set(),
+      lifecycleStartConfirmed: false,
+      lifecycleStopConfirmed: false,
       completion: null,
     };
     runs.set(runId, run);

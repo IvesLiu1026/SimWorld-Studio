@@ -199,6 +199,7 @@ function createHarness(scene, {
   maxQueueSize = 256,
   hookTimeoutMs = 5000,
   engineTimeSampler = null,
+  runtimeLifecycle = null,
 } = {}) {
   const log = [];
   const capabilityRegistry = registry || makeRegistry(log);
@@ -215,6 +216,7 @@ function createHarness(scene, {
       engineSamples.push([context.event_id, clock.now()]);
       return 100 + (clock.now() / 1000);
     }),
+    ...(runtimeLifecycle ? { lifecycle: runtimeLifecycle } : {}),
   });
   return { scheduler, timeline, registry: capabilityRegistry, clock, log, engineSamples };
 }
@@ -476,8 +478,129 @@ test("scheduler requires an injected engine-time sampler", () => {
   const registry = makeRegistry([]);
   expectSchedulerError(() => createVistaTimelineScheduler({ capabilityRegistry: registry }), "TIMELINE_SCHEDULER_CONFIG_INVALID");
   assert.deepEqual(ACTION_ADAPTER_METHODS, ["precondition", "execute", "completion", "timeout", "cancel", "cleanup"]);
-  assert.deepEqual(RUN_TRANSITIONS.ready, ["running", "stopping"]);
+  assert.deepEqual(RUN_TRANSITIONS.ready, ["running", "stopping", "failed", "cancelled"]);
   assert.deepEqual(RUN_TRANSITIONS.stopping, ["cancelled", "failed"]);
+});
+
+test("backend lifecycle gates the first event and records only confirmed end-PIE evidence", async () => {
+  const scene = clone(await loadMmg040());
+  scene.timeline = [scene.timeline[0]];
+  scene.duration_sec = 1;
+  const lifecycleLog = [];
+  const harness = createHarness(scene, {
+    runtimeLifecycle: {
+      async start(context) {
+        lifecycleLog.push(["start", context.run_id, context.signal.aborted]);
+        return { confirmed_live: true };
+      },
+      async stop(context) {
+        lifecycleLog.push(["stop", context.run_id, context.reason, context.signal.aborted]);
+        return { confirmed_stopped: true, ended_pie: true };
+      },
+    },
+  });
+  const initial = harness.scheduler.start(startRequest(harness.timeline));
+  await flushTurns(5);
+  assert.equal(lifecycleLog[0][0], "start");
+  assert.equal(harness.scheduler.getRun(access(initial.run_id)).state, "running");
+  harness.clock.advanceTo(1000);
+  await flushTurns(6);
+  const final = await harness.scheduler.waitForRun(access(initial.run_id));
+  assert.equal(final.state, "completed");
+  assert.deepEqual(final.cleanup, {
+    state: "completed",
+    pending_items: [],
+    confirmed_stopped: true,
+    ended_pie: true,
+    error: null,
+  });
+  assert.deepEqual(lifecycleLog.map((entry) => entry[0]), ["start", "stop"]);
+});
+
+test("Stop racing backend Start aborts Start, still runs backend Stop, and never invents ended_pie", async () => {
+  const scene = clone(await loadMmg040());
+  scene.timeline = [scene.timeline[0]];
+  scene.duration_sec = 1;
+  let releaseStart;
+  let startSignal = null;
+  const lifecycleLog = [];
+  const harness = createHarness(scene, {
+    runtimeLifecycle: {
+      start(context) {
+        startSignal = context.signal;
+        lifecycleLog.push("start");
+        return new Promise((resolve) => {
+          releaseStart = resolve;
+        });
+      },
+      async stop() {
+        lifecycleLog.push("stop");
+        return { confirmed_stopped: true, ended_pie: false };
+      },
+    },
+  });
+  const initial = harness.scheduler.start(startRequest(harness.timeline));
+  await flushTurns(3);
+  const stopPromise = harness.scheduler.stop({ ...access(initial.run_id), reason: "race stop" });
+  await flushTurns(3);
+  assert.equal(startSignal.aborted, true);
+  assert.deepEqual(lifecycleLog, ["start"], "backend Stop must not overtake an unsettled Start mutation");
+  releaseStart({ confirmed_live: true });
+  const stopped = await stopPromise;
+  assert.deepEqual(lifecycleLog, ["start", "stop"]);
+  assert.equal(stopped.state, "cancelled");
+  assert.equal(stopped.cleanup.confirmed_stopped, true);
+  assert.equal(stopped.cleanup.ended_pie, false);
+});
+
+test("failed backend Stop quarantines cleanup and cannot claim ended_pie", async () => {
+  const scene = clone(await loadMmg040());
+  scene.timeline = [scene.timeline[0]];
+  scene.duration_sec = 1;
+  const harness = createHarness(scene, {
+    runtimeLifecycle: {
+      async start() { return { confirmed_live: true }; },
+      async stop() { throw new Error("stop confirmation lost"); },
+    },
+  });
+  const initial = harness.scheduler.start(startRequest(harness.timeline));
+  await flushTurns(4);
+  harness.clock.advanceTo(1000);
+  await flushTurns(6);
+  const final = await harness.scheduler.waitForRun(access(initial.run_id));
+  assert.equal(final.state, "failed");
+  assert.equal(final.cleanup.confirmed_stopped, false);
+  assert.equal(final.cleanup.ended_pie, false);
+  assert.deepEqual(final.cleanup.pending_items, ["runtime_lifecycle"]);
+});
+
+test("failed backend Start dispatches no event and still requires authoritative backend Stop", async () => {
+  const scene = clone(await loadMmg040());
+  scene.timeline = [scene.timeline[0]];
+  scene.duration_sec = 1;
+  const lifecycleLog = [];
+  const harness = createHarness(scene, {
+    runtimeLifecycle: {
+      async start() {
+        lifecycleLog.push("start");
+        throw new Error("PIE live state not confirmed");
+      },
+      async stop() {
+        lifecycleLog.push("stop");
+        return { confirmed_stopped: true, ended_pie: false };
+      },
+    },
+  });
+  const initial = harness.scheduler.start(startRequest(harness.timeline));
+  await flushTurns(8);
+  const final = await harness.scheduler.waitForRun(access(initial.run_id));
+  assert.equal(final.state, "failed");
+  assert.equal(final.started_at, null);
+  assert.deepEqual(final.events.map((event) => event.attempt), [0]);
+  assert.deepEqual(final.events.map((event) => event.state), ["cancelled"]);
+  assert.deepEqual(lifecycleLog, ["start", "stop"]);
+  assert.equal(final.cleanup.confirmed_stopped, true);
+  assert.equal(final.cleanup.ended_pie, false);
 });
 
 test("invalid engine-time evidence fails the dispatched event before adapter mutation", async () => {

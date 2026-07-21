@@ -871,6 +871,11 @@ function createVistaAnimationTimelineRuntime(options = {}) {
       || !options.sceneBuildService || typeof options.sceneBuildService.status !== "function") {
     fail("ANIMATION_RUNTIME_CONFIG_INVALID", "Enabled animation runtime requires import and scene-build services");
   }
+  if (!options.runtimeLifecycle || typeof options.runtimeLifecycle.startForIdentity !== "function"
+      || typeof options.runtimeLifecycle.stateForIdentity !== "function"
+      || typeof options.runtimeLifecycle.stopForIdentity !== "function") {
+    fail("ANIMATION_RUNTIME_CONFIG_INVALID", "Enabled animation runtime requires the lease-bound backend PIE lifecycle");
+  }
   const bindingResolver = createVerifiedSceneBindingResolver();
   const globalReadiness = createGlobalAnimationReadiness({
     config,
@@ -935,6 +940,7 @@ function createVistaAnimationTimelineRuntime(options = {}) {
   const service = createVistaAnimationTimelineService({
     importService: options.importService,
     sceneBuildService: options.sceneBuildService,
+    runtimeLifecycle: options.runtimeLifecycle,
     runtimeProvider,
     bindingResolver,
     recordRoot: config.recordRoot,

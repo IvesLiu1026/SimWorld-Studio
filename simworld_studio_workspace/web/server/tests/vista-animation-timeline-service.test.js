@@ -244,6 +244,25 @@ function sceneBuildResult(plan) {
   };
 }
 
+function runtimeSceneProof(plan, overrides = {}) {
+  return {
+    schema: "vista-runtime-scene-proof/v1",
+    plan_id: plan.plan_id,
+    scene_id: plan.scene_id,
+    actor_manifest_digest: "1".repeat(64),
+    actor_count: plan.actors.length,
+    content_revision: "simworld-content-2026.07.21-r1",
+    verification_revision: "vista-runtime-proof-test-r1",
+    asset_evidence_digest: "2".repeat(64),
+    semantic_binding_digest: "3".repeat(64),
+    material_pbr_evidence_digest: "4".repeat(64),
+    evidence_bundle_digest: "5".repeat(64),
+    live_surface_digest: "6".repeat(64),
+    start_allowed: true,
+    ...overrides,
+  };
+}
+
 function bindingsFor(scene) {
   return {
     schema: BINDINGS_SCHEMA,
@@ -439,6 +458,7 @@ async function fixture(t, overrides = {}) {
     last_result: buildResult,
     updated_at: CHECKED_AT,
   };
+  const buildRuntimeProof = runtimeSceneProof(plan);
   const service = createVistaAnimationTimelineService({
     importService: overrides.importService || {
       async status(id, access) {
@@ -453,6 +473,10 @@ async function fixture(t, overrides = {}) {
         assert.equal(access.ownerId, OWNER);
         if (request.profile_id !== undefined) assert.equal(request.profile_id, layout.profile_id);
         return clone(overrides.buildStatus || buildStatus);
+      },
+      resolveActiveRuntimeProof(identity) {
+        assert.deepEqual(identity, ACCESS);
+        return clone(overrides.buildRuntimeProof || buildRuntimeProof);
       },
     },
     runtimeProvider: overrides.runtimeProvider || (async (identity) => {
@@ -478,12 +502,14 @@ async function fixture(t, overrides = {}) {
     randomBytes: randomFactory(),
     schedulerOptions: { clock: fakeClock, hookTimeoutMs: 1000 },
     preflightTtlMs: 60_000,
+    ...(overrides.runtimeLifecycle ? { runtimeLifecycle: overrides.runtimeLifecycle } : {}),
   });
   return {
     artifact,
     bindingCalls,
     bindings,
     buildResult,
+    buildRuntimeProof,
     buildStatus,
     contentProfile,
     fakeClock,
@@ -591,6 +617,152 @@ test("start writes a private pending receipt before execution and finalizes dura
   assert.equal(committed.evidence.run_id, started.run_id);
 });
 
+test("lease-bound backend Start/state gates events and authoritative Stop/state persists truthful ended_pie", async (t) => {
+  const lifecycleLog = [];
+  let releaseStart;
+  let proofDigest = null;
+  const startBarrier = new Promise((resolve) => { releaseStart = resolve; });
+  const runtimeLifecycle = {
+    controllerFor() { throw new Error("not used directly by animation service"); },
+    exactIdentityFromRequest() { throw new Error("not used directly by animation service"); },
+    sceneProofFor() { throw new Error("not used directly by animation service"); },
+    async startForIdentity(identity, options) {
+      lifecycleLog.push(["start", clone(identity), options.signal.aborted]);
+      proofDigest = options.sceneProof.actor_manifest_digest;
+      await startBarrier;
+      return {
+        schema: "vista-runtime-setup/v2",
+        phase: "live",
+        pie: true,
+        possessed: true,
+        scene_proof_digest: proofDigest,
+      };
+    },
+    async stateForIdentity(identity, options) {
+      const phase = lifecycleLog.some((entry) => entry[0] === "stop") ? "stopped" : "live";
+      lifecycleLog.push(["state", phase, clone(identity), options.force, options.signal.aborted]);
+      if (phase === "stopped") {
+        return { schema: "vista-runtime-state/v2", pie: false, possessed: false };
+      }
+      return { schema: "vista-runtime-state/v2", pie: true, possessed: true };
+    },
+    async stopForIdentity(identity, options) {
+      lifecycleLog.push(["stop", clone(identity), options.signal.aborted]);
+      return {
+        schema: "vista-runtime-stop/v2",
+        phase: "stopped",
+        confirmed_stopped: true,
+        ended_pie: true,
+      };
+    },
+  };
+  const current = await fixture(t, { runtimeLifecycle });
+  const preflight = await current.service.preflight(
+    IMPORT_ID,
+    { plan_id: current.plan.plan_id },
+    ACCESS,
+  );
+  const started = await current.service.start(IMPORT_ID, confirmation(preflight), ACCESS);
+  await flushTurns();
+
+  const gated = await current.service.status(IMPORT_ID, started.run_id, ACCESS);
+  assert.equal(gated.status, "pending");
+  assert.equal(gated.run.state, "ready");
+  assert.deepEqual(gated.run.events.map((event) => event.attempt), [0, 0, 0, 0, 0]);
+  assert.deepEqual(lifecycleLog.map((entry) => entry[0]), ["start"]);
+
+  releaseStart();
+  await flushTurns();
+  assert.deepEqual(lifecycleLog.slice(0, 2).map((entry) => entry[0]), ["start", "state"]);
+  assert.equal(lifecycleLog[1][1], "live");
+  assert.equal(proofDigest, current.buildRuntimeProof.actor_manifest_digest);
+
+  const final = await finishRun(current, started.run_id);
+  assert.equal(final.status, "completed");
+  assert.equal(final.run.cleanup.confirmed_stopped, true);
+  assert.equal(final.run.cleanup.ended_pie, true);
+  assert.deepEqual(lifecycleLog.map((entry) => entry[0]), ["start", "state", "stop", "state"]);
+  assert.equal(lifecycleLog[3][1], "stopped");
+  for (const entry of lifecycleLog) {
+    const loggedIdentity = entry.find((value) => value && value.ownerId === ACCESS.ownerId);
+    assert.deepEqual(loggedIdentity, ACCESS);
+  }
+});
+
+test("changed scene runtime proof invalidates confirmation before backend Start", async (t) => {
+  let currentProof;
+  const lifecycleCalls = [];
+  const runtimeLifecycle = {
+    async startForIdentity() { lifecycleCalls.push("start"); throw new Error("must not run"); },
+    async stateForIdentity() { lifecycleCalls.push("state"); throw new Error("must not run"); },
+    async stopForIdentity() { lifecycleCalls.push("stop"); throw new Error("must not run"); },
+  };
+  const base = await fixture(t);
+  currentProof = clone(base.buildRuntimeProof);
+  const guarded = await fixture(t, {
+    runtimeLifecycle,
+    sceneBuildService: {
+      async status() { return clone(base.buildStatus); },
+      resolveActiveRuntimeProof() { return clone(currentProof); },
+    },
+  });
+  const preflight = await guarded.service.preflight(
+    IMPORT_ID,
+    { plan_id: guarded.plan.plan_id },
+    ACCESS,
+  );
+  currentProof.actor_manifest_digest = "9".repeat(64);
+  await assert.rejects(
+    guarded.service.start(IMPORT_ID, confirmation(preflight), ACCESS),
+    hasCode("ANIMATION_PREFLIGHT_STALE"),
+  );
+  assert.deepEqual(lifecycleCalls, []);
+});
+
+test("backend Stop without a stopped state confirmation quarantines cleanup and cannot claim ended_pie", async (t) => {
+  let stopped = false;
+  const runtimeLifecycle = {
+    async startForIdentity(identity, options) {
+      return {
+        schema: "vista-runtime-setup/v2",
+        phase: "live",
+        pie: true,
+        possessed: true,
+        scene_proof_digest: options.sceneProof.actor_manifest_digest,
+      };
+    },
+    async stateForIdentity() {
+      return {
+        schema: "vista-runtime-state/v2",
+        pie: true,
+        possessed: true,
+      };
+    },
+    async stopForIdentity() {
+      stopped = true;
+      return {
+        schema: "vista-runtime-stop/v2",
+        phase: "stopped",
+        confirmed_stopped: true,
+        ended_pie: true,
+      };
+    },
+  };
+  const current = await fixture(t, { runtimeLifecycle });
+  const preflight = await current.service.preflight(
+    IMPORT_ID,
+    { plan_id: current.plan.plan_id },
+    ACCESS,
+  );
+  const started = await current.service.start(IMPORT_ID, confirmation(preflight), ACCESS);
+  const final = await finishRun(current, started.run_id);
+  assert.equal(stopped, true);
+  assert.equal(final.status, "failed");
+  assert.deepEqual(final.run.cleanup.pending_items, ["runtime_lifecycle"]);
+  assert.equal(final.run.cleanup.confirmed_stopped, false);
+  assert.equal(final.run.cleanup.ended_pie, false);
+});
+
 test("caller commands, stale confirmations, failed builds, and mismatched readiness fail closed", async (t) => {
   const current = await fixture(t);
   await assert.rejects(
@@ -681,6 +853,7 @@ test("orphaned pending receipts fail closed with an explicit recovery requiremen
   const recovered = await replacement.status(IMPORT_ID, started.run_id, ACCESS);
   assert.equal(recovered.status, "failed");
   assert.deepEqual(recovered.error, { code: "ANIMATION_RUN_RECOVERY_REQUIRED", retryable: false });
+  assert.equal(recovered.run, null, "restart quarantine must not fabricate end-PIE evidence");
 });
 
 test("concurrent start requests are serialized per owner slot", async (t) => {
