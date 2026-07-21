@@ -55,6 +55,38 @@ Blueprint function name 或 `vbp` command：
 | `releaseAnimationAction` | Yes | transient IK/root-motion controls released |
 | `restoreAnimationState` | Yes | snapshot ID 與 state digest 完全相同 |
 
+`vista-animation-ue-adapter.js` 現在把這七個方法固定為一個 closed operation
+allowlist。每個 operation 都有 immutable operation ID、SHA-256 contract
+fingerprint、request digest、單次 invocation ID，以及由 server 產生的 128-bit nonce
+marker。Nonce 是 JSON request 的資料欄位，不會被插入 caller-authored script 或 command。
+Transport response 必須以 exact JSON shape 回傳並逐項 echo operation identity、digest、
+invocation 與 nonce；任何遺漏、額外欄位或 stale marker 都 fail closed。
+
+Adapter 對 injected transport 的唯一介面是：
+
+```js
+transport.invokeAnimationContentApi(requestJson, brokerOptions)
+```
+
+`requestJson` 不含 `/Game` pawn／skeleton／implementation path。它只帶固定 operation、
+opaque binding／handle、已正規化 action parameters，以及 server-owned content
+profile revision／digest／receipt proof。真實 Content API 必須在 UE plugin 或另一個
+受信任的 server-side implementation 內，用 profile proof 查到固定 content；不能讓
+HTTP、NLP、Claude 或 browser 指定 Python、Blueprint function、`vbp` command、montage
+path 或任意 asset path。
+
+`brokerOptions` 是目前先行固定的 transport contract。所有 mutation（start、stop、
+release、restore）必定帶 `mutation: true` 與 `maxAttempts: 1`；transport 必須真的遵守，
+不得在 timeout、disconnect 或 marker missing 時內部重送。這些情況回報
+`ANIMATION_UE_MUTATION_OUTCOME_UNKNOWN`，同一 semantic mutation 會被 adapter 擋掉，
+需由 snapshot compensation／operator reconciliation 處理。Read-only preflight、
+snapshot、wait 才允許 `maxAttempts: 2`。
+
+Adapter 另行維護單一 active preflight 與 lifecycle state，要求 snapshot → start；未完成
+的 handle 必須先 stop-attempt 再 release-attempt，rollback 才能 restore exact snapshot
+ID + digest。所有七種 response payload 都再次做 exact validation，而不是只依賴外層
+runtime validator。
+
 若 start 已送出卻拿不到可驗證 handle，runtime 會嘗試 restore snapshot，但 cleanup 必須
 標記為 incomplete；不得宣稱角色已停止。一般 failure、timeout 或 operator Stop 則依序：
 
@@ -104,6 +136,13 @@ brace 與 lift-foot 明確拆成同一個 5 秒 frame，依 stable event ID 取�
   foot-contact anchors；wheeled chair 尚未證明可安全 drag 且保留 caster physics。
 - 尚未把這些高階 broker 方法接到 single-owner UE bridge；現有 generic `agent_action`
   registry 不是等價實作，不能當作 verified adapter。
+- 尚未有受信任的 UE `invokeAnimationContentApi` 實作與 immutable operation fingerprint
+  registry。現有 generic `execute_python_script`／`vbp`／montage path 工具不能接到此
+  adapter。若 Content API 無法只靠 profile proof 安全解析固定 content，factory 應因
+  缺少 injected transport 而 fail closed，不能退回 generic command。
+- 現有 `UeMcpBroker` 尚未實作並證明 `maxAttempts` contract；把 options 傳入但 transport
+  忽略它不算安全接線。正式 integration 必須加入 no-retry mutation transport test，並
+  驗證 timeout／disconnect 後不會送出第二個 UE mutation。
 - Backend Start／End PIE 與 stopped-state reconciliation 仍由外層 runtime route 負責；
   此 module 只保證 event action cleanup，不宣稱 PIE 已結束。
 - 尚未在 disposable map 驗證正常完成、montage notify timeout、Stop race、stream
@@ -117,9 +156,11 @@ profile／broker 只驗證 contract 與 failure semantics，不能複製到 Prod
 
 ```bash
 node --test simworld_studio_workspace/web/server/tests/vista-animation-runtime.test.js
+node --test simworld_studio_workspace/web/server/tests/vista-animation-ue-adapter.test.js
 node --test \
   simworld_studio_workspace/web/server/tests/vista-timeline-compiler.test.js \
   simworld_studio_workspace/web/server/tests/vista-timeline-scheduler.test.js \
-  simworld_studio_workspace/web/server/tests/vista-animation-runtime.test.js
+  simworld_studio_workspace/web/server/tests/vista-animation-runtime.test.js \
+  simworld_studio_workspace/web/server/tests/vista-animation-ue-adapter.test.js
 git diff --check
 ```
