@@ -9,10 +9,14 @@ const { createVistaImportRuntime } = require("./vista-import-runtime");
 const { createVistaAssetRuntime } = require("./vista-asset-runtime");
 const { createVistaSceneBuildRouter } = require("./vista-scene-build-routes");
 const { createVistaSceneBuildRuntime } = require("./vista-scene-build-runtime");
+const { createVistaAnimationTimelineRouter } = require("./vista-animation-timeline-routes");
+const { createVistaAnimationTimelineRuntime } = require("./vista-animation-timeline-runtime");
+const { createVistaAnimationDedicatedTransportResolver } = require("./vista-animation-dedicated-transport");
 const { createVistaSceneExecutor } = require("./vista-scene-executor");
 const { createVistaSceneUeAdapter } = require("./vista-scene-ue-adapter");
 const { createVistaSlotBrokerResolver, resolveVistaSceneExecutorConfig } = require("./vista-scene-executor-runtime");
 const { redactLogLine } = require("./log-redaction");
+let _vistaAnimationUeProbe=null;
 const studioReadiness = createStudioReadiness({
   env: process.env,
   claudeBin: CLAUDE_BIN,
@@ -22,6 +26,9 @@ const studioReadiness = createStudioReadiness({
     build: process.env.SIMWORLD_BUILD_REVISION || "working-tree",
     ue_engine: getUnrealEngineVersion(),
   },
+  animationUeProbe:(options)=>typeof _vistaAnimationUeProbe==="function"
+    ?_vistaAnimationUeProbe(options)
+    :null,
 });
 const {
   codingAgentsEnabled,
@@ -227,14 +234,14 @@ app.use("/api/vista/imports",createVistaImportRouter({
   service:vistaImportRuntime.service,
   resolveIdentity:_resolveVistaIdentity,
 }));
+const _resolveVistaSlotBroker=createVistaSlotBrokerResolver({
+  studioStreaming,
+  defaultBroker:ueBroker,
+  BrokerClass:UeMcpBroker,
+});
 const _vistaSceneExecutorConfig=resolveVistaSceneExecutorConfig(process.env,{assetConfig:vistaAssetRuntime.config});
 let _vistaSceneExecutor=null;
 if(_vistaSceneExecutorConfig.enabled){
-  const _resolveVistaSlotBroker=createVistaSlotBrokerResolver({
-    studioStreaming,
-    defaultBroker:ueBroker,
-    BrokerClass:UeMcpBroker,
-  });
   const _vistaSceneAdapter=createVistaSceneUeAdapter({
     resolveUeBroker:_resolveVistaSlotBroker,
     contentRevision:_vistaSceneExecutorConfig.contentRevision,
@@ -256,6 +263,23 @@ const vistaSceneBuildRuntime=createVistaSceneBuildRuntime({
 });
 app.use("/api/vista/imports",createVistaSceneBuildRouter({
   service:vistaSceneBuildRuntime.service,
+  resolveIdentity:_resolveVistaIdentity,
+}));
+const _vistaAnimationTransportResolver=createVistaAnimationDedicatedTransportResolver({
+  resolveUeBroker:_resolveVistaSlotBroker,
+});
+const vistaAnimationTimelineRuntime=createVistaAnimationTimelineRuntime({
+  env:process.env,
+  baseDir:__dirname,
+  importService:vistaImportRuntime.service,
+  sceneBuildService:vistaSceneBuildRuntime.service,
+  transportResolver:_vistaAnimationTransportResolver,
+  isActiveSessionBinding:(identity)=>studioStreaming.isActiveSessionBinding(identity),
+  defaultRecordRoot:path.join(path.dirname(vistaImportRuntime.config.artifactRoot),"vista-animation-timeline"),
+});
+_vistaAnimationUeProbe=vistaAnimationTimelineRuntime.animationUeProbe;
+app.use("/api/vista/imports",createVistaAnimationTimelineRouter({
+  service:vistaAnimationTimelineRuntime.service,
   resolveIdentity:_resolveVistaIdentity,
 }));
 app.get("/api/session",(s,e)=>{e.json({sessionId:STUDIO_SESSION})});

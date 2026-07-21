@@ -72,6 +72,26 @@ test("fixed VISTA routes stay behind the shared guards with no dynamic command r
   assert.doesNotMatch(source, /app\.(?:all|post|get)\(["']\/api\/vista\/(?:[:*]|command|execute)/);
 });
 
+test("animation timeline is mounted through the lease-bound dedicated UE transport", () => {
+  const indexPath = path.resolve(__dirname, "../index.js");
+  const source = fs.readFileSync(indexPath, "utf8");
+  const accessGuard = source.indexOf("app.use(createAccessGuard(STUDIO_ACCESS_TOKEN,{transport:STUDIO_TRANSPORT}))");
+  const animationMount = source.indexOf(
+    'app.use("/api/vista/imports",createVistaAnimationTimelineRouter({',
+  );
+  assert.ok(accessGuard >= 0 && accessGuard < animationMount);
+  assert.ok(animationMount >= 0);
+  assert.match(source, /createVistaAnimationDedicatedTransportResolver\(\{\s*resolveUeBroker:_resolveVistaSlotBroker/);
+  assert.match(source, /transportResolver:_vistaAnimationTransportResolver/);
+  assert.match(
+    source,
+    /isActiveSessionBinding:\(identity\)=>studioStreaming\.isActiveSessionBinding\(identity\)/,
+  );
+  assert.match(source, /_vistaAnimationUeProbe=vistaAnimationTimelineRuntime\.animationUeProbe/);
+  assert.match(source, /animationUeProbe:\(options\)=>typeof _vistaAnimationUeProbe==="function"/);
+  assert.doesNotMatch(source, /vista_animation_(?:content_api|capabilities|engine_time|evidence_capture)["']\s*\+/);
+});
+
 test("staged model-off workspace pins the fixed broker and exposes no agent MCP", () => {
   const stagePath = path.resolve(__dirname, "../../../../tools/stage_vista_workspace.py");
   const source = fs.readFileSync(stagePath, "utf8");
