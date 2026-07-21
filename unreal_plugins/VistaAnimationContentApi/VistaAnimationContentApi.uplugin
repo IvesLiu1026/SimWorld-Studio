@@ -1,0 +1,19 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0.0",
+  "FriendlyName": "VISTA Animation Content API",
+  "Description": "Fail-closed JSON-only VISTA animation capability and content API.",
+  "Category": "Simulation",
+  "CreatedBy": "SimWorld Studio",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "VistaAnimationContentApi",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}

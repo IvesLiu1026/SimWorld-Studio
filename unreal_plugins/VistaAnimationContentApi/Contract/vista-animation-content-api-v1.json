@@ -1,0 +1,90 @@
+{
+  "schema": "vista-animation-ue-content-api/v1",
+  "capability": {
+    "request_schema": "vista-animation-ue-capability-probe/v1",
+    "response_schema": "vista-animation-ue-capability/v1",
+    "operation_id": "vista.animation.capabilities.v1",
+    "operation_fingerprint": "ab2e3e17bbf8a612054c09270ed7e593dab1706baa682e9e7da732c58a46692b"
+  },
+  "operation_allowlist_digest": "851302cc75bd70e99536fa4e7adbf359ab95d94f104a369108bda91b8377c1a3",
+  "operations": [
+    {
+      "operation_id": "vista.animation.preflight.v1",
+      "operation_fingerprint": "44491226546ca0d78bc5d968a2d3ea98474a07a307256520e2321025957e56d0",
+      "request_schema": "vista-animation-preflight-request/v1",
+      "response_schema": "vista-animation-preflight-response/v1",
+      "mutation": false,
+      "max_attempts": 2
+    },
+    {
+      "operation_id": "vista.animation.release.v1",
+      "operation_fingerprint": "958c71ab9525719a6e570c148563fef78bde3915a3ba3ac752c843a62f4f5674",
+      "request_schema": "vista-animation-release-request/v1",
+      "response_schema": "vista-animation-release-response/v1",
+      "mutation": true,
+      "max_attempts": 1
+    },
+    {
+      "operation_id": "vista.animation.restore.v1",
+      "operation_fingerprint": "f47d059b6aa522571c68b1e7e726d1d5d5625fac330d3cc8413be1a1cce498a7",
+      "request_schema": "vista-animation-restore-request/v1",
+      "response_schema": "vista-animation-restore-response/v1",
+      "mutation": true,
+      "max_attempts": 1
+    },
+    {
+      "operation_id": "vista.animation.snapshot.v1",
+      "operation_fingerprint": "2f00085b3d8474fc77bd395cea9fa4d8965320dc1a7413963ef4be49e63ff95d",
+      "request_schema": "vista-animation-snapshot-request/v1",
+      "response_schema": "vista-animation-snapshot-response/v1",
+      "mutation": false,
+      "max_attempts": 2
+    },
+    {
+      "operation_id": "vista.animation.start.v1",
+      "operation_fingerprint": "9786b50f455a9277ddc857ec1aa4165a4110cc6d76a76f7e5ff7b7706ee4c30e",
+      "request_schema": "vista-animation-start-request/v1",
+      "response_schema": "vista-animation-start-response/v1",
+      "mutation": true,
+      "max_attempts": 1
+    },
+    {
+      "operation_id": "vista.animation.stop.v1",
+      "operation_fingerprint": "39decfb45b7b691d3d962e63c4ad1d1e1de5c1e2c2ced610c7a158116ec16c38",
+      "request_schema": "vista-animation-stop-request/v1",
+      "response_schema": "vista-animation-stop-response/v1",
+      "mutation": true,
+      "max_attempts": 1
+    },
+    {
+      "operation_id": "vista.animation.wait.v1",
+      "operation_fingerprint": "151df1d501b0ad2ba96604243cfa0a23a1aa7dffca8c6435e0b4a330e0596916",
+      "request_schema": "vista-animation-wait-request/v1",
+      "response_schema": "vista-animation-wait-response/v1",
+      "mutation": false,
+      "max_attempts": 2
+    }
+  ],
+  "actions": [
+    { "action": "look_at", "bridge_action_id": "vista_look_at_v1", "target_policy": "required" },
+    { "action": "brace", "bridge_action_id": "vista_brace_ik_v1", "target_policy": "required" },
+    { "action": "drag", "bridge_action_id": "vista_drag_ik_v1", "target_policy": "required" },
+    { "action": "lift_foot", "bridge_action_id": "vista_lift_foot_ik_v1", "target_policy": "required" },
+    { "action": "pause", "bridge_action_id": "vista_pause_pose_v1", "target_policy": "optional" },
+    { "action": "fall", "bridge_action_id": "vista_fall_montage_v1", "target_policy": "forbidden" },
+    { "action": "recover", "bridge_action_id": "vista_recover_montage_v1", "target_policy": "forbidden" }
+  ],
+  "security": {
+    "schema": "vista-animation-ue-security-policy/v1",
+    "json_only": true,
+    "fixed_operation_allowlist": true,
+    "nonce_echo_required": true,
+    "request_digest_echo_required": true,
+    "slot_binding_required": true,
+    "mutation_max_attempts": 1,
+    "caller_python": false,
+    "caller_console": false,
+    "caller_script": false,
+    "caller_asset_paths": false
+  }
+}
