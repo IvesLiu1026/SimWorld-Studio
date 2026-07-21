@@ -33,8 +33,9 @@ Depends on: [requirements.md](requirements.md), [design.md](design.md),
 
 ## Phase 1 — GitHub checkpoint and clean checkout
 
-- [ ] **T1.1 [Git Sync]** Coordinator pushes the reviewed
-  `codex/vista-production-completion` checkpoint to `IvesLiu1026/SimWorld-Studio` and announces its exact SHA.
+- [x] **T1.1 [Git Sync]** Coordinator pushed the reviewed
+  `codex/vista-production-completion` checkpoint to `IvesLiu1026/SimWorld-Studio` and verified that the
+  local and remote branch heads matched. The target must still resolve the final current SHA itself.
 - [ ] **T1.2 [Remote]** Resolve branch SHA with `git ls-remote`; stop if absent/mismatched.
   Requirement: RMT-001.
 - [ ] **T1.3 [Remote]** Clone the branch into a unique partial generation, verify remote URL, exact HEAD,

@@ -36,9 +36,11 @@ Network/host owner must restore the approved route before Phase 1 of [runbook.md
   plus its dirty migration layer. Preserve it as evidence; do not pull, clean, merge, copy or deploy it.
 - Historical Python/bridge tree: `/home/yhliu/SimWorld`, also preserved and not a current source sync path.
 
-The coordinator must push the reviewed integration branch before remote continuation. New target source
-generations live under `~/.local/share/simworld-studio/checkouts/<exact-sha>` and are clean/detached.
-Remote changes go to `codex/remote-82-*` branches and return through GitHub.
+The coordinator has pushed the reviewed integration branch and verified one matching local/remote head.
+Because this handoff update itself advances that branch, the target must resolve the final current SHA with
+`git ls-remote` rather than copying a SHA from prose. New target source generations live under
+`~/.local/share/simworld-studio/checkouts/<exact-sha>` and are clean/detached. Remote changes go to
+`codex/remote-82-*` branches and return through GitHub.
 
 ## What the integration branch provides
 
@@ -87,7 +89,7 @@ into the typed SceneSpec/BuildPlan route.
 | Area | Missing external/live evidence | Current truthful state |
 | --- | --- | --- |
 | Connectivity | working route to target and fresh inventory | blocked |
-| Source | pushed reviewed integration SHA and clean target generation | not synchronized |
+| Source | pushed reviewed integration SHA and clean target generation | GitHub branch synchronized; target generation pending |
 | UE plugin | exact UE 5.3.2 build, project install/load, listener dispatch and nonce/process receipt | v1.1.0 source integrated; no target build/load |
 | VISTA data | dataset-owner verified projection and approved staged bundle | not staged on current target generation |
 | Assets | reviewed Production adapter, immutable model files, pinned services, full Postgres/Qdrant index, live audit, restore drill | offline executor integrated; no Production adapter or index |
@@ -159,7 +161,7 @@ Do not pre-fill `Actual` or mark pass without an artifact path and digest.
 | Check | Required evidence | Actual | Status |
 | --- | --- | --- | --- |
 | Connectivity | successful read-only session + timestamp | none after 2026-07-21 no-route | blocked |
-| Source | GitHub URL/branch/exact SHA, clean status, fsck | none for refreshed branch | pending |
+| Source | GitHub URL/branch/exact SHA, clean status, fsck | branch pushed and coordinator heads matched; target checks pending | Git sync complete; target pending |
 | Offline suite | exact generation + command/totals/build output | none on target for refreshed branch | pending |
 | UE 5.3.2 plugin | v1.1.0 build log, binary/manifest SHA, load and nonce receipts | historical UE 5.7.3 v1.0.0 compile only | pending |
 | VISTA source | dry-run/apply result and bundle digest | code fixture only | pending |
@@ -220,6 +222,8 @@ absolute restricted dataset paths.
   animation contracts 22, candidate profile 10, packaging security 35, staging 6, Review Chromium 4 and
   VISTA Import Chromium 1 all passed; Vite built 1,879 modules and 25 schemas passed meta-schema checks.
   This is local code evidence only, not a test result from `140.113.215.82`.
+- Pushed `codex/vista-production-completion` to GitHub and verified the local/remote heads matched before
+  this follow-up handoff commit. The target must resolve the final current head after the follow-up push.
 - Preserved the 2026-07-15 transfer/test facts strictly as historical provenance.
 - Recorded the read-only SSH failure as `No route to host`; no target command or state change occurred.
 - Left all UE, dataset, asset, provider, public-network, operations and release gates open.
