@@ -2,71 +2,82 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
+
 const {
+  FIXED_CLEANUP_SCRIPT,
   FIXED_SETUP_SCRIPT,
   FIXED_STATE_SCRIPT,
   FIXED_STOP_SCRIPT,
+  VISTA_CLEANUP_MARKER,
+  VISTA_CLEANUP_SCHEMA,
   VISTA_GAME_MODE_CLASS,
   VISTA_PAWN_CLASS,
+  VISTA_SCENE_PROOF_SCHEMA,
   VISTA_SETUP_MARKER,
   VISTA_SETUP_SCHEMA,
-  VISTA_STOP_MARKER,
-  VISTA_STOP_SCHEMA,
   VISTA_STATE_MARKER,
   VISTA_STATE_SCHEMA,
-  bindFixedNonce,
+  VISTA_STOP_MARKER,
+  VISTA_STOP_SCHEMA,
+  bindFixedRuntimeScript,
   createVistaRuntimeBroker,
+  createVistaRuntimeControllerRegistry,
   extractSingleMarker,
   hasStrictlyEmptyBody,
-  validateStatePayload,
-  validateStopPayload,
+  normalizeSceneProof,
+  runtimeBindingDigest,
+  sceneManifestDigest,
 } = require("../vista-runtime-broker");
 
-const TEST_NONCE = "a".repeat(32);
+const NONCE = "a".repeat(32);
+const DIGESTS = Object.freeze({
+  asset: "b".repeat(64),
+  semantic: "c".repeat(64),
+  material: "d".repeat(64),
+  evidence: "e".repeat(64),
+});
 
-function runtimeMarker(marker) {
-  return `${marker}:${TEST_NONCE}`;
-}
-
-function createTestBroker(options) {
-  return createVistaRuntimeBroker({
-    initialRuntimePhase: "stopped",
-    ...options,
-    nonceFactory: () => TEST_NONCE,
-  });
-}
-
-function setupPayload(overrides = {}) {
+function identity(overrides = {}) {
   return {
-    schema: VISTA_SETUP_SCHEMA,
-    phase: "prepared",
-    prepared: true,
-    game_mode_class: VISTA_GAME_MODE_CLASS,
-    pawn_class: VISTA_PAWN_CLASS,
-    default_pawn_class: VISTA_PAWN_CLASS,
-    player_start_count: 1,
+    ownerId: "owner-runtime",
+    sessionId: "session-runtime",
+    slotId: 1,
+    leaseId: "lease-runtime-00000001",
+    mcpPort: 55561,
     ...overrides,
   };
 }
 
-function statePayload(overrides = {}) {
+function actorManifest(name = "VISTA_Floor") {
+  return [{
+    actor_name: name,
+    fingerprint: `vsa-${"f".repeat(24)}`,
+    operation_id: `vso-${"2".repeat(24)}`,
+    object_guid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  }];
+}
+
+function proof(overrides = {}) {
+  const { actorName, ...proofOverrides } = overrides;
+  const manifest = actorManifest(actorName);
   return {
-    schema: VISTA_STATE_SCHEMA,
-    pie: true,
-    possessed: true,
-    pawn_class: VISTA_PAWN_CLASS,
-    location: [100, -200, 110],
-    rotation: [1, -90, 0],
-    velocity: [300, 0, -1],
-    on_ground: true,
-    engine_time: 12.5,
-    ...overrides,
+    schema: VISTA_SCENE_PROOF_SCHEMA,
+    plan_id: `vsp-${"1".repeat(24)}`,
+    scene_id: "mmg_040_a07",
+    actor_manifest_digest: sceneManifestDigest(manifest),
+    actor_count: manifest.length,
+    content_revision: "content-r1",
+    verification_revision: "verification-r1",
+    asset_evidence_digest: DIGESTS.asset,
+    semantic_binding_digest: DIGESTS.semantic,
+    material_pbr_evidence_digest: DIGESTS.material,
+    evidence_bundle_digest: DIGESTS.evidence,
+    start_allowed: true,
+    ...proofOverrides,
   };
 }
 
-function stoppedPayload(overrides = {}) {
+function stoppedState() {
   return {
     schema: VISTA_STATE_SCHEMA,
     pie: false,
@@ -77,6 +88,42 @@ function stoppedPayload(overrides = {}) {
     velocity: null,
     on_ground: null,
     engine_time: null,
+  };
+}
+
+function liveState(time = 1) {
+  return {
+    schema: VISTA_STATE_SCHEMA,
+    pie: true,
+    possessed: true,
+    pawn_class: VISTA_PAWN_CLASS,
+    location: [0, 0, 96],
+    rotation: [0, 90, 0],
+    velocity: [0, 0, 0],
+    on_ground: true,
+    engine_time: time,
+  };
+}
+
+function markerFromScript(script, marker, payload) {
+  const match = script.match(new RegExp(`${marker}:([a-f0-9]{32}):`));
+  assert.ok(match, `missing bound ${marker} nonce`);
+  return { result: { python_logs: [`LogPython: ${marker}:${match[1]}:${JSON.stringify(payload)}`] } };
+}
+
+function setupPayload(sceneProof, overrides = {}) {
+  return {
+    schema: VISTA_SETUP_SCHEMA,
+    phase: "play_requested",
+    play_requested: true,
+    was_playing: false,
+    game_mode_class: VISTA_GAME_MODE_CLASS,
+    pawn_class: VISTA_PAWN_CLASS,
+    default_pawn_class: VISTA_PAWN_CLASS,
+    player_start_count: 1,
+    scene_actor_count: sceneProof.actor_count,
+    surface_actor_count: 1,
+    scene_manifest_digest: sceneProof.actor_manifest_digest,
     ...overrides,
   };
 }
@@ -91,481 +138,257 @@ function stopPayload(overrides = {}) {
   };
 }
 
-function markerReply(marker, payload, extraLogs = []) {
-  const boundMarker = [VISTA_SETUP_MARKER, VISTA_STOP_MARKER, VISTA_STATE_MARKER].includes(marker)
-    ? runtimeMarker(marker)
-    : marker;
+function cleanupPayload(overrides = {}) {
   return {
-    result: {
-      python_logs: [
-        "reviewed prefix",
-        `LogPython: ${boundMarker}:${JSON.stringify(payload)}`,
-        ...extraLogs,
-      ],
+    schema: VISTA_CLEANUP_SCHEMA,
+    phase: "cleaned",
+    binding_removed: true,
+    ...overrides,
+  };
+}
+
+function scriptedBroker(sceneProof, states, options = {}) {
+  const calls = [];
+  return {
+    calls,
+    async send(type, params, sendOptions) {
+      calls.push({ type, params, options: sendOptions });
+      assert.equal(type, "execute_python_script");
+      assert.deepEqual(Object.keys(params), ["script"]);
+      assert.equal(await sendOptions.preSendAuthorize(), true);
+      if (params.script.includes(VISTA_SETUP_MARKER)) {
+        if (options.setupError) throw options.setupError;
+        return markerFromScript(params.script, VISTA_SETUP_MARKER, setupPayload(sceneProof));
+      }
+      if (params.script.includes(VISTA_STOP_MARKER)) {
+        if (options.stopError) throw options.stopError;
+        return markerFromScript(params.script, VISTA_STOP_MARKER, stopPayload());
+      }
+      if (params.script.includes(VISTA_CLEANUP_MARKER)) {
+        return markerFromScript(params.script, VISTA_CLEANUP_MARKER, cleanupPayload());
+      }
+      assert.ok(params.script.includes(VISTA_STATE_MARKER));
+      const state = states.length > 1 ? states.shift() : states[0];
+      return markerFromScript(params.script, VISTA_STATE_MARKER, state);
     },
   };
 }
 
-function responseRecorder() {
-  return {
-    body: null,
-    headers: {},
-    statusCode: null,
-    set(name, value) { this.headers[name] = value; return this; },
-    status(code) { this.statusCode = code; return this; },
-    json(value) { this.body = value; return this; },
-  };
-}
-
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
-
-test("fixed scripts prepare only and expose no caller-authored Python surface", () => {
-  const brokerSource = fs.readFileSync(path.resolve(__dirname, "../vista-runtime-broker.js"), "utf8");
-  assert.doesNotMatch(brokerSource, /console\.|logToFile|logger\.(?:info|warn|error)/);
-  assert.match(FIXED_SETUP_SCRIPT, /set_editor_property\('default_game_mode'/);
-  assert.match(FIXED_SETUP_SCRIPT, /PlayerStart/);
-  assert.match(FIXED_SETUP_SCRIPT, /VISTA_RuntimeGround/);
-  assert.match(FIXED_SETUP_SCRIPT, /\/Engine\/BasicShapes\/Cube\.Cube/);
-  assert.match(FIXED_SETUP_SCRIPT, /get_unscaled_capsule_half_height\(\)/);
-  assert.match(FIXED_SETUP_SCRIPT, /spawn_actor_from_object/);
-  assert.match(FIXED_SETUP_SCRIPT, /GROUND_SCALE_XY = 10000\.0/);
-  assert.match(FIXED_SETUP_SCRIPT, /set_actor_scale3d/);
-  assert.match(FIXED_SETUP_SCRIPT, /set_collision_enabled/);
-  assert.match(FIXED_SETUP_SCRIPT, /set_collision_profile_name\('BlockAll'\)/);
-  assert.match(FIXED_SETUP_SCRIPT, new RegExp(VISTA_SETUP_MARKER));
-  assert.equal(FIXED_SETUP_SCRIPT.split(VISTA_SETUP_MARKER).length - 1, 1);
-  assert.match(FIXED_SETUP_SCRIPT, new RegExp(VISTA_GAME_MODE_CLASS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(FIXED_SETUP_SCRIPT, new RegExp(VISTA_PAWN_CLASS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.doesNotMatch(FIXED_SETUP_SCRIPT, /editor_play|simulate|save_(?:asset|loaded_asset)|save_dirty_packages/i);
-
-  assert.match(FIXED_STATE_SCRIPT, /get_game_world\(\)/);
-  assert.match(FIXED_STATE_SCRIPT, /is_in_play_in_editor\(\)/);
-  assert.match(FIXED_STATE_SCRIPT, /'pie': False/);
-  assert.match(FIXED_STATE_SCRIPT, /get_player_controller\(game_world, 0\)/);
-  assert.match(FIXED_STATE_SCRIPT, /get_player_pawn\(game_world, 0\)/);
-  assert.doesNotMatch(FIXED_STATE_SCRIPT, /controller\.get_pawn\(\)/);
-  assert.match(FIXED_STATE_SCRIPT, new RegExp(VISTA_STATE_MARKER));
-  assert.equal(FIXED_STATE_SCRIPT.split(VISTA_STATE_MARKER).length - 1, 1);
-  assert.doesNotMatch(FIXED_STATE_SCRIPT, /get_editor_world|editor_play_(?:simulate|in_viewport)|save_/i);
-
+test("fixed source starts/stops PIE without toolbar coordinates, caller code, or fallback geometry", () => {
+  assert.match(FIXED_SETUP_SCRIPT, /editor_request_begin_play\(\)/);
+  assert.match(FIXED_SETUP_SCRIPT, /hasattr\(level_editor_subsystem, 'editor_request_begin_play'\)/);
+  assert.match(FIXED_SETUP_SCRIPT, /scene_manifest_digest/);
+  assert.match(FIXED_SETUP_SCRIPT, /surface_count < 1/);
+  assert.match(FIXED_SETUP_SCRIPT, /SIMWORLD_VISTA_RUNTIME_V2_BINDING=/);
+  assert.match(FIXED_SETUP_SCRIPT, /binding_tags != \[expected_binding_tag\]/);
   assert.match(FIXED_STOP_SCRIPT, /editor_request_end_play\(\)/);
-  assert.match(FIXED_STOP_SCRIPT, /is_in_play_in_editor\(\)/);
-  assert.match(FIXED_STOP_SCRIPT, new RegExp(VISTA_STOP_MARKER));
-  assert.equal(FIXED_STOP_SCRIPT.split(VISTA_STOP_MARKER).length - 1, 1);
-  assert.doesNotMatch(FIXED_STOP_SCRIPT, /get_editor_world|editor_play_(?:simulate|in_viewport)|save_/i);
+  assert.match(FIXED_STOP_SCRIPT, /refusing to reconcile tags owned by another Studio lease or scene/);
+  assert.match(FIXED_CLEANUP_SCRIPT, /tag not in \[BINDING_TAG, SCENE_TAG\]/);
+  for (const source of [FIXED_SETUP_SCRIPT, FIXED_STATE_SCRIPT, FIXED_STOP_SCRIPT, FIXED_CLEANUP_SCRIPT]) {
+    assert.doesNotMatch(source, /486|78|spawn_actor|spawn_actor_from|BasicShapes|Cube\.Cube|save_(?:asset|dirty)/i);
+  }
+  assert.doesNotMatch(FIXED_SETUP_SCRIPT, /set_editor_property\('default_game_mode'/);
+  assert.equal(hasStrictlyEmptyBody(undefined), true);
+  assert.equal(hasStrictlyEmptyBody({}), true);
+  assert.equal(hasStrictlyEmptyBody(undefined, { "content-length": "1" }), false);
+  assert.equal(hasStrictlyEmptyBody({ script: "caller" }), false);
 });
 
-test("setup accepts only an absent or empty object body and returns the exact prepared contract", async () => {
-  assert.equal(hasStrictlyEmptyBody(undefined), true);
-  assert.equal(hasStrictlyEmptyBody(undefined, { "content-length": "0" }), true);
-  assert.equal(hasStrictlyEmptyBody({}), true);
-  assert.equal(hasStrictlyEmptyBody({}, { "content-length": "2" }), true);
-  assert.equal(hasStrictlyEmptyBody(undefined, { "content-length": "7" }), false);
-  assert.equal(hasStrictlyEmptyBody(undefined, { "transfer-encoding": "chunked" }), false);
-  for (const value of [null, [], "", { class_name: VISTA_PAWN_CLASS }, { nested: {} }]) {
-    assert.equal(hasStrictlyEmptyBody(value), false);
-  }
-
-  const calls = [];
-  const ueBroker = {
-    async send(type, params, options) {
-      calls.push({ type, params, options });
-      return markerReply(VISTA_SETUP_MARKER, setupPayload());
-    },
-  };
-  const broker = createTestBroker({ ueBroker });
-
-  const denied = responseRecorder();
-  await broker.setupVistaPlayMode({ body: { pawn: "caller supplied" } }, denied);
-  assert.equal(denied.statusCode, 400);
-  assert.equal(denied.body.code, "VISTA_EMPTY_BODY_REQUIRED");
-  assert.equal(calls.length, 0);
-
-  const unparsedBytes = responseRecorder();
-  await broker.setupVistaPlayMode(
-    { body: undefined, headers: { "content-length": "7", "content-type": "text/plain" } },
-    unparsedBytes,
+test("fixed script binding replaces only server nonce, lease digest, and scene digest", () => {
+  const id = identity();
+  const sceneProof = proof();
+  const bound = bindFixedRuntimeScript(
+    FIXED_SETUP_SCRIPT,
+    VISTA_SETUP_MARKER,
+    NONCE,
+    runtimeBindingDigest(id),
+    sceneProof.actor_manifest_digest,
   );
-  assert.equal(unparsedBytes.statusCode, 400);
-  assert.equal(calls.length, 0);
+  assert.match(bound, new RegExp(`${VISTA_SETUP_MARKER}:${NONCE}:`));
+  assert.match(bound, new RegExp(runtimeBindingDigest(id)));
+  assert.match(bound, new RegExp(sceneProof.actor_manifest_digest));
+  assert.doesNotMatch(bound, /PLACEHOLDER_V2/);
+  assert.throws(() => bindFixedRuntimeScript(
+    `${FIXED_SETUP_SCRIPT}\n${FIXED_SETUP_SCRIPT}`,
+    VISTA_SETUP_MARKER,
+    NONCE,
+    runtimeBindingDigest(id),
+    sceneProof.actor_manifest_digest,
+  ), /exactly one/);
+});
 
-  const accepted = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, accepted);
-  assert.equal(accepted.statusCode, 200);
-  assert.deepEqual(accepted.body, {
+test("one lease-bound controller performs backend Start, state confirmation, Stop, and exact cleanup", async () => {
+  const id = identity();
+  const sceneProof = proof();
+  let active = true;
+  const ue = scriptedBroker(sceneProof, [stoppedState(), liveState(), stoppedState()]);
+  const controller = createVistaRuntimeBroker({
+    identity: id,
+    sceneProof,
+    resolveUeBroker: () => ue,
+    isActiveSessionBinding: (candidate) => active && runtimeBindingDigest(candidate) === runtimeBindingDigest(id),
+    nonceFactory: () => NONCE,
+    delay: async () => {},
+    pollIntervalMs: 1,
+  });
+  const started = await controller.start();
+  assert.deepEqual(started, {
     schema: VISTA_SETUP_SCHEMA,
-    phase: "prepared",
+    phase: "live",
     prepared: true,
+    play_requested: true,
+    already_playing: false,
+    pie: true,
+    possessed: true,
     game_mode_class: VISTA_GAME_MODE_CLASS,
     pawn_class: VISTA_PAWN_CLASS,
     player_start_present: true,
-    requires_operator_play: true,
+    scene_proof_digest: sceneProof.actor_manifest_digest,
     play_lease_granted: true,
-    retry_after_ms: 30_000,
-    state_probe_grace_ms: 30_000,
   });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].type, "execute_python_script");
-  assert.deepEqual(Object.keys(calls[0].params), ["script"]);
-  assert.equal(calls[0].params.script, bindFixedNonce(FIXED_SETUP_SCRIPT, VISTA_SETUP_MARKER, TEST_NONCE));
-});
-
-test("each execution rejects stale log markers and retries once with a fresh server nonce", async () => {
-  const staleNonce = "1".repeat(32);
-  const nonces = ["2".repeat(32), "3".repeat(32)];
-  const calls = [];
-  const ueBroker = {
-    async send(_type, params) {
-      calls.push(params.script);
-      if (calls.length === 1) {
-        return markerReply(`${VISTA_SETUP_MARKER}:${staleNonce}`, setupPayload());
-      }
-      const match = params.script.match(new RegExp(`${VISTA_SETUP_MARKER}:([a-f0-9]{32}):`));
-      assert.ok(match);
-      return markerReply(`${VISTA_SETUP_MARKER}:${match[1]}`, setupPayload());
-    },
-  };
-  const broker = createVistaRuntimeBroker({
-    ueBroker,
-    initialRuntimePhase: "stopped",
-    nonceFactory: () => nonces.shift(),
-  });
-  const response = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, response);
-  assert.equal(response.statusCode, 200);
-  assert.equal(calls.length, 2);
-  assert.match(calls[0], new RegExp(`${VISTA_SETUP_MARKER}:${"2".repeat(32)}:`));
-  assert.match(calls[1], new RegExp(`${VISTA_SETUP_MARKER}:${"3".repeat(32)}:`));
-  assert.doesNotMatch(calls[0], new RegExp(staleNonce));
-});
-
-test("server FSM requires fresh stopped reconciliation before initial or post-Stop Play", async () => {
-  const calls = [];
-  const ueBroker = {
-    async send(_type, params) {
-      calls.push(params.script);
-      if (params.script.includes(runtimeMarker(VISTA_STATE_MARKER))) {
-        return markerReply(VISTA_STATE_MARKER, stoppedPayload());
-      }
-      if (params.script.includes(runtimeMarker(VISTA_SETUP_MARKER))) {
-        return markerReply(VISTA_SETUP_MARKER, setupPayload());
-      }
-      return markerReply(VISTA_STOP_MARKER, stopPayload());
-    },
-  };
-  const broker = createVistaRuntimeBroker({
-    ueBroker,
-    nonceFactory: () => TEST_NONCE,
-    setupGraceMs: 0,
-  });
-
-  const unknownSetup = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, unknownSetup);
-  assert.equal(unknownSetup.statusCode, 428);
-  assert.equal(unknownSetup.body.code, "VISTA_STATE_RECONCILIATION_REQUIRED");
-  assert.equal(calls.length, 0);
-
-  const initialState = responseRecorder();
-  await broker.getVistaState({}, initialState);
-  assert.deepEqual(initialState.body, stoppedPayload());
-  const setup = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, setup);
-  assert.equal(setup.statusCode, 200);
-
-  const stop = responseRecorder();
-  await broker.stopVistaPlayMode({ body: undefined }, stop);
-  assert.equal(stop.statusCode, 200);
-  const prematureSetup = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, prematureSetup);
-  assert.equal(prematureSetup.statusCode, 425);
-  assert.equal(prematureSetup.body.code, "VISTA_STOP_IN_PROGRESS");
-
-  const stoppedState = responseRecorder();
-  await broker.getVistaState({}, stoppedState);
-  assert.deepEqual(stoppedState.body, stoppedPayload());
-  const restarted = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, restarted);
-  assert.equal(restarted.statusCode, 200);
-});
-
-test("setup coalesces UE work, grants one Play lease, and blocks state for the operator grace", async () => {
-  let clock = 1_000;
-  const pendingSetup = deferred();
-  const calls = [];
-  const ueBroker = {
-    send(type, params) {
-      calls.push({ type, params });
-      if (calls.length === 1) return pendingSetup.promise;
-      return Promise.resolve(markerReply(VISTA_STATE_MARKER, statePayload()));
-    },
-  };
-  const broker = createTestBroker({ ueBroker, now: () => clock });
-  const first = responseRecorder();
-  const duplicate = responseRecorder();
-  const firstPromise = broker.setupVistaPlayMode({ body: undefined }, first);
-  const duplicatePromise = broker.setupVistaPlayMode({ body: {} }, duplicate);
-  await Promise.resolve();
-  assert.equal(calls.length, 1);
-  const setupPending = responseRecorder();
-  await broker.getVistaState({}, setupPending);
-  assert.equal(setupPending.statusCode, 425);
-  assert.equal(setupPending.body.code, "VISTA_SETUP_IN_PROGRESS");
-  assert.equal(setupPending.body.retry_after_ms, 1_000);
-  assert.equal(calls.length, 1, "setup in flight must suppress state probes");
-  pendingSetup.resolve(markerReply(VISTA_SETUP_MARKER, setupPayload()));
-  await Promise.all([firstPromise, duplicatePromise]);
-  assert.equal(first.statusCode, 200);
-  assert.equal(first.body.play_lease_granted, true);
-  assert.equal(duplicate.statusCode, 409);
-  assert.equal(duplicate.body.code, "VISTA_PLAY_LEASE_HELD");
-
-  const cachedSetup = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, cachedSetup);
-  assert.equal(calls.length, 1);
-  assert.equal(cachedSetup.statusCode, 409);
-  assert.equal(cachedSetup.body.code, "VISTA_PLAY_LEASE_HELD");
-
-  clock = 30_999;
-  const grace = responseRecorder();
-  await broker.getVistaState({}, grace);
-  assert.equal(grace.statusCode, 425);
-  assert.equal(grace.headers["Cache-Control"], "no-store");
-  assert.equal(grace.headers["Retry-After"], "1");
-  assert.equal(grace.body.code, "VISTA_PLAY_START_GRACE");
-  assert.equal(grace.body.retry_after_ms, 1);
-  assert.equal(calls.length, 1, "grace must not enqueue a UE state probe");
-
-  clock = 31_000;
-  const ready = responseRecorder();
-  await broker.getVistaState({}, ready);
-  assert.equal(ready.statusCode, 200);
-  assert.equal(calls.length, 2);
-});
-
-test("stop accepts only an empty contract, coalesces duplicates, and clears setup grace", async () => {
-  let clock = 1_000;
-  const pendingStop = deferred();
-  const calls = [];
-  const ueBroker = {
-    send(type, params) {
-      calls.push({ type, params });
-      if (params.script.includes(runtimeMarker(VISTA_SETUP_MARKER))) {
-        return Promise.resolve(markerReply(VISTA_SETUP_MARKER, setupPayload()));
-      }
-      if (params.script.includes(runtimeMarker(VISTA_STOP_MARKER))) return pendingStop.promise;
-      return Promise.resolve(markerReply(VISTA_STATE_MARKER, stoppedPayload()));
-    },
-  };
-  const broker = createTestBroker({ ueBroker, now: () => clock });
-
-  const setup = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, setup);
-  assert.equal(setup.statusCode, 200);
-
-  const denied = responseRecorder();
-  await broker.stopVistaPlayMode({ body: { command: "caller supplied" } }, denied);
-  assert.equal(denied.statusCode, 400);
-  assert.equal(denied.body.code, "VISTA_EMPTY_BODY_REQUIRED");
-  assert.equal(calls.length, 1);
-
-  const unparsedBytes = responseRecorder();
-  await broker.stopVistaPlayMode(
-    { body: undefined, headers: { "content-length": "1", "content-type": "text/plain" } },
-    unparsedBytes,
-  );
-  assert.equal(unparsedBytes.statusCode, 400);
-  assert.equal(calls.length, 1);
-
-  const first = responseRecorder();
-  const duplicate = responseRecorder();
-  const firstPromise = broker.stopVistaPlayMode({ body: undefined }, first);
-  const duplicatePromise = broker.stopVistaPlayMode({ body: {} }, duplicate);
-  await Promise.resolve();
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].type, "execute_python_script");
-  assert.deepEqual(Object.keys(calls[1].params), ["script"]);
-  assert.equal(calls[1].params.script, bindFixedNonce(FIXED_STOP_SCRIPT, VISTA_STOP_MARKER, TEST_NONCE));
-  pendingStop.resolve(markerReply(VISTA_STOP_MARKER, stopPayload()));
-  await Promise.all([firstPromise, duplicatePromise]);
-  assert.deepEqual(duplicate.body, first.body);
-  assert.deepEqual(first.body, {
+  assert.equal(ue.calls.find((call) => call.params.script.includes(VISTA_SETUP_MARKER)).options.maxAttempts, 1);
+  const stopped = await controller.stop();
+  assert.deepEqual(stopped, {
     schema: VISTA_STOP_SCHEMA,
-    phase: "stop_requested",
+    phase: "stopped",
     stop_requested: true,
     was_playing: true,
-    retry_after_ms: 500,
+    confirmed_stopped: true,
+    ended_pie: true,
+    binding_cleaned: true,
   });
-
-  // Stop clears the 30-second setup grace, so state is read immediately.
-  clock = 1_001;
-  const stopped = responseRecorder();
-  await broker.getVistaState({}, stopped);
-  assert.equal(stopped.statusCode, 200);
-  assert.deepEqual(stopped.body, stoppedPayload());
-  assert.equal(calls.length, 3);
+  assert.equal(ue.calls.find((call) => call.params.script.includes(VISTA_STOP_MARKER)).options.maxAttempts, 1);
+  assert.equal(ue.calls.find((call) => call.params.script.includes(VISTA_CLEANUP_MARKER)).options.maxAttempts, 2);
+  active = false;
+  await assert.rejects(controller.state({ force: true }), (error) => error.code === "VISTA_RUNTIME_LEASE_REVOKED");
 });
 
-test("an authoritative stopped-state read releases an abandoned Play lease", async () => {
-  let setupCalls = 0;
-  const ueBroker = {
-    async send(_type, params) {
-      if (params.script.includes(runtimeMarker(VISTA_SETUP_MARKER))) {
-        setupCalls += 1;
-        return markerReply(VISTA_SETUP_MARKER, setupPayload());
-      }
-      return markerReply(VISTA_STATE_MARKER, stoppedPayload());
+test("lost mutation receipts never fabricate ended_pie and recover only through exact state", async () => {
+  const id = identity();
+  const sceneProof = proof();
+  const lost = new Error("response lost");
+  const ue = scriptedBroker(sceneProof, [stoppedState(), liveState(), stoppedState()], {
+    setupError: lost,
+    stopError: lost,
+  });
+  const controller = createVistaRuntimeBroker({
+    identity: id,
+    sceneProof,
+    resolveUeBroker: () => ue,
+    isActiveSessionBinding: () => true,
+    nonceFactory: () => NONCE,
+    delay: async () => {},
+    pollIntervalMs: 1,
+  });
+  const started = await controller.start();
+  assert.equal(started.phase, "live");
+  assert.equal(started.play_requested, false);
+  const stopped = await controller.stop();
+  assert.equal(stopped.confirmed_stopped, true);
+  assert.equal(stopped.was_playing, null);
+  assert.equal(stopped.ended_pie, false);
+});
+
+test("registry isolates two sessions/two slots and quarantines an old same-slot lease", async () => {
+  const first = identity({ sessionId: "session-one", leaseId: "lease-runtime-00000001", slotId: 1, mcpPort: 55561 });
+  const second = identity({ sessionId: "session-two", leaseId: "lease-runtime-00000002", slotId: 2, mcpPort: 55563 });
+  const replacement = identity({ sessionId: "session-three", leaseId: "lease-runtime-00000003", slotId: 1, mcpPort: 55561 });
+  const proofs = new Map([[runtimeBindingDigest(first), proof({ actorName: "Floor_One" })], [runtimeBindingDigest(second), proof({ actorName: "Floor_Two" })], [runtimeBindingDigest(replacement), proof({ actorName: "Floor_Three" })]]);
+  const brokers = new Map([
+    [runtimeBindingDigest(first), scriptedBroker(proofs.get(runtimeBindingDigest(first)), [stoppedState(), liveState()])],
+    [runtimeBindingDigest(second), scriptedBroker(proofs.get(runtimeBindingDigest(second)), [stoppedState(), liveState()])],
+    [runtimeBindingDigest(replacement), scriptedBroker(proofs.get(runtimeBindingDigest(replacement)), [stoppedState()])],
+  ]);
+  const active = new Set(brokers.keys());
+  const registry = createVistaRuntimeControllerRegistry({
+    resolveIdentity: (request) => request.identity,
+    resolveUeBroker: (candidate) => brokers.get(runtimeBindingDigest(candidate)),
+    isActiveSessionBinding: (candidate) => active.has(runtimeBindingDigest(candidate)),
+    resolveSceneProof: (candidate) => proofs.get(runtimeBindingDigest(candidate)),
+    nonceFactory: () => NONCE,
+    delay: async () => {},
+    pollIntervalMs: 1,
+  });
+  const [one, two] = await Promise.all([
+    registry.startForIdentity(first),
+    registry.startForIdentity(second),
+  ]);
+  assert.equal(one.scene_proof_digest, proofs.get(runtimeBindingDigest(first)).actor_manifest_digest);
+  assert.equal(two.scene_proof_digest, proofs.get(runtimeBindingDigest(second)).actor_manifest_digest);
+  const oldController = registry.controllerFor(first);
+  await registry.stateForIdentity(replacement, { force: true });
+  await assert.rejects(oldController.stop(), (error) => error.code === "VISTA_RUNTIME_QUARANTINED");
+  assert.notEqual(runtimeBindingDigest(first), runtimeBindingDigest(replacement));
+});
+
+test("physical slot ownership is exclusive across owners as well as sessions", async () => {
+  const first = identity({ ownerId: "owner-one", sessionId: "session-one" });
+  const replacement = identity({
+    ownerId: "owner-two",
+    sessionId: "session-two",
+    leaseId: "lease-runtime-00000002",
+  });
+  const firstProof = proof({ actorName: "Floor_One" });
+  const replacementProof = proof({ actorName: "Floor_Two" });
+  const brokers = new Map([
+    [runtimeBindingDigest(first), scriptedBroker(firstProof, [stoppedState()])],
+    [runtimeBindingDigest(replacement), scriptedBroker(replacementProof, [stoppedState()])],
+  ]);
+  const registry = createVistaRuntimeControllerRegistry({
+    resolveIdentity: (request) => request.identity,
+    resolveUeBroker: (candidate) => brokers.get(runtimeBindingDigest(candidate)),
+    isActiveSessionBinding: () => true,
+    resolveSceneProof: (candidate) => (
+      runtimeBindingDigest(candidate) === runtimeBindingDigest(first) ? firstProof : replacementProof
+    ),
+    nonceFactory: () => NONCE,
+  });
+  const oldController = registry.controllerFor(first);
+  registry.controllerFor(replacement);
+  await assert.rejects(oldController.readState({ force: true }), (error) => error.code === "VISTA_RUNTIME_QUARANTINED");
+});
+
+test("queued/retried sends revalidate the exact lease before every dispatch", async () => {
+  const id = identity();
+  const sceneProof = proof();
+  let active = true;
+  let authorizationChecks = 0;
+  const broker = {
+    async send(_type, _params, options) {
+      authorizationChecks += 1;
+      assert.equal(await options.preSendAuthorize(), true);
+      active = false;
+      authorizationChecks += 1;
+      assert.equal(await options.preSendAuthorize(), false);
+      const error = new Error("authorization expired");
+      error.code = "UE_COMMAND_AUTHORIZATION_EXPIRED";
+      throw error;
     },
   };
-  const broker = createTestBroker({ ueBroker, setupGraceMs: 0 });
-  const first = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, first);
-  assert.equal(first.statusCode, 200);
-
-  const denied = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, denied);
-  assert.equal(denied.statusCode, 409);
-
-  const stopped = responseRecorder();
-  await broker.getVistaState({}, stopped);
-  assert.deepEqual(stopped.body, stoppedPayload());
-
-  const reclaimed = responseRecorder();
-  await broker.setupVistaPlayMode({ body: undefined }, reclaimed);
-  assert.equal(reclaimed.statusCode, 200);
-  assert.equal(reclaimed.body.play_lease_granted, true);
-  assert.equal(setupCalls, 2);
-});
-
-test("stop validation rejects malformed or extra marker data without leaking raw logs", async () => {
-  assert.deepEqual(validateStopPayload(stopPayload({ was_playing: false })), {
-    schema: VISTA_STOP_SCHEMA,
-    phase: "stop_requested",
-    stop_requested: true,
-    was_playing: false,
-    retry_after_ms: 500,
+  const controller = createVistaRuntimeBroker({
+    identity: id,
+    sceneProof,
+    resolveUeBroker: () => broker,
+    isActiveSessionBinding: () => active,
+    nonceFactory: () => NONCE,
   });
-  for (const rawReply of [
-    markerReply(VISTA_STOP_MARKER, { ...stopPayload(), raw_secret: "TOP_SECRET" }),
-    markerReply(VISTA_STOP_MARKER, stopPayload({ phase: "wrong" })),
-    { result: { python_logs: [`${runtimeMarker(VISTA_STOP_MARKER)}:{malformed TOP_SECRET`] } },
-  ]) {
-    const broker = createTestBroker({ ueBroker: { send: async () => rawReply } });
-    const response = responseRecorder();
-    await broker.stopVistaPlayMode({ body: undefined }, response);
-    assert.equal(response.statusCode, 502);
-    assert.doesNotMatch(JSON.stringify(response.body), /TOP_SECRET|python_logs|raw_secret/);
-  }
+  await assert.rejects(controller.state({ force: true }), (error) => error.code === "VISTA_RUNTIME_LEASE_REVOKED");
+  assert.equal(authorizationChecks, 2);
 });
 
-test("state reads coalesce in flight and remain capped at two starts per second", async () => {
-  let clock = 5_000;
-  const pendingState = deferred();
-  const calls = [];
-  const ueBroker = {
-    send(type, params) {
-      calls.push({ type, params });
-      if (calls.length === 1) return pendingState.promise;
-      return Promise.resolve(markerReply(VISTA_STATE_MARKER, statePayload({ engine_time: 13 })));
-    },
-  };
-  const broker = createTestBroker({ ueBroker, now: () => clock });
-  const first = responseRecorder();
-  const duplicate = responseRecorder();
-  const firstPromise = broker.getVistaState({}, first);
-  const duplicatePromise = broker.getVistaState({}, duplicate);
-  await Promise.resolve();
-  assert.equal(calls.length, 1);
-  pendingState.resolve(markerReply(VISTA_STATE_MARKER, statePayload()));
-  await Promise.all([firstPromise, duplicatePromise]);
-  assert.equal(first.statusCode, 200);
-  assert.deepEqual(duplicate.body, first.body);
-  assert.equal(first.headers["Cache-Control"], "no-store");
-
-  clock += 499;
-  const cached = responseRecorder();
-  await broker.getVistaState({}, cached);
-  assert.equal(calls.length, 1);
-  assert.deepEqual(cached.body, first.body);
-
-  clock += 1;
-  const refreshed = responseRecorder();
-  await broker.getVistaState({}, refreshed);
-  assert.equal(calls.length, 2);
-  assert.equal(refreshed.body.engine_time, 13);
-});
-
-test("state validation rejects malformed, duplicate, wrong-pawn, non-finite, and extra data", async () => {
-  const valid = statePayload();
-  assert.deepEqual(validateStatePayload(stoppedPayload()), stoppedPayload());
+test("scene proof and marker contracts reject degraded, malformed, duplicate, or extra data", () => {
   assert.throws(
-    () => validateStatePayload(stoppedPayload({ location: [0, 0, 0] })),
-    /VISTA_STATE_STOPPED_INVALID/,
+    () => normalizeSceneProof({ ...proof(), start_allowed: false }),
+    (error) => error.code === "VISTA_SCENE_PROOF_INVALID",
   );
   assert.throws(
-    () => extractSingleMarker({ result: { python_logs: [] } }, VISTA_STATE_MARKER),
-    /VISTA_MARKER_MISSING/,
+    () => normalizeSceneProof({ ...proof(), material_pbr_evidence_digest: "x" }),
+    (error) => error.code === "VISTA_SCENE_PROOF_INVALID",
   );
-  assert.throws(
-    () => extractSingleMarker({
-      result: { python_logs: [`${VISTA_STATE_MARKER}:${JSON.stringify(valid)}`, `${VISTA_STATE_MARKER}:${JSON.stringify(valid)}`] },
-    }, VISTA_STATE_MARKER),
-    /VISTA_MARKER_DUPLICATE/,
-  );
-  assert.throws(
-    () => validateStatePayload(statePayload({ pawn_class: "/Game/Wrong.Wrong_C" })),
-    /VISTA_PAWN_CLASS_MISMATCH/,
-  );
-  assert.throws(
-    () => validateStatePayload(statePayload({ velocity: [0, Number.POSITIVE_INFINITY, 0] })),
-    /VISTA_STATE_VECTOR_INVALID/,
-  );
-  assert.throws(
-    () => validateStatePayload({ ...statePayload(), raw_secret: "must not pass" }),
-    /VISTA_STATE_SHAPE_INVALID/,
-  );
-
-  const nonFiniteJson = JSON.stringify(valid).replace('"location":[100,-200,110]', '"location":[1e999,-200,110]');
-  const replies = [
-    { result: { python_logs: [`${runtimeMarker(VISTA_STATE_MARKER)}:{malformed TOP_SECRET`] } },
-    { result: { python_logs: [`${runtimeMarker(VISTA_STATE_MARKER)}:${JSON.stringify(valid)}`, `${runtimeMarker(VISTA_STATE_MARKER)}:${JSON.stringify(valid)}`] } },
-    markerReply(VISTA_STATE_MARKER, statePayload({ pawn_class: "/Game/TOP_SECRET.Wrong_C" })),
-    { result: { python_logs: [`${runtimeMarker(VISTA_STATE_MARKER)}:${nonFiniteJson}`] } },
-    markerReply(VISTA_STATE_MARKER, { ...statePayload(), raw_secret: "TOP_SECRET" }),
-  ];
-  for (const rawReply of replies) {
-    const broker = createTestBroker({ ueBroker: { send: async () => rawReply } });
-    const response = responseRecorder();
-    await broker.getVistaState({}, response);
-    assert.equal(response.statusCode, 502);
-    assert.doesNotMatch(JSON.stringify(response.body), /TOP_SECRET|python_logs|raw_secret/);
-  }
-});
-
-test("transport failures and setup marker extras are sanitized with no raw logs", async () => {
-  const unavailable = createTestBroker({
-    ueBroker: { send: async () => { throw new Error("TOP_SECRET raw UE reply"); } },
-  });
-  const unavailableResponse = responseRecorder();
-  await unavailable.getVistaState({}, unavailableResponse);
-  assert.equal(unavailableResponse.statusCode, 503);
-  assert.equal(unavailableResponse.body.code, "VISTA_RUNTIME_UNAVAILABLE");
-  assert.doesNotMatch(JSON.stringify(unavailableResponse.body), /TOP_SECRET|raw UE reply/);
-
-  const extraSetup = createTestBroker({
-    ueBroker: {
-      send: async () => markerReply(VISTA_SETUP_MARKER, { ...setupPayload(), raw_secret: "TOP_SECRET" }),
-    },
-  });
-  const setupResponse = responseRecorder();
-  await extraSetup.setupVistaPlayMode({ body: undefined }, setupResponse);
-  assert.equal(setupResponse.statusCode, 502);
-  assert.doesNotMatch(JSON.stringify(setupResponse.body), /TOP_SECRET|raw_secret/);
+  const valid = liveState();
+  assert.throws(() => extractSingleMarker({ result: { python_logs: [] } }, VISTA_STATE_MARKER), /VISTA_MARKER_MISSING/);
+  assert.throws(() => extractSingleMarker({ result: { python_logs: [
+    `${VISTA_STATE_MARKER}:${JSON.stringify(valid)}`,
+    `${VISTA_STATE_MARKER}:${JSON.stringify(valid)}`,
+  ] } }, VISTA_STATE_MARKER), /VISTA_MARKER_DUPLICATE/);
 });
