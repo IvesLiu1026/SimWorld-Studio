@@ -35,6 +35,27 @@ sudo chmod 0640 /etc/simworld/secrets/*
 Set the public origin, TURN DNS/IP, exact Git revision, and secret-file paths in
 `/etc/default/simworld`, following `deploy/aws/templates/simworld.env`.
 
+Before installing or changing any listener, run the machine-readable provision
+preflight as root from the reviewed, root-owned release tree:
+
+```bash
+cd /opt/simworld-studio
+set -a
+. /etc/default/simworld
+set +a
+sudo --preserve-env=STUDIO_PUBLIC_ORIGIN,TURN_PUBLIC_HOST,TURN_EXTERNAL_IP,SIMWORLD_RUNTIME_UID,SIMWORLD_RUNTIME_GID,SIMWORLD_SECRET_GID,TURN_CONFIG_GID,SIMWORLD_BUILD_REVISION,UE_POOL_SIZE,UE_PORT_STRIDE,UE_BASE_MCP_PORT,UE_BASE_CIRRUS_HTTP,UE_BASE_CIRRUS_WS,UE_BASE_CIRRUS_SFU,UE_BASE_UCV \
+  node deploy/aws/scripts/webrtc-deployment-preflight.js --phase provision \
+  | sudo tee /var/lib/simworld/evidence/webrtc-provision-preflight.json >/dev/null
+```
+
+The report contains no secret bytes. It fails closed on missing packages,
+unresolved or mismatched DNS, invalid numeric UID/GID bindings, an unpinned Git
+revision or dirty/non-root-owned release, public control-plane listeners,
+occupied TURN ports, or an existing `80/443` owner. Existing ingress is
+deliberately an administrator decision,
+not something the script replaces. `--skip-dns` is only useful for offline
+diagnosis and always leaves the DNS check blocked.
+
 This deployment tooling is Linux-only and requires `O_NOFOLLOW` and
 `O_DIRECTORY` semantics. Record the exact numeric `simworld` secret-group GID
 as `TURN_SHARED_SECRET_FILE_GID` whenever the TURN secret is `0640`. A
@@ -154,6 +175,23 @@ readiness still requires the deployment-pinned external receipt described in
 `webrtc-readiness-receipt.md`.
 
 ## 5. Firewall and listener audit
+
+After Nginx and Coturn are installed and configured, rerun the same tool with
+`--phase runtime`. Runtime mode requires root-level process attribution and
+verifies that Nginx owns public TCP `80/443`, Coturn owns public TCP/UDP `3478`
+and TCP/TLS `5349`, and the configured Node, asset-stack, Cirrus, MCP, SFU, and
+UnrealCV ports remain non-public. A passing host report is still not public
+readiness: DNS/TLS/firewall approval, external relay tests, interactive media
+evidence, and the signed readiness receipt remain separate gates.
+For that reason `host_runtime_ready: true` never changes the report's
+`production_ready: false`; only the separately validated readiness receipt may
+make the application readiness gate pass.
+
+```bash
+sudo --preserve-env=STUDIO_PUBLIC_ORIGIN,TURN_PUBLIC_HOST,TURN_EXTERNAL_IP,SIMWORLD_RUNTIME_UID,SIMWORLD_RUNTIME_GID,SIMWORLD_SECRET_GID,TURN_CONFIG_GID,SIMWORLD_BUILD_REVISION,UE_POOL_SIZE,UE_PORT_STRIDE,UE_BASE_MCP_PORT,UE_BASE_CIRRUS_HTTP,UE_BASE_CIRRUS_WS,UE_BASE_CIRRUS_SFU,UE_BASE_UCV \
+  node deploy/aws/scripts/webrtc-deployment-preflight.js --phase runtime \
+  | sudo tee /var/lib/simworld/evidence/webrtc-runtime-preflight.json >/dev/null
+```
 
 From the server, archive `ss -lntup` and the firewall/security-group export.
 Expected public listeners are only Nginx `80/443` and Coturn
