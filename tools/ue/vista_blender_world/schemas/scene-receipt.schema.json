@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.local/schemas/vista-blender-ue-scene-receipt-v1.json",
+  "title": "VISTA Blender UE scene receipt v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "error",
+    "bindings",
+    "source_map",
+    "output_map",
+    "removed_surrogates",
+    "generated_actors",
+    "lighting",
+    "runtime_layout",
+    "player_start_clearance",
+    "physics_prop",
+    "runtime_project_descriptor",
+    "actor_inventory",
+    "gates"
+  ],
+  "properties": {
+    "schema": {"const": "simworld.vista.blender-ue-scene-receipt/v1"},
+    "status": {
+      "enum": [
+        "saved_machine_candidate",
+        "partial_saved_quarantined",
+        "failed_unsaved_quarantined"
+      ]
+    },
+    "error": {"type": ["string", "null"], "maxLength": 1024},
+    "bindings": {"type": "object"},
+    "source_map": {"type": "object"},
+    "output_map": {"type": "object"},
+    "removed_surrogates": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "generated_actors": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/actorRecord"}
+    },
+    "lighting": {"type": "object"},
+    "runtime_layout": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/actorRecord"}
+    },
+    "player_start_clearance": {
+      "type": ["object", "null"],
+      "properties": {
+        "status": {"const": "passed"},
+        "pawn_class": {"type": "string", "minLength": 1},
+        "location_cm": {"$ref": "#/$defs/triple"},
+        "capsule_radius_cm": {"type": "number", "exclusiveMinimum": 0},
+        "capsule_half_height_cm": {"type": "number", "exclusiveMinimum": 0},
+        "blocking_actors": {"type": "array", "maxItems": 0}
+      },
+      "required": [
+        "status",
+        "pawn_class",
+        "location_cm",
+        "capsule_radius_cm",
+        "capsule_half_height_cm",
+        "blocking_actors"
+      ],
+      "additionalProperties": false
+    },
+    "physics_prop": {"type": ["object", "null"]},
+    "runtime_project_descriptor": {"type": ["object", "null"]},
+    "actor_inventory": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/actorRecord"}
+    },
+    "gates": {
+      "type": "object",
+      "required": [
+        "map_saved",
+        "source_map_immutable",
+        "generated_asset_coverage",
+        "physics_prop_configured",
+        "runtime_proof_tags",
+        "player_start_clearance",
+        "rendered_review",
+        "runtime_input",
+        "production_ready",
+        "semantic_index_eligible"
+      ],
+      "properties": {
+        "map_saved": {"enum": ["pending", "passed"]},
+        "source_map_immutable": {"enum": ["pending", "passed"]},
+        "generated_asset_coverage": {"enum": ["pending", "passed"]},
+        "physics_prop_configured": {"enum": ["pending", "passed"]},
+        "runtime_proof_tags": {"enum": ["pending", "passed"]},
+        "player_start_clearance": {"enum": ["pending", "passed"]},
+        "rendered_review": {"const": "pending"},
+        "runtime_input": {"const": "pending"},
+        "production_ready": {"const": false},
+        "semantic_index_eligible": {"const": false}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "saved_machine_candidate"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "error": {"type": "null"},
+          "bindings": {
+            "required": [
+              "engine",
+              "project",
+              "project_sha256",
+              "plan",
+              "plan_sha256",
+              "commandlet_script",
+              "commandlet_script_sha256",
+              "import_receipt",
+              "import_receipt_sha256",
+              "blender_manifest_sha256",
+              "generated_source_sha256"
+            ]
+          },
+          "source_map": {
+            "required": ["asset_path", "file", "sha256_before", "sha256_after"]
+          },
+          "output_map": {
+            "required": ["asset_path", "file", "bytes", "sha256", "save_succeeded"],
+            "properties": {
+              "asset_path": {"const": "/Game/VISTA/Scenes/MMG040_Office_BlenderR1"},
+              "file": {"type": "string", "minLength": 1},
+              "bytes": {"type": "integer", "minimum": 1},
+              "sha256": {"$ref": "#/$defs/sha256"},
+              "save_succeeded": {"const": true}
+            }
+          },
+          "generated_actors": {"minItems": 1},
+          "runtime_layout": {"minItems": 3},
+          "player_start_clearance": {"type": "object"},
+          "physics_prop": {"type": "object"},
+          "runtime_project_descriptor": {"type": "object"},
+          "actor_inventory": {"minItems": 1},
+          "gates": {
+            "properties": {
+              "map_saved": {"const": "passed"},
+              "source_map_immutable": {"const": "passed"},
+              "generated_asset_coverage": {"const": "passed"},
+              "physics_prop_configured": {"const": "passed"},
+              "runtime_proof_tags": {"const": "passed"},
+              "player_start_clearance": {"const": "passed"}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "triple": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number"},
+        {"type": "number"},
+        {"type": "number"}
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "actorRecord": {
+      "type": "object",
+      "required": [
+        "actor_id",
+        "label",
+        "actor_path",
+        "class_path",
+        "source_path",
+        "tags",
+        "transform"
+      ],
+      "properties": {
+        "actor_id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "actor_path": {"type": "string", "minLength": 1},
+        "class_path": {"type": "string", "minLength": 1},
+        "source_path": {"type": ["string", "null"]},
+        "tags": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true
+        },
+        "transform": {
+          "type": "object",
+          "required": ["location_cm", "rotation_deg", "scale"],
+          "properties": {
+            "location_cm": {"$ref": "#/$defs/triple"},
+            "rotation_deg": {"$ref": "#/$defs/triple"},
+            "scale": {"$ref": "#/$defs/triple"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

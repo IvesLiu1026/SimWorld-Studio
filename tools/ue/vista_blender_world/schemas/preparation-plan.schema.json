@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.local/schemas/vista-blender-ue-preparation-plan-v1.json",
+  "title": "VISTA Blender to UE preparation plan v1",
+  "type": "object",
+  "required": ["schema", "status", "policy", "source", "destination", "blender", "unreal"],
+  "properties": {
+    "schema": {"const": "simworld.vista.blender-ue-preparation-plan/v1"},
+    "status": {"const": "prepared_not_executed"},
+    "policy": {
+      "type": "object",
+      "required": [
+        "append_only",
+        "unreal_started",
+        "content_imported",
+        "scene_composed",
+        "network_listener_allowed",
+        "runtime_loopback_listener_allowed",
+        "studio_socket_fallback_allowed",
+        "canonical_or_archive_destination_allowed",
+        "r8_allowed"
+      ],
+      "properties": {
+        "append_only": {"const": true},
+        "unreal_started": {"const": false},
+        "content_imported": {"const": false},
+        "scene_composed": {"const": false},
+        "network_listener_allowed": {"const": false},
+        "runtime_loopback_listener_allowed": {"const": true},
+        "studio_socket_fallback_allowed": {"const": false},
+        "canonical_or_archive_destination_allowed": {"const": false},
+        "r8_allowed": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["revision", "project_root", "project_file", "project_sha256", "source_map", "source_map_file", "source_map_sha256", "snapshot"],
+      "properties": {
+        "revision": {"const": "disposable-project-r7"},
+        "project_root": {"type": "string", "pattern": "^/"},
+        "project_file": {"type": "string", "pattern": "^/"},
+        "project_sha256": {"$ref": "#/$defs/sha256"},
+        "source_map": {"const": "/Game/VISTA/Scenes/MMG040_Office_CommandletR3"},
+        "source_map_file": {"type": "string", "pattern": "^/"},
+        "source_map_sha256": {"$ref": "#/$defs/sha256"},
+        "snapshot": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "destination": {
+      "type": "object",
+      "required": ["run_root", "attempt_root", "project_root", "project_file", "plan_path", "import_receipt", "scene_receipt"],
+      "properties": {
+        "run_root": {"type": "string", "pattern": "^/"},
+        "attempt_root": {"type": "string", "pattern": "^/"},
+        "project_root": {"type": "string", "pattern": "^/"},
+        "project_file": {"type": "string", "pattern": "^/"},
+        "plan_path": {"type": "string", "pattern": "^/"},
+        "import_receipt": {"type": "string", "pattern": "^/"},
+        "scene_receipt": {"type": "string", "pattern": "^/"}
+      },
+      "additionalProperties": false
+    },
+    "blender": {
+      "type": "object",
+      "required": ["path", "sha256", "schema", "selected_import_source", "available_import_sources", "required_assets"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "schema": {"const": "simworld.vista.blender-asset-manifest/v1"},
+        "selected_import_source": {"$ref": "#/$defs/importSource"},
+        "available_import_sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/importSource"}},
+        "required_assets": {"type": "array", "minItems": 3, "maxItems": 3}
+      },
+      "additionalProperties": false
+    },
+    "unreal": {
+      "type": "object",
+      "required": ["engine", "route", "task_settings", "import_content_root", "source_map", "output_map", "scripts", "phases", "commands", "execution_gate"],
+      "properties": {
+        "route": {"const": "UnrealEditor-Cmd -run=pythonscript"},
+        "import_content_root": {"const": "/Game/VISTA/External/Procedural/MMG040OfficeR1"},
+        "source_map": {"const": "/Game/VISTA/Scenes/MMG040_Office_CommandletR3"},
+        "output_map": {"const": "/Game/VISTA/Scenes/MMG040_Office_BlenderR1"},
+        "engine": {"type": "object"},
+        "task_settings": {"type": "object"},
+        "scripts": {"type": "object"},
+        "phases": {"const": ["import", "compose"]},
+        "commands": {"type": "object"},
+        "execution_gate": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "importSource": {
+      "type": "object",
+      "required": ["path", "sha256", "bytes", "format"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "format": {"enum": ["glb", "gltf"]},
+        "media_type": {"type": ["string", "null"]},
+        "external_dependencies": {"type": "array"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

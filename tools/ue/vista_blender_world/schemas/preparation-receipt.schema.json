@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.local/schemas/vista-blender-ue-preparation-receipt-v1.json",
+  "title": "VISTA Blender to UE preparation receipt v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "prepared_at_utc",
+    "approval_ref_sha256",
+    "plan_sha256",
+    "source_tree_sha256_before",
+    "source_tree_sha256_after",
+    "destination_initial_tree_sha256",
+    "source_project_sha256",
+    "source_map_sha256",
+    "unreal_started",
+    "content_imported",
+    "scene_composed",
+    "network_used",
+    "publication_policy"
+  ],
+  "properties": {
+    "schema": {"const": "simworld.vista.blender-ue-preparation-receipt/v1"},
+    "status": {"const": "fresh_project_prepared"},
+    "prepared_at_utc": {"type": "string", "format": "date-time"},
+    "approval_ref_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "source_tree_sha256_before": {"$ref": "#/$defs/sha256"},
+    "source_tree_sha256_after": {"$ref": "#/$defs/sha256"},
+    "destination_initial_tree_sha256": {"$ref": "#/$defs/sha256"},
+    "source_project_sha256": {"$ref": "#/$defs/sha256"},
+    "source_map_sha256": {"$ref": "#/$defs/sha256"},
+    "unreal_started": {"const": false},
+    "content_imported": {"const": false},
+    "scene_composed": {"const": false},
+    "network_used": {"const": false},
+    "publication_policy": {"const": "atomic_non_overwriting"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+  "additionalProperties": false
+}

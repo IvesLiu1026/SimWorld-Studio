@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.local/schemas/vista-blender-ue-import-receipt-v1.json",
+  "title": "VISTA Blender UE import receipt v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "error",
+    "bindings",
+    "task",
+    "inventory",
+    "required_mesh_coverage",
+    "gates"
+  ],
+  "properties": {
+    "schema": {"const": "simworld.vista.blender-ue-import-receipt/v1"},
+    "status": {
+      "enum": [
+        "imported_inspected_candidate",
+        "partial_import_quarantined",
+        "failed_clean_quarantined"
+      ]
+    },
+    "error": {"type": ["string", "null"], "maxLength": 1024},
+    "bindings": {"type": "object"},
+    "task": {"type": "object"},
+    "inventory": {
+      "type": "object",
+      "required": ["objects", "static_meshes"],
+      "properties": {
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["class_path", "object_path"],
+            "properties": {
+              "class_path": {"type": "string", "minLength": 1},
+              "object_path": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "static_meshes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "source_mesh_name",
+              "object_path",
+              "bounds_dimensions_cm",
+              "material_slots",
+              "collision_generated_by_commandlet",
+              "simple_collision_shape_counts"
+            ],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "source_mesh_name": {"type": "string", "minLength": 1},
+              "object_path": {"type": "string", "minLength": 1},
+              "bounds_dimensions_cm": {"$ref": "#/$defs/nonnegativeTriple"},
+              "material_slots": {"type": "array"},
+              "collision_generated_by_commandlet": {"type": "boolean"},
+              "simple_collision_shape_counts": {"type": "object"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "required_mesh_coverage": {"type": "array"},
+    "gates": {
+      "type": "object",
+      "required": [
+        "machine_import_inventory",
+        "live_glb_commandlet_import",
+        "rendered_review",
+        "production_ready",
+        "semantic_index_eligible"
+      ],
+      "properties": {
+        "machine_import_inventory": {"enum": ["pending", "passed"]},
+        "live_glb_commandlet_import": {"enum": ["pending", "passed"]},
+        "rendered_review": {"const": "pending"},
+        "production_ready": {"const": false},
+        "semantic_index_eligible": {"const": false}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "imported_inspected_candidate"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "error": {"type": "null"},
+          "bindings": {
+            "required": [
+              "engine",
+              "project",
+              "project_sha256",
+              "plan",
+              "plan_sha256",
+              "commandlet_script",
+              "commandlet_script_sha256",
+              "import_source",
+              "import_source_format",
+              "import_source_sha256",
+              "blender_manifest",
+              "blender_manifest_sha256"
+            ]
+          },
+          "task": {
+            "required": ["attempted", "destination", "imported_object_paths", "returned_objects"],
+            "properties": {
+              "attempted": {"const": true},
+              "destination": {"const": "/Game/VISTA/External/Procedural/MMG040OfficeR1"},
+              "imported_object_paths": {"type": "array", "minItems": 1},
+              "returned_objects": {"type": "array", "minItems": 1}
+            }
+          },
+          "inventory": {
+            "properties": {
+              "objects": {"minItems": 1},
+              "static_meshes": {"minItems": 1}
+            }
+          },
+          "required_mesh_coverage": {"minItems": 1},
+          "gates": {
+            "properties": {
+              "machine_import_inventory": {"const": "passed"},
+              "live_glb_commandlet_import": {"const": "passed"}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonnegativeTriple": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": 0},
+        {"type": "number", "minimum": 0},
+        {"type": "number", "minimum": 0}
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "additionalProperties": false
+}
