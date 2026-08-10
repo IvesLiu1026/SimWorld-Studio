@@ -1,0 +1,4 @@
+interface:
+  display_name: "VISTA Blender Asset Forge"
+  short_description: "Build reproducible Blender assets for VISTA and Unreal"
+  default_prompt: "Use $vista-blender-asset-forge to generate, validate, and prepare a VISTA scene asset for Unreal Engine."
