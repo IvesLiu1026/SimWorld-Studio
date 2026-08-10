@@ -1,6 +1,6 @@
 # Handoff: VISTA Blender-to-Unreal Interactive World
 
-Status: Loopback vertical slice accepted — source committed locally, GitHub push pending; not Production
+Status: Loopback vertical slice accepted and branch published; not Production
 Updated: 2026-08-11
 
 ## Outcome so far
@@ -21,8 +21,8 @@ attempt-07 scene receipt remains an immutable machine-composition receipt with
 attempt-11 receipts below, not by rewriting that historical receipt.
 
 This is an accepted SSH-loopback development demo, not a public or Production
-deployment. The source implementation is committed locally; the documentation
-checkpoint and GitHub push are still pending and must not be claimed yet.
+deployment. The source implementation and evidence handoff are committed and
+published on the dedicated GitHub branch listed below.
 
 ## Source and Git identity
 
@@ -37,11 +37,14 @@ checkpoint and GitHub push are still pending and must not be claimed yet.
   - `3e1557ab` — hardened loopback Blender MCP lane
   - `91b5af94` — verified Blender-to-UE import and composition
   - `82f46f33` — isolated VISTA world runtime and browser-input proof
-- Current warning: this local branch still inherits
-  `origin/codex/semantic-production-adapter` as its upstream. It has not yet
-  been truthfully recorded as committed/pushed for this slice.
+- Documentation checkpoint: `017a693d`
+- Published branch:
+  `https://github.com/IvesLiu1026/SimWorld-Studio/tree/codex/vista-blender-world`
+- Review/compare URL:
+  `https://github.com/IvesLiu1026/SimWorld-Studio/compare/codex/semantic-production-adapter...codex/vista-blender-world`
+- Upstream: `origin/codex/vista-blender-world`
 
-After final validation and commits, correct and push it without force:
+The publication was performed without force using:
 
 ```bash
 cd /home/yhliu/SimWorld-Studio-worktrees/vista-blender-world
@@ -436,17 +439,13 @@ approval.
 - The loopback runtime and accepted final MCP probe are accepted. Final
   aggregate validation passed: 76 tests plus 17 subtests, Ruff, shell syntax,
   Python compile, schema/receipt checks, source secret scanning, and diff
-  checks are green. Documentation commit and GitHub push remain pending.
+  checks are green. The dedicated GitHub branch is published.
 
-## Final validation checklist for the coordinator
+## Publication record
 
-Before changing T10 and Git publication status to complete:
-
-1. Commit this reviewed spec/handoff checkpoint. Explicitly exclude attempts
-   06-11, all token files, `.playwright-cli/`, and the quarantined attempt-10
-   network trace.
-2. Correct the inherited upstream, push the branch without force, and record
-   the documentation commit plus the PR/compare URL here.
-3. Only then mark T10 complete and describe the branch as published. T8/T9 are
-   already complete for the bounded loopback slice and do not imply Production
-   readiness.
+T1-T10 are complete for the bounded loopback slice. The five reviewed commits
+through `017a693d` were pushed without force to the dedicated branch, and this
+closeout update is published as that branch's HEAD. Attempts 06-11, all token
+files, `.playwright-cli/`, and the quarantined attempt-10 network trace remain
+outside Git. This completion does not imply that the Production gaps above are
+closed.

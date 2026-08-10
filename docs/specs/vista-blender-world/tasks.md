@@ -1,6 +1,6 @@
 # Tasks: VISTA Blender-to-Unreal Interactive World
 
-Status: In progress — loopback runtime and release validation accepted; Git publication pending
+Status: Complete for the bounded loopback vertical slice; not Production
 Updated: 2026-08-11
 Depends on: requirements.md, design.md
 
@@ -116,15 +116,15 @@ Depends on: requirements.md, design.md
   - Validation: structured issue/repair ledger, cost/turn/time receipt, no P0
     deterministic or visible failures in the accepted attempt.
   - Result: accepted with zero Claude/VLM iterations and no repair loop. The
-    four retained attempt-11 views cover the complete Studio page, final UE
-    PlayerStart view, Blender room overview, and Blender chair detail; all are
+    four selected attempt-11 views cover the live Studio page, live Unreal
+    view, Blender room overview, and Blender chair detail; all are
     nonblank and show the detailed chair rather than the provisional proxy.
   - Honest boundary: this is a bounded manual/deterministic vertical-slice
     review, not a real Text/Visual Review provider result. The known bitmap-PBR
     and broader Production gaps remain documented and were not relabeled as
     fixed.
 
-- [ ] **T10. Validate, commit, push and write final handoff**
+- [x] **T10. Validate, commit, push and write final handoff**
   - Depends on: T3-T9
   - Requirements: R8
   - Validation: focused tests, frontend build if touched, `git diff --check`,
@@ -133,9 +133,12 @@ Depends on: requirements.md, design.md
     Python compile, JSON schema/receipt validation, source secret scanning and
     `git diff --check` all passed.
   - Local source commits: `fcfff03e`, `3e1557ab`, `91b5af94`, and `82f46f33`.
-  - Status: targeted source commits are complete. The documentation commit,
-    inherited-upstream correction, and GitHub push are still pending. Do not
-    report the branch as pushed yet.
+  - Publication: documentation checkpoint `017a693d` and the four source
+    commits were pushed without force to
+    `origin/codex/vista-blender-world`; the local branch now tracks that exact
+    remote branch.
+  - Compare URL:
+    `https://github.com/IvesLiu1026/SimWorld-Studio/compare/codex/semantic-production-adapter...codex/vista-blender-world`.
 
 ## Notes
 

@@ -9,8 +9,8 @@
   loopback Pixel Streaming evidence.
 - Current phase: attempt-07 supplies the authoritative import/map evidence and
   attempt-11 is the accepted, live loopback delivery runtime. Final aggregate
-  validation and four targeted source commits are complete; the documentation
-  commit, branch-upstream correction, and push remain pending.
+  validation, targeted commits, upstream correction, and GitHub branch
+  publication are complete.
 
 ## Ownership
 
@@ -25,7 +25,7 @@
 - Artifact root: append-only `/mnt/NAS2/yhliu/SimWorldStudio/vista-blender-world/runs/`.
 - Validation: requirements/design/tasks plus task-specific checks in `tasks.md`.
 - Handoff: `docs/specs/vista-blender-world/handoff.md` records the accepted
-  loopback runtime and must receive final commit IDs/compare URL after push.
+  loopback runtime, final commit IDs, and compare URL.
 
 ## Exact candidate and evidence roots
 
@@ -73,11 +73,10 @@ Completed machine gates:
 - four retained final/source views and bounded visual review;
 - accepted final Blender MCP probe on port `8400`.
 
-Still pending and therefore not claimable:
+Production follow-on work, still not claimable:
 
 - Production semantic index, public Coturn/WebRTC, real VLM review provider,
-  full character IK/fall/12-second timeline, or bitmap PBR completion;
-- corrected branch upstream and GitHub push.
+  full character IK/fall/12-second timeline, or bitmap PBR completion.
 
 ## Claude Code boundary
 
@@ -91,13 +90,11 @@ therefore intentionally launched with `--model-mode off`; this does not block
 the deterministic Blender/UE path, but the live NLP agent lane is unavailable
 until the user runs `claude login` and separately approves any paid review.
 
-## Immediate next steps for the coordinator
+## Coordinator handoff
 
 1. Preserve the one accepted attempt-11 runtime and final Blender MCP tmux; do
    not start a competing process on their assigned ports.
-2. Commit the reviewed handoff/spec files without staging `.playwright-cli/`
-   or any runtime artifact.
-3. Unset the incorrect inherited upstream and push
-   `codex/vista-blender-world` to the user fork without force.
-4. Add the final commit IDs and GitHub compare/PR URL to the handoff, then mark
-   T10 complete.
+2. Review or merge the published branch through
+   `https://github.com/IvesLiu1026/SimWorld-Studio/compare/codex/semantic-production-adapter...codex/vista-blender-world`.
+3. Keep `.playwright-cli/`, tokens, attempt directories, and other runtime
+   artifacts untracked.
