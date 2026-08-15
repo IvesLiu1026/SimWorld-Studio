@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 APP_NAME = "VISTA World"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SunshineConfigError(RuntimeError):
@@ -34,7 +36,15 @@ def load_apps(path: Path) -> dict[str, Any]:
     return payload
 
 
-def build_entry(*, python: Path, launcher: Path, profile: Path, working_dir: Path) -> dict[str, Any]:
+def build_entry(
+    *,
+    python: Path,
+    launcher: Path,
+    profile: Path,
+    working_dir: Path,
+    profile_sha256: str | None = None,
+    exit_timeout: int = 20,
+) -> dict[str, Any]:
     for value, label in (
         (python, "python"),
         (launcher, "launcher"),
@@ -43,9 +53,18 @@ def build_entry(*, python: Path, launcher: Path, profile: Path, working_dir: Pat
     ):
         if not value.is_absolute():
             raise SunshineConfigError(f"{label} path must be absolute")
-    command = shlex.join(
-        [str(python), str(launcher), "--profile", str(profile)]
-    )
+    if profile_sha256 is not None and SHA256_RE.fullmatch(profile_sha256) is None:
+        raise SunshineConfigError("profile SHA-256 must be lowercase hexadecimal")
+    if (
+        isinstance(exit_timeout, bool)
+        or not isinstance(exit_timeout, int)
+        or not 5 <= exit_timeout <= 300
+    ):
+        raise SunshineConfigError("exit timeout must be an integer from 5 through 300")
+    arguments = [str(python), str(launcher), "--profile", str(profile)]
+    if profile_sha256 is not None:
+        arguments.extend(["--profile-sha256", profile_sha256])
+    command = shlex.join(arguments)
     return {
         "name": APP_NAME,
         "cmd": command,
@@ -53,7 +72,7 @@ def build_entry(*, python: Path, launcher: Path, profile: Path, working_dir: Pat
         "image-path": "desktop.png",
         "auto-detach": "false",
         "wait-all": "true",
-        "exit-timeout": "20",
+        "exit-timeout": str(exit_timeout),
     }
 
 
@@ -103,6 +122,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--python", required=True, type=Path)
     result.add_argument("--launcher", required=True, type=Path)
     result.add_argument("--profile", required=True, type=Path)
+    result.add_argument("--profile-sha256")
+    result.add_argument("--exit-timeout", type=int, default=20)
     result.add_argument("--working-dir", required=True, type=Path)
     result.add_argument("--apply", action="store_true")
     return result
@@ -116,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
         launcher=args.launcher,
         profile=args.profile,
         working_dir=args.working_dir,
+        profile_sha256=args.profile_sha256,
+        exit_timeout=args.exit_timeout,
     )
     merged = merge_entry(current, entry)
     result: dict[str, Any] = {
