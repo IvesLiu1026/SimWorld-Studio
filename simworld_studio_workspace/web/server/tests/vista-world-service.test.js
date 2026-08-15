@@ -130,6 +130,123 @@ test("verified event start and reset use the fixed event transport", async () =>
   assert.equal(transport.calls[1].event_operation, "reset_event");
 });
 
+test("runtime generation mismatch resynchronizes the bounded session without advancing", async () => {
+  const transport = {
+    async send(payload) {
+      return {
+        command_id: payload.command_id,
+        status: "error",
+        code: "SESSION_GENERATION_MISMATCH",
+        session_generation: 3,
+      };
+    },
+  };
+  const service = createVistaWorldService({ catalog: fixtureCatalog(), transport });
+  const session = await service.createSession({ revision: "r1" }, IDENTITY);
+  await assert.rejects(
+    service.action(session.session_id, {
+      kind: "interaction",
+      generation: 0,
+      requester_semantic_id: "home.r1/player.01",
+      target_semantic_id: "home.r1/portal.entry-living.01",
+      affordance: "open",
+    }, IDENTITY),
+    (error) => error.code === "VISTA_WORLD_GENERATION_STALE"
+      && error.status === 409
+      && error.generation === 3,
+  );
+  const status = await service.status(session.session_id, IDENTITY);
+  assert.equal(status.generation, 3);
+  assert.equal(status.active_event, null);
+});
+
+test("runtime event failure neither advances generation nor changes active event", async () => {
+  const transport = {
+    async send(payload) {
+      return {
+        command_id: payload.command_id,
+        status: "error",
+        code: "EVENT_ID_NOT_FOUND",
+        session_generation: payload.session_generation,
+      };
+    },
+  };
+  const service = createVistaWorldService({ catalog: fixtureCatalog(), transport });
+  const session = await service.createSession({ revision: "r1" }, IDENTITY);
+  await assert.rejects(
+    service.startEvent(session.session_id, "mmg_044", { generation: 0 }, IDENTITY),
+    (error) => error.code === "VISTA_WORLD_ACTION_FAILED"
+      && error.generation === 0,
+  );
+  const status = await service.status(session.session_id, IDENTITY);
+  assert.equal(status.generation, 0);
+  assert.equal(status.active_event, null);
+});
+
+test("successful runtime response must advance by exactly one generation", async () => {
+  const transport = {
+    async send(payload) {
+      return {
+        command_id: payload.command_id,
+        status: "success",
+        code: "VISTA_WORLD_OK",
+        session_generation: payload.session_generation + 2,
+      };
+    },
+  };
+  const service = createVistaWorldService({ catalog: fixtureCatalog(), transport });
+  const session = await service.createSession({ revision: "r1" }, IDENTITY);
+  await assert.rejects(
+    service.action(session.session_id, {
+      kind: "interaction",
+      generation: 0,
+      requester_semantic_id: "home.r1/player.01",
+      target_semantic_id: "home.r1/portal.entry-living.01",
+      affordance: "open",
+    }, IDENTITY),
+    { code: "VISTA_WORLD_PROTOCOL_ERROR", generation: 0 },
+  );
+  assert.equal((await service.status(session.session_id, IDENTITY)).generation, 0);
+});
+
+test("runtime errors cannot roll session generation backward", async () => {
+  let responseGeneration = 2;
+  const transport = {
+    async send(payload) {
+      return {
+        command_id: payload.command_id,
+        status: "error",
+        code: "SESSION_GENERATION_MISMATCH",
+        session_generation: responseGeneration,
+      };
+    },
+  };
+  const service = createVistaWorldService({ catalog: fixtureCatalog(), transport });
+  const session = await service.createSession({ revision: "r1" }, IDENTITY);
+  await assert.rejects(
+    service.action(session.session_id, {
+      kind: "interaction",
+      generation: 0,
+      requester_semantic_id: "home.r1/player.01",
+      target_semantic_id: "home.r1/portal.entry-living.01",
+      affordance: "open",
+    }, IDENTITY),
+    { code: "VISTA_WORLD_GENERATION_STALE", generation: 2 },
+  );
+  responseGeneration = 1;
+  await assert.rejects(
+    service.action(session.session_id, {
+      kind: "interaction",
+      generation: 2,
+      requester_semantic_id: "home.r1/player.01",
+      target_semantic_id: "home.r1/portal.entry-living.01",
+      affordance: "open",
+    }, IDENTITY),
+    { code: "VISTA_WORLD_PROTOCOL_ERROR", generation: 2 },
+  );
+  assert.equal((await service.status(session.session_id, IDENTITY)).generation, 2);
+});
+
 test("session identity cannot be caller-swapped", async () => {
   const service = createVistaWorldService({ catalog: fixtureCatalog(), transport: fixtureTransport() });
   const session = await service.createSession({ revision: "r1" }, IDENTITY);

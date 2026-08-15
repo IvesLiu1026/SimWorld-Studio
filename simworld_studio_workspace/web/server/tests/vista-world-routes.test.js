@@ -100,3 +100,27 @@ test("router fails closed before service when active identity is absent", async 
   assert.equal(body.code, "VISTA_WORLD_ACCESS_INVALID");
   assert.equal(body.error, "An active Studio world session is required.");
 });
+
+test("router returns authoritative generation after a typed runtime conflict", async (t) => {
+  const service = fakeService();
+  service.action = async () => {
+    const error = new Error("runtime detail stays private");
+    error.code = "VISTA_WORLD_GENERATION_STALE";
+    error.status = 409;
+    error.generation = 7;
+    throw error;
+  };
+  const base = await withServer(t, service);
+  const response = await fetch(`${base}/sessions/vws-${"a".repeat(24)}/actions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: "The world session generation is stale.",
+    code: "VISTA_WORLD_GENERATION_STALE",
+    retryable: false,
+    generation: 7,
+  });
+});

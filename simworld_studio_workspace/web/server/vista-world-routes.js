@@ -14,6 +14,7 @@ const PUBLIC_MESSAGES = Object.freeze({
   VISTA_WORLD_EVENT_INCOMPATIBLE: "The event is incompatible with this world revision.",
   VISTA_WORLD_COMPILER_UNAVAILABLE: "The trusted VISTA world compiler is unavailable.",
   VISTA_WORLD_RUNTIME_UNAVAILABLE: "The typed Unreal world runtime is unavailable.",
+  VISTA_WORLD_ACTION_FAILED: "The typed Unreal world runtime rejected the action.",
   VISTA_WORLD_PROTOCOL_ERROR: "The typed Unreal world response is invalid.",
   VISTA_WORLD_CATALOG_INVALID: "The trusted VISTA world catalog is invalid.",
 });
@@ -27,6 +28,9 @@ function publicError(error) {
     error: PUBLIC_MESSAGES[code] || "VISTA world request failed.",
     code,
     retryable: Boolean(error && error.retryable),
+    ...(Number.isSafeInteger(error && error.generation) && error.generation >= 0
+      ? { generation: error.generation }
+      : {}),
   };
 }
 

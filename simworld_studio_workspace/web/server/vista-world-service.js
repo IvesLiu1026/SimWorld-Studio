@@ -18,12 +18,15 @@ const NPC_ACTION_TYPES = new Set([
 ]);
 
 class VistaWorldError extends Error {
-  constructor(code, message, { status = 400, retryable = false } = {}) {
+  constructor(code, message, { status = 400, retryable = false, generation } = {}) {
     super(message);
     this.name = "VistaWorldError";
     this.code = code;
     this.status = status;
     this.retryable = retryable;
+    if (Number.isSafeInteger(generation) && generation >= 0) {
+      this.generation = generation;
+    }
   }
 }
 
@@ -255,6 +258,35 @@ function normalizeNpcQueue(body, session) {
   };
 }
 
+function runtimeFailure(result, generation) {
+  const runtimeCode = typeof result.code === "string" ? result.code : "RUNTIME_ACTION_FAILED";
+  const mappings = new Map([
+    ["SESSION_GENERATION_MISMATCH", ["VISTA_WORLD_GENERATION_STALE", 409, false]],
+    ["REVISION_MISMATCH", ["VISTA_WORLD_SESSION_STALE", 409, false]],
+    ["REQUESTER_NOT_FOUND", ["VISTA_WORLD_NOT_FOUND", 404, false]],
+    ["TARGET_NOT_INTERACTABLE", ["VISTA_WORLD_NOT_FOUND", 404, false]],
+    ["PLACEMENT_ANCHOR_NOT_FOUND", ["VISTA_WORLD_NOT_FOUND", 404, false]],
+    ["NPC_CONTROLLER_NOT_FOUND", ["VISTA_WORLD_NOT_FOUND", 404, false]],
+    ["AFFORDANCE_UNSUPPORTED", ["VISTA_WORLD_ACTION_UNSUPPORTED", 400, false]],
+    ["EVENT_OPERATION_UNSUPPORTED", ["VISTA_WORLD_ACTION_UNSUPPORTED", 400, false]],
+    ["OPERATION_UNSUPPORTED", ["VISTA_WORLD_ACTION_UNSUPPORTED", 400, false]],
+    ["DISPATCH_TIMEOUT", ["VISTA_WORLD_RUNTIME_UNAVAILABLE", 503, true]],
+    ["DISPATCH_FAILED", ["VISTA_WORLD_RUNTIME_UNAVAILABLE", 503, true]],
+    ["RUNTIME_UNAVAILABLE", ["VISTA_WORLD_RUNTIME_UNAVAILABLE", 503, true]],
+  ]);
+  const [code, status, retryable] = mappings.get(runtimeCode)
+    || ["VISTA_WORLD_ACTION_FAILED", 409, false];
+  const error = new VistaWorldError(
+    code,
+    "Typed Unreal world runtime rejected the action",
+    { status, retryable, generation },
+  );
+  // Retain the bounded runtime code for server-side diagnostics. Routes expose
+  // only the stable public code and authoritative generation.
+  error.runtimeCode = runtimeCode;
+  return error;
+}
+
 function createVistaWorldService({ catalog, transport, compiler = null, now = () => Date.now() } = {}) {
   if (!catalog || typeof catalog.revision !== "function" || typeof catalog.event !== "function") {
     throw new TypeError("VISTA world catalog is required");
@@ -295,14 +327,41 @@ function createVistaWorldService({ catalog, transport, compiler = null, now = ()
       error.cause = rawError;
       throw error;
     }
-    if (!result || typeof result !== "object" || result.command_id !== payload.command_id
-        || !new Set(["completed", "accepted", "success"]).has(String(result.status))) {
+    const acceptedStatuses = new Set(["completed", "accepted", "success", "error"]);
+    if (!result || typeof result !== "object" || Array.isArray(result)
+        || result.command_id !== payload.command_id
+        || !acceptedStatuses.has(String(result.status))) {
       throw new VistaWorldError("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world response is invalid", { status: 502 });
     }
-    session.generation = Number.isSafeInteger(result.session_generation)
-      && result.session_generation > session.generation
-      ? result.session_generation
-      : session.generation + 1;
+    if (String(result.status) === "error") {
+      const runtimeCode = typeof result.code === "string" ? result.code : "";
+      const infrastructureFailure = new Set([
+        "DISPATCH_TIMEOUT", "DISPATCH_FAILED", "RUNTIME_UNAVAILABLE",
+      ]).has(runtimeCode);
+      if (!Number.isSafeInteger(result.session_generation)
+          || result.session_generation < session.generation) {
+        if (infrastructureFailure && result.session_generation === undefined) {
+          throw runtimeFailure(result, session.generation);
+        }
+        throw new VistaWorldError(
+          "VISTA_WORLD_PROTOCOL_ERROR",
+          "Typed Unreal world error generation is invalid",
+          { status: 502, generation: session.generation },
+        );
+      }
+      session.generation = result.session_generation;
+      session.updatedAt = now();
+      throw runtimeFailure(result, session.generation);
+    }
+    if (!Number.isSafeInteger(result.session_generation)
+        || result.session_generation !== session.generation + 1) {
+      throw new VistaWorldError(
+        "VISTA_WORLD_PROTOCOL_ERROR",
+        "Typed Unreal world response generation is invalid",
+        { status: 502, generation: session.generation },
+      );
+    }
+    session.generation = result.session_generation;
     session.updatedAt = now();
     return {
       schema: "simworld.vista.playable-world-command-result/v1",
