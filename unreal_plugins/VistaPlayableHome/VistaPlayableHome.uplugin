@@ -1,0 +1,25 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "VISTA Playable Home",
+  "Description": "Typed third-person interaction, indoor NPC, and resettable VISTA event runtime.",
+  "Category": "Simulation",
+  "CreatedBy": "SimWorld Studio",
+  "CanContainContent": true,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Plugins": [
+    {
+      "Name": "EnhancedInput",
+      "Enabled": true
+    }
+  ],
+  "Modules": [
+    {
+      "Name": "VistaPlayableHome",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ]
+}
