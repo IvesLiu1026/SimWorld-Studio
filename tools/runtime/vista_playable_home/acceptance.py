@@ -49,18 +49,25 @@ LOOPBACK_HOST = "127.0.0.1"
 
 PLAYER_ID = "home.r1/player.01"
 DOOR_ID = "home.r1/room.entry_hall/entity.interior_door.01"
+OFFICE_DOOR_ID = "home.r1/room.entry_hall/entity.interior_door.04"
 NPC_ID = "home.r1/room.entry_hall/entity.resident.01"
 LIVING_ANCHOR_ID = "home.r1/room.living_room/anchor.room_center"
+OFFICE_ANCHOR_ID = "home.r1/room.office/anchor.room_center"
 KEYS_ID = "home.r1/room.living_room/entity.keys.01"
 TABLETOP_RIGHT_ID = (
     "home.r1/room.living_room/entity.coffee_table.01/anchor.tabletop_right"
 )
+OFFICE_DESK_ANCHOR_ID = "home.r1/room.office/entity.desk.01/anchor.desktop"
 EVENT_IDS = ("mmg_001", "mmg_044", "mmg_045")
 DOOR_LOCATION_XY = (-150.0, -200.0)
-LIVING_CLEAR_TARGET_CM = (-480.0, -320.0, 10.0)
 LIVING_CLEAR_X_RANGE_CM = (-610.0, -330.0)
 LIVING_CLEAR_Y_RANGE_CM = (-360.0, -40.0)
 DOOR_CLEARANCE_RADIUS_CM = 220.0
+OFFICE_X_RANGE_CM = (150.0, 650.0)
+OFFICE_Y_RANGE_CM = (0.0, 400.0)
+TABLETOP_RIGHT_LOCATION_CM = (-365.0, -170.0, 48.0)
+OFFICE_DESK_LOCATION_CM = (520.0, 280.0, 76.0)
+PLACEMENT_TOLERANCE_CM = 2.0
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -675,6 +682,26 @@ def npc_is_living_room_door_clear(location: Sequence[float]) -> bool:
     )
 
 
+def npc_is_in_office(location: Sequence[float]) -> bool:
+    """Accept an NPC capsule center inside the declared office bounds."""
+
+    return (
+        len(location) >= 2
+        and OFFICE_X_RANGE_CM[0] <= location[0] <= OFFICE_X_RANGE_CM[1]
+        and OFFICE_Y_RANGE_CM[0] <= location[1] <= OFFICE_Y_RANGE_CM[1]
+    )
+
+
+def location_matches(
+    location: Sequence[float], expected: Sequence[float], tolerance_cm: float
+) -> bool:
+    return (
+        len(location) == len(expected) == 3
+        and all(abs(float(actual) - float(target)) <= tolerance_cm
+                for actual, target in zip(location, expected))
+    )
+
+
 def validate_state(value: Any, *, semantic_id: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != STATE_KEYS:
         _fail("STATE_INVALID", "runtime state fields differ")
@@ -857,22 +884,34 @@ class ProtocolSession:
             "replace": True,
             "actions": [
                 {
-                    "action_id": "acceptance.navigate.living",
+                    "action_id": "acceptance.navigate.keys",
                     "type": "navigate_to",
-                    "target_semantic_id": LIVING_ANCHOR_ID,
+                    "target_semantic_id": KEYS_ID,
                     "timeout_sec": 20.0,
                 },
                 {
-                    "action_id": "acceptance.navigate.living_clear",
-                    "type": "navigate_to",
-                    "target_location_cm": list(LIVING_CLEAR_TARGET_CM),
-                    "timeout_sec": 20.0,
+                    "action_id": "acceptance.pick_up.keys",
+                    "type": "pick_up",
+                    "target_semantic_id": KEYS_ID,
+                    "timeout_sec": 10.0,
                 },
                 {
-                    "action_id": "acceptance.wait.living",
+                    "action_id": "acceptance.navigate.office",
+                    "type": "navigate_to",
+                    "target_semantic_id": OFFICE_ANCHOR_ID,
+                    "timeout_sec": 25.0,
+                },
+                {
+                    "action_id": "acceptance.place.office_desk",
+                    "type": "place",
+                    "target_semantic_id": OFFICE_DESK_ANCHOR_ID,
+                    "timeout_sec": 10.0,
+                },
+                {
+                    "action_id": "acceptance.wait.office",
                     "type": "wait",
-                    "duration_sec": 10.0,
-                    "timeout_sec": 12.0,
+                    "duration_sec": 5.0,
+                    "timeout_sec": 7.0,
                 },
             ],
         }
@@ -954,55 +993,54 @@ def run_protocol(
     if door["values"].get("open") != "true":
         _fail("DOOR_STATE_MISMATCH", "door inspection did not preserve open=true", step="door.inspect_open")
 
-    npc_before = session.interaction(
-        "npc.preinspect",
-        target=NPC_ID,
+    office_door = session.interaction(
+        "office_door.close",
+        target=OFFICE_DOOR_ID,
+        affordance="close",
+        expected_code="DOOR_CLOSED",
+    )
+    if office_door["values"].get("open") != "false":
+        _fail(
+            "DOOR_STATE_MISMATCH",
+            "office door close mutation did not report open=false",
+            step="office_door.close",
+        )
+    office_door = session.interaction(
+        "office_door.inspect_closed",
+        target=OFFICE_DOOR_ID,
         affordance="inspect",
-        expected_code="NPC_INSPECTED",
+        expected_code="INSPECTED",
     )
-    before_location = _finite_vector(
-        npc_before["transform"]["location_cm"], "NPC baseline location_cm"
-    )
-    if npc_is_living_room_door_clear(before_location):
+    if office_door["values"].get("open") != "false":
         _fail(
-            "NPC_BASELINE_INVALID",
-            "NPC preinspection was already inside the living-room door-clear region",
-            step="npc.preinspect",
+            "DOOR_STATE_MISMATCH",
+            "office door inspection did not preserve open=false",
+            step="office_door.inspect_closed",
         )
-    session.npc_queue("npc.replace_queue")
-
-    deadline = monotonic() + npc_timeout_s
-    max_polls = max(1, math.ceil(npc_timeout_s / npc_poll_interval_s) + 1)
-    reached = False
-    for index in range(1, max_polls + 1):
-        if monotonic() > deadline:
-            break
-        state = session.interaction(
-            f"npc.inspect_poll.{index}",
-            target=NPC_ID,
-            affordance="inspect",
-            expected_code="NPC_INSPECTED",
-        )
-        location = _finite_vector(state["transform"]["location_cm"], "NPC location_cm")
-        if npc_is_living_room_door_clear(location):
-            reached = True
-            break
-        remaining = deadline - monotonic()
-        if remaining <= 0:
-            break
-        sleep(min(npc_poll_interval_s, remaining))
-    if not reached:
-        _fail(
-            "NPC_DESTINATION_TIMEOUT",
-            "NPC did not reach the living-room door-clear acceptance radius before its deadline",
-            step="npc.inspect_poll",
-        )
-
-    door = session.interaction(
-        "door.close", target=DOOR_ID, affordance="close", expected_code="DOOR_CLOSED"
+    office_door = session.interaction(
+        "office_door.open",
+        target=OFFICE_DOOR_ID,
+        affordance="open",
+        expected_code="DOOR_OPENED",
     )
-    if door["values"].get("open") != "false":
-        _fail("DOOR_STATE_MISMATCH", "door close mutation did not report open=false", step="door.close")
+    if office_door["values"].get("open") != "true":
+        _fail(
+            "DOOR_STATE_MISMATCH",
+            "office door open mutation did not report open=true",
+            step="office_door.open",
+        )
+    office_door = session.interaction(
+        "office_door.inspect_open",
+        target=OFFICE_DOOR_ID,
+        affordance="inspect",
+        expected_code="INSPECTED",
+    )
+    if office_door["values"].get("open") != "true":
+        _fail(
+            "DOOR_STATE_MISMATCH",
+            "office door inspection did not preserve open=true",
+            step="office_door.inspect_open",
+        )
 
     keys = session.interaction(
         "keys.pick_up", target=KEYS_ID, affordance="pick_up", expected_code="ITEM_PICKED_UP"
@@ -1011,6 +1049,7 @@ def run_protocol(
         keys.get("portable") is not True
         or keys["values"].get("held") != "true"
         or keys["values"].get("held_by") != PLAYER_ID
+        or keys["values"].get("placed_at", "") != ""
     ):
         _fail("KEYS_STATE_MISMATCH", "keys were not authoritatively held by the player", step="keys.pick_up")
     keys = session.interaction(
@@ -1028,8 +1067,115 @@ def run_protocol(
         expected_code="ITEM_PLACED",
         placement_anchor=TABLETOP_RIGHT_ID,
     )
-    if keys["values"].get("held") != "false" or keys["values"].get("held_by") != "":
-        _fail("KEYS_STATE_MISMATCH", "placed keys still report a carrier", step="keys.place_tabletop_right")
+    tabletop_location = _finite_vector(
+        keys["transform"]["location_cm"], "keys tabletop location_cm"
+    )
+    if (
+        keys["values"].get("held") != "false"
+        or keys["values"].get("held_by") != ""
+        or keys["values"].get("placed_at") != TABLETOP_RIGHT_ID
+        or not location_matches(
+            tabletop_location, TABLETOP_RIGHT_LOCATION_CM, PLACEMENT_TOLERANCE_CM
+        )
+    ):
+        _fail(
+            "KEYS_STATE_MISMATCH",
+            "player placement did not bind the exact tabletop-right semantic anchor",
+            step="keys.place_tabletop_right",
+        )
+
+    npc_before = session.interaction(
+        "npc.preinspect",
+        target=NPC_ID,
+        affordance="inspect",
+        expected_code="NPC_INSPECTED",
+    )
+    before_location = _finite_vector(
+        npc_before["transform"]["location_cm"], "NPC baseline location_cm"
+    )
+    if npc_is_living_room_door_clear(before_location) or npc_is_in_office(before_location):
+        _fail(
+            "NPC_BASELINE_INVALID",
+            "NPC preinspection was already in a destination acceptance region",
+            step="npc.preinspect",
+        )
+    session.npc_queue("npc.replace_queue")
+
+    deadline = monotonic() + npc_timeout_s
+    max_polls = max(1, math.ceil(npc_timeout_s / npc_poll_interval_s) + 1)
+    observed_carried = False
+    reached_office = False
+    placed_in_office = False
+    for index in range(1, max_polls + 1):
+        if monotonic() > deadline:
+            break
+        state = session.interaction(
+            f"npc.inspect_poll.{index}",
+            target=NPC_ID,
+            affordance="inspect",
+            expected_code="NPC_INSPECTED",
+        )
+        location = _finite_vector(state["transform"]["location_cm"], "NPC location_cm")
+        reached_office = reached_office or npc_is_in_office(location)
+        keys = session.interaction(
+            f"keys.inspect_cross_room_poll.{index}",
+            target=KEYS_ID,
+            affordance="inspect",
+            expected_code="INSPECTED",
+        )
+        held_by = keys["values"].get("held_by")
+        observed_carried = observed_carried or (
+            keys["values"].get("held") == "true" and held_by == NPC_ID
+        )
+        keys_location = _finite_vector(
+            keys["transform"]["location_cm"], "keys cross-room location_cm"
+        )
+        placed_in_office = (
+            reached_office
+            and keys["values"].get("held") == "false"
+            and held_by == ""
+            and keys["values"].get("placed_at") == OFFICE_DESK_ANCHOR_ID
+            and location_matches(
+                keys_location, OFFICE_DESK_LOCATION_CM, PLACEMENT_TOLERANCE_CM
+            )
+        )
+        if observed_carried and placed_in_office:
+            break
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            break
+        sleep(min(npc_poll_interval_s, remaining))
+    if not observed_carried:
+        _fail(
+            "NPC_CARRY_NOT_OBSERVED",
+            "keys were never authoritatively observed as held by the moving NPC",
+            step="keys.inspect_cross_room_poll",
+        )
+    if not reached_office or not placed_in_office:
+        _fail(
+            "NPC_DESTINATION_TIMEOUT",
+            "NPC did not carry and place the keys across the portal into the office before its deadline",
+            step="npc.inspect_poll",
+        )
+
+    door = session.interaction(
+        "door.close", target=DOOR_ID, affordance="close", expected_code="DOOR_CLOSED"
+    )
+    if door["values"].get("open") != "false":
+        _fail("DOOR_STATE_MISMATCH", "door close mutation did not report open=false", step="door.close")
+
+    office_door = session.interaction(
+        "office_door.close_after_crossing",
+        target=OFFICE_DOOR_ID,
+        affordance="close",
+        expected_code="DOOR_CLOSED",
+    )
+    if office_door["values"].get("open") != "false":
+        _fail(
+            "DOOR_STATE_MISMATCH",
+            "office door did not close after NPC crossing",
+            step="office_door.close_after_crossing",
+        )
 
     for event_id in EVENT_IDS:
         session.event(

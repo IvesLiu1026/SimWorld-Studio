@@ -54,6 +54,7 @@ class FakeVistaRuntime:
         hang_at: int | None = None,
         trickle_at: int | None = None,
         trickle_interval_s: float = 0.02,
+        stale_placement: bool = False,
     ) -> None:
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -66,10 +67,18 @@ class FakeVistaRuntime:
         self.hang_at = hang_at
         self.trickle_at = trickle_at
         self.trickle_interval_s = trickle_interval_s
+        self.stale_placement = stale_placement
         self.generation = 0
         self.active_event: str | None = None
-        self.door_open = False
-        self.keys_held = False
+        self.door_states = {
+            acceptance.DOOR_ID: False,
+            acceptance.OFFICE_DOOR_ID: True,
+        }
+        self.keys_held_by = ""
+        self.keys_placed_at = (
+            "home.r1/room.living_room/entity.coffee_table.01#tabletop_left"
+        )
+        self.keys_location = [-435.0, -170.0, 50.0]
         self.npc_queued = False
         self.npc_polls = 0
         self.requests: list[dict[str, Any]] = []
@@ -176,54 +185,80 @@ class FakeVistaRuntime:
                 raise AssertionError("interaction request fields differ")
             target = params["target_semantic_id"]
             affordance = params["affordance"]
-            if target == acceptance.DOOR_ID:
+            if target in self.door_states:
                 if affordance == "open":
-                    self.door_open = True
+                    self.door_states[target] = True
                     code = "DOOR_OPENED"
                 elif affordance == "close":
-                    self.door_open = False
+                    self.door_states[target] = False
                     code = "DOOR_CLOSED"
                 else:
                     code = "INSPECTED"
                 state = _state(
                     target,
-                    values={"visible": "true", "open": "true" if self.door_open else "false"},
+                    values={
+                        "visible": "true",
+                        "open": "true" if self.door_states[target] else "false",
+                    },
                 )
             elif target == acceptance.NPC_ID:
                 code = "NPC_INSPECTED"
                 if self.npc_queued:
                     self.npc_polls += 1
                     locations = (
-                        [-140.0, -60.0, 96.0],
-                        [-235.0, -205.0, 96.0],
-                        [-371.0, -270.0, 96.0],
+                        [-435.0, -170.0, 96.0],
+                        [0.0, 0.0, 96.0],
+                        [240.0, 200.0, 96.0],
                     )
                     location = locations[min(self.npc_polls, len(locations)) - 1]
+                    if self.npc_polls < 3:
+                        self.keys_held_by = acceptance.NPC_ID
+                        self.keys_placed_at = ""
+                        self.keys_location = list(location)
+                    else:
+                        self.keys_held_by = ""
+                        self.keys_placed_at = acceptance.OFFICE_DESK_ANCHOR_ID
+                        self.keys_location = list(acceptance.OFFICE_DESK_LOCATION_CM)
                 else:
-                    location = [260.0, 110.0, 96.0]
+                    location = [0.0, 0.0, 96.0]
                 state = _state(
                     target,
                     location=location,
-                    values={"current_room_id": "home.r1/room.living_room"},
+                    values={
+                        "current_room_id": (
+                            "home.r1/room.office"
+                            if acceptance.npc_is_in_office(location)
+                            else "home.r1/room.entry_hall"
+                        )
+                    },
                 )
             elif target == acceptance.KEYS_ID:
                 if affordance == "pick_up":
-                    self.keys_held = True
+                    self.keys_held_by = acceptance.PLAYER_ID
+                    self.keys_placed_at = ""
                     code = "ITEM_PICKED_UP"
                 elif affordance == "place":
                     if params["placement_anchor_semantic_id"] != acceptance.TABLETOP_RIGHT_ID:
                         raise AssertionError("placement anchor differs")
-                    self.keys_held = False
+                    self.keys_held_by = ""
+                    self.keys_placed_at = (
+                        "home.r1/room.living_room/entity.coffee_table.01#tabletop_left"
+                        if self.stale_placement
+                        else acceptance.TABLETOP_RIGHT_ID
+                    )
+                    self.keys_location = list(acceptance.TABLETOP_RIGHT_LOCATION_CM)
                     code = "ITEM_PLACED"
                 else:
                     code = "INSPECTED"
                 state = _state(
                     target,
+                    location=self.keys_location,
                     portable=True,
                     values={
                         "visible": "true",
-                        "held": "true" if self.keys_held else "false",
-                        "held_by": acceptance.PLAYER_ID if self.keys_held else "",
+                        "held": "true" if self.keys_held_by else "false",
+                        "held_by": self.keys_held_by,
+                        "placed_at": self.keys_placed_at,
                     },
                 )
             else:
@@ -401,6 +436,8 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         self.assertFalse(acceptance.npc_is_living_room_door_clear([-334.0, -252.0]))
         self.assertFalse(acceptance.npc_is_living_room_door_clear([-371.0, 100.0]))
         self.assertFalse(acceptance.npc_is_living_room_door_clear([-700.0, -270.0]))
+        self.assertTrue(acceptance.npc_is_in_office([240.0, 200.0]))
+        self.assertFalse(acceptance.npc_is_in_office([0.0, 0.0]))
 
     def test_full_tcp_sequence_writes_private_bound_acceptance(self) -> None:
         fixture = RuntimeAcceptanceFixture(self.root)
@@ -413,9 +450,9 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "accepted")
         self.assertIsNone(receipt["error"])
         self.assertEqual(receipt["initial_generation"], 0)
-        self.assertEqual(receipt["final_generation"], 17)
-        self.assertEqual(len(receipt["checks"]), 24)
-        self.assertEqual(len(server.requests), 24)
+        self.assertEqual(receipt["final_generation"], 25)
+        self.assertEqual(len(receipt["checks"]), 32)
+        self.assertEqual(len(server.requests), 32)
         self.assertEqual(stat.S_IMODE(fixture.output.stat().st_mode), 0o600)
         self.assertEqual(json.loads(fixture.output.read_text()), receipt)
 
@@ -433,7 +470,7 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         before_xy = preinspect["response"]["state"]["transform"]["location_cm"][:2]
         after_xy = final_poll["response"]["state"]["transform"]["location_cm"][:2]
         self.assertFalse(acceptance.npc_is_living_room_door_clear(before_xy))
-        self.assertTrue(acceptance.npc_is_living_room_door_clear(after_xy))
+        self.assertTrue(acceptance.npc_is_in_office(after_xy))
         queue = next(
             check for check in receipt["checks"] if check["step"] == "npc.replace_queue"
         )
@@ -441,25 +478,65 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
             queue["request"]["params"]["actions"],
             [
                 {
-                    "action_id": "acceptance.navigate.living",
+                    "action_id": "acceptance.navigate.keys",
                     "type": "navigate_to",
-                    "target_semantic_id": acceptance.LIVING_ANCHOR_ID,
+                    "target_semantic_id": acceptance.KEYS_ID,
                     "timeout_sec": 20.0,
                 },
                 {
-                    "action_id": "acceptance.navigate.living_clear",
-                    "type": "navigate_to",
-                    "target_location_cm": list(acceptance.LIVING_CLEAR_TARGET_CM),
-                    "timeout_sec": 20.0,
+                    "action_id": "acceptance.pick_up.keys",
+                    "type": "pick_up",
+                    "target_semantic_id": acceptance.KEYS_ID,
+                    "timeout_sec": 10.0,
                 },
                 {
-                    "action_id": "acceptance.wait.living",
+                    "action_id": "acceptance.navigate.office",
+                    "type": "navigate_to",
+                    "target_semantic_id": acceptance.OFFICE_ANCHOR_ID,
+                    "timeout_sec": 25.0,
+                },
+                {
+                    "action_id": "acceptance.place.office_desk",
+                    "type": "place",
+                    "target_semantic_id": acceptance.OFFICE_DESK_ANCHOR_ID,
+                    "timeout_sec": 10.0,
+                },
+                {
+                    "action_id": "acceptance.wait.office",
                     "type": "wait",
-                    "duration_sec": 10.0,
-                    "timeout_sec": 12.0,
+                    "duration_sec": 5.0,
+                    "timeout_sec": 7.0,
                 },
             ],
         )
+        held_poll = next(
+            check
+            for check in receipt["checks"]
+            if check["step"].startswith("keys.inspect_cross_room_poll.")
+            and check["response"]["state"]["values"]["held_by"] == acceptance.NPC_ID
+        )
+        self.assertEqual(held_poll["response"]["state"]["values"]["held"], "true")
+        final_keys = next(
+            check
+            for check in reversed(receipt["checks"])
+            if check["step"].startswith("keys.inspect_cross_room_poll.")
+        )
+        self.assertEqual(
+            final_keys["response"]["state"]["values"]["placed_at"],
+            acceptance.OFFICE_DESK_ANCHOR_ID,
+        )
+        self.assertEqual(
+            final_keys["response"]["state"]["transform"]["location_cm"],
+            list(acceptance.OFFICE_DESK_LOCATION_CM),
+        )
+        for step in (
+            "door.open",
+            "door.close",
+            "office_door.close",
+            "office_door.open",
+            "office_door.close_after_crossing",
+        ):
+            self.assertTrue(any(check["step"] == step for check in receipt["checks"]))
         event_steps = [check["step"] for check in receipt["checks"] if check["step"].startswith("event.")]
         for event_id in acceptance.EVENT_IDS:
             self.assertIn(f"event.{event_id}.start", event_steps)
@@ -475,6 +552,20 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
                     npc_poll_interval_s=0.01,
                 )
         self.assertEqual(caught.exception.code, "GENERATION_DRIFT")
+
+    def test_stale_placement_semantic_fails_closed(self) -> None:
+        with FakeVistaRuntime(stale_placement=True) as server:
+            with self.assertRaisesRegex(
+                acceptance.AcceptanceError, "exact tabletop-right semantic anchor"
+            ) as caught:
+                acceptance.run_protocol(
+                    server.port,
+                    socket_timeout_s=0.5,
+                    npc_timeout_s=1.0,
+                    npc_poll_interval_s=0.01,
+                )
+        self.assertEqual(caught.exception.code, "KEYS_STATE_MISMATCH")
+        self.assertEqual(caught.exception.step, "keys.place_tabletop_right")
 
     def test_bad_response_schema_fails_and_leaves_failure_receipt(self) -> None:
         fixture = RuntimeAcceptanceFixture(self.root)
