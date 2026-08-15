@@ -131,7 +131,12 @@ function createVistaWorldFileCatalog({ root } = {}) {
     event(eventId, revision) {
       requireString(eventId, EVENT_ID_RE, "event id");
       const event = safeJsonFile(resolvedRoot, path.join("events", `${eventId}.json`), "event");
-      const compatible = String(event.compatible_revision || event.house_revision || "");
+      const compatible = String(
+        event.compatible_revision
+        || event.house_revision
+        || (event.compatible_house && event.compatible_house.revision)
+        || "",
+      );
       if (compatible !== revision) {
         throw new VistaWorldError("VISTA_WORLD_EVENT_INCOMPATIBLE", "Event is incompatible with this world revision", { status: 409 });
       }

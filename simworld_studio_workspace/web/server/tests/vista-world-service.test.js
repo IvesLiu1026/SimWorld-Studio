@@ -143,7 +143,10 @@ test("file catalog is contained and excludes incompatible events", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vista-world-catalog-"));
   fs.mkdirSync(path.join(root, "events"));
   fs.writeFileSync(path.join(root, "house.json"), JSON.stringify({ house_id: "home.r1", revision: "r1" }));
-  fs.writeFileSync(path.join(root, "events", "mmg_044.json"), JSON.stringify({ event_id: "mmg_044", compatible_revision: "r1" }));
+  fs.writeFileSync(path.join(root, "events", "mmg_044.json"), JSON.stringify({
+    event_id: "mmg_044",
+    compatible_house: { house_id: "home.r1", revision: "r1" },
+  }));
   const catalog = createVistaWorldFileCatalog({ root });
   assert.equal(catalog.revision("r1").house_id, "home.r1");
   assert.equal(catalog.event("mmg_044", "r1").event_id, "mmg_044");
