@@ -18,6 +18,7 @@ from commandlet_common import (  # noqa: E402
     BUILTIN_URI_ALLOWLIST,
     IMPORT_MARKER,
     IMPORT_RECEIPT_SCHEMA,
+    IMPORT_RESULT_FILE,
     asset_name,
     canonical_path,
     derived_asset_path,
@@ -472,14 +473,21 @@ def run():
     }
     receipt_sha = write_exclusive_receipt(
         execution["import_receipt"], execution["attempt_root"], receipt)
-    marker = IMPORT_MARKER + json.dumps(
-        {
-            "status": status,
-            "receipt": execution["import_receipt"],
-            "sha256": receipt_sha,
-        },
-        sort_keys=True,
+    result = {
+        "status": status,
+        "receipt": execution["import_receipt"],
+        "sha256": receipt_sha,
+    }
+    # The Unreal commandlet keeps Python stdout in a different sink from its
+    # project log on some Linux builds.  Publish an fsync'd, O_EXCL handshake
+    # inside this fresh attempt so the host never has to infer success from a
+    # shutdown-time console line.
+    write_exclusive_receipt(
+        os.path.join(execution["attempt_root"], IMPORT_RESULT_FILE),
+        execution["attempt_root"],
+        result,
     )
+    marker = IMPORT_MARKER + json.dumps(result, sort_keys=True)
     # Unreal's embedded Python stdout is not guaranteed to be copied to the
     # commandlet log before shutdown.  The engine logger is the authoritative
     # transport; flushed stdout remains useful for compatible hosts.

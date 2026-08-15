@@ -137,6 +137,10 @@ def build_execution_manifest(
                 "path": str(pathlib.Path(__file__).with_name("compose_home_commandlet.py").resolve()),
                 "sha256": sha256_file(pathlib.Path(__file__).with_name("compose_home_commandlet.py")),
             },
+            "common": {
+                "path": str(pathlib.Path(__file__).with_name("commandlet_common.py").resolve()),
+                "sha256": sha256_file(pathlib.Path(__file__).with_name("commandlet_common.py")),
+            },
         },
         "import_receipt": str(import_output),
         "scene_receipt": str(scene_output),

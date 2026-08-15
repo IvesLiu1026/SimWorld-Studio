@@ -881,6 +881,108 @@ def test_run_command_accepts_marker_inside_unreal_log_prefix(tmp_path: pathlib.P
     assert marker == payload
 
 
+def test_run_command_prefers_exclusive_result_file(tmp_path: pathlib.Path) -> None:
+    payload = {"status": "ok", "receipt": "/tmp/receipt.json", "sha256": "b" * 64}
+    marker_path = tmp_path / "result.json"
+    script = (
+        "import json, os; "
+        f"raw=(json.dumps({payload!r}, sort_keys=True, separators=(',', ':'))+'\\n').encode(); "
+        f"fd=os.open({str(marker_path)!r}, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600); "
+        "os.write(fd, raw); os.fsync(fd); os.close(fd)"
+    )
+    marker = build_home._run_command(
+        phase="test",
+        argv=[sys.executable, "-c", script],
+        environment={},
+        log_path=tmp_path / "process.log",
+        marker_prefix="VISTA_TEST_RESULT:",
+        timeout_s=60,
+        marker_path=marker_path,
+    )
+    assert marker == payload
+
+
+def test_run_command_rejects_world_readable_result_file(tmp_path: pathlib.Path) -> None:
+    marker_path = tmp_path / "result.json"
+    script = (
+        "import json, os, pathlib; "
+        f"path=pathlib.Path({str(marker_path)!r}); "
+        "path.write_text(json.dumps({'status':'ok'}, separators=(',', ':'))+'\\n'); "
+        "os.chmod(path, 0o644)"
+    )
+    with pytest.raises(build_home.BuildHomeError, match="unsafe type, size, ownership, links, or permissions"):
+        build_home._run_command(
+            phase="test",
+            argv=[sys.executable, "-c", script],
+            environment={},
+            log_path=tmp_path / "process.log",
+            marker_prefix="VISTA_TEST_RESULT:",
+            timeout_s=60,
+            marker_path=marker_path,
+        )
+
+
+def test_run_command_does_not_fallback_when_bound_result_is_missing(tmp_path: pathlib.Path) -> None:
+    prefix = "VISTA_TEST_RESULT:"
+    payload = {"status": "stdout-only", "receipt": "/tmp/wrong", "sha256": "c" * 64}
+    script = f"import json; print({prefix!r}+json.dumps({payload!r}), flush=True)"
+    with pytest.raises(build_home.BuildHomeError, match="did not publish its result marker"):
+        build_home._run_command(
+            phase="test",
+            argv=[sys.executable, "-c", script],
+            environment={},
+            log_path=tmp_path / "process.log",
+            marker_prefix=prefix,
+            timeout_s=60,
+            marker_path=tmp_path / "missing-result.json",
+        )
+
+
+def test_run_command_uses_bound_result_over_conflicting_stdout(tmp_path: pathlib.Path) -> None:
+    prefix = "VISTA_TEST_RESULT:"
+    stdout_payload = {"status": "wrong", "receipt": "/tmp/wrong", "sha256": "d" * 64}
+    file_payload = {"status": "ok", "receipt": "/tmp/right", "sha256": "e" * 64}
+    marker_path = tmp_path / "result.json"
+    script = (
+        "import json, os; "
+        f"print({prefix!r}+json.dumps({stdout_payload!r}), flush=True); "
+        f"raw=(json.dumps({file_payload!r}, sort_keys=True, separators=(',', ':'))+'\\n').encode(); "
+        f"fd=os.open({str(marker_path)!r}, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600); "
+        "os.write(fd, raw); os.fsync(fd); os.close(fd)"
+    )
+    marker = build_home._run_command(
+        phase="test",
+        argv=[sys.executable, "-c", script],
+        environment={},
+        log_path=tmp_path / "process.log",
+        marker_prefix=prefix,
+        timeout_s=60,
+        marker_path=marker_path,
+    )
+    assert marker == file_payload
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"status": "wrong"},
+        {"receipt": "/tmp/wrong"},
+        {"sha256": "f" * 64},
+    ],
+)
+def test_verify_marker_rejects_wrong_binding(patch: dict[str, str]) -> None:
+    receipt = pathlib.Path("/tmp/right")
+    expected = {"status": "ok", "receipt": str(receipt), "sha256": "a" * 64}
+    with pytest.raises(build_home.BuildHomeError, match="marker disagrees"):
+        build_home._verify_marker(
+            {**expected, **patch},
+            status="ok",
+            receipt=receipt,
+            sha256="a" * 64,
+            phase="test",
+        )
+
+
 def test_source_is_static_and_does_not_accept_caller_python() -> None:
     path = ROOT / "tools/ue/vista_playable_home/build_home.py"
     source = path.read_text(encoding="utf-8")
@@ -889,4 +991,5 @@ def test_source_is_static_and_does_not_accept_caller_python() -> None:
     assert "shell=True" not in source
     assert 'with_name("import_assets_commandlet.py")' in source
     assert 'with_name("compose_home_commandlet.py")' in source
+    assert 'with_name("commandlet_common.py")' in source
     assert "hssd_contract.inspect_glb" in source

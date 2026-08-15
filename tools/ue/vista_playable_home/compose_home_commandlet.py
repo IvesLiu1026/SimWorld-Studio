@@ -13,6 +13,7 @@ from commandlet_common import (  # noqa: E402
     IMPORT_RECEIPT_SHA_ENV,
     SCENE_MARKER,
     SCENE_RECEIPT_SCHEMA,
+    SCENE_RESULT_FILE,
     canonical_path,
     load_build_plan,
     load_execution,
@@ -499,14 +500,17 @@ def run():
     }
     receipt_sha = write_exclusive_receipt(
         execution["scene_receipt"], execution["attempt_root"], receipt)
-    marker = SCENE_MARKER + json.dumps(
-        {
-            "status": status,
-            "receipt": execution["scene_receipt"],
-            "sha256": receipt_sha,
-        },
-        sort_keys=True,
+    result = {
+        "status": status,
+        "receipt": execution["scene_receipt"],
+        "sha256": receipt_sha,
+    }
+    write_exclusive_receipt(
+        os.path.join(execution["attempt_root"], SCENE_RESULT_FILE),
+        execution["attempt_root"],
+        result,
     )
+    marker = SCENE_MARKER + json.dumps(result, sort_keys=True)
     # Commandlets reliably retain engine log messages even when embedded
     # Python stdout is discarded during shutdown.
     unreal.log(marker)

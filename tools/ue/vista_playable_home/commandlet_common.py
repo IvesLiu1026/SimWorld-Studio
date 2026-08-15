@@ -18,6 +18,8 @@ EXECUTION_SHA_ENV = "VISTA_PLAYABLE_HOME_EXECUTION_SHA256"
 IMPORT_RECEIPT_SHA_ENV = "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256"
 IMPORT_MARKER = "VISTA_PLAYABLE_HOME_IMPORT_RESULT:"
 SCENE_MARKER = "VISTA_PLAYABLE_HOME_SCENE_RESULT:"
+IMPORT_RESULT_FILE = "import-result.json"
+SCENE_RESULT_FILE = "scene-result.json"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_PATH_PARTS = {
     "archive", "archives", "canonical", "production", "release", "releases",
@@ -124,7 +126,15 @@ def load_execution(script_kind: str, script_file: str) -> tuple[dict[str, Any], 
     composition = execution["composition_spec"]
     require(hashlib.sha256(canonical_json(composition)).hexdigest() == execution["composition_spec_sha256"],
             "composition spec digest mismatch")
-    script_contract = execution["scripts"][script_kind]
+    scripts = execution.get("scripts")
+    require(isinstance(scripts, dict) and set(scripts) == {"import", "compose", "common"},
+            "execution script pins differ")
+    common_contract = scripts["common"]
+    require(canonical_path(__file__) == canonical_path(common_contract["path"]),
+            "commandlet common helper identity mismatch")
+    require(sha256_file(__file__) == common_contract["sha256"],
+            "commandlet common helper digest mismatch")
+    script_contract = scripts[script_kind]
     require(canonical_path(script_file) == canonical_path(script_contract["path"]),
             "commandlet script identity mismatch")
     require(sha256_file(script_file) == script_contract["sha256"],

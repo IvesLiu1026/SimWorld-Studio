@@ -47,8 +47,10 @@ from tools.ue.vista_playable_home import contract, planning  # noqa: E402
 from tools.ue.vista_playable_home.commandlet_common import (  # noqa: E402
     IMPORT_MARKER,
     IMPORT_RECEIPT_SCHEMA,
+    IMPORT_RESULT_FILE,
     SCENE_MARKER,
     SCENE_RECEIPT_SCHEMA,
+    SCENE_RESULT_FILE,
     derived_asset_path,
 )
 from tools.worlds import playable_home as world_contract  # noqa: E402
@@ -1070,6 +1072,7 @@ def _planned_execution(
     scripts = {
         "import": Path(__file__).with_name("import_assets_commandlet.py").resolve(strict=True),
         "compose": Path(__file__).with_name("compose_home_commandlet.py").resolve(strict=True),
+        "common": Path(__file__).with_name("commandlet_common.py").resolve(strict=True),
     }
     value = {
         "schema_version": contract.EXECUTION_SCHEMA,
@@ -1184,6 +1187,7 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
                 "argv": _fixed_command(editor, project_path, Path(execution["scripts"]["import"]["path"])),
                 "env": common_env,
                 "log": str(attempt / "import.log"),
+                "result": str(attempt / IMPORT_RESULT_FILE),
                 "timeout_s": config.command_timeout_s,
             },
             {
@@ -1194,6 +1198,7 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
                     "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": "<sha256-from-verified-import-receipt>",
                 },
                 "log": str(attempt / "compose.log"),
+                "result": str(attempt / SCENE_RESULT_FILE),
                 "timeout_s": config.command_timeout_s,
             },
         ],
@@ -1620,6 +1625,7 @@ def _run_command(
     log_path: Path,
     marker_prefix: str,
     timeout_s: int,
+    marker_path: Path | None = None,
 ) -> dict[str, Any]:
     descriptor = os.open(
         log_path,
@@ -1657,6 +1663,74 @@ def _run_command(
         _fail("VISTA_HOME_BUILD_COMMAND_TIMEOUT", f"{phase} commandlet exceeded {timeout_s} seconds", pointer=str(log_path))
     if process is None or return_code != 0:
         _fail("VISTA_HOME_BUILD_COMMAND_FAILED", f"{phase} commandlet exited nonzero", pointer=str(log_path))
+    if marker_path is not None:
+        if marker_path.parent != log_path.parent:
+            _fail(
+                "VISTA_HOME_BUILD_MARKER_INVALID",
+                f"{phase} result marker must be beside its process log",
+                pointer=str(marker_path),
+            )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            marker_descriptor = os.open(marker_path, flags)
+        except FileNotFoundError:
+            _fail(
+                "VISTA_HOME_BUILD_MARKER_MISSING",
+                f"{phase} commandlet did not publish its result marker",
+                pointer=str(marker_path),
+            )
+        except OSError as exc:
+            _fail(
+                "VISTA_HOME_BUILD_MARKER_INVALID",
+                f"{phase} result marker cannot be opened safely: {exc}",
+                pointer=str(marker_path),
+            )
+        try:
+            metadata = os.fstat(marker_descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size > 4096
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_nlink != 1
+            ):
+                _fail(
+                    "VISTA_HOME_BUILD_MARKER_INVALID",
+                    f"{phase} result marker has unsafe type, size, ownership, links, or permissions",
+                    pointer=str(marker_path),
+                )
+            chunks: list[bytes] = []
+            remaining = metadata.st_size
+            while remaining:
+                block = os.read(marker_descriptor, remaining)
+                if not block:
+                    break
+                chunks.append(block)
+                remaining -= len(block)
+            raw = b"".join(chunks)
+        finally:
+            os.close(marker_descriptor)
+        if len(raw) != metadata.st_size:
+            _fail(
+                "VISTA_HOME_BUILD_MARKER_INVALID",
+                f"{phase} result marker changed or could not be read completely",
+                pointer=str(marker_path),
+            )
+        try:
+            marker = json.loads(raw)
+        except (UnicodeError, json.JSONDecodeError):
+            _fail(
+                "VISTA_HOME_BUILD_MARKER_INVALID",
+                f"{phase} result marker is not valid JSON",
+                pointer=str(marker_path),
+            )
+        if not isinstance(marker, dict) or canonical_json(marker) != raw:
+            _fail(
+                "VISTA_HOME_BUILD_MARKER_INVALID",
+                f"{phase} result marker is not canonical JSON",
+                pointer=str(marker_path),
+            )
+        return marker
     marker: dict[str, Any] | None = None
     prefix = marker_prefix.encode("utf-8")
     with log_path.open("rb") as log:
@@ -1772,6 +1846,7 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             log_path=attempt / "import.log",
             marker_prefix=IMPORT_MARKER,
             timeout_s=planned.config.command_timeout_s,
+            marker_path=attempt / IMPORT_RESULT_FILE,
         )
         import_receipt, import_sha = _load_receipt(
             import_receipt_path,
@@ -1800,6 +1875,7 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             log_path=attempt / "compose.log",
             marker_prefix=SCENE_MARKER,
             timeout_s=planned.config.command_timeout_s,
+            marker_path=attempt / SCENE_RESULT_FILE,
         )
         scene_receipt, scene_sha = _load_receipt(
             scene_receipt_path,
