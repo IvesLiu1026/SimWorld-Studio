@@ -158,28 +158,51 @@ def import_one(asset, binding, namespace, policies, room_shell=False):
             "source artifact pin mismatch")
     name = asset_name(asset["asset_id"])
     destination = namespace + "/Assets/" + name
-    task = unreal.AssetImportTask()
-    task.set_editor_property("filename", source)
-    task.set_editor_property("destination_path", destination)
-    task.set_editor_property("destination_name", name)
-    task.set_editor_property("automated", True)
-    task.set_editor_property("async_", False)
-    task.set_editor_property("replace_existing", False)
-    task.set_editor_property("replace_existing_settings", False)
-    task.set_editor_property("save", True)
-    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-    imported_paths = sorted(str(path) for path in list(task.get_editor_property("imported_object_paths") or []))
-    require(imported_paths, "asset import returned no object paths")
-    require(expected_path in imported_paths,
-            "import did not create the deterministic derived object path: " + expected_path)
-    imported_mesh_paths = [
-        path for path in imported_paths
-        if isinstance(unreal.load_asset(path), unreal.StaticMesh)
-    ]
-    require(imported_mesh_paths == [expected_path],
+    require(not unreal.EditorAssetLibrary.does_directory_exist(destination),
+            "asset destination already exists in fresh revision namespace")
+
+    # AssetTools.import_asset_tasks synchronizes the Content Browser after a
+    # successful Interchange import.  UE 5.7 Python commandlets intentionally
+    # have no Slate application, so that editor-only side effect asserts after
+    # the first asset.  Calling the public scripted Interchange manager avoids
+    # all Content Browser/UI code while retaining the same automated pipeline.
+    manager = unreal.InterchangeManager.get_interchange_manager_scripted()
+    source_data = unreal.InterchangeManager.create_source_data(source)
+    require(manager is not None and source_data is not None,
+            "Interchange manager or source data unavailable")
+    parameters = unreal.ImportAssetParameters()
+    parameters.set_editor_property("is_automated", True)
+    parameters.set_editor_property("follow_redirectors", False)
+    parameters.set_editor_property("destination_name", name)
+    parameters.set_editor_property("replace_existing", False)
+    parameters.set_editor_property("force_show_dialog", False)
+    imported_objects = list(manager.import_asset(destination, source_data, parameters) or [])
+    require(imported_objects, "Interchange import returned no objects")
+    raw_imported_paths = sorted(str(obj.get_path_name()) for obj in imported_objects if obj is not None)
+    imported_meshes = [obj for obj in imported_objects if isinstance(obj, unreal.StaticMesh)]
+    require(len(imported_meshes) == 1,
             "each source asset must import as exactly one combined primary StaticMesh")
+
+    # glTF Interchange pipelines may place the primary mesh below a generated
+    # StaticMeshes subfolder.  Move only that one mesh to the contract-derived
+    # object path; material/texture dependencies remain referenced in their
+    # private per-asset folder.  No caller controls either path.
+    mesh = imported_meshes[0]
+    raw_mesh_path = str(mesh.get_path_name())
+    expected_package_path = expected_path.rsplit(".", 1)[0]
+    if raw_mesh_path != expected_path:
+        require(unreal.EditorAssetLibrary.rename_asset(raw_mesh_path, expected_package_path),
+                "failed to move primary mesh to deterministic derived object path")
+    imported_paths = sorted(str(obj.get_path_name()) for obj in imported_objects if obj is not None)
+    imported_mesh_paths = sorted(
+        str(obj.get_path_name()) for obj in imported_objects
+        if isinstance(obj, unreal.StaticMesh)
+    )
+    require(imported_mesh_paths == [expected_path],
+            "primary StaticMesh path does not match deterministic contract")
     loaded = unreal.load_asset(expected_path)
-    require(loaded is not None, "derived imported object cannot be loaded")
+    require(isinstance(loaded, unreal.StaticMesh),
+            "derived imported StaticMesh cannot be loaded")
     return {
         "asset_id": asset["asset_id"],
         "source_kind": asset["source_kind"],
@@ -187,6 +210,7 @@ def import_one(asset, binding, namespace, policies, room_shell=False):
         "source_digest": asset["source_digest"],
         "source_file_sha256": binding["source_file_sha256"],
         "object_path": expected_path,
+        "raw_returned_object_paths": raw_imported_paths,
         "returned_object_paths": imported_paths,
         "inspection": inspect_asset(loaded, policies, True, room_shell=room_shell),
     }
