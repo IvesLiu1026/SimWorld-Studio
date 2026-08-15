@@ -27,6 +27,10 @@ function createVistaWorldUeAdapter({ resolveUeBroker, timeoutMs = 15_000 } = {})
       return broker.send(TOOL_NAME, payload, {
         timeoutMs,
         queueDeadlineMs: timeoutMs * 2,
+        // All operations on this boundary may mutate the live world. A
+        // transport timeout has an unknown outcome, so replay is forbidden.
+        maxAttempts: 1,
+        maxResponseBytes: 64 * 1024,
         ...(context && context.signal instanceof AbortSignal ? { signal: context.signal } : {}),
       });
     },

@@ -167,5 +167,7 @@ test("UE adapter uses one fixed tool and forwards no caller-selected command nam
   await adapter.send({ operation: "event", command_id: "vwc-" + "a".repeat(24) }, IDENTITY);
   assert.equal(calls[0].name, TOOL_NAME);
   assert.equal(calls[0].name, "vista_world_action");
+  assert.equal(calls[0].options.maxAttempts, 1);
+  assert.equal(calls[0].options.maxResponseBytes, 64 * 1024);
   await assert.rejects(adapter.send({ operation: "execute_python_script" }, IDENTITY));
 });
