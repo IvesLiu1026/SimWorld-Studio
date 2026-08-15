@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -331,4 +332,14 @@ test("production MCP lists typed world tools and sends no caller-controlled tran
   assert.equal(mcp.responses.get(4).result.isError, true);
   assert.equal(requests.length, 1, "invalid caller fields must never reach the broker");
   assert.doesNotMatch(JSON.stringify(mcp.responses.get(4)), /open\('\/secret'\)/);
+});
+
+test("internal broker pins mutation transport to one attempt and a bounded response", () => {
+  const source = fs.readFileSync(path.resolve(__dirname, "../index.js"), "utf8");
+  assert.match(source, /type==="vista_world_action"/);
+  assert.match(source, /\{timeoutMs:15000,queueDeadlineMs:30000,maxAttempts:1,maxResponseBytes:64\*1024\}/);
+  assert.doesNotMatch(
+    source,
+    /type==="vista_world_action"[\s\S]{0,240}maxAttempts:\s*(?:2|3|timeoutMs)/,
+  );
 });

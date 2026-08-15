@@ -565,7 +565,10 @@ app.post("/api/internal/ue",async(req,res)=>{
     return res.status(400).json({ok:false,error:"type required"});
   }
   try{
-    const result=await authorized.broker.send(type,params,{timeoutMs:typeof timeoutMs==="number"?timeoutMs:undefined});
+    const sendOptions=type==="vista_world_action"
+      ? {timeoutMs:15000,queueDeadlineMs:30000,maxAttempts:1,maxResponseBytes:64*1024}
+      : {timeoutMs:typeof timeoutMs==="number"?timeoutMs:undefined};
+    const result=await authorized.broker.send(type,params,sendOptions);
     res.json({ok:true,result});
   }catch(err){
     if(err&&err.retryAfterMs){
