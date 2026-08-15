@@ -60,6 +60,21 @@ void AVistaDoorActor::BeginPlay()
     ApplyDoorState(true);
 }
 
+void AVistaDoorActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    for (FVistaDoorwayTraversal& Traversal : ActiveDoorwayTraversals)
+    {
+        UPathFollowingComponent* PathFollowing = Traversal.PathFollowing.Get();
+        if (IsValid(PathFollowing) &&
+            PathFollowing->GetCurrentCustomLinkOb() == DoorwayLink)
+        {
+            PathFollowing->FinishUsingCustomLink(DoorwayLink);
+        }
+    }
+    ActiveDoorwayTraversals.Reset();
+    Super::EndPlay(EndPlayReason);
+}
+
 void AVistaDoorActor::ConfigureJambPivot()
 {
     const UStaticMesh* Mesh = DoorMesh->GetStaticMesh();
@@ -184,6 +199,10 @@ void AVistaDoorActor::HandleDoorwayLinkReached(
     UObject* PathingAgent,
     const FVector& Destination)
 {
+    if (!HasAuthority())
+    {
+        return;
+    }
     if (UPathFollowingComponent* PathFollowing =
             Cast<UPathFollowingComponent>(PathingAgent))
     {
@@ -227,12 +246,9 @@ void AVistaDoorActor::UpdateDoorwayTraversals(float DeltaSeconds)
         FVistaDoorwayTraversal& Traversal = ActiveDoorwayTraversals[Index];
         UPathFollowingComponent* PathFollowing = Traversal.PathFollowing.Get();
         APawn* MovingPawn = Traversal.Pawn.Get();
-        if (!IsValid(PathFollowing) || !IsValid(MovingPawn))
+        if (!IsValid(PathFollowing) || !IsValid(MovingPawn) ||
+            PathFollowing->GetCurrentCustomLinkOb() != DoorwayLink)
         {
-            if (IsValid(PathFollowing))
-            {
-                PathFollowing->FinishUsingCustomLink(DoorwayLink);
-            }
             ActiveDoorwayTraversals.RemoveAtSwap(Index);
             continue;
         }

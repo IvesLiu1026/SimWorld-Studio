@@ -392,6 +392,8 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("DoorwayLink->SetMoveReachedLink", source)
         self.assertIn("FinishUsingCustomLink", source)
         self.assertIn("UpdateDoorwayTraversals", source)
+        self.assertIn("GetCurrentCustomLinkOb()", source)
+        self.assertIn("ActiveDoorwayTraversals.Reset()", source)
         self.assertIn("VInterpConstantTo", source)
         self.assertIn("ETeleportType::TeleportPhysics", source)
         self.assertIn("ECollisionEnabled::NoCollision", source)
