@@ -512,6 +512,8 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("verify_legacy_input_mappings", compose_source)
         self.assertIn("LEGACY_AXIS_MAPPINGS.issubset", compose_source)
         self.assertIn("LEGACY_ACTION_MAPPINGS.issubset", compose_source)
+        self.assertIn('get_editor_property("key_name")', compose_source)
+        self.assertNotIn("str(item.key)", compose_source)
         self.assertNotIn("settings.save_key_mappings()", compose_source)
         self.assertNotIn("settings.save_config()", compose_source)
         self.assertIn('"phase": "configure_game_mode_input"', compose_source)

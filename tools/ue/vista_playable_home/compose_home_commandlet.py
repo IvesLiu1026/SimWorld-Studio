@@ -215,10 +215,21 @@ LEGACY_ACTION_MAPPINGS = {
 
 def verify_legacy_input_mappings():
     settings = unreal.InputSettings.get_input_settings()
-    existing_axes = {(str(item.axis_name), str(item.key), float(item.scale))
-                     for item in settings.get_editor_property("axis_mappings")}
-    existing_actions = {(str(item.action_name), str(item.key))
-                        for item in settings.get_editor_property("action_mappings")}
+    existing_axes = {
+        (
+            str(item.get_editor_property("axis_name")),
+            str(item.get_editor_property("key").get_editor_property("key_name")),
+            float(item.get_editor_property("scale")),
+        )
+        for item in settings.get_editor_property("axis_mappings")
+    }
+    existing_actions = {
+        (
+            str(item.get_editor_property("action_name")),
+            str(item.get_editor_property("key").get_editor_property("key_name")),
+        )
+        for item in settings.get_editor_property("action_mappings")
+    }
     require(LEGACY_AXIS_MAPPINGS.issubset(existing_axes),
             "DefaultInput.ini is missing required axis mappings")
     require(LEGACY_ACTION_MAPPINGS.issubset(existing_actions),
