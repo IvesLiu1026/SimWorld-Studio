@@ -172,6 +172,10 @@ PYTHONPATH=tools uv run --offline --project tools python \
 
 ## Final source validation
 
+- Collaboration branch: `origin/codex/vista-playable-home` in
+  `IvesLiu1026/SimWorld-Studio`; generated UE/Blender/runtime artifacts are not
+  committed. Pull-request entry:
+  `https://github.com/IvesLiu1026/SimWorld-Studio/pull/new/codex/vista-playable-home`.
 - Python VISTA Playable Home suite while the demo remained live:
   `125 passed, 44 subtests passed`.
 - Focused Node compile/route/service/MCP suite: `28 passed`.

@@ -190,12 +190,16 @@ Depends on: `requirements.md`, `design.md`
     six-room traversal, cross-room carry and a second live door interaction
     were not retained.
 
-- [ ] **T16. Commit, push and publish the collaboration handoff**
+- [x] **T16. Commit, push and publish the collaboration handoff**
   - Depends on: every completed task above.
   - Requirements: R11-R13.
   - Validation: atomic commits, explicit staging, tests/build summary, no
     secrets/generated projects, pushed `origin/codex/vista-playable-home`,
     exact Mac launch/stop instructions and residual administrator blockers.
+  - Evidence: source and evidence were committed with explicit staging and
+    pushed to `origin/codex/vista-playable-home`; `evidence.md` contains the
+    exact Mac/Tailnet lifecycle, test totals, artifact bindings and the sole
+    administrator input-device blocker. Generated projects remain on NAS.
 
 ## Residual Production Milestone
 
