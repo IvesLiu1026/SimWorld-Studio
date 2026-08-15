@@ -4,41 +4,96 @@
 from __future__ import annotations
 
 import argparse
-import json
+import stat
 import sys
 from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from tools.runtime.vista_playable_home import launch  # type: ignore
+    from tools.runtime.vista_playable_home import launch, profile as profile_contract  # type: ignore
 else:
-    from . import launch
+    from . import launch, profile as profile_contract
 
-ALLOWED_FIELDS = {
-    "workspace",
-    "project",
-    "ue_editor",
-    "map",
-    "display",
-    "gpu",
-    "vista_world_port",
-    "width",
-    "height",
-    "fps",
-    "nvidia_icd",
-    "nvidia_compat",
-}
+ALLOWED_FIELDS = profile_contract.PROFILE_FIELDS
+REQUIRED_FIELDS = profile_contract.PROFILE_REQUIRED_FIELDS
+MAX_PROFILE_BYTES = profile_contract.MAX_JSON_BYTES
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _profile_path(path: Path) -> Path:
+    candidate = Path(path)
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        raise ValueError("profile must be an absolute canonical path")
+    try:
+        metadata = candidate.lstat()
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("profile does not exist") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("profile must be a regular non-symlink file")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise ValueError("profile mode must be exactly 0600")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("profile identity could not be resolved") from exc
+    if resolved != candidate:
+        raise ValueError("profile must use its canonical file identity")
+    return resolved
+
+
+def _validate_payload(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ValueError("profile must be a JSON object")
+    unknown = set(payload) - ALLOWED_FIELDS
+    if unknown:
+        raise ValueError("profile contains unknown fields")
+    if not REQUIRED_FIELDS.issubset(payload):
+        raise ValueError("profile is missing required fields")
+    for field in profile_contract.PROFILE_PATH_FIELDS:
+        if field not in payload:
+            continue
+        value = payload[field]
+        if (
+            not isinstance(value, str)
+            or not value
+            or "\x00" in value
+            or not Path(value).is_absolute()
+            or ".." in Path(value).parts
+        ):
+            raise ValueError(f"profile field {field} must be an absolute path string")
+    for field in ("map", "display"):
+        if field in payload and (
+            not isinstance(payload[field], str)
+            or not payload[field]
+            or "\x00" in payload[field]
+        ):
+            raise ValueError(f"profile field {field} must be a non-empty string")
+    for field in profile_contract.PROFILE_INTEGER_FIELDS:
+        if field in payload and not _is_int(payload[field]):
+            raise ValueError(f"profile field {field} must be an integer")
+    return dict(payload)
 
 
 def load_profile(path: Path) -> list[str]:
-    if not path.is_absolute() or path.is_symlink() or not path.is_file():
-        raise ValueError("profile must be an absolute regular non-symlink file")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or set(payload) - ALLOWED_FIELDS:
-        raise ValueError("profile contains unknown fields")
-    required = {"workspace", "project", "ue_editor", "map"}
-    if not required.issubset(payload):
-        raise ValueError("profile is missing required fields")
+    profile_path = _profile_path(path)
+    try:
+        size = profile_path.stat().st_size
+        if size <= 0 or size > MAX_PROFILE_BYTES:
+            raise ValueError("profile size is outside its bound")
+        raw = profile_path.read_bytes()
+    except OSError as exc:
+        raise ValueError("profile could not be read") from exc
+    if len(raw) != size:
+        raise ValueError("profile changed while it was read")
+    try:
+        payload = _validate_payload(
+            profile_contract.strict_json_bytes(raw, label="profile")
+        )
+    except profile_contract.ProfileError as exc:
+        raise ValueError(str(exc)) from exc
     arguments: list[str] = []
     for field in (
         "workspace",
