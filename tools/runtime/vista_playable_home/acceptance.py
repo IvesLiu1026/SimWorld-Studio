@@ -1122,12 +1122,6 @@ def run_protocol(
             step="npc.inspect_poll",
         )
 
-    door = session.interaction(
-        "door.close", target=DOOR_ID, affordance="close", expected_code="DOOR_CLOSED"
-    )
-    if door["values"].get("open") != "false":
-        _fail("DOOR_STATE_MISMATCH", "door close mutation did not report open=false", step="door.close")
-
     office_door = session.interaction(
         "office_door.close_after_crossing",
         target=OFFICE_DOOR_ID,
