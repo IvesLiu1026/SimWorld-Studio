@@ -113,6 +113,11 @@ def static_mesh_component(actor):
     return components[0] if components else None
 
 
+def light_component(actor):
+    components = actor.get_components_by_class(unreal.LightComponentBase)
+    return components[0] if components else None
+
+
 def spawn(actor_subsystem, actor_class, value_transform, label, tags):
     actor = actor_subsystem.spawn_actor_from_class(
         actor_class,
@@ -337,10 +342,15 @@ def run():
     require(level_subsystem.new_level(map_path), "failed to create fresh target map")
     world = unreal.EditorLevelLibrary.get_editor_world()
     require(world is not None, "new map world unavailable")
+    world_settings = world.get_world_settings()
+    require(world_settings is not None, "new map world settings unavailable")
+    world_settings.set_editor_property("force_no_precomputed_lighting", True)
     created = []
     status = "failed_unsaved_quarantined"
     error = None
     reload_verified = False
+    dynamic_lighting_verified = False
+    deterministic_exposure_verified = False
     stage = {"phase": "compose_operations", "operation_id": None, "kind": None}
     try:
         for operation in spec["operations"]:
@@ -390,6 +400,14 @@ def run():
                 created.append(spawn(actor_subsystem, unreal.PlayerStart, operation["transform"],
                                      "VISTA_PlayerStart", operation["tags"]))
             elif kind == "place_lighting":
+                require(operation.get("profile") == "vista_playable_home_neutral_day_v2" and
+                        operation.get("light_mobility") == "movable",
+                        "unsupported lighting profile")
+                exposure = operation.get("exposure", {})
+                require(exposure.get("method") == "manual" and
+                        exposure.get("apply_physical_camera_exposure") is False and
+                        float(exposure.get("bias")) == -6.0,
+                        "unsupported exposure profile")
                 directional = actor_subsystem.spawn_actor_from_class(
                     unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 500.0),
                     unreal.Rotator(pitch=-35.0, yaw=-45.0, roll=0.0), transient=False)
@@ -398,6 +416,14 @@ def run():
                     unreal.Rotator(), transient=False)
                 directional.set_actor_label("VISTA_DirectionalLight")
                 skylight.set_actor_label("VISTA_SkyLight")
+                set_tags(directional, ["VistaRole=lighting"])
+                set_tags(skylight, ["VistaRole=lighting"])
+                directional_component = light_component(directional)
+                skylight_component = light_component(skylight)
+                require(directional_component is not None and skylight_component is not None,
+                        "failed to resolve deterministic environment lights")
+                directional_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+                skylight_component.set_mobility(unreal.ComponentMobility.MOVABLE)
                 created.extend([directional, skylight])
                 for light_spec in operation["indoor_lights"]:
                     point = actor_subsystem.spawn_actor_from_class(
@@ -405,8 +431,9 @@ def run():
                         unreal.Rotator(), transient=False)
                     require(point is not None, "failed to place deterministic indoor light")
                     point.set_actor_label(safe_label(light_spec["semantic_id"]))
-                    set_tags(point, light_spec["tags"])
+                    set_tags(point, list(light_spec["tags"]) + ["VistaRole=lighting"])
                     component = point.get_editor_property("point_light_component")
+                    component.set_mobility(unreal.ComponentMobility.MOVABLE)
                     component.set_editor_property("intensity", 3200.0)
                     component.set_editor_property(
                         "attenuation_radius", light_spec["attenuation_radius_cm"])
@@ -414,6 +441,26 @@ def run():
                     component.set_editor_property("temperature", 4000.0)
                     component.set_editor_property("cast_shadows", True)
                     created.append(point)
+                post = actor_subsystem.spawn_actor_from_class(
+                    unreal.PostProcessVolume, unreal.Vector(), unreal.Rotator(), transient=False)
+                require(post is not None, "failed to place deterministic post process")
+                post.set_actor_label("VISTA_PostProcess")
+                set_tags(post, ["VistaRole=post_process"])
+                post.set_editor_property("unbound", True)
+                post.set_editor_property("priority", 100.0)
+                post.set_editor_property("blend_weight", 1.0)
+                settings = post.get_editor_property("settings")
+                settings.set_editor_property("override_auto_exposure_method", True)
+                settings.set_editor_property(
+                    "auto_exposure_method", unreal.AutoExposureMethod.AEM_MANUAL)
+                settings.set_editor_property(
+                    "override_auto_exposure_apply_physical_camera_exposure", True)
+                settings.set_editor_property(
+                    "auto_exposure_apply_physical_camera_exposure", False)
+                settings.set_editor_property("override_auto_exposure_bias", True)
+                settings.set_editor_property("auto_exposure_bias", exposure["bias"])
+                post.set_editor_property("settings", settings)
+                created.append(post)
             elif kind == "configure_game_mode":
                 game_mode_path = assets[operation["game_mode"]["asset_id"]]["object_path"]
                 pawn_path = assets[operation["pawn"]["asset_id"]]["object_path"]
@@ -489,6 +536,44 @@ def run():
                 "reloaded map lost PlayerStart")
         require(any(isinstance(actor, unreal.NavMeshBoundsVolume) for actor in reloaded),
                 "reloaded map lost NavMesh bounds")
+        reloaded_world = unreal.EditorLevelLibrary.get_editor_world()
+        require(reloaded_world is not None and
+                reloaded_world.get_world_settings().get_editor_property(
+                    "force_no_precomputed_lighting"),
+                "reloaded map lost dynamic-lighting world policy")
+        vista_lights = [actor for actor in reloaded
+                        if unreal.Name("VistaRole=lighting") in
+                        actor.get_editor_property("tags")]
+        require(len(vista_lights) == 2 + len(next(
+                    operation for operation in spec["operations"]
+                    if operation["kind"] == "place_lighting")["indoor_lights"]),
+                "reloaded map lost VISTA lights")
+        require(all(light_component(actor) is not None and
+                    light_component(actor).get_editor_property("mobility") ==
+                    unreal.ComponentMobility.MOVABLE for actor in vista_lights),
+                "reloaded map contains a non-movable VISTA light")
+        post_volumes = [actor for actor in reloaded
+                        if unreal.Name("VistaRole=post_process") in
+                        actor.get_editor_property("tags")]
+        require(len(post_volumes) == 1 and
+                post_volumes[0].get_editor_property("unbound") and
+                float(post_volumes[0].get_editor_property("blend_weight")) == 1.0 and
+                float(post_volumes[0].get_editor_property("priority")) == 100.0,
+                "reloaded map lost unbound VISTA post process")
+        post_settings = post_volumes[0].get_editor_property("settings")
+        require(bool(post_settings.get_editor_property(
+                    "override_auto_exposure_method")) and
+                bool(post_settings.get_editor_property(
+                    "override_auto_exposure_apply_physical_camera_exposure")) and
+                bool(post_settings.get_editor_property("override_auto_exposure_bias")) and
+                post_settings.get_editor_property("auto_exposure_method") ==
+                unreal.AutoExposureMethod.AEM_MANUAL and
+                not bool(post_settings.get_editor_property(
+                    "auto_exposure_apply_physical_camera_exposure")) and
+                float(post_settings.get_editor_property("auto_exposure_bias")) == -6.0,
+                "reloaded map lost deterministic manual exposure")
+        dynamic_lighting_verified = True
+        deterministic_exposure_verified = True
         reload_verified = True
         status = "saved_reloaded_candidate"
     except Exception as exc:
@@ -526,6 +611,8 @@ def run():
             "player_start_verified": reload_verified,
             "game_mode_configured": reload_verified,
             "navmesh_bounds_verified": reload_verified,
+            "dynamic_lighting_verified": dynamic_lighting_verified,
+            "deterministic_exposure_verified": deterministic_exposure_verified,
             "quarantined": status != "saved_reloaded_candidate",
             "runtime_play_proof": "pending",
         },

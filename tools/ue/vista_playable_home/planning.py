@@ -430,7 +430,13 @@ def build_composition_spec(plan: Mapping[str, Any]) -> CompositionSpec:
             "event_plans": list(value["event_plans"]),
         }),
         _operation("configure_gameplay", "place_lighting", {
-            "profile": "vista_playable_home_neutral_day_v1",
+            "profile": "vista_playable_home_neutral_day_v2",
+            "light_mobility": "movable",
+            "exposure": {
+                "method": "manual",
+                "bias": -6.0,
+                "apply_physical_camera_exposure": False,
+            },
             "indoor_lights": indoor_lights,
         }),
         _operation("build_navigation", "place_navmesh_bounds", {

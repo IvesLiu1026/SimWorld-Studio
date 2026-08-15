@@ -977,6 +977,9 @@ def default_engine_ini(plan: Mapping[str, Any]) -> bytes:
         # the typed acceptance test proves that the NPC can traverse them.
         "RuntimeGeneration=Dynamic",
         "",
+        "[/Script/Engine.RendererSettings]",
+        "r.AllowStaticLighting=False",
+        "",
     ]
     return "\n".join(lines).encode("utf-8")
 

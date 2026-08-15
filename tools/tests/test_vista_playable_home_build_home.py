@@ -1000,3 +1000,5 @@ def test_project_uses_runtime_dynamic_navigation(fixture: Fixture) -> None:
     assert "[/Script/NavigationSystem.RecastNavMesh]" in raw
     assert "RuntimeGeneration=Dynamic\n" in raw
     assert "DynamicModifiersOnly" not in raw
+    assert "[/Script/Engine.RendererSettings]" in raw
+    assert "r.AllowStaticLighting=False\n" in raw

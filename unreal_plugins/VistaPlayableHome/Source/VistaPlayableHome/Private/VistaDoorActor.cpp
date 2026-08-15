@@ -66,21 +66,6 @@ void AVistaDoorActor::BeginPlay()
     ApplyDoorState(true);
 }
 
-void AVistaDoorActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
-{
-    for (FVistaDoorwayTraversal& Traversal : ActiveDoorwayTraversals)
-    {
-        UPathFollowingComponent* PathFollowing = Traversal.PathFollowing.Get();
-        if (IsValid(PathFollowing) &&
-            PathFollowing->GetCurrentCustomLinkOb() == DoorwayLink)
-        {
-            PathFollowing->FinishUsingCustomLink(DoorwayLink);
-        }
-    }
-    ActiveDoorwayTraversals.Reset();
-    Super::EndPlay(EndPlayReason);
-}
-
 void AVistaDoorActor::ConfigureJambPivot()
 {
     const UStaticMesh* Mesh = DoorMesh->GetStaticMesh();
@@ -102,7 +87,6 @@ void AVistaDoorActor::Tick(float DeltaSeconds)
     const FRotator Current = Hinge->GetRelativeRotation();
     Hinge->SetRelativeRotation(FMath::RInterpConstantTo(
         Current, TargetRotation, DeltaSeconds, AngularSpeedDegrees));
-    UpdateDoorwayTraversals(DeltaSeconds);
 }
 
 void AVistaDoorActor::GetLifetimeReplicatedProps(
@@ -205,80 +189,40 @@ void AVistaDoorActor::HandleDoorwayLinkReached(
     UObject* PathingAgent,
     const FVector& Destination)
 {
-    if (!HasAuthority())
+    UPathFollowingComponent* PathFollowing =
+        Cast<UPathFollowingComponent>(PathingAgent);
+    if (!IsValid(PathFollowing))
     {
         return;
     }
-    if (UPathFollowingComponent* PathFollowing =
-            Cast<UPathFollowingComponent>(PathingAgent))
+    if (!HasAuthority())
     {
-        AActor* PathOwner = PathFollowing->GetOwner();
-        APawn* MovingPawn = Cast<APawn>(PathOwner);
-        if (AController* Controller = Cast<AController>(PathOwner))
-        {
-            MovingPawn = Controller->GetPawn();
-        }
-        if (!IsValid(MovingPawn))
-        {
-            PathFollowing->FinishUsingCustomLink(LinkComponent);
-            return;
-        }
-
-        const FVector TraversalDestination(
-            Destination.X, Destination.Y, MovingPawn->GetActorLocation().Z);
-        FVistaDoorwayTraversal* Existing = ActiveDoorwayTraversals.FindByPredicate(
-            [PathFollowing](const FVistaDoorwayTraversal& Traversal)
-            {
-                return Traversal.PathFollowing.Get() == PathFollowing;
-            });
-        if (Existing)
-        {
-            Existing->Pawn = MovingPawn;
-            Existing->Destination = TraversalDestination;
-            return;
-        }
-
-        FVistaDoorwayTraversal& Traversal = ActiveDoorwayTraversals.AddDefaulted_GetRef();
-        Traversal.PathFollowing = PathFollowing;
-        Traversal.Pawn = MovingPawn;
-        Traversal.Destination = TraversalDestination;
+        // A bound smart-link delegate pauses PathFollowing even on a peer that
+        // cannot author movement.  Always release it to avoid a deadlock.
+        PathFollowing->FinishUsingCustomLink(LinkComponent);
+        return;
     }
-}
-
-void AVistaDoorActor::UpdateDoorwayTraversals(float DeltaSeconds)
-{
-    for (int32 Index = ActiveDoorwayTraversals.Num() - 1; Index >= 0; --Index)
+    AActor* PathOwner = PathFollowing->GetOwner();
+    APawn* MovingPawn = Cast<APawn>(PathOwner);
+    if (AController* Controller = Cast<AController>(PathOwner))
     {
-        FVistaDoorwayTraversal& Traversal = ActiveDoorwayTraversals[Index];
-        UPathFollowingComponent* PathFollowing = Traversal.PathFollowing.Get();
-        APawn* MovingPawn = Traversal.Pawn.Get();
-        if (!IsValid(PathFollowing) || !IsValid(MovingPawn) ||
-            PathFollowing->GetCurrentCustomLinkOb() != DoorwayLink)
-        {
-            ActiveDoorwayTraversals.RemoveAtSwap(Index);
-            continue;
-        }
-
-        const FVector CurrentLocation = MovingPawn->GetActorLocation();
-        const FVector NextLocation = FMath::VInterpConstantTo(
-            CurrentLocation,
-            Traversal.Destination,
-            DeltaSeconds,
-            DoorwayTraversalSpeedCmPerSecond);
-        // Door links bridge imported shells whose simple/complex collision can
-        // differ by asset.  The nav link is authoritative for this short,
-        // validated threshold traversal, so do not re-sweep the same wall.
-        MovingPawn->SetActorLocation(
-            NextLocation, false, nullptr, ETeleportType::TeleportPhysics);
-
-        if (FVector::DistSquared2D(NextLocation, Traversal.Destination) <= 4.0f)
-        {
-            MovingPawn->SetActorLocation(
-                Traversal.Destination, false, nullptr, ETeleportType::TeleportPhysics);
-            PathFollowing->FinishUsingCustomLink(DoorwayLink);
-            ActiveDoorwayTraversals.RemoveAtSwap(Index);
-        }
+        MovingPawn = Controller->GetPawn();
     }
+    if (!IsValid(MovingPawn))
+    {
+        PathFollowing->FinishUsingCustomLink(LinkComponent);
+        return;
+    }
+
+    const FVector TraversalDestination(
+        Destination.X, Destination.Y, MovingPawn->GetActorLocation().Z);
+    // Path following has already validated this enabled smart-link edge.
+    // Complete the short imported-shell threshold crossing atomically:
+    // sweeping here would collide with the same complex wall boundary that
+    // the link intentionally bridges and leave the AI paused until timeout.
+    MovingPawn->SetActorLocation(
+        TraversalDestination, false, nullptr, ETeleportType::TeleportPhysics);
+    PathFollowing->FinishUsingCustomLink(LinkComponent);
 }
 
 bool AVistaDoorActor::IsClosingObstructed() const

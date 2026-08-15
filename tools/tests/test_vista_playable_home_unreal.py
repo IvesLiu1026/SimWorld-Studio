@@ -194,6 +194,13 @@ class PlayableHomePlanningTests(unittest.TestCase):
         lighting = next(operation for operation in first.value["operations"]
                         if operation["kind"] == "place_lighting")
         self.assertEqual(len(lighting["indoor_lights"]), 1)
+        self.assertEqual(lighting["profile"], "vista_playable_home_neutral_day_v2")
+        self.assertEqual(lighting["light_mobility"], "movable")
+        self.assertEqual(lighting["exposure"], {
+            "method": "manual",
+            "bias": -6.0,
+            "apply_physical_camera_exposure": False,
+        })
         placement_anchor = next(operation for operation in first.value["operations"]
                                 if operation["kind"] == "place_placement_anchor")
         self.assertEqual(
@@ -398,10 +405,7 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertNotIn("CreateDefaultSubobject<UNavModifierComponent>", source)
         self.assertIn("DoorwayLink->SetMoveReachedLink", source)
         self.assertIn("FinishUsingCustomLink", source)
-        self.assertIn("UpdateDoorwayTraversals", source)
-        self.assertIn("GetCurrentCustomLinkOb()", source)
-        self.assertIn("ActiveDoorwayTraversals.Reset()", source)
-        self.assertIn("VInterpConstantTo", source)
+        self.assertIn("TraversalDestination", source)
         self.assertIn("ETeleportType::TeleportPhysics", source)
         self.assertIn("ECollisionEnabled::NoCollision", source)
         self.assertIn("UpdateActorInNavOctree", source)
@@ -416,6 +420,13 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn('TEXT("VistaSemanticId=")', source)
         self.assertIn('RuntimeStateValues.Find(TEXT("visible"))', source)
         self.assertIn("SessionGeneration = 0", source)
+        commandlet = (ROOT / "tools/ue/vista_playable_home/compose_home_commandlet.py").read_text()
+        self.assertIn("force_no_precomputed_lighting", commandlet)
+        self.assertIn("unreal.ComponentMobility.MOVABLE", commandlet)
+        self.assertIn("unreal.PostProcessVolume", commandlet)
+        self.assertIn("unreal.AutoExposureMethod.AEM_MANUAL", commandlet)
+        self.assertIn('"dynamic_lighting_verified"', commandlet)
+        self.assertIn('"deterministic_exposure_verified"', commandlet)
 
     def test_loopback_transport_is_fixed_and_bounded(self) -> None:
         source = (ROOT / "unreal_plugins/VistaPlayableHome/Source/VistaPlayableHome/Private/VistaWorldTcpAdapter.cpp").read_text()
