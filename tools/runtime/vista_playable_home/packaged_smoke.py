@@ -82,6 +82,8 @@ class SmokeInputs:
     pak_sha256: str
     archive_root: Path
     archive_tree_sha256: str
+    trusted_engine_root: Path
+    trusted_exemptions: tuple[Mapping[str, Any], ...]
     map_path: str
     output_dir: Path
     port: int
@@ -237,6 +239,72 @@ def validate_inputs(args: argparse.Namespace) -> SmokeInputs:
         raise PackagedSmokeError(
             "PACKAGE_ARCHIVE_INVALID", "package archive or secret-scan evidence differs"
         )
+    exemptions = secret_scan.get("trusted_upstream_exemptions")
+    if (
+        secret_scan.get("policy") != "high-confidence-credential-byte-patterns/v1"
+        or secret_scan.get("trusted_upstream_exemption_policy")
+        != "archive-Engine-path-and-byte-identical-pinned-engine-counterpart/v1"
+        or not isinstance(exemptions, list)
+        or secret_scan.get("trusted_upstream_exemption_count") != len(exemptions)
+    ):
+        raise PackagedSmokeError(
+            "PACKAGE_ARCHIVE_INVALID", "trusted-upstream exemption evidence differs"
+        )
+    allowed_rules = {name for name, _pattern in package_verifier.SECRET_PATTERNS}
+    normalized_exemptions: list[Mapping[str, Any]] = []
+    for exemption in exemptions:
+        if not isinstance(exemption, dict):
+            raise PackagedSmokeError(
+                "PACKAGE_ARCHIVE_INVALID", "trusted-upstream exemption is invalid"
+            )
+        archive_relative = exemption.get("archive_relative_path")
+        upstream_relative = exemption.get("upstream_relative_path")
+        rules = exemption.get("rules")
+        if (
+            exemption.get("policy")
+            != "byte-identical-pinned-engine-counterpart/v1"
+            or not isinstance(archive_relative, str)
+            or not archive_relative.startswith("Engine/")
+            or upstream_relative != archive_relative
+            or not isinstance(exemption.get("sha256"), str)
+            or SHA256_RE.fullmatch(exemption["sha256"]) is None
+            or not isinstance(rules, list)
+            or not rules
+            or rules != sorted(set(rules))
+            or not set(rules).issubset(allowed_rules)
+        ):
+            raise PackagedSmokeError(
+                "PACKAGE_ARCHIVE_INVALID", "trusted-upstream exemption is outside policy"
+            )
+        normalized_exemptions.append(dict(exemption))
+    if secret_scan.get("pattern_hits") != sum(
+        len(exemption["rules"]) for exemption in normalized_exemptions
+    ):
+        raise PackagedSmokeError(
+            "PACKAGE_ARCHIVE_INVALID", "trusted-upstream hit count differs"
+        )
+
+    trusted_upstream = _mapping(receipt.get("trusted_upstream"), "trusted upstream")
+    engine_root = _canonical_existing(
+        Path(str(trusted_upstream.get("engine_root", ""))),
+        "trusted engine root",
+        directory=True,
+    )
+    unreal_pak = _canonical_existing(
+        Path(str(trusted_upstream.get("unreal_pak", ""))), "trusted UnrealPak"
+    )
+    unreal_pak_sha = trusted_upstream.get("unreal_pak_sha256")
+    if (
+        trusted_upstream.get("policy")
+        != "engine-root-derived-from-pinned-unrealpak/v1"
+        or unreal_pak != engine_root / "Engine/Binaries/Linux/UnrealPak"
+        or not isinstance(unreal_pak_sha, str)
+        or SHA256_RE.fullmatch(unreal_pak_sha) is None
+        or not hmac.compare_digest(sha256_file(unreal_pak), unreal_pak_sha)
+    ):
+        raise PackagedSmokeError(
+            "TRUSTED_UPSTREAM_INVALID", "trusted engine binding differs"
+        )
     archive_root = _canonical_existing(root / "archive" / "Linux", "package archive", directory=True)
 
     executable_record = _mapping(artifacts.get("executable"), "executable artifact")
@@ -309,6 +377,8 @@ def validate_inputs(args: argparse.Namespace) -> SmokeInputs:
         pak_sha256=pak_sha,
         archive_root=archive_root,
         archive_tree_sha256=tree_sha,
+        trusted_engine_root=engine_root,
+        trusted_exemptions=tuple(normalized_exemptions),
         map_path=str(map_path),
         output_dir=output,
         port=port,
@@ -375,14 +445,19 @@ def verify_sealed_archive(inputs: SmokeInputs) -> dict[str, Any]:
     """Recompute the sealed archive without trusting the earlier receipt."""
 
     try:
-        observation = package_verifier.inspect_archive(inputs.archive_root)
+        observation = package_verifier.inspect_archive(
+            inputs.archive_root, trusted_engine_root=inputs.trusted_engine_root
+        )
     except package_verifier.PackageReceiptError as exc:
         raise PackagedSmokeError(
             "PACKAGE_ARCHIVE_DRIFT", "package archive could not be reverified"
         ) from exc
+    observed_scan = _mapping(observation.get("secret_scan"), "live secret scan")
     if (
         observation.get("tree_sha256") != inputs.archive_tree_sha256
-        or _mapping(observation.get("secret_scan"), "live secret scan").get("matches") != 0
+        or observed_scan.get("matches") != 0
+        or observed_scan.get("trusted_upstream_exemptions")
+        != [dict(value) for value in inputs.trusted_exemptions]
         or not hmac.compare_digest(sha256_file(inputs.launcher), inputs.launcher_sha256)
         or not hmac.compare_digest(sha256_file(inputs.executable), inputs.executable_sha256)
         or not hmac.compare_digest(sha256_file(inputs.pak), inputs.pak_sha256)
@@ -395,6 +470,7 @@ def verify_sealed_archive(inputs: SmokeInputs) -> dict[str, Any]:
         "file_count": observation["file_count"],
         "total_bytes": observation["total_bytes"],
         "secret_matches": 0,
+        "trusted_upstream_exemption_count": len(inputs.trusted_exemptions),
     }
 
 

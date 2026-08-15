@@ -127,7 +127,8 @@ class PackageReceiptTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self.unreal_pak = base / "UnrealPak"
+        self.unreal_pak = base / "UE" / "Engine" / "Binaries" / "Linux" / "UnrealPak"
+        self.unreal_pak.parent.mkdir(parents=True)
         self.unreal_pak.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.unreal_pak.chmod(0o700)
 
@@ -172,6 +173,14 @@ class PackageReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["bindings"]["source_commit"], "a" * 40)
         self.assertEqual(receipt["bindings"]["map_path"], package.EXPECTED_MAP_PATH)
         self.assertEqual(receipt["archive"]["secret_scan"]["matches"], 0)
+        self.assertEqual(
+            receipt["trusted_upstream"]["engine_root"],
+            str(self.unreal_pak.parents[3]),
+        )
+        self.assertEqual(
+            receipt["trusted_upstream"]["unreal_pak_sha256"],
+            package.sha256_file(self.unreal_pak),
+        )
         self.assertEqual(receipt["tools"]["ldd"]["missing"], 0)
         self.assertTrue(receipt["tools"]["unreal_pak"]["map_entry"].endswith("VistaPlayableHome.umap"))
         self.assertEqual(receipt_sha, package.sha256_file(inputs.output))
@@ -304,6 +313,46 @@ class PackageReceiptTests(unittest.TestCase):
         link.symlink_to(self.launcher)
         with self.assertRaisesRegex(package.PackageReceiptError, "ARCHIVE_(?:ENTRY|SYMLINK)_REFUSED"):
             package.inspect_archive(self.archive)
+
+    def test_byte_identical_engine_false_positive_has_bounded_exemption(self) -> None:
+        relative = pathlib.Path(
+            "Engine/Binaries/ThirdParty/Vulkan/Linux/libVkLayer_khronos_validation.so"
+        )
+        archived = self.archive / relative
+        upstream = self.unreal_pak.parents[3] / relative
+        archived.parent.mkdir(parents=True)
+        upstream.parent.mkdir(parents=True)
+        token_like_bytes = b"trusted-engine-fixture\x00sk-" + b"A" * 40 + b"\x00"
+        archived.write_bytes(token_like_bytes)
+        upstream.write_bytes(token_like_bytes)
+
+        observation = package.inspect_archive(
+            self.archive, trusted_engine_root=self.unreal_pak.parents[3]
+        )
+        scan = observation["secret_scan"]
+        self.assertEqual(scan["matches"], 0)
+        self.assertEqual(scan["pattern_hits"], 1)
+        self.assertEqual(scan["trusted_upstream_exemption_count"], 1)
+        exemption = scan["trusted_upstream_exemptions"][0]
+        self.assertEqual(exemption["archive_relative_path"], relative.as_posix())
+        self.assertEqual(exemption["upstream_relative_path"], relative.as_posix())
+        self.assertEqual(exemption["rules"], ["openai_token"])
+        self.assertNotIn((b"sk-" + b"A" * 40).decode(), json.dumps(exemption))
+
+        archived.write_bytes(token_like_bytes + b"modified")
+        with self.assertRaisesRegex(package.PackageReceiptError, "SECRET_SCAN_FAILED"):
+            package.inspect_archive(
+                self.archive, trusted_engine_root=self.unreal_pak.parents[3]
+            )
+
+    def test_engine_path_exemption_never_applies_to_package_content(self) -> None:
+        project_file = self.archive / "VistaPlayableHome" / "Config" / "Runtime.ini"
+        project_file.parent.mkdir(parents=True)
+        project_file.write_bytes(b"sk-" + b"B" * 40)
+        with self.assertRaisesRegex(package.PackageReceiptError, "SECRET_SCAN_FAILED"):
+            package.inspect_archive(
+                self.archive, trusted_engine_root=self.unreal_pak.parents[3]
+            )
 
     def test_archive_walk_error_is_not_silently_accepted(self) -> None:
         def broken_walk(*_args, **kwargs):

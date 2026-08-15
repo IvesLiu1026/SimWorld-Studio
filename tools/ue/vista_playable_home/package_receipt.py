@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Verify one fixed Linux Development package and seal an immutable receipt.
 
-This verifier is intentionally narrow.  It consumes the canonical
-``package-linux-development/attempt-01`` layout, binds it to the accepted UE
-scene-build result, and invokes only four fixed local inspection tools.  It
-does not build, launch, extract, upload, or modify the package.
+This verifier is intentionally narrow.  It consumes one append-only
+``package-linux-development/attempt-<id>`` layout, binds it to the accepted UE
+scene-build result, and invokes only fixed local inspection tools.  It does
+not build, launch, extract, upload, or modify the package.
 """
 
 from __future__ import annotations
@@ -106,6 +106,7 @@ class PackageInputs:
     source_commit: str
     map_path: str
     unreal_pak: Path
+    engine_root: Path
     uat_log: Path
     archive_root: Path
     launcher: Path
@@ -316,9 +317,23 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
         )
 
     unreal_pak = _canonical_existing(Path(args.unreal_pak), "UnrealPak")
-    if unreal_pak.name != "UnrealPak" or not os.access(unreal_pak, os.X_OK):
+    if len(unreal_pak.parents) < 4:
         raise PackageReceiptError(
-            "UNREALPAK_INVALID", "UnrealPak must be an executable named UnrealPak"
+            "UNREALPAK_INVALID",
+            "UnrealPak must be the pinned Engine/Binaries/Linux/UnrealPak",
+        )
+    engine_root = unreal_pak.parents[3]
+    expected_unreal_pak = engine_root / "Engine/Binaries/Linux/UnrealPak"
+    if (
+        unreal_pak.name != "UnrealPak"
+        or unreal_pak != expected_unreal_pak
+        or not engine_root.is_dir()
+        or engine_root.is_symlink()
+        or not os.access(unreal_pak, os.X_OK)
+    ):
+        raise PackageReceiptError(
+            "UNREALPAK_INVALID",
+            "UnrealPak must be the pinned Engine/Binaries/Linux/UnrealPak",
         )
 
     archive_root = _exact_child(root, Path("archive/Linux"), "archive root", directory=True)
@@ -345,6 +360,7 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
         source_commit=commit,
         map_path=map_path,
         unreal_pak=unreal_pak,
+        engine_root=engine_root,
         uat_log=uat_log,
         archive_root=archive_root,
         launcher=launcher,
@@ -693,11 +709,56 @@ def _archive_files(root: Path) -> list[Path]:
     return sorted(output, key=lambda path: path.relative_to(root).as_posix().encode("utf-8"))
 
 
-def inspect_archive(root: Path) -> dict[str, Any]:
+def _trusted_engine_exemption(
+    *,
+    root: Path,
+    path: Path,
+    relative: str,
+    archive_sha256: str,
+    rules: set[str],
+    trusted_engine_root: Path | None,
+) -> dict[str, Any]:
+    relative_path = Path(relative)
+    if trusted_engine_root is None or not relative_path.parts or relative_path.parts[0] != "Engine":
+        raise PackageReceiptError(
+            "SECRET_SCAN_FAILED", "package-specific archive content matched a secret rule"
+        )
+    engine_root = _canonical_existing(
+        trusted_engine_root, "trusted engine root", directory=True
+    )
+    upstream = _canonical_existing(
+        engine_root / relative_path, "trusted engine counterpart"
+    )
+    try:
+        upstream.relative_to(engine_root)
+    except ValueError as exc:  # pragma: no cover - canonical containment defense.
+        raise PackageReceiptError(
+            "TRUSTED_ENGINE_ESCAPE", "trusted engine counterpart escaped its root"
+        ) from exc
+    upstream_sha256 = sha256_file(upstream)
+    if not hmac.compare_digest(archive_sha256, upstream_sha256):
+        raise PackageReceiptError(
+            "SECRET_SCAN_FAILED",
+            "modified Engine archive content matched a secret rule",
+        )
+    return {
+        "policy": "byte-identical-pinned-engine-counterpart/v1",
+        "archive_relative_path": path.relative_to(root).as_posix(),
+        "upstream_relative_path": upstream.relative_to(engine_root).as_posix(),
+        "sha256": archive_sha256,
+        "rules": sorted(rules),
+    }
+
+
+def inspect_archive(
+    root: Path, *, trusted_engine_root: Path | None = None
+) -> dict[str, Any]:
     files_before = _archive_files(root)
     tree = hashlib.sha256()
     file_count = 0
     total_bytes = 0
+    exemptions: list[dict[str, Any]] = []
+    pattern_hit_count = 0
     # Preserve enough preceding bytes for the largest bounded credential form,
     # including regex quantifiers whose source representation is shorter than
     # the byte string they match.
@@ -707,6 +768,7 @@ def inspect_archive(root: Path) -> dict[str, Any]:
         before = os.lstat(path)
         digest = hashlib.sha256()
         overlap = b""
+        matched_rules: set[str] = set()
         try:
             descriptor = os.open(
                 path,
@@ -725,10 +787,7 @@ def inspect_archive(root: Path) -> dict[str, Any]:
                     window = overlap + block
                     for rule, pattern in SECRET_PATTERNS:
                         if pattern.search(window):
-                            raise PackageReceiptError(
-                                "SECRET_SCAN_FAILED",
-                                f"archive secret rule {rule} matched",
-                            )
+                            matched_rules.add(rule)
                     overlap = window[-maximum_pattern:]
         except PackageReceiptError:
             raise
@@ -740,6 +799,19 @@ def inspect_archive(root: Path) -> dict[str, Any]:
             != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
         ):
             raise PackageReceiptError("ARCHIVE_CHANGED", "archive changed while hashing")
+        if matched_rules:
+            archive_sha256 = digest.hexdigest()
+            exemptions.append(
+                _trusted_engine_exemption(
+                    root=root,
+                    path=path,
+                    relative=relative,
+                    archive_sha256=archive_sha256,
+                    rules=matched_rules,
+                    trusted_engine_root=trusted_engine_root,
+                )
+            )
+            pattern_hit_count += len(matched_rules)
         record = canonical_json(
             {
                 "executable": bool(before.st_mode & 0o111),
@@ -767,6 +839,12 @@ def inspect_archive(root: Path) -> dict[str, Any]:
             "files_scanned": file_count,
             "bytes_scanned": total_bytes,
             "matches": 0,
+            "pattern_hits": pattern_hit_count,
+            "trusted_upstream_exemption_policy": (
+                "archive-Engine-path-and-byte-identical-pinned-engine-counterpart/v1"
+            ),
+            "trusted_upstream_exemption_count": len(exemptions),
+            "trusted_upstream_exemptions": exemptions,
         },
     }
 
@@ -788,7 +866,9 @@ def verify_package(
     uat = inspect_uat_log(inputs.uat_log)
     executable_tools = inspect_executable(inputs.executable, runner)
     pak_tool = inspect_pak(inputs, runner)
-    archive = inspect_archive(inputs.archive_root)
+    archive = inspect_archive(
+        inputs.archive_root, trusted_engine_root=inputs.engine_root
+    )
     return {
         "schema": RECEIPT_SCHEMA,
         "status": "accepted",
@@ -812,6 +892,12 @@ def verify_package(
         "uat": uat,
         "project_policy": project_policy,
         "tools": {**executable_tools, "unreal_pak": pak_tool},
+        "trusted_upstream": {
+            "policy": "engine-root-derived-from-pinned-unrealpak/v1",
+            "engine_root": str(inputs.engine_root),
+            "unreal_pak": str(inputs.unreal_pak),
+            "unreal_pak_sha256": sha256_file(inputs.unreal_pak),
+        },
         "archive": archive,
         "output": str(inputs.output),
     }

@@ -35,7 +35,25 @@ class PackagedSmokeTests(unittest.TestCase):
         )
         self.pak.parent.mkdir(parents=True)
         self.pak.write_bytes(b"PAK-fixture\n")
-        archive_observation = package.inspect_archive(self.attempt / "archive" / "Linux")
+        self.engine_root = base / "UE"
+        self.unreal_pak = self.engine_root / "Engine/Binaries/Linux/UnrealPak"
+        self.unreal_pak.parent.mkdir(parents=True)
+        self.unreal_pak.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.unreal_pak.chmod(0o700)
+        engine_relative = pathlib.Path(
+            "Engine/Binaries/ThirdParty/Vulkan/Linux/libVkLayer_khronos_validation.so"
+        )
+        archived_engine_file = self.attempt / "archive" / "Linux" / engine_relative
+        upstream_engine_file = self.engine_root / engine_relative
+        archived_engine_file.parent.mkdir(parents=True)
+        upstream_engine_file.parent.mkdir(parents=True)
+        token_like_engine_bytes = b"engine-fixture\x00sk-" + b"Z" * 40 + b"\x00"
+        archived_engine_file.write_bytes(token_like_engine_bytes)
+        upstream_engine_file.write_bytes(token_like_engine_bytes)
+        archive_observation = package.inspect_archive(
+            self.attempt / "archive" / "Linux",
+            trusted_engine_root=self.engine_root,
+        )
         self.receipt_path = self.attempt / smoke.PACKAGE_RECEIPT_RELATIVE
         self.package_receipt = {
             "schema": smoke.PACKAGE_RECEIPT_SCHEMA,
@@ -68,6 +86,12 @@ class PackagedSmokeTests(unittest.TestCase):
             },
             "archive": {
                 **archive_observation,
+            },
+            "trusted_upstream": {
+                "policy": "engine-root-derived-from-pinned-unrealpak/v1",
+                "engine_root": str(self.engine_root),
+                "unreal_pak": str(self.unreal_pak),
+                "unreal_pak_sha256": smoke.sha256_file(self.unreal_pak),
             },
         }
         self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
@@ -155,6 +179,18 @@ class PackagedSmokeTests(unittest.TestCase):
         self.assertEqual(receipt["bindings"]["port"], 55777)
         self.assertEqual(probe_calls, 2)
         self.assertEqual(receipt["readiness"]["probe_count"], 2)
+        self.assertEqual(
+            receipt["archive_verification"]["before_launch"][
+                "trusted_upstream_exemption_count"
+            ],
+            1,
+        )
+        self.assertEqual(
+            receipt["archive_verification"]["after_termination"][
+                "trusted_upstream_exemption_count"
+            ],
+            1,
+        )
         self.assertEqual(receipt_sha, smoke.sha256_file(output))
         self.assertEqual(output.read_bytes(), smoke.canonical_json(receipt))
         self.assertFalse((self.attempt / "game-runtime" / "current.json").exists())
