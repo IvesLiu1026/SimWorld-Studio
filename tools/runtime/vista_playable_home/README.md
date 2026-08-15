@@ -29,6 +29,9 @@ uv run --project tools python \
 The game process binds only its fixed typed `vista_world_action` listener on
 the selected loopback port. The launcher refuses ports owned by existing VISTA
 runtimes and never exposes a Python, console, or caller-selected command lane.
+It remains in `starting` until a non-mutating typed status handshake proves the
+exact world revision and initial generation; a merely-live process or occupied
+port is never reported as ready.
 
 Each launch is retained under `game-runtime/attempt-<UTC>-<pid>`. A private
 `game-runtime/current.json` pointer lets the stop command target only the

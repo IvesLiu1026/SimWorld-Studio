@@ -22,6 +22,8 @@ RUNTIME_POINTER_SCHEMA = "simworld.vista.playable-home-runtime-pointer/v1"
 DEFAULT_DISPLAY = ":117"
 DEFAULT_GPU = 0
 DEFAULT_VISTA_WORLD_PORT = 55620
+DEFAULT_WORLD_REVISION = "vista_playable_home_r1"
+TYPED_RESPONSE_MAX_BYTES = 64 * 1024
 RESERVED_GPU_INDICES = frozenset({1})
 RESERVED_PORTS = frozenset(
     {3012, 3022, 55570, 55582, 8595, 8596, 8615, 8616, 8899, 8919, 8400}
@@ -371,6 +373,73 @@ def port_is_available(port: int, host: str = "127.0.0.1") -> bool:
         except OSError:
             return False
     return True
+
+
+def validate_typed_readiness_response(
+    response: Any,
+    *,
+    command_id: str,
+    expected_revision: str = DEFAULT_WORLD_REVISION,
+) -> dict[str, Any]:
+    required = {
+        "command_id", "status", "code", "world_revision",
+        "session_generation", "event_status",
+    }
+    if not isinstance(response, dict) or set(response) != required:
+        raise RuntimeSafetyError("typed runtime readiness response has an invalid shape")
+    if response.get("command_id") != command_id \
+            or response.get("status") != "success" \
+            or response.get("code") != "READY" \
+            or response.get("world_revision") != expected_revision \
+            or response.get("session_generation") != 0 \
+            or not isinstance(response.get("event_status"), str) \
+            or not 1 <= len(response["event_status"]) <= 80:
+        raise RuntimeSafetyError("typed runtime readiness identity does not match")
+    return dict(response)
+
+
+def probe_typed_runtime(
+    port: int,
+    *,
+    expected_revision: str = DEFAULT_WORLD_REVISION,
+    timeout: float = 1.0,
+) -> dict[str, Any]:
+    if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+        raise RuntimeSafetyError("typed runtime readiness port is invalid")
+    if not 0 < timeout <= 5:
+        raise RuntimeSafetyError("typed runtime readiness timeout is invalid")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", expected_revision):
+        raise RuntimeSafetyError("typed runtime readiness revision is invalid")
+    command_id = "vwc-" + os.urandom(12).hex()
+    request = {
+        "type": "vista_world_action",
+        "params": {"operation": "status", "command_id": command_id},
+    }
+    encoded = json.dumps(request, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+    chunks = bytearray()
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as connection:
+            connection.settimeout(timeout)
+            connection.sendall(encoded)
+            while len(chunks) <= TYPED_RESPONSE_MAX_BYTES:
+                block = connection.recv(min(8192, TYPED_RESPONSE_MAX_BYTES + 1 - len(chunks)))
+                if not block:
+                    break
+                chunks.extend(block)
+                try:
+                    response = json.loads(chunks.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                return validate_typed_readiness_response(
+                    response,
+                    command_id=command_id,
+                    expected_revision=expected_revision,
+                )
+    except (OSError, TimeoutError) as exc:
+        raise RuntimeSafetyError("typed runtime readiness connection failed") from exc
+    if len(chunks) > TYPED_RESPONSE_MAX_BYTES:
+        raise RuntimeSafetyError("typed runtime readiness response exceeded its limit")
+    raise RuntimeSafetyError("typed runtime readiness response was incomplete")
 
 
 def inspect_toolchain(ue_editor: Path) -> dict[str, Any]:

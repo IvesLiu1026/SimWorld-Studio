@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
         DEFAULT_DISPLAY,
         DEFAULT_GPU,
         DEFAULT_VISTA_WORLD_PORT,
+        DEFAULT_WORLD_REVISION,
         GameRuntimeConfig,
         RuntimeSafetyError,
         allocate_runtime_attempt,
@@ -27,6 +28,7 @@ if __package__ in {None, ""}:
         build_game_command,
         identity_is_live,
         process_identity,
+        probe_typed_runtime,
         publish_current_runtime,
         redacted_plan,
         runtime_root,
@@ -39,6 +41,7 @@ else:
         DEFAULT_DISPLAY,
         DEFAULT_GPU,
         DEFAULT_VISTA_WORLD_PORT,
+        DEFAULT_WORLD_REVISION,
         GameRuntimeConfig,
         RuntimeSafetyError,
         allocate_runtime_attempt,
@@ -46,6 +49,7 @@ else:
         build_game_command,
         identity_is_live,
         process_identity,
+        probe_typed_runtime,
         publish_current_runtime,
         redacted_plan,
         runtime_root,
@@ -101,6 +105,49 @@ def open_private_log(path: Path) -> Any:
         0o600,
     )
     return os.fdopen(descriptor, "w", encoding="utf-8")
+
+
+def terminate_owned_process(process: subprocess.Popen[Any], timeout: float = 5.0) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=timeout)
+    except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+def wait_for_typed_runtime(
+    process: subprocess.Popen[Any],
+    port: int,
+    *,
+    timeout: float = 180.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last_error: RuntimeSafetyError | None = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeSafetyError("Unreal exited before typed runtime readiness")
+        try:
+            return probe_typed_runtime(
+                port,
+                expected_revision=DEFAULT_WORLD_REVISION,
+                timeout=1.0,
+            )
+        except RuntimeSafetyError as error:
+            last_error = error
+            time.sleep(0.5)
+    failure = RuntimeSafetyError("typed Unreal runtime did not become ready")
+    failure.__cause__ = last_error
+    raise failure
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -171,33 +218,29 @@ def main(argv: list[str] | None = None) -> int:
         atomic_write_json(state_path, state)
         publish_current_runtime(config.workspace, state_path)
     except BaseException:
-        if process is not None and process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                process.wait(timeout=5)
-            except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
-                if process.poll() is None:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
-                        pass
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        pass
+        if process is not None:
+            terminate_owned_process(process)
         if log_handle is not None:
             log_handle.close()
         raise
     finally:
         fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
         os.close(lock_descriptor)
-    time.sleep(3)
-    if process.poll() is not None:
-        state.update(status="failed", updated_at=utc_now(), exit_code=process.returncode)
+    try:
+        readiness = wait_for_typed_runtime(process, config.vista_world_port)
+    except RuntimeSafetyError as error:
+        terminate_owned_process(process)
+        state.update(
+            status="failed",
+            updated_at=utc_now(),
+            exit_code=process.returncode,
+            failure="typed_runtime_not_ready",
+        )
         atomic_write_json(state_path, state)
         log_handle.close()
+        print(f"game launch refused: {error}", file=sys.stderr)
         return process.returncode or 1
-    state.update(status="running", updated_at=utc_now())
+    state.update(status="running", updated_at=utc_now(), readiness=readiness)
     atomic_write_json(state_path, state)
     print(json.dumps({"status": "running", "state": str(state_path), "pid": process.pid}))
     while process.poll() is None and not stopping:

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import stat
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,6 +22,7 @@ from tools.runtime.vista_playable_home.runtime import (
     build_game_command,
     inspect_toolchain,
     process_identity,
+    probe_typed_runtime,
     publish_current_runtime,
     redacted_plan,
     resolve_current_runtime_state,
@@ -28,6 +31,7 @@ from tools.runtime.vista_playable_home.runtime import (
     validate_display,
     validate_gpu,
     validate_map,
+    validate_typed_readiness_response,
     validate_vista_world_port,
 )
 
@@ -171,6 +175,55 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
             self.assertTrue(stop.signal_owned_process(identity, 15))
         kill.assert_called_once_with(4321, 15)
         kill_group.assert_not_called()
+
+    def test_typed_readiness_probe_proves_revision_and_zero_generation(self) -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        captured: dict[str, object] = {}
+
+        def serve() -> None:
+            connection, _address = listener.accept()
+            with connection:
+                request = b""
+                while not request.endswith(b"\n"):
+                    request += connection.recv(4096)
+                payload = json.loads(request)
+                captured.update(payload)
+                command_id = payload["params"]["command_id"]
+                connection.sendall(json.dumps({
+                    "command_id": command_id,
+                    "status": "success",
+                    "code": "READY",
+                    "world_revision": "vista_playable_home_r1",
+                    "session_generation": 0,
+                    "event_status": "idle",
+                }).encode("utf-8"))
+            listener.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        response = probe_typed_runtime(listener.getsockname()[1])
+        thread.join(timeout=2)
+        self.assertEqual(response["code"], "READY")
+        self.assertEqual(captured["type"], "vista_world_action")
+        self.assertEqual(set(captured["params"]), {"operation", "command_id"})
+        self.assertEqual(captured["params"]["operation"], "status")
+
+    def test_typed_readiness_rejects_wrong_revision_or_generation(self) -> None:
+        base = {
+            "command_id": "vwc-" + "a" * 24,
+            "status": "success",
+            "code": "READY",
+            "world_revision": "wrong",
+            "session_generation": 1,
+            "event_status": "idle",
+        }
+        with self.assertRaisesRegex(RuntimeSafetyError, "identity"):
+            validate_typed_readiness_response(
+                base,
+                command_id=base["command_id"],
+            )
 
     def test_sunshine_entry_replaces_only_named_app(self) -> None:
         payload = {"env": {"PATH": "x"}, "apps": [{"name": "Desktop"}, {"name": "VISTA World", "cmd": "old"}]}
