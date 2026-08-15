@@ -20,6 +20,7 @@ SCHEMA = "simworld.vista.playable-home-runtime/v1"
 PREFLIGHT_SCHEMA = "simworld.vista.playable-home-preflight/v1"
 DEFAULT_DISPLAY = ":117"
 DEFAULT_GPU = 0
+DEFAULT_VISTA_WORLD_PORT = 55620
 RESERVED_GPU_INDICES = frozenset({1})
 RESERVED_PORTS = frozenset(
     {3012, 3022, 55570, 55582, 8595, 8596, 8615, 8616, 8899, 8919, 8400}
@@ -40,6 +41,7 @@ class GameRuntimeConfig:
     map_path: str
     display: str = DEFAULT_DISPLAY
     gpu: int = DEFAULT_GPU
+    vista_world_port: int = DEFAULT_VISTA_WORLD_PORT
     width: int = 1280
     height: int = 720
     fps: int = 60
@@ -117,6 +119,16 @@ def validate_gpu(value: int) -> int:
     return value
 
 
+def validate_vista_world_port(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1024 <= value <= 65535:
+        raise RuntimeSafetyError("VISTA World port must be an integer from 1024 through 65535")
+    if value in RESERVED_PORTS:
+        raise RuntimeSafetyError(f"port {value} is reserved by an existing runtime")
+    if not port_is_available(value):
+        raise RuntimeSafetyError(f"port {value} is already in use")
+    return value
+
+
 def validate_dimensions(width: int, height: int, fps: int) -> tuple[int, int, int]:
     if not 640 <= width <= 3840 or not 480 <= height <= 2160:
         raise RuntimeSafetyError("render size must be between 640x480 and 3840x2160")
@@ -179,6 +191,7 @@ def validate_config(config: GameRuntimeConfig, *, create_workspace: bool) -> Gam
         map_path=validate_map(config.map_path),
         display=validate_display(config.display),
         gpu=validate_gpu(config.gpu),
+        vista_world_port=validate_vista_world_port(config.vista_world_port),
         width=width,
         height=height,
         fps=fps,
@@ -201,6 +214,7 @@ def build_game_command(config: GameRuntimeConfig) -> list[str]:
         f"-ResX={config.width}",
         f"-ResY={config.height}",
         f"-graphicsadapter={config.gpu}",
+        f"-VistaWorldPort={config.vista_world_port}",
         "-NOSPLASH",
         "-NOSOUND",
         "-NoAnalytics",

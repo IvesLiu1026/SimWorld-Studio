@@ -23,8 +23,12 @@ uv run --project tools python \
   --project /absolute/new-run/ue/attempt-01/project/Home.uproject \
   --ue-editor /absolute/Engine/Binaries/Linux/UnrealEditor \
   --map /Game/VISTA/PlayableHome/r1/Maps/VistaPlayableHome \
-  --display :117 --gpu 0 --preflight-only
+  --display :117 --gpu 0 --vista-world-port 55620 --preflight-only
 ```
+
+The game process binds only its fixed typed `vista_world_action` listener on
+the selected loopback port. The launcher refuses ports owned by existing VISTA
+runtimes and never exposes a Python, console, or caller-selected command lane.
 
 `sunshine_app.py` prints a plan by default. `--apply` creates a timestamped
 backup before replacing `apps.json`; Sunshine must then be restarted by its

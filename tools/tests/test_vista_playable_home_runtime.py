@@ -25,6 +25,7 @@ from tools.runtime.vista_playable_home.runtime import (
     validate_display,
     validate_gpu,
     validate_map,
+    validate_vista_world_port,
 )
 
 
@@ -59,12 +60,17 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         self.assertIn("-Windowed", command)
         self.assertFalse(any("RenderOffScreen" in item for item in command))
         self.assertFalse(any("PixelStreaming" in item for item in command))
+        self.assertIn("-VistaWorldPort=55620", command)
         self.assertEqual(command[0], str(config.ue_editor))
 
     def test_reserved_gpu_one_is_refused(self) -> None:
         with self.assertRaisesRegex(RuntimeSafetyError, "reserved"):
             validate_gpu(1)
         self.assertEqual(validate_gpu(0), 0)
+
+    def test_existing_runtime_ports_are_refused(self) -> None:
+        with self.assertRaisesRegex(RuntimeSafetyError, "reserved"):
+            validate_vista_world_port(55570)
 
     def test_map_display_and_paths_fail_closed(self) -> None:
         self.assertEqual(validate_display(":117"), ":117")

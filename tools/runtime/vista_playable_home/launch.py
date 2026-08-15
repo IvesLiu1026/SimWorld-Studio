@@ -18,6 +18,7 @@ if __package__ in {None, ""}:
     from tools.runtime.vista_playable_home.runtime import (  # type: ignore
         DEFAULT_DISPLAY,
         DEFAULT_GPU,
+        DEFAULT_VISTA_WORLD_PORT,
         GameRuntimeConfig,
         RuntimeSafetyError,
         atomic_write_json,
@@ -33,6 +34,7 @@ else:
     from .runtime import (
         DEFAULT_DISPLAY,
         DEFAULT_GPU,
+        DEFAULT_VISTA_WORLD_PORT,
         GameRuntimeConfig,
         RuntimeSafetyError,
         atomic_write_json,
@@ -54,6 +56,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--map", dest="map_path", required=True)
     result.add_argument("--display", default=DEFAULT_DISPLAY)
     result.add_argument("--gpu", type=int, default=DEFAULT_GPU)
+    result.add_argument("--vista-world-port", type=int, default=DEFAULT_VISTA_WORLD_PORT)
     result.add_argument("--width", type=int, default=1280)
     result.add_argument("--height", type=int, default=720)
     result.add_argument("--fps", type=int, default=60)
@@ -71,6 +74,7 @@ def config_from_args(args: argparse.Namespace) -> GameRuntimeConfig:
         map_path=args.map_path,
         display=args.display,
         gpu=args.gpu,
+        vista_world_port=args.vista_world_port,
         width=args.width,
         height=args.height,
         fps=args.fps,
