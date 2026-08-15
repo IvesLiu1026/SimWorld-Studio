@@ -67,6 +67,7 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         self.assertIn("-Windowed", command)
         self.assertFalse(any("RenderOffScreen" in item for item in command))
         self.assertFalse(any("PixelStreaming" in item for item in command))
+        self.assertIn("-ddc=InstalledNoZenLocalFallback", command)
         self.assertIn("-VistaWorldPort=55620", command)
         self.assertEqual(command[0], str(config.ue_editor))
 

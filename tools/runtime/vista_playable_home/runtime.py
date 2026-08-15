@@ -301,6 +301,7 @@ def build_game_command(config: GameRuntimeConfig) -> list[str]:
         "-NoAnalytics",
         "-UDPMESSAGING_TRANSPORT_ENABLE=0",
         "-ini:Engine:[/Script/TcpMessaging.TcpMessagingSettings]:EnableTransport=False",
+        "-ddc=InstalledNoZenLocalFallback",
         f"-ExecCmds=t.MaxFPS {config.fps}",
         "-SaveToUserDir",
         f"-UserDir={config.workspace / 'ue-user'}",
