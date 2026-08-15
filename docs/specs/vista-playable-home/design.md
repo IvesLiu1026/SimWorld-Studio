@@ -161,6 +161,22 @@ Import granularity is role-aware:
 The accepted MMG040 office remains a sealed reusable source. Its one-room
 script is not expanded into a monolithic house generator.
 
+The procedural forge is also the stable gameplay/collision layer; its first
+preview is intentionally a semantic blockout, not the final realism claim. A
+separate visual-binding pass may replace presentation meshes without changing
+entity IDs, transforms, affordances or collision actors. Revision r1 uses the
+already-local HSSD catalog for this pass:
+
+- deterministic category-to-source selection with exact GLB hashes;
+- axis, floor origin and target-bound normalization in pinned Blender 4.5.8;
+- retained embedded PBR materials and texture slots;
+- one primary presentation mesh per logical asset for strict UE import;
+- a CC BY-NC 4.0 attribution manifest and procedural fallback when a visual
+  binding is unavailable.
+
+Room shells, door kinematics, hazards and collision proxies remain authored by
+the project. Visual meshes never redefine navigation or event semantics.
+
 ## Unreal Gameplay Kernel
 
 The target compiled plugin is `VistaPlayableHome`. It contains:

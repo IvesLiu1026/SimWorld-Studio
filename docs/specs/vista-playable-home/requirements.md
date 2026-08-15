@@ -195,6 +195,12 @@ Acceptance notes:
   collision policies.
 - The first revision has visibly differentiated rooms and a nonblank preview;
   basic geometry may be used for hidden collision but not as every hero prop.
+- The accepted visual pass binds the principal furniture, appliances and
+  portable objects to licensed high-detail PBR meshes while retaining simple
+  hidden collision proxies and the same semantic IDs.
+- Third-party visual sources carry an exact source hash, license identifier
+  and attribution receipt. HSSD assets are demo/research-only under CC BY-NC
+  4.0 and are not silently redistributed as project-owned assets.
 
 ### R9 — Revisioned Unreal composition
 

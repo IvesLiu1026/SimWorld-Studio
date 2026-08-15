@@ -77,6 +77,17 @@ Depends on: `requirements.md`, `design.md`
     match; GLB is inspectable; preview is nonblank; room/entity counts and
     file sizes are recorded.
 
+- [ ] **T7A. Bind licensed high-detail PBR presentation assets**
+  - Owns: `tools/blender/vista_playable_home_hssd/**`, focused tests, and one
+    new append-only visual build under the active run root.
+  - Depends on: T7.
+  - Requirements: R8, R11-R13.
+  - Validation: deterministic HSSD selection; CC BY-NC 4.0 attribution and
+    exact source hashes; normalized orientation/origin/bounds; one primary
+    mesh per logical asset; embedded PBR material retention; nonblank
+    all-room Unreal screenshots. Procedural blockout remains the collision
+    fallback and is not presented as the final realism result.
+
 ## Phase D — Unreal Gameplay and Composition
 
 - [ ] **T8. Implement the VistaPlayableHome gameplay source contract**
