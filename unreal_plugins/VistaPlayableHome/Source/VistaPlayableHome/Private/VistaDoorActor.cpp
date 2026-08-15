@@ -8,6 +8,7 @@
 #include "Engine/OverlapResult.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "AI/Navigation/NavLinkDefinition.h"
 #include "NavAreas/NavArea_Default.h"
@@ -80,6 +81,7 @@ void AVistaDoorActor::Tick(float DeltaSeconds)
     const FRotator Current = Hinge->GetRelativeRotation();
     Hinge->SetRelativeRotation(FMath::RInterpConstantTo(
         Current, TargetRotation, DeltaSeconds, AngularSpeedDegrees));
+    UpdateDoorwayTraversals(DeltaSeconds);
 }
 
 void AVistaDoorActor::GetLifetimeReplicatedProps(
@@ -180,15 +182,80 @@ void AVistaDoorActor::OnRep_OpenState()
 void AVistaDoorActor::HandleDoorwayLinkReached(
     UNavLinkCustomComponent* LinkComponent,
     UObject* PathingAgent,
-    const FVector& /*Destination*/)
+    const FVector& Destination)
 {
-    // This doorway does not require a jump or a bespoke traversal animation.
-    // Explicitly release path following after the smart-link notification so
-    // the controller continues walking toward the link destination next tick.
     if (UPathFollowingComponent* PathFollowing =
             Cast<UPathFollowingComponent>(PathingAgent))
     {
-        PathFollowing->FinishUsingCustomLink(LinkComponent);
+        AActor* PathOwner = PathFollowing->GetOwner();
+        APawn* MovingPawn = Cast<APawn>(PathOwner);
+        if (AController* Controller = Cast<AController>(PathOwner))
+        {
+            MovingPawn = Controller->GetPawn();
+        }
+        if (!IsValid(MovingPawn))
+        {
+            PathFollowing->FinishUsingCustomLink(LinkComponent);
+            return;
+        }
+
+        const FVector TraversalDestination(
+            Destination.X, Destination.Y, MovingPawn->GetActorLocation().Z);
+        FVistaDoorwayTraversal* Existing = ActiveDoorwayTraversals.FindByPredicate(
+            [PathFollowing](const FVistaDoorwayTraversal& Traversal)
+            {
+                return Traversal.PathFollowing.Get() == PathFollowing;
+            });
+        if (Existing)
+        {
+            Existing->Pawn = MovingPawn;
+            Existing->Destination = TraversalDestination;
+            return;
+        }
+
+        FVistaDoorwayTraversal& Traversal = ActiveDoorwayTraversals.AddDefaulted_GetRef();
+        Traversal.PathFollowing = PathFollowing;
+        Traversal.Pawn = MovingPawn;
+        Traversal.Destination = TraversalDestination;
+    }
+}
+
+void AVistaDoorActor::UpdateDoorwayTraversals(float DeltaSeconds)
+{
+    for (int32 Index = ActiveDoorwayTraversals.Num() - 1; Index >= 0; --Index)
+    {
+        FVistaDoorwayTraversal& Traversal = ActiveDoorwayTraversals[Index];
+        UPathFollowingComponent* PathFollowing = Traversal.PathFollowing.Get();
+        APawn* MovingPawn = Traversal.Pawn.Get();
+        if (!IsValid(PathFollowing) || !IsValid(MovingPawn))
+        {
+            if (IsValid(PathFollowing))
+            {
+                PathFollowing->FinishUsingCustomLink(DoorwayLink);
+            }
+            ActiveDoorwayTraversals.RemoveAtSwap(Index);
+            continue;
+        }
+
+        const FVector CurrentLocation = MovingPawn->GetActorLocation();
+        const FVector NextLocation = FMath::VInterpConstantTo(
+            CurrentLocation,
+            Traversal.Destination,
+            DeltaSeconds,
+            DoorwayTraversalSpeedCmPerSecond);
+        // Door links bridge imported shells whose simple/complex collision can
+        // differ by asset.  The nav link is authoritative for this short,
+        // validated threshold traversal, so do not re-sweep the same wall.
+        MovingPawn->SetActorLocation(
+            NextLocation, false, nullptr, ETeleportType::TeleportPhysics);
+
+        if (FVector::DistSquared2D(NextLocation, Traversal.Destination) <= 4.0f)
+        {
+            MovingPawn->SetActorLocation(
+                Traversal.Destination, false, nullptr, ETeleportType::TeleportPhysics);
+            PathFollowing->FinishUsingCustomLink(DoorwayLink);
+            ActiveDoorwayTraversals.RemoveAtSwap(Index);
+        }
     }
 }
 

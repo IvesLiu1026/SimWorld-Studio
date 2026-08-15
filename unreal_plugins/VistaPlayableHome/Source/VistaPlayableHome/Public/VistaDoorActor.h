@@ -4,11 +4,19 @@
 #include "VistaSemanticActor.h"
 #include "VistaDoorActor.generated.h"
 
+class APawn;
 class UNavModifierComponent;
 class UNavLinkCustomComponent;
 class UPathFollowingComponent;
 class USceneComponent;
 class UStaticMeshComponent;
+
+struct FVistaDoorwayTraversal final
+{
+    TWeakObjectPtr<UPathFollowingComponent> PathFollowing;
+    TWeakObjectPtr<APawn> Pawn;
+    FVector Destination = FVector::ZeroVector;
+};
 
 UCLASS(Blueprintable)
 class VISTAPLAYABLEHOME_API AVistaDoorActor final : public AVistaSemanticActor
@@ -44,6 +52,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VISTA|Door")
     bool bInitiallyOpen = false;
 
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VISTA|Door",
+              meta = (ClampMin = "50.0", ClampMax = "1000.0"))
+    float DoorwayTraversalSpeedCmPerSecond = 300.0f;
+
     UFUNCTION(BlueprintPure, Category = "VISTA|Door")
     bool IsOpen() const { return bOpen; }
 
@@ -65,6 +77,7 @@ private:
 
     FRotator ClosedRotation = FRotator::ZeroRotator;
     FRotator TargetRotation = FRotator::ZeroRotator;
+    TArray<FVistaDoorwayTraversal> ActiveDoorwayTraversals;
 
     UFUNCTION()
     void OnRep_OpenState();
@@ -72,6 +85,7 @@ private:
     void HandleDoorwayLinkReached(UNavLinkCustomComponent* LinkComponent,
                                   UObject* PathingAgent,
                                   const FVector& Destination);
+    void UpdateDoorwayTraversals(float DeltaSeconds);
     void ConfigureJambPivot();
     bool IsClosingObstructed() const;
     void ApplyDoorState(bool bInstant);
