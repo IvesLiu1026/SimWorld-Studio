@@ -159,6 +159,25 @@ class Fixture:
         root = self.root / "inputs/hssd"
         output = _write(root / "assets" / f"{asset_id}.glb", b"glTF HSSD presentation")
         source_sha = hashlib.sha256(b"HSSD source object").hexdigest()
+        source_object_id = "c" * 40
+        source_dimensions = [2.0, 0.8, 0.85]
+        actual_glb_geometry = {
+            "measurement_policy": "decoded_position_accessors_active_scene_world_aabb_v1",
+            "coordinate_conversion": "gltf_y_up_to_blender_x_negative_z_y",
+            "mesh_node_count": 1,
+            "position_accessor_count": 1,
+            "position_vertex_count": 24,
+            "gltf_bounds_m": {
+                "min_m": [-1.0, -0.425, -0.4],
+                "max_m": [1.0, 0.425, 0.4],
+            },
+            "gltf_dimensions_m": [2.0, 0.85, 0.8],
+            "blender_bounds_m": {
+                "min_m": [-1.0, -0.4, -0.425],
+                "max_m": [1.0, 0.4, 0.425],
+            },
+            "blender_dimensions_m": source_dimensions,
+        }
         dataset = {
             "dataset": build_home.hssd_contract.HSSD_DATASET_NAME,
             "dataset_revision": "a" * 40,
@@ -187,10 +206,29 @@ class Fixture:
         preserved = [item for item in nonbuiltin if item != asset_id]
         source_contract = {
             "dataset": build_home.hssd_contract.HSSD_DATASET_NAME,
-            "object_id": "synthetic-sofa",
+            "object_id": source_object_id,
+            "name": "synthetic sofa",
+            "semantic_category": "couch",
+            "render_asset_relpath": f"objects/c/{source_object_id}.glb",
+            "object_config_relpath": f"objects/c/{source_object_id}.object_config.json",
             "render_asset_sha256": source_sha,
+            "catalog_aligned_dimensions_m": source_dimensions,
+            "catalog_dimensions_provenance": "metadata/fpmodels-with-decomposed.csv:aligned.dims",
+            "source_dimensions_blender_m": source_dimensions,
+            "actual_glb_geometry": actual_glb_geometry,
+            "up": [0.0, 1.0, 0.0],
+            "front": [0.0, 0.0, -1.0],
             "license_spdx": "CC-BY-NC-4.0",
             "license_url": build_home.hssd_contract.HSSD_LICENSE_URL,
+        }
+        output_source_contract = {
+            "dataset": source_contract["dataset"],
+            "object_id": source_contract["object_id"],
+            "render_asset_sha256": source_contract["render_asset_sha256"],
+            "license_spdx": source_contract["license_spdx"],
+            "license_url": source_contract["license_url"],
+            "catalog_aligned_dimensions_m": source_contract["catalog_aligned_dimensions_m"],
+            "actual_glb_geometry": source_contract["actual_glb_geometry"],
         }
         binding_plan = {
             "schema_version": build_home.HSSD_BINDING_PLAN_SCHEMA,
@@ -202,7 +240,12 @@ class Fixture:
             },
             "dataset": dataset,
             "license_receipt": license_receipt,
-            "selection_policy": {"version": "test"},
+            "selection_policy": {
+                "version": build_home.hssd_contract.SELECTION_POLICY_VERSION,
+                "dimension_source": "decoded_glb_position_accessors_active_scene_world_aabb",
+                "catalog_dimensions_role": "provenance_only_not_selection",
+                "maximum_axis_scale_anisotropy": 2.75,
+            },
             "mode": "full",
             "closed_world": {
                 "target_asset_ids": nonbuiltin,
@@ -215,6 +258,24 @@ class Fixture:
                 "target_dimensions_m": [2.2, 0.9, 0.9],
                 "source": source_contract,
                 "source_inspection": {"pbr_texture_slot_count": 1},
+                "normalization_plan": {
+                    "dimension_source": "decoded_glb_position_accessors_active_scene_world_aabb",
+                    "anisotropy_accepted": True,
+                    "planned_rotate_z_deg": 0,
+                    "scale_anisotropy": 1.0625,
+                },
+                "selection_receipt": {
+                    "geometry_measurement_policy": "decoded_position_accessors_active_scene_world_aabb_v1",
+                    "catalog_dimensions_used_for_selection": False,
+                    "matching_candidate_count": 3,
+                    "evaluated_candidate_count": 3,
+                    "eligible_candidate_count": 1,
+                    "candidate_decision_digest": "d" * 64,
+                    "selected_object_id": source_object_id,
+                    "selected_actual_scale_anisotropy": 1.0625,
+                    "maximum_axis_scale_anisotropy": 2.75,
+                    "accepted": True,
+                },
             }],
             "preserved_assets": [{"asset_id": item} for item in preserved],
         }
@@ -255,8 +316,12 @@ class Fixture:
                 "target_dimensions_m": [2.2, 0.9, 0.9],
                 "actual_dimensions_m": [2.2, 0.9, 0.9],
                 "normalization": {
-                    "source_import_dimensions_m": [2.0, 0.8, 0.85],
+                    "source_import_dimensions_m": source_dimensions,
+                    "planned_source_dimensions_m": source_dimensions,
+                    "source_dimensions_match_plan": True,
                     "rotate_z_deg": 0,
+                    "planned_rotate_z_deg": 0,
+                    "fit_matches_plan": True,
                     "rotation_mode": "XYZ",
                     "scale_xyz": [1.1, 1.125, 1.058824],
                     "actual_scale_anisotropy": 1.0625,
@@ -271,7 +336,7 @@ class Fixture:
                 },
                 "texture_transport": "blender_native_texture_import",
                 "texture_transport_receipt": {"mode": "blender_native_texture_import"},
-                "source": source_contract,
+                "source": output_source_contract,
                 "inspection": {
                     "mesh_count": 1,
                     "primitive_count": 1,
@@ -384,6 +449,30 @@ def test_full_visual_manifest_overrides_only_the_presentation_source(
     )
     with pytest.raises(build_home.BuildHomeError, match="unknown or builtin"):
         build_home.plan_build(invalid)
+
+
+def test_visual_manifest_refuses_planner_blender_geometry_receipt_drift(
+    fixture: Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    visual_path, _visual_sha, _output = fixture.visual_manifest("asset.prop.sofa")
+    value = json.loads(visual_path.read_text())
+    expected_inspection = value["outputs"][0]["inspection"]
+    monkeypatch.setattr(build_home.hssd_contract, "inspect_glb", lambda _path: expected_inspection)
+
+    value["outputs"][0]["normalization"]["source_dimensions_match_plan"] = False
+    value = build_home.hssd_contract.seal_document(value)
+    visual_path.write_bytes(build_home.hssd_contract.canonical_json_bytes(value))
+    config = fixture.config()
+    config = build_home.BuildConfig(
+        **{
+            **config.__dict__,
+            "visual_binding_manifest": visual_path,
+            "visual_binding_manifest_sha256": build_home.sha256_file(visual_path),
+        }
+    )
+    with pytest.raises(build_home.BuildHomeError, match="normalization receipt differs"):
+        build_home.plan_build(config)
 
 
 def test_tamper_and_path_escape_fail_before_attempt_creation(fixture: Fixture) -> None:

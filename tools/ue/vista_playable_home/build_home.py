@@ -721,9 +721,19 @@ def validate_visual_binding_manifest(
             _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {index} fields differ")
         asset_id = output["logical_asset_id"]
         source_contract = output.get("source")
+        output_source_keys = {
+            "dataset",
+            "object_id",
+            "render_asset_sha256",
+            "license_spdx",
+            "license_url",
+            "catalog_aligned_dimensions_m",
+            "actual_glb_geometry",
+        }
         if (
             output.get("media_type") != "model/gltf-binary"
             or not isinstance(source_contract, Mapping)
+            or set(source_contract) != output_source_keys
             or source_contract.get("license_spdx") != "CC-BY-NC-4.0"
             or source_contract.get("license_url") != license_value.get("url")
             or SHA256_RE.fullmatch(str(source_contract.get("render_asset_sha256", ""))) is None
@@ -735,6 +745,10 @@ def validate_visual_binding_manifest(
             or source_contract.get("dataset") != pinned_source.get("dataset")
             or source_contract.get("object_id") != pinned_source.get("object_id")
             or source_contract.get("render_asset_sha256") != pinned_source.get("render_asset_sha256")
+            or source_contract.get("catalog_aligned_dimensions_m")
+            != pinned_source.get("catalog_aligned_dimensions_m")
+            or source_contract.get("actual_glb_geometry")
+            != pinned_source.get("actual_glb_geometry")
         ):
             _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} source differs from the binding plan")
         inspection = output.get("inspection")
@@ -751,7 +765,11 @@ def validate_visual_binding_manifest(
         normalization = output.get("normalization")
         normalization_keys = {
             "source_import_dimensions_m",
+            "planned_source_dimensions_m",
+            "source_dimensions_match_plan",
             "rotate_z_deg",
+            "planned_rotate_z_deg",
+            "fit_matches_plan",
             "rotation_mode",
             "scale_xyz",
             "actual_scale_anisotropy",
@@ -761,9 +779,21 @@ def validate_visual_binding_manifest(
             "actual_bounds_m",
             "actual_dimensions_m",
         }
+        pinned_normalization = binding_by_id[asset_id].get("normalization_plan")
         if (
             not isinstance(normalization, Mapping)
             or set(normalization) != normalization_keys
+            or not isinstance(pinned_normalization, Mapping)
+            or normalization.get("source_dimensions_match_plan") is not True
+            or normalization.get("fit_matches_plan") is not True
+            or normalization.get("source_import_dimensions_m")
+            != pinned_source.get("source_dimensions_blender_m")
+            or normalization.get("planned_source_dimensions_m")
+            != pinned_source.get("source_dimensions_blender_m")
+            or normalization.get("rotate_z_deg")
+            != pinned_normalization.get("planned_rotate_z_deg")
+            or normalization.get("planned_rotate_z_deg")
+            != pinned_normalization.get("planned_rotate_z_deg")
             or normalization.get("rotation_mode") != "XYZ"
             or normalization.get("origin_policy") != "footprint_center_bottom_z_zero"
             or normalization.get("anisotropy_accepted") is not True
@@ -772,6 +802,13 @@ def validate_visual_binding_manifest(
             or not isinstance(normalization.get("actual_scale_anisotropy"), (int, float))
             or not math.isfinite(float(normalization["actual_scale_anisotropy"]))
             or not 1.0 <= float(normalization["actual_scale_anisotropy"]) <= 2.75
+            or isinstance(pinned_normalization.get("scale_anisotropy"), bool)
+            or not isinstance(pinned_normalization.get("scale_anisotropy"), (int, float))
+            or abs(
+                float(normalization["actual_scale_anisotropy"])
+                - float(pinned_normalization["scale_anisotropy"])
+            )
+            > 0.00001
             or normalization.get("actual_dimensions_m") != output.get("actual_dimensions_m")
         ):
             _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} normalization receipt differs")
