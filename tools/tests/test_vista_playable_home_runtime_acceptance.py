@@ -53,6 +53,8 @@ class FakeVistaRuntime:
         drift_at: int | None = None,
         bad_schema_at: int | None = None,
         hang_at: int | None = None,
+        trickle_at: int | None = None,
+        trickle_interval_s: float = 0.02,
     ) -> None:
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -63,6 +65,8 @@ class FakeVistaRuntime:
         self.drift_at = drift_at
         self.bad_schema_at = bad_schema_at
         self.hang_at = hang_at
+        self.trickle_at = trickle_at
+        self.trickle_interval_s = trickle_interval_s
         self.generation = 0
         self.active_event: str | None = None
         self.door_open = False
@@ -113,10 +117,19 @@ class FakeVistaRuntime:
                         response["session_generation"] += 1
                     if index == self.bad_schema_at:
                         response["unexpected"] = True
+                    encoded = json.dumps(response, separators=(",", ":")).encode("utf-8")
+                    if index == self.trickle_at:
+                        for byte in encoded:
+                            if self._stopping.is_set():
+                                break
+                            try:
+                                connection.sendall(bytes((byte,)))
+                            except (BrokenPipeError, ConnectionResetError):
+                                break
+                            time.sleep(self.trickle_interval_s)
+                        continue
                     try:
-                        connection.sendall(
-                            json.dumps(response, separators=(",", ":")).encode("utf-8")
-                        )
+                        connection.sendall(encoded)
                     except (BrokenPipeError, ConnectionResetError):
                         pass
         except BaseException as exc:
@@ -481,6 +494,23 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
                 )
         self.assertEqual(caught.exception.code, "RUNTIME_TIMEOUT")
         self.assertEqual(caught.exception.step, "status.g0")
+
+    def test_socket_timeout_is_one_absolute_deadline_against_trickle_peer(self) -> None:
+        started = time.monotonic()
+        with FakeVistaRuntime(trickle_at=0, trickle_interval_s=0.02) as server:
+            with self.assertRaises(acceptance.AcceptanceError) as caught:
+                acceptance.run_protocol(
+                    server.port,
+                    socket_timeout_s=0.06,
+                    npc_timeout_s=0.2,
+                    npc_poll_interval_s=0.01,
+                )
+        elapsed = time.monotonic() - started
+        self.assertEqual(caught.exception.code, "RUNTIME_TIMEOUT")
+        self.assertEqual(caught.exception.step, "status.g0")
+        # A per-recv timeout would be refreshed by every 20 ms byte and take
+        # seconds to receive this response. The total exchange must stay bound.
+        self.assertLess(elapsed, 0.3)
 
     def test_receipt_is_o_excl_and_existing_bytes_are_unchanged(self) -> None:
         fixture = RuntimeAcceptanceFixture(self.root)

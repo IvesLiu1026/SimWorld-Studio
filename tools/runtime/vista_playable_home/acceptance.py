@@ -609,7 +609,12 @@ def exchange_loopback(request: Mapping[str, Any], timeout: float, *, port: int) 
     response = bytearray()
     deadline = time.monotonic() + timeout
     try:
-        with socket.create_connection((LOOPBACK_HOST, port), timeout=timeout) as connection:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _fail("RUNTIME_TIMEOUT", "typed runtime connection exceeded its deadline")
+        with socket.create_connection(
+            (LOOPBACK_HOST, port), timeout=remaining
+        ) as connection:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _fail("RUNTIME_TIMEOUT", "typed runtime connection exceeded its deadline")
