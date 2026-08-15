@@ -971,6 +971,12 @@ def default_engine_ini(plan: Mapping[str, Any]) -> bytes:
         f"EditorStartupMap={map_path}",
         "GlobalDefaultGameMode=/Script/VistaPlayableHome.VistaPlayableHomeGameMode",
         "",
+        "[/Script/NavigationSystem.RecastNavMesh]",
+        # UE 5.7 no longer exposes the editor-only synchronous Build() call to
+        # Python.  Generate the base tiles from the saved bounds at runtime;
+        # the typed acceptance test proves that the NPC can traverse them.
+        "RuntimeGeneration=Dynamic",
+        "",
     ]
     return "\n".join(lines).encode("utf-8")
 

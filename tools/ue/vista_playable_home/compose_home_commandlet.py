@@ -338,9 +338,15 @@ def run():
     status = "failed_unsaved_quarantined"
     error = None
     reload_verified = False
+    stage = {"phase": "compose_operations", "operation_id": None, "kind": None}
     try:
         for operation in spec["operations"]:
             kind = operation["kind"]
+            stage = {
+                "phase": "compose_operation",
+                "operation_id": operation["operation_id"],
+                "kind": kind,
+            }
             if kind == "place_room_bundle":
                 actor = spawn(actor_subsystem, unreal.StaticMeshActor, operation["transform"],
                               safe_label(operation["semantic_id"]), operation["tags"])
@@ -383,7 +389,7 @@ def run():
             elif kind == "place_lighting":
                 directional = actor_subsystem.spawn_actor_from_class(
                     unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 500.0),
-                    unreal.Rotator(-35.0, -45.0, 0.0), transient=False)
+                    unreal.Rotator(pitch=-35.0, yaw=-45.0, roll=0.0), transient=False)
                 skylight = actor_subsystem.spawn_actor_from_class(
                     unreal.SkyLight, unreal.Vector(0.0, 0.0, 400.0),
                     unreal.Rotator(), transient=False)
@@ -442,12 +448,16 @@ def run():
                     desired_extent[2] / current_extent.z,
                 ))
                 set_tags(nav, ["VistaRole=navmesh_bounds"])
+                navigation_system = unreal.NavigationSystemV1.get_navigation_system(world)
+                require(navigation_system is not None, "navigation system unavailable")
+                navigation_system.on_navigation_bounds_updated(nav)
                 created.append(nav)
 
-        unreal.NavigationSystemV1.build_navigation(world)
+        stage = {"phase": "save_map", "operation_id": None, "kind": None}
         require(unreal.EditorLoadingAndSavingUtils.save_map(world, map_path),
                 "map save failed")
         status = "saved_candidate"
+        stage = {"phase": "reload_map", "operation_id": None, "kind": None}
         require(level_subsystem.load_level(map_path), "saved map reload failed")
         reloaded = actor_subsystem.get_all_level_actors()
         observed_tags = {str(tag) for actor in reloaded
@@ -464,7 +474,11 @@ def run():
         reload_verified = True
         status = "saved_reloaded_candidate"
     except Exception as exc:
-        error = {"type": type(exc).__name__, "message": str(exc)[:512]}
+        error = {
+            "type": type(exc).__name__,
+            "message": str(exc)[:512],
+            "stage": stage,
+        }
         if status == "saved_candidate":
             status = "partial_saved_quarantined"
         else:

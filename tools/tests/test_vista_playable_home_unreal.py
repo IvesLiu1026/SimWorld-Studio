@@ -475,6 +475,13 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
             "unreal.Rotator(pitch=values[1], yaw=values[2], roll=values[0])",
             compose_source,
         )
+        self.assertIn(
+            "unreal.Rotator(pitch=-35.0, yaw=-45.0, roll=0.0)",
+            compose_source,
+        )
+        self.assertIn("navigation_system.on_navigation_bounds_updated(nav)", compose_source)
+        self.assertNotIn("NavigationSystemV1.build_navigation", compose_source)
+        self.assertIn('"stage": stage', compose_source)
         self.assertNotIn(
             "unreal.Rotator(pitch=values[0], yaw=values[1], roll=values[2])",
             compose_source,

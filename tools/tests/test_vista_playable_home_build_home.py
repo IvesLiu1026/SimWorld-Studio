@@ -993,3 +993,10 @@ def test_source_is_static_and_does_not_accept_caller_python() -> None:
     assert 'with_name("compose_home_commandlet.py")' in source
     assert 'with_name("commandlet_common.py")' in source
     assert "hssd_contract.inspect_glb" in source
+
+
+def test_project_uses_runtime_dynamic_navigation(fixture: Fixture) -> None:
+    raw = build_home.default_engine_ini(fixture.plan).decode("utf-8")
+    assert "[/Script/NavigationSystem.RecastNavMesh]" in raw
+    assert "RuntimeGeneration=Dynamic\n" in raw
+    assert "DynamicModifiersOnly" not in raw
