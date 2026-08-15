@@ -409,6 +409,9 @@ def _successful_import_receipt(planned: build_home.PlannedBuild) -> dict:
                 "collision_generated": False,
                 "collision_trace_flag": None,
                 "room_shell": False,
+                "declared_core_texture_count": 0,
+                "returned_texture2d_paths": [],
+                "material_texture2d_paths": [],
             },
         }
         if asset["source_kind"] != "builtin":
@@ -438,9 +441,42 @@ def _successful_import_receipt(planned: build_home.PlannedBuild) -> dict:
             "namespace_fresh": True,
             "all_assets_bound": True,
             "material_and_collision_inspected": True,
+            "core_textures_imported_and_used": True,
             "quarantined": False,
         },
     }
+
+
+def test_import_receipt_requires_returned_texture_used_by_material(fixture: Fixture) -> None:
+    planned = build_home.plan_build(fixture.config())
+    receipt = _successful_import_receipt(planned)
+    imported = next(item for item in receipt["assets"] if item["source_kind"] != "builtin")
+    texture_path = imported["object_path"].rsplit(".", 1)[0] + "/Textures/T_BaseColor.T_BaseColor"
+    imported["returned_object_paths"].append(texture_path)
+    imported["returned_object_paths"].sort()
+    imported["inspection"].update(
+        {
+            "declared_core_texture_count": 1,
+            "returned_texture2d_paths": [texture_path],
+            "material_texture2d_paths": [texture_path],
+        }
+    )
+
+    build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
+
+    imported["inspection"]["material_texture2d_paths"] = []
+    with pytest.raises(build_home.BuildHomeError, match="no imported Texture2D used"):
+        build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
+
+    imported["inspection"]["material_texture2d_paths"] = [texture_path]
+    imported["returned_object_paths"].remove(texture_path)
+    with pytest.raises(build_home.BuildHomeError, match="binding differs"):
+        build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
+
+    imported["returned_object_paths"].append(texture_path)
+    imported["inspection"]["returned_texture2d_paths"] = [{}]
+    with pytest.raises(build_home.BuildHomeError, match="fields differ"):
+        build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
 
 
 def _successful_scene_receipt(planned: build_home.PlannedBuild, import_sha: str) -> dict:

@@ -7,6 +7,7 @@ is accepted.
 
 import json
 import os
+import struct
 import sys
 
 import unreal
@@ -33,6 +34,177 @@ def property_or_none(value, name):
         return value.get_editor_property(name)
     except Exception:
         return None
+
+
+def _integer(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def load_glb_texture_graph(path):
+    """Return the pinned GLB JSON graph and actual binary-chunk byte length.
+
+    Interchange can successfully create a material even when it cannot decode
+    the texture transport used by that material.  Read only the fixed GLB
+    container metadata here so the receipt records whether the source exposes
+    a core glTF ``texture.source`` backed by an embedded PNG/JPEG.  Binary
+    payloads are skipped rather than loaded into the commandlet process.
+    """
+
+    size = os.path.getsize(path)
+    with open(path, "rb") as source:
+        header = source.read(12)
+        require(len(header) == 12, "source GLB header is truncated")
+        magic, version, declared_length = struct.unpack("<4sII", header)
+        require(magic == b"glTF" and version == 2, "source artifact is not a GLB 2 container")
+        require(declared_length == size and declared_length >= 20,
+                "source GLB declared length differs from its pinned bytes")
+        offset = 12
+        json_payload = None
+        binary_length = None
+        while offset < declared_length:
+            chunk_header = source.read(8)
+            require(len(chunk_header) == 8, "source GLB chunk header is truncated")
+            chunk_length, chunk_type = struct.unpack("<I4s", chunk_header)
+            offset += 8
+            require(chunk_length % 4 == 0 and offset + chunk_length <= declared_length,
+                    "source GLB chunk bounds are invalid")
+            if chunk_type == b"JSON":
+                require(json_payload is None and chunk_length <= 16 * 1024 * 1024,
+                        "source GLB JSON chunk is duplicated or too large")
+                json_payload = source.read(chunk_length)
+                require(len(json_payload) == chunk_length, "source GLB JSON chunk is truncated")
+            else:
+                if chunk_type == b"BIN\x00":
+                    require(binary_length is None, "source GLB binary chunk is duplicated")
+                    binary_length = chunk_length
+                source.seek(chunk_length, os.SEEK_CUR)
+            offset += chunk_length
+        require(offset == declared_length and json_payload is not None,
+                "source GLB has no complete JSON chunk")
+    try:
+        graph = json.loads(json_payload.rstrip(b" \t\r\n\x00").decode("utf-8", "strict"))
+    except (UnicodeError, json.JSONDecodeError):
+        require(False, "source GLB JSON is invalid")
+    require(isinstance(graph, dict), "source GLB JSON root is not an object")
+    return graph, binary_length
+
+
+def declared_core_texture_count(path):
+    """Count valid core texture sources backed by embedded PNG/JPEG bytes."""
+
+    graph, binary_length = load_glb_texture_graph(path)
+    textures = graph.get("textures", [])
+    images = graph.get("images", [])
+    views = graph.get("bufferViews", [])
+    buffers = graph.get("buffers", [])
+    require(isinstance(textures, list) and isinstance(images, list) and
+            isinstance(views, list) and isinstance(buffers, list),
+            "source GLB texture graph arrays are invalid")
+    if not textures:
+        return 0
+    count = 0
+    for texture in textures:
+        require(isinstance(texture, dict), "source GLB texture record is invalid")
+        if "source" not in texture:
+            continue
+        image_index = texture["source"]
+        require(_integer(image_index) and 0 <= image_index < len(images),
+                "source GLB core texture source index is invalid")
+        image = images[image_index]
+        require(isinstance(image, dict), "source GLB image record is invalid")
+        if image.get("mimeType") not in {"image/png", "image/jpeg"}:
+            continue
+        require("uri" not in image,
+                "source GLB core PNG/JPEG must use embedded bytes, not a URI")
+        view_index = image.get("bufferView")
+        require(_integer(view_index) and 0 <= view_index < len(views),
+                "source GLB core PNG/JPEG is not embedded in a valid buffer view")
+        view = views[view_index]
+        require(isinstance(view, dict), "source GLB image buffer view is invalid")
+        buffer_index = view.get("buffer", 0)
+        byte_offset = view.get("byteOffset", 0)
+        byte_length = view.get("byteLength")
+        require(
+            _integer(buffer_index) and buffer_index == 0 and
+            _integer(byte_offset) and byte_offset >= 0 and
+            _integer(byte_length) and byte_length > 0 and
+            len(buffers) == 1 and isinstance(buffers[0], dict) and
+            "uri" not in buffers[0] and
+            _integer(buffers[0].get("byteLength")) and buffers[0]["byteLength"] > 0 and
+            _integer(binary_length) and
+            byte_offset + byte_length <= buffers[0]["byteLength"] <= binary_length,
+            "source GLB core PNG/JPEG payload is outside its embedded binary buffer",
+        )
+        count += 1
+    return count
+
+
+def _texture2d_path(value):
+    texture_class = getattr(unreal, "Texture2D", None)
+    if texture_class is None or value is None or not isinstance(value, texture_class):
+        return None
+    path = str(value.get_path_name())
+    return path if path else None
+
+
+def _material_texture2d_paths(material):
+    """Inspect real material references with UE reflection, including instances."""
+
+    textures = []
+    library = getattr(unreal, "MaterialEditingLibrary", None)
+    base = material
+    base_getter = getattr(material, "get_base_material", None)
+    if callable(base_getter):
+        try:
+            base = base_getter() or material
+        except Exception:
+            base = material
+    material_class = getattr(unreal, "Material", None)
+    used_getter = getattr(library, "get_used_textures", None) if library is not None else None
+    if material_class is not None and isinstance(base, material_class) and callable(used_getter):
+        try:
+            textures.extend(list(used_getter(base) or []))
+        except Exception:
+            pass
+
+    # A MaterialInstanceConstant can override a texture used by its base
+    # material.  Resolve the effective values through public reflected methods
+    # (the same APIs exposed to UE Python), then retain the property fallback
+    # for pipelines that return an instance subclass without the convenience
+    # method.
+    parameter_names = []
+    names_getter = getattr(library, "get_texture_parameter_names", None) if library is not None else None
+    if callable(names_getter):
+        try:
+            parameter_names = list(names_getter(material) or [])
+        except Exception:
+            parameter_names = []
+    value_getter = getattr(material, "get_texture_parameter_value", None)
+    instance_getter = (
+        getattr(library, "get_material_instance_texture_parameter_value", None)
+        if library is not None else None
+    )
+    instance_class = getattr(unreal, "MaterialInstanceConstant", None)
+    for parameter_name in parameter_names:
+        texture = None
+        try:
+            if callable(value_getter):
+                texture = value_getter(parameter_name)
+            elif (
+                instance_class is not None and
+                isinstance(material, instance_class) and
+                callable(instance_getter)
+            ):
+                texture = instance_getter(material, parameter_name)
+        except Exception:
+            texture = None
+        if texture is not None:
+            textures.append(texture)
+    for value in property_or_none(material, "texture_parameter_values") or []:
+        texture = property_or_none(value, "parameter_value")
+        if texture is not None:
+            textures.append(texture)
+    return sorted(set(path for path in (_texture2d_path(item) for item in textures) if path))
 
 
 def simple_collision_count(mesh):
@@ -68,7 +240,9 @@ def asset_collision_policies(plan):
     return result
 
 
-def inspect_asset(asset, policies, imported, room_shell=False):
+def inspect_asset(asset, policies, imported, room_shell=False,
+                  core_texture_count=0, returned_texture2d_paths=None):
+    returned_texture2d_paths = sorted(set(returned_texture2d_paths or []))
     record = {
         "object_path": str(asset.get_path_name()),
         "class_path": str(asset.get_class().get_path_name()),
@@ -78,6 +252,9 @@ def inspect_asset(asset, policies, imported, room_shell=False):
         "collision_generated": False,
         "collision_trace_flag": None,
         "room_shell": bool(room_shell),
+        "declared_core_texture_count": core_texture_count,
+        "returned_texture2d_paths": returned_texture2d_paths,
+        "material_texture2d_paths": [],
     }
     if not isinstance(asset, unreal.StaticMesh):
         return record
@@ -86,12 +263,22 @@ def inspect_asset(asset, policies, imported, room_shell=False):
     for slot in slots:
         material = property_or_none(slot, "material_interface")
         record["material_paths"].append(str(material.get_path_name()) if material else None)
+        if material is not None:
+            record["material_texture2d_paths"].extend(_material_texture2d_paths(material))
+    record["material_texture2d_paths"] = sorted(set(record["material_texture2d_paths"]))
     if imported:
         require(record["material_paths"] and all(record["material_paths"]),
                 "imported mesh has an empty material slot")
         require(all("DefaultMaterial" not in path and "BasicShapeMaterial" not in path
                     for path in record["material_paths"]),
                 "imported mesh uses a default/basic material")
+        if core_texture_count > 0:
+            require(returned_texture2d_paths,
+                    "source declares core PNG/JPEG textures but Interchange returned no Texture2D")
+            require(record["material_texture2d_paths"],
+                    "source declares core PNG/JPEG textures but the mesh material uses no Texture2D")
+            require(set(returned_texture2d_paths) & set(record["material_texture2d_paths"]),
+                    "source core PNG/JPEG did not bind an imported Texture2D to the mesh material")
 
     blocking = bool(set(policies) - {"detail_no_collision", "trigger_only"})
     body_setup = property_or_none(asset, "body_setup")
@@ -150,12 +337,16 @@ def import_one(asset, binding, namespace, policies, room_shell=False):
                 "collision_generated": False,
                 "collision_trace_flag": None,
                 "room_shell": bool(room_shell),
+                "declared_core_texture_count": 0,
+                "returned_texture2d_paths": [],
+                "material_texture2d_paths": [],
             },
         }
 
     source = canonical_path(binding["source_file"])
     require(os.path.isfile(source) and sha256_file(source) == binding["source_file_sha256"],
             "source artifact pin mismatch")
+    core_texture_count = declared_core_texture_count(source)
     name = asset_name(asset["asset_id"])
     destination = namespace + "/Assets/" + name
     require(not unreal.EditorAssetLibrary.does_directory_exist(destination),
@@ -194,6 +385,9 @@ def import_one(asset, binding, namespace, policies, room_shell=False):
         require(unreal.EditorAssetLibrary.rename_asset(raw_mesh_path, expected_package_path),
                 "failed to move primary mesh to deterministic derived object path")
     imported_paths = sorted(str(obj.get_path_name()) for obj in imported_objects if obj is not None)
+    returned_texture2d_paths = sorted(set(
+        path for path in (_texture2d_path(obj) for obj in imported_objects) if path
+    ))
     imported_mesh_paths = sorted(
         str(obj.get_path_name()) for obj in imported_objects
         if isinstance(obj, unreal.StaticMesh)
@@ -212,7 +406,14 @@ def import_one(asset, binding, namespace, policies, room_shell=False):
         "object_path": expected_path,
         "raw_returned_object_paths": raw_imported_paths,
         "returned_object_paths": imported_paths,
-        "inspection": inspect_asset(loaded, policies, True, room_shell=room_shell),
+        "inspection": inspect_asset(
+            loaded,
+            policies,
+            True,
+            room_shell=room_shell,
+            core_texture_count=core_texture_count,
+            returned_texture2d_paths=returned_texture2d_paths,
+        ),
     }
 
 
@@ -260,6 +461,12 @@ def run():
             "namespace_fresh": status == "imported_candidate",
             "all_assets_bound": status == "imported_candidate" and len(imported) == len(plan["assets"]),
             "material_and_collision_inspected": status == "imported_candidate",
+            "core_textures_imported_and_used": status == "imported_candidate" and all(
+                item["inspection"]["declared_core_texture_count"] == 0 or
+                bool(set(item["inspection"]["returned_texture2d_paths"]) &
+                     set(item["inspection"]["material_texture2d_paths"]))
+                for item in imported
+            ),
             "quarantined": status != "imported_candidate",
         },
     }

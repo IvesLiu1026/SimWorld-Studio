@@ -1268,6 +1268,7 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
         "namespace_fresh": True,
         "all_assets_bound": True,
         "material_and_collision_inspected": True,
+        "core_textures_imported_and_used": True,
         "quarantined": False,
     }:
         _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", "import receipt gates did not pass")
@@ -1309,6 +1310,9 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
         "collision_generated",
         "collision_trace_flag",
         "room_shell",
+        "declared_core_texture_count",
+        "returned_texture2d_paths",
+        "material_texture2d_paths",
     }
     for item in assets:
         asset_id = item["asset_id"]
@@ -1328,16 +1332,45 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
             or not inspection.get("class_path")
             or not isinstance(inspection.get("collision_policies"), list)
             or not isinstance(inspection.get("material_paths"), list)
+            or isinstance(inspection.get("declared_core_texture_count"), bool)
+            or not isinstance(inspection.get("declared_core_texture_count"), int)
+            or inspection.get("declared_core_texture_count") < 0
+            or not isinstance(inspection.get("returned_texture2d_paths"), list)
+            or not all(isinstance(path, str) and path
+                       for path in inspection.get("returned_texture2d_paths"))
+            or inspection.get("returned_texture2d_paths")
+            != sorted(set(inspection.get("returned_texture2d_paths")))
+            or not isinstance(inspection.get("material_texture2d_paths"), list)
+            or not all(isinstance(path, str) and path
+                       for path in inspection.get("material_texture2d_paths"))
+            or inspection.get("material_texture2d_paths")
+            != sorted(set(inspection.get("material_texture2d_paths")))
         ):
             _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", f"import receipt asset {asset_id} fields differ")
+        returned_textures = set(inspection["returned_texture2d_paths"])
+        material_textures = set(inspection["material_texture2d_paths"])
+        if source["source_kind"] == "builtin" and (
+            inspection["declared_core_texture_count"] != 0
+            or returned_textures
+            or material_textures
+        ):
+            _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", f"builtin receipt asset {asset_id} carries texture evidence")
         if source["source_kind"] != "builtin" and (
             item.get("source_file_sha256") != binding_by_id[asset_id]["source_file_sha256"]
             or not isinstance(item.get("raw_returned_object_paths"), list)
             or not all(isinstance(path, str) and path for path in item["raw_returned_object_paths"])
             or not isinstance(item.get("returned_object_paths"), list)
             or not all(isinstance(path, str) and path for path in item["returned_object_paths"])
+            or not returned_textures.issubset(set(item["returned_object_paths"]))
         ):
             _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", f"import receipt asset {asset_id} binding differs")
+        if inspection["declared_core_texture_count"] > 0 and not (
+            returned_textures and material_textures and returned_textures & material_textures
+        ):
+            _fail(
+                "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                f"import receipt asset {asset_id} has no imported Texture2D used by its material",
+            )
 
 
 def _verify_scene_receipt(

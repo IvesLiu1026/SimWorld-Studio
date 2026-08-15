@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import json
+import os
 import pathlib
 import py_compile
+import struct
 import sys
 import tempfile
 import unittest
@@ -36,6 +39,45 @@ def world_transform(x: float = 0.0, y: float = 0.0, z: float = 0.0) -> dict:
         "rotation_deg": [0.0, 0.0, 0.0],
         "scale": [1.0, 1.0, 1.0],
     }
+
+
+def commandlet_glb_texture_counter():
+    """Load only the commandlet's pure GLB helpers without importing Unreal."""
+
+    path = ROOT / "tools/ue/vista_playable_home/import_assets_commandlet.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    names = {"_integer", "load_glb_texture_graph", "declared_core_texture_count"}
+    body = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+    namespace = {"json": json, "os": os, "struct": struct}
+
+    def require(condition, message):
+        if not condition:
+            raise RuntimeError(message)
+
+    namespace["require"] = require
+    exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), namespace)
+    return namespace["declared_core_texture_count"]
+
+
+def commandlet_material_texture_inspector(unreal_namespace):
+    """Load the commandlet's reflected material helper against a fake UE API."""
+
+    path = ROOT / "tools/ue/vista_playable_home/import_assets_commandlet.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    names = {"property_or_none", "_texture2d_path", "_material_texture2d_paths"}
+    body = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+    namespace = {"unreal": unreal_namespace}
+    exec(compile(ast.Module(body=body, type_ignores=[]), str(path), "exec"), namespace)
+    return namespace["_material_texture2d_paths"]
+
+
+def glb_bytes(graph: dict, binary: bytes) -> bytes:
+    json_raw = json.dumps(graph, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    json_raw += b" " * ((-len(json_raw)) % 4)
+    binary_raw = binary + b"\x00" * ((-len(binary)) % 4)
+    chunks = struct.pack("<I4s", len(json_raw), b"JSON") + json_raw
+    chunks += struct.pack("<I4s", len(binary_raw), b"BIN\x00") + binary_raw
+    return struct.pack("<4sII", b"glTF", 2, 12 + len(chunks)) + chunks
 
 
 def build_plan() -> dict:
@@ -226,6 +268,99 @@ class PlayableHomePlanningTests(unittest.TestCase):
 
 
 class PlayableHomeSourceContractTests(unittest.TestCase):
+    def test_glb_core_texture_counter_requires_embedded_png_or_jpeg(self) -> None:
+        counter = commandlet_glb_texture_counter()
+        png_payload = b"synthetic-png"
+        jpeg_payload = b"synthetic-jpeg"
+        payload = png_payload + jpeg_payload
+        graph = {
+            "asset": {"version": "2.0"},
+            "buffers": [{"byteLength": len(payload)}],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": len(png_payload)},
+                {"buffer": 0, "byteOffset": len(png_payload), "byteLength": len(jpeg_payload)},
+            ],
+            "images": [
+                {"bufferView": 0, "mimeType": "image/png"},
+                {"bufferView": 1, "mimeType": "image/jpeg"},
+            ],
+            "textures": [{"source": 0}, {"source": 1}],
+        }
+        basis_only = copy.deepcopy(graph)
+        basis_only["textures"] = [{"extensions": {"KHR_texture_basisu": {"source": 0}}}]
+        invalid = copy.deepcopy(graph)
+        invalid["images"][0].pop("bufferView")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            valid_path = root / "valid.glb"
+            valid_path.write_bytes(glb_bytes(graph, payload))
+            self.assertEqual(counter(str(valid_path)), 2)
+
+            basis_path = root / "basis-only.glb"
+            basis_path.write_bytes(glb_bytes(basis_only, payload))
+            self.assertEqual(counter(str(basis_path)), 0)
+
+            invalid_path = root / "invalid.glb"
+            invalid_path.write_bytes(glb_bytes(invalid, payload))
+            with self.assertRaisesRegex(RuntimeError, "not embedded"):
+                counter(str(invalid_path))
+
+    def test_material_texture_inspector_resolves_base_and_instance_override(self) -> None:
+        class Texture2D:
+            def __init__(self, path):
+                self.path = path
+
+            def get_path_name(self):
+                return self.path
+
+        class Material:
+            def __init__(self, textures):
+                self.textures = textures
+
+            def get_base_material(self):
+                return self
+
+        class MaterialInstanceConstant:
+            def __init__(self, base, override):
+                self.base = base
+                self.override = override
+
+            def get_base_material(self):
+                return self.base
+
+            def get_texture_parameter_value(self, _name):
+                return self.override
+
+            def get_editor_property(self, _name):
+                raise AttributeError
+
+        class MaterialEditingLibrary:
+            @staticmethod
+            def get_used_textures(material):
+                return material.textures
+
+            @staticmethod
+            def get_texture_parameter_names(_material):
+                return ["BaseColor"]
+
+        class FakeUnreal:
+            pass
+
+        FakeUnreal.Texture2D = Texture2D
+        FakeUnreal.Material = Material
+        FakeUnreal.MaterialInstanceConstant = MaterialInstanceConstant
+        FakeUnreal.MaterialEditingLibrary = MaterialEditingLibrary
+        inspector = commandlet_material_texture_inspector(FakeUnreal)
+        default = Texture2D("/Engine/T_Default.T_Default")
+        imported = Texture2D("/Game/VISTA/T_BaseColor.T_BaseColor")
+        material = Material([default])
+        instance = MaterialInstanceConstant(material, imported)
+
+        self.assertEqual(
+            inspector(instance),
+            ["/Engine/T_Default.T_Default", "/Game/VISTA/T_BaseColor.T_BaseColor"],
+        )
+
     def test_plugin_manifest_and_gameplay_contract_are_complete(self) -> None:
         plugin = ROOT / "unreal_plugins/VistaPlayableHome"
         descriptor = json.loads((plugin / "VistaPlayableHome.uplugin").read_text())
@@ -313,6 +448,14 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("ImportAssetParameters", import_source)
         self.assertIn('parameters.set_editor_property("replace_existing", False)', import_source)
         self.assertIn("EditorAssetLibrary.rename_asset", import_source)
+        self.assertIn("declared_core_texture_count", import_source)
+        self.assertIn("MaterialEditingLibrary", import_source)
+        self.assertIn("get_used_textures", import_source)
+        self.assertIn("get_texture_parameter_names", import_source)
+        self.assertIn("get_texture_parameter_value", import_source)
+        self.assertIn("returned_texture2d_paths", import_source)
+        self.assertIn("material_texture2d_paths", import_source)
+        self.assertIn("core_textures_imported_and_used", import_source)
         self.assertNotIn("AssetImportTask", import_source)
         self.assertNotIn(".import_asset_tasks(", import_source)
         self.assertIn("derived_asset_path(namespace, asset)", import_source)

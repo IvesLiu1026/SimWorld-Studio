@@ -18,6 +18,15 @@ Each non-builtin asset must import as exactly one combined primary
 quarantined fresh revision; it never overwrites an accepted namespace or
 silently falls back to another map.
 
+Texture acceptance is byte- and reference-backed. The importer parses each
+pinned GLB JSON chunk and records how many core `texture.source` entries point
+to embedded `image/png` or `image/jpeg` buffer views. When that count is
+positive, acceptance requires at least one `Texture2D` returned by
+Interchange and the same object path reported by
+`MaterialEditingLibrary.get_used_textures` for a material assigned to the
+primary mesh. A material slot name alone is not texture evidence; missing or
+unbound Texture2D assets quarantine the fresh revision.
+
 Room bundles are hollow combined floor/wall/ceiling meshes and therefore use
 complex-as-simple static collision; they must never receive one enclosing
 convex hull. Player and NPC source transforms are floor-contact transforms,
