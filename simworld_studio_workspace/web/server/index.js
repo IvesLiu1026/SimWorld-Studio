@@ -41,6 +41,7 @@ const { createVistaAnimationDedicatedTransportResolver } = require("./vista-anim
 const { createVistaWorldRouter } = require("./vista-world-routes");
 const { createVistaWorldFileCatalog, createVistaWorldService } = require("./vista-world-service");
 const { createVistaWorldUeAdapter } = require("./vista-world-ue-adapter");
+const { createVistaWorldCompilerAdapter } = require("./vista-world-compiler-adapter");
 const { createVistaSceneExecutor } = require("./vista-scene-executor");
 const { createVistaSceneUeAdapter } = require("./vista-scene-ue-adapter");
 const { createVistaSlotBrokerResolver, createVistaSlotUcvBrokerResolver, resolveVistaSceneExecutorConfig } = require("./vista-scene-executor-runtime");
@@ -426,9 +427,13 @@ const vistaWorldCatalog=createVistaWorldFileCatalog({
 const vistaWorldTransport=createVistaWorldUeAdapter({
   resolveUeBroker:_resolveVistaSlotBroker,
 });
+const vistaWorldCompiler=createVistaWorldCompilerAdapter({
+  repositoryRoot:path.resolve(__dirname,"../../.."),
+});
 const vistaWorldService=createVistaWorldService({
   catalog:vistaWorldCatalog,
   transport:vistaWorldTransport,
+  compiler:vistaWorldCompiler,
 });
 app.use("/api/vista-world",createVistaWorldRouter({
   service:vistaWorldService,
