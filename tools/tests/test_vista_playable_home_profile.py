@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -191,6 +192,150 @@ class VistaPlayableHomeProfileTests(unittest.TestCase):
                         self.fixture.output,
                     )
                 self.assertFalse(self.fixture.output.exists())
+
+    def test_plan_resource_paths_refuse_symlink_missing_escape_and_non_executable(self) -> None:
+        original_project = self.fixture.config.project
+        original_editor = self.fixture.config.ue_editor
+
+        linked_project = self.fixture.workspace / "project" / "Linked.uproject"
+        linked_project.symlink_to(original_project)
+        outside_project = self.root / "Outside.uproject"
+        outside_project.write_text("{}\n", encoding="utf-8")
+        non_executable_editor = (
+            self.root
+            / "UE-nonexec"
+            / "Engine"
+            / "Binaries"
+            / "Linux"
+            / "UnrealEditor"
+        )
+        non_executable_editor.parent.mkdir(parents=True)
+        non_executable_editor.write_text("#!/bin/sh\n", encoding="utf-8")
+        non_executable_editor.chmod(0o600)
+        linked_editor = self.root / "linked-editor"
+        linked_editor.symlink_to(original_editor)
+        wrong_editor = (
+            self.root / "wrong" / "Binaries" / "Linux" / "UnrealEditor"
+        )
+        wrong_editor.parent.mkdir(parents=True)
+        wrong_editor.write_text("#!/bin/sh\n", encoding="utf-8")
+        wrong_editor.chmod(0o755)
+
+        real_icd = self.root / "nvidia.json"
+        real_icd.write_text("{}\n", encoding="utf-8")
+        linked_icd = self.root / "nvidia-link.json"
+        linked_icd.symlink_to(real_icd)
+        real_compat = self.root / "nvidia-compat"
+        real_compat.mkdir()
+        linked_compat = self.root / "nvidia-compat-link"
+        linked_compat.symlink_to(real_compat, target_is_directory=True)
+
+        cases: list[tuple[str, runtime.GameRuntimeConfig]] = [
+            (
+                "project_symlink",
+                runtime.GameRuntimeConfig(
+                    **{**self.fixture.config.__dict__, "project": linked_project}
+                ),
+            ),
+            (
+                "project_missing",
+                runtime.GameRuntimeConfig(
+                    **{
+                        **self.fixture.config.__dict__,
+                        "project": self.fixture.workspace / "missing.uproject",
+                    }
+                ),
+            ),
+            (
+                "project_escape",
+                runtime.GameRuntimeConfig(
+                    **{**self.fixture.config.__dict__, "project": outside_project}
+                ),
+            ),
+            (
+                "editor_symlink",
+                runtime.GameRuntimeConfig(
+                    **{**self.fixture.config.__dict__, "ue_editor": linked_editor}
+                ),
+            ),
+            (
+                "editor_missing",
+                runtime.GameRuntimeConfig(
+                    **{
+                        **self.fixture.config.__dict__,
+                        "ue_editor": self.root
+                        / "UE-missing"
+                        / "Engine"
+                        / "Binaries"
+                        / "Linux"
+                        / "UnrealEditor",
+                    }
+                ),
+            ),
+            (
+                "editor_non_executable",
+                runtime.GameRuntimeConfig(
+                    **{
+                        **self.fixture.config.__dict__,
+                        "ue_editor": non_executable_editor,
+                    }
+                ),
+            ),
+            (
+                "editor_wrong_identity",
+                runtime.GameRuntimeConfig(
+                    **{**self.fixture.config.__dict__, "ue_editor": wrong_editor}
+                ),
+            ),
+            (
+                "nvidia_icd_symlink",
+                runtime.GameRuntimeConfig(
+                    **{**self.fixture.config.__dict__, "nvidia_icd": linked_icd}
+                ),
+            ),
+            (
+                "nvidia_icd_missing",
+                runtime.GameRuntimeConfig(
+                    **{
+                        **self.fixture.config.__dict__,
+                        "nvidia_icd": self.root / "missing-nvidia.json",
+                    }
+                ),
+            ),
+            (
+                "nvidia_compat_symlink",
+                runtime.GameRuntimeConfig(
+                    **{
+                        **self.fixture.config.__dict__,
+                        "nvidia_compat": linked_compat,
+                    }
+                ),
+            ),
+            (
+                "nvidia_compat_missing",
+                runtime.GameRuntimeConfig(
+                    **{
+                        **self.fixture.config.__dict__,
+                        "nvidia_compat": self.root / "missing-compat",
+                    }
+                ),
+            ),
+        ]
+        for label, config in cases:
+            with self.subTest(label=label):
+                digest = self.fixture.write_plan(runtime.redacted_plan(config))
+                with self.assertRaises(profile.ProfileError):
+                    profile.write_profile(
+                        self.fixture.plan_path,
+                        digest,
+                        self.fixture.output,
+                    )
+                self.assertFalse(self.fixture.output.exists())
+
+        # Keep these references used explicitly so the valid fixture identity
+        # remains obvious next to all rejected variants.
+        self.assertTrue(original_project.is_file())
+        self.assertTrue(os.access(original_editor, os.X_OK))
 
     def test_unknown_duplicate_and_nonfinite_launch_plan_json_are_refused(self) -> None:
         unknown = copy.deepcopy(self.fixture.plan)

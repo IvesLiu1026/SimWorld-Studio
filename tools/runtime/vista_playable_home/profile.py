@@ -296,16 +296,45 @@ def _config_from_plan(value: Any) -> tuple[GameRuntimeConfig, Path]:
     if workspace_raw is None:  # unreachable for a required field, kept fail-closed
         raise ProfileError("plan workspace is missing")
     workspace = _canonical_directory(workspace_raw, "plan workspace")
-    project = _absolute_string(value.get("project"), "plan project")
-    ue_editor = _absolute_string(value.get("ue_editor"), "plan Unreal Editor")
-    nvidia_icd = _absolute_string(
+    project_raw = _absolute_string(value.get("project"), "plan project")
+    ue_editor_raw = _absolute_string(value.get("ue_editor"), "plan Unreal Editor")
+    nvidia_icd_raw = _absolute_string(
         value.get("nvidia_icd"), "plan NVIDIA ICD", optional=True
     )
-    nvidia_compat = _absolute_string(
+    nvidia_compat_raw = _absolute_string(
         value.get("nvidia_compat"), "plan NVIDIA compatibility directory", optional=True
     )
-    if project is None or ue_editor is None:  # unreachable for required fields
+    if project_raw is None or ue_editor_raw is None:  # unreachable for required fields
         raise ProfileError("launch plan executable paths are missing")
+    project = _canonical_file(project_raw, "plan project")
+    _contained(project, workspace, "plan project")
+    ue_editor = _canonical_file(ue_editor_raw, "plan Unreal Editor")
+    if (
+        ue_editor.name != "UnrealEditor"
+        or tuple(
+            part.name
+            for part in (
+                ue_editor.parent,
+                ue_editor.parent.parent,
+                ue_editor.parent.parent.parent,
+            )
+        )
+        != ("Linux", "Binaries", "Engine")
+        or not os.access(ue_editor, os.X_OK)
+    ):
+        raise ProfileError(
+            "plan Unreal Editor must be an executable Engine/Binaries/Linux/UnrealEditor"
+        )
+    nvidia_icd = (
+        _canonical_file(nvidia_icd_raw, "plan NVIDIA ICD")
+        if nvidia_icd_raw is not None
+        else None
+    )
+    nvidia_compat = (
+        _canonical_directory(nvidia_compat_raw, "plan NVIDIA compatibility directory")
+        if nvidia_compat_raw is not None
+        else None
+    )
     if project.suffix != ".uproject":
         raise ProfileError("plan project must end in .uproject")
     if not isinstance(value.get("title"), str) or not 1 <= len(value["title"]) <= 80:
