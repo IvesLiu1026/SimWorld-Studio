@@ -35,7 +35,7 @@ Depends on: `requirements.md`, `design.md`
 
 ## Phase B — Semantic World and Event Contracts
 
-- [ ] **T3. Implement strict HouseSpec/EventSpec/build-plan schemas**
+- [x] **T3. Implement strict HouseSpec/EventSpec/build-plan schemas**
   - Owns: `world_packs/schemas/**` and schema tests.
   - Depends on: T1-T2.
   - Requirements: R2, R4, R6-R9, R11, R13.
@@ -43,7 +43,7 @@ Depends on: `requirements.md`, `design.md`
     invalid transform, traversal, graph, portal, affordance, stale revision,
     event target, executable-field and oracle-field negatives.
 
-- [ ] **T4. Author the r1 house and seven verified event fixtures**
+- [x] **T4. Author the r1 house and seven verified event fixtures**
   - Owns: `world_packs/vista_playable_home_r1/**`.
   - Depends on: T3.
   - Requirements: R2, R6-R8, R11.
@@ -51,7 +51,7 @@ Depends on: `requirements.md`, `design.md`
     entities, affordances and public provenance; three r1 events executable;
     four follow-up events schema-valid.
 
-- [ ] **T5. Implement deterministic validator/resolver/compiler**
+- [x] **T5. Implement deterministic validator/resolver/compiler**
   - Owns: `tools/worlds/**` and focused tests.
   - Depends on: T3-T4.
   - Requirements: R2, R6-R9, R11-R13.
@@ -61,14 +61,14 @@ Depends on: `requirements.md`, `design.md`
 
 ## Phase C — Reproducible Multi-room Assets
 
-- [ ] **T6. Implement the modular headless Blender house forge**
+- [x] **T6. Implement the modular headless Blender house forge**
   - Owns: `tools/blender/vista_playable_home/**` and focused tests.
   - Depends on: T3-T4.
   - Requirements: R2, R8, R11-R13.
   - Validation: static tests cover stable identity, 10 cm grid placement,
     metadata, role-based collision, merge/instance policy and manifest digest.
 
-- [ ] **T7. Execute and seal two deterministic house builds**
+- [x] **T7. Execute and seal two deterministic house builds**
   - Owns: one new append-only NAS run root; no generated Git files except a
     small approved preview/evidence pointer.
   - Depends on: T6.
