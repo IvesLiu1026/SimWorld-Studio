@@ -1661,9 +1661,12 @@ def _run_command(
     prefix = marker_prefix.encode("utf-8")
     with log_path.open("rb") as log:
         for line in log:
-            if line.startswith(prefix):
+            marker_offset = line.find(prefix)
+            if marker_offset >= 0:
                 try:
-                    candidate = json.loads(line[len(prefix) :].decode("utf-8"))
+                    candidate = json.loads(
+                        line[marker_offset + len(prefix) :].strip().decode("utf-8")
+                    )
                 except (UnicodeError, json.JSONDecodeError):
                     candidate = None
                 if isinstance(candidate, dict):

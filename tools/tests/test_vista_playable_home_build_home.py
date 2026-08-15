@@ -862,6 +862,25 @@ def test_run_command_reaps_child_group_on_keyboard_interrupt(
     assert process.poll() is not None
 
 
+def test_run_command_accepts_marker_inside_unreal_log_prefix(tmp_path: pathlib.Path) -> None:
+    payload = {"status": "ok", "receipt": "/tmp/receipt.json", "sha256": "a" * 64}
+    marker_prefix = "VISTA_TEST_RESULT:"
+    script = (
+        "import json; "
+        f"print('[2026.08.15]LogPython: {marker_prefix}' + "
+        f"json.dumps({payload!r}, sort_keys=True), flush=True)"
+    )
+    marker = build_home._run_command(
+        phase="test",
+        argv=[sys.executable, "-c", script],
+        environment={},
+        log_path=tmp_path / "prefixed-marker.log",
+        marker_prefix=marker_prefix,
+        timeout_s=60,
+    )
+    assert marker == payload
+
+
 def test_source_is_static_and_does_not_accept_caller_python() -> None:
     path = ROOT / "tools/ue/vista_playable_home/build_home.py"
     source = path.read_text(encoding="utf-8")

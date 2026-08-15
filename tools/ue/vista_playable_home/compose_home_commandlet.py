@@ -499,8 +499,18 @@ def run():
     }
     receipt_sha = write_exclusive_receipt(
         execution["scene_receipt"], execution["attempt_root"], receipt)
-    print(SCENE_MARKER + json.dumps({"status": status, "receipt": execution["scene_receipt"],
-                                    "sha256": receipt_sha}, sort_keys=True))
+    marker = SCENE_MARKER + json.dumps(
+        {
+            "status": status,
+            "receipt": execution["scene_receipt"],
+            "sha256": receipt_sha,
+        },
+        sort_keys=True,
+    )
+    # Commandlets reliably retain engine log messages even when embedded
+    # Python stdout is discarded during shutdown.
+    unreal.log(marker)
+    print(marker, flush=True)
     if status != "saved_reloaded_candidate":
         raise RuntimeError("VISTA Playable Home composition failed; fresh revision quarantined")
 

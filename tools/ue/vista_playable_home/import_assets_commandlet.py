@@ -472,8 +472,19 @@ def run():
     }
     receipt_sha = write_exclusive_receipt(
         execution["import_receipt"], execution["attempt_root"], receipt)
-    print(IMPORT_MARKER + json.dumps({"status": status, "receipt": execution["import_receipt"],
-                                     "sha256": receipt_sha}, sort_keys=True))
+    marker = IMPORT_MARKER + json.dumps(
+        {
+            "status": status,
+            "receipt": execution["import_receipt"],
+            "sha256": receipt_sha,
+        },
+        sort_keys=True,
+    )
+    # Unreal's embedded Python stdout is not guaranteed to be copied to the
+    # commandlet log before shutdown.  The engine logger is the authoritative
+    # transport; flushed stdout remains useful for compatible hosts.
+    unreal.log(marker)
+    print(marker, flush=True)
     if status != "imported_candidate":
         raise RuntimeError("VISTA Playable Home import failed; fresh namespace quarantined")
 

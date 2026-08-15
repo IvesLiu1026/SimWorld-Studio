@@ -442,6 +442,8 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
             source = path.read_text(encoding="utf-8")
             self.assertNotIn("execute_python_script", source)
             self.assertNotIn("import socket", source)
+            self.assertIn("unreal.log(marker)", source)
+            self.assertIn("print(marker, flush=True)", source)
         import_source = import_path.read_text(encoding="utf-8")
         self.assertIn("InterchangeManager.get_interchange_manager_scripted", import_source)
         self.assertIn("InterchangeManager.create_source_data", import_source)
