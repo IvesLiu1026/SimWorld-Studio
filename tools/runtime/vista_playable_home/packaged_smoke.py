@@ -1,0 +1,810 @@
+#!/usr/bin/env python3
+"""Run a bounded NullRHI smoke against the sealed VISTA Linux package.
+
+The command launches only the package's fixed top-level shell launcher, binds
+the adapter to a caller-selected available loopback port, proves the typed
+runtime identity, and then terminates the process group it created.  It never
+publishes or replaces the interactive ``game-runtime/current.json`` pointer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping, Sequence
+
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from tools.runtime.vista_playable_home.runtime import (  # type: ignore
+        DEFAULT_WORLD_REVISION,
+        RuntimeSafetyError,
+        probe_typed_runtime,
+        validate_vista_world_port,
+    )
+    from tools.ue.vista_playable_home import package_receipt as package_verifier  # type: ignore
+else:
+    from .runtime import (
+        DEFAULT_WORLD_REVISION,
+        RuntimeSafetyError,
+        probe_typed_runtime,
+        validate_vista_world_port,
+    )
+    from tools.ue.vista_playable_home import package_receipt as package_verifier
+
+
+PACKAGE_RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v1"
+SMOKE_RECEIPT_SCHEMA = "simworld.vista.playable-home-packaged-smoke/v1"
+EXPECTED_MAP_PATH = "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
+EXPECTED_ATTEMPT_PARENT = "package-linux-development"
+PACKAGE_ATTEMPT_RE = re.compile(
+    r"^attempt-[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
+LAUNCHER_RELATIVE = Path("archive/Linux/VistaPlayableHome.sh")
+PACKAGE_RECEIPT_RELATIVE = Path("package-receipt.json")
+SMOKE_ATTEMPT_RE = re.compile(r"^attempt-[0-9]{2}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_JSON_BYTES = 4 * 1024 * 1024
+DEFAULT_READY_TIMEOUT_SECONDS = 180.0
+TRUSTED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+class PackagedSmokeError(RuntimeError):
+    """A bounded, non-secret smoke failure."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+@dataclass(frozen=True)
+class SmokeInputs:
+    package_attempt: Path
+    package_receipt: Path
+    package_receipt_sha256: str
+    receipt: Mapping[str, Any]
+    launcher: Path
+    launcher_sha256: str
+    executable: Path
+    executable_sha256: str
+    pak: Path
+    pak_sha256: str
+    archive_root: Path
+    archive_tree_sha256: str
+    map_path: str
+    output_dir: Path
+    port: int
+    timeout_seconds: float
+
+
+Probe = Callable[..., dict[str, Any]]
+ListenerProver = Callable[[int, int], dict[str, Any]]
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def canonical_json(value: Any) -> bytes:
+    try:
+        return (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise PackagedSmokeError("JSON_INVALID", "smoke receipt is not finite JSON") from exc
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as exc:
+        raise PackagedSmokeError("READ_FAILED", f"could not hash {path.name}") from exc
+    return digest.hexdigest()
+
+
+def _unique_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in output:
+            raise ValueError(f"duplicate JSON key: {key}")
+        output[key] = value
+    return output
+
+
+def _load_receipt(path: Path) -> Mapping[str, Any]:
+    try:
+        size = path.stat().st_size
+        if not 0 < size <= MAX_JSON_BYTES:
+            raise PackagedSmokeError("RECEIPT_SIZE_INVALID", "package receipt size is invalid")
+        raw = path.read_bytes()
+        value = json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=_unique_object,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite constant: {value}")
+            ),
+        )
+    except PackagedSmokeError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise PackagedSmokeError("RECEIPT_INVALID", "package receipt is not strict JSON") from exc
+    if not isinstance(value, dict):
+        raise PackagedSmokeError("RECEIPT_INVALID", "package receipt must be an object")
+    if canonical_json(value) != raw:
+        raise PackagedSmokeError("RECEIPT_INVALID", "package receipt is not canonical JSON")
+    return value
+
+
+def _canonical_existing(path: Path, label: str, *, directory: bool = False) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute() or ".." in candidate.parts or candidate.is_symlink():
+        raise PackagedSmokeError(
+            "PATH_IDENTITY_INVALID", f"{label} must be an absolute non-symlink path"
+        )
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise PackagedSmokeError("PATH_MISSING", f"{label} does not exist") from exc
+    correct_kind = resolved.is_dir() if directory else resolved.is_file()
+    if resolved != candidate or not correct_kind:
+        raise PackagedSmokeError(
+            "PATH_IDENTITY_INVALID", f"{label} must name its real path identity"
+        )
+    return resolved
+
+
+def _mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, dict):
+        raise PackagedSmokeError("RECEIPT_SHAPE_INVALID", f"{label} must be an object")
+    return value
+
+
+def validate_inputs(args: argparse.Namespace) -> SmokeInputs:
+    root = _canonical_existing(Path(args.package_attempt), "package attempt", directory=True)
+    if (
+        root.parent.name != EXPECTED_ATTEMPT_PARENT
+        or PACKAGE_ATTEMPT_RE.fullmatch(root.name) is None
+    ):
+        raise PackagedSmokeError(
+            "ATTEMPT_IDENTITY_INVALID",
+            "package attempt must be a safe package-linux-development/attempt-<id>",
+        )
+    receipt_path = _canonical_existing(root / PACKAGE_RECEIPT_RELATIVE, "package receipt")
+    pin = str(args.package_receipt_sha256 or "")
+    if not SHA256_RE.fullmatch(pin) or not hmac.compare_digest(sha256_file(receipt_path), pin):
+        raise PackagedSmokeError("PACKAGE_PIN_MISMATCH", "package receipt SHA differs")
+    receipt = _load_receipt(receipt_path)
+    if (
+        receipt.get("schema") != PACKAGE_RECEIPT_SCHEMA
+        or receipt.get("status") != "accepted"
+        or receipt.get("attempt_root") != str(root)
+    ):
+        raise PackagedSmokeError("PACKAGE_RECEIPT_INVALID", "package receipt identity differs")
+
+    bindings = _mapping(receipt.get("bindings"), "package bindings")
+    map_path = bindings.get("map_path")
+    if (
+        map_path != EXPECTED_MAP_PATH
+        or bindings.get("world_revision") != DEFAULT_WORLD_REVISION
+    ):
+        raise PackagedSmokeError("PACKAGE_MAP_INVALID", "package map or revision differs")
+    artifacts = _mapping(receipt.get("artifacts"), "package artifacts")
+    launcher_record = _mapping(artifacts.get("launcher"), "launcher artifact")
+    if launcher_record.get("relative_path") != LAUNCHER_RELATIVE.as_posix():
+        raise PackagedSmokeError("LAUNCHER_IDENTITY_INVALID", "launcher path differs")
+    launcher = _canonical_existing(root / LAUNCHER_RELATIVE, "package launcher")
+    launcher_sha = launcher_record.get("sha256")
+    if (
+        not isinstance(launcher_sha, str)
+        or not SHA256_RE.fullmatch(launcher_sha)
+        or not hmac.compare_digest(sha256_file(launcher), launcher_sha)
+        or not os.access(launcher, os.X_OK)
+    ):
+        raise PackagedSmokeError("LAUNCHER_PIN_MISMATCH", "launcher bytes or mode differ")
+    archive = _mapping(receipt.get("archive"), "package archive")
+    tree_sha = archive.get("tree_sha256")
+    secret_scan = _mapping(archive.get("secret_scan"), "package secret scan")
+    if (
+        not isinstance(tree_sha, str)
+        or SHA256_RE.fullmatch(tree_sha) is None
+        or secret_scan.get("matches") != 0
+    ):
+        raise PackagedSmokeError(
+            "PACKAGE_ARCHIVE_INVALID", "package archive or secret-scan evidence differs"
+        )
+    archive_root = _canonical_existing(root / "archive" / "Linux", "package archive", directory=True)
+
+    executable_record = _mapping(artifacts.get("executable"), "executable artifact")
+    expected_executable_relative = (
+        "archive/Linux/VistaPlayableHome/Binaries/Linux/VistaPlayableHome"
+    )
+    if executable_record.get("relative_path") != expected_executable_relative:
+        raise PackagedSmokeError("EXECUTABLE_IDENTITY_INVALID", "game executable path differs")
+    executable = _canonical_existing(root / expected_executable_relative, "game executable")
+    executable_sha = executable_record.get("sha256")
+    if (
+        not isinstance(executable_sha, str)
+        or SHA256_RE.fullmatch(executable_sha) is None
+        or not hmac.compare_digest(sha256_file(executable), executable_sha)
+        or not os.access(executable, os.X_OK)
+    ):
+        raise PackagedSmokeError("EXECUTABLE_PIN_MISMATCH", "game executable bytes differ")
+
+    pak_record = _mapping(artifacts.get("pak"), "pak artifact")
+    pak_relative = pak_record.get("relative_path")
+    expected_pak_parent = "archive/Linux/VistaPlayableHome/Content/Paks/"
+    if (
+        not isinstance(pak_relative, str)
+        or not pak_relative.startswith(expected_pak_parent)
+        or "/" in pak_relative.removeprefix(expected_pak_parent)
+        or not pak_relative.endswith(".pak")
+    ):
+        raise PackagedSmokeError("PAK_IDENTITY_INVALID", "pak path differs")
+    pak = _canonical_existing(root / pak_relative, "package pak")
+    pak_sha = pak_record.get("sha256")
+    if (
+        not isinstance(pak_sha, str)
+        or SHA256_RE.fullmatch(pak_sha) is None
+        or not hmac.compare_digest(sha256_file(pak), pak_sha)
+    ):
+        raise PackagedSmokeError("PAK_PIN_MISMATCH", "pak bytes differ")
+
+    output = Path(args.output_dir).expanduser()
+    expected_parent = root / "smoke"
+    if (
+        not output.is_absolute()
+        or ".." in output.parts
+        or output.parent != expected_parent
+        or SMOKE_ATTEMPT_RE.fullmatch(output.name) is None
+        or output.exists()
+        or output.is_symlink()
+    ):
+        raise PackagedSmokeError(
+            "OUTPUT_IDENTITY_INVALID",
+            "output must be a fresh package-attempt/smoke/attempt-NN directory",
+        )
+    timeout = float(args.timeout_seconds)
+    if not 5.0 <= timeout <= 600.0:
+        raise PackagedSmokeError("TIMEOUT_INVALID", "timeout must be from 5 through 600 seconds")
+    try:
+        port = validate_vista_world_port(args.vista_world_port)
+    except RuntimeSafetyError as exc:
+        raise PackagedSmokeError("PORT_INVALID", str(exc)) from exc
+
+    return SmokeInputs(
+        package_attempt=root,
+        package_receipt=receipt_path,
+        package_receipt_sha256=pin,
+        receipt=receipt,
+        launcher=launcher,
+        launcher_sha256=launcher_sha,
+        executable=executable,
+        executable_sha256=executable_sha,
+        pak=pak,
+        pak_sha256=pak_sha,
+        archive_root=archive_root,
+        archive_tree_sha256=tree_sha,
+        map_path=str(map_path),
+        output_dir=output,
+        port=port,
+        timeout_seconds=timeout,
+    )
+
+
+def build_command(inputs: SmokeInputs) -> list[str]:
+    user_dir = inputs.output_dir / "ue-user"
+    return [
+        str(inputs.launcher),
+        inputs.map_path,
+        "-nullrhi",
+        "-unattended",
+        "-NOSPLASH",
+        "-NOSOUND",
+        "-NoAnalytics",
+        f"-VistaWorldPort={inputs.port}",
+        "-UDPMESSAGING_TRANSPORT_ENABLE=0",
+        "-ini:Engine:[/Script/TcpMessaging.TcpMessagingSettings]:EnableTransport=False",
+        "-SaveToUserDir",
+        f"-UserDir={user_dir}",
+        "-stdout",
+        "-FullStdOutLogOutput",
+        "-log",
+    ]
+
+
+def sanitized_environment(inputs: SmokeInputs) -> dict[str, str]:
+    return {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": TRUSTED_PATH,
+        "HOME": str(inputs.output_dir / "home"),
+        "XDG_CACHE_HOME": str(inputs.output_dir / "xdg-cache"),
+        "XDG_CONFIG_HOME": str(inputs.output_dir / "xdg-config"),
+        "SDL_VIDEODRIVER": "dummy",
+        "CUDA_VISIBLE_DEVICES": "",
+    }
+
+
+def open_private_exclusive(path: Path):
+    descriptor = os.open(
+        path,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    return os.fdopen(descriptor, "wb")
+
+
+def _process_start_ticks(pid: int) -> int | None:
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    return int(fields[21]) if len(fields) > 21 else None
+
+
+def verify_sealed_archive(inputs: SmokeInputs) -> dict[str, Any]:
+    """Recompute the sealed archive without trusting the earlier receipt."""
+
+    try:
+        observation = package_verifier.inspect_archive(inputs.archive_root)
+    except package_verifier.PackageReceiptError as exc:
+        raise PackagedSmokeError(
+            "PACKAGE_ARCHIVE_DRIFT", "package archive could not be reverified"
+        ) from exc
+    if (
+        observation.get("tree_sha256") != inputs.archive_tree_sha256
+        or _mapping(observation.get("secret_scan"), "live secret scan").get("matches") != 0
+        or not hmac.compare_digest(sha256_file(inputs.launcher), inputs.launcher_sha256)
+        or not hmac.compare_digest(sha256_file(inputs.executable), inputs.executable_sha256)
+        or not hmac.compare_digest(sha256_file(inputs.pak), inputs.pak_sha256)
+    ):
+        raise PackagedSmokeError(
+            "PACKAGE_ARCHIVE_DRIFT", "package archive differs from its sealed receipt"
+        )
+    return {
+        "tree_sha256": observation["tree_sha256"],
+        "file_count": observation["file_count"],
+        "total_bytes": observation["total_bytes"],
+        "secret_matches": 0,
+    }
+
+
+def _listening_loopback_inodes(port: int) -> set[int]:
+    output: set[int] = set()
+    expected_port = f"{port:04X}"
+    for proc_path, ipv4 in ((Path("/proc/net/tcp"), True), (Path("/proc/net/tcp6"), False)):
+        try:
+            lines = proc_path.read_text(encoding="ascii").splitlines()[1:]
+        except (OSError, UnicodeDecodeError) as exc:
+            raise PackagedSmokeError(
+                "LISTENER_PROOF_FAILED", "could not inspect kernel TCP listeners"
+            ) from exc
+        for line in lines:
+            fields = line.split()
+            if len(fields) < 10 or fields[3] != "0A":
+                continue
+            address, separator, port_hex = fields[1].partition(":")
+            if separator != ":" or port_hex.upper() != expected_port:
+                continue
+            # The runtime adapter is required to bind IPv4 127.0.0.1.  Do not
+            # accept wildcard or externally reachable listeners as proof.
+            if not ipv4 or address.upper() != "0100007F":
+                continue
+            try:
+                output.add(int(fields[9]))
+            except ValueError as exc:
+                raise PackagedSmokeError(
+                    "LISTENER_PROOF_FAILED", "kernel listener inode is invalid"
+                ) from exc
+    return output
+
+
+def _process_group_socket_owners(process_group: int, inodes: set[int]) -> dict[int, list[int]]:
+    owners: dict[int, list[int]] = {inode: [] for inode in inodes}
+    try:
+        proc_entries = list(Path("/proc").iterdir())
+    except OSError as exc:
+        raise PackagedSmokeError("LISTENER_PROOF_FAILED", "could not enumerate processes") from exc
+    for entry in proc_entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw_stat = (entry / "stat").read_text(encoding="utf-8")
+            closing = raw_stat.rfind(")")
+            fields = raw_stat[closing + 2 :].split()
+            if closing < 0 or len(fields) < 3 or int(fields[2]) != process_group:
+                continue
+            pid = int(entry.name)
+            for descriptor in (entry / "fd").iterdir():
+                try:
+                    target = os.readlink(descriptor)
+                except (FileNotFoundError, PermissionError, OSError):
+                    continue
+                match = re.fullmatch(r"socket:\[([0-9]+)\]", target)
+                if match and int(match.group(1)) in owners:
+                    owners[int(match.group(1))].append(pid)
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError, ValueError):
+            continue
+    return owners
+
+
+def prove_loopback_listener_ownership(port: int, process_group: int) -> dict[str, Any]:
+    inodes = _listening_loopback_inodes(port)
+    if len(inodes) != 1:
+        raise PackagedSmokeError(
+            "LISTENER_OWNERSHIP_INVALID", "expected exactly one loopback listener"
+        )
+    owners = _process_group_socket_owners(process_group, inodes)
+    inode = next(iter(inodes))
+    owner_pids = sorted(set(owners.get(inode, [])))
+    if not owner_pids:
+        raise PackagedSmokeError(
+            "LISTENER_OWNERSHIP_INVALID", "typed listener is not owned by the smoke process group"
+        )
+    return {
+        "host": "127.0.0.1",
+        "port": port,
+        "socket_inode": inode,
+        "process_group": process_group,
+        "owner_pids": owner_pids,
+    }
+
+
+def wait_for_readiness(
+    process: subprocess.Popen[Any],
+    port: int,
+    timeout_seconds: float,
+    *,
+    probe: Probe = probe_typed_runtime,
+    listener_prover: ListenerProver = prove_loopback_listener_ownership,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise PackagedSmokeError("PROCESS_EXITED", "package exited before readiness")
+        try:
+            first = probe(
+                port,
+                expected_revision=DEFAULT_WORLD_REVISION,
+                timeout=1.0,
+            )
+            if process.poll() is not None:
+                raise PackagedSmokeError(
+                    "PROCESS_EXITED", "package exited after the first typed probe"
+                )
+            second = probe(
+                port,
+                expected_revision=DEFAULT_WORLD_REVISION,
+                timeout=1.0,
+            )
+            listener = listener_prover(port, process.pid)
+            return {
+                "probe_count": 2,
+                "stable": True,
+                "responses": [first, second],
+                "listener_ownership": listener,
+            }
+        except RuntimeSafetyError as exc:
+            last_error = exc
+            time.sleep(0.25)
+    raise PackagedSmokeError(
+        "READINESS_TIMEOUT",
+        "typed runtime did not become ready before the bounded timeout",
+    ) from last_error
+
+
+def terminate_owned_process(
+    process: subprocess.Popen[Any], *, term_timeout_seconds: float = 15.0
+) -> dict[str, Any]:
+    process_group = process.pid
+    if process.poll() is None:
+        try:
+            observed_group = os.getpgid(process.pid)
+        except (ProcessLookupError, PermissionError, OSError) as exc:
+            raise PackagedSmokeError(
+                "PROCESS_IDENTITY_LOST", "owned process identity was lost"
+            ) from exc
+        if observed_group != process_group:
+            raise PackagedSmokeError(
+                "PROCESS_GROUP_INVALID", "smoke process is not leader of its owned session"
+            )
+
+    def group_exists() -> bool:
+        try:
+            os.killpg(process_group, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def wait_group_gone(timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if not group_exists():
+                return True
+            time.sleep(0.05)
+        return not group_exists()
+
+    if not group_exists():
+        return {
+            "signal": None,
+            "escalated": False,
+            "exit_code": process.returncode,
+            "process_exited": process.poll() is not None,
+            "process_group_exited": True,
+        }
+    escalated = False
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        try:
+            process.wait(timeout=term_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            pass
+    if not wait_group_gone(min(term_timeout_seconds, 2.0)):
+        escalated = True
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if process.poll() is None:
+            try:
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                pass
+        if not wait_group_gone(5.0):
+            raise PackagedSmokeError(
+                "TERMINATION_FAILED", "owned process group survived SIGKILL"
+            )
+    return {
+        "signal": "SIGKILL" if escalated else "SIGTERM",
+        "escalated": escalated,
+        "exit_code": process.returncode,
+        "process_exited": process.poll() is not None,
+        "process_group_exited": not group_exists(),
+    }
+
+
+def _write_receipt(path: Path, receipt: Mapping[str, Any]) -> str:
+    raw = canonical_json(receipt)
+    with open_private_exclusive(path) as handle:
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return sha256_bytes(raw)
+
+
+def _error_record(error: BaseException) -> dict[str, str]:
+    if isinstance(error, PackagedSmokeError):
+        return {"type": type(error).__name__, "code": error.code, "message": str(error)}
+    if isinstance(error, OSError):
+        return {
+            "type": type(error).__name__,
+            "code": "OS_ERROR",
+            "message": "the packaged smoke encountered a local operating-system error",
+        }
+    return {
+        "type": type(error).__name__,
+        "code": "SMOKE_INTERNAL_ERROR",
+        "message": "the packaged smoke failed before acceptance",
+    }
+
+
+def run_smoke(
+    inputs: SmokeInputs,
+    *,
+    popen_factory: Callable[..., subprocess.Popen[Any]] = subprocess.Popen,
+    probe: Probe = probe_typed_runtime,
+    listener_prover: ListenerProver = prove_loopback_listener_ownership,
+) -> tuple[dict[str, Any], str]:
+    smoke_parent = inputs.package_attempt / "smoke"
+    if smoke_parent.exists():
+        smoke_parent = _canonical_existing(smoke_parent, "smoke root", directory=True)
+    else:
+        smoke_parent.mkdir(mode=0o700)
+    inputs.output_dir.mkdir(mode=0o700, exist_ok=False)
+    for directory in ("ue-user", "home", "xdg-cache", "xdg-config"):
+        (inputs.output_dir / directory).mkdir(mode=0o700)
+
+    log_path = inputs.output_dir / "packaged-smoke.log"
+    receipt_path = inputs.output_dir / "smoke-receipt.json"
+    command = build_command(inputs)
+    created_at = utc_now()
+    process: subprocess.Popen[Any] | None = None
+    readiness: dict[str, Any] | None = None
+    termination: dict[str, Any] | None = None
+    error: BaseException | None = None
+    process_record: dict[str, Any] | None = None
+    archive_before: dict[str, Any] | None = None
+    archive_after: dict[str, Any] | None = None
+    with open_private_exclusive(log_path) as log_handle:
+        try:
+            archive_before = verify_sealed_archive(inputs)
+            process = popen_factory(
+                command,
+                cwd=inputs.launcher.parent,
+                env=sanitized_environment(inputs),
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            start_ticks = _process_start_ticks(process.pid)
+            if start_ticks is None:
+                raise PackagedSmokeError(
+                    "PROCESS_IDENTITY_INVALID", "could not bind the owned process identity"
+                )
+            process_record = {
+                "pid": process.pid,
+                "start_ticks": start_ticks,
+                "process_group": os.getpgid(process.pid),
+            }
+            if process_record["process_group"] != process.pid:
+                raise PackagedSmokeError(
+                    "PROCESS_GROUP_INVALID", "smoke process did not create an owned session"
+                )
+            readiness = wait_for_readiness(
+                process,
+                inputs.port,
+                inputs.timeout_seconds,
+                probe=probe,
+                listener_prover=listener_prover,
+            )
+        except BaseException as exc:
+            error = exc
+        finally:
+            if process is not None:
+                try:
+                    termination = terminate_owned_process(process)
+                except BaseException as terminate_error:
+                    if error is None:
+                        error = terminate_error
+            try:
+                archive_after = verify_sealed_archive(inputs)
+            except BaseException as archive_error:
+                if error is None:
+                    error = archive_error
+            log_handle.flush()
+            os.fsync(log_handle.fileno())
+
+    accepted = (
+        error is None
+        and readiness is not None
+        and termination is not None
+        and termination.get("process_exited") is True
+        and termination.get("process_group_exited") is True
+        and archive_before is not None
+        and archive_after == archive_before
+    )
+    receipt: dict[str, Any] = {
+        "schema": SMOKE_RECEIPT_SCHEMA,
+        "status": "accepted" if accepted else "failed",
+        "created_at": created_at,
+        "completed_at": utc_now(),
+        "bindings": {
+            "package_attempt": str(inputs.package_attempt),
+            "package_receipt": str(inputs.package_receipt),
+            "package_receipt_sha256": inputs.package_receipt_sha256,
+            "launcher_sha256": inputs.launcher_sha256,
+            "archive_tree_sha256": _mapping(inputs.receipt.get("archive"), "archive").get(
+                "tree_sha256"
+            ),
+            "map_path": inputs.map_path,
+            "world_revision": DEFAULT_WORLD_REVISION,
+            "host": "127.0.0.1",
+            "port": inputs.port,
+        },
+        "launch": {
+            "launcher": str(inputs.launcher),
+            "command": command,
+            "cwd": str(inputs.launcher.parent),
+            "environment_policy": "minimal-nullrhi-no-display-no-gpu-no-secrets/v1",
+            "process": process_record,
+        },
+        "readiness": readiness,
+        "archive_verification": {
+            "before_launch": archive_before,
+            "after_termination": archive_after,
+            "stable": archive_before is not None and archive_after == archive_before,
+        },
+        "termination": termination,
+        "log": {
+            "path": str(log_path),
+            "sha256": sha256_file(log_path),
+            "bytes": log_path.stat().st_size,
+        },
+        "error": None if error is None else _error_record(error),
+        "output": str(receipt_path),
+    }
+    receipt_sha = _write_receipt(receipt_path, receipt)
+    return receipt, receipt_sha
+
+
+def plan(inputs: SmokeInputs) -> dict[str, Any]:
+    return {
+        "schema": SMOKE_RECEIPT_SCHEMA,
+        "mode": "preflight",
+        "package_receipt": str(inputs.package_receipt),
+        "package_receipt_sha256": inputs.package_receipt_sha256,
+        "launcher": str(inputs.launcher),
+        "launcher_sha256": inputs.launcher_sha256,
+        "map_path": inputs.map_path,
+        "host": "127.0.0.1",
+        "port": inputs.port,
+        "output_dir": str(inputs.output_dir),
+        "command": build_command(inputs),
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--package-attempt", required=True, type=Path)
+    parser.add_argument("--package-receipt-sha256", required=True)
+    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--vista-world-port", required=True, type=int)
+    parser.add_argument(
+        "--timeout-seconds", type=float, default=DEFAULT_READY_TIMEOUT_SECONDS
+    )
+    parser.add_argument("--apply", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    inputs = validate_inputs(args)
+    if not args.apply:
+        print(json.dumps(plan(inputs), indent=2, sort_keys=True))
+        return 0
+    receipt, receipt_sha = run_smoke(inputs)
+    print(
+        json.dumps(
+            {
+                "status": receipt["status"],
+                "receipt": receipt["output"],
+                "receipt_sha256": receipt_sha,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0 if receipt["status"] == "accepted" else 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (PackagedSmokeError, FileExistsError, OSError) as error:
+        print(f"packaged smoke refused: {error}", file=sys.stderr)
+        raise SystemExit(2)
