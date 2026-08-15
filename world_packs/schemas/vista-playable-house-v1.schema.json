@@ -1,0 +1,386 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-playable-house-v1.schema.json",
+  "title": "VISTA Playable House v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "house_id",
+    "revision",
+    "seed",
+    "units",
+    "coordinate_system",
+    "asset_catalog",
+    "rooms",
+    "portals",
+    "entities",
+    "relations",
+    "runtime_profile",
+    "budgets",
+    "provenance",
+    "content_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "simworld.vista.playable-house/v1"},
+    "house_id": {"$ref": "#/$defs/houseId"},
+    "revision": {"$ref": "#/$defs/revision"},
+    "seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+    "units": {"const": "meters"},
+    "coordinate_system": {"$ref": "#/$defs/coordinateSystem"},
+    "asset_catalog": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/asset"}
+    },
+    "rooms": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/room"}
+    },
+    "portals": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/portal"}
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/entity"}
+    },
+    "relations": {
+      "type": "array",
+      "maxItems": 20000,
+      "items": {"$ref": "#/$defs/relation"}
+    },
+    "runtime_profile": {"$ref": "#/$defs/runtimeProfile"},
+    "budgets": {"$ref": "#/$defs/budgets"},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "content_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "houseId": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", "maxLength": 96},
+    "revision": {"type": "string", "pattern": "^[a-z][a-z0-9_]*_r[0-9]+$", "maxLength": 96},
+    "roomId": {"type": "string", "pattern": "^home\\.r[0-9]+/room\\.[a-z][a-z0-9_]*$", "maxLength": 128},
+    "entityId": {"type": "string", "pattern": "^home\\.r[0-9]+/room\\.[a-z][a-z0-9_]*/entity\\.[a-z][a-z0-9_]*\\.[0-9]{2}$", "maxLength": 192},
+    "portalId": {"type": "string", "pattern": "^home\\.r[0-9]+/portal\\.[a-z][a-z0-9_]*-[a-z][a-z0-9_]*\\.[0-9]{2}$", "maxLength": 192},
+    "assetId": {"type": "string", "pattern": "^asset\\.[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", "maxLength": 128},
+    "relationId": {"type": "string", "pattern": "^relation\\.[a-z][a-z0-9_]*\\.[0-9]{2,4}$", "maxLength": 128},
+    "label": {"type": "string", "minLength": 1, "maxLength": 160},
+    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 96},
+    "vector3": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": -1000000, "maximum": 1000000},
+        {"type": "number", "minimum": -1000000, "maximum": 1000000},
+        {"type": "number", "minimum": -1000000, "maximum": 1000000}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rotation3": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": -360, "maximum": 360},
+        {"type": "number", "minimum": -360, "maximum": 360},
+        {"type": "number", "minimum": -360, "maximum": 360}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "scale3": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 1000}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location_m", "rotation_deg", "scale"],
+      "properties": {
+        "location_m": {"$ref": "#/$defs/vector3"},
+        "rotation_deg": {"$ref": "#/$defs/rotation3"},
+        "scale": {"$ref": "#/$defs/scale3"}
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_m", "max_m"],
+      "properties": {
+        "min_m": {"$ref": "#/$defs/vector3"},
+        "max_m": {"$ref": "#/$defs/vector3"}
+      }
+    },
+    "coordinateSystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["handedness", "up_axis", "forward_axis"],
+      "properties": {
+        "handedness": {"const": "right"},
+        "up_axis": {"const": "z"},
+        "forward_axis": {"const": "x"}
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "source_kind", "uri", "source_digest", "license"],
+      "properties": {
+        "asset_id": {"$ref": "#/$defs/assetId"},
+        "source_kind": {"enum": ["builtin", "procedural", "bundle"]},
+        "uri": {
+          "type": "string",
+          "pattern": "^(?:builtin|procedural|bundle)://[a-z0-9][a-z0-9._/-]{0,255}$",
+          "maxLength": 288
+        },
+        "source_digest": {"$ref": "#/$defs/digest"},
+        "license": {"type": "string", "minLength": 1, "maxLength": 96}
+      }
+    },
+    "reviewCamera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["camera_id", "location_m", "rotation_deg", "fov_deg"],
+      "properties": {
+        "camera_id": {"$ref": "#/$defs/slug"},
+        "location_m": {"$ref": "#/$defs/vector3"},
+        "rotation_deg": {"$ref": "#/$defs/rotation3"},
+        "fov_deg": {"type": "number", "minimum": 20, "maximum": 120}
+      }
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_id", "kind", "label", "bundle_asset_ref", "transform",
+        "bounds_m", "anchor_m", "review_cameras", "semantic_inventory"
+      ],
+      "properties": {
+        "room_id": {"$ref": "#/$defs/roomId"},
+        "kind": {"$ref": "#/$defs/slug"},
+        "label": {"$ref": "#/$defs/label"},
+        "bundle_asset_ref": {"$ref": "#/$defs/assetId"},
+        "transform": {"$ref": "#/$defs/transform"},
+        "bounds_m": {"$ref": "#/$defs/bounds"},
+        "anchor_m": {"$ref": "#/$defs/vector3"},
+        "review_cameras": {
+          "type": "array", "minItems": 1, "maxItems": 16,
+          "items": {"$ref": "#/$defs/reviewCamera"}
+        },
+        "semantic_inventory": {
+          "type": "array", "minItems": 1, "maxItems": 2048,
+          "items": {"$ref": "#/$defs/entityId"}, "uniqueItems": true
+        }
+      }
+    },
+    "clearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width_m", "height_m", "depth_m"],
+      "properties": {
+        "width_m": {"type": "number", "exclusiveMinimum": 0, "maximum": 20},
+        "height_m": {"type": "number", "exclusiveMinimum": 0, "maximum": 20},
+        "depth_m": {"type": "number", "exclusiveMinimum": 0, "maximum": 5}
+      }
+    },
+    "portal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "portal_id", "from_room_id", "to_room_id", "world_transform",
+        "clearance", "door_entity_id", "initial_state", "nav_policy"
+      ],
+      "properties": {
+        "portal_id": {"$ref": "#/$defs/portalId"},
+        "from_room_id": {"$ref": "#/$defs/roomId"},
+        "to_room_id": {"$ref": "#/$defs/roomId"},
+        "world_transform": {"$ref": "#/$defs/transform"},
+        "clearance": {"$ref": "#/$defs/clearance"},
+        "door_entity_id": {"oneOf": [{"$ref": "#/$defs/entityId"}, {"type": "null"}]},
+        "initial_state": {"enum": ["open", "closed"]},
+        "nav_policy": {"enum": ["always_open", "dynamic_door", "blocked"]}
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "open": {"type": "boolean"},
+        "active": {"type": "boolean"},
+        "powered": {"type": "boolean"},
+        "portable": {"type": "boolean"},
+        "visible": {"type": "boolean"},
+        "occupied": {"type": "boolean"},
+        "filled": {"type": "boolean"},
+        "liquid_level": {"type": "number", "minimum": 0, "maximum": 1},
+        "hazard": {"enum": ["none", "thermal", "spill", "overflow", "unstable", "obstacle"]},
+        "held_by": {"oneOf": [{"type": "string", "pattern": "^[a-z][a-z0-9._/-]*$", "maxLength": 128}, {"type": "null"}]},
+        "placed_at": {"oneOf": [{"type": "string", "pattern": "^[a-z][a-z0-9._/#-]*$", "maxLength": 224}, {"type": "null"}]},
+        "status": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64},
+        "inspect_text": {"type": "string", "maxLength": 320}
+      }
+    },
+    "placementAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor_id", "transform"],
+      "properties": {
+        "anchor_id": {"$ref": "#/$defs/slug"},
+        "transform": {"$ref": "#/$defs/transform"}
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_id", "room_id", "category", "asset_ref", "transform", "tags",
+        "component_role", "mobility", "collision_policy", "nav_obstacle",
+        "affordances", "initial_state", "placement_anchors"
+      ],
+      "properties": {
+        "entity_id": {"$ref": "#/$defs/entityId"},
+        "room_id": {"$ref": "#/$defs/roomId"},
+        "category": {"$ref": "#/$defs/slug"},
+        "asset_ref": {"$ref": "#/$defs/assetId"},
+        "transform": {"$ref": "#/$defs/transform"},
+        "tags": {
+          "type": "array", "maxItems": 32, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/slug"}
+        },
+        "component_role": {"enum": ["static_furniture", "decoration", "pickup", "door", "container", "appliance", "npc", "hazard", "anchor"]},
+        "mobility": {"enum": ["static", "movable", "simulated"]},
+        "collision_policy": {"enum": ["world_static", "furniture", "detail_no_collision", "pickup_physics", "door_dynamic", "pawn", "trigger_only"]},
+        "nav_obstacle": {"type": "boolean"},
+        "affordances": {
+          "type": "array", "maxItems": 8, "uniqueItems": true,
+          "items": {"enum": ["open", "close", "pick_up", "drop", "place", "toggle", "sit", "inspect"]}
+        },
+        "initial_state": {"$ref": "#/$defs/state"},
+        "placement_anchors": {
+          "type": "array", "maxItems": 32,
+          "items": {"$ref": "#/$defs/placementAnchor"}
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relation_id", "predicate", "subject_id", "object_id"],
+      "properties": {
+        "relation_id": {"$ref": "#/$defs/relationId"},
+        "predicate": {"enum": ["inside", "supports", "contains", "adjacent_to"]},
+        "subject_id": {"type": "string", "minLength": 1, "maxLength": 224},
+        "object_id": {"type": "string", "minLength": 1, "maxLength": 224}
+      }
+    },
+    "playerStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["room_id", "transform"],
+      "properties": {
+        "room_id": {"$ref": "#/$defs/roomId"},
+        "transform": {"$ref": "#/$defs/transform"}
+      }
+    },
+    "navigationAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["radius_m", "height_m", "max_step_height_m", "max_slope_deg"],
+      "properties": {
+        "radius_m": {"type": "number", "exclusiveMinimum": 0, "maximum": 5},
+        "height_m": {"type": "number", "exclusiveMinimum": 0, "maximum": 10},
+        "max_step_height_m": {"type": "number", "minimum": 0, "maximum": 2},
+        "max_slope_deg": {"type": "number", "minimum": 0, "maximum": 89}
+      }
+    },
+    "npcProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["npc_id", "entity_id", "home_room_id", "patrol_room_ids", "action_timeout_s"],
+      "properties": {
+        "npc_id": {"type": "string", "pattern": "^npc\\.[a-z][a-z0-9_]*$", "maxLength": 96},
+        "entity_id": {"$ref": "#/$defs/entityId"},
+        "home_room_id": {"$ref": "#/$defs/roomId"},
+        "patrol_room_ids": {
+          "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/roomId"}
+        },
+        "action_timeout_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 300}
+      }
+    },
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["move", "look", "jump", "sprint", "crouch", "interact"],
+      "properties": {
+        "move": {"const": true},
+        "look": {"const": true},
+        "jump": {"const": true},
+        "sprint": {"const": true},
+        "crouch": {"const": true},
+        "interact": {"const": true}
+      }
+    },
+    "runtimeProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "player_start", "pawn_asset_ref", "game_mode_asset_ref", "controls",
+        "interaction_distance_m", "navigation_agent", "npc_profiles", "remote_surface"
+      ],
+      "properties": {
+        "player_start": {"$ref": "#/$defs/playerStart"},
+        "pawn_asset_ref": {"$ref": "#/$defs/assetId"},
+        "game_mode_asset_ref": {"$ref": "#/$defs/assetId"},
+        "controls": {"$ref": "#/$defs/controls"},
+        "interaction_distance_m": {"type": "number", "exclusiveMinimum": 0, "maximum": 20},
+        "navigation_agent": {"$ref": "#/$defs/navigationAgent"},
+        "npc_profiles": {
+          "type": "array", "maxItems": 64,
+          "items": {"$ref": "#/$defs/npcProfile"}
+        },
+        "remote_surface": {"const": "game_only"}
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_rooms", "max_portals", "max_entities", "max_triangles", "max_draw_calls"],
+      "properties": {
+        "max_rooms": {"type": "integer", "minimum": 1, "maximum": 128},
+        "max_portals": {"type": "integer", "minimum": 0, "maximum": 512},
+        "max_entities": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "max_triangles": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+        "max_draw_calls": {"type": "integer", "minimum": 1, "maximum": 100000}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_commit", "authoring_tool", "source_refs", "license"],
+      "properties": {
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "authoring_tool": {"type": "string", "minLength": 1, "maxLength": 96},
+        "source_refs": {
+          "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9+.-]*://[a-zA-Z0-9][a-zA-Z0-9._/-]*$", "maxLength": 256}
+        },
+        "license": {"type": "string", "minLength": 1, "maxLength": 96}
+      }
+    }
+  }
+}

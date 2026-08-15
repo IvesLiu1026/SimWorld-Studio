@@ -1,0 +1,32 @@
+{
+  "schema_version": "simworld.vista.playable-event/v1",
+  "event_id": "mmg_070",
+  "title": "Loaded washer has not been started",
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "participating_room_ids": ["home.r1/room.bathroom_laundry"],
+  "participating_entity_ids": [
+    "home.r1/room.bathroom_laundry/entity.clothes.01",
+    "home.r1/room.bathroom_laundry/entity.washer.01"
+  ],
+  "initial_operations": [
+    {"op_id": "op.01", "op": "set_state", "target_id": "home.r1/room.bathroom_laundry/entity.washer.01", "state_patch": {"active": false, "status": "loaded"}},
+    {"op_id": "op.02", "op": "set_state", "target_id": "home.r1/room.bathroom_laundry/entity.clothes.01", "state_patch": {"status": "loaded"}},
+    {"op_id": "op.03", "op": "set_goal", "goal_id": "start_washer", "enabled": true}
+  ],
+  "public_goals": [
+    {"goal_id": "start_washer", "description": "Start the loaded washer before leaving the laundry area.", "success_condition_ids": ["washer_started"]}
+  ],
+  "triggers": [
+    {"condition_id": "clothes_loaded", "type": "entity_state", "target_id": "home.r1/room.bathroom_laundry/entity.clothes.01", "field": "status", "operator": "eq", "value": "loaded"}
+  ],
+  "success_conditions": [
+    {"condition_id": "washer_started", "type": "entity_state", "target_id": "home.r1/room.bathroom_laundry/entity.washer.01", "field": "active", "operator": "eq", "value": true}
+  ],
+  "failure_conditions": [
+    {"condition_id": "washer_wait_timeout", "type": "elapsed", "operator": "gte", "seconds": 120}
+  ],
+  "timeout_s": 600,
+  "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
+  "source": {"dataset": "VISTA", "sample_id": "mmg_070", "verification": "verified", "public_reference": "vista://assist-step/mmg_070"},
+  "content_digest": "90a5284fe1afd6c4944e8be00d96219e9755fa0f4dd3f534124ba80283bccbbf"
+}

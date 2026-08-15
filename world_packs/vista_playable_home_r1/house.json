@@ -1,0 +1,223 @@
+{
+  "schema_version": "simworld.vista.playable-house/v1",
+  "house_id": "home.r1",
+  "revision": "vista_playable_home_r1",
+  "seed": 20260815,
+  "units": "meters",
+  "coordinate_system": {"handedness": "right", "up_axis": "z", "forward_axis": "x"},
+  "asset_catalog": [
+    {"asset_id": "asset.bundle.entry_hall", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/entry-hall", "source_digest": "3092db8f7211026a2a3082aa1c858dcdb77195bdff148ca67b5bf4ab64051a46", "license": "research-fixture-only"},
+    {"asset_id": "asset.bundle.living_room", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/living-room", "source_digest": "98ad1ffbc8f3822924f8ff7531a280e631c5636d36d78a4ff317eceeefb621cc", "license": "research-fixture-only"},
+    {"asset_id": "asset.bundle.kitchen_dining", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/kitchen-dining", "source_digest": "509d535c17a9bbcca426bf77b939af1a67185922dc59729c1634468671061fda", "license": "research-fixture-only"},
+    {"asset_id": "asset.bundle.bedroom", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/bedroom", "source_digest": "0b7eef00b5829beb1498980f184aa4a27507db2cf4d956d4acf25d4ed8b0eadb", "license": "research-fixture-only"},
+    {"asset_id": "asset.bundle.office", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/office", "source_digest": "d9e87d98730112980208a72c409ec2af7a9173c8b4d7f1cfaf48391108a94ccb", "license": "research-fixture-only"},
+    {"asset_id": "asset.bundle.bathroom_laundry", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/bathroom-laundry", "source_digest": "379a86768d7e46a1d9263327c29cb219a8a92d24a7fd37ddf5d37437a391bad1", "license": "research-fixture-only"},
+    {"asset_id": "asset.runtime.player", "source_kind": "builtin", "uri": "builtin://vista/playable-home/pawn", "source_digest": "9bb33e653aeb7e663e785d2dd6e5cc9e827919d911b6a2d5da82d90722279f70", "license": "project-builtin"},
+    {"asset_id": "asset.runtime.game_mode", "source_kind": "builtin", "uri": "builtin://vista/playable-home/game-mode", "source_digest": "4f75fb7da6a018dceef7365511f478702c5681eb30222bd8d9a462964f298c28", "license": "project-builtin"},
+    {"asset_id": "asset.runtime.npc", "source_kind": "builtin", "uri": "builtin://vista/playable-home/npc", "source_digest": "159fe8cfee3de4f1aecd8a7b201c497c3196aec8b94114e8ba0da4d812bc91c7", "license": "project-builtin"},
+    {"asset_id": "asset.door.interior", "source_kind": "procedural", "uri": "procedural://vista-playable-home/interior-door", "source_digest": "5ecfa114e291d632fa61e58d5c01fed6d59d2af1d6a8674ecf3c27ca06d644f7", "license": "generated-project-asset"},
+    {"asset_id": "asset.door.exterior", "source_kind": "procedural", "uri": "procedural://vista-playable-home/exterior-door", "source_digest": "bfd07aa16e6571f9ea18c60909cbd46dd08846523b31300abbc22ca07e9f00bd", "license": "generated-project-asset"},
+    {"asset_id": "asset.prop.shoe_bench", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/shoe-bench", "source_digest": "3c71708cb97b100c6d198da21248e3d4aaafa9f3a6cbd3b4c994ed2b60c8efb9", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.sofa", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/sofa", "source_digest": "e97f4c1e67bd172513a1cf5b3061514bf3c9d63f7c1d0f1627a601db6e33492e", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.coffee_table", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/coffee-table", "source_digest": "24fd5be9e519da128655d7bc5008d517ce63da40a8be08d1454063456518c9e1", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.keys", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/keys", "source_digest": "2b6b743592f81446388fbaf7d22da43df71b8df12e76ec462a5d90bdc9f2290e", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.slipper", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/slipper", "source_digest": "b2cc25a87c03b1a71343eee0bf394355fe8b1c2a87513f01de506f3be782a493", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.spill_marker", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/spill-marker", "source_digest": "58b84fabf66888508fa91eba04342ecd133cb958d8c6918c55f57916536667a3", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.stove", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/stove", "source_digest": "f7a7ec668d3bf594f8645083f42054761574830315e14283b73679095b415ec8", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.pot", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/pot", "source_digest": "8902b928ed03cc4ff0abc7af65b8a9773a7ac09c7a33a99bf072be6d3a63e29a", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.dining_table", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/dining-table", "source_digest": "5cbc0dd58a8449332d501cf2d25be6037ab6557f5dab0f35fc494d2127701d55", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.coffee_cup", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/coffee-cup", "source_digest": "b197bbf71ea76da9276ec742fc6495eefb3bd06843522cb9209744e147bfee54", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.fridge", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/fridge", "source_digest": "25100e007c847d170c3da3aabbeabe4406d97e1711c90ffc3abcfdae55aa9f53", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.fire_marker", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/fire-marker", "source_digest": "2674b7a4daffcd8a03dc569a5cce40aaf565cb83ea1375a64ef0e84e41fb59f3", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.bed", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/bed", "source_digest": "51f8fc44a516e0ae3837e5731a892eb05b0a34691b9e3e7057bf714fca2c6147", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.nightstand", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/nightstand", "source_digest": "72bd8e1fe3b971d504aacc0a4dc81a44322aa5ec1cfb6664df5a4ffa9d0aa46a", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.phone", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/phone", "source_digest": "1fb2d7d4db67ba1805d780e474c55b363e84cf1ab693779a59a8dc952fb72ae5", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.backpack", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/backpack", "source_digest": "cdc7a55b39395bf8e92f835cc1ec9f8567520a4deea43a351386a982d63d7a22", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.desk", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/desk", "source_digest": "4efe889d4bc708aa6a851f3ad01114d725b6cc104805572f78b968c9790fd0f3", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.rolling_chair", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/rolling-chair", "source_digest": "8304bd3efcc9df8efd5e00f9f4a0e311b4d68056b6a712b821ed483959165b13", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.cabinet", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/cabinet", "source_digest": "d13f406b0ac876729ed2ee5f203d0b9485a0583cb6dd351e548a4427098e0337", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.cardboard_box", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/cardboard-box", "source_digest": "ef9c99e2cc06c3f8b7196c7266cc76f4dc1727411317a98efdd078b704e3d651", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.ladder", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/ladder", "source_digest": "6145b6ad8a18f6b0faae4e4b04945b61e9c25d4ae25ffaaa00b15054935d5e11", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.bathtub", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/bathtub", "source_digest": "8df772c20a4bbbe3af03ec107abd79ced3730a894201254f99fb40805a017ece", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.faucet", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/faucet", "source_digest": "20e0d677a7997cede9a00ecdf65d04f2103798288a311b375f1f488452508b39", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.washer", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/washer", "source_digest": "01e9169b4dabe5f647b3f8e1f788a59e6e67714d42135de3481ad79a153a01ff", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.laundry_basket", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/laundry-basket", "source_digest": "ec16a641b9f64e89970cfec1aa762af23788e2d9bba1e3a736d5d4dfb134d434", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.clothes", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/clothes", "source_digest": "fd854f4b9c9d58ebf5b75556f61aa289a9fc68eb769b3f4dd627362d1e577bb1", "license": "research-fixture-only"},
+    {"asset_id": "asset.prop.overflow_marker", "source_kind": "bundle", "uri": "bundle://vista-playable-home-r1/props/overflow-marker", "source_digest": "42e00ed94532cf170cd9ebdcd1669a51535b6dab08588f6a2031883f6abed75c", "license": "research-fixture-only"}
+  ],
+  "rooms": [
+    {
+      "room_id": "home.r1/room.entry_hall", "kind": "entry_hall", "label": "Entry and Hall",
+      "bundle_asset_ref": "asset.bundle.entry_hall",
+      "transform": {"location_m": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "bounds_m": {"min_m": [-1.5, -4, 0], "max_m": [1.5, 4, 3]},
+      "anchor_m": [0, 0, 0.1],
+      "review_cameras": [{"camera_id": "entry_overview", "location_m": [0, -3.2, 1.7], "rotation_deg": [-8, 0, 90], "fov_deg": 68}],
+      "semantic_inventory": [
+        "home.r1/room.entry_hall/entity.exit_door.01",
+        "home.r1/room.entry_hall/entity.interior_door.01",
+        "home.r1/room.entry_hall/entity.interior_door.02",
+        "home.r1/room.entry_hall/entity.interior_door.03",
+        "home.r1/room.entry_hall/entity.interior_door.04",
+        "home.r1/room.entry_hall/entity.interior_door.05",
+        "home.r1/room.entry_hall/entity.resident.01",
+        "home.r1/room.entry_hall/entity.shoe_bench.01"
+      ]
+    },
+    {
+      "room_id": "home.r1/room.living_room", "kind": "living_room", "label": "Living Room",
+      "bundle_asset_ref": "asset.bundle.living_room",
+      "transform": {"location_m": [-4, -2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
+      "anchor_m": [0, 0, 0.1],
+      "review_cameras": [{"camera_id": "living_overview", "location_m": [-2, -1.5, 1.7], "rotation_deg": [-10, 0, 35], "fov_deg": 70}],
+      "semantic_inventory": [
+        "home.r1/room.living_room/entity.coffee_table.01",
+        "home.r1/room.living_room/entity.keys.01",
+        "home.r1/room.living_room/entity.slipper.01",
+        "home.r1/room.living_room/entity.sofa.01",
+        "home.r1/room.living_room/entity.spill_marker.01"
+      ]
+    },
+    {
+      "room_id": "home.r1/room.kitchen_dining", "kind": "kitchen_dining", "label": "Kitchen and Dining",
+      "bundle_asset_ref": "asset.bundle.kitchen_dining",
+      "transform": {"location_m": [4, -2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
+      "anchor_m": [0, 0, 0.1],
+      "review_cameras": [{"camera_id": "kitchen_overview", "location_m": [2, -1.5, 1.7], "rotation_deg": [-10, 0, 145], "fov_deg": 70}],
+      "semantic_inventory": [
+        "home.r1/room.kitchen_dining/entity.coffee_cup.01",
+        "home.r1/room.kitchen_dining/entity.dining_table.01",
+        "home.r1/room.kitchen_dining/entity.fire_marker.01",
+        "home.r1/room.kitchen_dining/entity.fridge.01",
+        "home.r1/room.kitchen_dining/entity.pot.01",
+        "home.r1/room.kitchen_dining/entity.stove.01"
+      ]
+    },
+    {
+      "room_id": "home.r1/room.bedroom", "kind": "bedroom", "label": "Bedroom",
+      "bundle_asset_ref": "asset.bundle.bedroom",
+      "transform": {"location_m": [-4, 2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
+      "anchor_m": [0, 0, 0.1],
+      "review_cameras": [{"camera_id": "bedroom_overview", "location_m": [-2, 1.5, 1.7], "rotation_deg": [-10, 0, -35], "fov_deg": 68}],
+      "semantic_inventory": [
+        "home.r1/room.bedroom/entity.backpack.01",
+        "home.r1/room.bedroom/entity.bed.01",
+        "home.r1/room.bedroom/entity.nightstand.01",
+        "home.r1/room.bedroom/entity.phone.01"
+      ]
+    },
+    {
+      "room_id": "home.r1/room.office", "kind": "office", "label": "Office",
+      "bundle_asset_ref": "asset.bundle.office",
+      "transform": {"location_m": [4, 2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
+      "anchor_m": [0, 0, 0.1],
+      "review_cameras": [{"camera_id": "office_overview", "location_m": [2, 1.5, 1.7], "rotation_deg": [-10, 0, -145], "fov_deg": 68}],
+      "semantic_inventory": [
+        "home.r1/room.office/entity.cabinet.01",
+        "home.r1/room.office/entity.cardboard_box.01",
+        "home.r1/room.office/entity.desk.01",
+        "home.r1/room.office/entity.ladder.01",
+        "home.r1/room.office/entity.rolling_chair.01"
+      ]
+    },
+    {
+      "room_id": "home.r1/room.bathroom_laundry", "kind": "bathroom_laundry", "label": "Bathroom and Laundry",
+      "bundle_asset_ref": "asset.bundle.bathroom_laundry",
+      "transform": {"location_m": [0, 6, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "bounds_m": {"min_m": [-1.5, -2, 0], "max_m": [1.5, 2, 3]},
+      "anchor_m": [0, 0, 0.1],
+      "review_cameras": [{"camera_id": "bathroom_overview", "location_m": [0, 1.5, 1.7], "rotation_deg": [-10, 0, -90], "fov_deg": 65}],
+      "semantic_inventory": [
+        "home.r1/room.bathroom_laundry/entity.bathtub.01",
+        "home.r1/room.bathroom_laundry/entity.clothes.01",
+        "home.r1/room.bathroom_laundry/entity.faucet.01",
+        "home.r1/room.bathroom_laundry/entity.laundry_basket.01",
+        "home.r1/room.bathroom_laundry/entity.overflow_marker.01",
+        "home.r1/room.bathroom_laundry/entity.washer.01"
+      ]
+    }
+  ],
+  "portals": [
+    {"portal_id": "home.r1/portal.entry_hall-living_room.01", "from_room_id": "home.r1/room.entry_hall", "to_room_id": "home.r1/room.living_room", "world_transform": {"location_m": [-1.5, -2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "clearance": {"width_m": 1, "height_m": 2.1, "depth_m": 0.15}, "door_entity_id": "home.r1/room.entry_hall/entity.interior_door.01", "initial_state": "closed", "nav_policy": "dynamic_door"},
+    {"portal_id": "home.r1/portal.entry_hall-kitchen_dining.01", "from_room_id": "home.r1/room.entry_hall", "to_room_id": "home.r1/room.kitchen_dining", "world_transform": {"location_m": [1.5, -2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "clearance": {"width_m": 1, "height_m": 2.1, "depth_m": 0.15}, "door_entity_id": "home.r1/room.entry_hall/entity.interior_door.02", "initial_state": "open", "nav_policy": "dynamic_door"},
+    {"portal_id": "home.r1/portal.entry_hall-bedroom.01", "from_room_id": "home.r1/room.entry_hall", "to_room_id": "home.r1/room.bedroom", "world_transform": {"location_m": [-1.5, 2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "clearance": {"width_m": 1, "height_m": 2.1, "depth_m": 0.15}, "door_entity_id": "home.r1/room.entry_hall/entity.interior_door.03", "initial_state": "closed", "nav_policy": "dynamic_door"},
+    {"portal_id": "home.r1/portal.entry_hall-office.01", "from_room_id": "home.r1/room.entry_hall", "to_room_id": "home.r1/room.office", "world_transform": {"location_m": [1.5, 2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "clearance": {"width_m": 1, "height_m": 2.1, "depth_m": 0.15}, "door_entity_id": "home.r1/room.entry_hall/entity.interior_door.04", "initial_state": "open", "nav_policy": "dynamic_door"},
+    {"portal_id": "home.r1/portal.entry_hall-bathroom_laundry.01", "from_room_id": "home.r1/room.entry_hall", "to_room_id": "home.r1/room.bathroom_laundry", "world_transform": {"location_m": [0, 4, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "clearance": {"width_m": 1, "height_m": 2.1, "depth_m": 0.15}, "door_entity_id": "home.r1/room.entry_hall/entity.interior_door.05", "initial_state": "closed", "nav_policy": "dynamic_door"}
+  ],
+  "entities": [
+    {"entity_id": "home.r1/room.entry_hall/entity.exit_door.01", "room_id": "home.r1/room.entry_hall", "category": "exit_door", "asset_ref": "asset.door.exterior", "transform": {"location_m": [0, -4, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["door", "exit", "interactable"], "component_role": "door", "mobility": "movable", "collision_policy": "door_dynamic", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": false, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.entry_hall/entity.interior_door.01", "room_id": "home.r1/room.entry_hall", "category": "interior_door", "asset_ref": "asset.door.interior", "transform": {"location_m": [-1.5, -2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "tags": ["door", "interactable"], "component_role": "door", "mobility": "movable", "collision_policy": "door_dynamic", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": false, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.entry_hall/entity.interior_door.02", "room_id": "home.r1/room.entry_hall", "category": "interior_door", "asset_ref": "asset.door.interior", "transform": {"location_m": [1.5, -2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "tags": ["door", "interactable"], "component_role": "door", "mobility": "movable", "collision_policy": "door_dynamic", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": true, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.entry_hall/entity.interior_door.03", "room_id": "home.r1/room.entry_hall", "category": "interior_door", "asset_ref": "asset.door.interior", "transform": {"location_m": [-1.5, 2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "tags": ["door", "interactable"], "component_role": "door", "mobility": "movable", "collision_policy": "door_dynamic", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": false, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.entry_hall/entity.interior_door.04", "room_id": "home.r1/room.entry_hall", "category": "interior_door", "asset_ref": "asset.door.interior", "transform": {"location_m": [1.5, 2, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "tags": ["door", "interactable"], "component_role": "door", "mobility": "movable", "collision_policy": "door_dynamic", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": true, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.entry_hall/entity.interior_door.05", "room_id": "home.r1/room.entry_hall", "category": "interior_door", "asset_ref": "asset.door.interior", "transform": {"location_m": [0, 4, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["door", "interactable"], "component_role": "door", "mobility": "movable", "collision_policy": "door_dynamic", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": false, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.entry_hall/entity.resident.01", "room_id": "home.r1/room.entry_hall", "category": "resident", "asset_ref": "asset.runtime.npc", "transform": {"location_m": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["autonomous", "humanoid", "npc"], "component_role": "npc", "mobility": "movable", "collision_policy": "pawn", "nav_obstacle": false, "affordances": ["inspect"], "initial_state": {"visible": true, "status": "idle"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.entry_hall/entity.shoe_bench.01", "room_id": "home.r1/room.entry_hall", "category": "shoe_bench", "asset_ref": "asset.prop.shoe_bench", "transform": {"location_m": [1, -3.1, 0], "rotation_deg": [0, 0, 180], "scale": [1, 1, 1]}, "tags": ["furniture", "seating"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["sit", "inspect"], "initial_state": {"visible": true, "occupied": false}, "placement_anchors": []},
+
+    {"entity_id": "home.r1/room.living_room/entity.sofa.01", "room_id": "home.r1/room.living_room", "category": "sofa", "asset_ref": "asset.prop.sofa", "transform": {"location_m": [-1.6, 1.2, 0], "rotation_deg": [0, 0, -90], "scale": [1, 1, 1]}, "tags": ["furniture", "seating"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["sit", "inspect"], "initial_state": {"visible": true, "occupied": false}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.living_room/entity.coffee_table.01", "room_id": "home.r1/room.living_room", "category": "coffee_table", "asset_ref": "asset.prop.coffee_table", "transform": {"location_m": [0, 0.3, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["furniture", "surface"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["inspect"], "initial_state": {"visible": true}, "placement_anchors": [{"anchor_id": "tabletop_left", "transform": {"location_m": [-0.35, 0, 0.48], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}}, {"anchor_id": "tabletop_right", "transform": {"location_m": [0.35, 0, 0.48], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}}]},
+    {"entity_id": "home.r1/room.living_room/entity.keys.01", "room_id": "home.r1/room.living_room", "category": "keys", "asset_ref": "asset.prop.keys", "transform": {"location_m": [-0.35, 0.3, 0.5], "rotation_deg": [0, 0, 15], "scale": [1, 1, 1]}, "tags": ["hero", "portable"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "held_by": null, "placed_at": "home.r1/room.living_room/entity.coffee_table.01#tabletop_left"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.living_room/entity.slipper.01", "room_id": "home.r1/room.living_room", "category": "slipper", "asset_ref": "asset.prop.slipper", "transform": {"location_m": [1.4, -0.5, 0.03], "rotation_deg": [0, 0, 25], "scale": [1, 1, 1]}, "tags": ["obstacle", "portable"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "held_by": null, "hazard": "obstacle"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.living_room/entity.spill_marker.01", "room_id": "home.r1/room.living_room", "category": "spill_marker", "asset_ref": "asset.prop.spill_marker", "transform": {"location_m": [1.1, -0.6, 0.01], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["event_fixture", "hazard"], "component_role": "hazard", "mobility": "static", "collision_policy": "trigger_only", "nav_obstacle": false, "affordances": ["inspect"], "initial_state": {"visible": false, "hazard": "spill"}, "placement_anchors": []},
+
+    {"entity_id": "home.r1/room.kitchen_dining/entity.stove.01", "room_id": "home.r1/room.kitchen_dining", "category": "stove", "asset_ref": "asset.prop.stove", "transform": {"location_m": [1.8, 1.3, 0], "rotation_deg": [0, 0, 180], "scale": [1, 1, 1]}, "tags": ["appliance", "interactable"], "component_role": "appliance", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["toggle", "inspect"], "initial_state": {"active": false, "powered": true, "visible": true, "hazard": "none"}, "placement_anchors": [{"anchor_id": "front_burner", "transform": {"location_m": [0.2, 0, 0.92], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}}]},
+    {"entity_id": "home.r1/room.kitchen_dining/entity.pot.01", "room_id": "home.r1/room.kitchen_dining", "category": "pot", "asset_ref": "asset.prop.pot", "transform": {"location_m": [2, 1.3, 0.94], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["cookware", "portable"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "filled": true, "held_by": null, "placed_at": "home.r1/room.kitchen_dining/entity.stove.01#front_burner"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.kitchen_dining/entity.dining_table.01", "room_id": "home.r1/room.kitchen_dining", "category": "dining_table", "asset_ref": "asset.prop.dining_table", "transform": {"location_m": [-0.8, -0.2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["dining", "furniture", "surface"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["inspect"], "initial_state": {"visible": true}, "placement_anchors": [{"anchor_id": "place_setting", "transform": {"location_m": [0.25, 0, 0.76], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}}]},
+    {"entity_id": "home.r1/room.kitchen_dining/entity.coffee_cup.01", "room_id": "home.r1/room.kitchen_dining", "category": "coffee_cup", "asset_ref": "asset.prop.coffee_cup", "transform": {"location_m": [-0.55, -0.2, 0.78], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["hero", "portable"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "filled": true, "held_by": null, "placed_at": "home.r1/room.kitchen_dining/entity.dining_table.01#place_setting"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.kitchen_dining/entity.fridge.01", "room_id": "home.r1/room.kitchen_dining", "category": "fridge", "asset_ref": "asset.prop.fridge", "transform": {"location_m": [2, -1.2, 0], "rotation_deg": [0, 0, 180], "scale": [1, 1, 1]}, "tags": ["appliance", "container"], "component_role": "container", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": false, "powered": true, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.kitchen_dining/entity.fire_marker.01", "room_id": "home.r1/room.kitchen_dining", "category": "fire_marker", "asset_ref": "asset.prop.fire_marker", "transform": {"location_m": [2, 1.3, 1], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["event_fixture", "hazard"], "component_role": "hazard", "mobility": "static", "collision_policy": "trigger_only", "nav_obstacle": false, "affordances": ["inspect"], "initial_state": {"visible": false, "hazard": "thermal"}, "placement_anchors": []},
+
+    {"entity_id": "home.r1/room.bedroom/entity.bed.01", "room_id": "home.r1/room.bedroom", "category": "bed", "asset_ref": "asset.prop.bed", "transform": {"location_m": [-1, 0.6, 0], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}, "tags": ["furniture", "sleeping"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["sit", "inspect"], "initial_state": {"visible": true, "occupied": false}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.bedroom/entity.nightstand.01", "room_id": "home.r1/room.bedroom", "category": "nightstand", "asset_ref": "asset.prop.nightstand", "transform": {"location_m": [0.6, 1.2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["furniture", "surface"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["inspect"], "initial_state": {"visible": true}, "placement_anchors": [{"anchor_id": "top", "transform": {"location_m": [0, 0, 0.62], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}}]},
+    {"entity_id": "home.r1/room.bedroom/entity.phone.01", "room_id": "home.r1/room.bedroom", "category": "phone", "asset_ref": "asset.prop.phone", "transform": {"location_m": [0.6, 1.2, 0.64], "rotation_deg": [0, 0, 10], "scale": [1, 1, 1]}, "tags": ["hero", "portable"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "powered": true, "held_by": null, "placed_at": "home.r1/room.bedroom/entity.nightstand.01#top"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.bedroom/entity.backpack.01", "room_id": "home.r1/room.bedroom", "category": "backpack", "asset_ref": "asset.prop.backpack", "transform": {"location_m": [1.4, -1, 0.05], "rotation_deg": [0, 0, -20], "scale": [1, 1, 1]}, "tags": ["portable", "storage"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "held_by": null}, "placement_anchors": []},
+
+    {"entity_id": "home.r1/room.office/entity.desk.01", "room_id": "home.r1/room.office", "category": "desk", "asset_ref": "asset.prop.desk", "transform": {"location_m": [1.2, 0.8, 0], "rotation_deg": [0, 0, 180], "scale": [1, 1, 1]}, "tags": ["furniture", "surface", "workspace"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["inspect"], "initial_state": {"visible": true}, "placement_anchors": [{"anchor_id": "desktop", "transform": {"location_m": [0, 0, 0.76], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}}]},
+    {"entity_id": "home.r1/room.office/entity.rolling_chair.01", "room_id": "home.r1/room.office", "category": "rolling_chair", "asset_ref": "asset.prop.rolling_chair", "transform": {"location_m": [0.5, 0.2, 0], "rotation_deg": [0, 0, 160], "scale": [1, 1, 1]}, "tags": ["furniture", "rolling", "seating"], "component_role": "static_furniture", "mobility": "movable", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["sit", "inspect"], "initial_state": {"visible": true, "occupied": false, "hazard": "unstable"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.office/entity.cabinet.01", "room_id": "home.r1/room.office", "category": "cabinet", "asset_ref": "asset.prop.cabinet", "transform": {"location_m": [2, -1.2, 0], "rotation_deg": [0, 0, 180], "scale": [1, 1, 1]}, "tags": ["container", "furniture", "tall"], "component_role": "container", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": false, "visible": true}, "placement_anchors": [{"anchor_id": "top", "transform": {"location_m": [0, 0, 2.25], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}}]},
+    {"entity_id": "home.r1/room.office/entity.cardboard_box.01", "room_id": "home.r1/room.office", "category": "cardboard_box", "asset_ref": "asset.prop.cardboard_box", "transform": {"location_m": [2, -1.2, 2.28], "rotation_deg": [0, 0, 5], "scale": [1, 1, 1]}, "tags": ["hero", "portable"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "held_by": null, "placed_at": "home.r1/room.office/entity.cabinet.01#top"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.office/entity.ladder.01", "room_id": "home.r1/room.office", "category": "ladder", "asset_ref": "asset.prop.ladder", "transform": {"location_m": [-1.6, -1.1, 0], "rotation_deg": [0, 0, 35], "scale": [1, 1, 1]}, "tags": ["equipment", "furniture"], "component_role": "static_furniture", "mobility": "movable", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["inspect"], "initial_state": {"visible": true, "status": "folded"}, "placement_anchors": []},
+
+    {"entity_id": "home.r1/room.bathroom_laundry/entity.bathtub.01", "room_id": "home.r1/room.bathroom_laundry", "category": "bathtub", "asset_ref": "asset.prop.bathtub", "transform": {"location_m": [-0.65, 0.7, 0], "rotation_deg": [0, 0, -90], "scale": [1, 1, 1]}, "tags": ["bath", "furniture"], "component_role": "static_furniture", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["inspect"], "initial_state": {"visible": true, "liquid_level": 0}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.bathroom_laundry/entity.faucet.01", "room_id": "home.r1/room.bathroom_laundry", "category": "faucet", "asset_ref": "asset.prop.faucet", "transform": {"location_m": [-1.1, 1.4, 0.65], "rotation_deg": [0, 0, -90], "scale": [1, 1, 1]}, "tags": ["appliance", "water"], "component_role": "appliance", "mobility": "static", "collision_policy": "detail_no_collision", "nav_obstacle": false, "affordances": ["toggle", "inspect"], "initial_state": {"active": false, "powered": true, "visible": true, "hazard": "none"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.bathroom_laundry/entity.washer.01", "room_id": "home.r1/room.bathroom_laundry", "category": "washer", "asset_ref": "asset.prop.washer", "transform": {"location_m": [0.85, 1.2, 0], "rotation_deg": [0, 0, 180], "scale": [1, 1, 1]}, "tags": ["appliance", "laundry"], "component_role": "appliance", "mobility": "static", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["toggle", "inspect"], "initial_state": {"active": false, "powered": true, "visible": true, "status": "idle"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.bathroom_laundry/entity.laundry_basket.01", "room_id": "home.r1/room.bathroom_laundry", "category": "laundry_basket", "asset_ref": "asset.prop.laundry_basket", "transform": {"location_m": [0.9, -1, 0], "rotation_deg": [0, 0, 20], "scale": [1, 1, 1]}, "tags": ["container", "laundry"], "component_role": "container", "mobility": "movable", "collision_policy": "furniture", "nav_obstacle": true, "affordances": ["open", "close", "inspect"], "initial_state": {"open": true, "visible": true}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.bathroom_laundry/entity.clothes.01", "room_id": "home.r1/room.bathroom_laundry", "category": "clothes", "asset_ref": "asset.prop.clothes", "transform": {"location_m": [0.85, 1.2, 0.55], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["laundry", "portable"], "component_role": "pickup", "mobility": "simulated", "collision_policy": "pickup_physics", "nav_obstacle": false, "affordances": ["pick_up", "drop", "place", "inspect"], "initial_state": {"portable": true, "visible": true, "held_by": null, "status": "loaded"}, "placement_anchors": []},
+    {"entity_id": "home.r1/room.bathroom_laundry/entity.overflow_marker.01", "room_id": "home.r1/room.bathroom_laundry", "category": "overflow_marker", "asset_ref": "asset.prop.overflow_marker", "transform": {"location_m": [-0.5, 0.2, 0.01], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]}, "tags": ["event_fixture", "hazard"], "component_role": "hazard", "mobility": "static", "collision_policy": "trigger_only", "nav_obstacle": false, "affordances": ["inspect"], "initial_state": {"visible": false, "hazard": "overflow"}, "placement_anchors": []}
+  ],
+  "relations": [
+    {"relation_id": "relation.adjacent_rooms.01", "predicate": "adjacent_to", "subject_id": "home.r1/room.entry_hall", "object_id": "home.r1/room.living_room"},
+    {"relation_id": "relation.adjacent_rooms.02", "predicate": "adjacent_to", "subject_id": "home.r1/room.entry_hall", "object_id": "home.r1/room.kitchen_dining"},
+    {"relation_id": "relation.adjacent_rooms.03", "predicate": "adjacent_to", "subject_id": "home.r1/room.entry_hall", "object_id": "home.r1/room.bedroom"},
+    {"relation_id": "relation.adjacent_rooms.04", "predicate": "adjacent_to", "subject_id": "home.r1/room.entry_hall", "object_id": "home.r1/room.office"},
+    {"relation_id": "relation.adjacent_rooms.05", "predicate": "adjacent_to", "subject_id": "home.r1/room.entry_hall", "object_id": "home.r1/room.bathroom_laundry"},
+    {"relation_id": "relation.supports_item.01", "predicate": "supports", "subject_id": "home.r1/room.living_room/entity.coffee_table.01", "object_id": "home.r1/room.living_room/entity.keys.01"},
+    {"relation_id": "relation.supports_item.02", "predicate": "supports", "subject_id": "home.r1/room.kitchen_dining/entity.stove.01", "object_id": "home.r1/room.kitchen_dining/entity.pot.01"},
+    {"relation_id": "relation.supports_item.03", "predicate": "supports", "subject_id": "home.r1/room.kitchen_dining/entity.dining_table.01", "object_id": "home.r1/room.kitchen_dining/entity.coffee_cup.01"},
+    {"relation_id": "relation.supports_item.04", "predicate": "supports", "subject_id": "home.r1/room.bedroom/entity.nightstand.01", "object_id": "home.r1/room.bedroom/entity.phone.01"},
+    {"relation_id": "relation.supports_item.05", "predicate": "supports", "subject_id": "home.r1/room.office/entity.cabinet.01", "object_id": "home.r1/room.office/entity.cardboard_box.01"},
+    {"relation_id": "relation.contains_item.01", "predicate": "contains", "subject_id": "home.r1/room.bathroom_laundry/entity.washer.01", "object_id": "home.r1/room.bathroom_laundry/entity.clothes.01"}
+  ],
+  "runtime_profile": {
+    "player_start": {"room_id": "home.r1/room.entry_hall", "transform": {"location_m": [0, -2.5, 0.1], "rotation_deg": [0, 0, 90], "scale": [1, 1, 1]}},
+    "pawn_asset_ref": "asset.runtime.player",
+    "game_mode_asset_ref": "asset.runtime.game_mode",
+    "controls": {"move": true, "look": true, "jump": true, "sprint": true, "crouch": true, "interact": true},
+    "interaction_distance_m": 2.5,
+    "navigation_agent": {"radius_m": 0.34, "height_m": 1.8, "max_step_height_m": 0.35, "max_slope_deg": 44},
+    "npc_profiles": [{"npc_id": "npc.resident", "entity_id": "home.r1/room.entry_hall/entity.resident.01", "home_room_id": "home.r1/room.entry_hall", "patrol_room_ids": ["home.r1/room.entry_hall", "home.r1/room.living_room", "home.r1/room.kitchen_dining", "home.r1/room.bedroom", "home.r1/room.office", "home.r1/room.bathroom_laundry"], "action_timeout_s": 20}],
+    "remote_surface": "game_only"
+  },
+  "budgets": {"max_rooms": 16, "max_portals": 32, "max_entities": 512, "max_triangles": 5000000, "max_draw_calls": 4000},
+  "provenance": {
+    "source_commit": "74af9b067620a3d5398c23c7836b6a204ea56150",
+    "authoring_tool": "vista-playable-home-contracts/1",
+    "source_refs": ["spec://vista-playable-home/approved-2026-08-15", "vista://assist-step/verified-indoor-events"],
+    "license": "research-fixture-only"
+  },
+  "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"
+}

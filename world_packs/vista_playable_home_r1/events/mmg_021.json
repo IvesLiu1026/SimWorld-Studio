@@ -1,0 +1,35 @@
+{
+  "schema_version": "simworld.vista.playable-event/v1",
+  "event_id": "mmg_021",
+  "title": "Bath water continues running",
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "participating_room_ids": ["home.r1/room.bathroom_laundry"],
+  "participating_entity_ids": [
+    "home.r1/room.bathroom_laundry/entity.bathtub.01",
+    "home.r1/room.bathroom_laundry/entity.faucet.01",
+    "home.r1/room.bathroom_laundry/entity.overflow_marker.01"
+  ],
+  "initial_operations": [
+    {"op_id": "op.01", "op": "set_state", "target_id": "home.r1/room.bathroom_laundry/entity.faucet.01", "state_patch": {"active": true, "hazard": "overflow"}},
+    {"op_id": "op.02", "op": "set_state", "target_id": "home.r1/room.bathroom_laundry/entity.bathtub.01", "state_patch": {"liquid_level": 0.75}},
+    {"op_id": "op.03", "op": "set_visibility", "target_id": "home.r1/room.bathroom_laundry/entity.overflow_marker.01", "visible": false},
+    {"op_id": "op.04", "op": "set_goal", "goal_id": "stop_water", "enabled": true}
+  ],
+  "public_goals": [
+    {"goal_id": "stop_water", "description": "Deactivate the faucet before the bathtub overflows.", "success_condition_ids": ["faucet_off"]}
+  ],
+  "triggers": [
+    {"condition_id": "faucet_running", "type": "entity_state", "target_id": "home.r1/room.bathroom_laundry/entity.faucet.01", "field": "active", "operator": "eq", "value": true}
+  ],
+  "success_conditions": [
+    {"condition_id": "faucet_off", "type": "entity_state", "target_id": "home.r1/room.bathroom_laundry/entity.faucet.01", "field": "active", "operator": "eq", "value": false}
+  ],
+  "failure_conditions": [
+    {"condition_id": "overflow_visible", "type": "entity_state", "target_id": "home.r1/room.bathroom_laundry/entity.overflow_marker.01", "field": "visible", "operator": "eq", "value": true},
+    {"condition_id": "water_timeout", "type": "elapsed", "operator": "gte", "seconds": 90}
+  ],
+  "timeout_s": 600,
+  "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
+  "source": {"dataset": "VISTA", "sample_id": "mmg_021", "verification": "verified", "public_reference": "vista://assist-step/mmg_021"},
+  "content_digest": "75556551bea599ec8755c1b61265abdd8a65f2dea7d5915b0c3c659ebdcb5c27"
+}

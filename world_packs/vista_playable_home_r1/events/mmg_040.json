@@ -1,0 +1,33 @@
+{
+  "schema_version": "simworld.vista.playable-event/v1",
+  "event_id": "mmg_040",
+  "title": "High cabinet item and unstable rolling chair",
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "participating_room_ids": ["home.r1/room.office"],
+  "participating_entity_ids": [
+    "home.r1/room.office/entity.cardboard_box.01",
+    "home.r1/room.office/entity.ladder.01",
+    "home.r1/room.office/entity.rolling_chair.01"
+  ],
+  "initial_operations": [
+    {"op_id": "op.01", "op": "set_state", "target_id": "home.r1/room.office/entity.rolling_chair.01", "state_patch": {"hazard": "unstable"}},
+    {"op_id": "op.02", "op": "set_transform", "target_id": "home.r1/room.office/entity.cardboard_box.01", "room_id": "home.r1/room.office", "transform": {"location_m": [2, -1.2, 2.28], "rotation_deg": [0, 0, 5], "scale": [1, 1, 1]}},
+    {"op_id": "op.03", "op": "set_goal", "goal_id": "use_stable_access", "enabled": true}
+  ],
+  "public_goals": [
+    {"goal_id": "use_stable_access", "description": "Inspect and use the stable ladder rather than the rolling chair for the high box.", "success_condition_ids": ["ladder_inspected"]}
+  ],
+  "triggers": [
+    {"condition_id": "box_targeted", "type": "interaction", "target_id": "home.r1/room.office/entity.cardboard_box.01", "affordance": "inspect"}
+  ],
+  "success_conditions": [
+    {"condition_id": "ladder_inspected", "type": "interaction", "target_id": "home.r1/room.office/entity.ladder.01", "affordance": "inspect"}
+  ],
+  "failure_conditions": [
+    {"condition_id": "chair_used", "type": "interaction", "target_id": "home.r1/room.office/entity.rolling_chair.01", "affordance": "sit"}
+  ],
+  "timeout_s": 600,
+  "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
+  "source": {"dataset": "VISTA", "sample_id": "mmg_040", "verification": "verified", "public_reference": "vista://assist-step/mmg_040"},
+  "content_digest": "82179ade40e5d03d49459be7163d1d797b1712f707fcd425d04d56ff5cc20f3f"
+}

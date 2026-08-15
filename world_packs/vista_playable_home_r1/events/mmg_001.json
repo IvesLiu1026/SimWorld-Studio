@@ -1,0 +1,34 @@
+{
+  "schema_version": "simworld.vista.playable-event/v1",
+  "event_id": "mmg_001",
+  "title": "Stove remains active before leaving home",
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "participating_room_ids": ["home.r1/room.entry_hall", "home.r1/room.kitchen_dining"],
+  "participating_entity_ids": [
+    "home.r1/room.entry_hall/entity.exit_door.01",
+    "home.r1/room.kitchen_dining/entity.fire_marker.01",
+    "home.r1/room.kitchen_dining/entity.pot.01",
+    "home.r1/room.kitchen_dining/entity.stove.01"
+  ],
+  "initial_operations": [
+    {"op_id": "op.01", "op": "set_state", "target_id": "home.r1/room.kitchen_dining/entity.stove.01", "state_patch": {"active": true, "hazard": "thermal"}},
+    {"op_id": "op.02", "op": "set_visibility", "target_id": "home.r1/room.kitchen_dining/entity.fire_marker.01", "visible": true},
+    {"op_id": "op.03", "op": "set_goal", "goal_id": "secure_stove", "enabled": true}
+  ],
+  "public_goals": [
+    {"goal_id": "secure_stove", "description": "Deactivate the stove before opening the exit door.", "success_condition_ids": ["stove_off"]}
+  ],
+  "triggers": [
+    {"condition_id": "stove_active", "type": "entity_state", "target_id": "home.r1/room.kitchen_dining/entity.stove.01", "field": "active", "operator": "eq", "value": true}
+  ],
+  "success_conditions": [
+    {"condition_id": "stove_off", "type": "entity_state", "target_id": "home.r1/room.kitchen_dining/entity.stove.01", "field": "active", "operator": "eq", "value": false}
+  ],
+  "failure_conditions": [
+    {"condition_id": "exit_opened_while_active", "type": "interaction", "target_id": "home.r1/room.entry_hall/entity.exit_door.01", "affordance": "open"}
+  ],
+  "timeout_s": 600,
+  "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
+  "source": {"dataset": "VISTA", "sample_id": "mmg_001", "verification": "verified", "public_reference": "vista://assist-step/mmg_001"},
+  "content_digest": "85741a72e4c735973676d88afeed56f1cf4848370d1e7d5178e295dd6d5bd2bd"
+}
