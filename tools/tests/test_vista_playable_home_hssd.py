@@ -15,10 +15,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.blender.vista_playable_home_hssd import build as blender_build
+from tools.blender.vista_playable_home_hssd import glb_transport
 from tools.blender.vista_playable_home_hssd.glb_transport import (
+    encode_rgba8_png,
     read_glb,
-    rehydrate_basisu_materials,
-    validate_preserved_basisu_glb,
+    rehydrate_core_png_materials,
+    validate_core_png_glb,
     write_blender_surrogate,
     write_glb,
 )
@@ -223,18 +225,32 @@ def _built_manifest(mesh_count: int) -> dict:
         "schema_version": BUILT_MANIFEST_SCHEMA,
         "source_plan": {"schema_version": BINDING_PLAN_SCHEMA, "content_digest": "1" * 64},
         "license_receipt": {"accepted_spdx": HSSD_LICENSE_SPDX},
+        "builder_source": {
+            "repository_commit": "3" * 40,
+            "worktree_clean": True,
+            "source_files": [{"path": "tools/blender/builder.py", "sha256": "4" * 64}],
+        },
+        "normalization_policy": {"maximum_axis_scale_anisotropy": 2.75},
         "closed_world": {"bound_asset_ids": ["asset.prop.sofa"], "unaccounted_asset_ids": []},
         "outputs": [{
             "logical_asset_id": "asset.prop.sofa",
             "target_dimensions_m": [0.84, 2.25, 1.06],
             "actual_dimensions_m": [0.84, 2.25, 1.06],
             "sha256": "2" * 64,
+            "texture_transport": "blender_native_texture_import",
+            "normalization": {
+                "rotation_mode": "XYZ",
+                "actual_scale_anisotropy": 1.25,
+                "maximum_axis_scale_anisotropy": 2.75,
+                "anisotropy_accepted": True,
+            },
             "inspection": {
                 "mesh_count": mesh_count,
                 "material_count": 1,
                 "pbr_texture_slot_count": 1,
                 "base_normal_orm_texture_slot_count": 1,
                 "all_primitives_material_bound": 1,
+                "basisu_required": 0,
             },
         }],
     })
@@ -249,6 +265,11 @@ def test_built_manifest_enforces_one_primary_mesh_and_pbr_slots() -> None:
     no_pbr = seal_document(no_pbr)
     with pytest.raises(HssdBindingError, match="lost PBR"):
         validate_built_manifest(no_pbr)
+    bad_anisotropy = _built_manifest(mesh_count=1)
+    bad_anisotropy["outputs"][0]["normalization"]["actual_scale_anisotropy"] = 2.76
+    bad_anisotropy = seal_document(bad_anisotropy)
+    with pytest.raises(HssdBindingError, match="anisotropy"):
+        validate_built_manifest(bad_anisotropy)
 
 
 def test_build_module_is_importable_without_blender_and_cli_is_pinned() -> None:
@@ -258,6 +279,9 @@ def test_build_module_is_importable_without_blender_and_cli_is_pinned() -> None:
         "--output-root", "/tmp/output",
         "--license-accept", HSSD_LICENSE_SPDX,
         "--asset-id", "asset.prop.sofa",
+        "--node", "/opt/node/bin/node",
+        "--basis-transcoder-js", "/opt/basis/basis_transcoder.js",
+        "--basis-transcoder-wasm", "/opt/basis/basis_transcoder.wasm",
     ])
     assert args.license_accept == HSSD_LICENSE_SPDX
     assert args.asset_ids == ["asset.prop.sofa"]
@@ -265,9 +289,26 @@ def test_build_module_is_importable_without_blender_and_cli_is_pinned() -> None:
     assert "EXPECTED_BLENDER_VERSION = (4, 5, 8)" in source
     assert "one_logical_asset_one_primary_mesh" in source
     assert "export_scene.gltf" in source
+    assert 'primary.rotation_mode = "XYZ"' in source
+    assert "actual_scale_anisotropy" in source
 
 
-def test_basisu_surrogate_rehydrates_exact_pbr_payload(tmp_path: Path) -> None:
+def _decoder_receipt() -> dict:
+    pin = {"path": "/pinned/file", "sha256": "a" * 64}
+    return {
+        "distribution": "three",
+        "distribution_version": "0.185.1",
+        "basis_universal_license": "Apache-2.0",
+        "three_license": "MIT",
+        "provenance": "three/examples/jsm/libs/basis",
+        "node": dict(pin),
+        "transcoder_js": dict(pin),
+        "transcoder_wasm": dict(pin),
+        "decode_wrapper": dict(pin),
+    }
+
+
+def test_basisu_surrogate_transcodes_to_self_contained_core_png(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     image_payload = b"KTX2DATA"
     source_document = {
         "asset": {"version": "2.0"},
@@ -303,28 +344,66 @@ def test_basisu_surrogate_rehydrates_exact_pbr_payload(tmp_path: Path) -> None:
     normalized = tmp_path / "normalized.glb"
     write_glb(normalized, normalized_document, b"GEOM")
     output = tmp_path / "output.glb"
-    receipt = rehydrate_basisu_materials(source, normalized, output)
+    decoder = _decoder_receipt()
+    monkeypatch.setattr(glb_transport, "_decoder_identity", lambda *_args: decoder)
+
+    def fake_decode(payload: bytes, *_args: object) -> tuple[bytes, dict]:
+        png = encode_rgba8_png(2, 1, bytes([255, 0, 0, 255, 0, 255, 0, 255]))
+        return png, {
+            "schema_version": "simworld.basisu-rgba8-decode/v1",
+            "width": 2,
+            "height": 1,
+            "source_levels": 1,
+            "source_layers": 1,
+            "source_faces": 1,
+            "source_encoding": "ETC1S",
+            "has_alpha": True,
+            "output_format": "RGBA8",
+            "output_bytes": 8,
+            "mip_policy": "base_level_only",
+            "node_version": "v22.22.2",
+            "source_mime_type": "image/ktx2",
+            "source_ktx2_bytes": len(payload),
+            "source_ktx2_sha256": hashlib.sha256(payload).hexdigest(),
+            "output_mime_type": "image/png",
+            "output_png_bytes": len(png),
+            "output_png_sha256": hashlib.sha256(png).hexdigest(),
+            "png_encoder": {"policy": "test"},
+            "decoder": decoder,
+        }
+
+    monkeypatch.setattr(glb_transport, "_decode_ktx2_to_png", fake_decode)
+    receipt = rehydrate_core_png_materials(
+        source,
+        normalized,
+        output,
+        node_path=tmp_path / "node",
+        transcoder_js_path=tmp_path / "basis.js",
+        transcoder_wasm_path=tmp_path / "basis.wasm",
+    )
     output_document, output_binary = read_glb(output)
-    assert receipt["mode"] == "KHR_texture_basisu_preserved"
+    assert receipt["mode"] == "KHR_texture_basisu_to_core_png"
     assert receipt["blender_decoded_textures"] is False
     assert output_document["materials"] == source_document["materials"]
-    assert output_document["textures"] == source_document["textures"]
+    assert output_document["textures"] == [{"sampler": 0, "source": 0}]
+    assert "KHR_texture_basisu" not in output_document.get("extensionsRequired", [])
     assert output_document["meshes"][0]["primitives"][0]["material"] == 0
     image_view = output_document["bufferViews"][output_document["images"][0]["bufferView"]]
     start = image_view["byteOffset"]
-    assert output_binary[start : start + image_view["byteLength"]] == image_payload
-    validation = validate_preserved_basisu_glb(source, output)
+    png_payload = output_binary[start : start + image_view["byteLength"]]
+    assert png_payload.startswith(b"\x89PNG\r\n\x1a\n")
+    validation = validate_core_png_glb(source, output)
     assert validation["self_contained"] is True
-    assert validation["image_payloads"][0]["source_sha256"] == hashlib.sha256(image_payload).hexdigest()
-    assert validation["image_payloads"][0]["output_sha256"] == hashlib.sha256(image_payload).hexdigest()
-    assert validation["image_payloads"][0]["match"] is True
+    assert validation["core_texture_sources_valid"] is True
+    assert validation["image_payloads"][0]["source_ktx2_sha256"] == hashlib.sha256(image_payload).hexdigest()
+    assert validation["image_payloads"][0]["output_png_sha256"] == hashlib.sha256(png_payload).hexdigest()
 
 
 @pytest.mark.parametrize(
     "corruption",
-    ["material", "basisu_source", "external_image", "external_buffer", "missing_extension", "unaligned_buffer_view"],
+    ["material", "core_source", "external_image", "external_buffer", "required_basisu", "unaligned_buffer_view", "wrong_mime"],
 )
-def test_basisu_validator_rejects_dangling_or_external_records(tmp_path: Path, corruption: str) -> None:
+def test_core_png_validator_rejects_dangling_external_or_basisu_records(tmp_path: Path, corruption: str) -> None:
     image_payload = b"KTX2DATA"
     source_document = {
         "asset": {"version": "2.0"},
@@ -341,20 +420,52 @@ def test_basisu_validator_rejects_dangling_or_external_records(tmp_path: Path, c
     }
     source = tmp_path / "source.glb"
     write_glb(source, source_document, image_payload)
+    png_payload = encode_rgba8_png(1, 1, b"\x10\x20\x30\xff")
     output_document = json.loads(json.dumps(source_document))
+    output_document["buffers"] = [{"byteLength": len(png_payload)}]
+    output_document["bufferViews"] = [{"buffer": 0, "byteOffset": 0, "byteLength": len(png_payload)}]
+    output_document["images"] = [{"mimeType": "image/png", "bufferView": 0}]
+    output_document["textures"] = [{"sampler": 0, "source": 0}]
+    output_document.pop("extensionsUsed")
+    output_document.pop("extensionsRequired")
     if corruption == "material":
         output_document["meshes"][0]["primitives"][0]["material"] = 99
-    elif corruption == "basisu_source":
-        output_document["textures"][0]["extensions"]["KHR_texture_basisu"]["source"] = 99
+    elif corruption == "core_source":
+        output_document["textures"][0]["source"] = 99
     elif corruption == "external_image":
-        output_document["images"][0] = {"mimeType": "image/ktx2", "uri": "outside.ktx2"}
+        output_document["images"][0] = {"mimeType": "image/png", "uri": "outside.png"}
     elif corruption == "external_buffer":
         output_document["buffers"][0]["uri"] = "outside.bin"
     elif corruption == "unaligned_buffer_view":
         output_document["bufferViews"][0]["byteOffset"] = 1
+    elif corruption == "wrong_mime":
+        output_document["images"][0]["mimeType"] = "image/jpeg"
     else:
-        output_document["extensionsRequired"] = []
+        output_document["textures"][0]["extensions"] = {"KHR_texture_basisu": {"source": 0}}
+        output_document["extensionsUsed"] = ["KHR_texture_basisu"]
+        output_document["extensionsRequired"] = ["KHR_texture_basisu"]
     output = tmp_path / "corrupt.glb"
-    write_glb(output, output_document, image_payload)
+    write_glb(output, output_document, png_payload)
     with pytest.raises(HssdBindingError):
-        validate_preserved_basisu_glb(source, output)
+        validate_core_png_glb(source, output)
+
+
+def test_rgba_png_encoder_is_deterministic_and_strict() -> None:
+    rgba = bytes(range(16))
+    first = encode_rgba8_png(2, 2, rgba)
+    second = encode_rgba8_png(2, 2, rgba)
+    assert first == second
+    assert hashlib.sha256(first).hexdigest() == hashlib.sha256(second).hexdigest()
+    assert glb_transport._validate_rgba8_png(first, "fixture") == (2, 2)
+    with pytest.raises(HssdBindingError, match="byte count"):
+        encode_rgba8_png(2, 2, rgba[:-1])
+
+
+def test_unpinned_basis_transcoder_is_rejected_before_execution(tmp_path: Path) -> None:
+    node = Path(sys.executable).resolve()
+    javascript = tmp_path / "basis.js"
+    wasm = tmp_path / "basis.wasm"
+    javascript.write_text("module.exports = {};", encoding="utf-8")
+    wasm.write_bytes(b"not wasm")
+    with pytest.raises(HssdBindingError, match="not an approved offline pin"):
+        glb_transport._decoder_identity(node, javascript.resolve(), wasm.resolve())

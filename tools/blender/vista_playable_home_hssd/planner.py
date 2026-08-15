@@ -848,10 +848,41 @@ def validate_built_manifest(manifest: Mapping[str, Any]) -> None:
         raise HssdBindingError("HSSD built manifest lacks source plan identity")
     if manifest.get("license_receipt", {}).get("accepted_spdx") != HSSD_LICENSE_SPDX:
         raise HssdBindingError("HSSD built manifest lacks license receipt")
+    builder_source = manifest.get("builder_source")
+    if (
+        not isinstance(builder_source, dict)
+        or builder_source.get("worktree_clean") is not True
+        or not isinstance(builder_source.get("repository_commit"), str)
+        or not _GIT_SHA_RE.fullmatch(builder_source["repository_commit"])
+        or not isinstance(builder_source.get("source_files"), list)
+        or not builder_source["source_files"]
+    ):
+        raise HssdBindingError("HSSD built manifest lacks a clean builder source identity")
+    for source_file in builder_source["source_files"]:
+        if (
+            not isinstance(source_file, dict)
+            or not isinstance(source_file.get("path"), str)
+            or not isinstance(source_file.get("sha256"), str)
+            or not _SHA256_RE.fullmatch(source_file["sha256"])
+        ):
+            raise HssdBindingError("HSSD built manifest has an invalid builder source file receipt")
     outputs = manifest.get("outputs")
     closed = manifest.get("closed_world")
+    normalization_policy = manifest.get("normalization_policy")
     if not isinstance(outputs, list) or not isinstance(closed, dict):
         raise HssdBindingError("HSSD built manifest structure is invalid")
+    policy_maximum_anisotropy = (
+        normalization_policy.get("maximum_axis_scale_anisotropy")
+        if isinstance(normalization_policy, dict)
+        else None
+    )
+    if (
+        isinstance(policy_maximum_anisotropy, bool)
+        or not isinstance(policy_maximum_anisotropy, (int, float))
+        or not math.isfinite(float(policy_maximum_anisotropy))
+        or not 1.0 <= float(policy_maximum_anisotropy) <= _MAX_AXIS_SCALE_ANISOTROPY
+    ):
+        raise HssdBindingError("HSSD built manifest has an invalid normalization policy")
     output_ids: list[str] = []
     for entry in outputs:
         if not isinstance(entry, dict):
@@ -869,17 +900,64 @@ def validate_built_manifest(manifest: Mapping[str, Any]) -> None:
             or inspection.get("all_primitives_material_bound") != 1
         ):
             raise HssdBindingError(f"HSSD output lost PBR material/texture slots: {asset_id}")
-        if inspection.get("basisu_required") == 1:
-            if entry.get("texture_transport") != "KHR_texture_basisu_preserved":
-                raise HssdBindingError(f"HSSD BasisU output lacks an explicit preserved transport receipt: {asset_id}")
+        if inspection.get("basisu_required") != 0:
+            raise HssdBindingError(f"HSSD output still requires UE-incompatible KHR_texture_basisu: {asset_id}")
+        texture_transport = entry.get("texture_transport")
+        if texture_transport not in {"blender_native_texture_import", "KHR_texture_basisu_to_core_png"}:
+            raise HssdBindingError(f"HSSD output has an unknown texture transport: {asset_id}")
+        if texture_transport == "KHR_texture_basisu_to_core_png":
             transport = entry.get("texture_transport_receipt")
             if (
                 not isinstance(transport, dict)
                 or transport.get("blender_decoded_textures") is not False
+                or transport.get("source_basisu_required") is not True
+                or transport.get("output_basisu_required") is not False
+                or transport.get("core_texture_sources_valid") is not True
+                or transport.get("embedded_png_images_valid") is not True
                 or not isinstance(transport.get("image_payloads"), list)
                 or not transport["image_payloads"]
             ):
-                raise HssdBindingError(f"HSSD BasisU preservation receipt is incomplete: {asset_id}")
+                raise HssdBindingError(f"HSSD BasisU-to-core-PNG receipt is incomplete: {asset_id}")
+            decoder = transport.get("decoder")
+            if not isinstance(decoder, dict) or decoder.get("basis_universal_license") != "Apache-2.0":
+                raise HssdBindingError(f"HSSD BasisU decoder provenance is incomplete: {asset_id}")
+            for decoder_field in ("node", "transcoder_js", "transcoder_wasm", "decode_wrapper"):
+                record = decoder.get(decoder_field)
+                if not isinstance(record, dict) or not isinstance(record.get("sha256"), str) or not _SHA256_RE.fullmatch(record["sha256"]):
+                    raise HssdBindingError(f"HSSD BasisU decoder pin is incomplete: {asset_id}.{decoder_field}")
+            for image in transport["image_payloads"]:
+                if (
+                    not isinstance(image, dict)
+                    or not isinstance(image.get("source_ktx2_sha256"), str)
+                    or not _SHA256_RE.fullmatch(image["source_ktx2_sha256"])
+                    or not isinstance(image.get("output_png_sha256"), str)
+                    or not _SHA256_RE.fullmatch(image["output_png_sha256"])
+                    or not isinstance(image.get("width"), int)
+                    or image["width"] < 1
+                    or not isinstance(image.get("height"), int)
+                    or image["height"] < 1
+                ):
+                    raise HssdBindingError(f"HSSD texture transcode image receipt is incomplete: {asset_id}")
+        normalization = entry.get("normalization")
+        if not isinstance(normalization, dict):
+            raise HssdBindingError(f"HSSD output lacks normalization receipt: {asset_id}")
+        actual_anisotropy = normalization.get("actual_scale_anisotropy")
+        maximum_anisotropy = normalization.get("maximum_axis_scale_anisotropy")
+        if (
+            isinstance(actual_anisotropy, bool)
+            or not isinstance(actual_anisotropy, (int, float))
+            or not math.isfinite(float(actual_anisotropy))
+            or isinstance(maximum_anisotropy, bool)
+            or not isinstance(maximum_anisotropy, (int, float))
+            or not math.isfinite(float(maximum_anisotropy))
+            or float(maximum_anisotropy) < 1.0
+            or float(maximum_anisotropy) > _MAX_AXIS_SCALE_ANISOTROPY
+            or abs(float(maximum_anisotropy) - float(policy_maximum_anisotropy)) > 1e-9
+            or float(actual_anisotropy) > float(maximum_anisotropy) + 1e-9
+            or normalization.get("anisotropy_accepted") is not True
+            or normalization.get("rotation_mode") != "XYZ"
+        ):
+            raise HssdBindingError(f"HSSD output normalization anisotropy is not accepted: {asset_id}")
         validate_target_dimensions(entry.get("actual_dimensions_m"), asset_id)
         target = _v3(entry.get("target_dimensions_m"), f"{asset_id}.target_dimensions_m")
         actual = _v3(entry.get("actual_dimensions_m"), f"{asset_id}.actual_dimensions_m")

@@ -22,14 +22,23 @@ The generated assets are modified copies: they are imported, joined to one
 primary mesh, reoriented, rescaled to the approved target AABB, grounded at
 `z=0`, and re-exported while retaining their PBR materials and texture slots.
 The Habitat-ready HSSD files commonly require `KHR_texture_basisu`, which
-Blender 4.5.8 cannot decode. For those files the builder imports a temporary
-material-index surrogate, then reattaches the original KTX2 image bytes and
-exact source material/texture records to the normalized GLB. The attribution
-manifest records `texture_transport: KHR_texture_basisu_preserved` and
-`blender_decoded_textures: false`; it never claims Blender decoded the images
-and never silently drops or replaces compressed textures. Every KTX2 payload
-is SHA-256 checked image-by-image after rehydration, along with closed buffer,
-bufferView, material, texture, sampler, accessor, and extension indexes.
+Blender 4.5.8 cannot decode and Unreal 5.7.3 Interchange cannot consume as a
+required-only texture source. For those files the builder imports a temporary
+material-index surrogate, then decodes each KTX2 base mip to RGBA8 with an
+explicitly hash-pinned, offline Basis Universal WASM transcoder. It embeds a
+deterministic PNG and assigns the corresponding core glTF `texture.source`;
+`KHR_texture_basisu` is removed from the output declarations and texture
+records. The exact source PBR materials, texture-slot indices, samplers, and
+non-Basis extensions are retained.
+
+The attribution manifest records
+`texture_transport: KHR_texture_basisu_to_core_png`, the source KTX2 and output
+PNG SHA-256 hashes, dimensions, base-mip-only policy, Node/decoder/wrapper file
+hashes, Three distribution version, and Basis Universal Apache-2.0 license.
+It also records `blender_decoded_textures: false`; Blender only normalizes the
+mesh. Missing/unpinned decoders, invalid KTX2, dangling core sources, external
+images, wrong MIME types, missing PBR slots, or required BasisU declarations
+all fail closed. No texture is synthesized as a fallback.
 
 ## Contract
 
@@ -37,6 +46,8 @@ Inputs:
 
 - a `simworld.vista.playable-home-blender-manifest/v1` normalized manifest;
 - the pinned local HSSD checkout;
+- absolute local paths to the approved Node binary and pinned Three 0.185.1
+  Basis Universal JS/WASM pair (no package or network resolution);
 - explicit `--license-accept CC-BY-NC-4.0` acknowledgement.
 
 Outputs:
@@ -86,15 +97,20 @@ CUDA_VISIBLE_DEVICES='' \
   --normalized-manifest /absolute/run/blender/normalized-manifest.json \
   --hssd-root /mnt/NAS2/yhliu/habitat_data/versioned_data/hssd-hab \
   --output-root /absolute/empty/run/hssd-visuals \
-  --license-accept CC-BY-NC-4.0
+  --license-accept CC-BY-NC-4.0 \
+  --node /home/yhliu/.local/opt/node/bin/node \
+  --basis-transcoder-js \
+    /home/yhliu/judge-project/node_modules/three/examples/jsm/libs/basis/basis_transcoder.js \
+  --basis-transcoder-wasm \
+    /home/yhliu/judge-project/node_modules/three/examples/jsm/libs/basis/basis_transcoder.wasm
 ```
 
 For a three-asset smoke, add:
 
 ```text
 --asset-id asset.prop.sofa \
---asset-id asset.prop.bed \
---asset-id asset.prop.fridge
+--asset-id asset.prop.faucet \
+--asset-id asset.prop.nightstand
 ```
 
 UE integration should overlay only the built `asset.prop.*` entries onto the
@@ -107,5 +123,6 @@ authority for open/close and pickup state.
 
 ```bash
 uv run --offline --with pytest pytest -q \
+  tools/tests/test_vista_playable_home_blender.py \
   tools/tests/test_vista_playable_home_hssd.py
 ```

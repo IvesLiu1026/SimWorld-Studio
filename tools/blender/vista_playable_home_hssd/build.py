@@ -7,7 +7,9 @@ Run through the pinned Blender binary::
       --python tools/blender/vista_playable_home_hssd/build.py -- \
       --normalized-manifest /abs/normalized-manifest.json \
       --hssd-root /abs/hssd-hab --output-root /abs/empty-run \
-      --license-accept CC-BY-NC-4.0
+      --license-accept CC-BY-NC-4.0 \
+      --node /abs/node --basis-transcoder-js /abs/basis_transcoder.js \
+      --basis-transcoder-wasm /abs/basis_transcoder.wasm
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import math
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 from typing import Any, Sequence
@@ -44,7 +47,7 @@ if __package__ in {None, ""}:
     )
     from blender.vista_playable_home_hssd.glb_transport import (  # type: ignore[import-not-found]
         read_glb,
-        rehydrate_basisu_materials,
+        rehydrate_core_png_materials,
         uses_required_basisu,
         write_blender_surrogate,
     )
@@ -64,10 +67,16 @@ else:
         sha256_file,
         validate_built_manifest,
     )
-    from .glb_transport import read_glb, rehydrate_basisu_materials, uses_required_basisu, write_blender_surrogate
+    from .glb_transport import read_glb, rehydrate_core_png_materials, uses_required_basisu, write_blender_surrogate
 
 
 EXPECTED_BLENDER_VERSION = (4, 5, 8)
+_BUILDER_SOURCE_FILES = (
+    "tools/blender/vista_playable_home_hssd/basisu_decode.mjs",
+    "tools/blender/vista_playable_home_hssd/build.py",
+    "tools/blender/vista_playable_home_hssd/glb_transport.py",
+    "tools/blender/vista_playable_home_hssd/planner.py",
+)
 
 
 def parse_blender_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -79,6 +88,9 @@ def parse_blender_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-root", required=True, type=pathlib.Path)
     parser.add_argument("--asset-id", action="append", dest="asset_ids")
     parser.add_argument("--license-accept", required=True, choices=[HSSD_LICENSE_SPDX])
+    parser.add_argument("--node", required=True, type=pathlib.Path)
+    parser.add_argument("--basis-transcoder-js", required=True, type=pathlib.Path)
+    parser.add_argument("--basis-transcoder-wasm", required=True, type=pathlib.Path)
     return parser.parse_args(forwarded)
 
 
@@ -92,6 +104,49 @@ def prepare_output_root(path: pathlib.Path) -> pathlib.Path:
     if any(resolved.iterdir()):
         raise HssdBindingError(f"refusing to write into non-empty append-only output root: {resolved}")
     return resolved
+
+
+def _builder_source_identity() -> dict[str, Any]:
+    """Bind a run to a clean commit and exact builder source bytes."""
+
+    repository = pathlib.Path(__file__).resolve().parents[3]
+    git = pathlib.Path("/usr/bin/git")
+    if not git.is_file() or git.is_symlink():
+        raise HssdBindingError("pinned /usr/bin/git is unavailable")
+    try:
+        revision = subprocess.run(
+            [str(git), "-C", str(repository), "rev-parse", "HEAD"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=True,
+        ).stdout.decode("ascii").strip()
+        status = subprocess.run(
+            [str(git), "-C", str(repository), "status", "--porcelain=v1", "--untracked-files=all"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
+        raise HssdBindingError(f"unable to establish builder git identity: {error}") from error
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise HssdBindingError("builder git revision is invalid")
+    if status:
+        raise HssdBindingError("builder worktree must be clean before an attributable build")
+    files: list[dict[str, Any]] = []
+    for relative in _BUILDER_SOURCE_FILES:
+        path = repository / relative
+        if path.is_symlink() or not path.is_file():
+            raise HssdBindingError(f"builder source file is missing or symbolic: {relative}")
+        files.append({"path": relative, "sha256": sha256_file(path)})
+    return {
+        "repository_commit": revision,
+        "worktree_clean": True,
+        "source_files": files,
+    }
 
 
 def _asset_filename(asset_id: str) -> str:
@@ -152,11 +207,20 @@ def _join_imported_meshes(bpy: Any) -> Any:
     return primary
 
 
-def _normalize_primary(bpy: Any, mathutils: Any, primary: Any, target_dimensions: Sequence[float]) -> dict[str, Any]:
+def _normalize_primary(
+    bpy: Any,
+    mathutils: Any,
+    primary: Any,
+    target_dimensions: Sequence[float],
+    maximum_axis_scale_anisotropy: float,
+) -> dict[str, Any]:
     target = tuple(float(value) for value in target_dimensions)
     source_bounds = _bounds(primary)
     source_dimensions = _dimensions(source_bounds)
     rotation, _planned_scales, _anisotropy, _uniform = _fit_transform(source_dimensions, target)
+    # Imported glTF nodes commonly use QUATERNION mode. Assigning
+    # rotation_euler without changing the mode leaves the quaternion active.
+    primary.rotation_mode = "XYZ"
     primary.rotation_euler = (0.0, 0.0, math.radians(rotation))
     _select(bpy, [primary])
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
@@ -164,6 +228,16 @@ def _normalize_primary(bpy: Any, mathutils: Any, primary: Any, target_dimensions
     scales = tuple(target[axis] / oriented_dimensions[axis] for axis in range(3))
     if any(not math.isfinite(value) or value <= 0 for value in scales):
         raise HssdBindingError("invalid HSSD normalization scale")
+    actual_scale_anisotropy = max(scales) / min(scales)
+    if (
+        not math.isfinite(maximum_axis_scale_anisotropy)
+        or maximum_axis_scale_anisotropy < 1.0
+        or actual_scale_anisotropy > maximum_axis_scale_anisotropy + 1e-9
+    ):
+        raise HssdBindingError(
+            f"actual HSSD normalization anisotropy {actual_scale_anisotropy:.6f} exceeds "
+            f"maximum {maximum_axis_scale_anisotropy:.6f}"
+        )
     primary.scale = scales
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     minimum, maximum = _bounds(primary)
@@ -183,7 +257,11 @@ def _normalize_primary(bpy: Any, mathutils: Any, primary: Any, target_dimensions
     return {
         "source_import_dimensions_m": list(source_dimensions),
         "rotate_z_deg": rotation,
+        "rotation_mode": "XYZ",
         "scale_xyz": list(scales),
+        "actual_scale_anisotropy": actual_scale_anisotropy,
+        "maximum_axis_scale_anisotropy": maximum_axis_scale_anisotropy,
+        "anisotropy_accepted": True,
         "origin_policy": "footprint_center_bottom_z_zero",
         "actual_bounds_m": {"min_m": list(final_bounds[0]), "max_m": list(final_bounds[1])},
         "actual_dimensions_m": list(actual_dimensions),
@@ -209,7 +287,18 @@ def _export_primary(bpy: Any, path: pathlib.Path, primary: Any) -> None:
     path.chmod(0o600)
 
 
-def _build_one(bpy: Any, mathutils: Any, root: pathlib.Path, output_dir: pathlib.Path, binding: dict[str, Any]) -> dict[str, Any]:
+def _build_one(
+    bpy: Any,
+    mathutils: Any,
+    root: pathlib.Path,
+    output_dir: pathlib.Path,
+    binding: dict[str, Any],
+    *,
+    maximum_axis_scale_anisotropy: float,
+    node_path: pathlib.Path,
+    transcoder_js_path: pathlib.Path,
+    transcoder_wasm_path: pathlib.Path,
+) -> dict[str, Any]:
     _reset_scene(bpy)
     source = binding["source"]
     source_path = _contained_file(root, source["render_asset_relpath"], "selected HSSD render asset")
@@ -234,11 +323,24 @@ def _build_one(bpy: Any, mathutils: Any, root: pathlib.Path, output_dir: pathlib
         primary["hssd_source_sha256"] = source["render_asset_sha256"]
         primary["hssd_license_spdx"] = HSSD_LICENSE_SPDX
         primary["artifact_contract"] = "one_logical_asset_one_primary_mesh"
-        transform = _normalize_primary(bpy, mathutils, primary, binding["target_dimensions_m"])
+        transform = _normalize_primary(
+            bpy,
+            mathutils,
+            primary,
+            binding["target_dimensions_m"],
+            maximum_axis_scale_anisotropy,
+        )
         if basisu:
             normalized_surrogate = temporary_root / "normalized-surrogate.glb"
             _export_primary(bpy, normalized_surrogate, primary)
-            transport.update(rehydrate_basisu_materials(source_path, normalized_surrogate, output_path))
+            transport.update(rehydrate_core_png_materials(
+                source_path,
+                normalized_surrogate,
+                output_path,
+                node_path=node_path,
+                transcoder_js_path=transcoder_js_path,
+                transcoder_wasm_path=transcoder_wasm_path,
+            ))
         else:
             _export_primary(bpy, output_path, primary)
     inspection = inspect_glb(output_path.resolve())
@@ -274,6 +376,10 @@ def build(
     hssd_root: pathlib.Path,
     output_root: pathlib.Path,
     requested_asset_ids: Sequence[str] | None = None,
+    *,
+    node_path: pathlib.Path,
+    transcoder_js_path: pathlib.Path,
+    transcoder_wasm_path: pathlib.Path,
 ) -> pathlib.Path:
     try:
         import bpy  # type: ignore[import-not-found]
@@ -284,6 +390,7 @@ def build(
         raise HssdBindingError(
             f"pinned Blender {'.'.join(map(str, EXPECTED_BLENDER_VERSION))} is required; running {bpy.app.version_string}"
         )
+    builder_source = _builder_source_identity()
     normalized = load_normalized_manifest(normalized_manifest_path)
     root = _dataset_root(hssd_root)
     output_root = prepare_output_root(output_root)
@@ -293,7 +400,21 @@ def build(
     plan_path.chmod(0o600)
     output_dir = output_root / "assets"
     output_dir.mkdir(mode=0o700)
-    outputs = [_build_one(bpy, mathutils, root, output_dir, binding) for binding in plan["bindings"]]
+    maximum_axis_scale_anisotropy = float(plan["selection_policy"]["maximum_axis_scale_anisotropy"])
+    outputs = [
+        _build_one(
+            bpy,
+            mathutils,
+            root,
+            output_dir,
+            binding,
+            maximum_axis_scale_anisotropy=maximum_axis_scale_anisotropy,
+            node_path=node_path,
+            transcoder_js_path=transcoder_js_path,
+            transcoder_wasm_path=transcoder_wasm_path,
+        )
+        for binding in plan["bindings"]
+    ]
     built = seal_document({
         "schema_version": BUILT_MANIFEST_SCHEMA,
         "house_id": plan["house_id"],
@@ -302,6 +423,8 @@ def build(
         "dataset": plan["dataset"],
         "license_receipt": plan["license_receipt"],
         "blender": {"version": bpy.app.version_string, "mode": plan["mode"]},
+        "builder_source": builder_source,
+        "normalization_policy": {"maximum_axis_scale_anisotropy": maximum_axis_scale_anisotropy},
         "closed_world": {
             "bound_asset_ids": sorted(entry["logical_asset_id"] for entry in outputs),
             "unaccounted_asset_ids": [],
@@ -325,7 +448,15 @@ def build(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_blender_args(argv)
-    build(args.normalized_manifest, args.hssd_root, args.output_root, args.asset_ids)
+    build(
+        args.normalized_manifest,
+        args.hssd_root,
+        args.output_root,
+        args.asset_ids,
+        node_path=args.node,
+        transcoder_js_path=args.basis_transcoder_js,
+        transcoder_wasm_path=args.basis_transcoder_wasm,
+    )
     return 0
 
 
