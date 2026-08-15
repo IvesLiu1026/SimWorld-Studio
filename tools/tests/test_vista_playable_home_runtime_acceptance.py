@@ -194,11 +194,12 @@ class FakeVistaRuntime:
                 code = "NPC_INSPECTED"
                 if self.npc_queued:
                     self.npc_polls += 1
-                    location = (
-                        [-140.0, -60.0, 96.0]
-                        if self.npc_polls == 1
-                        else [-235.0, -205.0, 96.0]
+                    locations = (
+                        [-140.0, -60.0, 96.0],
+                        [-235.0, -205.0, 96.0],
+                        [-475.0, -315.0, 96.0],
                     )
+                    location = locations[min(self.npc_polls, len(locations)) - 1]
                 else:
                     location = [260.0, 110.0, 96.0]
                 state = _state(
@@ -407,9 +408,9 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "accepted")
         self.assertIsNone(receipt["error"])
         self.assertEqual(receipt["initial_generation"], 0)
-        self.assertEqual(receipt["final_generation"], 16)
-        self.assertEqual(len(receipt["checks"]), 23)
-        self.assertEqual(len(server.requests), 23)
+        self.assertEqual(receipt["final_generation"], 17)
+        self.assertEqual(len(receipt["checks"]), 24)
+        self.assertEqual(len(server.requests), 24)
         self.assertEqual(stat.S_IMODE(fixture.output.stat().st_mode), 0o600)
         self.assertEqual(json.loads(fixture.output.read_text()), receipt)
 
@@ -444,6 +445,12 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
                     "action_id": "acceptance.navigate.living",
                     "type": "navigate_to",
                     "target_semantic_id": acceptance.LIVING_ANCHOR_ID,
+                    "timeout_sec": 20.0,
+                },
+                {
+                    "action_id": "acceptance.navigate.living_clear",
+                    "type": "navigate_to",
+                    "target_location_cm": list(acceptance.LIVING_CLEAR_TARGET_CM),
                     "timeout_sec": 20.0,
                 },
                 {

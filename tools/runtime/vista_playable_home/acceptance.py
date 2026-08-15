@@ -56,7 +56,8 @@ TABLETOP_RIGHT_ID = (
     "home.r1/room.living_room/entity.coffee_table.01/anchor.tabletop_right"
 )
 EVENT_IDS = ("mmg_001", "mmg_044", "mmg_045")
-LIVING_TARGET_XY = (-240.0, -200.0)
+LIVING_CLEAR_TARGET_CM = (-480.0, -320.0, 10.0)
+LIVING_TARGET_XY = LIVING_CLEAR_TARGET_CM[:2]
 LIVING_ACCEPTANCE_RADIUS_CM = 80.0
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -849,6 +850,12 @@ class ProtocolSession:
                     "timeout_sec": 20.0,
                 },
                 {
+                    "action_id": "acceptance.navigate.living_clear",
+                    "type": "navigate_to",
+                    "target_location_cm": list(LIVING_CLEAR_TARGET_CM),
+                    "timeout_sec": 20.0,
+                },
+                {
                     "action_id": "acceptance.wait.living",
                     "type": "wait",
                     "duration_sec": 10.0,
@@ -975,7 +982,7 @@ def run_protocol(
     if not reached:
         _fail(
             "NPC_DESTINATION_TIMEOUT",
-            "NPC did not reach the living-room acceptance radius before its deadline",
+            "NPC did not reach the living-room door-clear acceptance radius before its deadline",
             step="npc.inspect_poll",
         )
 
