@@ -10,6 +10,172 @@
 
 namespace
 {
+constexpr const TCHAR* StableSemanticTagPrefix = TEXT("VistaSemanticId=");
+constexpr const TCHAR* PlacementOwnerTagPrefix = TEXT("VistaOwner=");
+constexpr const TCHAR* PlacementAnchorDelimiter = TEXT("/anchor.");
+
+bool IsLowerAsciiAlpha(const TCHAR Character)
+{
+    return Character >= TEXT('a') && Character <= TEXT('z');
+}
+
+bool IsAsciiDigit(const TCHAR Character)
+{
+    return Character >= TEXT('0') && Character <= TEXT('9');
+}
+
+bool IsStablePlacementAnchorSemanticId(const FString& Value)
+{
+    if (Value.IsEmpty() || Value.Len() > 240 || !IsLowerAsciiAlpha(Value[0]) ||
+        Value.Contains(TEXT("#")))
+    {
+        return false;
+    }
+    for (const TCHAR Character : Value)
+    {
+        if (!(IsLowerAsciiAlpha(Character) || IsAsciiDigit(Character) ||
+              Character == TEXT('.') || Character == TEXT('_') ||
+              Character == TEXT('/') || Character == TEXT('-')))
+        {
+            return false;
+        }
+    }
+
+    const int32 DelimiterIndex = Value.Find(
+        PlacementAnchorDelimiter, ESearchCase::CaseSensitive, ESearchDir::FromStart);
+    if (DelimiterIndex <= 0 ||
+        DelimiterIndex + FCString::Strlen(PlacementAnchorDelimiter) >= Value.Len() ||
+        Value.Find(PlacementAnchorDelimiter, ESearchCase::CaseSensitive,
+                   ESearchDir::FromStart, DelimiterIndex + 1) != INDEX_NONE)
+    {
+        return false;
+    }
+    const FString AnchorId = Value.Mid(
+        DelimiterIndex + FCString::Strlen(PlacementAnchorDelimiter));
+    const FString OwnerSemanticId = Value.Left(DelimiterIndex);
+    if (!OwnerSemanticId.Contains(TEXT("/entity."), ESearchCase::CaseSensitive) ||
+        AnchorId.IsEmpty() || !IsLowerAsciiAlpha(AnchorId[0]))
+    {
+        return false;
+    }
+    for (const TCHAR Character : AnchorId)
+    {
+        if (!(IsLowerAsciiAlpha(Character) || IsAsciiDigit(Character) ||
+              Character == TEXT('_')))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool CanonicalizePlacementAnchorSemanticId(const FString& Value, FString& OutSemanticId)
+{
+    FString Candidate = Value;
+    int32 CompactDelimiterIndex = INDEX_NONE;
+    if (Candidate.FindChar(TEXT('#'), CompactDelimiterIndex))
+    {
+        if (CompactDelimiterIndex <= 0 || CompactDelimiterIndex + 1 >= Candidate.Len() ||
+            Candidate.Mid(CompactDelimiterIndex + 1).Contains(TEXT("#")))
+        {
+            return false;
+        }
+        Candidate = Candidate.Left(CompactDelimiterIndex) + PlacementAnchorDelimiter +
+            Candidate.Mid(CompactDelimiterIndex + 1);
+    }
+    if (!IsStablePlacementAnchorSemanticId(Candidate))
+    {
+        return false;
+    }
+    OutSemanticId = MoveTemp(Candidate);
+    return true;
+}
+
+bool IsNullPlacementStateValue(const FString& Value)
+{
+    return Value.IsEmpty() || Value.Equals(TEXT("none"), ESearchCase::IgnoreCase) ||
+        Value.Equals(TEXT("null"), ESearchCase::IgnoreCase);
+}
+
+bool IsUniqueStablePlacementAnchor(UWorld* World,
+                                   const FString& SemanticId,
+                                   const AActor* ExpectedOwner = nullptr)
+{
+    if (!IsValid(World) || !IsStablePlacementAnchorSemanticId(SemanticId))
+    {
+        return false;
+    }
+    const FName StableTag(*(FString(StableSemanticTagPrefix) + SemanticId));
+    const int32 DelimiterIndex = SemanticId.Find(
+        PlacementAnchorDelimiter, ESearchCase::CaseSensitive, ESearchDir::FromStart);
+    const FName OwnerTag(*(FString(PlacementOwnerTagPrefix) +
+        SemanticId.Left(DelimiterIndex)));
+    const AActor* Match = nullptr;
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        if (!It->ActorHasTag(StableTag) || !It->ActorHasTag(OwnerTag))
+        {
+            continue;
+        }
+        if (Match != nullptr)
+        {
+            return false;
+        }
+        Match = *It;
+    }
+    return IsValid(Match) && IsValid(Match->GetRootComponent()) &&
+        (ExpectedOwner == nullptr || Match == ExpectedOwner);
+}
+
+bool StablePlacementAnchorSemanticId(const USceneComponent* PlacementAnchor,
+                                     FString& OutSemanticId)
+{
+    if (!IsValid(PlacementAnchor))
+    {
+        return false;
+    }
+    const AActor* Owner = PlacementAnchor->GetOwner();
+    if (!IsValid(Owner) || PlacementAnchor != Owner->GetRootComponent())
+    {
+        return false;
+    }
+
+    FString Match;
+    for (const FName& Tag : Owner->Tags)
+    {
+        const FString TagValue = Tag.ToString();
+        if (!TagValue.StartsWith(StableSemanticTagPrefix, ESearchCase::CaseSensitive))
+        {
+            continue;
+        }
+        const FString Candidate = TagValue.RightChop(FCString::Strlen(StableSemanticTagPrefix));
+        if (!IsStablePlacementAnchorSemanticId(Candidate))
+        {
+            continue;
+        }
+        if (!Match.IsEmpty() && Match != Candidate)
+        {
+            return false;
+        }
+        Match = Candidate;
+    }
+    if (Match.IsEmpty() ||
+        !IsUniqueStablePlacementAnchor(Owner->GetWorld(), Match, Owner))
+    {
+        return false;
+    }
+    OutSemanticId = MoveTemp(Match);
+    return true;
+}
+
+bool NormalizeStoredPlacementAnchor(UWorld* World,
+                                    const FString& Value,
+                                    FString& OutSemanticId)
+{
+    return CanonicalizePlacementAnchorSemanticId(Value, OutSemanticId) &&
+        IsUniqueStablePlacementAnchor(World, OutSemanticId);
+}
+
 FString CarrierSemanticId(const AActor* Carrier)
 {
     if (const AVistaPlayableHomeCharacter* Player =
@@ -63,6 +229,12 @@ AVistaPickupActor::AVistaPickupActor()
         EVistaAffordance::Place};
 }
 
+void AVistaPickupActor::BeginPlay()
+{
+    Super::BeginPlay();
+    NormalizePlacementState();
+}
+
 void AVistaPickupActor::GetLifetimeReplicatedProps(
     TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -76,6 +248,22 @@ FVistaEntityRuntimeState AVistaPickupActor::VistaGetRuntimeState_Implementation(
     State.bPortable = bPortable;
     State.Values.Add(TEXT("held"), IsValid(HeldBy) ? TEXT("true") : TEXT("false"));
     State.Values.Add(TEXT("held_by"), CarrierSemanticId(HeldBy));
+    if (IsValid(HeldBy))
+    {
+        State.Values.Remove(TEXT("placed_at"));
+    }
+    else if (const FString* PlacementValue = State.Values.Find(TEXT("placed_at")))
+    {
+        FString NormalizedPlacement;
+        if (NormalizeStoredPlacementAnchor(GetWorld(), *PlacementValue, NormalizedPlacement))
+        {
+            State.Values.Add(TEXT("placed_at"), NormalizedPlacement);
+        }
+        else
+        {
+            State.Values.Remove(TEXT("placed_at"));
+        }
+    }
     return State;
 }
 
@@ -86,6 +274,18 @@ FVistaInteractionResult AVistaPickupActor::VistaApplyRuntimeState_Implementation
     {
         return FVistaInteractionResult::Failure(
             EVistaInteractionStatus::Rejected, TEXT("AUTHORITY_REQUIRED"), SemanticId);
+    }
+
+    FString NormalizedPlacement;
+    const FString* PlacementValue = State.Values.Find(TEXT("placed_at"));
+    const bool bRestorePlacement = PlacementValue &&
+        !IsNullPlacementStateValue(*PlacementValue);
+    if (bRestorePlacement &&
+        !NormalizeStoredPlacementAnchor(GetWorld(), *PlacementValue, NormalizedPlacement))
+    {
+        return FVistaInteractionResult::Failure(
+            EVistaInteractionStatus::NotFound,
+            TEXT("BASELINE_PLACEMENT_ANCHOR_NOT_FOUND"), SemanticId);
     }
     if (IsValid(HeldBy))
     {
@@ -101,7 +301,15 @@ FVistaInteractionResult AVistaPickupActor::VistaApplyRuntimeState_Implementation
     {
         return BaseResult;
     }
-    Mesh->SetSimulatePhysics(bPortable);
+    if (bRestorePlacement)
+    {
+        RuntimeStateValues.Add(TEXT("placed_at"), NormalizedPlacement);
+    }
+    else
+    {
+        RuntimeStateValues.Remove(TEXT("placed_at"));
+    }
+    Mesh->SetSimulatePhysics(bPortable && !bRestorePlacement);
     if (bRestoreHeld)
     {
         AActor* Carrier = DesiredCarrierId
@@ -185,6 +393,7 @@ FVistaInteractionResult AVistaPickupActor::TryAttachTo(AActor* Carrier)
     }
 
     HeldBy = Carrier;
+    RuntimeStateValues.Remove(TEXT("placed_at"));
     ApplyAttachmentState();
     ForceNetUpdate();
     return FVistaInteractionResult::Success(
@@ -206,6 +415,15 @@ FVistaInteractionResult AVistaPickupActor::ReleaseFromCarrier(
             EVistaInteractionStatus::InvalidState, TEXT("ITEM_NOT_HELD"), SemanticId);
     }
 
+    FString PlacementAnchorSemanticId;
+    if (IsValid(PlacementAnchor) &&
+        !StablePlacementAnchorSemanticId(PlacementAnchor, PlacementAnchorSemanticId))
+    {
+        return FVistaInteractionResult::Failure(
+            EVistaInteractionStatus::InvalidState,
+            TEXT("PLACEMENT_ANCHOR_NOT_STABLE"), SemanticId);
+    }
+
     AActor* PreviousCarrier = HeldBy;
     const FTransform ReleaseTransform = IsValid(PlacementAnchor)
         ? PlacementAnchor->GetComponentTransform()
@@ -218,6 +436,11 @@ FVistaInteractionResult AVistaPickupActor::ReleaseFromCarrier(
     if (!IsValid(PlacementAnchor))
     {
         Mesh->SetPhysicsLinearVelocity(LinearVelocity);
+        RuntimeStateValues.Remove(TEXT("placed_at"));
+    }
+    else
+    {
+        RuntimeStateValues.Add(TEXT("placed_at"), PlacementAnchorSemanticId);
     }
     IVistaItemCarrier::Execute_VistaReleaseItem(PreviousCarrier, this);
     ForceNetUpdate();
@@ -246,4 +469,24 @@ void AVistaPickupActor::ApplyAttachmentState()
     DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
     Mesh->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
     Mesh->SetSimulatePhysics(bPortable);
+}
+
+void AVistaPickupActor::NormalizePlacementState()
+{
+    const FString* PlacementValue = RuntimeStateValues.Find(TEXT("placed_at"));
+    if (!PlacementValue || IsNullPlacementStateValue(*PlacementValue))
+    {
+        RuntimeStateValues.Remove(TEXT("placed_at"));
+        return;
+    }
+    FString NormalizedPlacement;
+    if (NormalizeStoredPlacementAnchor(GetWorld(), *PlacementValue, NormalizedPlacement))
+    {
+        RuntimeStateValues.Add(TEXT("placed_at"), NormalizedPlacement);
+        Mesh->SetSimulatePhysics(false);
+    }
+    else
+    {
+        RuntimeStateValues.Remove(TEXT("placed_at"));
+    }
 }
