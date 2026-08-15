@@ -38,6 +38,9 @@ const { createVistaSceneBuildRuntime } = require("./vista-scene-build-runtime");
 const { createVistaAnimationTimelineRouter } = require("./vista-animation-timeline-routes");
 const { createVistaAnimationTimelineRuntime } = require("./vista-animation-timeline-runtime");
 const { createVistaAnimationDedicatedTransportResolver } = require("./vista-animation-dedicated-transport");
+const { createVistaWorldRouter } = require("./vista-world-routes");
+const { createVistaWorldFileCatalog, createVistaWorldService } = require("./vista-world-service");
+const { createVistaWorldUeAdapter } = require("./vista-world-ue-adapter");
 const { createVistaSceneExecutor } = require("./vista-scene-executor");
 const { createVistaSceneUeAdapter } = require("./vista-scene-ue-adapter");
 const { createVistaSlotBrokerResolver, createVistaSlotUcvBrokerResolver, resolveVistaSceneExecutorConfig } = require("./vista-scene-executor-runtime");
@@ -417,6 +420,20 @@ const vistaRuntimeRegistry=createVistaRuntimeControllerRegistry({
   resolveSceneProof:(identity)=>vistaSceneBuildRuntime.service.resolveActiveRuntimeProof(identity),
 });
 app.use("/api/vista",createVistaRuntimeRouter({registry:vistaRuntimeRegistry}));
+const vistaWorldCatalog=createVistaWorldFileCatalog({
+  root:path.resolve(__dirname,"../../../world_packs/vista_playable_home_r1"),
+});
+const vistaWorldTransport=createVistaWorldUeAdapter({
+  resolveUeBroker:_resolveVistaSlotBroker,
+});
+const vistaWorldService=createVistaWorldService({
+  catalog:vistaWorldCatalog,
+  transport:vistaWorldTransport,
+});
+app.use("/api/vista-world",createVistaWorldRouter({
+  service:vistaWorldService,
+  resolveIdentity:_resolveVistaIdentity,
+}));
 const _vistaAnimationTransportResolver=createVistaAnimationDedicatedTransportResolver({
   resolveUeBroker:_resolveVistaSlotBroker,
 });
