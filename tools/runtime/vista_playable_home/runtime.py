@@ -284,17 +284,32 @@ def inspect_toolchain(ue_editor: Path) -> dict[str, Any]:
     editor = Path(ue_editor).resolve(strict=False)
     engine = editor.parents[2] if len(editor.parents) >= 3 else Path("/")
     root = engine.parent
-    candidates = {
+    fixed_candidates = {
         "run_uat": root / "Engine" / "Build" / "BatchFiles" / "RunUAT.sh",
         "build_sh": root / "Engine" / "Build" / "BatchFiles" / "Linux" / "Build.sh",
-        "unreal_build_tool": root / "Engine" / "Binaries" / "DotNET" / "UnrealBuildTool" / "UnrealBuildTool",
-        "unreal_header_tool": root / "Engine" / "Binaries" / "Linux" / "UnrealHeaderTool",
         "engine_source": root / "Engine" / "Source",
     }
-    present = {name: path.exists() for name, path in candidates.items()}
+    alternatives = {
+        "unreal_build_tool": (
+            root / "Engine" / "Binaries" / "DotNET" / "UnrealBuildTool" / "UnrealBuildTool",
+            root / "Engine" / "Binaries" / "DotNET" / "UnrealBuildTool",
+        ),
+        # Installed/source engines do not always retain a standalone UHT ELF.
+        # RunUAT can build UHT from this program source before compiling a
+        # plugin, so either representation is a real build capability.
+        "unreal_header_tool": (
+            root / "Engine" / "Binaries" / "Linux" / "UnrealHeaderTool",
+            root / "Engine" / "Programs" / "UnrealHeaderTool",
+            root / "Engine" / "Source" / "Programs" / "UnrealHeaderTool",
+        ),
+    }
+    selected = dict(fixed_candidates)
+    for name, choices in alternatives.items():
+        selected[name] = next((choice for choice in choices if choice.exists()), choices[0])
+    present = {name: path.exists() for name, path in selected.items()}
     return {
         "engine_root": str(root),
-        "paths": {name: str(path) for name, path in candidates.items()},
+        "paths": {name: str(path) for name, path in selected.items()},
         "present": present,
         "cook_ready": all(present.values()),
     }

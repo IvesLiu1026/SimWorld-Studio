@@ -95,6 +95,23 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         self.assertFalse(report["cook_ready"])
         self.assertIn("run_uat", report["present"])
 
+    def test_toolchain_accepts_source_built_uht_layout(self) -> None:
+        config = self.make_config()
+        engine_root = config.ue_editor.parents[3]
+        for relative in (
+            "Engine/Build/BatchFiles/RunUAT.sh",
+            "Engine/Build/BatchFiles/Linux/Build.sh",
+            "Engine/Binaries/DotNET/UnrealBuildTool/UnrealBuildTool",
+        ):
+            target = engine_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("#!/bin/sh\n", encoding="utf-8")
+        (engine_root / "Engine/Source/Programs/UnrealHeaderTool").mkdir(parents=True)
+        report = inspect_toolchain(config.ue_editor)
+        self.assertTrue(report["cook_ready"])
+        self.assertTrue(report["present"]["unreal_header_tool"])
+        self.assertTrue(report["paths"]["unreal_header_tool"].endswith("Source/Programs/UnrealHeaderTool"))
+
     def test_atomic_state_is_private(self) -> None:
         target = self.root / "state.json"
         atomic_write_json(target, {"ok": True})
