@@ -213,11 +213,21 @@ def _normalize_primary(
     primary: Any,
     target_dimensions: Sequence[float],
     maximum_axis_scale_anisotropy: float,
+    expected_source_dimensions: Sequence[float],
+    planned_rotate_z_deg: int,
+    planned_scale_anisotropy: float,
 ) -> dict[str, Any]:
     target = tuple(float(value) for value in target_dimensions)
     source_bounds = _bounds(primary)
     source_dimensions = _dimensions(source_bounds)
-    rotation, _planned_scales, _anisotropy, _uniform = _fit_transform(source_dimensions, target)
+    expected = tuple(float(value) for value in expected_source_dimensions)
+    if any(abs(source_dimensions[axis] - expected[axis]) > 0.0005 for axis in range(3)):
+        raise HssdBindingError(
+            "Blender-imported HSSD source dimensions drifted from the planner's decoded GLB AABB"
+        )
+    rotation, _planned_scales, computed_anisotropy, _uniform = _fit_transform(source_dimensions, target)
+    if rotation != planned_rotate_z_deg or abs(computed_anisotropy - float(planned_scale_anisotropy)) > 0.00001:
+        raise HssdBindingError("Blender-imported HSSD fit disagrees with the actual-geometry binding plan")
     # Imported glTF nodes commonly use QUATERNION mode. Assigning
     # rotation_euler without changing the mode leaves the quaternion active.
     primary.rotation_mode = "XYZ"
@@ -256,7 +266,11 @@ def _normalize_primary(
         raise HssdBindingError("normalized HSSD origin is not footprint-center/bottom-zero")
     return {
         "source_import_dimensions_m": list(source_dimensions),
+        "planned_source_dimensions_m": list(expected),
+        "source_dimensions_match_plan": True,
         "rotate_z_deg": rotation,
+        "planned_rotate_z_deg": planned_rotate_z_deg,
+        "fit_matches_plan": True,
         "rotation_mode": "XYZ",
         "scale_xyz": list(scales),
         "actual_scale_anisotropy": actual_scale_anisotropy,
@@ -329,6 +343,9 @@ def _build_one(
             primary,
             binding["target_dimensions_m"],
             maximum_axis_scale_anisotropy,
+            binding["source"]["source_dimensions_blender_m"],
+            int(binding["normalization_plan"]["planned_rotate_z_deg"]),
+            float(binding["normalization_plan"]["scale_anisotropy"]),
         )
         if basisu:
             normalized_surrogate = temporary_root / "normalized-surrogate.glb"
@@ -366,6 +383,8 @@ def _build_one(
             "render_asset_sha256": source["render_asset_sha256"],
             "license_spdx": source["license_spdx"],
             "license_url": source["license_url"],
+            "catalog_aligned_dimensions_m": source["catalog_aligned_dimensions_m"],
+            "actual_glb_geometry": source["actual_glb_geometry"],
         },
         "inspection": inspection,
     }

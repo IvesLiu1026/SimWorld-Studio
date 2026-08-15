@@ -58,9 +58,22 @@ Outputs:
   PBR/mesh inspection, source attribution, and closed-world coverage.
 
 Selection is independent of directory/CSV order. It first uses HSSD's
-condensed semantic labels, then target dimension fit, PBR texture-slot and
-triangle gates, and finally the HSSD object id as a stable tie-breaker. Missing
-or unknown categories fail closed. The only explicit procedural preservations
+condensed semantic labels, then decodes every candidate's active-scene
+`POSITION` accessors, applies the glTF node hierarchy, and measures the actual
+world AABB after the glTF Y-up to Blender Z-up conversion. Rotate-Z and scale
+fit are derived only from that measured AABB. Candidates whose actual axis
+scale anisotropy exceeds `2.75` are rejected before Blender starts and the
+next candidate is selected by a stable score. HSSD `aligned.dims` remains in
+the source receipt as catalog provenance, but is explicitly not used for
+selection. This distinction is required because some catalog rows disagree
+with the corresponding GLB geometry.
+
+Each binding records the measured glTF/Blender bounds, vertex/accessor counts,
+fit result, candidate/rejection counts, and a digest of the ordered candidate
+decision ledger. Blender remeasures the imported source and fails closed if
+its dimensions, chosen rotation, or anisotropy disagree with the plan. PBR
+texture-slot and triangle gates, followed by the HSSD object id, remain stable
+tie-breakers. Missing or unknown categories fail closed. The only explicit procedural preservations
 are room shell/ceiling/collision bundles, gameplay doors, runtime NPCs, event
 markers, and loose keys (HSSD has no verified loose-key semantic category).
 

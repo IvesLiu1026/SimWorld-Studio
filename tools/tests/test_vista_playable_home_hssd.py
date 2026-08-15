@@ -30,32 +30,66 @@ from tools.blender.vista_playable_home_hssd.planner import (
     HSSD_LICENSE_SPDX,
     HssdBindingError,
     _candidate_files,
+    _fit_transform,
     build_binding_plan,
     derive_target_assets,
+    inspect_glb_geometry,
     seal_document,
+    validate_binding_plan,
     validate_built_manifest,
     validate_target_dimensions,
 )
 
 
-def _write_glb(path: Path, *, mesh_count: int = 1, triangles: int = 100, pbr: bool = True) -> None:
+def _write_glb(
+    path: Path,
+    *,
+    mesh_count: int = 1,
+    triangles: int = 100,
+    pbr: bool = True,
+    gltf_dimensions: tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> None:
     meshes = []
     accessors = []
     for index in range(mesh_count):
         accessors.append({"count": triangles * 3, "componentType": 5123, "type": "SCALAR"})
-        meshes.append({"primitives": [{"attributes": {}, "indices": index, "material": 0}]})
+    position_accessor = len(accessors)
+    minimum = [-value / 2 for value in gltf_dimensions]
+    maximum = [value / 2 for value in gltf_dimensions]
+    accessors.append({
+        "bufferView": 0,
+        "componentType": 5126,
+        "count": 2,
+        "type": "VEC3",
+        "min": minimum,
+        "max": maximum,
+    })
+    for index in range(mesh_count):
+        meshes.append({"primitives": [{"attributes": {"POSITION": position_accessor}, "indices": index, "material": 0}]})
+    binary = struct.pack("<ffffff", *minimum, *maximum)
     document = {
         "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": list(range(mesh_count))}],
+        "nodes": [{"mesh": index} for index in range(mesh_count)],
         "meshes": meshes,
         "accessors": accessors,
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(binary)}],
         "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}] if pbr else [],
         "textures": [{"source": 0}] if pbr else [],
         "images": [{"uri": "data:image/png;base64,AA=="}] if pbr else [],
     }
     payload = json.dumps(document, separators=(",", ":")).encode("utf-8")
     payload += b" " * ((4 - len(payload) % 4) % 4)
-    total = 12 + 8 + len(payload)
-    path.write_bytes(struct.pack("<4sII", b"glTF", 2, total) + struct.pack("<II", len(payload), 0x4E4F534A) + payload)
+    total = 12 + 8 + len(payload) + 8 + len(binary)
+    path.write_bytes(
+        struct.pack("<4sII", b"glTF", 2, total)
+        + struct.pack("<II", len(payload), 0x4E4F534A)
+        + payload
+        + struct.pack("<II", len(binary), 0x004E4942)
+        + binary
+    )
 
 
 def _primitive(dimensions: tuple[float, float, float], *, rotation_z: float = 0.0) -> dict:
@@ -107,7 +141,7 @@ def _normalized_manifest(entities: list[dict], *, room_bundles: list[dict] | Non
     })
 
 
-def _dataset(tmp_path: Path, candidates: list[tuple[str, str, tuple[float, float, float]]]) -> tuple[Path, str]:
+def _dataset(tmp_path: Path, candidates: list[tuple]) -> tuple[Path, str]:
     root = tmp_path / "hssd-hab"
     (root / "metadata").mkdir(parents=True)
     (root / ".git").mkdir()
@@ -118,12 +152,14 @@ def _dataset(tmp_path: Path, candidates: list[tuple[str, str, tuple[float, float
     with (root / "metadata" / "hssd_obj_semantics_condensed.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["Object Hash", "Semantic Category: CONDENSED"])
         writer.writeheader()
-        for object_id, category, _dimensions in candidates:
+        for object_id, category, *_dimensions in candidates:
             writer.writerow({"Object Hash": object_id, "Semantic Category: CONDENSED": category})
     with (root / "metadata" / "fpmodels-with-decomposed.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["id", "name", "aligned.dims"])
         writer.writeheader()
-        for object_id, category, dimensions in candidates:
+        for candidate in candidates:
+            object_id, category, dimensions = candidate[:3]
+            gltf_dimensions = candidate[3] if len(candidate) == 4 else dimensions
             writer.writerow({"id": object_id, "name": f"fixture {category}", "aligned.dims": ",".join(map(str, dimensions))})
             object_dir = root / "objects" / object_id[0]
             object_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +167,7 @@ def _dataset(tmp_path: Path, candidates: list[tuple[str, str, tuple[float, float
                 json.dumps({"up": [0, 1, 0], "front": [0, 0, -1], "render_asset": f"{object_id}.glb"}),
                 encoding="utf-8",
             )
-            _write_glb(object_dir / f"{object_id}.glb")
+            _write_glb(object_dir / f"{object_id}.glb", gltf_dimensions=gltf_dimensions)
     return root.resolve(), readme_hash
 
 
@@ -154,6 +190,59 @@ def test_selection_is_deterministic_and_independent_of_csv_order(tmp_path: Path)
     assert first == second
     assert first["content_digest"] == second["content_digest"]
     assert first["bindings"][0]["source"]["object_id"] == close_id
+
+
+def test_ladder_catalog_geometry_mismatch_is_rejected_then_falls_back_deterministically(tmp_path: Path) -> None:
+    mismatched_id = "a" * 40
+    fallback_id = "b" * 40
+    candidates = [
+        # Mirrors the failed canonical Rope Towel Ladder: catalog dimensions
+        # predict a standing object, while decoded GLB POSITION data imports
+        # into Blender as a 6 cm-high object.
+        (mismatched_id, "ladder", (0.48, 1.491183, 0.06), (0.48, 0.06, 1.491183)),
+        (fallback_id, "ladder", (0.50, 1.50, 0.08), (0.50, 1.50, 0.08)),
+    ]
+    root, readme_hash = _dataset(tmp_path, candidates)
+    target_dimensions = (0.893748, 0.14, 1.891251)
+    manifest = _normalized_manifest([_entity("asset.prop.ladder", "ladder", target_dimensions)])
+
+    first = build_binding_plan(manifest, root, expected_readme_sha256=readme_hash)
+    semantics = root / "metadata" / "hssd_obj_semantics_condensed.csv"
+    models = root / "metadata" / "fpmodels-with-decomposed.csv"
+    for path in (semantics, models):
+        rows = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join([rows[0], *reversed(rows[1:])]) + "\n", encoding="utf-8")
+    second = build_binding_plan(manifest, root, expected_readme_sha256=readme_hash)
+
+    assert first == second
+    binding = first["bindings"][0]
+    assert binding["source"]["object_id"] == fallback_id
+    assert binding["source"]["catalog_aligned_dimensions_m"] == [0.5, 1.5, 0.08]
+    assert binding["source"]["source_dimensions_blender_m"] == pytest.approx([0.5, 0.08, 1.5])
+    assert binding["normalization_plan"]["dimension_source"] == "decoded_glb_position_accessors_active_scene_world_aabb"
+    assert binding["normalization_plan"]["scale_anisotropy"] <= 2.75
+    receipt = binding["selection_receipt"]
+    assert receipt["catalog_dimensions_used_for_selection"] is False
+    assert receipt["matching_candidate_count"] == 2
+    assert receipt["eligible_candidate_count"] == 1
+    assert receipt["rejection_counts"] == {"actual_geometry_anisotropy_exceeded": 1}
+    assert len(receipt["candidate_decision_digest"]) == 64
+    validate_binding_plan(first)
+
+    mismatch_geometry = inspect_glb_geometry(
+        root / "objects" / "a" / f"{mismatched_id}.glb"
+    )
+    assert mismatch_geometry["blender_dimensions_m"] == pytest.approx([0.48, 1.491183, 0.06])
+    _rotation, _scales, mismatch_anisotropy, _uniform = _fit_transform(
+        mismatch_geometry["blender_dimensions_m"], target_dimensions
+    )
+    assert mismatch_anisotropy == pytest.approx(108.071486, abs=1e-6)
+
+    tampered = json.loads(json.dumps(first))
+    tampered["bindings"][0]["selection_receipt"]["catalog_dimensions_used_for_selection"] = True
+    tampered = seal_document(tampered)
+    with pytest.raises(HssdBindingError, match="selection receipt"):
+        validate_binding_plan(tampered)
 
 
 def test_dataset_paths_are_contained_and_symlinks_fail_closed(tmp_path: Path) -> None:

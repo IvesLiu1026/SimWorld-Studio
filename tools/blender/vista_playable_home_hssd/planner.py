@@ -17,7 +17,7 @@ import os
 import pathlib
 import re
 import struct
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Iterable, Mapping, Sequence
 
 
@@ -29,15 +29,16 @@ HSSD_LICENSE_URL = "https://creativecommons.org/licenses/by-nc/4.0/"
 HSSD_PROJECT_URL = "https://3dlg-hcvc.github.io/hssd/"
 HSSD_DATASET_NAME = "Habitat Synthetic Scenes Dataset (HSSD)"
 PINNED_HSSD_README_SHA256 = "4509914d584031173390bf5f41722ec25e19de3f1e0ea54a423eadf63073d49c"
-SELECTION_POLICY_VERSION = "hssd-pbr-dimension-fit-v1"
+SELECTION_POLICY_VERSION = "hssd-pbr-actual-glb-aabb-fit-v2"
 
 _OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}")
 _ASSET_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 _GLB_JSON_CHUNK = 0x4E4F534A
+_GLB_BINARY_CHUNK = 0x004E4942
 _MAX_GLB_JSON_BYTES = 32 * 1024 * 1024
-_MAX_INSPECTED_PER_TARGET = 256
+_MAX_POSITION_VERTICES = 5_000_000
 _MIN_TRIANGLES = 50
 _MAX_AXIS_SCALE_ANISOTROPY = 2.75
 _MIN_UNIFORM_SCALE = 0.10
@@ -121,8 +122,9 @@ class Candidate:
     name: str
     source_relpath: str
     config_relpath: str
-    source_dimensions_habitat_m: tuple[float, float, float]
+    catalog_aligned_dimensions_m: tuple[float, float, float]
     source_dimensions_blender_m: tuple[float, float, float]
+    source_geometry: dict[str, Any]
     up: tuple[float, float, float]
     front: tuple[float, float, float]
     planned_rotate_z_deg: int
@@ -130,6 +132,15 @@ class Candidate:
     scale_anisotropy: float
     uniform_scale: float
     inspection: dict[str, int]
+    selection_receipt: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _GlbStructure:
+    path: pathlib.Path
+    document: dict[str, Any]
+    binary_offset: int | None
+    binary_length: int
 
 
 def _normalize(value: Any) -> Any:
@@ -488,9 +499,7 @@ def _load_metadata(root: pathlib.Path) -> tuple[dict[str, tuple[str, int]], dict
     return semantics, models
 
 
-def inspect_glb(path: pathlib.Path) -> dict[str, int]:
-    """Inspect GLB structure/PBR slots without decoding textures or geometry."""
-
+def _read_glb_structure(path: pathlib.Path) -> _GlbStructure:
     path = _regular_absolute_file(path, "GLB")
     try:
         with path.open("rb") as handle:
@@ -500,17 +509,49 @@ def inspect_glb(path: pathlib.Path) -> dict[str, int]:
             magic, version, declared_length = struct.unpack("<4sII", header)
             if magic != b"glTF" or version != 2 or declared_length != path.stat().st_size:
                 raise HssdBindingError(f"invalid GLB header: {path.name}")
-            chunk_header = handle.read(8)
-            if len(chunk_header) != 8:
+            document: dict[str, Any] | None = None
+            binary_offset: int | None = None
+            binary_length = 0
+            while handle.tell() < declared_length:
+                chunk_header = handle.read(8)
+                if len(chunk_header) != 8:
+                    raise HssdBindingError(f"truncated GLB chunk header: {path.name}")
+                chunk_length, chunk_type = struct.unpack("<II", chunk_header)
+                chunk_offset = handle.tell()
+                if chunk_offset + chunk_length > declared_length:
+                    raise HssdBindingError(f"GLB chunk escapes declared length: {path.name}")
+                if chunk_type == _GLB_JSON_CHUNK:
+                    if document is not None or chunk_length > _MAX_GLB_JSON_BYTES:
+                        raise HssdBindingError(f"invalid GLB JSON chunk: {path.name}")
+                    raw = handle.read(chunk_length)
+                    loaded = json.loads(
+                        raw.rstrip(b"\x00 \t\r\n").decode("utf-8"),
+                        object_pairs_hook=_reject_duplicate_pairs,
+                        parse_constant=lambda value: (_ for _ in ()).throw(
+                            HssdBindingError(f"non-finite GLB JSON constant: {value}")
+                        ),
+                    )
+                    if not isinstance(loaded, dict):
+                        raise HssdBindingError(f"GLB JSON root must be an object: {path.name}")
+                    document = loaded
+                elif chunk_type == _GLB_BINARY_CHUNK:
+                    if binary_offset is not None:
+                        raise HssdBindingError(f"multiple GLB binary chunks: {path.name}")
+                    binary_offset = chunk_offset
+                    binary_length = chunk_length
+                    handle.seek(chunk_length, os.SEEK_CUR)
+                else:
+                    handle.seek(chunk_length, os.SEEK_CUR)
+            if document is None:
                 raise HssdBindingError(f"missing GLB JSON chunk: {path.name}")
-            chunk_length, chunk_type = struct.unpack("<II", chunk_header)
-            if chunk_type != _GLB_JSON_CHUNK or chunk_length > _MAX_GLB_JSON_BYTES:
-                raise HssdBindingError(f"invalid GLB JSON chunk: {path.name}")
-            document = json.loads(handle.read(chunk_length).rstrip(b"\x00 \t\r\n").decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, struct.error) as error:
         raise HssdBindingError(f"invalid GLB {path.name}: {error}") from error
-    if not isinstance(document, dict) or document.get("asset", {}).get("version") != "2.0":
+    if document.get("asset", {}).get("version") != "2.0":
         raise HssdBindingError(f"unsupported glTF document: {path.name}")
+    return _GlbStructure(path=path, document=document, binary_offset=binary_offset, binary_length=binary_length)
+
+
+def _inspect_glb_document(document: Mapping[str, Any], path: pathlib.Path) -> dict[str, int]:
     meshes = document.get("meshes", [])
     accessors = document.get("accessors", [])
     materials = document.get("materials", [])
@@ -574,6 +615,261 @@ def inspect_glb(path: pathlib.Path) -> dict[str, int]:
     }
 
 
+def inspect_glb(path: pathlib.Path) -> dict[str, int]:
+    """Inspect GLB structure/PBR slots without decoding textures."""
+
+    structure = _read_glb_structure(path)
+    return _inspect_glb_document(structure.document, structure.path)
+
+
+_IDENTITY_MATRIX = (
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0, 0.0),
+    (0.0, 0.0, 1.0, 0.0),
+    (0.0, 0.0, 0.0, 1.0),
+)
+
+
+def _matmul4(
+    left: tuple[tuple[float, float, float, float], ...],
+    right: tuple[tuple[float, float, float, float], ...],
+) -> tuple[tuple[float, float, float, float], ...]:
+    return tuple(
+        tuple(sum(left[row][inner] * right[inner][column] for inner in range(4)) for column in range(4))
+        for row in range(4)
+    )
+
+
+def _node_matrix(node: Mapping[str, Any], label: str) -> tuple[tuple[float, float, float, float], ...]:
+    matrix = node.get("matrix")
+    has_trs = any(field in node for field in ("translation", "rotation", "scale"))
+    if matrix is not None:
+        if has_trs or not isinstance(matrix, list) or len(matrix) != 16:
+            raise HssdBindingError(f"invalid glTF node matrix/TRS: {label}")
+        values = [float(value) for value in matrix]
+        if any(not math.isfinite(value) for value in values):
+            raise HssdBindingError(f"non-finite glTF node matrix: {label}")
+        # glTF stores matrices in column-major order.
+        return tuple(tuple(values[column * 4 + row] for column in range(4)) for row in range(4))
+    translation = _v3(node.get("translation", [0, 0, 0]), f"{label}.translation")
+    scale = _v3(node.get("scale", [1, 1, 1]), f"{label}.scale")
+    if any(value == 0 for value in scale):
+        raise HssdBindingError(f"zero glTF node scale: {label}")
+    rotation_raw = node.get("rotation", [0, 0, 0, 1])
+    if not isinstance(rotation_raw, (list, tuple)) or len(rotation_raw) != 4:
+        raise HssdBindingError(f"invalid glTF node rotation: {label}")
+    quaternion = tuple(float(value) for value in rotation_raw)
+    if any(not math.isfinite(value) for value in quaternion):
+        raise HssdBindingError(f"non-finite glTF node rotation: {label}")
+    norm = math.sqrt(sum(value * value for value in quaternion))
+    if norm <= 1e-12:
+        raise HssdBindingError(f"zero glTF node quaternion: {label}")
+    x, y, z, w = (value / norm for value in quaternion)
+    rotation = (
+        (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+        (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+        (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
+    )
+    return (
+        (rotation[0][0] * scale[0], rotation[0][1] * scale[1], rotation[0][2] * scale[2], translation[0]),
+        (rotation[1][0] * scale[0], rotation[1][1] * scale[1], rotation[1][2] * scale[2], translation[1]),
+        (rotation[2][0] * scale[0], rotation[2][1] * scale[1], rotation[2][2] * scale[2], translation[2]),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+
+
+def _transform_point(
+    matrix: tuple[tuple[float, float, float, float], ...],
+    point: Sequence[float],
+) -> tuple[float, float, float]:
+    values = tuple(sum(matrix[row][column] * (point[column] if column < 3 else 1.0) for column in range(4)) for row in range(4))
+    if not all(math.isfinite(value) for value in values) or abs(values[3]) <= 1e-12:
+        raise HssdBindingError("invalid homogeneous glTF vertex transform")
+    return tuple(values[axis] / values[3] for axis in range(3))  # type: ignore[return-value]
+
+
+def _read_position_accessor(
+    structure: _GlbStructure,
+    accessor_index: int,
+    cache: dict[int, tuple[tuple[float, float, float], ...]],
+) -> tuple[tuple[float, float, float], ...]:
+    if accessor_index in cache:
+        return cache[accessor_index]
+    document = structure.document
+    accessors = document.get("accessors")
+    views = document.get("bufferViews")
+    buffers = document.get("buffers")
+    if not isinstance(accessors, list) or not isinstance(views, list) or not isinstance(buffers, list):
+        raise HssdBindingError(f"invalid glTF geometry arrays: {structure.path.name}")
+    if not 0 <= accessor_index < len(accessors) or not isinstance(accessors[accessor_index], dict):
+        raise HssdBindingError(f"invalid glTF POSITION accessor: {structure.path.name}")
+    accessor = accessors[accessor_index]
+    if (
+        accessor.get("componentType") != 5126
+        or accessor.get("type") != "VEC3"
+        or accessor.get("normalized") not in {None, False}
+        or "sparse" in accessor
+    ):
+        raise HssdBindingError(f"unsupported glTF POSITION accessor: {structure.path.name}")
+    count = accessor.get("count")
+    view_index = accessor.get("bufferView")
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 1
+        or count > _MAX_POSITION_VERTICES
+        or not isinstance(view_index, int)
+        or not 0 <= view_index < len(views)
+        or not isinstance(views[view_index], dict)
+    ):
+        raise HssdBindingError(f"invalid glTF POSITION range: {structure.path.name}")
+    view = views[view_index]
+    if view.get("buffer") != 0 or len(buffers) != 1 or not isinstance(buffers[0], dict) or buffers[0].get("uri") is not None:
+        raise HssdBindingError(f"POSITION data is not in the closed GLB buffer: {structure.path.name}")
+    if structure.binary_offset is None:
+        raise HssdBindingError(f"GLB has no binary geometry chunk: {structure.path.name}")
+    view_offset = view.get("byteOffset", 0)
+    view_length = view.get("byteLength")
+    accessor_offset = accessor.get("byteOffset", 0)
+    stride = view.get("byteStride", 12)
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (view_offset, accessor_offset)):
+        raise HssdBindingError(f"invalid glTF geometry offset: {structure.path.name}")
+    if isinstance(view_length, bool) or not isinstance(view_length, int) or view_length < 12:
+        raise HssdBindingError(f"invalid glTF geometry buffer view: {structure.path.name}")
+    if isinstance(stride, bool) or not isinstance(stride, int) or stride < 12 or stride % 4:
+        raise HssdBindingError(f"invalid glTF POSITION stride: {structure.path.name}")
+    span = (count - 1) * stride + 12
+    if accessor_offset + span > view_length or view_offset + accessor_offset + span > structure.binary_length:
+        raise HssdBindingError(f"glTF POSITION accessor escapes binary data: {structure.path.name}")
+    with structure.path.open("rb") as handle:
+        handle.seek(structure.binary_offset + view_offset + accessor_offset)
+        payload = handle.read(span)
+    if len(payload) != span:
+        raise HssdBindingError(f"truncated glTF POSITION data: {structure.path.name}")
+    if stride == 12:
+        points = tuple(struct.unpack("<fff", payload[offset : offset + 12]) for offset in range(0, span, 12))
+    else:
+        points = tuple(struct.unpack_from("<fff", payload, index * stride) for index in range(count))
+    if len(points) != count or any(not all(math.isfinite(value) for value in point) for point in points):
+        raise HssdBindingError(f"non-finite glTF POSITION data: {structure.path.name}")
+    cache[accessor_index] = points
+    return points
+
+
+def inspect_glb_geometry(path: pathlib.Path) -> dict[str, Any]:
+    """Measure the exact active-scene POSITION AABB in glTF and Blender axes."""
+
+    structure = _read_glb_structure(path)
+    document = structure.document
+    nodes = document.get("nodes", [])
+    meshes = document.get("meshes", [])
+    scenes = document.get("scenes", [])
+    if not isinstance(nodes, list) or not isinstance(meshes, list) or not isinstance(scenes, list):
+        raise HssdBindingError(f"invalid glTF scene arrays: {structure.path.name}")
+    if not nodes or not meshes:
+        raise HssdBindingError(f"glTF has no scene geometry: {structure.path.name}")
+    parent_counts = [0] * len(nodes)
+    for node_index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise HssdBindingError(f"invalid glTF node {node_index}: {structure.path.name}")
+        children = node.get("children", [])
+        if not isinstance(children, list):
+            raise HssdBindingError(f"invalid glTF node children {node_index}: {structure.path.name}")
+        for child in children:
+            if not isinstance(child, int) or not 0 <= child < len(nodes):
+                raise HssdBindingError(f"invalid glTF child index: {structure.path.name}")
+            parent_counts[child] += 1
+            if parent_counts[child] > 1:
+                raise HssdBindingError(f"glTF node has multiple parents: {structure.path.name}")
+    if scenes:
+        scene_index = document.get("scene", 0)
+        if scene_index is None:
+            scene_index = 0
+        if not isinstance(scene_index, int) or not 0 <= scene_index < len(scenes) or not isinstance(scenes[scene_index], dict):
+            raise HssdBindingError(f"invalid active glTF scene: {structure.path.name}")
+        roots = scenes[scene_index].get("nodes", [])
+        if not isinstance(roots, list):
+            raise HssdBindingError(f"invalid active glTF scene roots: {structure.path.name}")
+    else:
+        roots = [index for index, count in enumerate(parent_counts) if count == 0]
+    if not roots or any(not isinstance(index, int) or not 0 <= index < len(nodes) for index in roots):
+        raise HssdBindingError(f"glTF active scene has no valid roots: {structure.path.name}")
+    gltf_minimum = [math.inf, math.inf, math.inf]
+    gltf_maximum = [-math.inf, -math.inf, -math.inf]
+    blender_minimum = [math.inf, math.inf, math.inf]
+    blender_maximum = [-math.inf, -math.inf, -math.inf]
+    accessor_cache: dict[int, tuple[tuple[float, float, float], ...]] = {}
+    position_accessor_count = 0
+    position_vertex_count = 0
+    mesh_node_count = 0
+    visiting: set[int] = set()
+    visited: set[int] = set()
+
+    def visit(node_index: int, parent_matrix: tuple[tuple[float, float, float, float], ...]) -> None:
+        nonlocal position_accessor_count, position_vertex_count, mesh_node_count
+        if node_index in visiting:
+            raise HssdBindingError(f"glTF node cycle: {structure.path.name}")
+        if node_index in visited:
+            raise HssdBindingError(f"glTF node appears twice in active scene: {structure.path.name}")
+        visiting.add(node_index)
+        node = nodes[node_index]
+        world = _matmul4(parent_matrix, _node_matrix(node, f"node[{node_index}]"))
+        mesh_index = node.get("mesh")
+        if mesh_index is not None:
+            if "skin" in node or not isinstance(mesh_index, int) or not 0 <= mesh_index < len(meshes) or not isinstance(meshes[mesh_index], dict):
+                raise HssdBindingError(f"unsupported skinned/invalid glTF mesh node: {structure.path.name}")
+            mesh = meshes[mesh_index]
+            if "weights" in mesh or "weights" in node:
+                raise HssdBindingError(f"morphed glTF mesh is unsupported: {structure.path.name}")
+            primitives = mesh.get("primitives")
+            if not isinstance(primitives, list) or not primitives:
+                raise HssdBindingError(f"glTF mesh has no primitives: {structure.path.name}")
+            mesh_node_count += 1
+            for primitive in primitives:
+                if not isinstance(primitive, dict) or primitive.get("targets"):
+                    raise HssdBindingError(f"invalid/morphed glTF primitive: {structure.path.name}")
+                attributes = primitive.get("attributes")
+                accessor_index = attributes.get("POSITION") if isinstance(attributes, dict) else None
+                if not isinstance(accessor_index, int):
+                    raise HssdBindingError(f"glTF primitive lacks POSITION: {structure.path.name}")
+                points = _read_position_accessor(structure, accessor_index, accessor_cache)
+                position_accessor_count += 1
+                position_vertex_count += len(points)
+                for point in points:
+                    gltf_point = _transform_point(world, point)
+                    # glTF is Y-up; Blender imports it as X, -Z, Y.
+                    blender_point = (gltf_point[0], -gltf_point[2], gltf_point[1])
+                    for axis in range(3):
+                        gltf_minimum[axis] = min(gltf_minimum[axis], gltf_point[axis])
+                        gltf_maximum[axis] = max(gltf_maximum[axis], gltf_point[axis])
+                        blender_minimum[axis] = min(blender_minimum[axis], blender_point[axis])
+                        blender_maximum[axis] = max(blender_maximum[axis], blender_point[axis])
+        for child in node.get("children", []):
+            visit(child, world)
+        visiting.remove(node_index)
+        visited.add(node_index)
+
+    for root in roots:
+        visit(root, _IDENTITY_MATRIX)
+    if mesh_node_count < 1 or position_vertex_count < 1 or any(not math.isfinite(value) for value in blender_minimum + blender_maximum):
+        raise HssdBindingError(f"glTF active scene contains no measurable mesh: {structure.path.name}")
+    gltf_dimensions = tuple(gltf_maximum[axis] - gltf_minimum[axis] for axis in range(3))
+    blender_dimensions = tuple(blender_maximum[axis] - blender_minimum[axis] for axis in range(3))
+    if any(not math.isfinite(value) or value <= 1e-9 for value in blender_dimensions):
+        raise HssdBindingError(f"degenerate glTF geometry AABB: {structure.path.name}")
+    return {
+        "measurement_policy": "decoded_position_accessors_active_scene_world_aabb_v1",
+        "coordinate_conversion": "gltf_y_up_to_blender_x_negative_z_y",
+        "mesh_node_count": mesh_node_count,
+        "position_accessor_count": position_accessor_count,
+        "position_vertex_count": position_vertex_count,
+        "gltf_bounds_m": {"min_m": gltf_minimum, "max_m": gltf_maximum},
+        "gltf_dimensions_m": list(gltf_dimensions),
+        "blender_bounds_m": {"min_m": blender_minimum, "max_m": blender_maximum},
+        "blender_dimensions_m": list(blender_dimensions),
+    }
+
+
 def _fit_transform(source_dimensions: Sequence[float], target_dimensions: Sequence[float]) -> tuple[int, tuple[float, float, float], float, float]:
     source = _v3(source_dimensions, "source dimensions")
     target = _v3(target_dimensions, "target dimensions")
@@ -609,45 +905,59 @@ def _select_candidate(
     target: TargetAsset,
     semantics: Mapping[str, tuple[str, int]],
     models: Mapping[str, Mapping[str, str]],
+    source_cache: dict[str, tuple[dict[str, int], dict[str, Any]]],
 ) -> Candidate:
     aliases = CATEGORY_RULES[target.category].aliases
     alias_priority = {alias: index for index, alias in enumerate(aliases)}
-    preliminary: list[tuple[tuple[Any, ...], str, str, tuple[float, float, float], int, tuple[float, float, float], float, float]] = []
-    invalid_reasons: list[str] = []
-    for object_id, (semantic_category, _row_index) in semantics.items():
+    viable: list[tuple[tuple[Any, ...], Candidate]] = []
+    decisions: list[dict[str, Any]] = []
+    rejection_counts: dict[str, int] = {}
+
+    def reject(decision: dict[str, Any], reason: str, error: Exception | None = None) -> None:
+        decision["status"] = "rejected"
+        decision["reason"] = reason
+        if error is not None:
+            decision["error_sha256"] = hashlib.sha256(str(error).encode("utf-8")).hexdigest()
+        decisions.append(decision)
+        rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+
+    matching = sorted(
+        (
+            (object_id, semantic_category)
+            for object_id, (semantic_category, _row_index) in semantics.items()
+            if semantic_category in alias_priority and _OBJECT_ID_RE.fullmatch(object_id)
+        ),
+        key=lambda item: (alias_priority[item[1]], item[0]),
+    )
+    for object_id, semantic_category in matching:
+        decision: dict[str, Any] = {
+            "object_id": object_id,
+            "semantic_category": semantic_category,
+            "alias_priority": alias_priority[semantic_category],
+        }
         if semantic_category not in alias_priority or not _OBJECT_ID_RE.fullmatch(object_id):
             continue
         model = models.get(object_id)
         if not model or not (model.get("aligned.dims") or "").strip():
+            reject(decision, "missing_catalog_provenance")
             continue
         try:
-            habitat_dimensions = _parse_dimensions(model["aligned.dims"], object_id)
-        except HssdBindingError:
+            catalog_dimensions = _parse_dimensions(model["aligned.dims"], object_id)
+        except HssdBindingError as error:
+            reject(decision, "invalid_catalog_provenance", error)
             continue
-        # HSSD/glTF is Y-up. Blender's glTF importer converts it to Z-up.
-        blender_dimensions = (habitat_dimensions[0], habitat_dimensions[2], habitat_dimensions[1])
-        rotation, scales, anisotropy, uniform = _fit_transform(blender_dimensions, target.target_dimensions_m)
-        if anisotropy > _MAX_AXIS_SCALE_ANISOTROPY or not (_MIN_UNIFORM_SCALE <= uniform <= _MAX_UNIFORM_SCALE):
-            continue
-        score = (
-            alias_priority[semantic_category],
-            round(anisotropy, 3),
-            round(abs(math.log(uniform)), 2),
-            object_id,
-        )
-        preliminary.append((score, object_id, semantic_category, habitat_dimensions, rotation, scales, anisotropy, uniform))
-    preliminary.sort(key=lambda item: item[0])
-    viable: list[tuple[tuple[Any, ...], Candidate]] = []
-    for base_score, object_id, semantic_category, habitat_dimensions, rotation, scales, anisotropy, uniform in preliminary[:_MAX_INSPECTED_PER_TARGET]:
+        decision["catalog_aligned_dimensions_m"] = list(catalog_dimensions)
         try:
             source_path, config_path, source_relpath, config_relpath = _candidate_files(root, object_id)
             config = _load_json(config_path)
             up = _v3(config.get("up"), f"{object_id}.up")
             front = _v3(config.get("front"), f"{object_id}.front")
             if up != (0.0, 1.0, 0.0) or front != (0.0, 0.0, -1.0):
-                invalid_reasons.append(f"{object_id}:unsupported_axes")
+                reject(decision, "unsupported_axes")
                 continue
-            inspection = inspect_glb(source_path)
+            if object_id not in source_cache:
+                source_cache[object_id] = (inspect_glb(source_path), inspect_glb_geometry(source_path))
+            inspection, geometry = source_cache[object_id]
             if (
                 inspection["material_count"] < 1
                 or inspection["pbr_material_count"] < 1
@@ -658,17 +968,43 @@ def _select_candidate(
                 or inspection["all_primitives_material_bound"] != 1
                 or inspection["triangle_count"] < _MIN_TRIANGLES
             ):
-                invalid_reasons.append(f"{object_id}:not_high_detail_pbr")
+                reject(decision, "not_high_detail_pbr")
                 continue
+            blender_dimensions = _v3(geometry.get("blender_dimensions_m"), f"{object_id}.actual_blender_dimensions")
+            rotation, scales, anisotropy, uniform = _fit_transform(blender_dimensions, target.target_dimensions_m)
+            decision.update({
+                "actual_blender_dimensions_m": list(blender_dimensions),
+                "planned_rotate_z_deg": rotation,
+                "actual_scale_anisotropy": anisotropy,
+                "uniform_scale": uniform,
+            })
+            if anisotropy > _MAX_AXIS_SCALE_ANISOTROPY:
+                reject(decision, "actual_geometry_anisotropy_exceeded")
+                continue
+            if not (_MIN_UNIFORM_SCALE <= uniform <= _MAX_UNIFORM_SCALE):
+                reject(decision, "actual_geometry_uniform_scale_out_of_range")
+                continue
+            quality_score = (
+                alias_priority[semantic_category],
+                round(anisotropy, 10),
+                round(abs(math.log(uniform)), 10),
+                -min(inspection["pbr_texture_slot_count"], 8),
+                -min(inspection["triangle_count"], 500_000),
+                object_id,
+            )
+            decision["status"] = "eligible"
+            decision["quality_score"] = list(quality_score)
+            decisions.append(decision)
             candidate = Candidate(
                 object_id=object_id,
                 semantic_category=semantic_category,
-                alias_priority=base_score[0],
+                alias_priority=alias_priority[semantic_category],
                 name=(models[object_id].get("name") or "").strip(),
                 source_relpath=source_relpath,
                 config_relpath=config_relpath,
-                source_dimensions_habitat_m=habitat_dimensions,
-                source_dimensions_blender_m=(habitat_dimensions[0], habitat_dimensions[2], habitat_dimensions[1]),
+                catalog_aligned_dimensions_m=catalog_dimensions,
+                source_dimensions_blender_m=blender_dimensions,
+                source_geometry=geometry,
                 up=up,
                 front=front,
                 planned_rotate_z_deg=rotation,
@@ -676,23 +1012,33 @@ def _select_candidate(
                 scale_anisotropy=anisotropy,
                 uniform_scale=uniform,
                 inspection=inspection,
-            )
-            quality_score = (
-                base_score[0],
-                base_score[1],
-                base_score[2],
-                -min(inspection["pbr_texture_slot_count"], 8),
-                -min(inspection["triangle_count"], 500_000),
-                object_id,
+                selection_receipt={},
             )
             viable.append((quality_score, candidate))
         except HssdBindingError as error:
-            invalid_reasons.append(f"{object_id}:{error}")
+            reject(decision, "source_or_geometry_contract_error", error)
     if not viable:
-        suffix = f"; inspected failures={invalid_reasons[:3]}" if invalid_reasons else ""
-        raise HssdBindingError(f"no licensed high-detail PBR HSSD candidate for category {target.category}{suffix}")
+        raise HssdBindingError(
+            f"no licensed high-detail PBR HSSD candidate for category {target.category}; "
+            f"matching={len(matching)} rejection_counts={dict(sorted(rejection_counts.items()))}"
+        )
     viable.sort(key=lambda item: item[0])
-    return viable[0][1]
+    selected_score, selected = viable[0]
+    receipt = {
+        "geometry_measurement_policy": "decoded_position_accessors_active_scene_world_aabb_v1",
+        "catalog_dimensions_used_for_selection": False,
+        "matching_candidate_count": len(matching),
+        "evaluated_candidate_count": len(decisions),
+        "eligible_candidate_count": len(viable),
+        "rejection_counts": dict(sorted(rejection_counts.items())),
+        "candidate_decision_digest": hashlib.sha256(canonical_json_bytes(decisions)).hexdigest(),
+        "selected_object_id": selected.object_id,
+        "selected_quality_score": list(selected_score),
+        "selected_actual_scale_anisotropy": selected.scale_anisotropy,
+        "maximum_axis_scale_anisotropy": _MAX_AXIS_SCALE_ANISOTROPY,
+        "accepted": True,
+    }
+    return replace(selected, selection_receipt=receipt)
 
 
 def _binding_entry(root: pathlib.Path, target: TargetAsset, candidate: Candidate) -> dict[str, Any]:
@@ -711,6 +1057,8 @@ def _binding_entry(root: pathlib.Path, target: TargetAsset, candidate: Candidate
             "planned_scale_xyz": list(candidate.planned_scale_xyz),
             "scale_anisotropy": candidate.scale_anisotropy,
             "uniform_scale": candidate.uniform_scale,
+            "dimension_source": "decoded_glb_position_accessors_active_scene_world_aabb",
+            "anisotropy_accepted": True,
             "origin_policy": "footprint_center_bottom_z_zero",
             "dimension_policy": "exact_target_aabb_after_import",
         },
@@ -722,14 +1070,17 @@ def _binding_entry(root: pathlib.Path, target: TargetAsset, candidate: Candidate
             "render_asset_relpath": candidate.source_relpath,
             "object_config_relpath": candidate.config_relpath,
             "render_asset_sha256": sha256_file(source_path),
-            "source_dimensions_habitat_m": list(candidate.source_dimensions_habitat_m),
+            "catalog_aligned_dimensions_m": list(candidate.catalog_aligned_dimensions_m),
+            "catalog_dimensions_provenance": "metadata/fpmodels-with-decomposed.csv:aligned.dims",
             "source_dimensions_blender_m": list(candidate.source_dimensions_blender_m),
+            "actual_glb_geometry": candidate.source_geometry,
             "up": list(candidate.up),
             "front": list(candidate.front),
             "license_spdx": HSSD_LICENSE_SPDX,
             "license_url": HSSD_LICENSE_URL,
         },
         "source_inspection": dict(candidate.inspection),
+        "selection_receipt": candidate.selection_receipt,
     }
 
 
@@ -756,7 +1107,11 @@ def build_binding_plan(
         mode = "subset_smoke"
     identity = dataset_identity(root, expected_readme_sha256)
     semantics, models = _load_metadata(root)
-    bindings = [_binding_entry(root, targets[asset_id], _select_candidate(root, targets[asset_id], semantics, models)) for asset_id in requested]
+    source_cache: dict[str, tuple[dict[str, int], dict[str, Any]]] = {}
+    bindings = [
+        _binding_entry(root, targets[asset_id], _select_candidate(root, targets[asset_id], semantics, models, source_cache))
+        for asset_id in requested
+    ]
     preserved_for_plan = preserved if mode == "full" else []
     accounted = sorted([entry["logical_asset_id"] for entry in bindings] + [entry["asset_id"] for entry in preserved_for_plan])
     target_universe = sorted(list(targets) + [entry["asset_id"] for entry in preserved]) if mode == "full" else list(requested)
@@ -781,7 +1136,9 @@ def build_binding_plan(
             "minimum_triangles": _MIN_TRIANGLES,
             "require_pbr_texture_slot": True,
             "maximum_axis_scale_anisotropy": _MAX_AXIS_SCALE_ANISOTROPY,
-            "tie_breaker": "semantic_alias_then_dimension_bucket_then_pbr_slots_then_triangles_then_object_id",
+            "dimension_source": "decoded_glb_position_accessors_active_scene_world_aabb",
+            "catalog_dimensions_role": "provenance_only_not_selection",
+            "tie_breaker": "semantic_alias_then_actual_aabb_anisotropy_then_uniform_scale_then_pbr_slots_then_triangles_then_object_id",
         },
         "mode": mode,
         "closed_world": {
@@ -810,8 +1167,17 @@ def validate_binding_plan(plan: Mapping[str, Any]) -> None:
     bindings = plan.get("bindings")
     preserved = plan.get("preserved_assets")
     closed = plan.get("closed_world")
+    policy = plan.get("selection_policy")
     if not isinstance(bindings, list) or not isinstance(preserved, list) or not isinstance(closed, dict):
         raise HssdBindingError("HSSD binding plan arrays are invalid")
+    if (
+        not isinstance(policy, dict)
+        or policy.get("version") != SELECTION_POLICY_VERSION
+        or policy.get("dimension_source") != "decoded_glb_position_accessors_active_scene_world_aabb"
+        or policy.get("catalog_dimensions_role") != "provenance_only_not_selection"
+        or policy.get("maximum_axis_scale_anisotropy") != _MAX_AXIS_SCALE_ANISOTROPY
+    ):
+        raise HssdBindingError("HSSD binding plan has an invalid actual-geometry selection policy")
     bound_ids: list[str] = []
     for entry in bindings:
         if not isinstance(entry, dict):
@@ -822,10 +1188,54 @@ def validate_binding_plan(plan: Mapping[str, Any]) -> None:
         validate_target_dimensions(entry.get("target_dimensions_m"), asset_id)
         source = entry.get("source")
         inspection = entry.get("source_inspection")
+        normalization = entry.get("normalization_plan")
+        selection = entry.get("selection_receipt")
         if not isinstance(source, dict) or source.get("license_spdx") != HSSD_LICENSE_SPDX:
             raise HssdBindingError(f"HSSD binding lacks per-source attribution: {asset_id}")
         if not isinstance(source.get("render_asset_sha256"), str) or not _SHA256_RE.fullmatch(source["render_asset_sha256"]):
             raise HssdBindingError(f"HSSD binding lacks source hash: {asset_id}")
+        geometry = source.get("actual_glb_geometry")
+        if (
+            not isinstance(geometry, dict)
+            or geometry.get("measurement_policy") != "decoded_position_accessors_active_scene_world_aabb_v1"
+            or geometry.get("coordinate_conversion") != "gltf_y_up_to_blender_x_negative_z_y"
+            or not isinstance(geometry.get("position_vertex_count"), int)
+            or geometry["position_vertex_count"] < 1
+        ):
+            raise HssdBindingError(f"HSSD binding lacks measured GLB geometry: {asset_id}")
+        measured_dimensions = _v3(geometry.get("blender_dimensions_m"), f"{asset_id}.actual_glb_geometry.blender_dimensions_m")
+        recorded_dimensions = _v3(source.get("source_dimensions_blender_m"), f"{asset_id}.source_dimensions_blender_m")
+        _v3(source.get("catalog_aligned_dimensions_m"), f"{asset_id}.catalog_aligned_dimensions_m")
+        if any(abs(measured_dimensions[axis] - recorded_dimensions[axis]) > 1e-6 for axis in range(3)):
+            raise HssdBindingError(f"HSSD binding measured dimensions disagree: {asset_id}")
+        if (
+            not isinstance(normalization, dict)
+            or normalization.get("dimension_source") != "decoded_glb_position_accessors_active_scene_world_aabb"
+            or normalization.get("anisotropy_accepted") is not True
+            or not isinstance(normalization.get("planned_rotate_z_deg"), int)
+            or normalization["planned_rotate_z_deg"] not in {0, 90}
+            or isinstance(normalization.get("scale_anisotropy"), bool)
+            or not isinstance(normalization.get("scale_anisotropy"), (int, float))
+            or not math.isfinite(float(normalization["scale_anisotropy"]))
+            or float(normalization["scale_anisotropy"]) > _MAX_AXIS_SCALE_ANISOTROPY + 1e-9
+        ):
+            raise HssdBindingError(f"HSSD binding normalization is not actual-geometry accepted: {asset_id}")
+        if (
+            not isinstance(selection, dict)
+            or selection.get("geometry_measurement_policy") != "decoded_position_accessors_active_scene_world_aabb_v1"
+            or selection.get("catalog_dimensions_used_for_selection") is not False
+            or selection.get("selected_object_id") != source.get("object_id")
+            or selection.get("accepted") is not True
+            or not isinstance(selection.get("candidate_decision_digest"), str)
+            or not _SHA256_RE.fullmatch(selection["candidate_decision_digest"])
+            or not isinstance(selection.get("matching_candidate_count"), int)
+            or not isinstance(selection.get("evaluated_candidate_count"), int)
+            or not isinstance(selection.get("eligible_candidate_count"), int)
+            or not selection["matching_candidate_count"] >= selection["evaluated_candidate_count"] >= selection["eligible_candidate_count"] >= 1
+            or abs(float(selection.get("selected_actual_scale_anisotropy", math.inf)) - float(normalization["scale_anisotropy"])) > 1e-9
+            or selection.get("maximum_axis_scale_anisotropy") != _MAX_AXIS_SCALE_ANISOTROPY
+        ):
+            raise HssdBindingError(f"HSSD binding selection receipt is incomplete: {asset_id}")
         if not isinstance(inspection, dict) or inspection.get("pbr_texture_slot_count", 0) < 1:
             raise HssdBindingError(f"HSSD source is not PBR-textured: {asset_id}")
         bound_ids.append(asset_id)
