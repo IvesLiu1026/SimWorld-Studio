@@ -1687,16 +1687,25 @@ def _run_command(
             )
         try:
             metadata = os.fstat(marker_descriptor)
+            # NFSv4 servers may intentionally map client UIDs/GIDs to a
+            # server-side identity.  Bind provenance to the host-created,
+            # O_EXCL transcript and its private attempt directory instead of
+            # comparing the mapped server UID with the client euid.
+            log_metadata = os.stat(log_path, follow_symlinks=False)
+            parent_metadata = os.stat(log_path.parent, follow_symlinks=False)
             if (
                 not stat.S_ISREG(metadata.st_mode)
                 or metadata.st_size > 4096
                 or stat.S_IMODE(metadata.st_mode) != 0o600
-                or metadata.st_uid != os.geteuid()
                 or metadata.st_nlink != 1
+                or metadata.st_uid != log_metadata.st_uid
+                or metadata.st_gid != log_metadata.st_gid
+                or metadata.st_uid != parent_metadata.st_uid
+                or metadata.st_gid != parent_metadata.st_gid
             ):
                 _fail(
                     "VISTA_HOME_BUILD_MARKER_INVALID",
-                    f"{phase} result marker has unsafe type, size, ownership, links, or permissions",
+                    f"{phase} result marker has unsafe type, size, provenance, links, or permissions",
                     pointer=str(marker_path),
                 )
             chunks: list[bytes] = []

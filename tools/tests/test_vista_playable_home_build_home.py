@@ -910,7 +910,7 @@ def test_run_command_rejects_world_readable_result_file(tmp_path: pathlib.Path) 
         "path.write_text(json.dumps({'status':'ok'}, separators=(',', ':'))+'\\n'); "
         "os.chmod(path, 0o644)"
     )
-    with pytest.raises(build_home.BuildHomeError, match="unsafe type, size, ownership, links, or permissions"):
+    with pytest.raises(build_home.BuildHomeError, match="unsafe type, size, provenance, links, or permissions"):
         build_home._run_command(
             phase="test",
             argv=[sys.executable, "-c", script],
