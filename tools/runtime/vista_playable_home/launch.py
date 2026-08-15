@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import signal
@@ -21,10 +22,12 @@ if __package__ in {None, ""}:
         DEFAULT_VISTA_WORLD_PORT,
         GameRuntimeConfig,
         RuntimeSafetyError,
+        allocate_runtime_attempt,
         atomic_write_json,
         build_game_command,
         identity_is_live,
         process_identity,
+        publish_current_runtime,
         redacted_plan,
         sanitized_environment,
         utc_now,
@@ -37,10 +40,12 @@ else:
         DEFAULT_VISTA_WORLD_PORT,
         GameRuntimeConfig,
         RuntimeSafetyError,
+        allocate_runtime_attempt,
         atomic_write_json,
         build_game_command,
         identity_is_live,
         process_identity,
+        publish_current_runtime,
         redacted_plan,
         sanitized_environment,
         utc_now,
@@ -104,36 +109,52 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(plan, indent=2, sort_keys=True))
         return 0
 
-    runtime_dir = config.workspace / "game-runtime"
-    runtime_dir.mkdir(mode=0o700, exist_ok=False)
     (config.workspace / "ue-user").mkdir(mode=0o700, exist_ok=True)
     (config.workspace / "xdg-cache" / "UnrealEngine" / "DDC").mkdir(
         mode=0o700, parents=True, exist_ok=True
     )
-    atomic_write_json(runtime_dir / "launch-plan.json", plan)
-    log_handle = open_private_log(runtime_dir / "unreal-game.log")
-    process = subprocess.Popen(
-        build_game_command(config),
-        cwd=config.project.parent,
-        env=sanitized_environment(config),
-        stdin=subprocess.DEVNULL,
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
+    runtime_root = config.workspace / "game-runtime"
+    runtime_root.mkdir(mode=0o700, exist_ok=True)
+    lock_descriptor = os.open(
+        runtime_root / ".launch.lock",
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
     )
-    identity = process_identity(process.pid, "unreal-game")
-    state_path = runtime_dir / "runtime-state.json"
-    state: dict[str, Any] = {
-        "schema": "simworld.vista.playable-home-runtime-state/v1",
-        "status": "starting",
-        "created_at": utc_now(),
-        "updated_at": utc_now(),
-        "map": config.map_path,
-        "display": config.display,
-        "gpu": config.gpu,
-        "process": identity,
-    }
-    atomic_write_json(state_path, state)
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(lock_descriptor)
+        raise RuntimeSafetyError("another VISTA World launch is in progress") from exc
+    try:
+        runtime_dir = allocate_runtime_attempt(config.workspace)
+        atomic_write_json(runtime_dir / "launch-plan.json", plan)
+        log_handle = open_private_log(runtime_dir / "unreal-game.log")
+        process = subprocess.Popen(
+            build_game_command(config),
+            cwd=config.project.parent,
+            env=sanitized_environment(config),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        identity = process_identity(process.pid, "unreal-game")
+        state_path = runtime_dir / "runtime-state.json"
+        state: dict[str, Any] = {
+            "schema": "simworld.vista.playable-home-runtime-state/v1",
+            "status": "starting",
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+            "map": config.map_path,
+            "display": config.display,
+            "gpu": config.gpu,
+            "process": identity,
+        }
+        atomic_write_json(state_path, state)
+        publish_current_runtime(config.workspace, state_path)
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
     stopping = False
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -181,6 +202,6 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (RuntimeSafetyError, FileExistsError) as error:
+    except (RuntimeSafetyError, FileExistsError, OSError) as error:
         print(f"game launch refused: {error}", file=sys.stderr)
         raise SystemExit(2)

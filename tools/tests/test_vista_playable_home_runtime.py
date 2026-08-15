@@ -15,11 +15,14 @@ from tools.runtime.vista_playable_home import preflight, profile_entrypoint, sun
 from tools.runtime.vista_playable_home.runtime import (
     GameRuntimeConfig,
     RuntimeSafetyError,
+    allocate_runtime_attempt,
     atomic_write_json,
     build_game_command,
     inspect_toolchain,
     process_identity,
+    publish_current_runtime,
     redacted_plan,
+    resolve_current_runtime_state,
     sanitized_environment,
     validate_config,
     validate_display,
@@ -123,6 +126,35 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         atomic_write_json(target, {"ok": True})
         self.assertEqual(json.loads(target.read_text()), {"ok": True})
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
+    def test_runtime_attempts_are_repeatable_and_current_pointer_is_contained(self) -> None:
+        config = self.make_config()
+        first = allocate_runtime_attempt(config.workspace)
+        first_state = first / "runtime-state.json"
+        atomic_write_json(first_state, {
+            "status": "stopped",
+            "process": {"pid": 2147483647, "start_ticks": 1},
+        })
+        pointer = publish_current_runtime(config.workspace, first_state)
+        self.assertEqual(stat.S_IMODE(pointer.stat().st_mode), 0o600)
+        resolved, state = resolve_current_runtime_state(config.workspace)
+        self.assertEqual(resolved, first_state)
+        self.assertEqual(state["status"], "stopped")
+        second = allocate_runtime_attempt(config.workspace)
+        self.assertNotEqual(first, second)
+        self.assertTrue(first_state.is_file())
+
+    def test_runtime_attempt_refuses_a_live_current_identity(self) -> None:
+        config = self.make_config()
+        attempt = allocate_runtime_attempt(config.workspace)
+        state_path = attempt / "runtime-state.json"
+        atomic_write_json(state_path, {
+            "status": "running",
+            "process": process_identity(os.getpid(), "test-runtime"),
+        })
+        publish_current_runtime(config.workspace, state_path)
+        with self.assertRaisesRegex(RuntimeSafetyError, "already live"):
+            allocate_runtime_attempt(config.workspace)
 
     def test_sunshine_entry_replaces_only_named_app(self) -> None:
         payload = {"env": {"PATH": "x"}, "apps": [{"name": "Desktop"}, {"name": "VISTA World", "cmd": "old"}]}

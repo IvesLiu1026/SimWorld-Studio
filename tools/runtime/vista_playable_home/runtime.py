@@ -18,6 +18,7 @@ from typing import Any, Mapping, Sequence
 
 SCHEMA = "simworld.vista.playable-home-runtime/v1"
 PREFLIGHT_SCHEMA = "simworld.vista.playable-home-preflight/v1"
+RUNTIME_POINTER_SCHEMA = "simworld.vista.playable-home-runtime-pointer/v1"
 DEFAULT_DISPLAY = ":117"
 DEFAULT_GPU = 0
 DEFAULT_VISTA_WORLD_PORT = 55620
@@ -27,6 +28,7 @@ RESERVED_PORTS = frozenset(
 )
 MAP_RE = re.compile(r"^/Game/[A-Za-z0-9_./-]+$")
 DISPLAY_RE = re.compile(r"^:([0-9]{1,4})$")
+ATTEMPT_RE = re.compile(r"^attempt-[0-9]{8}T[0-9]{6}\.[0-9]{6}Z-[0-9]+$")
 
 
 class RuntimeSafetyError(RuntimeError):
@@ -72,6 +74,81 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def runtime_root(workspace: Path) -> Path:
+    root = _existing(workspace, "workspace", directory=True) / "game-runtime"
+    root.mkdir(mode=0o700, exist_ok=True)
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeSafetyError("runtime root must be a real directory")
+    return root
+
+
+def resolve_current_runtime_state(workspace: Path) -> tuple[Path, dict[str, Any]]:
+    root = runtime_root(workspace)
+    pointer_path = root / "current.json"
+    if pointer_path.is_symlink() or not pointer_path.is_file():
+        raise RuntimeSafetyError("runtime pointer is missing or unsafe")
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeSafetyError("runtime pointer is invalid") from exc
+    if not isinstance(pointer, dict) or set(pointer) != {"schema", "state"} \
+            or pointer.get("schema") != RUNTIME_POINTER_SCHEMA:
+        raise RuntimeSafetyError("runtime pointer has an invalid shape")
+    relative = Path(str(pointer.get("state", "")))
+    if relative.is_absolute() or len(relative.parts) != 2 \
+            or not ATTEMPT_RE.fullmatch(relative.parts[0]) \
+            or relative.parts[1] != "runtime-state.json":
+        raise RuntimeSafetyError("runtime pointer target is invalid")
+    candidate = root / relative
+    if candidate.is_symlink() or candidate.parent.is_symlink() or not candidate.is_file():
+        raise RuntimeSafetyError("runtime state is missing or unsafe")
+    state_path = candidate.resolve(strict=True)
+    _ensure_contained(state_path, root.resolve(strict=True), "runtime state")
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeSafetyError("runtime state is invalid") from exc
+    if not isinstance(state, dict):
+        raise RuntimeSafetyError("runtime state must be an object")
+    return state_path, state
+
+
+def allocate_runtime_attempt(workspace: Path) -> Path:
+    root = runtime_root(workspace)
+    pointer = root / "current.json"
+    if pointer.exists():
+        _state_path, state = resolve_current_runtime_state(workspace)
+        identity = state.get("process")
+        if isinstance(identity, Mapping) and identity_is_live(identity):
+            raise RuntimeSafetyError("a VISTA World runtime is already live")
+    attempt = (
+        "attempt-"
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        + f"-{os.getpid()}"
+    )
+    if not ATTEMPT_RE.fullmatch(attempt):
+        raise RuntimeSafetyError("runtime attempt identity is invalid")
+    attempt_root = root / attempt
+    attempt_root.mkdir(mode=0o700, exist_ok=False)
+    return attempt_root
+
+
+def publish_current_runtime(workspace: Path, state_path: Path) -> Path:
+    root = runtime_root(workspace).resolve(strict=True)
+    state = state_path.resolve(strict=True)
+    _ensure_contained(state, root, "runtime state")
+    relative = state.relative_to(root)
+    if len(relative.parts) != 2 or not ATTEMPT_RE.fullmatch(relative.parts[0]) \
+            or relative.parts[1] != "runtime-state.json":
+        raise RuntimeSafetyError("runtime state location is invalid")
+    pointer = root / "current.json"
+    atomic_write_json(pointer, {
+        "schema": RUNTIME_POINTER_SCHEMA,
+        "state": relative.as_posix(),
+    })
+    return pointer
 
 
 def _absolute(path: Path, label: str) -> Path:

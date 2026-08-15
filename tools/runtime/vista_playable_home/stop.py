@@ -19,6 +19,7 @@ if __package__ in {None, ""}:
         atomic_write_json,
         identity_is_live,
         process_start_ticks,
+        resolve_current_runtime_state,
         utc_now,
     )
 else:
@@ -27,21 +28,13 @@ else:
         atomic_write_json,
         identity_is_live,
         process_start_ticks,
+        resolve_current_runtime_state,
         utc_now,
     )
 
 
 def load_state(workspace: Path) -> tuple[Path, dict[str, Any]]:
-    state_path = workspace.resolve(strict=True) / "game-runtime" / "runtime-state.json"
-    if not state_path.is_file() or state_path.is_symlink():
-        raise RuntimeSafetyError("runtime state is missing or unsafe")
-    try:
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeSafetyError("runtime state is invalid") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeSafetyError("runtime state must be an object")
-    return state_path, payload
+    return resolve_current_runtime_state(workspace)
 
 
 def signal_owned(identity: Mapping[str, Any], signum: int) -> bool:
