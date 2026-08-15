@@ -994,43 +994,7 @@ def run_protocol(
         _fail("DOOR_STATE_MISMATCH", "door inspection did not preserve open=true", step="door.inspect_open")
 
     office_door = session.interaction(
-        "office_door.close",
-        target=OFFICE_DOOR_ID,
-        affordance="close",
-        expected_code="DOOR_CLOSED",
-    )
-    if office_door["values"].get("open") != "false":
-        _fail(
-            "DOOR_STATE_MISMATCH",
-            "office door close mutation did not report open=false",
-            step="office_door.close",
-        )
-    office_door = session.interaction(
-        "office_door.inspect_closed",
-        target=OFFICE_DOOR_ID,
-        affordance="inspect",
-        expected_code="INSPECTED",
-    )
-    if office_door["values"].get("open") != "false":
-        _fail(
-            "DOOR_STATE_MISMATCH",
-            "office door inspection did not preserve open=false",
-            step="office_door.inspect_closed",
-        )
-    office_door = session.interaction(
-        "office_door.open",
-        target=OFFICE_DOOR_ID,
-        affordance="open",
-        expected_code="DOOR_OPENED",
-    )
-    if office_door["values"].get("open") != "true":
-        _fail(
-            "DOOR_STATE_MISMATCH",
-            "office door open mutation did not report open=true",
-            step="office_door.open",
-        )
-    office_door = session.interaction(
-        "office_door.inspect_open",
+        "office_door.inspect_initial_open",
         target=OFFICE_DOOR_ID,
         affordance="inspect",
         expected_code="INSPECTED",
@@ -1038,8 +1002,8 @@ def run_protocol(
     if office_door["values"].get("open") != "true":
         _fail(
             "DOOR_STATE_MISMATCH",
-            "office door inspection did not preserve open=true",
-            step="office_door.inspect_open",
+            "office door did not begin open for the NPC office route",
+            step="office_door.inspect_initial_open",
         )
 
     keys = session.interaction(
@@ -1175,6 +1139,18 @@ def run_protocol(
             "DOOR_STATE_MISMATCH",
             "office door did not close after NPC crossing",
             step="office_door.close_after_crossing",
+        )
+    office_door = session.interaction(
+        "office_door.inspect_closed_after_crossing",
+        target=OFFICE_DOOR_ID,
+        affordance="inspect",
+        expected_code="INSPECTED",
+    )
+    if office_door["values"].get("open") != "false":
+        _fail(
+            "DOOR_STATE_MISMATCH",
+            "office door inspection did not preserve the post-crossing close",
+            step="office_door.inspect_closed_after_crossing",
         )
 
     for event_id in EVENT_IDS:

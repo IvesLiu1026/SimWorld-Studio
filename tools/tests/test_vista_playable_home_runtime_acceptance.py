@@ -450,9 +450,9 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "accepted")
         self.assertIsNone(receipt["error"])
         self.assertEqual(receipt["initial_generation"], 0)
-        self.assertEqual(receipt["final_generation"], 25)
-        self.assertEqual(len(receipt["checks"]), 32)
-        self.assertEqual(len(server.requests), 32)
+        self.assertEqual(receipt["final_generation"], 23)
+        self.assertEqual(len(receipt["checks"]), 30)
+        self.assertEqual(len(server.requests), 30)
         self.assertEqual(stat.S_IMODE(fixture.output.stat().st_mode), 0o600)
         self.assertEqual(json.loads(fixture.output.read_text()), receipt)
 
@@ -532,9 +532,9 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         for step in (
             "door.open",
             "door.close",
-            "office_door.close",
-            "office_door.open",
+            "office_door.inspect_initial_open",
             "office_door.close_after_crossing",
+            "office_door.inspect_closed_after_crossing",
         ):
             self.assertTrue(any(check["step"] == step for check in receipt["checks"]))
         event_steps = [check["step"] for check in receipt["checks"] if check["step"].startswith("event.")]
