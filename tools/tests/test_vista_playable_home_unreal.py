@@ -330,6 +330,8 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("partial_saved_quarantined", compose_source)
         self.assertIn("unreal.PointLight", compose_source)
         self.assertIn("patrol_target_semantic_ids", compose_source)
+        self.assertIn('"generate_overlap_events"', compose_source)
+        self.assertNotIn("set_generate_overlap_events(", compose_source)
 
 
 if __name__ == "__main__":

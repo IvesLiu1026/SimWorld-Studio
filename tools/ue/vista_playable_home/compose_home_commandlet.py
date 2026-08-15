@@ -143,7 +143,12 @@ def apply_entity_properties(actor, operation, asset_entry):
         component.set_static_mesh(asset)
         collision = operation["collision"]
         component.set_collision_profile_name(unreal.Name(collision["profile"]))
-        component.set_generate_overlap_events(collision["generate_overlap"])
+        # UE 5.7 no longer exposes UPrimitiveComponent::SetGenerateOverlapEvents
+        # as a Python method.  The reflected property remains writable and is
+        # the commandlet-safe API (it does not require an editor UI).
+        component.set_editor_property(
+            "generate_overlap_events", bool(collision["generate_overlap"])
+        )
         component.set_simulate_physics(collision["simulate_physics"])
         mobility = operation["mobility"]
         component.set_mobility(
