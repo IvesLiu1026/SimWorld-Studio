@@ -56,7 +56,7 @@ TABLETOP_RIGHT_ID = (
     "home.r1/room.living_room/entity.coffee_table.01/anchor.tabletop_right"
 )
 EVENT_IDS = ("mmg_001", "mmg_044", "mmg_045")
-LIVING_TARGET_XY = (-400.0, -200.0)
+LIVING_TARGET_XY = (-240.0, -200.0)
 LIVING_ACCEPTANCE_RADIUS_CM = 80.0
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

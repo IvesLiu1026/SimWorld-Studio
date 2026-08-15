@@ -2,7 +2,7 @@
   "schema_version": "simworld.vista.playable-event/v1",
   "event_id": "mmg_045",
   "title": "Phone left in the bedroom",
-  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "51208e0ecc1ad1450ca6d9b14a4fb46989bff90fd8dc15422a0a47df6827c8c3"},
   "participating_room_ids": ["home.r1/room.bedroom", "home.r1/room.entry_hall"],
   "participating_entity_ids": [
     "home.r1/room.bedroom/entity.phone.01",
@@ -28,5 +28,5 @@
   "timeout_s": 600,
   "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
   "source": {"dataset": "VISTA", "sample_id": "mmg_045", "verification": "verified", "public_reference": "vista://assist-step/mmg_045"},
-  "content_digest": "b742cd40a22c5bfaef8883a53ac044c4d3d558a883d6df52a141e0cd1ea1bcd2"
+  "content_digest": "f1c50344b73b6997283018838c08c385f0fb710653083b8cf9b3d10a3c6f743c"
 }

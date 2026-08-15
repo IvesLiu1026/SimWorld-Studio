@@ -2,7 +2,7 @@
   "schema_version": "simworld.vista.playable-event/v1",
   "event_id": "mmg_070",
   "title": "Loaded washer has not been started",
-  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "51208e0ecc1ad1450ca6d9b14a4fb46989bff90fd8dc15422a0a47df6827c8c3"},
   "participating_room_ids": ["home.r1/room.bathroom_laundry"],
   "participating_entity_ids": [
     "home.r1/room.bathroom_laundry/entity.clothes.01",
@@ -28,5 +28,5 @@
   "timeout_s": 600,
   "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
   "source": {"dataset": "VISTA", "sample_id": "mmg_070", "verification": "verified", "public_reference": "vista://assist-step/mmg_070"},
-  "content_digest": "90a5284fe1afd6c4944e8be00d96219e9755fa0f4dd3f534124ba80283bccbbf"
+  "content_digest": "53e60f5bef042f3c3154b52d65ae8bd6c10d598f043535a9daada410f8bd715d"
 }

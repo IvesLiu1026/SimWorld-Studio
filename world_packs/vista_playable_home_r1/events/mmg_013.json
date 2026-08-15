@@ -2,7 +2,7 @@
   "schema_version": "simworld.vista.playable-event/v1",
   "event_id": "mmg_013",
   "title": "Coffee carried past a slipper obstacle",
-  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "51208e0ecc1ad1450ca6d9b14a4fb46989bff90fd8dc15422a0a47df6827c8c3"},
   "participating_room_ids": ["home.r1/room.kitchen_dining", "home.r1/room.living_room"],
   "participating_entity_ids": [
     "home.r1/room.kitchen_dining/entity.coffee_cup.01",
@@ -30,5 +30,5 @@
   "timeout_s": 600,
   "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
   "source": {"dataset": "VISTA", "sample_id": "mmg_013", "verification": "verified", "public_reference": "vista://assist-step/mmg_013"},
-  "content_digest": "3bf1a9747b3eeded8d10126eed833d978700be32fade14b71574f0ea66bf5067"
+  "content_digest": "e9afea9e0e9eb79c1f38302d35602220e9b7ffd7ebd04cbfd062ce8752cbca77"
 }

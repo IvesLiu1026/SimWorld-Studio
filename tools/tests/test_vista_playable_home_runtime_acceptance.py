@@ -197,7 +197,7 @@ class FakeVistaRuntime:
                     location = (
                         [-140.0, -60.0, 96.0]
                         if self.npc_polls == 1
-                        else [-390.0, -205.0, 96.0]
+                        else [-235.0, -205.0, 96.0]
                     )
                 else:
                     location = [260.0, 110.0, 96.0]

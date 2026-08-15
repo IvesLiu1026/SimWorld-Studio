@@ -2,7 +2,7 @@
   "schema_version": "simworld.vista.playable-event/v1",
   "event_id": "mmg_021",
   "title": "Bath water continues running",
-  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "51208e0ecc1ad1450ca6d9b14a4fb46989bff90fd8dc15422a0a47df6827c8c3"},
   "participating_room_ids": ["home.r1/room.bathroom_laundry"],
   "participating_entity_ids": [
     "home.r1/room.bathroom_laundry/entity.bathtub.01",
@@ -31,5 +31,5 @@
   "timeout_s": 600,
   "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
   "source": {"dataset": "VISTA", "sample_id": "mmg_021", "verification": "verified", "public_reference": "vista://assist-step/mmg_021"},
-  "content_digest": "75556551bea599ec8755c1b61265abdd8a65f2dea7d5915b0c3c659ebdcb5c27"
+  "content_digest": "d63fdc5ba69f1031f131bcad1cbf4e0022955717ed8068bf70b8498afaff85c7"
 }

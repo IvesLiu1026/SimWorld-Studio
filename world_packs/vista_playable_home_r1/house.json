@@ -69,7 +69,7 @@
       "bundle_asset_ref": "asset.bundle.living_room",
       "transform": {"location_m": [-4, -2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
       "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
-      "anchor_m": [0, 0, 0.1],
+      "anchor_m": [1.6, 0, 0.1],
       "review_cameras": [{"camera_id": "living_overview", "location_m": [-2, -1.5, 1.7], "rotation_deg": [-10, 0, 35], "fov_deg": 70}],
       "semantic_inventory": [
         "home.r1/room.living_room/entity.coffee_table.01",
@@ -84,7 +84,7 @@
       "bundle_asset_ref": "asset.bundle.kitchen_dining",
       "transform": {"location_m": [4, -2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
       "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
-      "anchor_m": [0, 0, 0.1],
+      "anchor_m": [-1.6, 0, 0.1],
       "review_cameras": [{"camera_id": "kitchen_overview", "location_m": [2, -1.5, 1.7], "rotation_deg": [-10, 0, 145], "fov_deg": 70}],
       "semantic_inventory": [
         "home.r1/room.kitchen_dining/entity.coffee_cup.01",
@@ -100,7 +100,7 @@
       "bundle_asset_ref": "asset.bundle.bedroom",
       "transform": {"location_m": [-4, 2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
       "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
-      "anchor_m": [0, 0, 0.1],
+      "anchor_m": [1.6, 0, 0.1],
       "review_cameras": [{"camera_id": "bedroom_overview", "location_m": [-2, 1.5, 1.7], "rotation_deg": [-10, 0, -35], "fov_deg": 68}],
       "semantic_inventory": [
         "home.r1/room.bedroom/entity.backpack.01",
@@ -114,7 +114,7 @@
       "bundle_asset_ref": "asset.bundle.office",
       "transform": {"location_m": [4, 2, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
       "bounds_m": {"min_m": [-2.5, -2, 0], "max_m": [2.5, 2, 3]},
-      "anchor_m": [0, 0, 0.1],
+      "anchor_m": [-1.6, 0, 0.1],
       "review_cameras": [{"camera_id": "office_overview", "location_m": [2, 1.5, 1.7], "rotation_deg": [-10, 0, -145], "fov_deg": 68}],
       "semantic_inventory": [
         "home.r1/room.office/entity.cabinet.01",
@@ -129,7 +129,7 @@
       "bundle_asset_ref": "asset.bundle.bathroom_laundry",
       "transform": {"location_m": [0, 6, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
       "bounds_m": {"min_m": [-1.5, -2, 0], "max_m": [1.5, 2, 3]},
-      "anchor_m": [0, 0, 0.1],
+      "anchor_m": [0, -1.6, 0.1],
       "review_cameras": [{"camera_id": "bathroom_overview", "location_m": [0, 1.5, 1.7], "rotation_deg": [-10, 0, -90], "fov_deg": 65}],
       "semantic_inventory": [
         "home.r1/room.bathroom_laundry/entity.bathtub.01",
@@ -219,5 +219,5 @@
     "source_refs": ["spec://vista-playable-home/approved-2026-08-15", "vista://assist-step/verified-indoor-events"],
     "license": "research-fixture-only"
   },
-  "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"
+  "content_digest": "51208e0ecc1ad1450ca6d9b14a4fb46989bff90fd8dc15422a0a47df6827c8c3"
 }

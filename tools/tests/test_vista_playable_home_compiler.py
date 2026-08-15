@@ -56,6 +56,20 @@ class PlayableHomeCompilerTests(unittest.TestCase):
 
     def test_room_local_transforms_resolve_to_world_centimeters(self) -> None:
         plan = compiler.compile_build_plan(self.house, self.events)
+        room_anchors = {
+            room["room_id"]: room["anchor_world_cm"] for room in plan["rooms"]
+        }
+        self.assertEqual(
+            room_anchors,
+            {
+                "home.r1/room.entry_hall": [0, 0, 10],
+                "home.r1/room.living_room": [-240, -200, 10],
+                "home.r1/room.kitchen_dining": [240, -200, 10],
+                "home.r1/room.bedroom": [-240, 200, 10],
+                "home.r1/room.office": [240, 200, 10],
+                "home.r1/room.bathroom_laundry": [0, 440, 10],
+            },
+        )
         entities = {entity["entity_id"]: entity for entity in plan["entities"]}
         coffee_table = entities["home.r1/room.living_room/entity.coffee_table.01"]
         self.assertEqual(coffee_table["world_transform_cm"]["location_cm"], [-400, -170, 0])

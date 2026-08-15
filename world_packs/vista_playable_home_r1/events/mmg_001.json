@@ -2,7 +2,7 @@
   "schema_version": "simworld.vista.playable-event/v1",
   "event_id": "mmg_001",
   "title": "Stove remains active before leaving home",
-  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "b9674469c5ee7ca2315be1df7145dbef5527a38ee2a145f9f1e2ad5709b7ecb1"},
+  "compatible_house": {"house_id": "home.r1", "revision": "vista_playable_home_r1", "content_digest": "51208e0ecc1ad1450ca6d9b14a4fb46989bff90fd8dc15422a0a47df6827c8c3"},
   "participating_room_ids": ["home.r1/room.entry_hall", "home.r1/room.kitchen_dining"],
   "participating_entity_ids": [
     "home.r1/room.entry_hall/entity.exit_door.01",
@@ -30,5 +30,5 @@
   "timeout_s": 600,
   "reset_policy": {"mode": "restore_baseline", "reset_npc_queues": true, "release_held_items": true},
   "source": {"dataset": "VISTA", "sample_id": "mmg_001", "verification": "verified", "public_reference": "vista://assist-step/mmg_001"},
-  "content_digest": "85741a72e4c735973676d88afeed56f1cf4848370d1e7d5178e295dd6d5bd2bd"
+  "content_digest": "8b0943a6e4d94ed6fb6fd07ebf7c1f3929559b715e59152689b235349e1f888e"
 }
