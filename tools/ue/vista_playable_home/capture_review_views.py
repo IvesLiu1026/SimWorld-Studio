@@ -3,15 +3,16 @@
 
 The host process validates a SHA-256-pinned build plan and an already
 materialized UE project, creates a fresh append-only output attempt, then
-launches a regular X11 ``UnrealEditor`` process.  The same byte-pinned file is
-executed inside Unreal; callers cannot supply Python source or a script path.
+launches six regular X11 ``UnrealEditor`` children sequentially.  Each child is
+bound to one immutable ordinal manifest and executes this same byte-pinned
+file; callers cannot supply Python source or a script path.
 
-Inside Unreal, the worker resolves the six materialized ``CameraActor``
-instances by their stable ``VistaSemanticId`` tags.  A Slate post-tick state
-machine moves the level viewport to each actor and waits for every asynchronous
-high-resolution PNG before allowing the editor to exit.  The host independently
-parses and unfilters each PNG, validates its exact dimensions and nonblank pixel
-content, and writes the accepted receipt with ``O_EXCL``.
+Inside Unreal, every worker revalidates the full materialized ``CameraActor``
+tag set, pilots its selected actor, and requests exactly one native
+``HighResShot`` into a host-created private local scratch directory.  Only the
+host may strict-decode those exact bytes, copy them with ``O_EXCL`` into final
+evidence paths, rehash them, and aggregate a receipt after all six distinct
+images have passed.
 
 Normal invocations are validation-only.  Add ``--apply`` to launch Unreal::
 
@@ -37,11 +38,13 @@ import math
 import os
 import pathlib
 import re
+import shutil
 import signal
 import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import zlib
 from collections.abc import Mapping, Sequence
@@ -52,22 +55,39 @@ from typing import Any
 
 Path = pathlib.Path
 BUILD_PLAN_SCHEMA = "simworld.vista.playable-home-build-plan/v1"
-EXECUTION_SCHEMA = "simworld.vista.playable-home-review-capture-execution/v1"
-UE_RESULT_SCHEMA = "simworld.vista.playable-home-review-capture-ue-result/v1"
-RECEIPT_SCHEMA = "simworld.vista.playable-home-review-capture-receipt/v1"
+EXECUTION_SCHEMA = "simworld.vista.playable-home-review-capture-execution/v2"
+WORKER_EXECUTION_SCHEMA = (
+    "simworld.vista.playable-home-review-capture-worker-execution/v1"
+)
+UE_RESULT_SCHEMA = "simworld.vista.playable-home-review-capture-ue-result/v2"
+RECEIPT_SCHEMA = "simworld.vista.playable-home-review-capture-receipt/v2"
 EXPECTED_REVISION = "vista_playable_home_r1"
 EXPECTED_HOUSE_ID = "home.r1"
 EXPECTED_MAP_PATH = (
     "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
 )
+EXPECTED_MAP_ASSET_RELATIVE = Path(
+    "project/Content/VISTA/PlayableHome/vista_playable_home_r1/Maps/"
+    "VistaPlayableHome.umap"
+)
 EXPECTED_PROJECT_NAME = "VistaPlayableHome.uproject"
+EXPECTED_BUILD_RESULT_NAME = "result-receipt.json"
+EXPECTED_BUILD_RESULT_SCHEMA = "simworld.vista.playable-home-ue-build-result/v1"
+EXPECTED_ENGINE_PREFIX = "5.7."
 WIDTH = 1280
 HEIGHT = 720
+CAPTURE_METHOD = "camera_actor_pilot_highres_console"
+SCREENSHOT_TIMEOUT_SECONDS = 120.0
+WORKER_PROOF_POLL_INTERVAL_SECONDS = 0.25
+WORKER_PROOF_STABILITY_SECONDS = 0.5
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_PNG_BYTES = 128 * 1024 * 1024
+MAX_DDC_SEED_FILES = 20_000
+MAX_DDC_SEED_BYTES = 2 * 1024 * 1024 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DISPLAY_RE = re.compile(r"^:[0-9]{1,5}(?:\.[0-9]{1,3})?$")
 ATTEMPT_RE = re.compile(r"^attempt-[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+SAFE_LOCAL_PATH_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
 EXECUTION_ENV = "VISTA_PLAYABLE_HOME_REVIEW_EXECUTION"
 EXECUTION_SHA_ENV = "VISTA_PLAYABLE_HOME_REVIEW_EXECUTION_SHA256"
 WORKER_ENV = "VISTA_PLAYABLE_HOME_REVIEW_WORKER"
@@ -77,6 +97,19 @@ RECEIPT_FILE = "review-capture-receipt.json"
 EDITOR_LOG_FILE = "unreal-editor.log"
 EDITOR_STDOUT_FILE = "unreal-editor-stdout.log"
 IMAGES_DIR = "images"
+WORKERS_DIR = "workers"
+LOCAL_SCRATCH_PARENT = Path("/tmp")
+NVIDIA_VULKAN_ICD = Path("/usr/share/vulkan/icd.d/nvidia_icd.json")
+PASSTHROUGH_ENV_KEYS = (
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "USER",
+    "XDG_DATA_DIRS",
+)
 
 # This is deliberately a fixed r1 evidence surface, not a generic camera or
 # Python execution API.  The order is also the receipt/capture order.
@@ -387,33 +420,93 @@ class CaptureInputs:
     attempt_root: Path
     project: Path
     project_sha256: str
+    map_asset: Path
+    map_asset_sha256: str
     build_plan: Path
     build_plan_sha256: str
     plan: dict[str, Any]
+    build_result: Path
+    build_result_sha256: str
     map_path: str
     unreal_editor: Path
+    unreal_editor_sha256: str
     output_dir: Path
     display: str
     graphics_adapter: int
     timeout_seconds: int
     script: Path
     script_sha256: str
+    nvidia_icd_sha256: str
+    ddc_seed: Path | None
+    ddc_seed_tree_sha256: str | None
     cameras: tuple[dict[str, Any], ...]
+
+
+def _tree_snapshot(root: Path) -> tuple[str, int, int]:
+    records: list[dict[str, Any]] = []
+    total_bytes = 0
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        _reject_symlink_components(path, "DDC seed entry")
+        relative = path.relative_to(root).as_posix()
+        metadata = os.lstat(path)
+        if stat.S_ISDIR(metadata.st_mode):
+            records.append({"path": relative, "type": "directory"})
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            _fail("VISTA_HOME_REVIEW_DDC_SEED_INVALID", "DDC seed has a non-regular entry", pointer=str(path))
+        total_bytes += metadata.st_size
+        records.append(
+            {
+                "path": relative,
+                "type": "file",
+                "bytes": metadata.st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+        if len(records) > MAX_DDC_SEED_FILES or total_bytes > MAX_DDC_SEED_BYTES:
+            _fail("VISTA_HOME_REVIEW_DDC_SEED_INVALID", "DDC seed exceeds its safety bound")
+    if not records:
+        _fail("VISTA_HOME_REVIEW_DDC_SEED_INVALID", "DDC seed is empty")
+    return sha256_bytes(canonical_json(records)), len(records), total_bytes
+
+
+def _validate_build_result(path: Path, attempt_root: Path, map_path: str) -> tuple[dict[str, Any], str]:
+    if path != attempt_root / EXPECTED_BUILD_RESULT_NAME:
+        _fail("VISTA_HOME_REVIEW_BUILD_RESULT_INVALID", "build result location differs")
+    result, raw = _load_json(path, label="accepted UE build result")
+    if (
+        result.get("schema_version") != EXPECTED_BUILD_RESULT_SCHEMA
+        or result.get("status") != "accepted_candidate"
+        or result.get("attempt_root") != str(attempt_root)
+        or result.get("revision") != EXPECTED_REVISION
+        or result.get("map_path") != map_path
+    ):
+        _fail("VISTA_HOME_REVIEW_BUILD_RESULT_INVALID", "accepted UE build result binding differs")
+    return result, sha256_bytes(raw)
 
 
 def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
     attempt_root = _existing_directory(Path(args.attempt_root), "attempt root")
     project = _require_child(_existing_file(Path(args.project), "project"), attempt_root, "project")
     _, project_sha = _validate_project(project)
+    map_asset = _require_child(
+        _existing_file(attempt_root / EXPECTED_MAP_ASSET_RELATIVE, "materialized map asset"),
+        attempt_root,
+        "materialized map asset",
+    )
     build_plan = _require_child(_existing_file(Path(args.build_plan), "build plan"), attempt_root, "build plan")
     if SHA256_RE.fullmatch(args.build_plan_sha256 or "") is None:
         _fail("VISTA_HOME_REVIEW_PIN_INVALID", "build plan pin must be a lowercase SHA-256")
     plan, raw = _load_json(build_plan, label="build plan", expected_sha256=args.build_plan_sha256)
     plan_sha = sha256_bytes(raw)
     cameras = compile_fixed_cameras(plan, args.map_path)
+    build_result = _existing_file(attempt_root / EXPECTED_BUILD_RESULT_NAME, "accepted UE build result")
+    _, build_result_sha = _validate_build_result(build_result, attempt_root, args.map_path)
     unreal_editor = _existing_file(Path(args.unreal_editor), "UnrealEditor", executable=True)
     if unreal_editor.name != "UnrealEditor":
         _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "engine executable must be UnrealEditor")
+    if not NVIDIA_VULKAN_ICD.is_file():
+        _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "pinned NVIDIA Vulkan ICD is unavailable")
     if DISPLAY_RE.fullmatch(args.display or "") is None:
         _fail("VISTA_HOME_REVIEW_DISPLAY_INVALID", "DISPLAY must be a local X11 display such as :117")
     if isinstance(args.graphics_adapter, bool) or not 0 <= args.graphics_adapter <= 31:
@@ -429,37 +522,85 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
     _require_child(parent, attempt_root, "output parent", strict=False)
     if output_dir.exists():
         _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "append-only output attempt already exists", pointer=str(output_dir))
+    ddc_seed: Path | None = None
+    ddc_seed_tree_sha256: str | None = None
+    if bool(args.ddc_seed) != bool(args.ddc_seed_tree_sha256):
+        _fail("VISTA_HOME_REVIEW_DDC_SEED_INVALID", "DDC seed path and tree pin must be provided together")
+    if args.ddc_seed:
+        ddc_seed = _require_child(
+            _existing_directory(Path(args.ddc_seed), "DDC seed"),
+            attempt_root,
+            "DDC seed",
+        )
+        if SHA256_RE.fullmatch(args.ddc_seed_tree_sha256 or "") is None:
+            _fail("VISTA_HOME_REVIEW_DDC_SEED_INVALID", "DDC seed tree pin is invalid")
+        actual_tree, _entries, _bytes = _tree_snapshot(ddc_seed)
+        if actual_tree != args.ddc_seed_tree_sha256:
+            _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "DDC seed tree SHA-256 differs")
+        ddc_seed_tree_sha256 = actual_tree
     script = _existing_file(Path(__file__).resolve(strict=True), "fixed review capture script")
     return CaptureInputs(
         attempt_root=attempt_root,
         project=project,
         project_sha256=project_sha,
+        map_asset=map_asset,
+        map_asset_sha256=sha256_file(map_asset),
         build_plan=build_plan,
         build_plan_sha256=plan_sha,
         plan=plan,
+        build_result=build_result,
+        build_result_sha256=build_result_sha,
         map_path=args.map_path,
         unreal_editor=unreal_editor,
+        unreal_editor_sha256=sha256_file(unreal_editor),
         output_dir=output_dir,
         display=args.display,
         graphics_adapter=args.graphics_adapter,
         timeout_seconds=args.timeout_seconds,
         script=script,
         script_sha256=sha256_file(script),
+        nvidia_icd_sha256=sha256_file(NVIDIA_VULKAN_ICD),
+        ddc_seed=ddc_seed,
+        ddc_seed_tree_sha256=ddc_seed_tree_sha256,
         cameras=tuple(cameras),
     )
 
 
 def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
+    """Build the immutable aggregate execution manifest.
+
+    Per-child scratch paths deliberately do not live here: the host creates
+    them only after the append-only output root exists, then binds each one in
+    its own ordinal worker manifest.
+    """
+
     output = inputs.output_dir
     return {
         "schema_version": EXECUTION_SCHEMA,
         "attempt_root": str(inputs.attempt_root),
         "project": {"path": str(inputs.project), "sha256": inputs.project_sha256},
+        "map_asset": {"path": str(inputs.map_asset), "sha256": inputs.map_asset_sha256},
         "build_plan": {
             "path": str(inputs.build_plan),
             "sha256": inputs.build_plan_sha256,
             "content_digest": inputs.plan["content_digest"],
         },
+        "build_result": {
+            "path": str(inputs.build_result),
+            "sha256": inputs.build_result_sha256,
+        },
+        "engine": {
+            "executable": str(inputs.unreal_editor),
+            "executable_sha256": inputs.unreal_editor_sha256,
+            "nvidia_icd": str(NVIDIA_VULKAN_ICD),
+            "nvidia_icd_sha256": inputs.nvidia_icd_sha256,
+            "required_version_prefix": EXPECTED_ENGINE_PREFIX,
+        },
+        "ddc_seed": (
+            {"path": str(inputs.ddc_seed), "tree_sha256": inputs.ddc_seed_tree_sha256}
+            if inputs.ddc_seed is not None
+            else None
+        ),
         "map_path": inputs.map_path,
         "output_root": str(output),
         "script": {"path": str(inputs.script), "sha256": inputs.script_sha256},
@@ -470,9 +611,9 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
             "cameras": [dict(camera) for camera in inputs.cameras],
         },
         "artifacts": {
-            "ue_result": str(output / UE_RESULT_FILE),
-            "editor_log": str(output / EDITOR_LOG_FILE),
-            "editor_stdout": str(output / EDITOR_STDOUT_FILE),
+            "images_dir": str(output / IMAGES_DIR),
+            "workers_dir": str(output / WORKERS_DIR),
+            "receipt": str(output / RECEIPT_FILE),
         },
         "policy": {
             "append_only_output": True,
@@ -480,12 +621,116 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
             "fixed_camera_actor_tags": True,
             "regular_editor_x11": True,
             "receipt_requires_host_png_validation": True,
+            "sequential_owned_editor_children": True,
+            "one_native_highres_shot_per_child": True,
+            "native_png_uses_private_local_scratch": True,
         },
     }
 
 
-def build_editor_command(inputs: CaptureInputs) -> list[str]:
-    output = inputs.output_dir
+@dataclass(frozen=True)
+class WorkerRun:
+    ordinal: int
+    camera: dict[str, Any]
+    worker_dir: Path
+    manifest_path: Path
+    manifest_sha256: str
+    scratch_dir: Path
+    scratch_png: Path
+    result_path: Path
+    editor_log: Path
+    editor_stdout: Path
+
+
+@dataclass(frozen=True)
+class WorkerSuccessProof:
+    result_sha256: str
+    png_sha256: str
+    png_bytes: int
+
+
+def _camera_for_ordinal(inputs: CaptureInputs, ordinal: int) -> dict[str, Any]:
+    if isinstance(ordinal, bool) or not isinstance(ordinal, int) or not 1 <= ordinal <= len(inputs.cameras):
+        _fail("VISTA_HOME_REVIEW_ORDINAL_INVALID", "worker ordinal is outside the fixed six-camera plan")
+    camera = inputs.cameras[ordinal - 1]
+    if camera["ordinal"] != ordinal:
+        _fail("VISTA_HOME_REVIEW_ORDINAL_INVALID", "fixed camera ordinal ordering differs")
+    return dict(camera)
+
+
+def _validate_scratch_png(
+    path: Path,
+    *,
+    ordinal: int,
+    attempt_root: Path,
+    require_parent: bool,
+) -> Path:
+    candidate = _absolute_lexical(path, "worker scratch PNG")
+    if SAFE_LOCAL_PATH_RE.fullmatch(str(candidate)) is None or not str(candidate).isascii():
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG path is not safe ASCII", pointer=str(candidate))
+    if candidate.name != "capture.png" or candidate.parent.name != f"worker-{ordinal:02d}":
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG path does not bind the immutable ordinal")
+    scratch_root = candidate.parent.parent
+    if scratch_root.parent != LOCAL_SCRATCH_PARENT or not scratch_root.name.startswith("vista-home-review-"):
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG must use a direct host-owned local scratch root")
+    try:
+        candidate.relative_to(attempt_root)
+    except ValueError:
+        pass
+    else:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG must remain outside the UE attempt")
+    if require_parent:
+        root = _existing_directory(scratch_root, "scratch root")
+        parent = _existing_directory(candidate.parent, "worker scratch directory")
+        if stat.S_IMODE(os.lstat(root).st_mode) != 0o700 or stat.S_IMODE(os.lstat(parent).st_mode) != 0o700:
+            _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch root or worker directory mode is not 0700")
+    else:
+        _reject_symlink_components(candidate, "worker scratch PNG", allow_missing_tail=True)
+    return candidate
+
+
+def build_worker_execution(
+    inputs: CaptureInputs,
+    aggregate_execution_sha256: str,
+    ordinal: int,
+    scratch_png: Path,
+) -> dict[str, Any]:
+    if SHA256_RE.fullmatch(aggregate_execution_sha256) is None:
+        _fail("VISTA_HOME_REVIEW_PIN_INVALID", "aggregate execution pin is invalid")
+    camera = _camera_for_ordinal(inputs, ordinal)
+    scratch = _validate_scratch_png(
+        scratch_png,
+        ordinal=ordinal,
+        attempt_root=inputs.attempt_root,
+        require_parent=True,
+    )
+    worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
+    return {
+        "schema_version": WORKER_EXECUTION_SCHEMA,
+        "aggregate_execution": {
+            "path": str(inputs.output_dir / EXECUTION_FILE),
+            "sha256": aggregate_execution_sha256,
+        },
+        "ordinal": ordinal,
+        "camera": camera,
+        "scratch_png": str(scratch),
+        "artifacts": {
+            "ue_result": str(worker_dir / UE_RESULT_FILE),
+            "editor_log": str(worker_dir / EDITOR_LOG_FILE),
+            "editor_stdout": str(worker_dir / EDITOR_STDOUT_FILE),
+            "final_image": str(inputs.output_dir / camera["relative_path"]),
+        },
+        "policy": {
+            "immutable_ordinal": True,
+            "exactly_one_camera_capture": True,
+            "at_most_one_native_highres_shot": True,
+            "host_accepts_and_copies_png": True,
+        },
+    }
+
+
+def build_editor_command(inputs: CaptureInputs, ordinal: int = 1) -> list[str]:
+    worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
     return [
         str(inputs.unreal_editor),
         str(inputs.project),
@@ -502,12 +747,13 @@ def build_editor_command(inputs: CaptureInputs) -> list[str]:
         "-NoAnalytics",
         "-UDPMESSAGING_TRANSPORT_ENABLE=0",
         "-ini:Engine:[/Script/TcpMessaging.TcpMessagingSettings]:EnableTransport=False",
+        "-ini:EditorPerProjectUserSettings:[/Script/UnrealEd.EditorLoadingSavingSettings]:bAutoSaveEnable=False",
         "-ddc=InstalledNoZenLocalFallback",
         "-ExecCmds=t.MaxFPS 60",
         "-SaveToUserDir",
-        f"-UserDir={output / 'ue-user'}",
-        f"-LocalDataCachePath={output / 'ddc'}",
-        f"-abslog={output / EDITOR_LOG_FILE}",
+        f"-UserDir={inputs.output_dir / 'ue-user'}",
+        f"-LocalDataCachePath={inputs.output_dir / 'ddc'}",
+        f"-abslog={worker_dir / EDITOR_LOG_FILE}",
         "-stdout",
         "-FullStdOutLogOutput",
     ]
@@ -517,38 +763,131 @@ def _prepare_output(inputs: CaptureInputs, execution_raw: bytes) -> None:
     try:
         os.mkdir(inputs.output_dir, 0o700)
         os.mkdir(inputs.output_dir / IMAGES_DIR, 0o700)
+        os.mkdir(inputs.output_dir / WORKERS_DIR, 0o700)
         os.mkdir(inputs.output_dir / "ue-user", 0o700)
         os.mkdir(inputs.output_dir / "ddc", 0o700)
+        os.mkdir(inputs.output_dir / "xdg-cache", 0o700)
+        os.mkdir(inputs.output_dir / "xdg-config", 0o700)
     except FileExistsError:
         _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "append-only output attempt already exists", pointer=str(inputs.output_dir))
     except OSError as exc:
         _fail("VISTA_HOME_REVIEW_OUTPUT_CREATE_FAILED", f"cannot create output attempt: {exc}", pointer=str(inputs.output_dir))
     _write_exclusive(inputs.output_dir / EXECUTION_FILE, execution_raw)
+    if inputs.ddc_seed is not None:
+        target_root = (
+            inputs.output_dir
+            / "ue-user/.config/Epic/UnrealEngine/Common/DerivedDataCache"
+        )
+        target_root.mkdir(mode=0o700, parents=True, exist_ok=False)
+        for source in sorted(inputs.ddc_seed.rglob("*"), key=lambda item: item.relative_to(inputs.ddc_seed).as_posix()):
+            relative = source.relative_to(inputs.ddc_seed)
+            target = target_root / relative
+            if source.is_dir():
+                target.mkdir(mode=0o700, exist_ok=False)
+                continue
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            descriptor = os.open(
+                target,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                with source.open("rb") as reader, os.fdopen(descriptor, "wb", closefd=False) as writer:
+                    shutil.copyfileobj(reader, writer, length=1024 * 1024)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+            finally:
+                os.close(descriptor)
+
+
+def _owned_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        _fail("VISTA_HOME_REVIEW_EDITOR_LIFECYCLE_FAILED", "owned editor process group became inaccessible")
+    return True
+
+
+def _wait_owned_group_exit(process_group_id: int, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while _owned_group_exists(process_group_id) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not _owned_group_exists(process_group_id)
 
 
 def _terminate_owned(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=10)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
+    """Terminate the entire start_new_session process group, even if its leader exited."""
+
+    process_group_id = process.pid
+    if _owned_group_exists(process_group_id):
+        try:
+            os.killpg(process_group_id, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    if not _wait_owned_group_exit(process_group_id, 2.0):
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         if process.poll() is None:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait(timeout=10)
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                _fail("VISTA_HOME_REVIEW_EDITOR_LIFECYCLE_FAILED", "owned editor leader survived SIGKILL")
+        if not _wait_owned_group_exit(process_group_id, 2.0):
+            _fail("VISTA_HOME_REVIEW_EDITOR_LIFECYCLE_FAILED", "owned editor process group survived SIGKILL")
 
 
-def run_editor(inputs: CaptureInputs, execution_sha256: str) -> int:
-    env = os.environ.copy()
-    env["DISPLAY"] = inputs.display
-    env[WORKER_ENV] = "1"
-    env[EXECUTION_ENV] = str(inputs.output_dir / EXECUTION_FILE)
-    env[EXECUTION_SHA_ENV] = execution_sha256
-    command = build_editor_command(inputs)
-    stdout_path = inputs.output_dir / EDITOR_STDOUT_FILE
+def build_editor_environment(
+    inputs: CaptureInputs,
+    worker_manifest: Path,
+    worker_manifest_sha256: str,
+) -> dict[str, str]:
+    """Return the minimum fixed environment needed by the owned editor.
+
+    Provider credentials, database URLs, Codex state, SSH metadata, and other
+    ambient process variables must never be forwarded into Unreal.
+    """
+
+    env = {
+        key: value
+        for key in PASSTHROUGH_ENV_KEYS
+        if (value := os.environ.get(key)) is not None
+    }
+    env.update(
+        {
+            "DISPLAY": inputs.display,
+            "HOME": str(inputs.output_dir / "ue-user"),
+            "XDG_CACHE_HOME": str(inputs.output_dir / "xdg-cache"),
+            "XDG_CONFIG_HOME": str(inputs.output_dir / "xdg-config"),
+            "SDL_VIDEODRIVER": "x11",
+            "VK_ICD_FILENAMES": str(NVIDIA_VULKAN_ICD),
+            "__GLX_VENDOR_LIBRARY_NAME": "nvidia",
+            WORKER_ENV: "1",
+            EXECUTION_ENV: str(worker_manifest),
+            EXECUTION_SHA_ENV: worker_manifest_sha256,
+        }
+    )
+    return env
+
+
+def run_editor(inputs: CaptureInputs, worker: WorkerRun) -> int:
+    if not NVIDIA_VULKAN_ICD.is_file():
+        _fail(
+            "VISTA_HOME_REVIEW_ENGINE_INVALID",
+            "pinned NVIDIA Vulkan ICD is unavailable",
+            pointer=str(NVIDIA_VULKAN_ICD),
+        )
+    env = build_editor_environment(inputs, worker.manifest_path, worker.manifest_sha256)
+    command = build_editor_command(inputs, worker.ordinal)
+    stdout_path = worker.editor_stdout
     with stdout_path.open("xb") as stdout:
         try:
             process = subprocess.Popen(
@@ -562,11 +901,54 @@ def run_editor(inputs: CaptureInputs, execution_sha256: str) -> int:
             )
         except OSError as exc:
             _fail("VISTA_HOME_REVIEW_EDITOR_LAUNCH_FAILED", f"UnrealEditor launch failed: {exc}")
+        terminated_after_proof = False
         try:
-            return process.wait(timeout=inputs.timeout_seconds)
-        except subprocess.TimeoutExpired:
-            _terminate_owned(process)
-            _fail("VISTA_HOME_REVIEW_EDITOR_TIMEOUT", "UnrealEditor did not finish the fixed capture before timeout")
+            deadline = time.monotonic() + inputs.timeout_seconds
+            previous_proof: WorkerSuccessProof | None = None
+            proof_first_seen = 0.0
+            proof_observations = 0
+            while True:
+                returncode = process.poll()
+                if returncode is not None:
+                    return returncode
+                now = time.monotonic()
+                if now >= deadline:
+                    _fail("VISTA_HOME_REVIEW_EDITOR_TIMEOUT", "UnrealEditor did not finish the fixed capture before timeout")
+                proof = _probe_worker_success(inputs, worker)
+                if proof is None:
+                    previous_proof = None
+                    proof_first_seen = 0.0
+                    proof_observations = 0
+                elif proof != previous_proof:
+                    previous_proof = proof
+                    proof_first_seen = now
+                    proof_observations = 1
+                else:
+                    proof_observations += 1
+                    if (
+                        proof_observations >= 2
+                        and now - proof_first_seen >= WORKER_PROOF_STABILITY_SECONDS
+                    ):
+                        # Do not mask a real early process failure that raced
+                        # with the second proof observation.  Once the child is
+                        # still live and the proof is stable, terminate only its
+                        # owned process group and synthesize success; the caller
+                        # immediately repeats all final validation gates.
+                        returncode = process.poll()
+                        if returncode is not None:
+                            return returncode
+                        _terminate_owned(process)
+                        terminated_after_proof = True
+                        return 0
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    time.sleep(min(WORKER_PROOF_POLL_INTERVAL_SECONDS, remaining))
+        finally:
+            # Covers timeout, host cancellation/KeyboardInterrupt, unexpected
+            # exceptions, and helper descendants left after a normal leader
+            # exit.  No owned Unreal process group may outlive this call.
+            if not terminated_after_proof:
+                _terminate_owned(process)
     raise AssertionError("unreachable")
 
 
@@ -608,10 +990,27 @@ def inspect_png(path: Path, *, expected_width: int = WIDTH, expected_height: int
     """Strictly decode a bounded 8-bit RGB/RGBA PNG and prove it is nonblank."""
 
     source = _existing_file(path, "captured PNG")
-    size = source.stat().st_size
-    if size <= 0 or size > MAX_PNG_BYTES:
-        _fail("VISTA_HOME_REVIEW_PNG_INVALID", "PNG size is outside safety bound", pointer=str(source))
     raw = source.read_bytes()
+    return inspect_png_bytes(
+        raw,
+        expected_width=expected_width,
+        expected_height=expected_height,
+        source_label=str(source),
+    )
+
+
+def inspect_png_bytes(
+    raw: bytes,
+    *,
+    expected_width: int = WIDTH,
+    expected_height: int = HEIGHT,
+    source_label: str = "<PNG bytes>",
+) -> PngInspection:
+    """Strictly decode the exact bytes that the host will later copy."""
+
+    source = source_label
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= MAX_PNG_BYTES:
+        _fail("VISTA_HOME_REVIEW_PNG_INVALID", "PNG size is outside safety bound", pointer=str(source))
     if raw[:8] != b"\x89PNG\r\n\x1a\n":
         _fail("VISTA_HOME_REVIEW_PNG_INVALID", "PNG signature differs", pointer=str(source))
     offset = 8
@@ -725,9 +1124,49 @@ def inspect_png(path: Path, *, expected_width: int = WIDTH, expected_height: int
     return inspection
 
 
-def _load_ue_result(inputs: CaptureInputs, execution_sha256: str) -> tuple[dict[str, Any], str]:
-    result_path = inputs.output_dir / UE_RESULT_FILE
-    result, raw = _load_json(result_path, label="Unreal capture result")
+def _read_exact_regular(path: Path, label: str) -> bytes:
+    source = _existing_file(path, label)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(source, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_PNG_BYTES:
+            _fail("VISTA_HOME_REVIEW_PNG_INVALID", f"{label} size or type is invalid", pointer=str(source))
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(1024 * 1024, remaining))
+            if not block:
+                _fail("VISTA_HOME_REVIEW_PNG_INVALID", f"{label} ended before its pinned size", pointer=str(source))
+            chunks.append(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1):
+            _fail("VISTA_HOME_REVIEW_PNG_INVALID", f"{label} grew during host acceptance", pointer=str(source))
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            _fail("VISTA_HOME_REVIEW_PNG_INVALID", f"{label} changed during host acceptance", pointer=str(source))
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _load_worker_result(inputs: CaptureInputs, worker: WorkerRun) -> tuple[dict[str, Any], str]:
+    _load_json(
+        worker.manifest_path,
+        label=f"worker execution manifest {worker.ordinal}",
+        expected_sha256=worker.manifest_sha256,
+    )
+    result, raw = _load_json(worker.result_path, label=f"Unreal capture result {worker.ordinal}")
     expected_keys = {
         "schema_version",
         "status",
@@ -736,6 +1175,7 @@ def _load_ue_result(inputs: CaptureInputs, execution_sha256: str) -> tuple[dict[
         "project_path",
         "map_path",
         "execution_sha256",
+        "worker_ordinal",
         "camera_actor_set_exact",
         "captures",
         "error",
@@ -745,81 +1185,253 @@ def _load_ue_result(inputs: CaptureInputs, execution_sha256: str) -> tuple[dict[
     if result.get("status") != "captured_candidate" or result.get("error") is not None:
         error = result.get("error")
         _fail("VISTA_HOME_REVIEW_UE_CAPTURE_FAILED", f"Unreal rejected capture: {error}")
-    if result.get("execution_sha256") != execution_sha256:
+    if result.get("execution_sha256") != worker.manifest_sha256 or result.get("worker_ordinal") != worker.ordinal:
         _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal result execution binding differs")
     if result.get("project_path") != str(inputs.project) or result.get("map_path") != inputs.map_path:
         _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal loaded project or map differs")
+    engine_version = result.get("engine_version")
+    if not isinstance(engine_version, str) or not engine_version.startswith(EXPECTED_ENGINE_PREFIX):
+        _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "Unreal capture did not use UE 5.7")
     if result.get("camera_actor_set_exact") is not True:
         _fail("VISTA_HOME_REVIEW_CAMERA_SET_INVALID", "materialized camera actor set was not exact")
     captures = result.get("captures")
-    if not isinstance(captures, list) or len(captures) != len(inputs.cameras):
-        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture count differs")
-    expected_semantics = [camera["semantic_id"] for camera in inputs.cameras]
-    actual_semantics = [capture.get("semantic_id") for capture in captures if isinstance(capture, Mapping)]
-    if actual_semantics != expected_semantics:
-        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture camera order or IDs differ")
+    if not isinstance(captures, list) or len(captures) != 1:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "each Unreal child must report exactly one capture")
+    capture_keys = {
+        "ordinal",
+        "room_kind",
+        "room_id",
+        "camera_id",
+        "semantic_id",
+        "actor_label",
+        "capture_method",
+        "actual_transform",
+        "actual_fov_deg",
+        "relative_path",
+        "bytes",
+        "sha256",
+        "native_png_path",
+    }
+    expected = worker.camera
+    capture = captures[0]
+    if not isinstance(capture, Mapping) or set(capture) != capture_keys:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture fields differ")
+    for key in ("ordinal", "room_kind", "room_id", "camera_id", "semantic_id", "relative_path"):
+        if capture.get(key) != expected[key]:
+            _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", f"Unreal capture {key} differs")
+    if capture.get("native_png_path") != str(worker.scratch_png):
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal native PNG path differs from host scratch binding")
+    if not isinstance(capture.get("actor_label"), str) or not capture["actor_label"]:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture actor label is invalid")
+    if capture.get("capture_method") != CAPTURE_METHOD:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture did not pilot the fixed CameraActor")
+    actual_transform = capture.get("actual_transform")
+    if not isinstance(actual_transform, Mapping) or set(actual_transform) != {"location_cm", "rotation_deg", "scale"}:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture transform is invalid")
+    try:
+        actual_transform = _transform(actual_transform, "Unreal capture transform")
+    except (KeyError, TypeError):
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture transform is invalid")
+    if not _transform_matches(actual_transform, expected["expected_transform"]):
+        _fail("VISTA_HOME_REVIEW_CAMERA_DRIFT", "Unreal capture transform differs from the fixed camera")
+    actual_fov = capture.get("actual_fov_deg")
+    if (
+        isinstance(actual_fov, bool)
+        or not isinstance(actual_fov, (int, float))
+        or not math.isfinite(float(actual_fov))
+        or abs(float(actual_fov) - float(expected["expected_fov_deg"])) > 0.05
+    ):
+        _fail("VISTA_HOME_REVIEW_CAMERA_DRIFT", "Unreal capture FOV differs from the fixed camera")
+    byte_count = capture.get("bytes")
+    if isinstance(byte_count, bool) or not isinstance(byte_count, int) or not 0 < byte_count <= MAX_PNG_BYTES:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture byte count is invalid")
+    if not isinstance(capture.get("sha256"), str) or SHA256_RE.fullmatch(capture["sha256"]) is None:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal capture SHA-256 is invalid")
     return result, sha256_bytes(raw)
+
+
+def _probe_worker_success(inputs: CaptureInputs, worker: WorkerRun) -> WorkerSuccessProof | None:
+    """Return a strict proof observation without copying or accepting artifacts.
+
+    Result and PNG files are visible before their writers necessarily finish,
+    so every parse/read/decode failure is treated as "not ready".  The caller
+    requires repeated identical observations before it may stop the owned UE
+    process.  Final acceptance still happens later through the normal result,
+    PNG, pin, distinctness, and receipt gates.
+    """
+
+    if not worker.result_path.exists() or not worker.scratch_png.exists():
+        return None
+    try:
+        result, result_sha256 = _load_worker_result(inputs, worker)
+        raw = _read_exact_regular(worker.scratch_png, "native worker PNG proof")
+        capture_result = result["captures"][0]
+        png_sha256 = sha256_bytes(raw)
+        if capture_result["bytes"] != len(raw) or capture_result["sha256"] != png_sha256:
+            return None
+        inspect_png_bytes(raw, source_label=str(worker.scratch_png))
+    except (OSError, ReviewCaptureError):
+        return None
+    return WorkerSuccessProof(
+        result_sha256=result_sha256,
+        png_sha256=png_sha256,
+        png_bytes=len(raw),
+    )
+
+
+def _verify_input_pins(inputs: CaptureInputs) -> None:
+    pins = (
+        (inputs.project, inputs.project_sha256, "project"),
+        (inputs.map_asset, inputs.map_asset_sha256, "materialized map asset"),
+        (inputs.build_plan, inputs.build_plan_sha256, "build plan"),
+        (inputs.build_result, inputs.build_result_sha256, "accepted UE build result"),
+        (inputs.script, inputs.script_sha256, "fixed capture script"),
+        (inputs.unreal_editor, inputs.unreal_editor_sha256, "UnrealEditor"),
+        (NVIDIA_VULKAN_ICD, inputs.nvidia_icd_sha256, "NVIDIA Vulkan ICD"),
+    )
+    for path, expected, label in pins:
+        if sha256_file(_existing_file(path, label)) != expected:
+            _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", f"{label} changed during capture")
+    _validate_build_result(inputs.build_result, inputs.attempt_root, inputs.map_path)
+
+
+def _inspection_dict(inspection: PngInspection) -> dict[str, Any]:
+    return {
+        "width": inspection.width,
+        "height": inspection.height,
+        "bit_depth": inspection.bit_depth,
+        "color_type": inspection.color_type,
+        "unique_rgb_count_capped": inspection.unique_rgb_count_capped,
+        "luma_min": inspection.luma_min,
+        "luma_max": inspection.luma_max,
+        "opaque_pixel_count": inspection.opaque_pixel_count,
+        "pixel_count": inspection.pixel_count,
+        "nonblank": inspection.nonblank,
+    }
+
+
+def _accept_worker_png(
+    inputs: CaptureInputs,
+    worker: WorkerRun,
+    ue_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    capture = ue_result["captures"][0]
+    _validate_scratch_png(
+        worker.scratch_png,
+        ordinal=worker.ordinal,
+        attempt_root=inputs.attempt_root,
+        require_parent=True,
+    )
+    raw = _read_exact_regular(worker.scratch_png, "native worker PNG")
+    source_sha = sha256_bytes(raw)
+    if capture.get("bytes") != len(raw) or capture.get("sha256") != source_sha:
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal native PNG size or hash differs")
+    inspection = inspect_png_bytes(raw, source_label=str(worker.scratch_png))
+    final_path = inputs.output_dir / worker.camera["relative_path"]
+    _require_child(final_path, inputs.output_dir, "final PNG")
+    try:
+        _write_exclusive(final_path, raw)
+    except FileExistsError:
+        _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "accepted final PNG already exists", pointer=str(final_path))
+    accepted_raw = _read_exact_regular(final_path, "accepted final PNG")
+    accepted_sha = sha256_bytes(accepted_raw)
+    if accepted_raw != raw or accepted_sha != source_sha:
+        _fail("VISTA_HOME_REVIEW_PNG_COPY_MISMATCH", "accepted PNG bytes differ from native scratch bytes")
+    inspect_png_bytes(accepted_raw, source_label=str(final_path))
+    return {
+        "ordinal": worker.camera["ordinal"],
+        "room_kind": worker.camera["room_kind"],
+        "room_id": worker.camera["room_id"],
+        "camera_id": worker.camera["camera_id"],
+        "semantic_id": worker.camera["semantic_id"],
+        "actor_label": capture.get("actor_label"),
+        "capture_method": capture.get("capture_method"),
+        "actual_transform": capture.get("actual_transform"),
+        "actual_fov_deg": capture.get("actual_fov_deg"),
+        "path": final_path.relative_to(inputs.output_dir).as_posix(),
+        "bytes": len(accepted_raw),
+        "sha256": accepted_sha,
+        "native_and_final_sha256_equal": True,
+        "png": _inspection_dict(inspection),
+    }
+
+
+@dataclass(frozen=True)
+class WorkerOutcome:
+    worker: WorkerRun
+    ue_result: dict[str, Any]
+    ue_result_sha256: str
+    image: dict[str, Any]
 
 
 def build_receipt(
     inputs: CaptureInputs,
     execution_sha256: str,
-    ue_result: Mapping[str, Any],
-    ue_result_sha256: str,
-    editor_returncode: int,
+    outcomes: Sequence[WorkerOutcome],
 ) -> dict[str, Any]:
-    if editor_returncode != 0:
-        _fail("VISTA_HOME_REVIEW_EDITOR_FAILED", f"UnrealEditor exited with status {editor_returncode}")
-    captures_by_semantic = {
-        capture["semantic_id"]: capture
-        for capture in ue_result["captures"]
-        if isinstance(capture, Mapping)
-    }
-    images: list[dict[str, Any]] = []
-    for camera in inputs.cameras:
-        capture = captures_by_semantic.get(camera["semantic_id"])
-        if capture is None or capture.get("relative_path") != camera["relative_path"]:
-            _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal image path differs from fixed plan")
-        image_path = _require_child(
-            _existing_file(inputs.output_dir / camera["relative_path"], "captured PNG"),
-            inputs.output_dir,
-            "captured PNG",
-        )
-        inspection = inspect_png(image_path)
-        if capture.get("bytes") != image_path.stat().st_size:
-            _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal-reported PNG size differs")
-        images.append(
-            {
-                "ordinal": camera["ordinal"],
-                "room_kind": camera["room_kind"],
-                "room_id": camera["room_id"],
-                "camera_id": camera["camera_id"],
-                "semantic_id": camera["semantic_id"],
-                "actor_label": capture.get("actor_label"),
-                "capture_method": capture.get("capture_method"),
-                "actual_transform": capture.get("actual_transform"),
-                "actual_fov_deg": capture.get("actual_fov_deg"),
-                "path": image_path.relative_to(inputs.output_dir).as_posix(),
-                "bytes": image_path.stat().st_size,
-                "sha256": sha256_file(image_path),
-                "png": {
-                    "width": inspection.width,
-                    "height": inspection.height,
-                    "bit_depth": inspection.bit_depth,
-                    "color_type": inspection.color_type,
-                    "unique_rgb_count_capped": inspection.unique_rgb_count_capped,
-                    "luma_min": inspection.luma_min,
-                    "luma_max": inspection.luma_max,
-                    "opaque_pixel_count": inspection.opaque_pixel_count,
-                    "pixel_count": inspection.pixel_count,
-                    "nonblank": inspection.nonblank,
-                },
-            }
-        )
+    _verify_input_pins(inputs)
+    _load_json(
+        inputs.output_dir / EXECUTION_FILE,
+        label="aggregate execution manifest",
+        expected_sha256=execution_sha256,
+    )
+    if len(outcomes) != len(inputs.cameras):
+        _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "receipt requires all six worker outcomes")
+    if [item.worker.ordinal for item in outcomes] != list(range(1, len(inputs.cameras) + 1)):
+        _fail("VISTA_HOME_REVIEW_ORDINAL_INVALID", "worker outcomes are not the fixed sequential ordinals")
+    images = [dict(item.image) for item in outcomes]
     room_kinds = [image["room_kind"] for image in images]
     expected_room_kinds = [camera[0] for camera in FIXED_REVIEW_CAMERAS]
     if room_kinds != expected_room_kinds:
         _fail("VISTA_HOME_REVIEW_ROOM_SET_INVALID", "receipt room order differs")
+    if len({image["sha256"] for image in images}) != len(images):
+        _fail("VISTA_HOME_REVIEW_PNG_DUPLICATE", "fixed room screenshots are not all distinct")
+    engine_versions = {item.ue_result.get("engine_version") for item in outcomes}
+    if len(engine_versions) != 1:
+        _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "worker Unreal Engine versions differ")
+    worker_bindings: list[dict[str, Any]] = []
+    logs: list[dict[str, Any]] = []
+    for outcome in outcomes:
+        worker = outcome.worker
+        _load_json(
+            worker.manifest_path,
+            label=f"worker execution manifest {worker.ordinal}",
+            expected_sha256=worker.manifest_sha256,
+        )
+        result_path = _existing_file(worker.result_path, "Unreal worker result")
+        if sha256_file(result_path) != outcome.ue_result_sha256:
+            _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "Unreal worker result changed before receipt")
+        final_path = inputs.output_dir / worker.camera["relative_path"]
+        final_raw = _read_exact_regular(final_path, "accepted final PNG")
+        if len(final_raw) != outcome.image["bytes"] or sha256_bytes(final_raw) != outcome.image["sha256"]:
+            _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "accepted final PNG changed before receipt")
+        inspect_png_bytes(final_raw, source_label=str(final_path))
+        editor_log = _existing_file(worker.editor_log, "UnrealEditor log")
+        editor_stdout = _existing_file(worker.editor_stdout, "UnrealEditor stdout")
+        worker_bindings.append(
+            {
+                "ordinal": worker.ordinal,
+                "manifest_path": worker.manifest_path.relative_to(inputs.output_dir).as_posix(),
+                "manifest_sha256": worker.manifest_sha256,
+                "ue_result_path": worker.result_path.relative_to(inputs.output_dir).as_posix(),
+                "ue_result_sha256": outcome.ue_result_sha256,
+            }
+        )
+        logs.append(
+            {
+                "ordinal": worker.ordinal,
+                "editor": {
+                    "path": editor_log.relative_to(inputs.output_dir).as_posix(),
+                    "bytes": editor_log.stat().st_size,
+                    "sha256": sha256_file(editor_log),
+                },
+                "stdout": {
+                    "path": editor_stdout.relative_to(inputs.output_dir).as_posix(),
+                    "bytes": editor_stdout.stat().st_size,
+                    "sha256": sha256_file(editor_stdout),
+                },
+            }
+        )
     return {
         "schema_version": RECEIPT_SCHEMA,
         "status": "accepted",
@@ -829,7 +1441,10 @@ def build_receipt(
         "map_path": inputs.map_path,
         "engine": {
             "executable": str(inputs.unreal_editor),
-            "version": ue_result.get("engine_version"),
+            "executable_sha256": inputs.unreal_editor_sha256,
+            "version": next(iter(engine_versions)),
+            "nvidia_icd": str(NVIDIA_VULKAN_ICD),
+            "nvidia_icd_sha256": inputs.nvidia_icd_sha256,
             "display": inputs.display,
             "graphics_adapter": inputs.graphics_adapter,
             "regular_editor_x11": True,
@@ -837,14 +1452,21 @@ def build_receipt(
         "bindings": {
             "project_path": str(inputs.project),
             "project_sha256": inputs.project_sha256,
+            "map_asset_path": str(inputs.map_asset),
+            "map_asset_sha256": inputs.map_asset_sha256,
             "build_plan_path": str(inputs.build_plan),
             "build_plan_sha256": inputs.build_plan_sha256,
             "build_plan_content_digest": inputs.plan["content_digest"],
+            "build_result_path": str(inputs.build_result),
+            "build_result_sha256": inputs.build_result_sha256,
             "script_path": str(inputs.script),
             "script_sha256": inputs.script_sha256,
             "execution_sha256": execution_sha256,
-            "ue_result_sha256": ue_result_sha256,
+            "worker_results": worker_bindings,
+            "ddc_seed_path": str(inputs.ddc_seed) if inputs.ddc_seed is not None else None,
+            "ddc_seed_tree_sha256": inputs.ddc_seed_tree_sha256,
         },
+        "logs": logs,
         "capture": {
             "width": WIDTH,
             "height": HEIGHT,
@@ -856,9 +1478,119 @@ def build_receipt(
             "exact_materialized_camera_actor_set": True,
             "every_png_exact_dimensions": True,
             "every_png_nonblank": True,
+            "every_room_png_distinct": True,
+            "map_asset_pre_and_post_pinned": True,
+            "accepted_build_result_pinned": True,
             "caller_python_allowed": False,
+            "six_sequential_owned_editor_children": True,
+            "one_native_highres_shot_per_child": True,
+            "native_png_private_local_scratch": True,
+            "native_and_final_bytes_equal": True,
         },
     }
+
+
+def _create_scratch_root(inputs: CaptureInputs) -> Path:
+    parent = _existing_directory(LOCAL_SCRATCH_PARENT, "local scratch parent")
+    scratch = Path(tempfile.mkdtemp(prefix="vista-home-review-", dir=str(parent)))
+    if SAFE_LOCAL_PATH_RE.fullmatch(str(scratch)) is None or not str(scratch).isascii():
+        shutil.rmtree(scratch, ignore_errors=True)
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is not safe ASCII")
+    if scratch.parent != parent or stat.S_IMODE(os.lstat(scratch).st_mode) != 0o700:
+        shutil.rmtree(scratch, ignore_errors=True)
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is not private local storage")
+    try:
+        scratch.relative_to(inputs.attempt_root)
+    except ValueError:
+        return scratch
+    shutil.rmtree(scratch, ignore_errors=True)
+    _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is inside the UE attempt")
+    raise AssertionError("unreachable")
+
+
+def _prepare_worker_runs(
+    inputs: CaptureInputs,
+    execution_sha256: str,
+    scratch_root: Path,
+) -> tuple[WorkerRun, ...]:
+    workers: list[WorkerRun] = []
+    for ordinal in range(1, len(inputs.cameras) + 1):
+        worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
+        scratch_dir = scratch_root / f"worker-{ordinal:02d}"
+        os.mkdir(worker_dir, 0o700)
+        os.mkdir(scratch_dir, 0o700)
+        scratch_png = scratch_dir / "capture.png"
+        manifest = build_worker_execution(inputs, execution_sha256, ordinal, scratch_png)
+        manifest_raw = canonical_json(manifest)
+        manifest_path = worker_dir / EXECUTION_FILE
+        _write_exclusive(manifest_path, manifest_raw)
+        workers.append(
+            WorkerRun(
+                ordinal=ordinal,
+                camera=_camera_for_ordinal(inputs, ordinal),
+                worker_dir=worker_dir,
+                manifest_path=manifest_path,
+                manifest_sha256=sha256_bytes(manifest_raw),
+                scratch_dir=scratch_dir,
+                scratch_png=scratch_png,
+                result_path=worker_dir / UE_RESULT_FILE,
+                editor_log=worker_dir / EDITOR_LOG_FILE,
+                editor_stdout=worker_dir / EDITOR_STDOUT_FILE,
+            )
+        )
+    return tuple(workers)
+
+
+def _remove_scratch_root(path: Path) -> None:
+    if (
+        path.parent != LOCAL_SCRATCH_PARENT
+        or not path.name.startswith("vista-home-review-")
+        or SAFE_LOCAL_PATH_RE.fullmatch(str(path)) is None
+    ):
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "refusing to remove an unowned scratch root")
+    shutil.rmtree(path)
+
+
+def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha256: str) -> dict[str, Any]:
+    """Run six owned Unreal children sequentially and accept their exact PNG bytes."""
+
+    _prepare_output(inputs, execution_raw)
+    scratch_root: Path | None = None
+    try:
+        scratch_root = _create_scratch_root(inputs)
+        workers = _prepare_worker_runs(inputs, execution_sha256, scratch_root)
+        outcomes: list[WorkerOutcome] = []
+        for worker in workers:
+            _verify_input_pins(inputs)
+            returncode = run_editor(inputs, worker)
+            if returncode != 0:
+                _fail(
+                    "VISTA_HOME_REVIEW_EDITOR_FAILED",
+                    f"UnrealEditor child {worker.ordinal} exited with status {returncode}",
+                )
+            ue_result, ue_result_sha = _load_worker_result(inputs, worker)
+            image = _accept_worker_png(inputs, worker, ue_result)
+            outcomes.append(
+                WorkerOutcome(
+                    worker=worker,
+                    ue_result=ue_result,
+                    ue_result_sha256=ue_result_sha,
+                    image=image,
+                )
+            )
+        receipt = build_receipt(inputs, execution_sha256, outcomes)
+        receipt_raw = canonical_json(receipt)
+        receipt_path = inputs.output_dir / RECEIPT_FILE
+        _write_exclusive(receipt_path, receipt_raw)
+        return {
+            "status": "accepted",
+            "receipt": str(receipt_path),
+            "receipt_sha256": sha256_bytes(receipt_raw),
+            "image_count": len(receipt["capture"]["images"]),
+        }
+    finally:
+        if scratch_root is not None and scratch_root.exists():
+            _remove_scratch_root(scratch_root)
 
 
 def _host_main(args: argparse.Namespace) -> int:
@@ -872,29 +1604,15 @@ def _host_main(args: argparse.Namespace) -> int:
             "execution_sha256": execution_sha,
             "output_root": str(inputs.output_dir),
             "room_kinds": [camera["room_kind"] for camera in inputs.cameras],
-            "command": build_editor_command(inputs),
+            "command": build_editor_command(inputs, 1),
+            "commands": [build_editor_command(inputs, ordinal) for ordinal in range(1, 7)],
             "policy": execution["policy"],
         }
         if not args.apply:
             sys.stdout.buffer.write(canonical_json(preview))
             return 0
-        _prepare_output(inputs, execution_raw)
-        returncode = run_editor(inputs, execution_sha)
-        ue_result, ue_result_sha = _load_ue_result(inputs, execution_sha)
-        receipt = build_receipt(inputs, execution_sha, ue_result, ue_result_sha, returncode)
-        receipt_raw = canonical_json(receipt)
-        receipt_path = inputs.output_dir / RECEIPT_FILE
-        _write_exclusive(receipt_path, receipt_raw)
-        sys.stdout.buffer.write(
-            canonical_json(
-                {
-                    "status": "accepted",
-                    "receipt": str(receipt_path),
-                    "receipt_sha256": sha256_bytes(receipt_raw),
-                    "image_count": len(receipt["capture"]["images"]),
-                }
-            )
-        )
+        result = execute_capture(inputs, execution_raw, execution_sha)
+        sys.stdout.buffer.write(canonical_json(result))
         return 0
     except ReviewCaptureError as exc:
         sys.stderr.buffer.write(canonical_json({"status": "failed", "error": exc.public_dict()}))
@@ -940,25 +1658,45 @@ def _safe_execution_child(value: Any, output_root: Path, label: str) -> Path:
     return _require_child(path, output_root, label)
 
 
-def _load_worker_execution() -> tuple[dict[str, Any], str]:
-    manifest_text = os.environ.get(EXECUTION_ENV, "")
-    expected_sha = os.environ.get(EXECUTION_SHA_ENV, "")
-    if SHA256_RE.fullmatch(expected_sha) is None:
-        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker execution pin is invalid")
-    manifest_path = _existing_file(Path(manifest_text), "review execution manifest")
-    execution, raw = _load_json(manifest_path, label="review execution manifest", expected_sha256=expected_sha)
+def _validate_aggregate_worker_inputs(
+    execution: Mapping[str, Any],
+    aggregate_manifest_path: Path,
+) -> tuple[Path, list[dict[str, Any]]]:
+    expected_fields = {
+        "schema_version",
+        "attempt_root",
+        "project",
+        "map_asset",
+        "build_plan",
+        "build_result",
+        "engine",
+        "ddc_seed",
+        "map_path",
+        "output_root",
+        "script",
+        "capture",
+        "artifacts",
+        "policy",
+    }
     expected_policy = {
         "append_only_output": True,
         "caller_python_allowed": False,
         "fixed_camera_actor_tags": True,
         "regular_editor_x11": True,
         "receipt_requires_host_png_validation": True,
+        "sequential_owned_editor_children": True,
+        "one_native_highres_shot_per_child": True,
+        "native_png_uses_private_local_scratch": True,
     }
-    if execution.get("schema_version") != EXECUTION_SCHEMA or execution.get("policy") != expected_policy:
-        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker execution schema or policy differs")
+    if (
+        set(execution) != expected_fields
+        or execution.get("schema_version") != EXECUTION_SCHEMA
+        or execution.get("policy") != expected_policy
+    ):
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "aggregate execution schema or policy differs")
     output_root = _existing_directory(Path(execution.get("output_root", "")), "review output root")
-    if manifest_path != output_root / EXECUTION_FILE:
-        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "execution manifest location differs")
+    if aggregate_manifest_path != output_root / EXECUTION_FILE:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "aggregate execution manifest location differs")
     script = execution.get("script")
     if not isinstance(script, Mapping) or set(script) != {"path", "sha256"}:
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "fixed script binding differs")
@@ -966,45 +1704,157 @@ def _load_worker_execution() -> tuple[dict[str, Any], str]:
     if script["path"] != str(current_script) or script["sha256"] != sha256_file(current_script):
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "fixed script identity or digest differs")
     project = execution.get("project")
+    map_asset = execution.get("map_asset")
     build_plan = execution.get("build_plan")
+    build_result = execution.get("build_result")
+    engine = execution.get("engine")
     if not isinstance(project, Mapping) or set(project) != {"path", "sha256"}:
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "project binding differs")
+    if not isinstance(map_asset, Mapping) or set(map_asset) != {"path", "sha256"}:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "map asset binding differs")
     if not isinstance(build_plan, Mapping) or set(build_plan) != {"path", "sha256", "content_digest"}:
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "build plan binding differs")
+    if not isinstance(build_result, Mapping) or set(build_result) != {"path", "sha256"}:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "build result binding differs")
+    if (
+        not isinstance(engine, Mapping)
+        or set(engine)
+        != {"executable", "executable_sha256", "nvidia_icd", "nvidia_icd_sha256", "required_version_prefix"}
+        or engine.get("required_version_prefix") != EXPECTED_ENGINE_PREFIX
+    ):
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "engine binding differs")
     project_path = _existing_file(Path(project["path"]), "project")
+    map_asset_path = _existing_file(Path(map_asset["path"]), "materialized map asset")
     plan_path = _existing_file(Path(build_plan["path"]), "build plan")
-    if sha256_file(project_path) != project["sha256"] or sha256_file(plan_path) != build_plan["sha256"]:
-        _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker project or build plan pin differs")
+    build_result_path = _existing_file(Path(build_result["path"]), "accepted UE build result")
+    engine_path = _existing_file(Path(engine["executable"]), "UnrealEditor")
+    icd_path = _existing_file(Path(engine["nvidia_icd"]), "NVIDIA Vulkan ICD")
+    if (
+        sha256_file(project_path) != project["sha256"]
+        or sha256_file(map_asset_path) != map_asset["sha256"]
+        or sha256_file(plan_path) != build_plan["sha256"]
+        or sha256_file(build_result_path) != build_result["sha256"]
+        or sha256_file(engine_path) != engine["executable_sha256"]
+        or sha256_file(icd_path) != engine["nvidia_icd_sha256"]
+    ):
+        _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker evidence or engine pin differs")
+    if Path("/proc/self/exe").resolve(strict=True) != engine_path:
+        _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "running UnrealEditor identity differs")
+    if os.environ.get("VK_ICD_FILENAMES") != str(icd_path):
+        _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "running Vulkan ICD binding differs")
     plan, _ = _load_json(plan_path, label="build plan", expected_sha256=build_plan["sha256"])
     if plan.get("content_digest") != build_plan["content_digest"]:
         _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker build plan content digest differs")
+    attempt_root = _existing_directory(Path(execution.get("attempt_root", "")), "attempt root")
+    _validate_build_result(build_result_path, attempt_root, execution.get("map_path"))
+    ddc_seed = execution.get("ddc_seed")
+    if ddc_seed is not None:
+        if not isinstance(ddc_seed, Mapping) or set(ddc_seed) != {"path", "tree_sha256"}:
+            _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "DDC seed binding differs")
+        seed_path = _existing_directory(Path(ddc_seed["path"]), "DDC seed")
+        seed_sha, _entries, _bytes = _tree_snapshot(seed_path)
+        if seed_sha != ddc_seed["tree_sha256"]:
+            _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker DDC seed pin differs")
     cameras = compile_fixed_cameras(plan, execution.get("map_path"))
     capture = execution.get("capture")
     if not isinstance(capture, Mapping) or capture.get("width") != WIDTH or capture.get("height") != HEIGHT:
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker capture dimensions differ")
     if capture.get("room_kinds") != [camera["room_kind"] for camera in cameras] or capture.get("cameras") != cameras:
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker fixed camera plan differs")
-    artifacts = execution.get("artifacts")
-    if not isinstance(artifacts, Mapping) or set(artifacts) != {"ue_result", "editor_log", "editor_stdout"}:
+    aggregate_artifacts = execution.get("artifacts")
+    if not isinstance(aggregate_artifacts, Mapping) or set(aggregate_artifacts) != {
+        "images_dir", "workers_dir", "receipt"
+    }:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "aggregate artifact bindings differ")
+    if (
+        _safe_execution_child(aggregate_artifacts["images_dir"], output_root, "images directory")
+        != output_root / IMAGES_DIR
+        or _safe_execution_child(aggregate_artifacts["workers_dir"], output_root, "workers directory")
+        != output_root / WORKERS_DIR
+        or _safe_execution_child(aggregate_artifacts["receipt"], output_root, "receipt")
+        != output_root / RECEIPT_FILE
+    ):
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "aggregate artifact path differs")
+    if (output_root / RECEIPT_FILE).exists():
+        _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "aggregate receipt already exists")
+    return output_root, cameras
+
+
+def _load_worker_execution() -> tuple[dict[str, Any], dict[str, Any], str]:
+    manifest_text = os.environ.get(EXECUTION_ENV, "")
+    expected_sha = os.environ.get(EXECUTION_SHA_ENV, "")
+    if SHA256_RE.fullmatch(expected_sha) is None:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker execution pin is invalid")
+    manifest_path = _existing_file(Path(manifest_text), "worker execution manifest")
+    worker, _raw = _load_json(
+        manifest_path,
+        label="worker execution manifest",
+        expected_sha256=expected_sha,
+    )
+    expected_worker_policy = {
+        "immutable_ordinal": True,
+        "exactly_one_camera_capture": True,
+        "at_most_one_native_highres_shot": True,
+        "host_accepts_and_copies_png": True,
+    }
+    if (
+        set(worker)
+        != {"schema_version", "aggregate_execution", "ordinal", "camera", "scratch_png", "artifacts", "policy"}
+        or worker.get("schema_version") != WORKER_EXECUTION_SCHEMA
+        or worker.get("policy") != expected_worker_policy
+    ):
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker execution schema or policy differs")
+    aggregate_ref = worker.get("aggregate_execution")
+    if not isinstance(aggregate_ref, Mapping) or set(aggregate_ref) != {"path", "sha256"}:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "aggregate execution binding differs")
+    aggregate_path = _existing_file(Path(aggregate_ref["path"]), "aggregate execution manifest")
+    execution, _aggregate_raw = _load_json(
+        aggregate_path,
+        label="aggregate execution manifest",
+        expected_sha256=aggregate_ref["sha256"],
+    )
+    output_root, cameras = _validate_aggregate_worker_inputs(execution, aggregate_path)
+    ordinal = worker.get("ordinal")
+    if isinstance(ordinal, bool) or not isinstance(ordinal, int) or not 1 <= ordinal <= len(cameras):
+        _fail("VISTA_HOME_REVIEW_ORDINAL_INVALID", "worker ordinal is invalid")
+    expected_camera = cameras[ordinal - 1]
+    if worker.get("camera") != expected_camera or expected_camera["ordinal"] != ordinal:
+        _fail("VISTA_HOME_REVIEW_ORDINAL_INVALID", "worker camera does not match its immutable ordinal")
+    worker_dir = output_root / WORKERS_DIR / f"{ordinal:02d}"
+    if manifest_path != worker_dir / EXECUTION_FILE:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker manifest path differs from ordinal")
+    scratch_png = _validate_scratch_png(
+        Path(worker.get("scratch_png", "")),
+        ordinal=ordinal,
+        attempt_root=Path(execution["attempt_root"]),
+        require_parent=True,
+    )
+    artifacts = worker.get("artifacts")
+    if not isinstance(artifacts, Mapping) or set(artifacts) != {
+        "ue_result", "editor_log", "editor_stdout", "final_image"
+    }:
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker artifact bindings differ")
-    if _safe_execution_child(artifacts["ue_result"], output_root, "Unreal result") != output_root / UE_RESULT_FILE:
-        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker Unreal result path differs")
-    for camera in cameras:
-        expected_path = output_root / camera["relative_path"]
-        _safe_execution_child(str(expected_path), output_root, "fixed image")
-        if expected_path.exists():
-            _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "fixed screenshot already exists", pointer=str(expected_path))
-    return execution, expected_sha
+    expected_artifacts = {
+        "ue_result": worker_dir / UE_RESULT_FILE,
+        "editor_log": worker_dir / EDITOR_LOG_FILE,
+        "editor_stdout": worker_dir / EDITOR_STDOUT_FILE,
+        "final_image": output_root / expected_camera["relative_path"],
+    }
+    for key, expected_path in expected_artifacts.items():
+        if _safe_execution_child(artifacts[key], output_root, key) != expected_path:
+            _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", f"worker {key} path differs")
+    if expected_artifacts["ue_result"].exists() or expected_artifacts["final_image"].exists() or scratch_png.exists():
+        _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "worker output already exists before capture")
+    return execution, worker, expected_sha
 
 
-def _worker_write_result(execution: Mapping[str, Any], result: Mapping[str, Any]) -> None:
-    output_root = Path(execution["output_root"])
-    target = output_root / UE_RESULT_FILE
+def _worker_write_result(worker: Mapping[str, Any], result: Mapping[str, Any]) -> None:
+    target = Path(worker["artifacts"]["ue_result"])
     _write_exclusive(target, canonical_json(dict(result)))
 
 
 def _worker_result(
-    execution: Mapping[str, Any],
+    worker: Mapping[str, Any],
     execution_sha: str,
     *,
     status: str,
@@ -1023,6 +1873,7 @@ def _worker_result(
         "project_path": project_path,
         "map_path": map_path,
         "execution_sha256": execution_sha,
+        "worker_ordinal": worker["ordinal"],
         "camera_actor_set_exact": camera_actor_set_exact,
         "captures": [dict(item) for item in captures],
         "error": dict(error) if error is not None else None,
@@ -1038,16 +1889,17 @@ def _unreal_worker() -> int:
         raise RuntimeError("Unreal Python module is unavailable") from exc
 
     execution: dict[str, Any] | None = None
+    worker_execution: dict[str, Any] | None = None
     execution_sha = os.environ.get(EXECUTION_SHA_ENV, "")
     keep_alive = False
     try:
-        execution, execution_sha = _load_worker_execution()
+        execution, worker_execution, execution_sha = _load_worker_execution()
         project_path = str(Path(unreal.Paths.get_project_file_path()).resolve(strict=True))
         if project_path != execution["project"]["path"] or sha256_file(Path(project_path)) != execution["project"]["sha256"]:
             _fail("VISTA_HOME_REVIEW_PROJECT_INVALID", "loaded Unreal project differs from the pin")
         engine_version = str(unreal.SystemLibrary.get_engine_version())
-        if not engine_version.startswith("5."):
-            _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "Unreal Engine major version differs")
+        if not engine_version.startswith(EXPECTED_ENGINE_PREFIX):
+            _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "Unreal Engine version is not 5.7")
         editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
         actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
         world = editor.get_editor_world()
@@ -1058,6 +1910,7 @@ def _unreal_worker() -> int:
             _fail("VISTA_HOME_REVIEW_MAP_MISMATCH", f"loaded map {loaded_map!r} differs")
 
         expected_cameras = execution["capture"]["cameras"]
+        selected_camera = worker_execution["camera"]
         expected_tags = {camera["semantic_tag"] for camera in expected_cameras}
         actors_by_tag: dict[str, list[Any]] = {tag: [] for tag in expected_tags}
         vista_camera_tags: set[str] = set()
@@ -1072,18 +1925,33 @@ def _unreal_worker() -> int:
                     actors_by_tag[tag].append(actor)
         if vista_camera_tags != expected_tags or any(len(actors_by_tag[tag]) != 1 for tag in expected_tags):
             _fail("VISTA_HOME_REVIEW_CAMERA_SET_INVALID", "materialized review CameraActor set is not exact")
+        actor_paths = [
+            str(actors_by_tag[camera["semantic_tag"]][0].get_path_name())
+            for camera in expected_cameras
+        ]
+        if len(set(actor_paths)) != len(expected_cameras):
+            _fail("VISTA_HOME_REVIEW_CAMERA_SET_INVALID", "fixed semantic tags do not map to distinct CameraActors")
 
-        resolved: list[tuple[dict[str, Any], Any, dict[str, list[float]], float]] = []
         for camera in expected_cameras:
-            actor = actors_by_tag[camera["semantic_tag"]][0]
-            actual_transform = _actual_transform(actor)
-            if not _transform_matches(actual_transform, camera["expected_transform"]):
-                _fail("VISTA_HOME_REVIEW_CAMERA_DRIFT", f"materialized camera {camera['semantic_id']} transform differs")
-            component = actor.get_editor_property("camera_component")
-            fov = float(component.get_editor_property("field_of_view"))
-            if abs(fov - float(camera["expected_fov_deg"])) > 0.05:
-                _fail("VISTA_HOME_REVIEW_CAMERA_DRIFT", f"materialized camera {camera['semantic_id']} FOV differs")
-            resolved.append((camera, actor, actual_transform, fov))
+            actor_tags = {
+                str(tag)
+                for tag in actors_by_tag[camera["semantic_tag"]][0].get_editor_property("tags")
+            }
+            if actor_tags & expected_tags != {camera["semantic_tag"]}:
+                _fail("VISTA_HOME_REVIEW_CAMERA_SET_INVALID", "CameraActor has an ambiguous fixed semantic tag")
+        actor = actors_by_tag[selected_camera["semantic_tag"]][0]
+        actual_transform = _actual_transform(actor)
+        if not _transform_matches(actual_transform, selected_camera["expected_transform"]):
+            _fail("VISTA_HOME_REVIEW_CAMERA_DRIFT", "selected materialized CameraActor transform differs")
+        component = actor.get_editor_property("camera_component")
+        fov = float(component.get_editor_property("field_of_view"))
+        if abs(fov - float(selected_camera["expected_fov_deg"])) > 0.05:
+            _fail("VISTA_HOME_REVIEW_CAMERA_DRIFT", "selected materialized CameraActor FOV differs")
+
+        pilot = getattr(unreal.EditorLevelLibrary, "pilot_level_actor", None)
+        eject = getattr(unreal.EditorLevelLibrary, "eject_pilot_level_actor", None)
+        if not callable(pilot) or not callable(eject):
+            _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "UE 5.7 CameraActor pilot API is unavailable")
 
         unreal.EditorPythonScripting.set_keep_python_script_alive(True)
         keep_alive = True
@@ -1096,10 +1964,10 @@ def _unreal_worker() -> int:
             "handle": None,
             "phase": "warmup",
             "phase_started": time.monotonic(),
-            "index": 0,
             "stable_size": None,
             "stable_since": None,
             "captures": [],
+            "shot_requested": False,
             "finished": False,
         }
 
@@ -1114,7 +1982,7 @@ def _unreal_worker() -> int:
             try:
                 if error is None:
                     result = _worker_result(
-                        execution,
+                        worker_execution,
                         execution_sha,
                         status="captured_candidate",
                         captures=state["captures"],
@@ -1130,7 +1998,7 @@ def _unreal_worker() -> int:
                     else:
                         public_error = {"code": "VISTA_HOME_REVIEW_UE_EXCEPTION", "message": str(error)}
                     result = _worker_result(
-                        execution,
+                        worker_execution,
                         execution_sha,
                         status="failed",
                         captures=state["captures"],
@@ -1140,7 +2008,7 @@ def _unreal_worker() -> int:
                         project_path=project_path,
                         map_path=loaded_map,
                     )
-                _worker_write_result(execution, result)
+                _worker_write_result(worker_execution, result)
             finally:
                 unreal.EditorPythonScripting.set_keep_python_script_alive(False)
 
@@ -1153,73 +2021,70 @@ def _unreal_worker() -> int:
                         return
                     state["phase"] = "set_camera"
                 if state["phase"] == "set_camera":
-                    if state["index"] >= len(resolved):
-                        finish()
-                        return
-                    camera, actor, _actual, _fov = resolved[state["index"]]
                     location = actor.get_actor_location()
                     rotation = actor.get_actor_rotation()
                     editor.set_level_viewport_camera_info(location, rotation)
-                    capture_method = "camera_actor_transform"
-                    pilot = getattr(unreal.EditorLevelLibrary, "pilot_level_actor", None)
-                    if callable(pilot):
-                        pilot(actor)
-                        capture_method = "camera_actor_pilot"
+                    pilot(actor)
                     unreal.EditorLevelLibrary.editor_invalidate_viewports()
-                    state["capture_method"] = capture_method
+                    state["capture_method"] = CAPTURE_METHOD
                     state["phase"] = "settle"
                     state["phase_started"] = now
                     return
                 if state["phase"] == "settle":
                     if now - state["phase_started"] < 0.5:
                         return
-                    camera, _actor, _actual, _fov = resolved[state["index"]]
-                    image_path = Path(execution["output_root"]) / camera["relative_path"]
-                    result = unreal.AutomationLibrary.take_high_res_screenshot(WIDTH, HEIGHT, str(image_path))
-                    if result is False:
-                        _fail("VISTA_HOME_REVIEW_SCREENSHOT_REJECTED", f"Unreal rejected {camera['semantic_id']} screenshot")
+                    if state["shot_requested"]:
+                        _fail("VISTA_HOME_REVIEW_SCREENSHOT_REJECTED", "worker attempted a second native capture")
+                    image_path = Path(worker_execution["scratch_png"])
+                    command = f'HighResShot {WIDTH}x{HEIGHT} filename="{image_path}"'
+                    state["shot_requested"] = True
+                    unreal.log(f"VISTA_PLAYABLE_HOME_REVIEW_SCREENSHOT_REQUESTED {selected_camera['semantic_id']}")
+                    unreal.SystemLibrary.execute_console_command(world, command)
                     state["phase"] = "await_file"
                     state["phase_started"] = now
                     state["stable_size"] = None
                     state["stable_since"] = None
                     return
                 if state["phase"] == "await_file":
-                    camera, actor, actual, fov = resolved[state["index"]]
-                    image_path = Path(execution["output_root"]) / camera["relative_path"]
-                    if now - state["phase_started"] > 30.0:
-                        _fail("VISTA_HOME_REVIEW_SCREENSHOT_TIMEOUT", f"PNG for {camera['semantic_id']} did not stabilize")
-                    if not image_path.is_file():
-                        return
-                    size = image_path.stat().st_size
+                    image_path = Path(worker_execution["scratch_png"])
+                    if now - state["phase_started"] > SCREENSHOT_TIMEOUT_SECONDS:
+                        _fail("VISTA_HOME_REVIEW_SCREENSHOT_TIMEOUT", f"PNG for {selected_camera['semantic_id']} did not stabilize")
+                    if image_path.is_file():
+                        size = image_path.stat().st_size
+                        if size > 0:
+                            if state["stable_size"] != size:
+                                state["stable_size"] = size
+                                state["stable_since"] = now
+                                return
+                            if state["stable_since"] is None or now - state["stable_since"] < 0.25:
+                                return
+                        else:
+                            size = 0
+                    else:
+                        size = 0
                     if size <= 0:
                         return
-                    if state["stable_size"] != size:
-                        state["stable_size"] = size
-                        state["stable_since"] = now
-                        return
-                    if state["stable_since"] is None or now - state["stable_since"] < 0.25:
-                        return
+                    if size > MAX_PNG_BYTES:
+                        _fail("VISTA_HOME_REVIEW_PNG_INVALID", "native PNG exceeds safety bound")
                     state["captures"].append(
                         {
-                            "ordinal": camera["ordinal"],
-                            "room_kind": camera["room_kind"],
-                            "room_id": camera["room_id"],
-                            "camera_id": camera["camera_id"],
-                            "semantic_id": camera["semantic_id"],
+                            "ordinal": selected_camera["ordinal"],
+                            "room_kind": selected_camera["room_kind"],
+                            "room_id": selected_camera["room_id"],
+                            "camera_id": selected_camera["camera_id"],
+                            "semantic_id": selected_camera["semantic_id"],
                             "actor_label": str(actor.get_actor_label()),
                             "capture_method": state["capture_method"],
-                            "actual_transform": actual,
+                            "actual_transform": actual_transform,
                             "actual_fov_deg": fov,
-                            "relative_path": camera["relative_path"],
+                            "relative_path": selected_camera["relative_path"],
                             "bytes": size,
+                            "sha256": sha256_file(image_path),
+                            "native_png_path": str(image_path),
                         }
                     )
-                    eject = getattr(unreal.EditorLevelLibrary, "eject_pilot_level_actor", None)
-                    if callable(eject):
-                        eject()
-                    state["index"] += 1
-                    state["phase"] = "set_camera"
-                    state["phase_started"] = now
+                    eject()
+                    finish()
             except Exception as exc:  # Unreal callback boundary
                 finish(exc)
 
@@ -1227,16 +2092,16 @@ def _unreal_worker() -> int:
         unreal.log("VISTA_PLAYABLE_HOME_REVIEW_CAPTURE_STARTED")
         return 0
     except Exception as exc:
-        if execution is not None:
+        if worker_execution is not None:
             try:
                 if isinstance(exc, ReviewCaptureError):
                     public_error = exc.public_dict()
                 else:
                     public_error = {"code": "VISTA_HOME_REVIEW_UE_EXCEPTION", "message": str(exc)}
                 _worker_write_result(
-                    execution,
+                    worker_execution,
                     _worker_result(
-                        execution,
+                        worker_execution,
                         execution_sha,
                         status="failed",
                         captures=[],
@@ -1269,6 +2134,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--display", required=True, help="local X11 display, for example :117")
     parser.add_argument("--graphics-adapter", type=int, default=0, help="bounded Unreal graphics adapter index")
     parser.add_argument("--timeout-seconds", type=int, default=300, help="owned editor timeout (60-900 seconds)")
+    parser.add_argument("--ddc-seed", help="optional pinned prior local DDC directory inside the UE attempt")
+    parser.add_argument("--ddc-seed-tree-sha256", help="tree SHA-256 for --ddc-seed")
     parser.add_argument("--apply", action="store_true", help="create the output attempt and launch fixed Unreal capture")
     return parser
 

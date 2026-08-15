@@ -5,12 +5,14 @@ import binascii
 import copy
 import inspect
 import json
+import os
 import pathlib
 import stat
 import struct
 import tempfile
 import unittest
 import zlib
+from unittest import mock
 
 
 from tools.ue.vista_playable_home import capture_review_views as capture
@@ -61,7 +63,7 @@ def png_chunk(kind: bytes, payload: bytes) -> bytes:
     )
 
 
-def rgb_png(width: int, height: int, *, solid: bool = False) -> bytes:
+def rgb_png(width: int, height: int, *, solid: bool = False, seed: int = 0) -> bytes:
     scanlines = bytearray()
     for y in range(height):
         scanlines.append(0)
@@ -69,7 +71,11 @@ def rgb_png(width: int, height: int, *, solid: bool = False) -> bytes:
             if solid:
                 rgb = (0, 0, 0)
             else:
-                rgb = ((x * 31 + y * 7) % 256, (x * 11 + y * 43) % 256, (x * 17 + y * 23) % 256)
+                rgb = (
+                    (x * 31 + y * 7 + seed * 13) % 256,
+                    (x * 11 + y * 43 + seed * 29) % 256,
+                    (x * 17 + y * 23 + seed * 47) % 256,
+                )
             scanlines.extend(rgb)
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     return (
@@ -114,17 +120,25 @@ class ReviewCameraPlanTests(unittest.TestCase):
             attempt_root=root,
             project=root / "project" / capture.EXPECTED_PROJECT_NAME,
             project_sha256="2" * 64,
+            map_asset=root / capture.EXPECTED_MAP_ASSET_RELATIVE,
+            map_asset_sha256="3" * 64,
             build_plan=root / "contracts" / "build-plan.json",
-            build_plan_sha256="3" * 64,
+            build_plan_sha256="4" * 64,
             plan=build_plan(),
+            build_result=root / capture.EXPECTED_BUILD_RESULT_NAME,
+            build_result_sha256="5" * 64,
             map_path=capture.EXPECTED_MAP_PATH,
             unreal_editor=pathlib.Path("/opt/Unreal/Engine/Binaries/Linux/UnrealEditor"),
+            unreal_editor_sha256="6" * 64,
             output_dir=root / "review-cameras" / "attempt-01",
             display=":117",
             graphics_adapter=0,
             timeout_seconds=300,
             script=pathlib.Path(capture.__file__).resolve(),
-            script_sha256="4" * 64,
+            script_sha256="7" * 64,
+            nvidia_icd_sha256="8" * 64,
+            ddc_seed=None,
+            ddc_seed_tree_sha256=None,
             cameras=tuple(capture.compile_fixed_cameras(build_plan(), capture.EXPECTED_MAP_PATH)),
         )
         command = capture.build_editor_command(inputs)
@@ -142,8 +156,19 @@ class ReviewCameraPlanTests(unittest.TestCase):
         self.assertIn("semantic_tag", source)
         self.assertIn("register_slate_post_tick_callback", source)
         self.assertIn("set_keep_python_script_alive(True)", source)
-        self.assertIn("AutomationLibrary.take_high_res_screenshot", source)
+        self.assertIn("HighResShot", source)
+        self.assertIn("execute_console_command", source)
+        self.assertEqual(source.count("execute_console_command(world, command)"), 1)
+        self.assertIn('state["shot_requested"]', source)
+        self.assertIn('selected_camera = worker_execution["camera"]', source)
+        self.assertIn('image_path = Path(worker_execution["scratch_png"])', source)
+        self.assertNotIn('Path(execution["output_root"]) / camera["relative_path"]', source)
+        self.assertNotIn("AutomationLibrary.take_high_res_screenshot(WIDTH", source)
         self.assertNotIn("exec(", source)
+
+        lifecycle_source = inspect.getsource(capture.run_editor)
+        self.assertIn("finally:", lifecycle_source)
+        self.assertIn("_terminate_owned(process)", lifecycle_source)
 
 
 class ReviewPngValidationTests(unittest.TestCase):
@@ -202,7 +227,23 @@ class ReviewCaptureInputTests(unittest.TestCase):
         )
         plan_path = contracts_dir / "build-plan.json"
         plan_path.write_bytes(capture.canonical_json(build_plan()))
-        editor = root.parent / f"UnrealEditor-{root.name}"
+        map_asset = root / capture.EXPECTED_MAP_ASSET_RELATIVE
+        map_asset.parent.mkdir(parents=True)
+        map_asset.write_bytes(b"synthetic umap")
+        (root / capture.EXPECTED_BUILD_RESULT_NAME).write_bytes(
+            capture.canonical_json(
+                {
+                    "schema_version": capture.EXPECTED_BUILD_RESULT_SCHEMA,
+                    "status": "accepted_candidate",
+                    "attempt_root": str(root),
+                    "revision": capture.EXPECTED_REVISION,
+                    "map_path": capture.EXPECTED_MAP_PATH,
+                }
+            )
+        )
+        engine_dir = root / "engine"
+        engine_dir.mkdir()
+        editor = engine_dir / f"UnrealEditor-{root.name}"
         editor.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         editor.chmod(editor.stat().st_mode | stat.S_IXUSR)
         self.addCleanup(lambda: editor.unlink(missing_ok=True))
@@ -217,8 +258,18 @@ class ReviewCaptureInputTests(unittest.TestCase):
             display=":117",
             graphics_adapter=0,
             timeout_seconds=300,
+            ddc_seed=None,
+            ddc_seed_tree_sha256=None,
             apply=False,
         )
+
+    def make_valid_inputs(self, root: pathlib.Path) -> capture.CaptureInputs:
+        args = self.make_args(root)
+        fake_editor = pathlib.Path(args.unreal_editor)
+        fixed_editor = fake_editor.with_name("UnrealEditor")
+        fake_editor.rename(fixed_editor)
+        args.unreal_editor = str(fixed_editor)
+        return capture.validate_inputs(args)
 
     def test_inputs_require_real_unreal_name_and_fresh_append_only_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -257,6 +308,364 @@ class ReviewCaptureInputTests(unittest.TestCase):
             args.display = "remote.example:0"
             with self.assertRaisesRegex(capture.ReviewCaptureError, "DISPLAY_INVALID"):
                 capture.validate_inputs(args)
+
+    def test_editor_environment_is_allowlisted_and_pins_nvidia_icd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            inputs = capture.validate_inputs(args)
+
+            manifest = inputs.output_dir / capture.WORKERS_DIR / "01" / capture.EXECUTION_FILE
+            previous = os.environ.get("ANTHROPIC_API_KEY")
+            os.environ["ANTHROPIC_API_KEY"] = "must-not-cross-boundary"
+            try:
+                environment = capture.build_editor_environment(inputs, manifest, "5" * 64)
+            finally:
+                if previous is None:
+                    os.environ.pop("ANTHROPIC_API_KEY", None)
+                else:
+                    os.environ["ANTHROPIC_API_KEY"] = previous
+
+        self.assertNotIn("ANTHROPIC_API_KEY", environment)
+        self.assertEqual(environment["DISPLAY"], ":117")
+        self.assertEqual(environment["VK_ICD_FILENAMES"], str(capture.NVIDIA_VULKAN_ICD))
+        self.assertEqual(environment[capture.WORKER_ENV], "1")
+        self.assertEqual(environment[capture.EXECUTION_SHA_ENV], "5" * 64)
+        self.assertEqual(environment[capture.EXECUTION_ENV], str(manifest))
+
+    def write_fake_worker_success(
+        self,
+        inputs: capture.CaptureInputs,
+        worker: capture.WorkerRun,
+        *,
+        seed: int,
+    ) -> None:
+        worker.editor_log.write_bytes(f"editor-{worker.ordinal}\n".encode())
+        worker.editor_stdout.write_bytes(f"stdout-{worker.ordinal}\n".encode())
+        raw = rgb_png(capture.WIDTH, capture.HEIGHT, seed=seed)
+        worker.scratch_png.write_bytes(raw)
+        manifest = json.loads(worker.manifest_path.read_text(encoding="utf-8"))
+        camera = worker.camera
+        result = capture._worker_result(
+            manifest,
+            worker.manifest_sha256,
+            status="captured_candidate",
+            captures=[
+                {
+                    "ordinal": camera["ordinal"],
+                    "room_kind": camera["room_kind"],
+                    "room_id": camera["room_id"],
+                    "camera_id": camera["camera_id"],
+                    "semantic_id": camera["semantic_id"],
+                    "actor_label": f"CameraActor_{worker.ordinal}",
+                    "capture_method": capture.CAPTURE_METHOD,
+                    "actual_transform": camera["expected_transform"],
+                    "actual_fov_deg": camera["expected_fov_deg"],
+                    "relative_path": camera["relative_path"],
+                    "bytes": len(raw),
+                    "sha256": capture.sha256_bytes(raw),
+                    "native_png_path": str(worker.scratch_png),
+                }
+            ],
+            camera_actor_set_exact=True,
+            error=None,
+            engine_version="5.7.0-test",
+            project_path=str(inputs.project),
+            map_path=inputs.map_path,
+        )
+        capture._worker_write_result(manifest, result)
+
+    def test_ordinal_manifest_binds_one_camera_and_private_safe_scratch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            inputs = self.make_valid_inputs(attempt)
+            local = workspace / "local-scratch"
+            local.mkdir(mode=0o700)
+            scratch_root = local / "vista-home-review-fixture"
+            scratch_root.mkdir(mode=0o700)
+            scratch_dir = scratch_root / "worker-04"
+            scratch_dir.mkdir(mode=0o700)
+            scratch_png = scratch_dir / "capture.png"
+
+            with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
+                manifest = capture.build_worker_execution(inputs, "a" * 64, 4, scratch_png)
+                with self.assertRaisesRegex(capture.ReviewCaptureError, "ORDINAL_INVALID"):
+                    capture.build_worker_execution(inputs, "a" * 64, 0, scratch_png)
+                with self.assertRaisesRegex(capture.ReviewCaptureError, "SCRATCH_INVALID"):
+                    capture._validate_scratch_png(
+                        local / 'vista-home-review-fixture/worker-04/bad" name.png',
+                        ordinal=4,
+                        attempt_root=attempt,
+                        require_parent=False,
+                    )
+                with self.assertRaisesRegex(capture.ReviewCaptureError, "SCRATCH_INVALID"):
+                    capture._validate_scratch_png(
+                        pathlib.Path("/mnt/NAS2/worker-04/capture.png"),
+                        ordinal=4,
+                        attempt_root=attempt,
+                        require_parent=False,
+                    )
+
+        self.assertEqual(manifest["ordinal"], 4)
+        self.assertEqual(manifest["camera"]["ordinal"], 4)
+        self.assertNotIn("cameras", manifest)
+        self.assertEqual(manifest["scratch_png"], str(scratch_png))
+        self.assertTrue(manifest["policy"]["at_most_one_native_highres_shot"])
+
+    def test_host_aggregates_six_sequential_children_and_exact_hash_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            inputs = self.make_valid_inputs(attempt)
+            local = workspace / "local-scratch"
+            local.mkdir(mode=0o700)
+            execution_raw = capture.canonical_json(capture.build_execution(inputs))
+            execution_sha = capture.sha256_bytes(execution_raw)
+            lifecycle: list[tuple[str, int]] = []
+
+            def fake_run(_inputs: capture.CaptureInputs, worker: capture.WorkerRun) -> int:
+                lifecycle.append(("start", worker.ordinal))
+                for previous in range(1, worker.ordinal):
+                    previous_camera = inputs.cameras[previous - 1]
+                    self.assertTrue((inputs.output_dir / previous_camera["relative_path"]).is_file())
+                self.assertFalse((inputs.output_dir / capture.RECEIPT_FILE).exists())
+                self.write_fake_worker_success(inputs, worker, seed=worker.ordinal)
+                lifecycle.append(("end", worker.ordinal))
+                return 0
+
+            with (
+                mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local),
+                mock.patch.object(capture, "run_editor", side_effect=fake_run),
+            ):
+                result = capture.execute_capture(inputs, execution_raw, execution_sha)
+
+            receipt_path = pathlib.Path(result["receipt"])
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                lifecycle,
+                [(phase, ordinal) for ordinal in range(1, 7) for phase in ("start", "end")],
+            )
+            self.assertEqual(result["image_count"], 6)
+            self.assertEqual([item["ordinal"] for item in receipt["bindings"]["worker_results"]], list(range(1, 7)))
+            self.assertEqual(len(receipt["logs"]), 6)
+            self.assertEqual(len(receipt["capture"]["images"]), 6)
+            self.assertEqual(len({item["sha256"] for item in receipt["capture"]["images"]}), 6)
+            self.assertTrue(all(item["native_and_final_sha256_equal"] for item in receipt["capture"]["images"]))
+            self.assertFalse((inputs.output_dir / capture.UE_RESULT_FILE).exists())
+            self.assertEqual(list(local.iterdir()), [])
+            for ordinal in range(1, 7):
+                manifest = json.loads(
+                    (inputs.output_dir / capture.WORKERS_DIR / f"{ordinal:02d}" / capture.EXECUTION_FILE).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                result_payload = json.loads(
+                    (inputs.output_dir / capture.WORKERS_DIR / f"{ordinal:02d}" / capture.UE_RESULT_FILE).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(manifest["ordinal"], ordinal)
+                self.assertEqual(len(result_payload["captures"]), 1)
+                final = inputs.output_dir / inputs.cameras[ordinal - 1]["relative_path"]
+                self.assertEqual(capture.sha256_file(final), result_payload["captures"][0]["sha256"])
+
+    def test_child_failure_stops_sequence_and_never_writes_aggregate_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            inputs = self.make_valid_inputs(attempt)
+            local = workspace / "local-scratch"
+            local.mkdir(mode=0o700)
+            execution_raw = capture.canonical_json(capture.build_execution(inputs))
+            execution_sha = capture.sha256_bytes(execution_raw)
+            launched: list[int] = []
+
+            def fake_run(_inputs: capture.CaptureInputs, worker: capture.WorkerRun) -> int:
+                launched.append(worker.ordinal)
+                worker.editor_log.write_bytes(b"editor\n")
+                worker.editor_stdout.write_bytes(b"stdout\n")
+                if worker.ordinal == 3:
+                    return 9
+                self.write_fake_worker_success(inputs, worker, seed=worker.ordinal)
+                return 0
+
+            with (
+                mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local),
+                mock.patch.object(capture, "run_editor", side_effect=fake_run),
+                self.assertRaisesRegex(capture.ReviewCaptureError, "child 3 exited with status 9"),
+            ):
+                capture.execute_capture(inputs, execution_raw, execution_sha)
+
+            self.assertEqual(launched, [1, 2, 3])
+            self.assertFalse((inputs.output_dir / capture.RECEIPT_FILE).exists())
+            self.assertEqual(list(local.iterdir()), [])
+
+    def test_duplicate_room_images_fail_before_aggregate_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            inputs = self.make_valid_inputs(attempt)
+            local = workspace / "local-scratch"
+            local.mkdir(mode=0o700)
+            execution_raw = capture.canonical_json(capture.build_execution(inputs))
+            execution_sha = capture.sha256_bytes(execution_raw)
+
+            def fake_run(_inputs: capture.CaptureInputs, worker: capture.WorkerRun) -> int:
+                self.write_fake_worker_success(inputs, worker, seed=0)
+                return 0
+
+            with (
+                mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local),
+                mock.patch.object(capture, "run_editor", side_effect=fake_run),
+                self.assertRaisesRegex(capture.ReviewCaptureError, "PNG_DUPLICATE"),
+            ):
+                capture.execute_capture(inputs, execution_raw, execution_sha)
+
+            self.assertFalse((inputs.output_dir / capture.RECEIPT_FILE).exists())
+
+    def test_final_png_copy_is_o_excl_and_never_overwrites(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            inputs = self.make_valid_inputs(attempt)
+            local = workspace / "local-scratch"
+            local.mkdir(mode=0o700)
+            execution_raw = capture.canonical_json(capture.build_execution(inputs))
+            execution_sha = capture.sha256_bytes(execution_raw)
+            with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
+                capture._prepare_output(inputs, execution_raw)
+                scratch_root = capture._create_scratch_root(inputs)
+                try:
+                    worker = capture._prepare_worker_runs(inputs, execution_sha, scratch_root)[0]
+                    self.write_fake_worker_success(inputs, worker, seed=1)
+                    ue_result, _sha = capture._load_worker_result(inputs, worker)
+                    final = inputs.output_dir / worker.camera["relative_path"]
+                    sentinel = b"must-not-overwrite"
+                    final.write_bytes(sentinel)
+                    with self.assertRaisesRegex(capture.ReviewCaptureError, "OUTPUT_EXISTS"):
+                        capture._accept_worker_png(inputs, worker, ue_result)
+                    self.assertEqual(final.read_bytes(), sentinel)
+                finally:
+                    capture._remove_scratch_root(scratch_root)
+
+    def test_stable_valid_worker_proof_terminates_owned_child_and_returns_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            inputs = self.make_valid_inputs(attempt)
+            local = workspace / "local-scratch"
+            local.mkdir(mode=0o700)
+            execution_raw = capture.canonical_json(capture.build_execution(inputs))
+            execution_sha = capture.sha256_bytes(execution_raw)
+
+            class RunningProcess:
+                pid = 424242
+
+                @staticmethod
+                def poll() -> None:
+                    return None
+
+            process = RunningProcess()
+            with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
+                capture._prepare_output(inputs, execution_raw)
+                scratch_root = capture._create_scratch_root(inputs)
+                try:
+                    worker = capture._prepare_worker_runs(inputs, execution_sha, scratch_root)[0]
+                    self.write_fake_worker_success(inputs, worker, seed=1)
+                    worker.editor_stdout.unlink()
+                    with (
+                        mock.patch.object(capture.subprocess, "Popen", return_value=process),
+                        mock.patch.object(capture, "_terminate_owned") as terminate,
+                        mock.patch.object(capture, "WORKER_PROOF_STABILITY_SECONDS", 0.0),
+                        mock.patch.object(capture, "WORKER_PROOF_POLL_INTERVAL_SECONDS", 0.0),
+                        mock.patch.object(
+                            capture,
+                            "_probe_worker_success",
+                            wraps=capture._probe_worker_success,
+                        ) as probe,
+                    ):
+                        returncode = capture.run_editor(inputs, worker)
+
+                    self.assertEqual(returncode, 0)
+                    self.assertGreaterEqual(probe.call_count, 2)
+                    terminate.assert_called_once_with(process)
+                finally:
+                    capture._remove_scratch_root(scratch_root)
+
+    def test_partial_or_invalid_worker_proof_cannot_synthesize_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            inputs = self.make_valid_inputs(attempt)
+            local = workspace / "local-scratch"
+            local.mkdir(mode=0o700)
+            execution_raw = capture.canonical_json(capture.build_execution(inputs))
+            execution_sha = capture.sha256_bytes(execution_raw)
+
+            with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
+                capture._prepare_output(inputs, execution_raw)
+                scratch_root = capture._create_scratch_root(inputs)
+                try:
+                    worker = capture._prepare_worker_runs(inputs, execution_sha, scratch_root)[0]
+                    self.write_fake_worker_success(inputs, worker, seed=1)
+                    good_result = worker.result_path.read_bytes()
+                    good_png = worker.scratch_png.read_bytes()
+
+                    worker.result_path.write_bytes(b'{"schema_version":')
+                    self.assertIsNone(capture._probe_worker_success(inputs, worker))
+
+                    worker.result_path.write_bytes(good_result)
+                    worker.scratch_png.write_bytes(good_png[:100])
+                    self.assertIsNone(capture._probe_worker_success(inputs, worker))
+
+                    worker.scratch_png.write_bytes(good_png)
+                    invalid = json.loads(good_result)
+                    invalid["execution_sha256"] = "0" * 64
+                    worker.result_path.write_bytes(capture.canonical_json(invalid))
+                    self.assertIsNone(capture._probe_worker_success(inputs, worker))
+
+                    class ExitingProcess:
+                        pid = 434343
+
+                        def __init__(self) -> None:
+                            self.returncodes = iter((None, 17))
+
+                        def poll(self) -> int | None:
+                            return next(self.returncodes, 17)
+
+                    process = ExitingProcess()
+                    worker.editor_stdout.unlink()
+                    with (
+                        mock.patch.object(capture.subprocess, "Popen", return_value=process),
+                        mock.patch.object(capture, "_terminate_owned") as terminate,
+                        mock.patch.object(capture, "WORKER_PROOF_POLL_INTERVAL_SECONDS", 0.0),
+                    ):
+                        returncode = capture.run_editor(inputs, worker)
+                    self.assertEqual(returncode, 17)
+                    terminate.assert_called_once_with(process)
+                finally:
+                    capture._remove_scratch_root(scratch_root)
+
+    def test_input_pin_drift_is_rejected_before_child_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            inputs = self.make_valid_inputs(root)
+            inputs.map_asset.write_bytes(b"drifted umap")
+            with self.assertRaisesRegex(capture.ReviewCaptureError, "PIN_MISMATCH"):
+                capture._verify_input_pins(inputs)
 
 
 if __name__ == "__main__":
