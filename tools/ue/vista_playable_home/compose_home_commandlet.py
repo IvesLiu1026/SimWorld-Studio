@@ -216,17 +216,20 @@ def add_legacy_input_mappings():
         if (name, key, scale) not in existing_axes:
             mapping = unreal.InputAxisKeyMapping()
             mapping.set_editor_property("axis_name", unreal.Name(name))
-            mapping.set_editor_property("key", unreal.Key(key))
+            key_value = unreal.Key()
+            key_value.set_editor_property("key_name", unreal.Name(key))
+            mapping.set_editor_property("key", key_value)
             mapping.set_editor_property("scale", scale)
             settings.add_axis_mapping(mapping, False)
     for name, key in actions:
         if (name, key) not in existing_actions:
             mapping = unreal.InputActionKeyMapping()
             mapping.set_editor_property("action_name", unreal.Name(name))
-            mapping.set_editor_property("key", unreal.Key(key))
+            key_value = unreal.Key()
+            key_value.set_editor_property("key_name", unreal.Name(key))
+            mapping.set_editor_property("key", key_value)
             settings.add_action_mapping(mapping, False)
     settings.save_key_mappings()
-    settings.save_config()
 
 
 def event_definitions(plan, assets, room_anchor_ids):
@@ -418,8 +421,23 @@ def run():
                         pawn_path == "/Script/VistaPlayableHome.VistaPlayableHomeCharacter",
                         "runtime classes are not the fixed playable-home classes")
                 game_mode = unreal.load_class(None, game_mode_path)
+                stage = {
+                    "phase": "configure_game_mode_world_settings",
+                    "operation_id": operation["operation_id"],
+                    "kind": kind,
+                }
                 world.get_world_settings().set_editor_property("default_game_mode", game_mode)
+                stage = {
+                    "phase": "configure_game_mode_input",
+                    "operation_id": operation["operation_id"],
+                    "kind": kind,
+                }
                 add_legacy_input_mappings()
+                stage = {
+                    "phase": "configure_game_mode_events",
+                    "operation_id": operation["operation_id"],
+                    "kind": kind,
+                }
                 definition_class = unreal.load_class(
                     None, "/Script/VistaPlayableHome.VistaEventDefinitionActor")
                 definition_actor = actor_subsystem.spawn_actor_from_class(

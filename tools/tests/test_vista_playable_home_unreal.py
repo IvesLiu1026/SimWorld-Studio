@@ -482,6 +482,11 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("navigation_system.on_navigation_bounds_updated(nav)", compose_source)
         self.assertNotIn("NavigationSystemV1.build_navigation", compose_source)
         self.assertIn('"stage": stage', compose_source)
+        self.assertIn("key_value = unreal.Key()", compose_source)
+        self.assertIn('key_value.set_editor_property("key_name", unreal.Name(key))', compose_source)
+        self.assertNotIn("unreal.Key(key)", compose_source)
+        self.assertNotIn("settings.save_config()", compose_source)
+        self.assertIn('"phase": "configure_game_mode_input"', compose_source)
         self.assertNotIn(
             "unreal.Rotator(pitch=values[0], yaw=values[1], roll=values[2])",
             compose_source,
