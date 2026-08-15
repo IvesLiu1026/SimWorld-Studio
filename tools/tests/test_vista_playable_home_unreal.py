@@ -389,6 +389,13 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("ConfigureJambPivot", source)
         self.assertIn("GetBoundingBox().Min.X", source)
         self.assertIn("DoorwayLink->SetEnabled(bOpen)", source)
+        self.assertIn(
+            "DoorwayLink->AddNavigationObstacle(",
+            source,
+        )
+        self.assertIn("FVector(55.0f, 20.0f, 100.0f)", source)
+        self.assertIn("DoorMesh->SetCanEverAffectNavigation(false)", source)
+        self.assertNotIn("CreateDefaultSubobject<UNavModifierComponent>", source)
         self.assertIn("DoorwayLink->SetMoveReachedLink", source)
         self.assertIn("FinishUsingCustomLink", source)
         self.assertIn("UpdateDoorwayTraversals", source)

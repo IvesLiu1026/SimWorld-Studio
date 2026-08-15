@@ -5,7 +5,6 @@
 #include "VistaDoorActor.generated.h"
 
 class APawn;
-class UNavModifierComponent;
 class UNavLinkCustomComponent;
 class UPathFollowingComponent;
 class USceneComponent;
@@ -34,9 +33,6 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Door")
     TObjectPtr<UStaticMeshComponent> DoorMesh;
-
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Door")
-    TObjectPtr<UNavModifierComponent> NavigationModifier;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Door")
     TObjectPtr<UNavLinkCustomComponent> DoorwayLink;
