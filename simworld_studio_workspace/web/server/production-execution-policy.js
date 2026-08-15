@@ -1,6 +1,7 @@
 "use strict";
 
 const { isInternalCapabilityCandidate } = require("./internal-run-capability");
+const { internalVistaWorldMutationAllowed } = require("./vista-world-mcp-tools");
 
 const PRODUCTION_SAFETY_VALUES = new Set(["1", "true", "enforced"]);
 const DISABLED_SAFETY_VALUES = new Set(["", "0", "false"]);
@@ -146,7 +147,7 @@ function denyGenericExecution(res) {
 function internalCapabilityOperationPolicy({ channel, body } = {}, env = process.env) {
   if (!productionExecutionLocked(env)) return Object.freeze({ allowed: true });
   const allowed = channel === "ue"
-    ? internalUeReadAllowed(body)
+    ? internalUeReadAllowed(body) || internalVistaWorldMutationAllowed(body, env)
     : channel === "ucv"
       ? internalUcvReadAllowed(body)
       : channel === "assets" && internalAssetSearchAllowed(body);
@@ -170,7 +171,9 @@ function createProductionExecutionGuard({ env = process.env } = {}) {
       return denyGenericExecution(res);
     }
     if (isInternalCapabilityCandidate(req)) return next();
-    if (requestPath === "/api/internal/ue" && !internalUeReadAllowed(req.body)) {
+    if (requestPath === "/api/internal/ue"
+        && !internalUeReadAllowed(req.body)
+        && !internalVistaWorldMutationAllowed(req.body, env)) {
       return denyGenericExecution(res);
     }
     if (requestPath === "/api/internal/ucv" && !internalUcvReadAllowed(req.body)) {
@@ -186,6 +189,7 @@ module.exports = {
   internalAssetSearchAllowed,
   internalUcvReadAllowed,
   internalUeReadAllowed,
+  internalVistaWorldMutationAllowed,
   internalCapabilityOperationPolicy,
   productionExecutionLocked,
   productionMcpToolAllowed,
