@@ -29,6 +29,7 @@ if __package__ in {None, ""}:
         process_identity,
         publish_current_runtime,
         redacted_plan,
+        runtime_root,
         sanitized_environment,
         utc_now,
         validate_config,
@@ -47,6 +48,7 @@ else:
         process_identity,
         publish_current_runtime,
         redacted_plan,
+        runtime_root,
         sanitized_environment,
         utc_now,
         validate_config,
@@ -109,14 +111,22 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(plan, indent=2, sort_keys=True))
         return 0
 
+    stopping = False
+
+    def request_stop(_signum: int, _frame: Any) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
     (config.workspace / "ue-user").mkdir(mode=0o700, exist_ok=True)
     (config.workspace / "xdg-cache" / "UnrealEngine" / "DDC").mkdir(
         mode=0o700, parents=True, exist_ok=True
     )
-    runtime_root = config.workspace / "game-runtime"
-    runtime_root.mkdir(mode=0o700, exist_ok=True)
+    runtime_root_path = runtime_root(config.workspace)
     lock_descriptor = os.open(
-        runtime_root / ".launch.lock",
+        runtime_root_path / ".launch.lock",
         os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
@@ -125,10 +135,14 @@ def main(argv: list[str] | None = None) -> int:
     except BlockingIOError as exc:
         os.close(lock_descriptor)
         raise RuntimeSafetyError("another VISTA World launch is in progress") from exc
+    log_handle = None
+    process = None
     try:
         runtime_dir = allocate_runtime_attempt(config.workspace)
         atomic_write_json(runtime_dir / "launch-plan.json", plan)
         log_handle = open_private_log(runtime_dir / "unreal-game.log")
+        if stopping:
+            raise RuntimeSafetyError("VISTA World launch was cancelled")
         process = subprocess.Popen(
             build_game_command(config),
             cwd=config.project.parent,
@@ -139,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             start_new_session=True,
         )
         identity = process_identity(process.pid, "unreal-game")
+        supervisor = process_identity(os.getpid(), "vista-world-supervisor")
         state_path = runtime_dir / "runtime-state.json"
         state: dict[str, Any] = {
             "schema": "simworld.vista.playable-home-runtime-state/v1",
@@ -146,23 +161,36 @@ def main(argv: list[str] | None = None) -> int:
             "created_at": utc_now(),
             "updated_at": utc_now(),
             "map": config.map_path,
+            "project": str(config.project),
             "display": config.display,
             "gpu": config.gpu,
+            "vista_world_port": config.vista_world_port,
             "process": identity,
+            "supervisor": supervisor,
         }
         atomic_write_json(state_path, state)
         publish_current_runtime(config.workspace, state_path)
+    except BaseException:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)
+            except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+                if process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    try:
+                        process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        pass
+        if log_handle is not None:
+            log_handle.close()
+        raise
     finally:
         fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
         os.close(lock_descriptor)
-    stopping = False
-
-    def request_stop(_signum: int, _frame: Any) -> None:
-        nonlocal stopping
-        stopping = True
-
-    signal.signal(signal.SIGINT, request_stop)
-    signal.signal(signal.SIGTERM, request_stop)
     time.sleep(3)
     if process.poll() is not None:
         state.update(status="failed", updated_at=utc_now(), exit_code=process.returncode)

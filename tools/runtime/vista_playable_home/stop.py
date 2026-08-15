@@ -55,14 +55,39 @@ def signal_owned(identity: Mapping[str, Any], signum: int) -> bool:
         return False
 
 
+def signal_owned_process(identity: Mapping[str, Any], signum: int) -> bool:
+    if not identity_is_live(identity):
+        return False
+    try:
+        pid = int(identity["pid"])
+        expected_ticks = int(identity["start_ticks"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeSafetyError("supervisor process identity is incomplete") from exc
+    if process_start_ticks(pid) != expected_ticks:
+        return False
+    try:
+        os.kill(pid, signum)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
 def stop(workspace: Path, timeout: float = 15.0) -> dict[str, Any]:
     state_path, state = load_state(workspace)
     identity = state.get("process")
     if not isinstance(identity, Mapping):
         raise RuntimeSafetyError("runtime state has no process identity")
     actions: list[str] = []
-    if signal_owned(identity, signal.SIGTERM):
-        actions.append("SIGTERM")
+    supervisor = state.get("supervisor")
+    if isinstance(supervisor, Mapping) and identity_is_live(supervisor):
+        state.update(status="stop_requested", updated_at=utc_now())
+        atomic_write_json(state_path, state)
+        if signal_owned_process(supervisor, signal.SIGTERM):
+            actions.append("SUPERVISOR_SIGTERM")
+        elif signal_owned(identity, signal.SIGTERM):
+            actions.append("UE_SIGTERM_FALLBACK")
+    elif signal_owned(identity, signal.SIGTERM):
+        actions.append("UE_SIGTERM")
     deadline = time.monotonic() + timeout
     while identity_is_live(identity) and time.monotonic() < deadline:
         time.sleep(0.2)

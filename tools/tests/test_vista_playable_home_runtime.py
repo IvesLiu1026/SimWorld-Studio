@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.runtime.vista_playable_home import preflight, profile_entrypoint, sunshine_app
+from tools.runtime.vista_playable_home import preflight, profile_entrypoint, stop, sunshine_app
 from tools.runtime.vista_playable_home.runtime import (
     GameRuntimeConfig,
     RuntimeSafetyError,
@@ -87,6 +87,10 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         config = self.make_config()
         with self.assertRaisesRegex(RuntimeSafetyError, "contained"):
             validate_config(GameRuntimeConfig(**{**config.__dict__, "project": outside}), create_workspace=False)
+        lexical_link = self.root / "linked-run"
+        lexical_link.symlink_to(config.workspace, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeSafetyError, "symlink"):
+            validate_config(GameRuntimeConfig(**{**config.__dict__, "workspace": lexical_link}), create_workspace=False)
 
     def test_plan_contains_no_arbitrary_command_or_secret(self) -> None:
         config = validate_config(self.make_config(), create_workspace=False)
@@ -155,6 +159,18 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         publish_current_runtime(config.workspace, state_path)
         with self.assertRaisesRegex(RuntimeSafetyError, "already live"):
             allocate_runtime_attempt(config.workspace)
+
+    def test_stop_signals_supervisor_pid_without_its_process_group(self) -> None:
+        identity = {"pid": 4321, "start_ticks": 99, "process_group": 7777}
+        with (
+            mock.patch.object(stop, "identity_is_live", return_value=True),
+            mock.patch.object(stop, "process_start_ticks", return_value=99),
+            mock.patch.object(stop.os, "kill") as kill,
+            mock.patch.object(stop.os, "killpg") as kill_group,
+        ):
+            self.assertTrue(stop.signal_owned_process(identity, 15))
+        kill.assert_called_once_with(4321, 15)
+        kill_group.assert_not_called()
 
     def test_sunshine_entry_replaces_only_named_app(self) -> None:
         payload = {"env": {"PATH": "x"}, "apps": [{"name": "Desktop"}, {"name": "VISTA World", "cmd": "old"}]}

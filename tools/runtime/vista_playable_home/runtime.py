@@ -223,10 +223,12 @@ def _ensure_contained(candidate: Path, root: Path, label: str) -> None:
 
 def validate_config(config: GameRuntimeConfig, *, create_workspace: bool) -> GameRuntimeConfig:
     workspace_lexical = _absolute(config.workspace, "workspace")
+    if workspace_lexical.is_symlink():
+        raise RuntimeSafetyError("workspace must not be a symlink")
     if create_workspace:
         workspace_lexical.mkdir(parents=True, mode=0o700, exist_ok=True)
     workspace = _existing(workspace_lexical, "workspace", directory=True)
-    if workspace.is_symlink() or not os.access(workspace, os.R_OK | os.W_OK | os.X_OK):
+    if not os.access(workspace, os.R_OK | os.W_OK | os.X_OK):
         raise RuntimeSafetyError("workspace must be a user-accessible real directory")
 
     project = _existing(config.project, "UE project")
