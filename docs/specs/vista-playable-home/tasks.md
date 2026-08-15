@@ -1,7 +1,8 @@
 # Tasks: VISTA Playable Home
 
-Status: Integrated game-only preview accepted; production residuals open
-Updated: 2026-08-15
+Status: Sealed Linux Development package and technical capture delivered;
+remote input permission and visual-quality work remain open
+Updated: 2026-08-16
 Depends on: `requirements.md`, `design.md`
 
 ## Execution Rules
@@ -89,9 +90,11 @@ Depends on: `requirements.md`, `design.md`
     fallback and is not presented as the final realism result.
   - Current evidence: 23 deterministic HSSD PBR bindings, exact source hashes,
     CC BY-NC 4.0 attribution, normalized geometry and retained material/texture
-    inspection pass. This remains open because a fixed nonblank screenshot for
-    every room has not been retained and the current visual pass is not claimed
-    photorealistic.
+    inspection pass. Attempt 07 retains six distinct, strictly decoded,
+    nonblank 1280x720 Unreal screenshots with exact CameraActor/transform/FOV
+    bindings. This remains open because visual inspection found poor framing,
+    furniture occlusion and blockout-grade lighting; the screenshots prove
+    all-room materialization, not finished photorealistic presentation.
 
 ## Phase D — Unreal Gameplay and Composition
 
@@ -113,9 +116,9 @@ Depends on: `requirements.md`, `design.md`
   - Validation: mocked tests cover namespace isolation, material/collision
     roles, stable tags, room/portal placement, PlayerStart, GameMode, NavMesh,
     NPC, saved-map reload and quarantine.
-  - Evidence: accepted attempt 09 passed map save/reload, semantic tags,
+  - Evidence: accepted attempt 10 passed map save/reload, semantic tags,
     PlayerStart, GameMode, NavMesh bounds, dynamic lighting, deterministic
-    exposure and persisted input-mapping gates.
+    exposure, persisted input-mapping gates and portable placement anchors.
 
 - [x] **T10. Prove the best available gameplay path in a disposable project**
   - Owns: one append-only UE attempt and receipts.
@@ -151,8 +154,10 @@ Depends on: `requirements.md`, `design.md`
     non-overlapping ports; read-only Sunshine/Tailscale/display/input/toolchain
     report; legacy runtime regression.
   - Evidence: the retained launch plan uses GPU 0, display `:117`, loopback
-    port `55620`, a fixed map and an owned supervisor/process group. The latest
-    read-only preflight reports preview/toolchain ready and one input blocker.
+    port `55620`, a fixed map and an owned supervisor/process group. The sealed
+    package profile re-hashes the archive before spawn and after typed `READY`;
+    the latest read-only packaged preflight reports package/display/network/
+    service ready and one input blocker.
 
 - [x] **T13. Add a deterministic Sunshine `VISTA World` application plan**
   - Owns: source-controlled config generator and user-level installation
@@ -184,11 +189,11 @@ Depends on: `requirements.md`, `design.md`
   - Validation: uncut all-room traversal; two doors; one carried object; one
     moving NPC; `mmg_001`, `mmg_044`, `mmg_045` start/reset; fixed screenshots,
     state receipts and honest unsupported-feature ledger.
-  - Current evidence: keyboard translation/jump, one door open/close with
-    physical NPC crossing, keys pickup/place, NPC movement and all three event
-    start/status/reset cycles pass in UE. This remains open because an uncut
-    six-room traversal, cross-room carry and a second live door interaction
-    were not retained.
+  - Current evidence: attempt 10 retains 29 generation-checked actions with
+    two distinct live doors, keys pickup/place, physical NPC cross-room motion
+    while carrying the keys to the office desk, and all three event
+    start/status/reset cycles. This remains open only because an uncut visual
+    player traversal through all six rooms has not been retained.
 
 - [x] **T16. Commit, push and publish the collaboration handoff**
   - Depends on: every completed task above.
@@ -196,22 +201,29 @@ Depends on: `requirements.md`, `design.md`
   - Validation: atomic commits, explicit staging, tests/build summary, no
     secrets/generated projects, pushed `origin/codex/vista-playable-home`,
     exact Mac launch/stop instructions and residual administrator blockers.
-  - Evidence: source and evidence were committed with explicit staging and
-    pushed to `origin/codex/vista-playable-home`; `evidence.md` contains the
-    exact Mac/Tailnet lifecycle, test totals, artifact bindings and the sole
-    administrator input-device blocker. Generated projects remain on NAS.
+  - Evidence: source and evidence use explicit atomic staging; the final
+    Python suite passed `171 tests, 46 subtests` and the focused Node suite
+    passed 28 tests. `evidence.md` retains the exact Mac/Tailnet lifecycle,
+    package/capture hashes and the sole administrator device-permission
+    blocker. The pushed remote branch is checked against local `HEAD`, while
+    generated projects remain on NAS rather than Git.
 
 ## Residual Production Milestone
 
-- [ ] **T17. Cook a Development game executable**
+- [x] **T17. Cook a Development game executable**
   - A complete UE 5.7.3 toolchain with RunUAT/UBT/UHT, headers and compiler is
     available; build and cook into the append-only NAS run root after T8-T10.
   - Requirements: R9-R10, R12-R13.
   - Validation: clean cook/package receipt, packaged smoke, direct Sunshine
     capture and rollback to the game-only preview profile.
-  - Current evidence: RunUAT/UBT/UHT, engine source and compiler preflight are
-    ready. No cook/package receipt exists yet, so the current demo remains the
-    explicitly allowed `UnrealEditor -game` preview.
+  - Evidence: RunUAT completed Build/Cook/Stage/Package/Archive for Linux
+    Development in a clean disposable project. The accepted receipt binds the
+    archive, ELF, PAK, exact source build/runtime acceptance and pinned engine;
+    NullRHI smoke reached typed READY with owned listener proof and stable
+    pre/post archive hashes. The package-bound Sunshine supervisor then
+    launched the ELF directly on GPU 0, reached typed READY, and retained a
+    nonblank 1280x720 movement proof. The historical `UnrealEditor -game`
+    profile remains only as a tested rollback.
 
 ## Notes
 

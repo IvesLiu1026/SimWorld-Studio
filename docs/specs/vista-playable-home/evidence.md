@@ -1,7 +1,8 @@
 # Evidence: VISTA Playable Home
 
-Status: Integrated game-only preview accepted; residual gates recorded
-Updated: 2026-08-15
+Status: Sealed Linux Development package accepted; remote video ready and
+administrator input blocker recorded
+Updated: 2026-08-16
 
 This ledger points to append-only generated artifacts without committing large
 Blender or Unreal outputs to Git. A checked task means the stated acceptance
@@ -54,32 +55,47 @@ not a false byte-equality claim for renderer output.
 - The binding contains 23 closed-world principal assets with normalized
   geometry, embedded PBR materials/textures and exact upstream hashes. HSSD is
   retained as research/noncommercial demo content under CC BY-NC 4.0.
-- T7A remains open: the assets are real and bound, but there is no retained
-  fixed Unreal screenshot for every room, and the present visuals are not
-  claimed photorealistic.
+- Accepted fixed-camera attempt:
+  `ue/attempt-10-placement-cross-room/review-cameras/attempt-07-proof-handshake`
+- Review-capture receipt SHA-256:
+  `51a77f4973534ce5fe29f75f905d4b7264a6d0479722b65d7cce7371856c2e33`
+- Six distinct 1280x720 RGBA PNGs cover entry hall, living room,
+  kitchen/dining, bedroom, office and bathroom/laundry. Every worker reloaded
+  the exact map, revalidated the complete six-CameraActor semantic-tag set,
+  matched its selected transform/FOV, and produced one native HighResShot.
+  The host strictly decoded every PNG, proved nonblank pixels, copied with
+  `O_EXCL`, re-hashed native/final byte equality and wrote the aggregate
+  receipt only after all six passed.
+- T7A remains open on presentation quality, not evidence availability. Visual
+  inspection shows the fixed cameras are frequently dominated by walls or
+  occluding furniture and the lighting/material presentation remains closer
+  to a functional blockout than a photorealistic interior. The receipt is a
+  truthful all-room technical baseline, not a claim of finished realism.
 
 ## Unreal build
 
 - Accepted attempt:
-  `ue/attempt-09-hssd-playable-input`
-- Accepted pointer: `ue/accepted.json`.
+  `ue/attempt-10-placement-cross-room`
 - Build result SHA-256:
-  `a4954dd61d8bec682bdd99beaf2c6a226d1e278c3e3f9fad116c64e0032f6569`
+  `1b4853547bfa6ebd6d62ca2f1243ae2f74acdf67bfdfb11aa969c3013ccf1a2f`
 - Result content digest:
-  `29cb3c4a0c996b7fba0288f113e925d8bc4eb19b56cde967d341c6ce1f5b3044`
+  `32f4064dfdf0b1945b23f7630d010ed3e6777d78358351e804d1d311a35e9e37`
 - Execution manifest SHA-256:
-  `75826d9c550aa24ba8213a27ad2538f323c4521a69c11b89380dd4c27e3e10fd`
+  `5eb4a0f9410a0f351599c5f8bf6caa8a59f716efdbf19189b909f276273b2208`
 - Scene receipt SHA-256:
-  `55cbc6be3e8c8f53ee41d004a37a4ba9c858c851bab3a8de0e107c1fc009c6e0`
+  `7e7997e8346e4c1c600131c3419600d5d4508039e1b733445e5718315adaea34`
+- Materialized map SHA-256:
+  `6533ae772d136a93e09adb923a3b7a864219fa51bec48d9d3ab9195f9b89a1f9`
 - Plugin package tree SHA-256:
   `05fef8b15f3accfe41db097fe6988c9b0f55f1db782a1ef7e608fe8056271628`
 - Manny character tree SHA-256:
   `424aaf443954ce893d141fba833683be968a2ec0994862c7fc7cbc34c701b609`
 - Persisted `DefaultInput.ini` SHA-256:
-  `0c7ac04b205137b457a286231588ca984e2f78ca75d7310f4c33260ac357a6d6`
+  `b22db9229bbb2c18160197f51400f3bf171951780e58661d8dccf4dc99f405f3`
 - Scene gates passed: saved, reloaded, semantic tags, PlayerStart, GameMode,
   NavMesh bounds, dynamic lighting, deterministic exposure and reflected input
-  mappings. The attempt is not quarantined.
+  mappings. Attempt 10 also contains the corrected portable placement anchors
+  and second-door/cross-room acceptance path. The attempt is not quarantined.
 - Attempt 08 is deliberately retained as rejected evidence: import succeeded,
   but the original reflected-key verifier misread the UE key struct and failed
   closed rather than publishing an unverified build.
@@ -87,53 +103,78 @@ not a false byte-equality claim for renderer output.
 ## Gameplay acceptance
 
 - Accepted runtime attempt:
-  `ue/attempt-09-hssd-playable-input/game-runtime/attempt-20260815T133111.731389Z-794633`
+  `ue/attempt-10-placement-cross-room/game-runtime/attempt-20260815T143001.463678Z-847049`
 - Acceptance receipt SHA-256:
-  `99fab796477465e300c678c2eda7b42bba384864b273ed350653697488adb409`
-- Status is `accepted`, generation advanced exactly from 0 to 25, and all 32
-  typed checks passed in one UE session.
-- Proven behavior: living-room door open/inspect/close, NPC queued navigation
-  and physical doorway crossing, keys pickup/inspect/place, plus start/status/
-  reset for `mmg_001`, `mmg_044` and `mmg_045`.
-- Retained input views in that attempt prove nonblack idle, mouse/W movement
-  and Space jump. A later run through the installed Sunshine profile isolates
-  keyboard translation without mouse rotation.
-- T15 remains open because the retained protocol run covers one live door and
-  same-room pickup/place only; it does not contain an uncut visual traversal
-  through all six rooms, a cross-room carry or a second live door action.
-- Known state deviation: `keys.place_tabletop_right` moved the actor to the
-  correct right-anchor transform, but the response retained the baseline
-  `values.placed_at` string for `tabletop_left`. The transform proof is valid;
-  the stale semantic value must be fixed before T15 is accepted.
-- Provenance limitation: the acceptance receipt bound the then-current
-  `runtime-state.json`, but that state file is intentionally updated by the
-  later stop lifecycle. The 32-step transcript remains self-contained and
-  immutable; a follow-up harness revision should copy an acceptance-time state
-  snapshot instead of binding a mutable lifecycle file.
+  `fa8aaf966026147c2fd44fb50c34c6e160b63a34bfd14fa6114b0a90baa1ddb5`
+- Status is `accepted`; all 29 typed checks passed in one UE session with exact
+  generation accounting.
+- Proven behavior: one closed living-room door opened and inspected; the
+  initially open office door was independently inspected and then closed
+  after the crossing. Keys were picked up and placed at the correct right-side
+  coffee-table anchor. The NPC physically moved from the hall into the office,
+  carried the keys across the room boundary and placed them on the office desk.
+  `mmg_001`, `mmg_044` and `mmg_045` each passed start/status/reset.
+- The placement response now retains the correct
+  `values.placed_at=.../anchor.tabletop_right`; the earlier attempt-09 stale
+  value is superseded rather than hidden.
+- T15 remains open only for an uncut visual player traversal through all six
+  rooms. Door, carried-object, moving-NPC, event, state-receipt and local input
+  behavior are otherwise retained.
+
+## Sealed Linux Development package
+
+- Accepted package attempt:
+  `ue/package-linux-development/attempt-04-no-afs-clean`
+- Package receipt SHA-256:
+  `c7dcd0bea0c2cb0de8f874857add910acfeca43af4caaf28295210c224734787`
+- Archive tree SHA-256:
+  `b48743bd949c0256696344d4c1a60b75209d9f2d096781a5832554b7379f6bcb`
+- Packaged ELF SHA-256:
+  `ce0761a8b702cb5aed6f857490be771ea09fcf7b6f2a5d8dd60f8449171e2837`
+- Archive launcher SHA-256:
+  `659f82ef64e36e052f6011b542b1d8e9b3ff05b900c44585cbfad76aa7809ef2`
+- PAK SHA-256:
+  `419c823aab85dcc10ce60e7fc948af0bdb5690184b73f648cf603c89a8cec43e`
+- Pinned UnrealPak SHA-256:
+  `70f02f3ed3d3ac45b740830b16c7af96c4bcb0e8302795031c76f95d36caff84`
+- NullRHI smoke receipt SHA-256:
+  `f2fa62f30c9192bd4e0359ce04f89446ae18f3e4468b448913ecb79bd5775386`
+- RunUAT completed Build, Cook, Stage, Package and Archive for Linux
+  Development. The archive contains 34 files and 1,080,625,414 bytes. Smoke
+  reached typed `READY` on isolated loopback port `55621`, proved listener
+  ownership and retained identical pre/post archive hashes.
 
 ## Sunshine/Moonlight handoff
 
-- Live runtime attempt:
-  `ue/attempt-09-hssd-playable-input/game-runtime/attempt-20260815T134359.458370Z-808721`
-- Source commit at launch:
-  `57fc8485097cd4514a9f223cfd8fffda3d8c3c87` (clean worktree).
+- Package-bound profile SHA-256:
+  `a3ced97d68c2701baf009ddbe97680bbb38c7a86a141342006a8d12f85d6f43b`
+- Installed Sunshine `apps.json` SHA-256:
+  `96de56d61ead83ee0181df56fe56e6c2219c1ddbb40d805c38b2a53e6296fdfe`
+- Pre-install backup SHA-256:
+  `372809fd03427587ccdeb0248d27bbe72b5ce8c9adb8b32961978f05926e342c`
+- Enabled `vista-sunshine.service` unit SHA-256:
+  `08c7367802e8f916f3e992ad50fb4144c96ad8ed523ea49c50ae129cf8228b54`
+- Accepted packaged runtime attempt:
+  `ue/package-linux-development/attempt-04-no-afs-clean/game-runtime/attempt-20260815T153119.999197Z-955364`
+- Immutable typed-READY snapshot SHA-256:
+  `159b8ab515e3bd9998055fa8c7ef4da3ddcea0eba9c2e91f4d459b87aa1ed5ae`
 - Launch-plan SHA-256:
-  `dddec678f6d8300d75fee478ec4d97609c0e00a634ca8784d0d5c7618bb2e680`
-- Sunshine profile SHA-256:
-  `3cc9ff47b8e0f082bd4ee951073410d84a7ea0418d9a5fcd3cf2df171be00611`
-- Input-proof SHA-256:
-  `b6cb8f50572c7158e92b717dc4f7bb92c9a120697ddf6fffcc790efc57d627bd`
-- XTest held W for one second in the game-only window. Idle-to-idle SSIM was
-  `0.940250`; idle-to-after-W SSIM was `0.350643` at 1280x720, with a visible
-  character translation. Screenshot hashes are bound by `input-proof.json`.
-- Corrected final preflight SHA-256:
-  `cf7e76ba95381ba3d47b4987e4780ad0b7a2e51c4fd16ced6231e57d3ba7c2cf`.
-  It reports display `:117`, GPU 0, Tailnet IP `100.114.80.121`, UDP available,
-  Sunshine listener reachable, `VISTA World` registered, preview/toolchain
-  ready, and `moonlight_control_ready: false`.
-- `preflight-final.json` is superseded and must not be used: its caller passed
-  the `apps.json` file where a config directory was required. Append-only
-  discipline preserved it; `preflight-final-corrected.json` is authoritative.
+  `c4303a3d1badc8985e4cb1bc9d7c39a8727034f073e01a728e91e0676ba80cec`
+- Package-live preflight SHA-256:
+  `fde07ef16a55baa975afcb7b75b27af0da5c60adc7a80580d36a7f776f6b23ca`
+- The supervisor re-hashed the full archive before spawn and after typed
+  `READY`, launched the packaged ELF directly on GPU 0/display `:117`, and
+  proved ownership of loopback port `55620`. It did not invoke UnrealEditor,
+  a `.uproject`, the archive shell launcher or `-game`.
+- Retained local XTest evidence is a render/input smoke, not a Moonlight input
+  claim. At 1280x720, idle-before to idle-baseline SSIM was `0.939224` and
+  idle-baseline to after-W SSIM was `0.506581`; the player visibly moved and
+  an NPC was visible. The immutable images are bound inside the packaged
+  runtime attempt.
+- Sunshine is enabled and active as a user service, listens only on Tailnet IP
+  `100.114.80.121`, and initialized NVENC H.264/HEVC capture. The packaged live
+  preflight reports every package/display/network/service gate ready and the
+  single blocker below.
 - The only current remote-control blocker is `moonlight_input_view_only`:
   `/dev/uinput` and `/dev/uhid` exist as root-only 0600 devices, so `yhliu`
   cannot inject a Moonlight keyboard, mouse or gamepad. Sunshine video capture
@@ -154,21 +195,23 @@ Mac connection and lifecycle:
 cd /home/yhliu/SimWorld-Studio-worktrees/vista-playable-home
 PYTHONPATH=tools uv run --offline --project tools python \
   tools/runtime/vista_playable_home/stop.py \
-  --workspace /mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/attempt-09-hssd-playable-input
+  --workspace /mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/package-linux-development/attempt-04-no-afs-clean
 ```
+
+The earlier `UnrealEditor -game` attempt and its profile remain retained only
+as rollback evidence. The current `VISTA World` entry is package-bound.
 
 ## Remaining production gates
 
 - Run and retain one end-to-end Studio/NLP request through the already
   implemented authenticated HTTP/MCP surface into the live typed Unreal lane.
-- Retain an uncut six-room traversal, a second live door interaction and fixed
-  review-camera screenshots for every room; include a cross-room carried item
-  and correct the stale `placed_at` semantic value.
-- Improve lighting, character presentation and room dressing before calling
-  the scene photorealistic.
-- Cook and smoke-test a Development executable. Toolchain preflight is ready,
-  but no package receipt exists, so the current deliverable is correctly
-  labeled `UnrealEditor -game` preview rather than packaged or Production.
+- Retain an uncut visual player traversal through all six rooms. The second
+  door, cross-room carried item and corrected `placed_at` value are already
+  accepted in attempt 10.
+- Reframe the six review cameras and improve lighting, character presentation
+  and room dressing before calling the scene photorealistic.
+- Obtain persistent user access to `/dev/uinput` and `/dev/uhid`, then restart
+  the Sunshine user service and retain a real Moonlight input proof.
 
 ## Final source validation
 
@@ -176,8 +219,10 @@ PYTHONPATH=tools uv run --offline --project tools python \
   `IvesLiu1026/SimWorld-Studio`; generated UE/Blender/runtime artifacts are not
   committed. Pull-request entry:
   `https://github.com/IvesLiu1026/SimWorld-Studio/pull/new/codex/vista-playable-home`.
-- Python VISTA Playable Home suite while the demo remained live:
-  `125 passed, 44 subtests passed`.
+- Source commits use explicit staging; the final push is verified by matching
+  local `HEAD` to the remote branch rather than assuming a successful upload.
+- Python VISTA Playable Home suite with the final package and sequential
+  capture code: `171 passed, 46 subtests passed`.
 - Focused Node compile/route/service/MCP suite: `28 passed`.
 - The Python suite initially exposed two command-plan tests that accidentally
   depended on live port `55620` being unused. They now mock availability only
