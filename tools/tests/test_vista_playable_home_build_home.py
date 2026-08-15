@@ -232,6 +232,18 @@ class Fixture:
             "dataset": dataset,
             "license_receipt": license_receipt,
             "blender": {"version": "4.5.8 LTS", "mode": "full"},
+            "builder_source": {
+                "repository_commit": "b" * 40,
+                "worktree_clean": True,
+                "source_files": [
+                    {
+                        "path": relative,
+                        "sha256": build_home.sha256_file(ROOT / relative),
+                    }
+                    for relative in build_home.HSSD_BUILDER_SOURCE_FILES
+                ],
+            },
+            "normalization_policy": {"maximum_axis_scale_anisotropy": 2.75},
             "closed_world": {"bound_asset_ids": [asset_id], "unaccounted_asset_ids": []},
             "outputs": [{
                 "logical_asset_id": asset_id,
@@ -242,7 +254,21 @@ class Fixture:
                 "media_type": "model/gltf-binary",
                 "target_dimensions_m": [2.2, 0.9, 0.9],
                 "actual_dimensions_m": [2.2, 0.9, 0.9],
-                "normalization": {"origin": "floor_center", "up": "+Z", "forward": "+X"},
+                "normalization": {
+                    "source_import_dimensions_m": [2.0, 0.8, 0.85],
+                    "rotate_z_deg": 0,
+                    "rotation_mode": "XYZ",
+                    "scale_xyz": [1.1, 1.125, 1.058824],
+                    "actual_scale_anisotropy": 1.0625,
+                    "maximum_axis_scale_anisotropy": 2.75,
+                    "anisotropy_accepted": True,
+                    "origin_policy": "footprint_center_bottom_z_zero",
+                    "actual_bounds_m": {
+                        "min_m": [-1.1, -0.45, 0.0],
+                        "max_m": [1.1, 0.45, 0.9],
+                    },
+                    "actual_dimensions_m": [2.2, 0.9, 0.9],
+                },
                 "texture_transport": "blender_native_texture_import",
                 "texture_transport_receipt": {"mode": "blender_native_texture_import"},
                 "source": source_contract,

@@ -89,6 +89,18 @@ MANNY_REQUIRED_FILES = (
     "Mannequins/Meshes/SKM_Manny.uasset",
     "Mannequins/Animations/ABP_Manny.uasset",
 )
+HSSD_BUILDER_SOURCE_FILES = (
+    "tools/blender/vista_playable_home_hssd/basisu_decode.mjs",
+    "tools/blender/vista_playable_home_hssd/build.py",
+    "tools/blender/vista_playable_home_hssd/glb_transport.py",
+    "tools/blender/vista_playable_home_hssd/planner.py",
+)
+HSSD_BASIS_TRANSCODER_JS_SHA256 = (
+    "8478b5b6d6b74e7d3082b89f6417321d8d1dc0307f2b30d4484bb11b441696a1"
+)
+HSSD_BASIS_TRANSCODER_WASM_SHA256 = (
+    "6cf17dc889352c42e9acf8897107978d127005fe3386c36a0e3845e27967630a"
+)
 
 
 class BuildHomeError(RuntimeError):
@@ -495,6 +507,8 @@ def validate_visual_binding_manifest(
         "dataset",
         "license_receipt",
         "blender",
+        "builder_source",
+        "normalization_policy",
         "closed_world",
         "outputs",
         "content_digest",
@@ -560,6 +574,39 @@ def validate_visual_binding_manifest(
     blender = visual.get("blender")
     if not isinstance(blender, Mapping) or blender.get("mode") != "full":
         _fail("VISTA_HOME_BUILD_VISUAL_INVALID", "only a full visual build may override presentation assets")
+    builder_source = visual.get("builder_source")
+    if (
+        not isinstance(builder_source, Mapping)
+        or set(builder_source) != {"repository_commit", "worktree_clean", "source_files"}
+        or re.fullmatch(r"[0-9a-f]{40}", str(builder_source.get("repository_commit", ""))) is None
+        or builder_source.get("worktree_clean") is not True
+        or not isinstance(builder_source.get("source_files"), list)
+    ):
+        _fail("VISTA_HOME_BUILD_VISUAL_INVALID", "visual builder source identity differs")
+    builder_files: dict[str, str] = {}
+    for record in builder_source["source_files"]:
+        if (
+            not isinstance(record, Mapping)
+            or set(record) != {"path", "sha256"}
+            or not isinstance(record.get("path"), str)
+            or record["path"] in builder_files
+            or SHA256_RE.fullmatch(str(record.get("sha256", ""))) is None
+        ):
+            _fail("VISTA_HOME_BUILD_VISUAL_INVALID", "visual builder source file receipt differs")
+        builder_files[record["path"]] = record["sha256"]
+    if set(builder_files) != set(HSSD_BUILDER_SOURCE_FILES):
+        _fail("VISTA_HOME_BUILD_VISUAL_INVALID", "visual builder source file inventory differs")
+    for relative, expected in builder_files.items():
+        source_file = REPO_ROOT / relative
+        if source_file.is_symlink() or not source_file.is_file() or sha256_file(source_file) != expected:
+            _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual builder source bytes differ: {relative}")
+    normalization_policy = visual.get("normalization_policy")
+    if (
+        not isinstance(normalization_policy, Mapping)
+        or set(normalization_policy) != {"maximum_axis_scale_anisotropy"}
+        or normalization_policy.get("maximum_axis_scale_anisotropy") != 2.75
+    ):
+        _fail("VISTA_HOME_BUILD_VISUAL_INVALID", "visual normalization policy differs")
     dataset = visual.get("dataset")
     if not isinstance(dataset, Mapping) or not isinstance(dataset.get("license"), Mapping):
         _fail("VISTA_HOME_BUILD_VISUAL_INVALID", "visual dataset license is missing")
@@ -698,9 +745,42 @@ def validate_visual_binding_manifest(
             or inspection.get("pbr_texture_slot_count", 0) < 1
             or inspection.get("base_normal_orm_texture_slot_count", 0) < 1
             or inspection.get("all_primitives_material_bound") != 1
+            or inspection.get("basisu_required") != 0
         ):
             _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} lost its PBR one-mesh contract")
-        if inspection.get("basisu_required") == 1:
+        normalization = output.get("normalization")
+        normalization_keys = {
+            "source_import_dimensions_m",
+            "rotate_z_deg",
+            "rotation_mode",
+            "scale_xyz",
+            "actual_scale_anisotropy",
+            "maximum_axis_scale_anisotropy",
+            "anisotropy_accepted",
+            "origin_policy",
+            "actual_bounds_m",
+            "actual_dimensions_m",
+        }
+        if (
+            not isinstance(normalization, Mapping)
+            or set(normalization) != normalization_keys
+            or normalization.get("rotation_mode") != "XYZ"
+            or normalization.get("origin_policy") != "footprint_center_bottom_z_zero"
+            or normalization.get("anisotropy_accepted") is not True
+            or normalization.get("maximum_axis_scale_anisotropy") != 2.75
+            or isinstance(normalization.get("actual_scale_anisotropy"), bool)
+            or not isinstance(normalization.get("actual_scale_anisotropy"), (int, float))
+            or not math.isfinite(float(normalization["actual_scale_anisotropy"]))
+            or not 1.0 <= float(normalization["actual_scale_anisotropy"]) <= 2.75
+            or normalization.get("actual_dimensions_m") != output.get("actual_dimensions_m")
+        ):
+            _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} normalization receipt differs")
+        transport_mode = output.get("texture_transport")
+        transport = output.get("texture_transport_receipt")
+        if transport_mode == "blender_native_texture_import":
+            if not isinstance(transport, Mapping) or dict(transport) != {"mode": "blender_native_texture_import"}:
+                _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} native texture receipt differs")
+        elif transport_mode == "KHR_texture_basisu_to_core_png":
             transport = output.get("texture_transport_receipt")
             required_true = {
                 "self_contained",
@@ -708,27 +788,57 @@ def validate_visual_binding_manifest(
                 "single_mesh",
                 "buffer_views_aligned_and_in_range",
                 "primitive_material_indices_valid",
-                "basisu_texture_sources_valid",
+                "core_texture_sources_valid",
+                "embedded_png_images_valid",
                 "extension_declarations_complete",
             }
             if (
-                output.get("texture_transport") != "KHR_texture_basisu_preserved"
-                or not isinstance(transport, Mapping)
+                not isinstance(transport, Mapping)
+                or transport.get("mode") != transport_mode
                 or transport.get("blender_decoded_textures") is not False
+                or transport.get("source_basisu_required") is not True
+                or transport.get("output_basisu_required") is not False
                 or not all(transport.get(key) is True for key in required_true)
-                or not isinstance(transport.get("base_normal_orm_texture_slots"), Mapping)
+                or isinstance(transport.get("base_normal_orm_texture_slots"), bool)
+                or not isinstance(transport.get("base_normal_orm_texture_slots"), int)
+                or transport.get("base_normal_orm_texture_slots") < 1
                 or not isinstance(transport.get("image_payloads"), list)
                 or not transport.get("image_payloads")
             ):
-                _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} lacks a complete BasisU transport receipt")
+                _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} lacks a complete core-PNG transport receipt")
+            decoder = transport.get("decoder")
+            if (
+                not isinstance(decoder, Mapping)
+                or decoder.get("distribution") != "three"
+                or decoder.get("distribution_version") != "0.185.1"
+                or decoder.get("basis_universal_license") != "Apache-2.0"
+                or decoder.get("three_license") != "MIT"
+                or decoder.get("provenance") != "three/examples/jsm/libs/basis"
+                or not isinstance(decoder.get("transcoder_js"), Mapping)
+                or decoder["transcoder_js"].get("sha256") != HSSD_BASIS_TRANSCODER_JS_SHA256
+                or not isinstance(decoder.get("transcoder_wasm"), Mapping)
+                or decoder["transcoder_wasm"].get("sha256") != HSSD_BASIS_TRANSCODER_WASM_SHA256
+                or not isinstance(decoder.get("decode_wrapper"), Mapping)
+                or decoder["decode_wrapper"].get("sha256") != builder_files[
+                    "tools/blender/vista_playable_home_hssd/basisu_decode.mjs"
+                ]
+            ):
+                _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} decoder provenance differs")
             for payload in transport["image_payloads"]:
                 if (
                     not isinstance(payload, Mapping)
-                    or payload.get("match") is not True
-                    or SHA256_RE.fullmatch(str(payload.get("source_sha256", ""))) is None
-                    or payload.get("output_sha256") != payload.get("source_sha256")
+                    or SHA256_RE.fullmatch(str(payload.get("source_ktx2_sha256", ""))) is None
+                    or SHA256_RE.fullmatch(str(payload.get("output_png_sha256", ""))) is None
+                    or isinstance(payload.get("width"), bool)
+                    or not isinstance(payload.get("width"), int)
+                    or payload.get("width") < 1
+                    or isinstance(payload.get("height"), bool)
+                    or not isinstance(payload.get("height"), int)
+                    or payload.get("height") < 1
                 ):
-                    _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} BasisU payload differs")
+                    _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} texture payload receipt differs")
+        else:
+            _fail("VISTA_HOME_BUILD_VISUAL_INVALID", f"visual output {asset_id} texture transport differs")
         source = _contained_artifact(root, output["path"], f"visual output {asset_id}")
         expected = _require_sha(output.get("sha256"), f"visual output {asset_id} SHA-256")
         size = output.get("bytes")
