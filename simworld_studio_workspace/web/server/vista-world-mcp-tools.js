@@ -161,9 +161,13 @@ function validNpcAction(action, seenActionIds) {
 
 function isVistaWorldWirePayloadAllowed(payload, revision = DEFAULT_REVISION) {
   if (!isPlainObject(payload) || !REVISION_RE.test(revision)
-      || !COMMAND_ID_RE.test(String(payload.command_id || ""))
-      || payload.expected_revision !== revision
-      || !validGeneration(payload.session_generation)) return false;
+      || !COMMAND_ID_RE.test(String(payload.command_id || ""))) return false;
+
+  if (payload.operation === "status") {
+    return Object.keys(payload).length === 2
+      && Object.keys(payload).every((key) => new Set(["operation", "command_id"]).has(key));
+  }
+  if (payload.expected_revision !== revision || !validGeneration(payload.session_generation)) return false;
 
   if (payload.operation === "interaction") {
     const required = new Set([
@@ -325,6 +329,9 @@ function validateRuntimeResponse(response, payload) {
   if (response.session_generation !== undefined && !validGeneration(response.session_generation)) {
     fail("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world generation is invalid");
   }
+  if (response.status === "error" && !validGeneration(response.session_generation)) {
+    fail("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world error omitted its generation");
+  }
   if (response.target_semantic_id !== undefined
       && !SEMANTIC_ID_RE.test(String(response.target_semantic_id || ""))) {
     fail("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world target is invalid");
@@ -335,6 +342,35 @@ function validateRuntimeResponse(response, payload) {
   if (SUCCESS_STATUSES.has(response.status)
       && response.session_generation !== payload.session_generation + 1) {
     fail("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world generation did not advance exactly once");
+  }
+  return response;
+}
+
+function validateRuntimeStatus(response, payload, revision) {
+  const required = new Set([
+    "command_id", "status", "code", "world_revision", "session_generation",
+    "event_status", "active_event",
+  ]);
+  let serialized;
+  try {
+    serialized = JSON.stringify(response);
+  } catch {
+    fail("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world status is invalid");
+  }
+  if (!isPlainObject(response) || Buffer.byteLength(serialized || "", "utf8") > 64 * 1024
+      || Object.keys(response).length !== required.size
+      || !Object.keys(response).every((key) => required.has(key))
+      || response.command_id !== payload.command_id
+      || response.status !== "success"
+      || response.code !== "READY"
+      || response.world_revision !== revision
+      || !validGeneration(response.session_generation)
+      || typeof response.event_status !== "string"
+      || response.event_status.length < 1 || response.event_status.length > 80
+      || (response.active_event !== null
+        && (!EVENT_ID_RE.test(String(response.active_event || ""))
+          || !VERIFIED_EVENT_ID_SET.has(response.active_event)))) {
+    fail("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world status identity is invalid");
   }
   return response;
 }
@@ -376,7 +412,7 @@ function toolDefinitions(revision) {
   return Object.freeze([
     {
       name: TOOL_NAMES.status,
-      description: "Read this MCP process's typed VISTA Playable Home session binding, generation, and active event. This is local state and performs no mutation.",
+      description: "Read the authoritative running VISTA Playable Home revision, generation, and active event through a non-mutating typed health call.",
       inputSchema: {
         type: "object", additionalProperties: false,
         properties: { expected_revision: revisionProperty },
@@ -455,17 +491,31 @@ function createVistaWorldMcpTools({ sendTyped, env = process.env, randomBytes = 
     inFlight: false,
   };
 
-  function status(args) {
+  async function status(args) {
     exactObject(args, new Set(["expected_revision"]), new Set(["expected_revision"]), "VISTA world status");
     requireExpectedRevision(args.expected_revision, revision);
-    return {
-      schema: "simworld.vista.playable-world-session/v1",
-      session_id: sessionId,
-      revision,
-      generation: state.generation,
-      active_event: state.activeEvent,
-      status: state.inFlight ? "busy" : "bound",
+    if (state.inFlight) fail("VISTA_WORLD_BUSY", "A typed VISTA world command is already in flight");
+    const payload = {
+      operation: "status",
+      command_id: randomCommandId(randomBytes),
     };
+    state.inFlight = true;
+    try {
+      const response = validateRuntimeStatus(await sendTyped(payload), payload, revision);
+      state.generation = response.session_generation;
+      state.activeEvent = response.active_event;
+      return {
+        schema: "simworld.vista.playable-world-session/v1",
+        session_id: sessionId,
+        revision,
+        generation: state.generation,
+        active_event: state.activeEvent,
+        event_status: response.event_status,
+        status: "bound",
+      };
+    } finally {
+      state.inFlight = false;
+    }
   }
 
   async function dispatch(payload, activeEventAfterSuccess) {
@@ -479,13 +529,14 @@ function createVistaWorldMcpTools({ sendTyped, env = process.env, randomBytes = 
       if (SUCCESS_STATUSES.has(response.status)) {
         state.generation = response.session_generation;
         if (activeEventAfterSuccess !== undefined) state.activeEvent = activeEventAfterSuccess;
-      } else if (validGeneration(response.session_generation)
-          && response.session_generation >= state.generation) {
+      } else if (response.session_generation >= state.generation) {
         // A newly-created MCP process can start behind an already-running UE
         // world. A typed error may safely disclose the authoritative generation
         // so a later explicit command can use it. This helper itself never
         // retries a mutation.
         state.generation = response.session_generation;
+      } else {
+        fail("VISTA_WORLD_PROTOCOL_ERROR", "Typed Unreal world generation moved backward");
       }
       return {
         schema: "simworld.vista.playable-world-command-result/v1",

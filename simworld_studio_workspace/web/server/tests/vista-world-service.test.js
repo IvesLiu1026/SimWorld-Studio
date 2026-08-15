@@ -40,12 +40,27 @@ function fixtureCatalog() {
   };
 }
 
+function runtimeStatus(payload, generation = 0, activeEvent = null) {
+  return {
+    command_id: payload.command_id,
+    status: "success",
+    code: "READY",
+    world_revision: "r1",
+    session_generation: generation,
+    event_status: activeEvent === null ? "idle" : "active",
+    active_event: activeEvent,
+  };
+}
+
 function fixtureTransport() {
   const calls = [];
   return {
     calls,
     async send(payload) {
       calls.push(payload);
+      if (payload.operation === "status") {
+        return runtimeStatus(payload);
+      }
       return {
         command_id: payload.command_id,
         status: "completed",
@@ -71,9 +86,10 @@ test("service binds a lease, enforces generation, and sends only typed interacti
     affordance: "open",
   }, IDENTITY);
   assert.equal(result.generation, 1);
-  assert.equal(transport.calls[0].operation, "interaction");
-  assert.equal(transport.calls[0].expected_revision, "r1");
-  assert.deepEqual(Object.keys(transport.calls[0]).sort(), [
+  assert.equal(transport.calls[0].operation, "status");
+  assert.equal(transport.calls[1].operation, "interaction");
+  assert.equal(transport.calls[1].expected_revision, "r1");
+  assert.deepEqual(Object.keys(transport.calls[1]).sort(), [
     "affordance", "command_id", "expected_revision", "operation",
     "requester_semantic_id", "session_generation", "target_semantic_id",
   ]);
@@ -104,7 +120,7 @@ test("service validates bounded NPC queues and rejects arbitrary executable fiel
     ],
   }, IDENTITY);
   assert.equal(result.generation, 1);
-  assert.equal(transport.calls[0].operation, "npc_queue");
+  assert.equal(transport.calls[1].operation, "npc_queue");
   await assert.rejects(
     service.action(session.session_id, {
       kind: "npc_queue",
@@ -124,15 +140,33 @@ test("verified event start and reset use the fixed event transport", async () =>
   const session = await service.createSession({ revision: "r1" }, IDENTITY);
   const started = await service.startEvent(session.session_id, "mmg_044", { generation: 0 }, IDENTITY);
   assert.equal(started.active_event, "mmg_044");
-  assert.equal(transport.calls[0].event_operation, "start_event");
+  assert.equal(transport.calls[1].event_operation, "start_event");
   const reset = await service.resetEvent(session.session_id, { generation: 1 }, IDENTITY);
   assert.equal(reset.active_event, null);
-  assert.equal(transport.calls[1].event_operation, "reset_event");
+  assert.equal(transport.calls[2].event_operation, "reset_event");
+});
+
+test("session creation binds the authoritative runtime generation and active event", async () => {
+  const transport = {
+    calls: [],
+    async send(payload) {
+      this.calls.push(payload);
+      return runtimeStatus(payload, 6, "mmg_044");
+    },
+  };
+  const service = createVistaWorldService({ catalog: fixtureCatalog(), transport });
+  const session = await service.createSession({ revision: "r1" }, IDENTITY);
+  assert.equal(session.generation, 6);
+  assert.equal(session.active_event, "mmg_044");
+  assert.deepEqual(Object.keys(transport.calls[0]).sort(), ["command_id", "operation"]);
 });
 
 test("runtime generation mismatch resynchronizes the bounded session without advancing", async () => {
+  let authoritativeGeneration = 0;
   const transport = {
     async send(payload) {
+      if (payload.operation === "status") return runtimeStatus(payload, authoritativeGeneration);
+      authoritativeGeneration = 3;
       return {
         command_id: payload.command_id,
         status: "error",
@@ -163,6 +197,7 @@ test("runtime generation mismatch resynchronizes the bounded session without adv
 test("runtime event failure neither advances generation nor changes active event", async () => {
   const transport = {
     async send(payload) {
+      if (payload.operation === "status") return runtimeStatus(payload);
       return {
         command_id: payload.command_id,
         status: "error",
@@ -186,6 +221,7 @@ test("runtime event failure neither advances generation nor changes active event
 test("successful runtime response must advance by exactly one generation", async () => {
   const transport = {
     async send(payload) {
+      if (payload.operation === "status") return runtimeStatus(payload);
       return {
         command_id: payload.command_id,
         status: "success",
@@ -211,8 +247,11 @@ test("successful runtime response must advance by exactly one generation", async
 
 test("runtime errors cannot roll session generation backward", async () => {
   let responseGeneration = 2;
+  let authoritativeGeneration = 0;
   const transport = {
     async send(payload) {
+      if (payload.operation === "status") return runtimeStatus(payload, authoritativeGeneration);
+      authoritativeGeneration = Math.max(authoritativeGeneration, responseGeneration);
       return {
         command_id: payload.command_id,
         status: "error",
@@ -286,5 +325,8 @@ test("UE adapter uses one fixed tool and forwards no caller-selected command nam
   assert.equal(calls[0].name, "vista_world_action");
   assert.equal(calls[0].options.maxAttempts, 1);
   assert.equal(calls[0].options.maxResponseBytes, 64 * 1024);
+  await adapter.send({ operation: "status", command_id: "vwc-" + "b".repeat(24) }, IDENTITY);
+  assert.equal(calls[1].payload.operation, "status");
+  assert.equal(calls[1].options.maxAttempts, 1);
   await assert.rejects(adapter.send({ operation: "execute_python_script" }, IDENTITY));
 });

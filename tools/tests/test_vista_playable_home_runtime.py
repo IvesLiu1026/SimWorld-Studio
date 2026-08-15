@@ -198,6 +198,7 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
                     "world_revision": "vista_playable_home_r1",
                     "session_generation": 0,
                     "event_status": "idle",
+                    "active_event": None,
                 }).encode("utf-8"))
             listener.close()
 
@@ -218,6 +219,7 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
             "world_revision": "wrong",
             "session_generation": 1,
             "event_status": "idle",
+            "active_event": None,
         }
         with self.assertRaisesRegex(RuntimeSafetyError, "identity"):
             validate_typed_readiness_response(

@@ -287,6 +287,31 @@ function runtimeFailure(result, generation) {
   return error;
 }
 
+function validateRuntimeStatus(result, payload, revision) {
+  const required = new Set([
+    "command_id", "status", "code", "world_revision", "session_generation",
+    "event_status", "active_event",
+  ]);
+  if (!result || typeof result !== "object" || Array.isArray(result)
+      || Object.keys(result).length !== required.size
+      || !Object.keys(result).every((key) => required.has(key))
+      || result.command_id !== payload.command_id
+      || result.status !== "success" || result.code !== "READY"
+      || result.world_revision !== revision
+      || !Number.isSafeInteger(result.session_generation) || result.session_generation < 0
+      || typeof result.event_status !== "string" || result.event_status.length < 1
+      || result.event_status.length > 80
+      || (result.active_event !== null
+        && (typeof result.active_event !== "string" || !EVENT_ID_RE.test(result.active_event)))) {
+    throw new VistaWorldError(
+      "VISTA_WORLD_PROTOCOL_ERROR",
+      "Typed Unreal world status is invalid",
+      { status: 502 },
+    );
+  }
+  return result;
+}
+
 function createVistaWorldService({ catalog, transport, compiler = null, now = () => Date.now() } = {}) {
   if (!catalog || typeof catalog.revision !== "function" || typeof catalog.event !== "function") {
     throw new TypeError("VISTA world catalog is required");
@@ -312,6 +337,27 @@ function createVistaWorldService({ catalog, transport, compiler = null, now = ()
     if (requireGeneration(generation) !== session.generation) {
       throw new VistaWorldError("VISTA_WORLD_GENERATION_STALE", "World session generation is stale", { status: 409 });
     }
+  }
+
+  async function synchronizeRuntime(session, context) {
+    const payload = { operation: "status", command_id: randomId("vwc") };
+    let result;
+    try {
+      result = await transport.send(payload, context);
+    } catch (rawError) {
+      const error = new VistaWorldError(
+        "VISTA_WORLD_RUNTIME_UNAVAILABLE",
+        "Typed Unreal world runtime is unavailable",
+        { status: 503, retryable: true },
+      );
+      error.cause = rawError;
+      throw error;
+    }
+    const status = validateRuntimeStatus(result, payload, session.revision);
+    session.generation = status.session_generation;
+    session.activeEvent = status.active_event;
+    session.updatedAt = now();
+    return status;
   }
 
   async function sendAndAdvance(session, payload, context) {
@@ -412,13 +458,14 @@ function createVistaWorldService({ catalog, transport, compiler = null, now = ()
         createdAt: now(),
         updatedAt: now(),
       };
+      await synchronizeRuntime(session, identity);
       sessions.set(id, session);
       return {
         schema: "simworld.vista.playable-world-session/v1",
         session_id: id,
         revision,
-        generation: 0,
-        active_event: null,
+        generation: session.generation,
+        active_event: session.activeEvent,
         status: "bound",
       };
     },
@@ -426,12 +473,14 @@ function createVistaWorldService({ catalog, transport, compiler = null, now = ()
     async status(sessionId, rawIdentity) {
       const identity = normalizeIdentity(rawIdentity);
       const session = sessionFor(sessionId, identity);
+      const runtimeStatus = await synchronizeRuntime(session, identity);
       return {
         schema: "simworld.vista.playable-world-session/v1",
         session_id: session.id,
         revision: session.revision,
         generation: session.generation,
         active_event: session.activeEvent,
+        event_status: runtimeStatus.event_status,
         status: "bound",
       };
     },

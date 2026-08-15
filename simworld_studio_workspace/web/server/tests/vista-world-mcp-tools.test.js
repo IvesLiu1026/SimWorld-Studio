@@ -36,6 +36,18 @@ function success(payload, extra = {}) {
   };
 }
 
+function ready(payload, generation = 0, activeEvent = null) {
+  return {
+    command_id: payload.command_id,
+    status: "success",
+    code: "READY",
+    world_revision: REVISION,
+    session_generation: generation,
+    event_status: activeEvent === null ? "idle" : "active",
+    active_event: activeEvent,
+  };
+}
+
 function statusArgs() {
   return { expected_revision: REVISION };
 }
@@ -66,6 +78,7 @@ test("interaction sends one exact vista_world_action payload and advances genera
   const runtime = createVistaWorldMcpTools({
     sendTyped: async (payload) => {
       calls.push(payload);
+      if (payload.operation === "status") return ready(payload);
       return success(payload, {
         target_semantic_id: payload.target_semantic_id,
         state: { semantic_id: payload.target_semantic_id, values: { open: "true" } },
@@ -73,25 +86,25 @@ test("interaction sends one exact vista_world_action payload and advances genera
     },
   });
 
-  assert.equal(runtime.handlers[TOOL_NAMES.status](statusArgs()).generation, 0);
+  assert.equal((await runtime.handlers[TOOL_NAMES.status](statusArgs())).generation, 0);
   const result = await runtime.handlers[TOOL_NAMES.interact](interactionArgs());
   assert.equal(result.generation, 1);
   assert.equal(result.status, "success");
   assert.equal("active_event" in result, false);
-  assert.equal(calls.length, 1);
-  assert.deepEqual(Object.keys(calls[0]).sort(), [
+  assert.equal(calls.length, 2);
+  assert.deepEqual(Object.keys(calls[1]).sort(), [
     "affordance", "command_id", "expected_revision", "operation",
     "requester_semantic_id", "session_generation", "target_semantic_id",
   ]);
-  assert.equal(calls[0].operation, "interaction");
-  assert.match(calls[0].command_id, /^vwc-[a-f0-9]{24}$/);
-  assert.equal(JSON.stringify(calls[0]).includes("python"), false);
+  assert.equal(calls[1].operation, "interaction");
+  assert.match(calls[1].command_id, /^vwc-[a-f0-9]{24}$/);
+  assert.equal(JSON.stringify(calls[1]).includes("python"), false);
 
   await assert.rejects(
     async () => runtime.handlers[TOOL_NAMES.interact](interactionArgs(0)),
     { code: "VISTA_WORLD_GENERATION_STALE" },
   );
-  assert.equal(calls.length, 1, "stale commands must fail before transport");
+  assert.equal(calls.length, 2, "stale commands must fail before transport");
 });
 
 test("runtime errors resynchronize generation without replaying a mutation", async () => {
@@ -99,6 +112,7 @@ test("runtime errors resynchronize generation without replaying a mutation", asy
   const runtime = createVistaWorldMcpTools({
     sendTyped: async (payload) => {
       calls.push(payload);
+      if (payload.operation === "status") return ready(payload, 7);
       return {
         command_id: payload.command_id,
         status: "error",
@@ -111,7 +125,20 @@ test("runtime errors resynchronize generation without replaying a mutation", asy
   assert.equal(result.status, "error");
   assert.equal(result.generation, 7);
   assert.equal(calls.length, 1);
-  assert.equal(runtime.handlers[TOOL_NAMES.status](statusArgs()).generation, 7);
+  assert.equal((await runtime.handlers[TOOL_NAMES.status](statusArgs())).generation, 7);
+  assert.equal(calls.length, 2);
+});
+
+test("status synchronizes an authoritative active event without advancing generation", async () => {
+  const calls = [];
+  const runtime = createVistaWorldMcpTools({
+    sendTyped: async (payload) => { calls.push(payload); return ready(payload, 5, "mmg_045"); },
+  });
+  const result = await runtime.handlers[TOOL_NAMES.status](statusArgs());
+  assert.equal(result.generation, 5);
+  assert.equal(result.active_event, "mmg_045");
+  assert.equal(result.event_status, "active");
+  assert.deepEqual(Object.keys(calls[0]).sort(), ["command_id", "operation"]);
 });
 
 test("only one generation-changing command may be in flight", async () => {

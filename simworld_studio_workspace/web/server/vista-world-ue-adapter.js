@@ -1,7 +1,7 @@
 "use strict";
 
 const TOOL_NAME = "vista_world_action";
-const OPERATIONS = new Set(["interaction", "npc_queue", "event"]);
+const OPERATIONS = new Set(["status", "interaction", "npc_queue", "event"]);
 
 function createVistaWorldUeAdapter({ resolveUeBroker, timeoutMs = 15_000 } = {}) {
   if (typeof resolveUeBroker !== "function") {
@@ -27,8 +27,8 @@ function createVistaWorldUeAdapter({ resolveUeBroker, timeoutMs = 15_000 } = {})
       return broker.send(TOOL_NAME, payload, {
         timeoutMs,
         queueDeadlineMs: timeoutMs * 2,
-        // All operations on this boundary may mutate the live world. A
-        // transport timeout has an unknown outcome, so replay is forbidden.
+        // Mutations have an unknown outcome after timeout, and status shares
+        // the same serialized boundary. Never replay either implicitly.
         maxAttempts: 1,
         maxResponseBytes: 64 * 1024,
         ...(context && context.signal instanceof AbortSignal ? { signal: context.signal } : {}),

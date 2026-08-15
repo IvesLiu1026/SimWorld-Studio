@@ -383,7 +383,7 @@ def validate_typed_readiness_response(
 ) -> dict[str, Any]:
     required = {
         "command_id", "status", "code", "world_revision",
-        "session_generation", "event_status",
+        "session_generation", "event_status", "active_event",
     }
     if not isinstance(response, dict) or set(response) != required:
         raise RuntimeSafetyError("typed runtime readiness response has an invalid shape")
@@ -393,7 +393,11 @@ def validate_typed_readiness_response(
             or response.get("world_revision") != expected_revision \
             or response.get("session_generation") != 0 \
             or not isinstance(response.get("event_status"), str) \
-            or not 1 <= len(response["event_status"]) <= 80:
+            or not 1 <= len(response["event_status"]) <= 80 \
+            or (response.get("active_event") is not None and (
+                not isinstance(response["active_event"], str)
+                or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", response["active_event"]) is None
+            )):
         raise RuntimeSafetyError("typed runtime readiness identity does not match")
     return dict(response)
 
