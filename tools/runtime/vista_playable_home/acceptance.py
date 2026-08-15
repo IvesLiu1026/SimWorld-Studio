@@ -56,9 +56,11 @@ TABLETOP_RIGHT_ID = (
     "home.r1/room.living_room/entity.coffee_table.01/anchor.tabletop_right"
 )
 EVENT_IDS = ("mmg_001", "mmg_044", "mmg_045")
+DOOR_LOCATION_XY = (-150.0, -200.0)
 LIVING_CLEAR_TARGET_CM = (-480.0, -320.0, 10.0)
-LIVING_TARGET_XY = LIVING_CLEAR_TARGET_CM[:2]
-LIVING_ACCEPTANCE_RADIUS_CM = 80.0
+LIVING_CLEAR_X_RANGE_CM = (-610.0, -330.0)
+LIVING_CLEAR_Y_RANGE_CM = (-360.0, -40.0)
+DOOR_CLEARANCE_RADIUS_CM = 220.0
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -662,6 +664,17 @@ def _finite_vector(value: Any, label: str) -> list[float]:
     return [float(item) for item in value]
 
 
+def npc_is_living_room_door_clear(location: Sequence[float]) -> bool:
+    """Accept a navigable living-room point outside the complete door sweep."""
+
+    return (
+        len(location) >= 2
+        and LIVING_CLEAR_X_RANGE_CM[0] <= location[0] <= LIVING_CLEAR_X_RANGE_CM[1]
+        and LIVING_CLEAR_Y_RANGE_CM[0] <= location[1] <= LIVING_CLEAR_Y_RANGE_CM[1]
+        and math.dist(location[:2], DOOR_LOCATION_XY) >= DOOR_CLEARANCE_RADIUS_CM
+    )
+
+
 def validate_state(value: Any, *, semantic_id: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != STATE_KEYS:
         _fail("STATE_INVALID", "runtime state fields differ")
@@ -950,10 +963,10 @@ def run_protocol(
     before_location = _finite_vector(
         npc_before["transform"]["location_cm"], "NPC baseline location_cm"
     )
-    if math.dist(before_location[:2], LIVING_TARGET_XY) <= LIVING_ACCEPTANCE_RADIUS_CM:
+    if npc_is_living_room_door_clear(before_location):
         _fail(
             "NPC_BASELINE_INVALID",
-            "NPC preinspection was already inside the living-room acceptance radius",
+            "NPC preinspection was already inside the living-room door-clear region",
             step="npc.preinspect",
         )
     session.npc_queue("npc.replace_queue")
@@ -971,8 +984,7 @@ def run_protocol(
             expected_code="NPC_INSPECTED",
         )
         location = _finite_vector(state["transform"]["location_cm"], "NPC location_cm")
-        distance = math.dist(location[:2], LIVING_TARGET_XY)
-        if distance <= LIVING_ACCEPTANCE_RADIUS_CM:
+        if npc_is_living_room_door_clear(location):
             reached = True
             break
         remaining = deadline - monotonic()

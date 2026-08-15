@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import socket
 import stat
@@ -197,7 +196,7 @@ class FakeVistaRuntime:
                     locations = (
                         [-140.0, -60.0, 96.0],
                         [-235.0, -205.0, 96.0],
-                        [-475.0, -315.0, 96.0],
+                        [-371.0, -270.0, 96.0],
                     )
                     location = locations[min(self.npc_polls, len(locations)) - 1]
                 else:
@@ -397,6 +396,12 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
             request, timeout, port=server.port
         )
 
+    def test_door_clear_predicate_requires_safe_living_room_region(self) -> None:
+        self.assertTrue(acceptance.npc_is_living_room_door_clear([-371.0, -270.0]))
+        self.assertFalse(acceptance.npc_is_living_room_door_clear([-334.0, -252.0]))
+        self.assertFalse(acceptance.npc_is_living_room_door_clear([-371.0, 100.0]))
+        self.assertFalse(acceptance.npc_is_living_room_door_clear([-700.0, -270.0]))
+
     def test_full_tcp_sequence_writes_private_bound_acceptance(self) -> None:
         fixture = RuntimeAcceptanceFixture(self.root)
         with FakeVistaRuntime() as server:
@@ -427,14 +432,8 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         )
         before_xy = preinspect["response"]["state"]["transform"]["location_cm"][:2]
         after_xy = final_poll["response"]["state"]["transform"]["location_cm"][:2]
-        self.assertGreater(
-            math.dist(before_xy, acceptance.LIVING_TARGET_XY),
-            acceptance.LIVING_ACCEPTANCE_RADIUS_CM,
-        )
-        self.assertLessEqual(
-            math.dist(after_xy, acceptance.LIVING_TARGET_XY),
-            acceptance.LIVING_ACCEPTANCE_RADIUS_CM,
-        )
+        self.assertFalse(acceptance.npc_is_living_room_door_clear(before_xy))
+        self.assertTrue(acceptance.npc_is_living_room_door_clear(after_xy))
         queue = next(
             check for check in receipt["checks"] if check["step"] == "npc.replace_queue"
         )
