@@ -156,8 +156,8 @@ Depends on: `requirements.md`, `design.md`
 ## Residual Production Milestone
 
 - [ ] **T17. Cook a Development game executable**
-  - Blocked until a matching full UE 5.3.2 development toolchain with
-    RunUAT/UBT/UHT, headers, compiler and writable build space is available.
+  - A complete UE 5.7.3 toolchain with RunUAT/UBT/UHT, headers and compiler is
+    available; build and cook into the append-only NAS run root after T8-T10.
   - Requirements: R9-R10, R12-R13.
   - Validation: clean cook/package receipt, packaged smoke, direct Sunshine
     capture and rollback to the game-only preview profile.

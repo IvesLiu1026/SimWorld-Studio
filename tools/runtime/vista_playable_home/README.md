@@ -22,7 +22,7 @@ uv run --project tools python \
   --workspace /absolute/new-run/ue/attempt-01 \
   --project /absolute/new-run/ue/attempt-01/project/Home.uproject \
   --ue-editor /absolute/Engine/Binaries/Linux/UnrealEditor \
-  --map /Game/VISTA/PlayableHome/r1/Maps/VistaPlayableHome \
+  --map /Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome \
   --display :117 --gpu 0 --vista-world-port 55620 --preflight-only
 ```
 

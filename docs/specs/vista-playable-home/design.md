@@ -177,11 +177,12 @@ The target compiled plugin is `VistaPlayableHome`. It contains:
 - `UVistaEventSubsystem` for compatible overlay apply/reset and event status;
 - a minimal professional HUD for interaction prompt, held item, room and event.
 
-Because the current engine archive cannot compile new C++, the same contract
-is also represented by a deterministic Unreal Editor composition script. The
-first live preview reuses the available third-person GameMode/pawn and existing
-Blueprint interaction candidates where they satisfy the contract. Missing
-compiled behavior is reported as blocked rather than simulated in the web UI.
+The host now has a complete UE 5.7.3 toolchain (RunUAT, UBT, UHT, headers and
+editor binaries), so r1 builds the `VistaPlayableHome` C++ plugin and installs
+it into a fresh content-only project. The same contract is also represented by
+a deterministic Unreal Editor composition script for import, map creation and
+reload verification. Any compile or runtime failure is retained as a blocker
+receipt rather than simulated in the web UI.
 
 ## Agent and Server Interfaces
 
@@ -205,6 +206,13 @@ POST /api/vista-world/sessions/:id/events/reset
 All writes require the current revision/session generation. The server maps
 NLP output to the same typed action enum used by Unreal; it does not forward
 free-form Python or Blueprint code.
+
+Placement anchors use one wire-safe semantic identity across Node and Unreal:
+`<entity_id>/anchor.<anchor_id>`. The source HouseSpec may retain the compact
+`<entity_id>#<anchor_id>` value in baseline `placed_at` state, but the compiler
+and composer materialize the wire identity as a tagged TargetPoint. A `place`
+action therefore resolves an exact anchor component instead of silently using
+the parent actor origin.
 
 ## Unreal Composition
 
