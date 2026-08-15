@@ -280,6 +280,11 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn('TEXT("event_status")', source)
         self.assertIn('TEXT("active_event")', source)
         self.assertIn("FJsonValueNull", source)
+        self.assertIn("Rotation.Roll", source)
+        self.assertIn("Rotation.Pitch", source)
+        self.assertIn("Rotation.Yaw", source)
+        self.assertLess(source.index("Rotation.Roll"), source.index("Rotation.Pitch"))
+        self.assertLess(source.index("Rotation.Pitch"), source.index("Rotation.Yaw"))
         self.assertIn("Runtime->GetStatus", source)
         self.assertIn("bIncludeAuthoritativeStatus", source)
         self.assertIn("Runtime->GetStatus(FName(*CommandId)), true", source)
@@ -316,6 +321,14 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("CTF_USE_COMPLEX_AS_SIMPLE", import_source)
         self.assertIn("room_shell", import_source)
         compose_source = compose_path.read_text(encoding="utf-8")
+        self.assertIn(
+            "unreal.Rotator(pitch=values[1], yaw=values[2], roll=values[0])",
+            compose_source,
+        )
+        self.assertNotIn(
+            "unreal.Rotator(pitch=values[0], yaw=values[1], roll=values[2])",
+            compose_source,
+        )
         self.assertIn("level_subsystem.new_level(map_path)", compose_source)
         self.assertIn("level_subsystem.load_level(map_path)", compose_source)
         self.assertIn("VistaSemanticId=", (directory / "planning.py").read_text())

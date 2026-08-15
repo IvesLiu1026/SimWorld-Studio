@@ -197,9 +197,11 @@ TSharedRef<FJsonObject> RuntimeStateJson(const FVistaEntityRuntimeState& State)
         MakeShared<FJsonValueNumber>(Location.Y),
         MakeShared<FJsonValueNumber>(Location.Z)});
     Transform->SetArrayField(TEXT("rotation_deg"), {
+        // The public HouseSpec/World API contract is XYZ Euler. FRotator names
+        // those same axis rotations Roll(X), Pitch(Y), and Yaw(Z).
+        MakeShared<FJsonValueNumber>(Rotation.Roll),
         MakeShared<FJsonValueNumber>(Rotation.Pitch),
-        MakeShared<FJsonValueNumber>(Rotation.Yaw),
-        MakeShared<FJsonValueNumber>(Rotation.Roll)});
+        MakeShared<FJsonValueNumber>(Rotation.Yaw)});
     Transform->SetArrayField(TEXT("scale"), {
         MakeShared<FJsonValueNumber>(Scale.X),
         MakeShared<FJsonValueNumber>(Scale.Y),

@@ -28,7 +28,12 @@ def vector(values):
 
 
 def rotation(values):
-    return unreal.Rotator(pitch=values[0], yaw=values[1], roll=values[2])
+    # The HouseSpec contract stores right-handed XYZ Euler components.  Unreal
+    # names rotations by their axis instead: roll=X, pitch=Y, yaw=Z.  Keep the
+    # source axes intact when constructing an FRotator; in particular, the
+    # common [0, 0, 90] doorway transform must become a 90 degree yaw rather
+    # than tipping the door onto its side with a 90 degree roll.
+    return unreal.Rotator(pitch=values[1], yaw=values[2], roll=values[0])
 
 
 def transform(value):
