@@ -427,6 +427,7 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("unreal.AutoExposureMethod.AEM_MANUAL", commandlet)
         self.assertIn('"dynamic_lighting_verified"', commandlet)
         self.assertIn('"deterministic_exposure_verified"', commandlet)
+        self.assertIn('"input_mappings_verified"', commandlet)
 
     def test_loopback_transport_is_fixed_and_bounded(self) -> None:
         source = (ROOT / "unreal_plugins/VistaPlayableHome/Source/VistaPlayableHome/Private/VistaWorldTcpAdapter.cpp").read_text()
@@ -508,9 +509,10 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("navigation_system.on_navigation_bounds_updated(nav)", compose_source)
         self.assertNotIn("NavigationSystemV1.build_navigation", compose_source)
         self.assertIn('"stage": stage', compose_source)
-        self.assertIn("key_value = unreal.Key()", compose_source)
-        self.assertIn('key_value.set_editor_property("key_name", unreal.Name(key))', compose_source)
-        self.assertNotIn("unreal.Key(key)", compose_source)
+        self.assertIn("verify_legacy_input_mappings", compose_source)
+        self.assertIn("LEGACY_AXIS_MAPPINGS.issubset", compose_source)
+        self.assertIn("LEGACY_ACTION_MAPPINGS.issubset", compose_source)
+        self.assertNotIn("settings.save_key_mappings()", compose_source)
         self.assertNotIn("settings.save_config()", compose_source)
         self.assertIn('"phase": "configure_game_mode_input"', compose_source)
         self.assertNotIn(

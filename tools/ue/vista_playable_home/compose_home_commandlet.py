@@ -202,39 +202,27 @@ def apply_entity_properties(actor, operation, asset_entry):
                 "failed to bind typed affordances: " + str(exc))
 
 
-def add_legacy_input_mappings():
+LEGACY_AXIS_MAPPINGS = {
+    ("MoveForward", "W", 1.0), ("MoveForward", "S", -1.0),
+    ("MoveRight", "D", 1.0), ("MoveRight", "A", -1.0),
+    ("Turn", "MouseX", 1.0), ("LookUp", "MouseY", -1.0),
+}
+LEGACY_ACTION_MAPPINGS = {
+    ("Jump", "SpaceBar"), ("Sprint", "LeftShift"),
+    ("Crouch", "C"), ("Interact", "E"), ("Drop", "Q"),
+}
+
+
+def verify_legacy_input_mappings():
     settings = unreal.InputSettings.get_input_settings()
-    axes = [
-        ("MoveForward", "W", 1.0), ("MoveForward", "S", -1.0),
-        ("MoveRight", "D", 1.0), ("MoveRight", "A", -1.0),
-        ("Turn", "MouseX", 1.0), ("LookUp", "MouseY", -1.0),
-    ]
-    actions = [
-        ("Jump", "SpaceBar"), ("Sprint", "LeftShift"),
-        ("Crouch", "C"), ("Interact", "E"), ("Drop", "Q"),
-    ]
     existing_axes = {(str(item.axis_name), str(item.key), float(item.scale))
                      for item in settings.get_editor_property("axis_mappings")}
     existing_actions = {(str(item.action_name), str(item.key))
                         for item in settings.get_editor_property("action_mappings")}
-    for name, key, scale in axes:
-        if (name, key, scale) not in existing_axes:
-            mapping = unreal.InputAxisKeyMapping()
-            mapping.set_editor_property("axis_name", unreal.Name(name))
-            key_value = unreal.Key()
-            key_value.set_editor_property("key_name", unreal.Name(key))
-            mapping.set_editor_property("key", key_value)
-            mapping.set_editor_property("scale", scale)
-            settings.add_axis_mapping(mapping, False)
-    for name, key in actions:
-        if (name, key) not in existing_actions:
-            mapping = unreal.InputActionKeyMapping()
-            mapping.set_editor_property("action_name", unreal.Name(name))
-            key_value = unreal.Key()
-            key_value.set_editor_property("key_name", unreal.Name(key))
-            mapping.set_editor_property("key", key_value)
-            settings.add_action_mapping(mapping, False)
-    settings.save_key_mappings()
+    require(LEGACY_AXIS_MAPPINGS.issubset(existing_axes),
+            "DefaultInput.ini is missing required axis mappings")
+    require(LEGACY_ACTION_MAPPINGS.issubset(existing_actions),
+            "DefaultInput.ini is missing required action mappings")
 
 
 def event_definitions(plan, assets, room_anchor_ids):
@@ -332,6 +320,10 @@ def run():
     plan = load_build_plan(execution)
     import_receipt, import_path, import_sha = load_import_receipt(execution)
     engine, project = verify_runtime(execution)
+    input_config = canonical_path(os.path.join(
+        os.path.dirname(project), "Config", "DefaultInput.ini"))
+    require(os.path.isfile(input_config), "DefaultInput.ini is missing")
+    input_config_sha = sha256_file(input_config)
     spec = execution["composition_spec"]
     map_path = spec["map_path"]
     require(not unreal.EditorAssetLibrary.does_asset_exist(map_path),
@@ -351,6 +343,7 @@ def run():
     reload_verified = False
     dynamic_lighting_verified = False
     deterministic_exposure_verified = False
+    input_mappings_verified = False
     stage = {"phase": "compose_operations", "operation_id": None, "kind": None}
     try:
         for operation in spec["operations"]:
@@ -479,7 +472,7 @@ def run():
                     "operation_id": operation["operation_id"],
                     "kind": kind,
                 }
-                add_legacy_input_mappings()
+                verify_legacy_input_mappings()
                 stage = {
                     "phase": "configure_game_mode_events",
                     "operation_id": operation["operation_id"],
@@ -572,8 +565,10 @@ def run():
                     "auto_exposure_apply_physical_camera_exposure")) and
                 float(post_settings.get_editor_property("auto_exposure_bias")) == -6.0,
                 "reloaded map lost deterministic manual exposure")
+        verify_legacy_input_mappings()
         dynamic_lighting_verified = True
         deterministic_exposure_verified = True
+        input_mappings_verified = True
         reload_verified = True
         status = "saved_reloaded_candidate"
     except Exception as exc:
@@ -600,6 +595,8 @@ def run():
             "import_receipt": import_path,
             "import_receipt_sha256": import_sha,
             "composition_spec_sha256": execution["composition_spec_sha256"],
+            "input_config": input_config,
+            "input_config_sha256": input_config_sha,
         },
         "content_namespace": spec["content_namespace"],
         "map_path": map_path,
@@ -613,6 +610,7 @@ def run():
             "navmesh_bounds_verified": reload_verified,
             "dynamic_lighting_verified": dynamic_lighting_verified,
             "deterministic_exposure_verified": deterministic_exposure_verified,
+            "input_mappings_verified": input_mappings_verified,
             "quarantined": status != "saved_reloaded_candidate",
             "runtime_play_proof": "pending",
         },

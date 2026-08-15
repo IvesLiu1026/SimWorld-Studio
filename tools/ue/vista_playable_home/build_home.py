@@ -984,6 +984,30 @@ def default_engine_ini(plan: Mapping[str, Any]) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
+def default_input_ini() -> bytes:
+    """Return the fixed legacy input contract used by the C++ playable pawn."""
+
+    lines = [
+        "[/Script/Engine.InputSettings]",
+        "bCaptureMouseOnLaunch=True",
+        "DefaultViewportMouseCaptureMode=CapturePermanently_IncludingInitialMouseDown",
+        "DefaultViewportMouseLockMode=LockOnCapture",
+        '+AxisMappings=(AxisName="MoveForward",Scale=1.000000,Key=W)',
+        '+AxisMappings=(AxisName="MoveForward",Scale=-1.000000,Key=S)',
+        '+AxisMappings=(AxisName="MoveRight",Scale=1.000000,Key=D)',
+        '+AxisMappings=(AxisName="MoveRight",Scale=-1.000000,Key=A)',
+        '+AxisMappings=(AxisName="Turn",Scale=1.000000,Key=MouseX)',
+        '+AxisMappings=(AxisName="LookUp",Scale=-1.000000,Key=MouseY)',
+        '+ActionMappings=(ActionName="Jump",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=SpaceBar)',
+        '+ActionMappings=(ActionName="Sprint",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=LeftShift)',
+        '+ActionMappings=(ActionName="Crouch",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=C)',
+        '+ActionMappings=(ActionName="Interact",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=E)',
+        '+ActionMappings=(ActionName="Drop",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=Q)',
+        "",
+    ]
+    return "\n".join(lines).encode("utf-8")
+
+
 def _fixed_command(editor: Path, project_file: Path, script: Path) -> list[str]:
     return [
         str(editor),
@@ -1027,6 +1051,7 @@ class PlannedBuild:
     characters_snapshot: TreeSnapshot
     project_raw: bytes
     engine_ini_raw: bytes
+    input_ini_raw: bytes
     execution: dict[str, Any]
     execution_raw: bytes
     execution_sha256: str
@@ -1140,6 +1165,7 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
     editor, editor_sha = _validate_editor(config, require_existing=require_editor)
     descriptor_raw = canonical_json(project_descriptor())
     engine_ini_raw = default_engine_ini(plan)
+    input_ini_raw = default_input_ini()
     execution, execution_raw, execution_sha = _planned_execution(
         plan=plan,
         attempt=attempt,
@@ -1188,6 +1214,7 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
             "plugin_destination": str(attempt / "project" / "Plugins" / EXPECTED_PLUGIN_NAME),
             "characters_destination": str(attempt / "project" / "Content" / "Characters"),
             "engine_config_sha256": sha256_bytes(engine_ini_raw),
+            "input_config_sha256": sha256_bytes(input_ini_raw),
         },
         "execution": {"path": str(execution_path), "sha256": execution_sha, "value": execution},
         "commands": [
@@ -1227,6 +1254,7 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         characters_snapshot=characters_snapshot,
         project_raw=descriptor_raw,
         engine_ini_raw=engine_ini_raw,
+        input_ini_raw=input_ini_raw,
         execution=execution,
         execution_raw=execution_raw,
         execution_sha256=execution_sha,
@@ -1566,6 +1594,7 @@ def _verify_scene_receipt(
         "navmesh_bounds_verified": True,
         "dynamic_lighting_verified": True,
         "deterministic_exposure_verified": True,
+        "input_mappings_verified": True,
         "quarantined": False,
         "runtime_play_proof": "pending",
     }:
@@ -1579,7 +1608,16 @@ def _verify_scene_receipt(
         "import_receipt",
         "import_receipt_sha256",
         "composition_spec_sha256",
+        "input_config",
+        "input_config_sha256",
     }
+    expected_input_config = (
+        Path(execution["project_file"]).parent / "Config" / "DefaultInput.ini"
+    )
+    expected_input_sha = sha256_bytes(default_input_ini())
+    actual_input_sha = sha256_file(
+        _existing_file(expected_input_config, "project input config")
+    )
     if not isinstance(bindings, Mapping) or set(bindings) != expected_binding_keys or (
         not isinstance(bindings.get("engine"), str)
         or not bindings.get("engine", "").startswith("5.")
@@ -1589,6 +1627,10 @@ def _verify_scene_receipt(
         or bindings.get("import_receipt") != execution["import_receipt"]
         or bindings.get("import_receipt_sha256") != import_sha256
         or bindings.get("composition_spec_sha256") != execution["composition_spec_sha256"]
+        or bindings.get("input_config")
+        != str(expected_input_config)
+        or bindings.get("input_config_sha256") != expected_input_sha
+        or actual_input_sha != expected_input_sha
     ):
         _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", "scene receipt pins differ")
     if not isinstance(receipt.get("actor_inventory"), list):
@@ -1801,6 +1843,7 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
     project_file = project_root / EXPECTED_PROJECT_NAME
     _write_exclusive(project_file, planned.project_raw)
     _write_exclusive(config_dir / "DefaultEngine.ini", planned.engine_ini_raw)
+    _write_exclusive(config_dir / "DefaultInput.ini", planned.input_ini_raw)
     copy_counts: Counter[str] = Counter()
     copy_counts.update(_copy_tree(config.plugin_package, plugins_root / EXPECTED_PLUGIN_NAME, "compiled plugin"))
     copy_counts.update(_copy_tree(config.characters_content, content_root / "Characters", "Characters content"))
@@ -1828,6 +1871,7 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
         "orchestrator_plan_digest": planned.dry_run_report["content_digest"],
         "execution_sha256": generated.sha256,
         "project_sha256": generated.value["project_sha256"],
+        "input_config_sha256": sha256_bytes(planned.input_ini_raw),
         "build_plan_sha256": generated.value["build_plan_sha256"],
         "plugin_tree_sha256": installed_plugin.sha256,
         "characters_tree_sha256": installed_characters.sha256,

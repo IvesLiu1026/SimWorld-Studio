@@ -407,6 +407,7 @@ def test_materialization_creates_content_only_project_and_matches_contract(fixtu
     }
     assert (attempt / "project/Plugins/VistaPlayableHome/Binaries/Linux/libUnrealEditor-VistaPlayableHome.so").is_file()
     assert (attempt / "project/Content/Characters/Mannequins/Meshes/SKM_Manny.uasset").is_file()
+    assert (attempt / "project/Config/DefaultInput.ini").read_bytes() == planned.input_ini_raw
     assert (attempt / "contracts/build-plan.json").read_bytes() == planning.canonical_json(fixture.plan)
     assert (attempt / "execution.json").read_bytes() == planned.execution_raw
     assert sum(copy_counts.values()) == fixture.plugin_snapshot.file_count + fixture.characters_snapshot.file_count
@@ -607,6 +608,14 @@ def _successful_scene_receipt(planned: build_home.PlannedBuild, import_sha: str)
             "import_receipt": planned.execution["import_receipt"],
             "import_receipt_sha256": import_sha,
             "composition_spec_sha256": planned.execution["composition_spec_sha256"],
+            "input_config": str(
+                pathlib.Path(planned.execution["project_file"]).parent
+                / "Config"
+                / "DefaultInput.ini"
+            ),
+            "input_config_sha256": build_home.sha256_bytes(
+                build_home.default_input_ini()
+            ),
         },
         "content_namespace": planned.plan["unreal"]["content_namespace"],
         "map_path": planned.plan["unreal"]["map_path"],
@@ -620,10 +629,40 @@ def _successful_scene_receipt(planned: build_home.PlannedBuild, import_sha: str)
             "navmesh_bounds_verified": True,
             "dynamic_lighting_verified": True,
             "deterministic_exposure_verified": True,
+            "input_mappings_verified": True,
             "quarantined": False,
             "runtime_play_proof": "pending",
         },
     }
+
+
+def test_scene_receipt_rejects_untrusted_input_contract(fixture: Fixture) -> None:
+    planned = build_home.plan_build(fixture.config())
+    input_config = (
+        pathlib.Path(planned.execution["project_file"]).parent
+        / "Config"
+        / "DefaultInput.ini"
+    )
+    _write(input_config, planned.input_ini_raw)
+    import_sha = "a" * 64
+    receipt = _successful_scene_receipt(planned, import_sha)
+
+    build_home._verify_scene_receipt(receipt, planned.execution, planned.plan, import_sha)
+
+    wrong_path = copy.deepcopy(receipt)
+    wrong_path["bindings"]["input_config"] = str(input_config.with_name("Input.ini"))
+    with pytest.raises(build_home.BuildHomeError, match="scene receipt pins differ"):
+        build_home._verify_scene_receipt(wrong_path, planned.execution, planned.plan, import_sha)
+
+    wrong_sha = copy.deepcopy(receipt)
+    wrong_sha["bindings"]["input_config_sha256"] = "b" * 64
+    with pytest.raises(build_home.BuildHomeError, match="scene receipt pins differ"):
+        build_home._verify_scene_receipt(wrong_sha, planned.execution, planned.plan, import_sha)
+
+    false_gate = copy.deepcopy(receipt)
+    false_gate["gates"]["input_mappings_verified"] = False
+    with pytest.raises(build_home.BuildHomeError, match="scene receipt gates did not pass"):
+        build_home._verify_scene_receipt(false_gate, planned.execution, planned.plan, import_sha)
 
 
 def _successful_commandlet_runner(
@@ -1004,3 +1043,18 @@ def test_project_uses_runtime_dynamic_navigation(fixture: Fixture) -> None:
     assert "DynamicModifiersOnly" not in raw
     assert "[/Script/Engine.RendererSettings]" in raw
     assert "r.AllowStaticLighting=False\n" in raw
+
+
+def test_project_persists_fixed_gameplay_input_contract() -> None:
+    raw = build_home.default_input_ini().decode("utf-8")
+    assert raw.startswith("[/Script/Engine.InputSettings]\n")
+    assert "bCaptureMouseOnLaunch=True\n" in raw
+    assert "DefaultViewportMouseCaptureMode=CapturePermanently_IncludingInitialMouseDown\n" in raw
+    for value in (
+        'AxisName="MoveForward",Scale=1.000000,Key=W',
+        'AxisName="MoveRight",Scale=-1.000000,Key=A',
+        'AxisName="Turn",Scale=1.000000,Key=MouseX',
+        'ActionName="Interact",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=E',
+        'ActionName="Drop",bShift=False,bCtrl=False,bAlt=False,bCmd=False,Key=Q',
+    ):
+        assert value in raw
