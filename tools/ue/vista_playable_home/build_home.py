@@ -1564,6 +1564,8 @@ def _verify_scene_receipt(
         "player_start_verified": True,
         "game_mode_configured": True,
         "navmesh_bounds_verified": True,
+        "dynamic_lighting_verified": True,
+        "deterministic_exposure_verified": True,
         "quarantined": False,
         "runtime_play_proof": "pending",
     }:

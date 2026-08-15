@@ -618,6 +618,8 @@ def _successful_scene_receipt(planned: build_home.PlannedBuild, import_sha: str)
             "player_start_verified": True,
             "game_mode_configured": True,
             "navmesh_bounds_verified": True,
+            "dynamic_lighting_verified": True,
+            "deterministic_exposure_verified": True,
             "quarantined": False,
             "runtime_play_proof": "pending",
         },
