@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+DEFAULT_READY_TIMEOUT_S = 480.0
+
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from tools.runtime.vista_playable_home.runtime import (  # type: ignore
@@ -129,7 +131,7 @@ def wait_for_typed_runtime(
     process: subprocess.Popen[Any],
     port: int,
     *,
-    timeout: float = 180.0,
+    timeout: float = DEFAULT_READY_TIMEOUT_S,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     last_error: RuntimeSafetyError | None = None

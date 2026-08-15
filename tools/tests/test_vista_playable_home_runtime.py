@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.runtime.vista_playable_home import preflight, profile_entrypoint, stop, sunshine_app
+from tools.runtime.vista_playable_home import launch, preflight, profile_entrypoint, stop, sunshine_app
 from tools.runtime.vista_playable_home.runtime import (
     GameRuntimeConfig,
     RuntimeSafetyError,
@@ -70,6 +70,10 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         self.assertIn("-ddc=InstalledNoZenLocalFallback", command)
         self.assertIn("-VistaWorldPort=55620", command)
         self.assertEqual(command[0], str(config.ue_editor))
+
+    def test_cold_nas_launch_has_bounded_turnkey_headroom(self) -> None:
+        self.assertGreaterEqual(launch.DEFAULT_READY_TIMEOUT_S, 300.0)
+        self.assertLessEqual(launch.DEFAULT_READY_TIMEOUT_S, 600.0)
 
     def test_reserved_gpu_one_is_refused(self) -> None:
         with self.assertRaisesRegex(RuntimeSafetyError, "reserved"):
