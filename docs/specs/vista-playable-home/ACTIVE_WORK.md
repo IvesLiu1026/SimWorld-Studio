@@ -5,7 +5,7 @@
 - Integration worktree: `/home/yhliu/SimWorld-Studio-worktrees/vista-playable-home`
 - Branch: `codex/vista-playable-home`
 - Base: `origin/codex/vista-multiscene-world@a0c943d9`
-- Status: user-approved implementation in progress
+- Status: accepted game-only preview delivered; production residuals open
 
 ## Ownership
 
@@ -60,3 +60,17 @@
   branch.
 - Generated Blender/UE/runtime artifacts remain outside Git in a new
   append-only run root.
+
+## Current Integrated State
+
+- Accepted UE build: active run root `20260815T110115Z-navfix`, attempt 09.
+- Accepted runtime proof: one door, carried/placed keys, one moving NPC and
+  `mmg_001`/`mmg_044`/`mmg_045` start/reset in a single generation-checked
+  session.
+- Live surface: GPU 0, display `:117`, loopback `55620`, Sunshine application
+  `VISTA World`, Tailnet IP `100.114.80.121`.
+- Remote video is ready. Moonlight control remains administrator-blocked only
+  by root-only `/dev/uinput` and `/dev/uhid`; do not report it control-ready.
+- Open product work: retained end-to-end NLP-to-live-UE proof, fixed all-room
+  visual evidence, second-door/cross-room-carry acceptance, stale `placed_at`
+  state correction, visual-quality pass and Development cook.
