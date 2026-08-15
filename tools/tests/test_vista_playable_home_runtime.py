@@ -61,7 +61,11 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         )
 
     def test_game_command_is_visible_game_mode_without_editor_or_offscreen(self) -> None:
-        config = validate_config(self.make_config(), create_workspace=False)
+        with mock.patch(
+            "tools.runtime.vista_playable_home.runtime.port_is_available",
+            return_value=True,
+        ):
+            config = validate_config(self.make_config(), create_workspace=False)
         command = build_game_command(config)
         self.assertIn("-game", command)
         self.assertIn("-Windowed", command)
@@ -83,6 +87,14 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
     def test_existing_runtime_ports_are_refused(self) -> None:
         with self.assertRaisesRegex(RuntimeSafetyError, "reserved"):
             validate_vista_world_port(55570)
+        with (
+            mock.patch(
+                "tools.runtime.vista_playable_home.runtime.port_is_available",
+                return_value=False,
+            ),
+            self.assertRaisesRegex(RuntimeSafetyError, "already in use"),
+        ):
+            validate_vista_world_port(55620)
 
     def test_map_display_and_paths_fail_closed(self) -> None:
         self.assertEqual(validate_display(":117"), ":117")
@@ -102,7 +114,11 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
             validate_config(GameRuntimeConfig(**{**config.__dict__, "workspace": lexical_link}), create_workspace=False)
 
     def test_plan_contains_no_arbitrary_command_or_secret(self) -> None:
-        config = validate_config(self.make_config(), create_workspace=False)
+        with mock.patch(
+            "tools.runtime.vista_playable_home.runtime.port_is_available",
+            return_value=True,
+        ):
+            config = validate_config(self.make_config(), create_workspace=False)
         rendered = json.dumps(redacted_plan(config))
         self.assertIn("unreal-editor-game-preview", rendered)
         self.assertNotIn("ANTHROPIC", rendered)
