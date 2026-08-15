@@ -14,6 +14,7 @@
 #include "NavAreas/NavArea_Null.h"
 #include "NavLinkCustomComponent.h"
 #include "NavModifierComponent.h"
+#include "Navigation/PathFollowingComponent.h"
 #include "NavigationSystem.h"
 #include "Net/UnrealNetwork.h"
 
@@ -38,6 +39,7 @@ AVistaDoorActor::AVistaDoorActor()
         ENavLinkDirection::BothWays);
     DoorwayLink->SetEnabledArea(UNavArea_Default::StaticClass());
     DoorwayLink->SetDisabledArea(UNavArea_Null::StaticClass());
+    DoorwayLink->SetMoveReachedLink(this, &AVistaDoorActor::HandleDoorwayLinkReached);
     DoorwayLink->SetEnabled(false);
     AllowedAffordances = {
         EVistaAffordance::Inspect,
@@ -175,6 +177,21 @@ void AVistaDoorActor::OnRep_OpenState()
     ApplyDoorState(false);
 }
 
+void AVistaDoorActor::HandleDoorwayLinkReached(
+    UNavLinkCustomComponent* LinkComponent,
+    UObject* PathingAgent,
+    const FVector& /*Destination*/)
+{
+    // This doorway does not require a jump or a bespoke traversal animation.
+    // Explicitly release path following after the smart-link notification so
+    // the controller continues walking toward the link destination next tick.
+    if (UPathFollowingComponent* PathFollowing =
+            Cast<UPathFollowingComponent>(PathingAgent))
+    {
+        PathFollowing->FinishUsingCustomLink(LinkComponent);
+    }
+}
+
 bool AVistaDoorActor::IsClosingObstructed() const
 {
     const UStaticMesh* Mesh = DoorMesh->GetStaticMesh();
@@ -247,6 +264,12 @@ void AVistaDoorActor::ApplyDoorState(bool bInstant)
     {
         Hinge->SetRelativeRotation(TargetRotation);
     }
+    // Imported leaves have asset-specific pivots and collision hulls.  Once a
+    // door is logically open, its leaf must not keep an AI/player capsule
+    // blocked at the threshold while the visual sweep finishes.
+    DoorMesh->SetCollisionEnabled(
+        bOpen ? ECollisionEnabled::NoCollision
+              : ECollisionEnabled::QueryAndPhysics);
     NavigationModifier->SetAreaClass(bOpen ? UNavArea_Default::StaticClass() : UNavArea_Null::StaticClass());
     DoorwayLink->SetEnabled(bOpen);
     UNavigationSystemV1::UpdateActorInNavOctree(*this);

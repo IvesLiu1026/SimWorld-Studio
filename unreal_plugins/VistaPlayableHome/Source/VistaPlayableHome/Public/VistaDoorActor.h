@@ -6,6 +6,7 @@
 
 class UNavModifierComponent;
 class UNavLinkCustomComponent;
+class UPathFollowingComponent;
 class USceneComponent;
 class UStaticMeshComponent;
 
@@ -68,6 +69,9 @@ private:
     UFUNCTION()
     void OnRep_OpenState();
 
+    void HandleDoorwayLinkReached(UNavLinkCustomComponent* LinkComponent,
+                                  UObject* PathingAgent,
+                                  const FVector& Destination);
     void ConfigureJambPivot();
     bool IsClosingObstructed() const;
     void ApplyDoorState(bool bInstant);
