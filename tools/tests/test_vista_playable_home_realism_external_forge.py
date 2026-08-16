@@ -465,9 +465,9 @@ def test_no_external_v1_path_is_byte_stable_and_runtime_source_is_fail_closed() 
     profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
     plan = build_forge_plan(house, profile)
     manifest_bytes = canonical_json_bytes(normalized_manifest(plan, texture_size_px=512))
-    assert plan.content_digest == "d376ef0d3397b654b85e35a32dc9734ab32c5a062c8a8c051397ddf252bc9eb0"
-    assert hashlib.sha256(canonical_json_bytes(plan)).hexdigest() == "7acc976376c7e2d61896aaf2583783ddfa7df18efed8cc25ee98f615fee02810"
-    assert hashlib.sha256(manifest_bytes).hexdigest() == "a13557bd6cf141d784913b6ccd18c4ad3196789f3ba7040ad6feebf02204559f"
+    assert plan.content_digest == "56d07c9664dfe6d054124ca08acac007f6aef7338f0fdbaa81377fcaff34f008"
+    assert hashlib.sha256(canonical_json_bytes(plan)).hexdigest() == "8f9ef316cbc5a20fd1ccb5413eac704ef3d39a58bf48bd2d3cca995491c26b13"
+    assert hashlib.sha256(manifest_bytes).hexdigest() == "9e11ad06fe7f7bff581a097e451eba02e500ae7c8af386fb79ae52fcc7b5ac8a"
     assert len(manifest_bytes) == 116578
 
     import tools.blender.vista_playable_home_realism.external_assets as runtime

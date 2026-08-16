@@ -15,7 +15,11 @@ Updated: 2026-08-16
 - Approved visual profile:
   `world_packs/vista_playable_home_r1/visual_profiles/realistic_interior_r2.json`.
 - Visual-profile content digest:
-  `b8d803c0645ed62cb706cc05cdd4ece6670465439827213077c2e3fd2ed5c114`.
+  `ad6f53ee847755579918c88c87779b8053032e5cb269e564266a2f71276fd162`.
+- The coffee-table and stove receipts now bind the exact audited Poly Haven
+  CC0 source-tree digests, measured floor-aligned bounds, 4K texture channels,
+  and conservative non-Nanite import policies.  The stove additionally records
+  its opacity map and masked blend mode.
 - The closed profile contract rejects unknown fields, stale HouseSpec pins,
   executable fields, duplicate bindings, invalid transforms, unlicensed
   sources, review cameras outside their room, and practical lights outside
@@ -54,6 +58,10 @@ Append-only run root:
 The latest retained source smoke is:
 
 `blender/attempt-04-honesty-smoke`
+
+This retained smoke predates the truthful external-hero receipt update.  Its
+digests below remain historical evidence and must not be relabeled as a build
+of the current visual-profile identity.
 
 It was generated with pinned Blender 4.5.8 LTS, factory startup, Cycles CPU,
 and an explicit 64 px smoke texture override.  It contains 182 architectural
