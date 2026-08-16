@@ -68,7 +68,7 @@ class RealisticInteriorContractTests(unittest.TestCase):
         self.assertEqual(self.profile["architecture_profile"]["collision_policy"], "hidden_r1_proxies")
 
     def test_profile_and_receipt_digests_are_canonical_and_repeatable(self) -> None:
-        expected = "b8d803c0645ed62cb706cc05cdd4ece6670465439827213077c2e3fd2ed5c114"
+        expected = "ad6f53ee847755579918c88c87779b8053032e5cb269e564266a2f71276fd162"
         self.assertEqual(self.profile["content_digest"], expected)
         self.assertEqual(contract.content_digest(self.profile), expected)
         first = self.reseal(self.profile)
@@ -79,6 +79,71 @@ class RealisticInteriorContractTests(unittest.TestCase):
         self.assertEqual(contract.content_digest(reverse_key_order), expected)
         for receipt in self.profile["asset_source_receipts"]:
             self.assertEqual(receipt["receipt_digest"], contract.content_digest(receipt, "receipt_digest"))
+
+    def test_external_hero_receipts_pin_truthful_poly_haven_sources(self) -> None:
+        receipts = {
+            receipt["logical_asset_id"]: receipt
+            for receipt in self.profile["asset_source_receipts"]
+        }
+        expected = {
+            "visual.hero.living_coffee_table": {
+                "source_uri": "polyhaven://models/modern_coffee_table_01",
+                "source_digest": "cf5fac22ac00b8725f91ad4565ddaa32dc5f10b213a0938a92de9e2432c1ddfe",
+                "source_version": "files-31772c0aab6f930a18de82606146c0a97f08b7d0",
+                "min_m": [-0.6009150147438049, -0.30000004172325134, 0],
+                "max_m": [0.6009150147438049, 0.30000004172325134, 0.38999998569488525],
+                "blend_mode": "opaque",
+                "texture_semantics": ["base_color", "normal", "roughness"],
+                "texture_count": 3,
+                "entitlement_record": "local-audit://poly-haven-cc0-20260816/modern_coffee_table_01",
+                "attribution": "Modern Coffee Table 01 by Poly Haven, provided under CC0 1.0.",
+                "receipt_digest": "b1ab6a246f9e80c94c29e2fc4d08be6f2dfed5d19561c9ba8825e387700996d8",
+            },
+            "visual.hero.kitchen_stove": {
+                "source_uri": "polyhaven://models/electric_stove",
+                "source_digest": "c55acbd188af4674ce5c1c8605f2447c5fb830a05b1650b0d03296b419b38795",
+                "source_version": "files-750ee10bdfe78eb6b0b620ef7b5a898e436fb696",
+                "min_m": [-0.25129741430282593, -0.3238105922937393, 0],
+                "max_m": [0.25129741430282593, 0.3238105922937393, 0.8586971759796143],
+                "blend_mode": "masked",
+                "texture_semantics": ["base_color", "normal", "roughness", "metalness", "opacity"],
+                "texture_count": 5,
+                "entitlement_record": "local-audit://poly-haven-cc0-20260816/electric_stove",
+                "attribution": "Electric Stove by Poly Haven, provided under CC0 1.0.",
+                "receipt_digest": "f608bc5af0b28546377d6cab48d0308bfb1e94662d9897a0c179957e53db842b",
+            },
+        }
+
+        for logical_asset_id, pinned in expected.items():
+            receipt = receipts[logical_asset_id]
+            self.assertEqual(receipt["source_kind"], "existing_local")
+            self.assertEqual(receipt["source_uri"], pinned["source_uri"])
+            self.assertEqual(receipt["source_digest"], pinned["source_digest"])
+            self.assertEqual(receipt["source_version"], pinned["source_version"])
+            self.assertEqual(receipt["metric_bounds_m"]["min_m"], pinned["min_m"])
+            self.assertEqual(receipt["metric_bounds_m"]["max_m"], pinned["max_m"])
+            self.assertEqual(receipt["license"]["license_id"], "CC0-1.0")
+            self.assertEqual(
+                receipt["license"]["license_url"],
+                "https://creativecommons.org/publicdomain/zero/1.0/",
+            )
+            self.assertEqual(receipt["license"]["entitlement_status"], "verified")
+            self.assertEqual(receipt["license"]["entitlement_record"], pinned["entitlement_record"])
+            self.assertEqual(receipt["license"]["attribution"], pinned["attribution"])
+            self.assertIn("floor-centered", receipt["license"]["modification_notice"])
+            self.assertIn("identity-root", receipt["license"]["modification_notice"])
+            self.assertEqual(receipt["license"]["commercial_use"], "allowed")
+            self.assertEqual(receipt["license"]["redistribution_restriction"], "project_policy")
+            slot = receipt["material_inventory"]["slots"][0]
+            self.assertEqual(slot["blend_mode"], pinned["blend_mode"])
+            self.assertEqual(slot["texture_semantics"], pinned["texture_semantics"])
+            self.assertEqual(slot["minimum_texture_size_px"], 4096)
+            self.assertEqual(receipt["material_inventory"]["texture_count"], pinned["texture_count"])
+            self.assertEqual(receipt["import_policy"]["nanite"], "disabled_ineligible")
+            self.assertEqual(receipt["import_policy"]["mobility"], "static")
+            self.assertEqual(receipt["import_policy"]["lod_policy"], "single_mesh_measured")
+            self.assertEqual(receipt["import_policy"]["collision_policy"], "hidden_r1_proxy")
+            self.assertEqual(receipt["receipt_digest"], pinned["receipt_digest"])
 
     def test_unknown_and_executable_fields_fail_closed(self) -> None:
         unknown = copy.deepcopy(self.profile)

@@ -170,18 +170,21 @@
     {
       "receipt_id": "source.hero.living_coffee_table",
       "logical_asset_id": "visual.hero.living_coffee_table",
-      "source_kind": "project_authored",
-      "source_uri": "project://vista-playable-home-realism/living-coffee-table",
-      "source_digest": "21fcfe4cdf82056d1b38aec6c766334030d8648c8cb8f1450b35422adbefed1c",
-      "source_version": "recipe_v1",
-      "metric_bounds_m": {"min_m": [-0.62, -0.36, 0], "max_m": [0.62, 0.36, 0.5]},
+      "source_kind": "existing_local",
+      "source_uri": "polyhaven://models/modern_coffee_table_01",
+      "source_digest": "cf5fac22ac00b8725f91ad4565ddaa32dc5f10b213a0938a92de9e2432c1ddfe",
+      "source_version": "files-31772c0aab6f930a18de82606146c0a97f08b7d0",
+      "metric_bounds_m": {
+        "min_m": [-0.6009150147438049, -0.30000004172325134, 0],
+        "max_m": [0.6009150147438049, 0.30000004172325134, 0.38999998569488525]
+      },
       "license": {
-        "license_id": "Apache-2.0",
-        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
-        "entitlement_status": "project_owned",
-        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/living-coffee-table",
-        "attribution": "SimWorld Studio and VISTA World project authors",
-        "modification_notice": "Original project-authored presentation recipe.",
+        "license_id": "CC0-1.0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "entitlement_status": "verified",
+        "entitlement_record": "local-audit://poly-haven-cc0-20260816/modern_coffee_table_01",
+        "attribution": "Modern Coffee Table 01 by Poly Haven, provided under CC0 1.0.",
+        "modification_notice": "The Poly Haven source is floor-centered, uniformly scaled, and exported as an identity-root presentation bundle; source geometry and textures are otherwise retained.",
         "commercial_use": "allowed",
         "redistribution_restriction": "project_policy"
       },
@@ -192,35 +195,38 @@
             "shader_class": "pbr_metallic_roughness",
             "blend_mode": "opaque",
             "texture_semantics": ["base_color", "normal", "roughness"],
-            "minimum_texture_size_px": 2048
+            "minimum_texture_size_px": 4096
           }
         ],
         "texture_count": 3,
         "all_primitives_material_bound": true
       },
       "import_policy": {
-        "nanite": "eligible_static_opaque",
+        "nanite": "disabled_ineligible",
         "mobility": "static",
-        "lod_policy": "nanite",
+        "lod_policy": "single_mesh_measured",
         "collision_policy": "hidden_r1_proxy"
       },
-      "receipt_digest": "69a7e0973a1323cd6491568370c69ec1571fef6d15d9235961a438d75cde6e93"
+      "receipt_digest": "b1ab6a246f9e80c94c29e2fc4d08be6f2dfed5d19561c9ba8825e387700996d8"
     },
     {
       "receipt_id": "source.hero.kitchen_stove",
       "logical_asset_id": "visual.hero.kitchen_stove",
-      "source_kind": "project_authored",
-      "source_uri": "project://vista-playable-home-realism/kitchen-stove",
-      "source_digest": "787959f6a529bde99a5d4024de95abb73fe507fdc1b889c90a08551440f4f5ba",
-      "source_version": "recipe_v1",
-      "metric_bounds_m": {"min_m": [-0.36, -0.34, 0], "max_m": [0.36, 0.34, 0.95]},
+      "source_kind": "existing_local",
+      "source_uri": "polyhaven://models/electric_stove",
+      "source_digest": "c55acbd188af4674ce5c1c8605f2447c5fb830a05b1650b0d03296b419b38795",
+      "source_version": "files-750ee10bdfe78eb6b0b620ef7b5a898e436fb696",
+      "metric_bounds_m": {
+        "min_m": [-0.25129741430282593, -0.3238105922937393, 0],
+        "max_m": [0.25129741430282593, 0.3238105922937393, 0.8586971759796143]
+      },
       "license": {
-        "license_id": "Apache-2.0",
-        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
-        "entitlement_status": "project_owned",
-        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/kitchen-stove",
-        "attribution": "SimWorld Studio and VISTA World project authors",
-        "modification_notice": "Original project-authored presentation recipe.",
+        "license_id": "CC0-1.0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "entitlement_status": "verified",
+        "entitlement_record": "local-audit://poly-haven-cc0-20260816/electric_stove",
+        "attribution": "Electric Stove by Poly Haven, provided under CC0 1.0.",
+        "modification_notice": "The Poly Haven source is floor-centered, uniformly scaled, and exported as an identity-root presentation bundle; source geometry and textures are otherwise retained.",
         "commercial_use": "allowed",
         "redistribution_restriction": "project_policy"
       },
@@ -229,21 +235,21 @@
           {
             "slot_id": "stove_surface",
             "shader_class": "pbr_metallic_roughness",
-            "blend_mode": "opaque",
-            "texture_semantics": ["base_color", "normal", "roughness", "metalness"],
-            "minimum_texture_size_px": 2048
+            "blend_mode": "masked",
+            "texture_semantics": ["base_color", "normal", "roughness", "metalness", "opacity"],
+            "minimum_texture_size_px": 4096
           }
         ],
-        "texture_count": 4,
+        "texture_count": 5,
         "all_primitives_material_bound": true
       },
       "import_policy": {
-        "nanite": "eligible_static_opaque",
+        "nanite": "disabled_ineligible",
         "mobility": "static",
-        "lod_policy": "nanite",
+        "lod_policy": "single_mesh_measured",
         "collision_policy": "hidden_r1_proxy"
       },
-      "receipt_digest": "a6ea810e70d4ba3380c1e7e85ba47c7bc19a82d9366055aa0ccea12a2b85ad2f"
+      "receipt_digest": "f608bc5af0b28546377d6cab48d0308bfb1e94662d9897a0c179957e53db842b"
     },
     {
       "receipt_id": "source.hero.kitchen_dining_table",
@@ -665,5 +671,5 @@
       "home.r1/room.bedroom/entity.phone.01"
     ]
   },
-  "content_digest": "b8d803c0645ed62cb706cc05cdd4ece6670465439827213077c2e3fd2ed5c114"
+  "content_digest": "ad6f53ee847755579918c88c87779b8053032e5cb269e564266a2f71276fd162"
 }
