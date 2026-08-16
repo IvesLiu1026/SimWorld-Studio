@@ -138,7 +138,7 @@ def visual_profile(plan: dict) -> dict:
                 "illuminance_lux": 65000.0,
                 "temperature_k": 5600.0,
             },
-            "sky": {"source": "dynamic_sky", "sky_intensity": 1.0},
+            "sky": {"source": "real_time_capture", "sky_intensity": 1.0},
             "apertures": apertures,
             "practical_lights": practicals,
             "gameplay_exposure": {
@@ -236,8 +236,36 @@ def test_r2_composition_is_additive_and_r1_default_is_byte_stable() -> None:
     assert len(cameras) == 6
     assert all(op["transform"]["rotation_deg"][0] == 0.0 for op in cameras)
     assert not any(op["kind"] == "place_lighting" for op in r2.value["operations"])
-    assert sum(op["kind"] == "place_realistic_lighting" for op in r2.value["operations"]) == 1
+    lighting = [
+        op for op in r2.value["operations"]
+        if op["kind"] == "place_realistic_lighting"
+    ]
+    assert len(lighting) == 1
+    assert lighting[0]["sky"] == {
+        "source": "real_time_capture",
+        "sky_intensity": 1.0,
+    }
     assert r2.value["visual_profile_id"] == "realistic_interior_r2"
+
+    invalid = visual_profile(plan)
+    invalid["lighting_rig"]["sky"]["source"] = "specified_cubemap"
+    with pytest.raises(
+        planning.VistaPlayableHomePlanError,
+        match="lighting sky source must be real_time_capture",
+    ):
+        planning.build_composition_spec(plan, invalid)
+
+
+def test_r2_commandlet_uses_ue57_skylight_properties_and_reload_gate() -> None:
+    commandlet = (
+        ROOT / "tools/ue/vista_playable_home/compose_home_commandlet.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'set_required(sky_component, "intensity",' in commandlet
+    assert 'set_required(sky_component, "real_time_capture", True)' in commandlet
+    assert "unreal.SkyLightSourceType.SLS_CAPTURED_SCENE" in commandlet
+    assert '"intensity_scale"' not in commandlet
+    assert "reloaded r2 sky lost captured-scene real-time intensity" in commandlet
 
 
 def test_renderer_config_and_observation_contract_are_explicit() -> None:

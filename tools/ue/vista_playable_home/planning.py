@@ -460,6 +460,8 @@ def compile_realistic_lighting_operation(
     }
     sky = _mapping(value.get("sky"), "lighting rig sky")
     source = _safe_id(sky.get("source"), "lighting rig sky.source")
+    _require(source == "real_time_capture", "VISTA_HOME_LIGHTING_RIG_INVALID",
+             "lighting sky source must be real_time_capture")
     normalized_sky = {
         "source": source,
         "sky_intensity": _finite_number(sky.get("sky_intensity"),

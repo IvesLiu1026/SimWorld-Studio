@@ -183,7 +183,13 @@ def spawn_r2_lighting(actor_subsystem, operation):
     set_required(sun_component, "use_temperature", True)
     set_required(sun_component, "temperature", sun_spec["temperature_k"])
     set_required(sun_component, "cast_shadows", True)
-    set_required(sky_component, "intensity_scale", operation["sky"]["sky_intensity"])
+    sky_spec = operation["sky"]
+    require(sky_spec.get("source") == "real_time_capture",
+            "unsupported r2 sky source")
+    set_required(sky_component, "source_type",
+                 unreal.SkyLightSourceType.SLS_CAPTURED_SCENE)
+    set_required(sky_component, "real_time_capture", True)
+    set_required(sky_component, "intensity", sky_spec["sky_intensity"])
     created = [sun, sky]
     for light_spec in operation["practical_lights"]:
         actor_class = unreal.RectLight if light_spec["type"] == "rect" else unreal.SpotLight
@@ -693,6 +699,23 @@ def run():
                 "reloaded map lost unbound VISTA post process")
         post_settings = post_volumes[0].get_editor_property("settings")
         if is_r2:
+            sky_lights = [actor for actor in vista_lights
+                          if unreal.Name("VistaLightType=sky") in
+                          actor.get_editor_property("tags")]
+            require(len(sky_lights) == 1,
+                    "reloaded r2 sky light set is not exact")
+            reloaded_sky_component = light_component(sky_lights[0])
+            sky_spec = lighting_operation["sky"]
+            require(reloaded_sky_component is not None and
+                    sky_spec.get("source") == "real_time_capture" and
+                    reloaded_sky_component.get_editor_property("source_type") ==
+                    unreal.SkyLightSourceType.SLS_CAPTURED_SCENE and
+                    bool(reloaded_sky_component.get_editor_property(
+                        "real_time_capture")) and
+                    math.isclose(float(reloaded_sky_component.get_editor_property(
+                        "intensity")), float(sky_spec["sky_intensity"]),
+                        rel_tol=0.0, abs_tol=1e-6),
+                    "reloaded r2 sky lost captured-scene real-time intensity")
             exposure = lighting_operation["gameplay_exposure"]
             require(bool(post_settings.get_editor_property(
                         "override_auto_exposure_method")) and
