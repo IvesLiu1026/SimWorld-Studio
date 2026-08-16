@@ -60,9 +60,19 @@ PLACEMENT_PATH = (
 )
 
 
-def _sources(logical_id: str, asset_type: str, resolution: str, dimensions) -> AcquiredAsset:
-    semantics = ("base_color", "normal", "roughness")
-    files = tuple(
+def _sources(
+    logical_id: str,
+    asset_type: str,
+    resolution: str,
+    dimensions,
+    *,
+    asset_id: str | None = None,
+    provider_hash: str | None = None,
+    source_tree: str | None = None,
+    semantics=("base_color", "normal", "roughness"),
+) -> AcquiredAsset:
+    resolved_asset_id = asset_id or logical_id.rsplit(".", 1)[-1]
+    texture_files = tuple(
         AcquiredFile(
             relative_path=f"textures/{logical_id.rsplit('.', 1)[-1]}_{semantic}.png",
             size_bytes=24,
@@ -72,17 +82,29 @@ def _sources(logical_id: str, asset_type: str, resolution: str, dimensions) -> A
         )
         for semantic in semantics
     )
+    primary_file = AcquiredFile(
+        relative_path="fixture.blend",
+        size_bytes=24,
+        sha256=hashlib.sha256(f"{logical_id}:blend".encode()).hexdigest(),
+        semantic=(),
+        dimensions_px=None,
+    )
+    files = (primary_file, *texture_files) if asset_type == "model" else texture_files
     return AcquiredAsset(
-        asset_id=logical_id.rsplit(".", 1)[-1],
+        asset_id=resolved_asset_id,
         logical_asset_id=logical_id,
         asset_type=asset_type,
         room_role="fixture",
         resolution=resolution,
         file_variant="blend" if asset_type == "model" else "pbr_jpg",
-        provider_files_hash=hashlib.sha1(logical_id.encode()).hexdigest(),
-        source_relative_root=f"assets/{logical_id.rsplit('.', 1)[-1]}",
-        primary_relative_path=f"assets/{logical_id.rsplit('.', 1)[-1]}/fixture.blend",
-        source_tree_sha256=hashlib.sha256(f"tree:{logical_id}".encode()).hexdigest(),
+        provider_files_hash=provider_hash or hashlib.sha1(logical_id.encode()).hexdigest(),
+        source_relative_root=f"assets/{resolved_asset_id}",
+        primary_relative_path=(
+            f"assets/{resolved_asset_id}/fixture.blend"
+            if asset_type == "model"
+            else f"assets/{resolved_asset_id}/{texture_files[0].relative_path}"
+        ),
+        source_tree_sha256=source_tree or hashlib.sha256(f"tree:{logical_id}".encode()).hexdigest(),
         catalog_dimensions_m=dimensions,
         files=files,
     )
@@ -92,8 +114,25 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
     assets = (
         _sources("visual.material.white_oak_veneer", "texture", "4k", None),
         _sources("visual.material.poly_wool_herringbone", "texture", "4k", None),
-        _sources("visual.hero.living_coffee_table", "model", "4k", (1.2, 0.6, 0.39)),
-        _sources("visual.hero.kitchen_stove", "model", "4k", (0.5, 0.64, 0.86)),
+        _sources(
+            "visual.hero.living_coffee_table",
+            "model",
+            "4k",
+            (1.2018300294876099, 0.6000000834465027, 0.38999998569488525),
+            asset_id="modern_coffee_table_01",
+            provider_hash="31772c0aab6f930a18de82606146c0a97f08b7d0",
+            source_tree="cf5fac22ac00b8725f91ad4565ddaa32dc5f10b213a0938a92de9e2432c1ddfe",
+        ),
+        _sources(
+            "visual.hero.kitchen_stove",
+            "model",
+            "4k",
+            (0.5025948286056519, 0.6476211845874786, 0.8586971759796143),
+            asset_id="electric_stove",
+            provider_hash="750ee10bdfe78eb6b0b620ef7b5a898e436fb696",
+            source_tree="c55acbd188af4674ce5c1c8605f2447c5fb830a05b1650b0d03296b419b38795",
+            semantics=("base_color", "metalness", "normal", "opacity", "roughness"),
+        ),
         _sources("visual.dressing.entry.rubber_boots", "model", "2k", (0.4, 0.2, 0.4)),
     )
     return ExternalAssetSet(
@@ -226,8 +265,8 @@ def test_external_plan_uses_room_local_meters_and_keeps_world_room_offset(tmp_pa
     living = next(item for item in plan.rooms if item.kind == "living_room")
     assert coffee.location_m == (0, 0.3, 0)
     assert living.location_m == (-4, -2, 0)
-    assert coffee.room_local_aabb.min_m == pytest.approx((-0.6, 0, 0))
-    assert coffee.room_local_aabb.max_m == pytest.approx((0.6, 0.6, 0.39))
+    assert coffee.room_local_aabb.min_m == pytest.approx((-0.600915, 0, 0))
+    assert coffee.room_local_aabb.max_m == pytest.approx((0.600915, 0.6, 0.39))
     contract = ue_bundle_contract(
         plan,
         living,
