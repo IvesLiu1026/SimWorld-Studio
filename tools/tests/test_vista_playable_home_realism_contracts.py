@@ -68,7 +68,7 @@ class RealisticInteriorContractTests(unittest.TestCase):
         self.assertEqual(self.profile["architecture_profile"]["collision_policy"], "hidden_r1_proxies")
 
     def test_profile_and_receipt_digests_are_canonical_and_repeatable(self) -> None:
-        expected = "69492b9c9df22f80a9de235865a36126b692c84d91209537ddb4b27bc3bd6a2a"
+        expected = "b8d803c0645ed62cb706cc05cdd4ece6670465439827213077c2e3fd2ed5c114"
         self.assertEqual(self.profile["content_digest"], expected)
         self.assertEqual(contract.content_digest(self.profile), expected)
         first = self.reseal(self.profile)
@@ -246,6 +246,23 @@ class RealisticInteriorContractTests(unittest.TestCase):
         self.assert_contract_error(
             "VISTA_VISUAL_REVIEW_SHOT_INVALID",
             lambda: contract.validate_profile(outside_room, self.house),
+        )
+
+    def test_practical_lights_use_world_coordinates_inside_declared_rooms(self) -> None:
+        locations = {
+            light["light_id"]: light["location_cm"]
+            for light in self.profile["lighting_rig"]["practical_lights"]
+        }
+        self.assertEqual(locations["light.entry_hall.01"], [0, -80, 245])
+        self.assertEqual(locations["light.living_room.01"], [-520, -180, 165])
+        self.assertEqual(locations["light.kitchen_dining.01"], [400, -180, 250])
+
+        room_local_mistake = copy.deepcopy(self.profile)
+        room_local_mistake["lighting_rig"]["practical_lights"][1]["location_cm"] = [120, -180, 165]
+        room_local_mistake = self.reseal(room_local_mistake)
+        self.assert_contract_error(
+            "VISTA_VISUAL_LIGHTING_RIG_INVALID",
+            lambda: contract.validate_profile(room_local_mistake, self.house),
         )
 
     def test_public_fixture_contains_no_private_paths_or_unresolved_fallback(self) -> None:

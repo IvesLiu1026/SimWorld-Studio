@@ -250,6 +250,16 @@ def validate_profile(profile: Mapping[str, Any], house: Mapping[str, Any]) -> No
     rooms = {room["room_id"]: room for room in house["rooms"]}
     room_ids = set(rooms)
     entity_ids = {entity["entity_id"] for entity in house["entities"]}
+
+    def point_is_inside_room(point_cm: Iterable[float], room_id: str) -> bool:
+        room = rooms[room_id]
+        location = room["transform"]["location_m"]
+        scale = room["transform"]["scale"]
+        bounds = room["bounds_m"]
+        minimum_cm = [(origin + low * factor) * 100 for origin, low, factor in zip(location, bounds["min_m"], scale)]
+        maximum_cm = [(origin + high * factor) * 100 for origin, high, factor in zip(location, bounds["max_m"], scale)]
+        return all(low <= value <= high for value, low, high in zip(point_cm, minimum_cm, maximum_cm))
+
     finished = set(profile["finished_room_ids"])
     compatibility = set(profile["compatibility_room_ids"])
     if finished != EXPECTED_FINISHED_ROOMS or finished & compatibility or finished | compatibility != room_ids:
@@ -291,14 +301,8 @@ def validate_profile(profile: Mapping[str, Any], house: Mapping[str, Any]) -> No
     for index, shot in enumerate(shots):
         if shot["room_id"] not in finished or shot["eye_location_cm"] == shot["look_at_target_cm"]:
             _fail("VISTA_VISUAL_REVIEW_SHOT_INVALID", f"$.review_shots[{index}]", "Review shot room or look vector is invalid")
-        room = rooms[shot["room_id"]]
-        location = room["transform"]["location_m"]
-        scale = room["transform"]["scale"]
-        bounds = room["bounds_m"]
-        minimum_cm = [(origin + low * factor) * 100 for origin, low, factor in zip(location, bounds["min_m"], scale)]
-        maximum_cm = [(origin + high * factor) * 100 for origin, high, factor in zip(location, bounds["max_m"], scale)]
         for field in ("eye_location_cm", "look_at_target_cm"):
-            if any(value < low or value > high for value, low, high in zip(shot[field], minimum_cm, maximum_cm)):
+            if not point_is_inside_room(shot[field], shot["room_id"]):
                 _fail("VISTA_VISUAL_REVIEW_SHOT_INVALID", f"$.review_shots[{index}].{field}", "Review point is outside its declared room")
         if not set(shot["expected_hero_ids"]).issubset(known_visual_ids):
             _fail("VISTA_VISUAL_REVIEW_SHOT_INVALID", f"$.review_shots[{index}].expected_hero_ids", "Review shot references an unknown hero")
@@ -309,6 +313,13 @@ def validate_profile(profile: Mapping[str, Any], house: Mapping[str, Any]) -> No
     _require_unique((item["light_id"] for item in lights), "$.lighting_rig.practical_lights", "light ID")
     if {light["room_id"] for light in lights} != finished or {light["type"] for light in lights} == {"point"}:
         _fail("VISTA_VISUAL_LIGHTING_RIG_INVALID", "$.lighting_rig.practical_lights", "Finished rooms need non-uniform physical practical lights")
+    for index, light in enumerate(lights):
+        if not point_is_inside_room(light["location_cm"], light["room_id"]):
+            _fail(
+                "VISTA_VISUAL_LIGHTING_RIG_INVALID",
+                f"$.lighting_rig.practical_lights[{index}].location_cm",
+                "Practical light is outside its declared room",
+            )
     exposure = profile["lighting_rig"]["gameplay_exposure"]
     if exposure["min_ev100"] >= exposure["max_ev100"]:
         _fail("VISTA_VISUAL_EXPOSURE_INVALID", "$.lighting_rig.gameplay_exposure", "Exposure range must increase")

@@ -525,7 +525,7 @@
         "light_id": "light.entry_hall.01",
         "room_id": "home.r1/room.entry_hall",
         "type": "spot",
-        "location_cm": [-420, 0, 245],
+        "location_cm": [0, -80, 245],
         "direction": [0, 0, -1],
         "intensity": 850,
         "unit": "lumens",
@@ -536,7 +536,7 @@
         "light_id": "light.living_room.01",
         "room_id": "home.r1/room.living_room",
         "type": "rect",
-        "location_cm": [120, -180, 165],
+        "location_cm": [-520, -180, 165],
         "direction": [-0.2, 0.25, -0.95],
         "intensity": 1100,
         "unit": "lumens",
@@ -547,7 +547,7 @@
         "light_id": "light.kitchen_dining.01",
         "room_id": "home.r1/room.kitchen_dining",
         "type": "rect",
-        "location_cm": [0, 20, 250],
+        "location_cm": [400, -180, 250],
         "direction": [0, 0, -1],
         "intensity": 1600,
         "unit": "lumens",
@@ -665,5 +665,5 @@
       "home.r1/room.bedroom/entity.phone.01"
     ]
   },
-  "content_digest": "69492b9c9df22f80a9de235865a36126b692c84d91209537ddb4b27bc3bd6a2a"
+  "content_digest": "b8d803c0645ed62cb706cc05cdd4ece6670465439827213077c2e3fd2ed5c114"
 }
