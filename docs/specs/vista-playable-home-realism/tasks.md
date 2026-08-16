@@ -12,8 +12,10 @@ Depends on: requirements.md, design.md
   8000, and canonical VISTA data unchanged.
 - Generated assets and evidence use fresh append-only run roots and stay out of
   Git.
-- External download, purchase, account use, paid API, or public deployment
-  requires its own explicit approval.
+- External 2K/4K downloads and a non-GPU-1 Unreal 5.7 validation run were
+  explicitly approved on 2026-08-16.  Purchase, new credential/account use,
+  paid API, redistribution, or public deployment still requires separate
+  approval.
 - Stage named files only; one logical commit per reviewable change.
 
 ## Task List
@@ -119,6 +121,10 @@ Depends on: requirements.md, design.md
   - Validation: each acquired item has a verifiable account entitlement,
     applicable license, exact source hash, allowed collaboration/redistribution
     policy, and approved contact-sheet entry.
+  - Authorization: granted by the user with “允許！” on 2026-08-16 for external
+    2K/4K assets stored on NAS.  Prefer account-free CC0 sources; Fab assets may
+    proceed only when an existing entitlement can be verified without purchase
+    or new credentials.
 
 - [ ] T10. Separate presentation from semantic collision/gameplay actors
   - Files: tools/ue/vista_playable_home/planning.py,
@@ -249,5 +255,6 @@ Depends on: requirements.md, design.md
 - The current live r1 runtime and Sunshine process remain untouched during the
   spec phase.
 - The user approved requirements, design, and tasks on 2026-08-16 with
-  “批准”.  The zero-download/local-first asset policy is active; T9 remains a
-  separate external-acquisition gate.
+  “批准”, then opened the external 2K/4K and non-GPU-1 Unreal validation gate
+  with “允許！”.  Purchase, credentials, paid APIs, public deployment, GPU 1,
+  and the accepted r1 runtime remain outside that authorization.

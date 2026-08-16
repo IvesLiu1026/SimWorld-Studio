@@ -24,11 +24,17 @@ Updated: 2026-08-16
     import/composition wiring, closed reload observations, and focused tests;
   - indoor camera: additive r2 third-person spring-arm profile and focused
     source tests.
-- Active isolated workers: none; `/root` owns final integration and evidence.
+- Active isolated read-only workers:
+  - `realism_asset_shortlist`: licensed 2K/4K candidate/source research;
+  - `realism_ue_readiness`: UE/GPU/NAS/runtime readiness audit;
+  - `realism_forge_review`: external-asset forge integration review.
+  `/root` alone owns source integration, downloads, generated attempts, and
+  runtime lifecycle until a later written handoff changes ownership.
 
 ## Runtime Ownership
 
-- None during contract/source implementation.
+- `/root` owns the approved r2 validation lifecycle on a safe GPU selected
+  after the readiness audit, with GPU 0 preferred by the approved requirements.
 - Do not restart, replace, or stop the accepted r1 packaged runtime.
 - Do not touch GPU 1 or its existing Unreal processes.
 - Do not change Sunshine, Tailscale, production port 8000, or the r1 package
@@ -36,11 +42,13 @@ Updated: 2026-08-16
 
 ## External-State Gates
 
-- No external asset download, purchase, Epic/Fab account use, paid model/API,
-  upload, public deployment, or long-running GPU build is authorized by the
-  implementation approval.
-- Generated implementation artifacts will use a new append-only run root after
-  approval.
+- The user authorized external 2K/4K asset downloads to NAS and a non-GPU-1
+  Unreal 5.7 import/Lumen/package validation run with “允許！” on 2026-08-16.
+- Default acquisition is account-free CC0 with exact URL, licence, size, and
+  SHA-256 receipts.  Existing Fab/Epic entitlement may be used only if it can
+  be verified locally; purchase, new credentials, paid APIs, uploads, public
+  deployment, and redistribution remain unauthorized.
+- Every generated implementation artifact uses a new append-only attempt.
 
 ## Handoff
 
@@ -59,5 +67,6 @@ Updated: 2026-08-16
   smoke-only and not visually accepted.  The retained local hero audit is
   `asset-audit/attempt-01-hssd-hero-gap` and correctly reports incomplete
   coverage without a promotion gate.
-- The accepted r1 live runtime remains untouched.  No r2 Unreal commandlet,
-  package, or GPU execution has been authorized or run in this phase.
+- The accepted r1 live runtime remains untouched.  The r2 GPU run is now
+  authorized but has not yet started; readiness and resource ownership must be
+  recorded before launch.

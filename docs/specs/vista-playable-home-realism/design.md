@@ -455,9 +455,10 @@ identity.  No “photorealistic” or “GTA-grade” label is emitted automatic
 
 ## Open Questions
 
-- Hero asset procurement policy is intentionally deferred to its explicit gate:
-  existing/project-authored only, or user-authorized Fab acquisition with
-  entitlement receipts.
+- The hero-asset gate is open for account-free, no-payment 2K/4K sources with
+  verifiable licences and NAS storage.  Fab/Epic use remains conditional on an
+  existing verifiable entitlement; purchase or new credentials are not
+  authorized.
 - Hardware Lumen/ray tracing is evaluated after the software-Lumen slice; it is
   not an approval blocker.
 
@@ -465,4 +466,5 @@ identity.  No “photorealistic” or “GTA-grade” label is emitted automatic
 
 - Requested by: user
 - Approved by: user, “批准”
+- External/GPU gate approved by: user, “允許！”
 - Date: 2026-08-16

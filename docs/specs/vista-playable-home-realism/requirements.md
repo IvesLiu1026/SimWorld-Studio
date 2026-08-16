@@ -293,13 +293,16 @@ Acceptance notes:
 
 ## Open Questions
 
-No question blocks contract and architectural work.  Before the hero-asset
-beauty pass, the user must choose whether to authorize Fab/external downloads
-and confirm the applicable Epic/Fab account entitlement.  Until then the
-implementation uses project-authored and already-local licensed sources only.
+External 2K/4K acquisition and a non-GPU-1 Unreal 5.7 validation run are now
+authorized.  Acquisition defaults to no-account, no-payment sources with a
+verifiable licence (preferably CC0) and NAS storage.  Fab/Epic content remains
+conditional on an already-valid, locally verifiable account entitlement; this
+approval does not authorize a purchase, credential creation, or redistribution
+outside the private research/demo build.
 
 ## Approval
 
 - Requested by: user, “那我現在想要 GTA 等級的寫實室內”
 - Approved by: user, “批准”
+- External/GPU gate approved by: user, “允許！”
 - Date: 2026-08-16
