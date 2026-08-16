@@ -28,8 +28,22 @@ from typing import Any, Callable, Mapping, Sequence
 
 
 RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v1"
+R2_RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v2"
 SOURCE_BUILD_SCHEMA = "simworld.vista.playable-home-ue-build-result/v1"
 SOURCE_ACCEPTANCE_SCHEMA = "simworld.vista.playable-home-runtime-acceptance/v1"
+R2_SOURCE_ACCEPTANCE_SCHEMA = "simworld.vista.playable-home-runtime-acceptance/v2"
+R2_RUNTIME_PROFILE = "realistic_interior_r2"
+R2_CAMERA_PROFILE = "realistic_interior_r2"
+R2_DISPLAY = ":119"
+R2_GPU = 0
+R2_VISTA_WORLD_PORT = 55630
+R2_WIDTH = 1920
+R2_HEIGHT = 1080
+R2_FPS = 60
+R2_PRESENTATION_BUNDLE_COUNT = 3
+R2_PRESENTATION_COLLISION_POLICY = (
+    "presentation_no_collision_use_hidden_r1_proxies"
+)
 EXPECTED_MAP_PATH = "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
 EXPECTED_REVISION = "vista_playable_home_r1"
 EXPECTED_ATTEMPT_PARENT = "package-linux-development"
@@ -87,6 +101,57 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     ),
 )
 
+R2_ACCEPTANCE_BINDING_KEYS = frozenset(
+    {
+        "workspace",
+        "runtime_state",
+        "runtime_state_sha256",
+        "build_result",
+        "build_result_sha256",
+        "repo_root",
+        "source_commit",
+        "source_clean",
+        "host",
+        "port",
+        "world_revision",
+        "map_path",
+        "project",
+        "runtime_profile",
+        "camera_profile",
+        "display",
+        "gpu",
+        "width",
+        "height",
+        "fps",
+        "launch_plan",
+        "launch_plan_sha256",
+    }
+)
+R2_BUILD_DIGEST_FIELDS = (
+    "visual_profile_sha256",
+    "visual_profile_content_digest",
+    "renderer_profile_request_sha256",
+    "renderer_profile_request_content_digest",
+    "presentation_import_receipt_sha256",
+    "presentation_scene_receipt_sha256",
+    "presentation_manifest_sha256",
+    "presentation_artifact_receipt_sha256",
+)
+R2_PACKAGE_BINDING_FIELDS = (
+    "runtime_profile",
+    "camera_profile",
+    "visual_profile_id",
+    *R2_BUILD_DIGEST_FIELDS,
+    "accepted_display",
+    "accepted_gpu",
+    "accepted_vista_world_port",
+    "accepted_width",
+    "accepted_height",
+    "accepted_fps",
+    "presentation_bundle_count",
+    "presentation_collision_policy",
+)
+
 
 class PackageReceiptError(RuntimeError):
     """A bounded, non-secret package verification failure."""
@@ -117,6 +182,8 @@ class PackageInputs:
     source_acceptance_result: Mapping[str, Any]
     project_descriptor: Path
     project_config: Path
+    runtime_profile: str | None
+    camera_profile: str | None
 
 
 @dataclass(frozen=True)
@@ -245,6 +312,96 @@ def _validate_map(value: str) -> str:
     return map_path
 
 
+def _content_digest(value: Mapping[str, Any]) -> str:
+    body = dict(value)
+    body.pop("content_digest", None)
+    return sha256_bytes(canonical_json(body))
+
+
+def _validate_r2_source_chain(
+    *,
+    source_result: Mapping[str, Any],
+    acceptance: Mapping[str, Any],
+    bindings: Mapping[str, Any],
+    source: Path,
+    source_pin: str,
+    source_acceptance: Path,
+    commit: str,
+    map_path: str,
+) -> None:
+    if set(bindings) != R2_ACCEPTANCE_BINDING_KEYS:
+        raise PackageReceiptError(
+            "SOURCE_ACCEPTANCE_INVALID",
+            "r2 source acceptance binding fields differ",
+        )
+    fixed_acceptance = {
+        "build_result": str(source),
+        "build_result_sha256": source_pin,
+        "source_commit": commit,
+        "source_clean": True,
+        "host": "127.0.0.1",
+        "port": R2_VISTA_WORLD_PORT,
+        "world_revision": EXPECTED_REVISION,
+        "map_path": map_path,
+        "runtime_profile": R2_RUNTIME_PROFILE,
+        "camera_profile": R2_CAMERA_PROFILE,
+        "display": R2_DISPLAY,
+        "gpu": R2_GPU,
+        "width": R2_WIDTH,
+        "height": R2_HEIGHT,
+        "fps": R2_FPS,
+    }
+    if any(bindings.get(key) != value for key, value in fixed_acceptance.items()):
+        raise PackageReceiptError(
+            "SOURCE_ACCEPTANCE_INVALID",
+            "r2 source acceptance profile/build binding differs",
+        )
+    for field in (
+        "runtime_state_sha256",
+        "launch_plan_sha256",
+    ):
+        value = bindings.get(field)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise PackageReceiptError(
+                "SOURCE_ACCEPTANCE_INVALID",
+                f"r2 source acceptance {field} is invalid",
+            )
+    if (
+        acceptance.get("output") != str(source_acceptance)
+        or acceptance.get("error") is not None
+        or acceptance.get("initial_generation") != 0
+        or not isinstance(acceptance.get("checks"), list)
+        or not acceptance["checks"]
+    ):
+        raise PackageReceiptError(
+            "SOURCE_ACCEPTANCE_INVALID",
+            "r2 source acceptance did not retain a successful observed run",
+        )
+    if (
+        source_result.get("content_digest") != _content_digest(source_result)
+        or source_result.get("visual_profile_id") != R2_RUNTIME_PROFILE
+        or source_result.get("renderer_runtime_observation") != "pending"
+        or source_result.get("presentation_bundle_count")
+        != R2_PRESENTATION_BUNDLE_COUNT
+        or source_result.get("presentation_collision_policy")
+        != R2_PRESENTATION_COLLISION_POLICY
+        or source_result.get("presentation_ue_import_observation")
+        != "verified_by_commandlet"
+        or source_result.get("presentation_runtime_play_proof") != "pending"
+    ):
+        raise PackageReceiptError(
+            "SOURCE_RESULT_INVALID",
+            "r2 source build presentation identity differs",
+        )
+    for field in R2_BUILD_DIGEST_FIELDS:
+        value = source_result.get(field)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise PackageReceiptError(
+                "SOURCE_RESULT_INVALID",
+                f"r2 source build {field} is invalid",
+            )
+
+
 def _only_pak(directory: Path) -> Path:
     entries: list[Path] = []
     try:
@@ -302,8 +459,12 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
         source_acceptance, label="source runtime acceptance"
     )
     acceptance_bindings = source_acceptance_result.get("bindings")
+    acceptance_schema = source_acceptance_result.get("schema")
     if (
-        source_acceptance_result.get("schema") != SOURCE_ACCEPTANCE_SCHEMA
+        acceptance_schema not in {
+            SOURCE_ACCEPTANCE_SCHEMA,
+            R2_SOURCE_ACCEPTANCE_SCHEMA,
+        }
         or source_acceptance_result.get("status") != "accepted"
         or not isinstance(acceptance_bindings, dict)
         or acceptance_bindings.get("build_result") != str(source)
@@ -315,6 +476,21 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
             "SOURCE_ACCEPTANCE_INVALID",
             "source acceptance does not bind the build, commit, and map",
         )
+    runtime_profile: str | None = None
+    camera_profile: str | None = None
+    if acceptance_schema == R2_SOURCE_ACCEPTANCE_SCHEMA:
+        _validate_r2_source_chain(
+            source_result=source_result,
+            acceptance=source_acceptance_result,
+            bindings=acceptance_bindings,
+            source=source,
+            source_pin=pin,
+            source_acceptance=source_acceptance,
+            commit=commit,
+            map_path=map_path,
+        )
+        runtime_profile = R2_RUNTIME_PROFILE
+        camera_profile = R2_CAMERA_PROFILE
 
     unreal_pak = _canonical_existing(Path(args.unreal_pak), "UnrealPak")
     if len(unreal_pak.parents) < 4:
@@ -371,6 +547,8 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
         source_acceptance_result=source_acceptance_result,
         project_descriptor=project_descriptor,
         project_config=project_config,
+        runtime_profile=runtime_profile,
+        camera_profile=camera_profile,
     )
 
 
@@ -869,20 +1047,46 @@ def verify_package(
     archive = inspect_archive(
         inputs.archive_root, trusted_engine_root=inputs.engine_root
     )
+    bindings: dict[str, Any] = {
+        "source_build_result": str(inputs.source_build_result),
+        "source_build_result_sha256": inputs.source_build_result_sha256,
+        "source_commit": inputs.source_commit,
+        "source_runtime_acceptance": str(inputs.source_acceptance),
+        "source_runtime_acceptance_sha256": inputs.source_acceptance_sha256,
+        "map_path": inputs.map_path,
+        "world_revision": EXPECTED_REVISION,
+    }
+    if inputs.runtime_profile == R2_RUNTIME_PROFILE:
+        source = inputs.source_result
+        acceptance_bindings = inputs.source_acceptance_result["bindings"]
+        bindings.update(
+            {
+                "runtime_profile": R2_RUNTIME_PROFILE,
+                "camera_profile": R2_CAMERA_PROFILE,
+                "visual_profile_id": source["visual_profile_id"],
+                **{field: source[field] for field in R2_BUILD_DIGEST_FIELDS},
+                "accepted_display": acceptance_bindings["display"],
+                "accepted_gpu": acceptance_bindings["gpu"],
+                "accepted_vista_world_port": acceptance_bindings["port"],
+                "accepted_width": acceptance_bindings["width"],
+                "accepted_height": acceptance_bindings["height"],
+                "accepted_fps": acceptance_bindings["fps"],
+                "presentation_bundle_count": source["presentation_bundle_count"],
+                "presentation_collision_policy": source[
+                    "presentation_collision_policy"
+                ],
+            }
+        )
     return {
-        "schema": RECEIPT_SCHEMA,
+        "schema": (
+            R2_RECEIPT_SCHEMA
+            if inputs.runtime_profile == R2_RUNTIME_PROFILE
+            else RECEIPT_SCHEMA
+        ),
         "status": "accepted",
         "created_at": utc_now(),
         "attempt_root": str(inputs.attempt_root),
-        "bindings": {
-            "source_build_result": str(inputs.source_build_result),
-            "source_build_result_sha256": inputs.source_build_result_sha256,
-            "source_commit": inputs.source_commit,
-            "source_runtime_acceptance": str(inputs.source_acceptance),
-            "source_runtime_acceptance_sha256": inputs.source_acceptance_sha256,
-            "map_path": inputs.map_path,
-            "world_revision": EXPECTED_REVISION,
-        },
+        "bindings": bindings,
         "artifacts": {
             "archive_root": str(inputs.archive_root),
             "launcher": _artifact(inputs.launcher, inputs.attempt_root),

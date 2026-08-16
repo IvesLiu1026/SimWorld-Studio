@@ -45,6 +45,7 @@ else:
 
 
 PACKAGE_RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v1"
+R2_PACKAGE_RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v2"
 SMOKE_RECEIPT_SCHEMA = "simworld.vista.playable-home-packaged-smoke/v1"
 EXPECTED_MAP_PATH = "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
 EXPECTED_ATTEMPT_PARENT = "package-linux-development"
@@ -201,8 +202,12 @@ def validate_inputs(args: argparse.Namespace) -> SmokeInputs:
     if not SHA256_RE.fullmatch(pin) or not hmac.compare_digest(sha256_file(receipt_path), pin):
         raise PackagedSmokeError("PACKAGE_PIN_MISMATCH", "package receipt SHA differs")
     receipt = _load_receipt(receipt_path)
+    receipt_schema = receipt.get("schema")
     if (
-        receipt.get("schema") != PACKAGE_RECEIPT_SCHEMA
+        receipt_schema not in {
+            PACKAGE_RECEIPT_SCHEMA,
+            R2_PACKAGE_RECEIPT_SCHEMA,
+        }
         or receipt.get("status") != "accepted"
         or receipt.get("attempt_root") != str(root)
     ):
@@ -215,6 +220,20 @@ def validate_inputs(args: argparse.Namespace) -> SmokeInputs:
         or bindings.get("world_revision") != DEFAULT_WORLD_REVISION
     ):
         raise PackagedSmokeError("PACKAGE_MAP_INVALID", "package map or revision differs")
+    if receipt_schema == R2_PACKAGE_RECEIPT_SCHEMA and (
+        bindings.get("runtime_profile") != package_verifier.R2_RUNTIME_PROFILE
+        or bindings.get("camera_profile") != package_verifier.R2_CAMERA_PROFILE
+        or bindings.get("accepted_display") != package_verifier.R2_DISPLAY
+        or bindings.get("accepted_gpu") != package_verifier.R2_GPU
+        or bindings.get("accepted_vista_world_port")
+        != package_verifier.R2_VISTA_WORLD_PORT
+        or bindings.get("accepted_width") != package_verifier.R2_WIDTH
+        or bindings.get("accepted_height") != package_verifier.R2_HEIGHT
+        or bindings.get("accepted_fps") != package_verifier.R2_FPS
+    ):
+        raise PackagedSmokeError(
+            "PACKAGE_PROFILE_INVALID", "r2 package profile binding differs"
+        )
     artifacts = _mapping(receipt.get("artifacts"), "package artifacts")
     launcher_record = _mapping(artifacts.get("launcher"), "launcher artifact")
     if launcher_record.get("relative_path") != LAUNCHER_RELATIVE.as_posix():

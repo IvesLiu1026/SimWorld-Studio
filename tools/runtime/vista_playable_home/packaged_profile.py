@@ -120,6 +120,9 @@ BINDING_KEYS = frozenset(
         "world_revision",
     }
 )
+R2_BINDING_KEYS = BINDING_KEYS | frozenset(
+    package_verifier.R2_PACKAGE_BINDING_FIELDS
+)
 ARTIFACT_KEYS = frozenset({"archive_root", "launcher", "executable", "pak"})
 ARTIFACT_RECORD_KEYS = frozenset(
     {"relative_path", "sha256", "bytes", "executable"}
@@ -160,6 +163,16 @@ class PackageBinding:
     pak_sha256: str
     map_path: str
     world_revision: str
+    runtime_profile: str | None = None
+    camera_profile: str | None = None
+    visual_profile_sha256: str | None = None
+    visual_profile_content_digest: str | None = None
+    renderer_profile_request_sha256: str | None = None
+    renderer_profile_request_content_digest: str | None = None
+    presentation_import_receipt_sha256: str | None = None
+    presentation_scene_receipt_sha256: str | None = None
+    presentation_manifest_sha256: str | None = None
+    presentation_artifact_receipt_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -438,15 +451,25 @@ def validate_package_attempt(
         )
     if set(receipt) != RECEIPT_KEYS:
         raise PackagedProfileError("RECEIPT_SHAPE_INVALID", "package receipt fields differ")
+    receipt_schema = receipt.get("schema")
+    if receipt_schema == package_verifier.RECEIPT_SCHEMA:
+        package_runtime_profile = None
+        binding_keys = BINDING_KEYS
+    elif receipt_schema == package_verifier.R2_RECEIPT_SCHEMA:
+        package_runtime_profile = R2_RUNTIME_PROFILE
+        binding_keys = R2_BINDING_KEYS
+    else:
+        raise PackagedProfileError(
+            "RECEIPT_IDENTITY_INVALID", "package receipt schema differs"
+        )
     if (
-        receipt.get("schema") != package_verifier.RECEIPT_SCHEMA
-        or receipt.get("status") != "accepted"
+        receipt.get("status") != "accepted"
         or receipt.get("attempt_root") != str(root)
         or receipt.get("output") != str(receipt_path)
     ):
         raise PackagedProfileError("RECEIPT_IDENTITY_INVALID", "package receipt identity differs")
 
-    bindings = _mapping(receipt.get("bindings"), "package bindings", BINDING_KEYS)
+    bindings = _mapping(receipt.get("bindings"), "package bindings", binding_keys)
     if (
         bindings.get("map_path") != EXPECTED_MAP_PATH
         or bindings.get("world_revision") != EXPECTED_WORLD_REVISION
@@ -462,6 +485,34 @@ def validate_package_attempt(
         )
     ):
         raise PackagedProfileError("PACKAGE_BINDING_INVALID", "package source/map bindings differ")
+    if package_runtime_profile == R2_RUNTIME_PROFILE:
+        r2_fixed = {
+            "runtime_profile": R2_RUNTIME_PROFILE,
+            "camera_profile": R2_CAMERA_PROFILE,
+            "visual_profile_id": R2_RUNTIME_PROFILE,
+            "accepted_display": package_verifier.R2_DISPLAY,
+            "accepted_gpu": package_verifier.R2_GPU,
+            "accepted_vista_world_port": package_verifier.R2_VISTA_WORLD_PORT,
+            "accepted_width": package_verifier.R2_WIDTH,
+            "accepted_height": package_verifier.R2_HEIGHT,
+            "accepted_fps": package_verifier.R2_FPS,
+            "presentation_bundle_count": (
+                package_verifier.R2_PRESENTATION_BUNDLE_COUNT
+            ),
+            "presentation_collision_policy": (
+                package_verifier.R2_PRESENTATION_COLLISION_POLICY
+            ),
+        }
+        if any(bindings.get(key) != value for key, value in r2_fixed.items()):
+            raise PackagedProfileError(
+                "PACKAGE_BINDING_INVALID", "r2 package source/profile bindings differ"
+            )
+        for field in package_verifier.R2_BUILD_DIGEST_FIELDS:
+            value = bindings.get(field)
+            if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+                raise PackagedProfileError(
+                    "PACKAGE_BINDING_INVALID", f"r2 package {field} is invalid"
+                )
 
     artifacts = _mapping(receipt.get("artifacts"), "package artifacts", ARTIFACT_KEYS)
     archive_root_value = artifacts.get("archive_root")
@@ -589,6 +640,34 @@ def validate_package_attempt(
         pak_sha256=pak_sha,
         map_path=EXPECTED_MAP_PATH,
         world_revision=EXPECTED_WORLD_REVISION,
+        runtime_profile=package_runtime_profile,
+        camera_profile=(
+            R2_CAMERA_PROFILE
+            if package_runtime_profile == R2_RUNTIME_PROFILE
+            else None
+        ),
+        visual_profile_sha256=bindings.get("visual_profile_sha256"),
+        visual_profile_content_digest=bindings.get(
+            "visual_profile_content_digest"
+        ),
+        renderer_profile_request_sha256=bindings.get(
+            "renderer_profile_request_sha256"
+        ),
+        renderer_profile_request_content_digest=bindings.get(
+            "renderer_profile_request_content_digest"
+        ),
+        presentation_import_receipt_sha256=bindings.get(
+            "presentation_import_receipt_sha256"
+        ),
+        presentation_scene_receipt_sha256=bindings.get(
+            "presentation_scene_receipt_sha256"
+        ),
+        presentation_manifest_sha256=bindings.get(
+            "presentation_manifest_sha256"
+        ),
+        presentation_artifact_receipt_sha256=bindings.get(
+            "presentation_artifact_receipt_sha256"
+        ),
     )
 
 
@@ -622,6 +701,14 @@ def profile_from_binding(
             "PROFILE_FIXED_VALUE_INVALID",
             "runtime profile is not one of the closed profiles",
         ) from exc
+    if (
+        binding.runtime_profile != spec.runtime_profile
+        or binding.camera_profile != spec.camera_profile
+    ):
+        raise PackagedProfileError(
+            "PACKAGE_PROFILE_MISMATCH",
+            "package receipt and requested runtime profile differ",
+        )
     profile = {
         "schema": R2_PROFILE_SCHEMA if runtime_profile is not None else PROFILE_SCHEMA,
         "mode": R2_PROFILE_MODE if runtime_profile is not None else PROFILE_MODE,

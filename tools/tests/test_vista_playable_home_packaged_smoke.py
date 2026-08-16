@@ -140,6 +140,28 @@ class PackagedSmokeTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", environment)
         self.assertNotIn("STUDIO_ACCESS_TOKEN", environment)
 
+    def test_realistic_r2_package_receipt_is_admitted_only_with_fixed_binding(self) -> None:
+        self.package_receipt["schema"] = smoke.R2_PACKAGE_RECEIPT_SCHEMA
+        self.package_receipt["bindings"].update(
+            {
+                "runtime_profile": package.R2_RUNTIME_PROFILE,
+                "camera_profile": package.R2_CAMERA_PROFILE,
+                "accepted_display": package.R2_DISPLAY,
+                "accepted_gpu": package.R2_GPU,
+                "accepted_vista_world_port": package.R2_VISTA_WORLD_PORT,
+                "accepted_width": package.R2_WIDTH,
+                "accepted_height": package.R2_HEIGHT,
+                "accepted_fps": package.R2_FPS,
+            }
+        )
+        self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
+        self.assertEqual(self.inputs().receipt["schema"], smoke.R2_PACKAGE_RECEIPT_SCHEMA)
+
+        self.package_receipt["bindings"]["accepted_gpu"] = 1
+        self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
+        with self.assertRaisesRegex(smoke.PackagedSmokeError, "PACKAGE_PROFILE_INVALID"):
+            self.inputs()
+
     def test_real_owned_process_group_is_probed_terminated_and_sealed(self) -> None:
         inputs = self.inputs()
         probe_calls = 0

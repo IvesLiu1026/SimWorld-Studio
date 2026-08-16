@@ -144,6 +144,75 @@ class PackageReceiptTests(unittest.TestCase):
             unreal_pak=self.unreal_pak,
         )
 
+    def enable_r2_source_chain(self) -> None:
+        source_result = {
+            "schema_version": package.SOURCE_BUILD_SCHEMA,
+            "status": "accepted_candidate",
+            "timestamp_utc": "2026-08-16T08:00:00+00:00",
+            "attempt_root": str(self.source_result.parent),
+            "revision": package.EXPECTED_REVISION,
+            "map_path": package.EXPECTED_MAP_PATH,
+            "execution_sha256": "1" * 64,
+            "import_receipt_sha256": "2" * 64,
+            "scene_receipt_sha256": "3" * 64,
+            "copy_methods": {"copy": 3},
+            "runtime_play_proof": "pending",
+            "visual_profile_id": package.R2_RUNTIME_PROFILE,
+            "visual_profile_sha256": "4" * 64,
+            "visual_profile_content_digest": "5" * 64,
+            "renderer_profile_request_sha256": "6" * 64,
+            "renderer_profile_request_content_digest": "7" * 64,
+            "renderer_runtime_observation": "pending",
+            "base_scene_receipt_sha256": "3" * 64,
+            "presentation_import_receipt_sha256": "8" * 64,
+            "presentation_scene_receipt_sha256": "9" * 64,
+            "presentation_manifest_sha256": "a" * 64,
+            "presentation_artifact_receipt_sha256": "b" * 64,
+            "presentation_bundle_count": package.R2_PRESENTATION_BUNDLE_COUNT,
+            "presentation_collision_policy": package.R2_PRESENTATION_COLLISION_POLICY,
+            "presentation_ue_import_observation": "verified_by_commandlet",
+            "presentation_runtime_play_proof": "pending",
+        }
+        source_result["content_digest"] = package._content_digest(source_result)
+        self.source_result.write_text(json.dumps(source_result), encoding="utf-8")
+        source_pin = package.sha256_file(self.source_result)
+        acceptance = {
+            "schema": package.R2_SOURCE_ACCEPTANCE_SCHEMA,
+            "status": "accepted",
+            "created_at": "2026-08-16T08:10:00+00:00",
+            "completed_at": "2026-08-16T08:11:00+00:00",
+            "output": str(self.source_acceptance),
+            "bindings": {
+                "workspace": str(self.source_result.parent),
+                "runtime_state": str(self.source_result.parent / "runtime-state.json"),
+                "runtime_state_sha256": "c" * 64,
+                "build_result": str(self.source_result),
+                "build_result_sha256": source_pin,
+                "repo_root": str(self.source_result.parent / "repo"),
+                "source_commit": "a" * 40,
+                "source_clean": True,
+                "host": "127.0.0.1",
+                "port": package.R2_VISTA_WORLD_PORT,
+                "world_revision": package.EXPECTED_REVISION,
+                "map_path": package.EXPECTED_MAP_PATH,
+                "project": str(self.source_result.parent / "project.uproject"),
+                "runtime_profile": package.R2_RUNTIME_PROFILE,
+                "camera_profile": package.R2_CAMERA_PROFILE,
+                "display": package.R2_DISPLAY,
+                "gpu": package.R2_GPU,
+                "width": package.R2_WIDTH,
+                "height": package.R2_HEIGHT,
+                "fps": package.R2_FPS,
+                "launch_plan": str(self.source_result.parent / "launch-plan.json"),
+                "launch_plan_sha256": "d" * 64,
+            },
+            "initial_generation": 0,
+            "final_generation": 9,
+            "checks": [{"step": "fixture.observed"}],
+            "error": None,
+        }
+        self.source_acceptance.write_text(json.dumps(acceptance), encoding="utf-8")
+
     @staticmethod
     def runner(name: str, arguments, timeout: float) -> package.ToolResult:
         del timeout
@@ -188,6 +257,42 @@ class PackageReceiptTests(unittest.TestCase):
         self.assertEqual(inputs.output.read_bytes(), package.canonical_json(receipt))
         with self.assertRaises(FileExistsError):
             package.write_exclusive_receipt(inputs.output, receipt)
+
+    def test_realistic_r2_package_retains_the_observed_source_chain(self) -> None:
+        self.enable_r2_source_chain()
+        inputs = package.validate_inputs(self.args())
+        self.assertEqual(inputs.runtime_profile, package.R2_RUNTIME_PROFILE)
+        receipt = package.verify_package(inputs, self.runner)
+        self.assertEqual(receipt["schema"], package.R2_RECEIPT_SCHEMA)
+        bindings = receipt["bindings"]
+        self.assertEqual(bindings["runtime_profile"], package.R2_RUNTIME_PROFILE)
+        self.assertEqual(bindings["camera_profile"], package.R2_CAMERA_PROFILE)
+        self.assertEqual(bindings["accepted_display"], package.R2_DISPLAY)
+        self.assertEqual(
+            bindings["accepted_vista_world_port"], package.R2_VISTA_WORLD_PORT
+        )
+        self.assertEqual(bindings["visual_profile_sha256"], "4" * 64)
+        self.assertEqual(bindings["presentation_manifest_sha256"], "a" * 64)
+
+    def test_realistic_r2_source_profile_or_digest_drift_is_rejected(self) -> None:
+        self.enable_r2_source_chain()
+        acceptance = json.loads(self.source_acceptance.read_text(encoding="utf-8"))
+        acceptance["bindings"]["camera_profile"] = "default"
+        self.source_acceptance.write_text(json.dumps(acceptance), encoding="utf-8")
+        with self.assertRaisesRegex(package.PackageReceiptError, "SOURCE_ACCEPTANCE_INVALID"):
+            package.validate_inputs(self.args())
+
+        self.enable_r2_source_chain()
+        source = json.loads(self.source_result.read_text(encoding="utf-8"))
+        source["presentation_manifest_sha256"] = "f" * 64
+        self.source_result.write_text(json.dumps(source), encoding="utf-8")
+        acceptance = json.loads(self.source_acceptance.read_text(encoding="utf-8"))
+        acceptance["bindings"]["build_result_sha256"] = package.sha256_file(
+            self.source_result
+        )
+        self.source_acceptance.write_text(json.dumps(acceptance), encoding="utf-8")
+        with self.assertRaisesRegex(package.PackageReceiptError, "SOURCE_RESULT_INVALID"):
+            package.validate_inputs(self.args())
 
     def test_tool_calls_are_fixed_argv_without_shell_surface(self) -> None:
         inputs = package.validate_inputs(self.args())

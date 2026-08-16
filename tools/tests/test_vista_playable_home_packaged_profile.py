@@ -131,6 +131,36 @@ class PackagedProfileFixture:
         self,
         runtime_profile: str | None = None,
     ) -> packaged_profile.ProfileWriteResult:
+        if runtime_profile == runtime.R2_RUNTIME_PROFILE:
+            self.receipt["schema"] = package_verifier.R2_RECEIPT_SCHEMA
+            self.receipt["bindings"].update(
+                {
+                    "runtime_profile": runtime.R2_RUNTIME_PROFILE,
+                    "camera_profile": runtime.R2_CAMERA_PROFILE,
+                    "visual_profile_id": runtime.R2_RUNTIME_PROFILE,
+                    "visual_profile_sha256": "4" * 64,
+                    "visual_profile_content_digest": "5" * 64,
+                    "renderer_profile_request_sha256": "6" * 64,
+                    "renderer_profile_request_content_digest": "7" * 64,
+                    "presentation_import_receipt_sha256": "8" * 64,
+                    "presentation_scene_receipt_sha256": "9" * 64,
+                    "presentation_manifest_sha256": "a" * 64,
+                    "presentation_artifact_receipt_sha256": "b" * 64,
+                    "accepted_display": runtime.R2_DISPLAY,
+                    "accepted_gpu": runtime.R2_GPU,
+                    "accepted_vista_world_port": runtime.R2_VISTA_WORLD_PORT,
+                    "accepted_width": runtime.R2_WIDTH,
+                    "accepted_height": runtime.R2_HEIGHT,
+                    "accepted_fps": runtime.R2_FPS,
+                    "presentation_bundle_count": (
+                        package_verifier.R2_PRESENTATION_BUNDLE_COUNT
+                    ),
+                    "presentation_collision_policy": (
+                        package_verifier.R2_PRESENTATION_COLLISION_POLICY
+                    ),
+                }
+            )
+            self.write_receipt()
         return packaged_profile.write_profile(
             self.attempt,
             self.receipt_sha256,
@@ -235,6 +265,53 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertEqual(plan["runtime"]["runtime_profile"], runtime.R2_RUNTIME_PROFILE)
         self.assertEqual(plan["runtime"]["camera_profile"], runtime.R2_CAMERA_PROFILE)
         self.assertEqual(plan["runtime"]["vista_world_port"], runtime.R2_VISTA_WORLD_PORT)
+
+    def test_package_and_requested_runtime_profiles_must_match(self) -> None:
+        with self.assertRaisesRegex(
+            packaged_profile.PackagedProfileError, "PACKAGE_PROFILE_MISMATCH"
+        ):
+            packaged_profile.write_profile(
+                self.fixture.attempt,
+                self.fixture.receipt_sha256,
+                self.fixture.icd,
+                self.fixture.profile_path,
+                runtime_profile=runtime.R2_RUNTIME_PROFILE,
+            )
+
+        self.fixture.receipt["schema"] = package_verifier.R2_RECEIPT_SCHEMA
+        self.fixture.receipt["bindings"].update(
+            {
+                "runtime_profile": runtime.R2_RUNTIME_PROFILE,
+                "camera_profile": runtime.R2_CAMERA_PROFILE,
+                "visual_profile_id": runtime.R2_RUNTIME_PROFILE,
+                **{
+                    field: "e" * 64
+                    for field in package_verifier.R2_BUILD_DIGEST_FIELDS
+                },
+                "accepted_display": runtime.R2_DISPLAY,
+                "accepted_gpu": runtime.R2_GPU,
+                "accepted_vista_world_port": runtime.R2_VISTA_WORLD_PORT,
+                "accepted_width": runtime.R2_WIDTH,
+                "accepted_height": runtime.R2_HEIGHT,
+                "accepted_fps": runtime.R2_FPS,
+                "presentation_bundle_count": (
+                    package_verifier.R2_PRESENTATION_BUNDLE_COUNT
+                ),
+                "presentation_collision_policy": (
+                    package_verifier.R2_PRESENTATION_COLLISION_POLICY
+                ),
+            }
+        )
+        r2_pin = self.fixture.write_receipt()
+        with self.assertRaisesRegex(
+            packaged_profile.PackagedProfileError, "PACKAGE_PROFILE_MISMATCH"
+        ):
+            packaged_profile.write_profile(
+                self.fixture.attempt,
+                r2_pin,
+                self.fixture.icd,
+                self.fixture.profile_path,
+            )
 
     def test_realistic_r2_profile_fixed_tuple_tampering_is_refused(self) -> None:
         result = self.fixture.write_profile(runtime.R2_RUNTIME_PROFILE)
