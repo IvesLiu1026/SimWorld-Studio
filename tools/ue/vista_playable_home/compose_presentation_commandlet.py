@@ -52,13 +52,46 @@ def safe_label(value):
     )[:170]
 
 
-def actor_record(actor):
+def observed_transform(actor):
+    location = actor.get_actor_location()
+    actor_rotation = actor.get_actor_rotation()
+    scale = actor.get_actor_scale3d()
     return {
-        "label": str(actor.get_actor_label()),
-        "class_path": str(actor.get_class().get_path_name()),
-        "path": str(actor.get_path_name()),
-        "tags": sorted(str(tag) for tag in actor.get_editor_property("tags")),
+        "location_cm": [float(location.x), float(location.y), float(location.z)],
+        "rotation_deg": [
+            float(actor_rotation.roll),
+            float(actor_rotation.pitch),
+            float(actor_rotation.yaw),
+        ],
+        "scale": [float(scale.x), float(scale.y), float(scale.z)],
     }
+
+
+def transform_matches(actual, expected):
+    location_ok = all(
+        abs(actual_value - float(expected_value)) <= 0.05
+        for actual_value, expected_value in zip(
+            actual["location_cm"], expected["location_cm"]
+        )
+    )
+    rotation_ok = all(
+        abs((actual_value - float(expected_value) + 180.0) % 360.0 - 180.0)
+        <= 0.05
+        for actual_value, expected_value in zip(
+            actual["rotation_deg"], expected["rotation_deg"]
+        )
+    )
+    scale_ok = all(
+        abs(actual_value - float(expected_value)) <= 0.0001
+        for actual_value, expected_value in zip(actual["scale"], expected["scale"])
+    )
+    return location_ok and rotation_ok and scale_ok
+
+
+def actor_hidden(actor):
+    getter = getattr(actor, "is_hidden", None)
+    require(callable(getter), "Actor.is_hidden is unavailable")
+    return bool(getter())
 
 
 def attach_keep_world(child, parent):
@@ -128,6 +161,9 @@ def run():
         if item["kind"] == "place_room_presentation_bundle"
     ]
     require(len(operations) == 3, "presentation composition operation set differs")
+    bindings_by_artifact = {
+        item["artifact_id"]: item for item in execution["presentation_bindings"]
+    }
 
     actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -152,6 +188,7 @@ def run():
     error = None
     stage = {"phase": "presentation_compose", "operation_id": None}
     reload_verified = False
+    room_observations = []
     try:
         for operation in operations:
             stage = {
@@ -227,9 +264,21 @@ def run():
             ]
             require(len(presentation_matches) == 1,
                     "reloaded presentation actor is not exact")
-            component = static_mesh_component(presentation_matches[0])
+            presentation_actor = presentation_matches[0]
+            component = static_mesh_component(presentation_actor)
+            mesh = component.get_editor_property("static_mesh") if component else None
+            imported = imports_by_artifact[operation["artifact_id"]]
+            binding = bindings_by_artifact[operation["artifact_id"]]
+            transform = observed_transform(presentation_actor)
+            material_slot_count = (
+                int(component.get_num_materials()) if component is not None else -1
+            )
             require(component is not None and
+                    isinstance(mesh, unreal.StaticMesh) and
+                    str(mesh.get_path_name()) == imported["object_path"] and
+                    transform_matches(transform, operation["transform"]) and
                     str(component.get_collision_profile_name()) == "NoCollision" and
+                    material_slot_count == binding["material_count"] and
                     not bool(component.get_editor_property("generate_overlap_events")),
                     "reloaded presentation actor lost NoCollision policy")
             semantic_tag = unreal.Name("VistaSemanticId=" + operation["room_id"])
@@ -241,12 +290,40 @@ def run():
             ]
             require(len(authority_matches) == 1,
                     "reloaded r1 collision authority is not exact")
-            authority_component = static_mesh_component(authority_matches[0])
-            require(authority_matches[0].is_hidden() or
-                    not bool(authority_component.get_editor_property("visible")),
+            authority = authority_matches[0]
+            authority_component = static_mesh_component(authority)
+            authority_hidden = actor_hidden(authority)
+            authority_visible = bool(
+                authority_component.get_editor_property("visible")
+            ) if authority_component else True
+            parent = presentation_actor.get_attach_parent_actor()
+            parent_path = str(parent.get_path_name()) if parent else ""
+            authority_path = str(authority.get_path_name())
+            require(authority_component is not None and authority_hidden and
+                    not authority_visible,
                     "reloaded r1 collision authority became visible")
             require(str(authority_component.get_collision_profile_name()) == "BlockAll",
                     "reloaded r1 collision authority lost blocking collision")
+            require(parent_path == authority_path,
+                    "reloaded presentation actor lost its r1 authority attachment")
+            room_observations.append({
+                "artifact_id": operation["artifact_id"],
+                "presentation_id": operation["presentation_id"],
+                "room_id": operation["room_id"],
+                "room_kind": operation["room_kind"],
+                "actor_path": str(presentation_actor.get_path_name()),
+                "static_mesh_object_path": str(mesh.get_path_name()),
+                "world_transform_cm": transform,
+                "collision_profile": str(component.get_collision_profile_name()),
+                "material_slot_count": material_slot_count,
+                "attach_parent_actor_path": parent_path,
+                "r1_authority_actor_path": authority_path,
+                "r1_authority_collision_profile": str(
+                    authority_component.get_collision_profile_name()
+                ),
+                "r1_authority_hidden_in_game": authority_hidden,
+                "r1_authority_component_visible": authority_visible,
+            })
         reload_verified = True
         status = "saved_reloaded_candidate"
     except Exception as exc:
@@ -261,9 +338,6 @@ def run():
             else "failed_unsaved_quarantined"
         )
 
-    inventory = [
-        actor_record(actor) for actor in actor_subsystem.get_all_level_actors()
-    ]
     receipt = {
         "schema_version": PRESENTATION_SCENE_RECEIPT_SCHEMA,
         "status": status,
@@ -281,8 +355,8 @@ def run():
         },
         "content_namespace": namespace,
         "map_path": map_path,
-        "presentation_actor_inventory": sorted(
-            inventory, key=lambda item: item["path"]
+        "room_observations": sorted(
+            room_observations, key=lambda item: item["room_id"]
         ),
         "gates": {
             "map_saved": status == "saved_reloaded_candidate",

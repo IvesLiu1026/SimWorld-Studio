@@ -593,15 +593,53 @@ def _validate_presentation_glb(
         _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB inventories are not arrays", pointer=str(path))
     assert isinstance(meshes, list) and isinstance(nodes, list)
     assert isinstance(materials, list) and isinstance(textures, list)
-    mesh_nodes = [node for node in nodes if isinstance(node, Mapping) and isinstance(node.get("mesh"), int)]
+    mesh_nodes = [
+        (index, node)
+        for index, node in enumerate(nodes)
+        if isinstance(node, Mapping)
+        and isinstance(node.get("mesh"), int)
+        and not isinstance(node.get("mesh"), bool)
+    ]
     bundle_nodes = [
-        node for node in nodes
+        (index, node)
+        for index, node in enumerate(nodes)
         if isinstance(node, Mapping)
         and isinstance(node.get("extras"), Mapping)
         and node["extras"].get("vista_bundle_contract") == "one_room_one_mesh_v1"
     ]
-    if len(meshes) != 1 or len(mesh_nodes) != 1 or len(bundle_nodes) != 1 or not _identity_gltf_node(bundle_nodes[0]):
+    scenes = document.get("scenes")
+    active_scene_index = document.get("scene")
+    if (
+        len(meshes) != 1
+        or len(mesh_nodes) != 1
+        or len(bundle_nodes) != 1
+        or not isinstance(scenes, list)
+        or isinstance(active_scene_index, bool)
+        or not isinstance(active_scene_index, int)
+        or not 0 <= active_scene_index < len(scenes)
+    ):
         _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB is not one identity-root mesh", pointer=str(path))
+    mesh_node_index, mesh_node = mesh_nodes[0]
+    bundle_node_index, bundle_node = bundle_nodes[0]
+    active_scene = scenes[active_scene_index]
+    active_roots = active_scene.get("nodes") if isinstance(active_scene, Mapping) else None
+    has_parent = any(
+        isinstance(node, Mapping)
+        and isinstance(node.get("children"), list)
+        and mesh_node_index in node["children"]
+        for node in nodes
+    )
+    if (
+        mesh_node_index != bundle_node_index
+        or mesh_node.get("mesh") != 0
+        or not isinstance(active_roots, list)
+        or len(active_roots) != 1
+        or isinstance(active_roots[0], bool)
+        or active_roots[0] != mesh_node_index
+        or has_parent
+        or not _identity_gltf_node(mesh_node)
+    ):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB active scene root identity differs", pointer=str(path))
     if document.get("cameras") not in (None, []):
         _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB contains a camera", pointer=str(path))
     extensions = document.get("extensions", {})
@@ -649,7 +687,7 @@ def _validate_presentation_glb(
             ):
                 _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", f"presentation material {index} lacks complete PBR texture bindings", pointer=str(path))
 
-    metadata = bundle_nodes[0]["extras"]
+    metadata = bundle_node["extras"]
     try:
         embedded_transform = json.loads(str(metadata.get("vista_expected_world_transform_cm_json")))
         embedded_material_ids = json.loads(str(metadata.get("vista_material_ids_json")))
@@ -2666,6 +2704,45 @@ def _presentation_object_path(namespace: str, target_asset_id: str) -> str:
     return namespace + "/Presentation/" + name + "." + name
 
 
+def _receipt_transform_matches(value: Any, expected: Mapping[str, Any]) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "location_cm", "rotation_deg", "scale"
+    }:
+        return False
+    vectors: dict[str, list[float]] = {}
+    for key in ("location_cm", "rotation_deg", "scale"):
+        raw = value.get(key)
+        if (
+            not isinstance(raw, list)
+            or len(raw) != 3
+            or any(
+                isinstance(item, bool)
+                or not isinstance(item, (int, float))
+                or not math.isfinite(float(item))
+                for item in raw
+            )
+        ):
+            return False
+        vectors[key] = [float(item) for item in raw]
+    location_ok = all(
+        abs(actual - float(wanted)) <= 0.05
+        for actual, wanted in zip(
+            vectors["location_cm"], expected["location_cm"]
+        )
+    )
+    rotation_ok = all(
+        abs((actual - float(wanted) + 180.0) % 360.0 - 180.0) <= 0.05
+        for actual, wanted in zip(
+            vectors["rotation_deg"], expected["rotation_deg"]
+        )
+    )
+    scale_ok = all(
+        abs(actual - float(wanted)) <= 0.0001
+        for actual, wanted in zip(vectors["scale"], expected["scale"])
+    )
+    return location_ok and rotation_ok and scale_ok
+
+
 def _verify_presentation_import_receipt(
     receipt: Mapping[str, Any],
     execution: Mapping[str, Any],
@@ -2802,14 +2879,13 @@ def _verify_presentation_scene_receipt(
 ) -> None:
     expected_keys = {
         "schema_version", "status", "error", "bindings", "content_namespace",
-        "map_path", "presentation_actor_inventory", "gates",
+        "map_path", "room_observations", "gates",
     }
     spec = execution["composition_spec"]
     if (
         set(receipt) != expected_keys
         or receipt.get("content_namespace") != spec["content_namespace"]
         or receipt.get("map_path") != spec["map_path"]
-        or not isinstance(receipt.get("presentation_actor_inventory"), list)
     ):
         _fail(
             "VISTA_HOME_BUILD_RECEIPT_INVALID",
@@ -2859,6 +2935,110 @@ def _verify_presentation_scene_receipt(
             "VISTA_HOME_BUILD_RECEIPT_INVALID",
             "presentation scene receipt pins differ",
         )
+    observations = receipt.get("room_observations")
+    operations = {
+        item["artifact_id"]: item
+        for item in spec["operations"]
+        if item.get("kind") == "place_room_presentation_bundle"
+    }
+    presentation_bindings = {
+        item["artifact_id"]: item
+        for item in execution["presentation_bindings"]
+    }
+    if (
+        not isinstance(observations, list)
+        or len(observations) != 3
+        or len(operations) != 3
+        or set(operations) != set(presentation_bindings)
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation room observation inventory differs",
+        )
+    observation_keys = {
+        "artifact_id", "presentation_id", "room_id", "room_kind",
+        "actor_path", "static_mesh_object_path", "world_transform_cm",
+        "collision_profile", "material_slot_count",
+        "attach_parent_actor_path", "r1_authority_actor_path",
+        "r1_authority_collision_profile", "r1_authority_hidden_in_game",
+        "r1_authority_component_visible",
+    }
+    seen_artifacts: set[str] = set()
+    actor_paths: set[str] = set()
+    authority_paths: set[str] = set()
+    for observation in observations:
+        artifact_id = (
+            observation.get("artifact_id")
+            if isinstance(observation, Mapping)
+            else None
+        )
+        operation = operations.get(artifact_id)
+        source = presentation_bindings.get(artifact_id)
+        if (
+            not isinstance(observation, Mapping)
+            or set(observation) != observation_keys
+            or operation is None
+            or source is None
+            or artifact_id in seen_artifacts
+            or observation.get("presentation_id") != operation["presentation_id"]
+            or observation.get("room_id") != operation["room_id"]
+            or observation.get("room_kind") != operation["room_kind"]
+            or not isinstance(observation.get("actor_path"), str)
+            or not observation["actor_path"]
+            or observation["actor_path"] in actor_paths
+            or observation.get("static_mesh_object_path")
+            != _presentation_object_path(
+                spec["content_namespace"], source["target_asset_id"]
+            )
+            or not _receipt_transform_matches(
+                observation.get("world_transform_cm"), operation["transform"]
+            )
+            or observation.get("collision_profile") != "NoCollision"
+            or isinstance(observation.get("material_slot_count"), bool)
+            or not isinstance(observation.get("material_slot_count"), int)
+            or observation.get("material_slot_count") != source["material_count"]
+            or not isinstance(observation.get("attach_parent_actor_path"), str)
+            or not observation["attach_parent_actor_path"]
+            or observation.get("attach_parent_actor_path")
+            != observation.get("r1_authority_actor_path")
+            or observation.get("actor_path")
+            == observation.get("r1_authority_actor_path")
+            or observation["r1_authority_actor_path"] in authority_paths
+            or observation.get("r1_authority_collision_profile") != "BlockAll"
+            or observation.get("r1_authority_hidden_in_game") is not True
+            or observation.get("r1_authority_component_visible") is not False
+        ):
+            _fail(
+                "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                f"presentation room observation {artifact_id} differs",
+            )
+        seen_artifacts.add(artifact_id)
+        actor_paths.add(observation["actor_path"])
+        authority_paths.add(observation["r1_authority_actor_path"])
+    if seen_artifacts != set(operations):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation room observations do not cover the exact room slice",
+        )
+
+
+def _result_scene_receipt_pins(
+    scene_sha256: str,
+    presentation_scene_sha256: str | None,
+) -> dict[str, str]:
+    """Keep the legacy scene receipt pin stable and name the r2 pin separately."""
+
+    result = {
+        "scene_receipt_sha256": _require_sha(
+            scene_sha256, "base scene receipt SHA-256"
+        )
+    }
+    if presentation_scene_sha256 is not None:
+        result["presentation_scene_receipt_sha256"] = _require_sha(
+            presentation_scene_sha256,
+            "presentation scene receipt SHA-256",
+        )
+    return result
 
 
 def _terminate_owned_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -3362,7 +3542,6 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
                 sha256=presentation_scene_sha,
                 phase="presentation_compose",
             )
-        final_scene_sha = presentation_scene_sha or scene_sha
         result = {
             "schema_version": RESULT_RECEIPT_SCHEMA,
             "status": "accepted_candidate",
@@ -3372,7 +3551,7 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             "map_path": planned.plan["unreal"]["map_path"],
             "execution_sha256": planned.execution_sha256,
             "import_receipt_sha256": import_sha,
-            "scene_receipt_sha256": final_scene_sha,
+            **_result_scene_receipt_pins(scene_sha, presentation_scene_sha),
             "copy_methods": dict(sorted(copy_counts.items())),
             "runtime_play_proof": "pending",
         }
@@ -3393,7 +3572,6 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             result.update({
                 "base_scene_receipt_sha256": scene_sha,
                 "presentation_import_receipt_sha256": presentation_import_sha,
-                "presentation_scene_receipt_sha256": presentation_scene_sha,
                 "presentation_manifest_sha256": (
                     planned.config.presentation_manifest_sha256
                 ),

@@ -168,6 +168,35 @@ def _presentation_contracts(
     return manifest_path, receipt_path, manifest, receipt
 
 
+def _rewrite_first_bundle(
+    root: Path,
+    manifest_path: Path,
+    receipt_path: Path,
+    manifest: dict,
+    receipt: dict,
+    mutate,
+) -> None:
+    record = manifest["ue_import_bundles"][0]
+    document = _glb_document(record)
+    mutate(document)
+    bundle_path = root / record["relative_path"]
+    _write_glb(bundle_path, document)
+    digest = build_home.sha256_file(bundle_path)
+    size = bundle_path.stat().st_size
+    artifact_id = record["artifact_id"]
+    for inventory in (
+        manifest["ue_import_bundles"],
+        receipt["ue_import_bundles"],
+        receipt["artifacts"],
+    ):
+        matched = [item for item in inventory if item["artifact_id"] == artifact_id]
+        assert len(matched) == 1
+        matched[0]["sha256"] = digest
+        matched[0]["size_bytes"] = size
+    manifest_path.write_bytes(build_home.canonical_json(manifest))
+    receipt_path.write_bytes(build_home.canonical_json(receipt))
+
+
 def _presentation_config(
     fixture: BuildFixture,
     manifest_path: Path,
@@ -311,6 +340,169 @@ def test_presentation_manifest_receipt_and_glb_fail_closed(tmp_path: Path) -> No
         build_home.plan_build(
             _presentation_config(fixture, escape_manifest, escape_receipt)
         )
+
+
+@pytest.mark.parametrize("case", ["decoy_extras", "parented_mesh"])
+def test_presentation_glb_requires_the_active_identity_mesh_root(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    root = tmp_path / "inputs" / case
+    manifest_path, receipt_path, manifest, receipt = _presentation_contracts(
+        root, fixture
+    )
+
+    def mutate(document: dict) -> None:
+        if case == "decoy_extras":
+            extras = document["nodes"][0].pop("extras")
+            document["nodes"][0]["translation"] = [1.0, 0.0, 0.0]
+            document["nodes"].append({"name": "DecoyContract", "extras": extras})
+        else:
+            document["nodes"].append({
+                "name": "DecoyParent",
+                "children": [0],
+            })
+            document["scenes"][0]["nodes"] = [1]
+
+    _rewrite_first_bundle(
+        root, manifest_path, receipt_path, manifest, receipt, mutate
+    )
+    with pytest.raises(
+        build_home.BuildHomeError,
+        match="active scene root identity differs",
+    ):
+        build_home.plan_build(
+            _presentation_config(fixture, manifest_path, receipt_path)
+        )
+
+
+def _presentation_scene_receipt(
+    planned: build_home.PlannedBuild,
+    base_scene_sha: str,
+    presentation_import_sha: str,
+) -> dict:
+    execution = planned.execution
+    namespace = execution["composition_spec"]["content_namespace"]
+    bindings = {
+        item["artifact_id"]: item for item in execution["presentation_bindings"]
+    }
+    operations = [
+        item for item in execution["composition_spec"]["operations"]
+        if item["kind"] == "place_room_presentation_bundle"
+    ]
+    observations = []
+    for index, operation in enumerate(operations):
+        source = bindings[operation["artifact_id"]]
+        authority_path = f"{execution['composition_spec']['map_path']}:PersistentLevel.R1_{index}"
+        observations.append({
+            "artifact_id": operation["artifact_id"],
+            "presentation_id": operation["presentation_id"],
+            "room_id": operation["room_id"],
+            "room_kind": operation["room_kind"],
+            "actor_path": (
+                f"{execution['composition_spec']['map_path']}:PersistentLevel.R2_{index}"
+            ),
+            "static_mesh_object_path": build_home._presentation_object_path(
+                namespace, source["target_asset_id"]
+            ),
+            "world_transform_cm": copy.deepcopy(operation["transform"]),
+            "collision_profile": "NoCollision",
+            "material_slot_count": source["material_count"],
+            "attach_parent_actor_path": authority_path,
+            "r1_authority_actor_path": authority_path,
+            "r1_authority_collision_profile": "BlockAll",
+            "r1_authority_hidden_in_game": True,
+            "r1_authority_component_visible": False,
+        })
+    return {
+        "schema_version": build_home.PRESENTATION_SCENE_RECEIPT_SCHEMA,
+        "status": "saved_reloaded_candidate",
+        "error": None,
+        "bindings": {
+            "engine": "5.7.0-test",
+            "project": execution["project_file"],
+            "execution_manifest": str(Path(execution["attempt_root"]) / "execution.json"),
+            "execution_manifest_sha256": build_home.sha256_bytes(
+                planning.canonical_json(execution)
+            ),
+            "base_scene_receipt": execution["scene_receipt"],
+            "base_scene_receipt_sha256": base_scene_sha,
+            "presentation_import_receipt": execution["presentation_import_receipt"],
+            "presentation_import_receipt_sha256": presentation_import_sha,
+            "composition_spec_sha256": execution["composition_spec_sha256"],
+        },
+        "content_namespace": namespace,
+        "map_path": execution["composition_spec"]["map_path"],
+        "room_observations": sorted(
+            observations, key=lambda item: item["room_id"]
+        ),
+        "gates": {
+            "map_saved": True,
+            "map_reloaded": True,
+            "exact_three_presentation_actors": True,
+            "presentation_no_collision_verified": True,
+            "hidden_r1_collision_authority_verified": True,
+            "semantic_authority_preserved": True,
+            "quarantined": False,
+            "runtime_play_proof": "pending",
+        },
+    }
+
+
+def test_presentation_scene_receipt_recomputes_each_room_observation(
+    tmp_path: Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, _manifest, _receipt = _presentation_contracts(
+        tmp_path / "inputs" / "presentation", fixture
+    )
+    planned = build_home.plan_build(
+        _presentation_config(fixture, manifest_path, receipt_path)
+    )
+    base_scene_sha = "a" * 64
+    presentation_import_sha = "b" * 64
+    receipt = _presentation_scene_receipt(
+        planned, base_scene_sha, presentation_import_sha
+    )
+    build_home._verify_presentation_scene_receipt(
+        receipt, planned.execution, base_scene_sha, presentation_import_sha
+    )
+
+    corruptions = []
+    wrong_mesh = copy.deepcopy(receipt)
+    wrong_mesh["room_observations"][0]["static_mesh_object_path"] += "_Wrong"
+    corruptions.append(wrong_mesh)
+    wrong_transform = copy.deepcopy(receipt)
+    wrong_transform["room_observations"][0]["world_transform_cm"][
+        "location_cm"
+    ][0] += 1.0
+    corruptions.append(wrong_transform)
+    wrong_parent = copy.deepcopy(receipt)
+    wrong_parent["room_observations"][0]["attach_parent_actor_path"] += "_Wrong"
+    corruptions.append(wrong_parent)
+    for corrupted in corruptions:
+        with pytest.raises(build_home.BuildHomeError, match="room observation"):
+            build_home._verify_presentation_scene_receipt(
+                corrupted,
+                planned.execution,
+                base_scene_sha,
+                presentation_import_sha,
+            )
+
+
+def test_result_scene_receipt_pins_preserve_legacy_semantics() -> None:
+    base_scene_sha = "a" * 64
+    presentation_scene_sha = "b" * 64
+    assert build_home._result_scene_receipt_pins(base_scene_sha, None) == {
+        "scene_receipt_sha256": base_scene_sha
+    }
+    assert build_home._result_scene_receipt_pins(
+        base_scene_sha, presentation_scene_sha
+    ) == {
+        "scene_receipt_sha256": base_scene_sha,
+        "presentation_scene_receipt_sha256": presentation_scene_sha,
+    }
 
 
 def test_r1_execution_and_config_remain_on_legacy_two_phase_path(
