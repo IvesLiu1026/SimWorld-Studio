@@ -91,6 +91,35 @@ SIMPLE_COLLISION_ELEMENT_PROPERTIES = (
     "skinned_level_set_elems",
     "skinned_triangle_mesh_elems",
 )
+PRESENTATION_AFFORDANCE_NAMES = frozenset({
+    "open",
+    "close",
+    "pick_up",
+    "drop",
+    "place",
+    "toggle",
+    "sit",
+    "inspect",
+})
+
+
+def reflected_affordance_name(value, enum_type):
+    """Normalize a reflected UE enum member without parsing its repr."""
+
+    member_name = getattr(value, "name", None)
+    base.require(
+        isinstance(member_name, str)
+        and member_name
+        and member_name == member_name.upper(),
+        "semantic target affordance member name is invalid",
+    )
+    normalized = member_name.lower()
+    base.require(
+        normalized in PRESENTATION_AFFORDANCE_NAMES
+        and getattr(enum_type, member_name, None) is value,
+        "semantic target affordance member is not a closed VISTA enum value",
+    )
+    return normalized
 
 
 def property_or_none(value, name):

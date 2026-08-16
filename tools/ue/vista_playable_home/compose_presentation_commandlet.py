@@ -21,6 +21,7 @@ from presentation_commandlet_common import (  # noqa: E402
     presentation_import_receipt_schema,
     presentation_is_external,
     presentation_scene_receipt_schema,
+    reflected_affordance_name,
     require,
     simple_collision_count,
     write_exclusive_receipt,
@@ -134,7 +135,7 @@ def interaction_affordances(actor):
         values = actor.get_editor_property("allowed_affordances")
         result = []
         for value in values:
-            name = str(value).rsplit(".", 1)[-1].lower()
+            name = reflected_affordance_name(value, unreal.VistaAffordance)
             require(name and name not in result,
                     "semantic target affordance inventory is invalid")
             result.append(name)

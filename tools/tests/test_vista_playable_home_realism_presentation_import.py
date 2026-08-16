@@ -3,10 +3,13 @@ from __future__ import annotations
 import ast
 import copy
 import dataclasses
+import enum
 import hashlib
+import importlib
 import json
 import py_compile
 import struct
+import sys
 from pathlib import Path
 
 import pytest
@@ -1477,6 +1480,46 @@ def test_presentation_sources_compile_without_launching_unreal() -> None:
     assert 'binding["external_content"]["semantic_target_ids"]' in composer
     assert "hide_semantic_target_visuals(actor)" in composer
     assert "r1_semantic_visual_observations" in composer
+
+
+def test_reflected_affordance_names_use_typed_enum_members(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commandlet_root = ROOT / "tools/ue/vista_playable_home"
+    monkeypatch.syspath_prepend(str(commandlet_root))
+    sys.modules.pop("presentation_commandlet_common", None)
+    common = importlib.import_module("presentation_commandlet_common")
+
+    class VistaAffordance(enum.Enum):
+        PICK_UP = 2
+        SIT = 6
+        INSPECT = 7
+
+    assert common.reflected_affordance_name(
+        VistaAffordance.PICK_UP, VistaAffordance
+    ) == "pick_up"
+    assert common.reflected_affordance_name(
+        VistaAffordance.SIT, VistaAffordance
+    ) == "sit"
+    assert common.reflected_affordance_name(
+        VistaAffordance.INSPECT, VistaAffordance
+    ) == "inspect"
+    with pytest.raises(RuntimeError, match="member name"):
+        common.reflected_affordance_name("<VistaAffordance.SIT: 6>", VistaAffordance)
+
+    class LookalikeAffordance(enum.IntEnum):
+        SIT = 6
+
+    with pytest.raises(RuntimeError, match="closed VISTA enum"):
+        common.reflected_affordance_name(
+            LookalikeAffordance.SIT, VistaAffordance
+        )
+
+    composer = (
+        ROOT / "tools/ue/vista_playable_home/compose_presentation_commandlet.py"
+    ).read_text(encoding="utf-8")
+    assert "reflected_affordance_name(value, unreal.VistaAffordance)" in composer
+    assert 'str(value).rsplit(".", 1)' not in composer
 
 
 def test_presentation_collision_clear_is_commandlet_safe_and_reloaded() -> None:
