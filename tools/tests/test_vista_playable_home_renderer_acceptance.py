@@ -419,7 +419,7 @@ def test_full_renderer_observation_is_only_observed_acceptance(
     assert receipt["bindings"]["package"]["sha256"] == fixture.package_sha
     assert receipt["bindings"]["runtime"]["process"]["pid"] > 0
     assert receipt["bindings"]["runtime"]["listener_owner_closure_scope"] == (
-        "all-visible-processes/fail-closed-same-effective-uid/v1"
+        "single-loopback-inode+exact-managed-pid+visible-foreign-rejection/v1"
     )
     assert receipt["bindings"]["runtime"]["listener_expected_effective_uid"] >= 0
     assert receipt["bindings"]["runtime"]["listener_exact_packaged_game_identity"] == {

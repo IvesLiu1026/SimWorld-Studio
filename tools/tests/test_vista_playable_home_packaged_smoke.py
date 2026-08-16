@@ -483,7 +483,7 @@ class PackagedSmokeTests(unittest.TestCase):
         ):
             smoke.prove_loopback_listener_ownership(55777, 424242)
 
-    def test_unreadable_same_uid_descriptor_table_fails_closed(self) -> None:
+    def test_unreadable_managed_descriptor_table_fails_closed(self) -> None:
         proc_root = pathlib.Path(self.temporary.name) / "fake-proc"
         process = proc_root / "424242"
         process.mkdir(parents=True)
@@ -505,6 +505,60 @@ class PackagedSmokeTests(unittest.TestCase):
             self.assertRaisesRegex(
                 smoke.PackagedSmokeError,
                 "LISTENER_VISIBILITY_INCOMPLETE",
+            ),
+        ):
+            smoke.prove_loopback_listener_ownership(55777, 424242)
+
+    def test_unreadable_unrelated_same_uid_descriptor_table_is_scoped_out(
+        self,
+    ) -> None:
+        inode = 111
+        managed_pid = 424242
+        unrelated_pid = 424243
+        proc_root = self.proc_snapshot(inode, {managed_pid: managed_pid})
+        uid = os.geteuid()
+        unrelated = proc_root / str(unrelated_pid)
+        unrelated.mkdir()
+        (unrelated / "status").write_text(
+            f"Name:\tfixture\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n",
+            encoding="utf-8",
+        )
+        (unrelated / "stat").write_text(
+            f"{unrelated_pid} (fixture) S 1 {unrelated_pid} {unrelated_pid} 0\n",
+            encoding="utf-8",
+        )
+        # A regular file deterministically models a non-dumpable unrelated
+        # process whose /proc/<pid>/fd cannot be enumerated.
+        (unrelated / "fd").write_text("unreadable fixture\n", encoding="utf-8")
+        with (
+            mock.patch.object(smoke, "PROC_ROOT", proc_root),
+            mock.patch.object(
+                smoke, "_listening_loopback_inodes", return_value={inode}
+            ),
+        ):
+            proof = smoke.prove_loopback_listener_ownership(55777, managed_pid)
+
+        self.assertEqual(proof["process_group"], managed_pid)
+        self.assertEqual(proof["owner_pids"], [managed_pid])
+
+    def test_listener_inode_change_during_proof_fails_closed(self) -> None:
+        with (
+            mock.patch.object(
+                smoke,
+                "_listening_loopback_inodes",
+                side_effect=[{111}, {222}],
+            ),
+            mock.patch.object(
+                smoke, "process_effective_uid", return_value=os.geteuid()
+            ),
+            mock.patch.object(
+                smoke,
+                "_global_socket_owners",
+                return_value={111: [{"pid": 424242, "process_group": 424242}]},
+            ),
+            self.assertRaisesRegex(
+                smoke.PackagedSmokeError,
+                "listener identity changed",
             ),
         ):
             smoke.prove_loopback_listener_ownership(55777, 424242)

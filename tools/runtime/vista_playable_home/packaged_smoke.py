@@ -64,7 +64,9 @@ MAX_JSON_BYTES = 4 * 1024 * 1024
 DEFAULT_READY_TIMEOUT_SECONDS = 180.0
 TRUSTED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PROC_ROOT = Path("/proc")
-LISTENER_OWNER_CLOSURE_SCOPE = "all-visible-processes/fail-closed-same-effective-uid/v1"
+LISTENER_OWNER_CLOSURE_SCOPE = (
+    "single-loopback-inode+exact-managed-pid+visible-foreign-rejection/v1"
+)
 
 
 class PackagedSmokeError(RuntimeError):
@@ -805,10 +807,10 @@ def _process_start_ticks(pid: int) -> int | None:
 def process_effective_uid(pid: int) -> int:
     """Return the effective UID recorded by procfs, or fail closed.
 
-    Listener ownership can only be closed over processes whose descriptor
-    tables are visible.  Linux normally exposes every descriptor table owned
-    by the caller's effective UID.  A hidden or unreadable same-UID table is a
-    proof failure, not evidence that no other holder exists.
+    The managed process identity and its descriptor table are mandatory
+    listener proof.  Linux can hide descriptor tables of unrelated same-UID
+    non-dumpable processes, so those tables are scanned only as additional
+    visible-foreign-holder evidence.
     """
 
     try:
@@ -960,16 +962,20 @@ def _listening_loopback_inodes(port: int) -> set[int]:
 
 
 def _global_socket_owners(
-    inodes: set[int], expected_effective_uid: int
+    inodes: set[int],
+    expected_effective_uid: int,
+    expected_process_group: int,
 ) -> dict[int, list[dict[str, int]]]:
-    """Enumerate every provably visible process holding listener inodes.
+    """Enumerate every visible process holding listener inodes.
 
-    Looking only inside the expected process group is not an ownership proof:
-    a descriptor inherited by, or passed to, another process group would be
-    invisible.  The caller therefore inspects every descriptor table visible
-    through procfs.  Descriptor tables for other UIDs may be kernel-hidden;
-    same-effective-UID status and descriptor tables must all be readable or
-    the proof fails closed with ``LISTENER_VISIBILITY_INCOMPLETE``.
+    The expected process group's descriptor tables are mandatory proof and
+    therefore fail closed when unreadable.  Other same-UID processes are also
+    scanned so any visible inherited or passed listener descriptor is
+    rejected by the caller.  Linux may legitimately hide an unrelated
+    same-UID process's descriptor table (for example after it becomes
+    non-dumpable); that unrelated table is not part of the sealed launch
+    group and does not invalidate proof that the single kernel listener is
+    held by the managed group.
     """
 
     owner_sets: dict[int, set[tuple[int, int]]] = {inode: set() for inode in inodes}
@@ -983,35 +989,42 @@ def _global_socket_owners(
         if not entry.name.isdigit():
             continue
         pid = int(entry.name)
+        is_expected_process = pid == expected_process_group
         try:
             effective_uid = process_effective_uid(pid)
-        except PackagedSmokeError as exc:
+        except PackagedSmokeError:
             # A process may disappear at any point during procfs traversal.
             if not entry.exists():
                 continue
-            # Without its status we cannot prove that an unreadable process is
-            # outside the expected UID scope, so remain conservative.
-            raise exc
-        same_uid = effective_uid == expected_effective_uid
+            if is_expected_process:
+                raise
+            # Foreign descriptor inspection is additional visible-holder
+            # rejection, not part of the exact managed-PID proof.
+            continue
+        if is_expected_process and effective_uid != expected_effective_uid:
+            raise PackagedSmokeError(
+                "LISTENER_VISIBILITY_INCOMPLETE",
+                "managed process effective UID changed during ownership proof",
+            )
         try:
             raw_stat = (entry / "stat").read_text(encoding="utf-8")
             closing = raw_stat.rfind(")")
             fields = raw_stat[closing + 2 :].split()
             if closing < 0 or len(fields) < 3:
-                if same_uid:
+                if is_expected_process:
                     raise PackagedSmokeError(
                         "LISTENER_VISIBILITY_INCOMPLETE",
-                        "same-UID process identity is malformed",
+                        "managed process identity is malformed",
                     )
                 continue
             process_group = int(fields[2])
         except (FileNotFoundError, ProcessLookupError):
             continue
         except (PermissionError, OSError, UnicodeDecodeError, ValueError) as exc:
-            if same_uid:
+            if is_expected_process:
                 raise PackagedSmokeError(
                     "LISTENER_VISIBILITY_INCOMPLETE",
-                    "same-UID process identity is unreadable",
+                    "managed process identity is unreadable",
                 ) from exc
             continue
         try:
@@ -1019,10 +1032,10 @@ def _global_socket_owners(
         except (FileNotFoundError, ProcessLookupError):
             continue
         except (PermissionError, OSError) as exc:
-            if same_uid:
+            if is_expected_process:
                 raise PackagedSmokeError(
                     "LISTENER_VISIBILITY_INCOMPLETE",
-                    "same-UID descriptor table is unreadable",
+                    "managed process-group descriptor table is unreadable",
                 ) from exc
             continue
         for descriptor in descriptors:
@@ -1031,10 +1044,10 @@ def _global_socket_owners(
             except FileNotFoundError:
                 continue
             except (PermissionError, OSError) as exc:
-                if same_uid:
+                if is_expected_process:
                     raise PackagedSmokeError(
                         "LISTENER_VISIBILITY_INCOMPLETE",
-                        "same-UID descriptor link is unreadable",
+                        "managed process-group descriptor link is unreadable",
                     ) from exc
                 continue
             match = re.fullmatch(r"socket:\[([0-9]+)\]", target)
@@ -1050,29 +1063,36 @@ def _global_socket_owners(
 
 
 def prove_loopback_listener_ownership(port: int, process_group: int) -> dict[str, Any]:
-    inodes = _listening_loopback_inodes(port)
-    if len(inodes) != 1:
+    inodes_before = _listening_loopback_inodes(port)
+    if len(inodes_before) != 1:
         raise PackagedSmokeError(
             "LISTENER_OWNERSHIP_INVALID", "expected exactly one loopback listener"
         )
     expected_effective_uid = process_effective_uid(process_group)
-    owners = _global_socket_owners(inodes, expected_effective_uid)
-    inode = next(iter(inodes))
-    owner_records = owners.get(inode, [])
-    if not owner_records or any(
-        record.get("process_group") != process_group for record in owner_records
-    ):
+    owners = _global_socket_owners(
+        inodes_before,
+        expected_effective_uid,
+        process_group,
+    )
+    inodes_after = _listening_loopback_inodes(port)
+    if inodes_after != inodes_before:
         raise PackagedSmokeError(
             "LISTENER_OWNERSHIP_INVALID",
-            "typed listener ownership is not closed over the sealed process group",
+            "loopback listener identity changed during ownership proof",
         )
-    owner_pids = sorted({record["pid"] for record in owner_records})
+    inode = next(iter(inodes_before))
+    owner_records = owners.get(inode, [])
+    if owner_records != [{"pid": process_group, "process_group": process_group}]:
+        raise PackagedSmokeError(
+            "LISTENER_OWNERSHIP_INVALID",
+            "typed listener is not owned only by the exact managed process",
+        )
     return {
         "host": "127.0.0.1",
         "port": port,
         "socket_inode": inode,
         "process_group": process_group,
-        "owner_pids": owner_pids,
+        "owner_pids": [process_group],
     }
 
 
