@@ -20,11 +20,17 @@ from tools.blender.vista_playable_home_realism.config import (
     DEFAULT_TEXTURE_SIZE_PX,
     ForgeInputError,
     canonical_json_bytes,
+    content_digest,
     prepare_output_root,
 )
 from tools.blender.vista_playable_home_realism.dressing import anchors_clear_exclusions
 from tools.blender.vista_playable_home_realism.export import normalized_manifest
-from tools.blender.vista_playable_home_realism.inspect import GLB_JSON_CHUNK, GLB_MAGIC, inspect_glb
+from tools.blender.vista_playable_home_realism.inspect import (
+    GLB_JSON_CHUNK,
+    GLB_MAGIC,
+    inspect_glb,
+    inspect_output,
+)
 from tools.blender.vista_playable_home_realism.materials import material_plan_manifest
 
 
@@ -204,7 +210,7 @@ def test_profile_mismatch_and_nonempty_outputs_fail_closed(house: dict, profile:
         prepare_output_root(occupied)
 
 
-def test_independent_glb_inspector_reads_roles_and_rejects_cameras(tmp_path: Path) -> None:
+def _tiny_role_glb_bytes() -> bytes:
     document = {
         "asset": {"version": "2.0"},
         "scene": 0,
@@ -225,18 +231,69 @@ def test_independent_glb_inspector_reads_roles_and_rejects_cameras(tmp_path: Pat
     json_chunk = json.dumps(document, separators=(",", ":")).encode("utf-8")
     json_chunk += b" " * ((4 - len(json_chunk) % 4) % 4)
     total = 12 + 8 + len(json_chunk)
-    path = tmp_path / "tiny.glb"
-    path.write_bytes(
+    return (
         struct.pack("<III", GLB_MAGIC, 2, total)
         + struct.pack("<II", len(json_chunk), GLB_JSON_CHUNK)
         + json_chunk
     )
+
+
+def test_independent_glb_inspector_reads_roles_and_rejects_cameras(tmp_path: Path) -> None:
+    path = tmp_path / "tiny.glb"
+    path.write_bytes(_tiny_role_glb_bytes())
     result = inspect_glb(path)
     assert result["asset_version"] == "2.0"
     assert result["mesh_count"] == 1
     assert result["camera_count"] == 0
     assert result["component_extra_count"] == 1
     assert result["component_roles"] == ["architecture_shell"]
+
+
+def test_output_inspection_is_root_independent_and_does_not_leak_absolute_paths(tmp_path: Path) -> None:
+    receipts = []
+    for name in ("attempt-01", "attempt-02"):
+        root = tmp_path / name
+        (root / "glb").mkdir(parents=True)
+        (root / "glb" / "tiny.glb").write_bytes(_tiny_role_glb_bytes())
+        (root / "normalized-manifest.json").write_text(
+            json.dumps(
+                {
+                    "forge_plan_digest": "a" * 64,
+                    "build_quality": {"quality_class": "smoke_only"},
+                    "components": [{"component_id": f"component.{index:02d}"} for index in range(60)],
+                    "role_counts": {
+                        "architecture_shell": 20,
+                        "architectural_detail": 20,
+                        "cabinetry": 20,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / "artifact-receipt.json").write_text(
+            json.dumps(
+                {
+                    "artifacts": [
+                        {
+                            "artifact_id": "glb.vertical_slice",
+                            "relative_path": "glb/tiny.glb",
+                            "media_type": "model/gltf-binary",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        receipts.append(inspect_output(root))
+
+    assert receipts[0] == receipts[1]
+    assert content_digest(receipts[0]) == content_digest(receipts[1])
+    assert receipts[0]["glbs"][0]["relative_path"] == "glb/tiny.glb"
+    assert "relative_or_absolute_path" not in receipts[0]["glbs"][0]
+    payload = canonical_json_bytes(receipts[0])
+    assert str(tmp_path).encode("utf-8") not in payload
+    assert b"attempt-01" not in payload
+    assert b"attempt-02" not in payload
 
 
 def test_build_script_remains_importable_without_bpy() -> None:

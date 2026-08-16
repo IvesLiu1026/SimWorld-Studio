@@ -53,6 +53,7 @@ def inspect_glb(path: pathlib.Path) -> dict[str, Any]:
 
 
 def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
+    output_root = output_root.resolve(strict=True)
     manifest_path = output_root / "normalized-manifest.json"
     artifact_path = output_root / "artifact-receipt.json"
     if not manifest_path.is_file() or not artifact_path.is_file():
@@ -69,12 +70,25 @@ def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
     for artifact in receipt.get("artifacts", []):
         if artifact.get("media_type") != "model/gltf-binary":
             continue
-        path = output_root / artifact["relative_path"]
+        relative_path = artifact.get("relative_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            raise ForgeInputError("GLB artifact relative_path must be a non-empty string")
+        relative = pathlib.PurePosixPath(relative_path)
+        if relative.is_absolute() or ".." in relative.parts or "\\" in relative_path:
+            raise ForgeInputError(f"unsafe GLB artifact relative_path: {relative_path!r}")
+        path = (output_root / pathlib.Path(*relative.parts)).resolve(strict=True)
+        if not path.is_relative_to(output_root) or path.is_symlink() or not path.is_file():
+            raise ForgeInputError(f"GLB artifact escapes output root or is not a regular file: {relative_path!r}")
         inspection = inspect_glb(path)
         if inspection["camera_count"] != 0:
             raise ForgeInputError(f"production GLB unexpectedly contains cameras: {path}")
         if inspection["component_extra_count"] == 0:
             raise ForgeInputError(f"production GLB lacks presentation role metadata: {path}")
+        # ``inspect_glb`` remains useful as a standalone diagnostic and may
+        # identify the caller-provided path.  Persistent build receipts must
+        # never bind a host-private attempt root, so normalize at this boundary.
+        inspection.pop("relative_or_absolute_path", None)
+        inspection["relative_path"] = relative.as_posix()
         glbs.append(inspection)
     return {
         "schema_version": "simworld.vista.playable-home-realism-inspection/v1",
