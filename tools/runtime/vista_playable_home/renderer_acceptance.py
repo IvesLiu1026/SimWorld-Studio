@@ -46,11 +46,19 @@ else:
     from tools.ue.vista_playable_home import build_home, package_receipt
 
 
-RECEIPT_SCHEMA = "simworld.vista.playable-home-renderer-runtime-acceptance/v2"
+RECEIPT_SCHEMA = "simworld.vista.playable-home-renderer-runtime-acceptance/v3"
 EXPECTED_PROFILE = acceptance.R2_RUNTIME_PROFILE
 EXPECTED_MAP = package_receipt.EXPECTED_MAP_PATH
 MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
+MAX_RUNTIME_LOG_PREFIX_BYTES = 64 * 1024 * 1024
+PACKAGED_GAME_LOG_NAME = "packaged-game.log"
+RUNTIME_LOG_GATE_POLICY = "simworld.vista.playable-home-renderer-log-gate/v1"
+PROHIBITED_RUNTIME_LOG_PATTERNS = (
+    "missing bUsedWithNanite",
+    "Default Material will be used",
+    "Non-Nanite Marking Job Queue overflow",
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 COMMAND_ID_RE = re.compile(r"^vwc-[0-9a-f]{24}$")
@@ -146,6 +154,17 @@ class FileSeal:
     raw: bytes | None = None
 
 
+@dataclass(frozen=True)
+class RuntimeLogObservation:
+    path: Path
+    prefix_sha256: str
+    prefix_bytes: int
+    mode: int
+    owner_uid: int
+    device: int
+    inode: int
+
+
 Exchange = Callable[[Mapping[str, Any], float, int], tuple[bytes, Any]]
 ListenerProver = Callable[[int, int], Mapping[str, Any]]
 
@@ -235,6 +254,114 @@ def _sealed_file(
 
 def sha256_file(path: Path) -> str:
     return _sealed_file(path).sha256
+
+
+def observe_packaged_runtime_log(inputs: RendererInputs) -> RuntimeLogObservation:
+    """Seal the complete log prefix present after the renderer warmup probe.
+
+    The packaged process keeps this file open, so its final size is not a
+    stable artifact.  We instead bind the exact prefix length and digest seen
+    after ``renderer_status`` succeeds.  Concurrent appends are allowed;
+    replacement, truncation, ownership/mode drift, oversized evidence, and
+    any renderer degradation signature are rejected.
+    """
+
+    path = inputs.runtime_binding.state_path.parent / PACKAGED_GAME_LOG_NAME
+    try:
+        before = os.lstat(path)
+        if (
+            stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_uid != inputs.runtime_effective_uid
+        ):
+            _fail(
+                "RUNTIME_LOG_IDENTITY_INVALID",
+                "packaged game log ownership, type, or mode differs",
+            )
+        prefix_bytes = before.st_size
+        if not 0 < prefix_bytes <= MAX_RUNTIME_LOG_PREFIX_BYTES:
+            _fail(
+                "RUNTIME_LOG_SIZE_INVALID",
+                "packaged game log prefix size is invalid",
+            )
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (
+                opened.st_dev != before.st_dev
+                or opened.st_ino != before.st_ino
+                or opened.st_size < prefix_bytes
+                or opened.st_uid != before.st_uid
+                or opened.st_nlink != 1
+                or stat.S_IMODE(opened.st_mode) != 0o600
+            ):
+                _fail(
+                    "RUNTIME_LOG_CHANGED",
+                    "packaged game log changed while opening",
+                )
+            remaining = prefix_bytes
+            blocks = []
+            while remaining:
+                block = handle.read(min(1024 * 1024, remaining))
+                if not block:
+                    _fail(
+                        "RUNTIME_LOG_CHANGED",
+                        "packaged game log was truncated while reading",
+                    )
+                blocks.append(block)
+                remaining -= len(block)
+            after_descriptor = os.fstat(handle.fileno())
+        after_path = os.lstat(path)
+    except RendererAcceptanceError:
+        raise
+    except OSError as exc:
+        raise RendererAcceptanceError(
+            "RUNTIME_LOG_READ_FAILED", "could not read packaged game log"
+        ) from exc
+    for observed in (after_descriptor, after_path):
+        if (
+            observed.st_dev != before.st_dev
+            or observed.st_ino != before.st_ino
+            or observed.st_size < prefix_bytes
+            or observed.st_uid != before.st_uid
+            or observed.st_nlink != 1
+            or not stat.S_ISREG(observed.st_mode)
+            or stat.S_IMODE(observed.st_mode) != 0o600
+        ):
+            _fail(
+                "RUNTIME_LOG_CHANGED",
+                "packaged game log identity changed while observing its prefix",
+            )
+    raw = b"".join(blocks)
+    if len(raw) != prefix_bytes:
+        _fail("RUNTIME_LOG_CHANGED", "packaged game log prefix length differs")
+    matches = [
+        pattern
+        for pattern in PROHIBITED_RUNTIME_LOG_PATTERNS
+        if pattern.encode("utf-8") in raw
+    ]
+    if matches:
+        _fail(
+            "RENDERER_LOG_REJECTED",
+            "packaged game log contains prohibited renderer degradation: "
+            + matches[0],
+        )
+    return RuntimeLogObservation(
+        path=path,
+        prefix_sha256=sha256_bytes(raw),
+        prefix_bytes=prefix_bytes,
+        mode=stat.S_IMODE(before.st_mode),
+        owner_uid=before.st_uid,
+        device=before.st_dev,
+        inode=before.st_ino,
+    )
 
 
 def _unique_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
@@ -1326,6 +1453,7 @@ def build_receipt(
     listener_after: Mapping[str, Any],
     package_bytes_before: Mapping[str, Any],
     package_bytes_after: Mapping[str, Any],
+    runtime_log: RuntimeLogObservation,
 ) -> dict[str, Any]:
     state = inputs.runtime_state
     observation_contract = inputs.renderer_request["observation_contract"]
@@ -1432,6 +1560,19 @@ def build_receipt(
                     "start_ticks": state["process"]["start_ticks"],
                     "process_group": state["process"]["process_group"],
                 },
+                "packaged_game_log": {
+                    "path": str(runtime_log.path),
+                    "observed_prefix_sha256": runtime_log.prefix_sha256,
+                    "observed_prefix_bytes": runtime_log.prefix_bytes,
+                    "mode": runtime_log.mode,
+                    "owner_uid": runtime_log.owner_uid,
+                    "device": runtime_log.device,
+                    "inode": runtime_log.inode,
+                    "gate_policy": RUNTIME_LOG_GATE_POLICY,
+                    "observed_after_renderer_status": True,
+                    "prohibited_patterns": list(PROHIBITED_RUNTIME_LOG_PATTERNS),
+                    "prohibited_pattern_matches": [],
+                },
             },
         },
         "protocol": {
@@ -1494,6 +1635,10 @@ def execute_acceptance(
             "LISTENER_OWNERSHIP_CHANGED",
             "packaged renderer listener changed during observation",
         )
+    # Read the append-only packaged log only after renderer_status and all
+    # package/listener warmup checks have passed.  Its observed prefix becomes
+    # immutable receipt evidence; known material/Nanite fallbacks fail closed.
+    runtime_log = observe_packaged_runtime_log(inputs)
     receipt = build_receipt(
         inputs,
         request=request,
@@ -1504,6 +1649,7 @@ def execute_acceptance(
         listener_after=listener_after,
         package_bytes_before=package_bytes_before,
         package_bytes_after=package_bytes_after,
+        runtime_log=runtime_log,
     )
     descriptor = _reserve_output(inputs)
     raw = canonical_json(receipt)

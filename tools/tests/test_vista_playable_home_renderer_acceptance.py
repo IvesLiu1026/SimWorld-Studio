@@ -336,6 +336,12 @@ class RendererFixture(RuntimeAcceptanceFixture):
         }
         self.state_path = package_runtime_attempt / "runtime-state.json"
         self.state_path.write_bytes(renderer.canonical_json(packaged_state))
+        self.runtime_log = package_runtime_attempt / renderer.PACKAGED_GAME_LOG_NAME
+        self.runtime_log.write_bytes(
+            b"LogInit: Display: packaged renderer warmup complete\n"
+            b"LogRHI: Display: VULKAN_SM6\n"
+        )
+        self.runtime_log.chmod(0o600)
         runtime_root = package_attempt / "game-runtime"
         (runtime_root / "current.json").write_bytes(
             renderer.canonical_json(
@@ -409,7 +415,7 @@ def test_full_renderer_observation_is_only_observed_acceptance(
     )
 
     assert receipt["status"] == "accepted"
-    assert receipt["schema"].endswith("/v2")
+    assert receipt["schema"].endswith("/v3")
     assert receipt["renderer_runtime_observation"] == "observed_accepted"
     assert receipt["bindings"]["build"]["pending_renderer_observation"] is True
     assert receipt["bindings"]["renderer_request"]["runtime_proof_in_request"] is False
@@ -437,6 +443,20 @@ def test_full_renderer_observation_is_only_observed_acceptance(
         == (receipt["bindings"]["runtime"]["listener_after"])
     )
     assert fixture.listener_proof_calls == 2
+    log_proof = receipt["bindings"]["runtime"]["packaged_game_log"]
+    assert log_proof == {
+        "path": str(fixture.runtime_log),
+        "observed_prefix_sha256": renderer.sha256_file(fixture.runtime_log),
+        "observed_prefix_bytes": fixture.runtime_log.stat().st_size,
+        "mode": 0o600,
+        "owner_uid": os.geteuid(),
+        "device": fixture.runtime_log.stat().st_dev,
+        "inode": fixture.runtime_log.stat().st_ino,
+        "gate_policy": renderer.RUNTIME_LOG_GATE_POLICY,
+        "observed_after_renderer_status": True,
+        "prohibited_patterns": list(renderer.PROHIBITED_RUNTIME_LOG_PATTERNS),
+        "prohibited_pattern_matches": [],
+    }
     byte_verification = receipt["bindings"]["package"]["byte_verification"]
     assert byte_verification["exact_match"] is True
     assert byte_verification["before_exchange"] == byte_verification["after_exchange"]
@@ -481,6 +501,46 @@ def test_full_renderer_observation_is_only_observed_acceptance(
             listener_prover=fixture.listener_prover,
         )
     assert caught.value.code == "RECEIPT_EXISTS"
+
+
+@pytest.mark.parametrize("pattern", renderer.PROHIBITED_RUNTIME_LOG_PATTERNS)
+def test_renderer_rejects_packaged_log_material_and_nanite_degradation(
+    tmp_path: pathlib.Path, pattern: str
+) -> None:
+    fixture = RendererFixture(tmp_path)
+    fixture.runtime_log.write_text(
+        f"LogInit: warmup complete\nLogRenderer: Warning: {pattern}\n",
+        encoding="utf-8",
+    )
+    fixture.runtime_log.chmod(0o600)
+
+    with pytest.raises(renderer.RendererAcceptanceError) as caught:
+        renderer.execute_acceptance(
+            fixture.renderer_config,
+            exchange=fixture.exchange,
+            listener_prover=fixture.listener_prover,
+        )
+
+    assert caught.value.code == "RENDERER_LOG_REJECTED"
+    assert pattern in str(caught.value)
+    assert not fixture.renderer_output.exists()
+
+
+def test_renderer_requires_private_attempt_local_packaged_log(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = RendererFixture(tmp_path)
+    fixture.runtime_log.chmod(0o644)
+
+    with pytest.raises(renderer.RendererAcceptanceError) as caught:
+        renderer.execute_acceptance(
+            fixture.renderer_config,
+            exchange=fixture.exchange,
+            listener_prover=fixture.listener_prover,
+        )
+
+    assert caught.value.code == "RUNTIME_LOG_IDENTITY_INVALID"
+    assert not fixture.renderer_output.exists()
 
 
 def test_renderer_receipt_mode_is_deterministic_under_restrictive_umask(
