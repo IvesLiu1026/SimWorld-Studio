@@ -76,6 +76,8 @@ EXPECTED_BUILD_RESULT_SCHEMA = "simworld.vista.playable-home-ue-build-result/v1"
 EXPECTED_ENGINE_PREFIX = "5.7."
 WIDTH = 1280
 HEIGHT = 720
+R2_WIDTH = 1920
+R2_HEIGHT = 1080
 CAPTURE_METHOD = "camera_actor_pilot_highres_console"
 SCREENSHOT_TIMEOUT_SECONDS = 120.0
 WORKER_PROOF_POLL_INTERVAL_SECONDS = 0.25
@@ -395,6 +397,130 @@ def compile_fixed_cameras(plan: Mapping[str, Any], map_path: str) -> list[dict[s
             }
         )
     return cameras
+
+
+def compile_realistic_cameras(
+    visual_profile: Mapping[str, Any],
+    map_path: str,
+    *,
+    room_bounds_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+    approved_doorway_bounds_by_room: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    blocking_bounds: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """Compile r2 look-at shots for a future 1080p capture execution.
+
+    This is intentionally separate from ``compile_fixed_cameras`` so the
+    accepted r1 six-camera CLI and receipts retain their exact v2 contract.
+    Preflight AABBs are optional; when they are absent, each camera explicitly
+    retains a runtime-observation requirement instead of claiming clearance.
+    """
+
+    if map_path != EXPECTED_MAP_PATH:
+        _fail("VISTA_HOME_REVIEW_MAP_MISMATCH", "requested r2 map differs from the pinned home map")
+    from tools.ue.vista_playable_home import planning as realism_planning
+
+    try:
+        operations = realism_planning.compile_realistic_review_operations(
+            visual_profile,
+            room_bounds_by_id=room_bounds_by_id,
+            approved_doorway_bounds_by_room=approved_doorway_bounds_by_room,
+            blocking_bounds=blocking_bounds,
+        )
+    except realism_planning.VistaPlayableHomePlanError as exc:
+        _fail(exc.code, exc.detail)
+    ordered = operations
+    cameras: list[dict[str, Any]] = []
+    for ordinal, operation in enumerate(ordered, start=1):
+        shot_id = operation["review_shot_id"]
+        file_id = re.sub(r"[^A-Za-z0-9._-]", "_", shot_id)
+        cameras.append({
+            "ordinal": ordinal,
+            "visual_profile_id": visual_profile.get("visual_profile_id"),
+            "room_id": operation["room_id"],
+            "camera_id": shot_id,
+            "purpose": operation["purpose"],
+            "semantic_id": operation["semantic_id"],
+            "semantic_tag": f"VistaSemanticId={operation['semantic_id']}",
+            "eye_location_cm": list(operation["eye_location_cm"]),
+            "look_at_target_cm": list(operation["look_at_target_cm"]),
+            "expected_transform": dict(operation["transform"]),
+            "expected_fov_deg": operation["fov_deg"],
+            "near_field_clearance_cm": operation["near_field_clearance_cm"],
+            "exposure": dict(operation["exposure"]),
+            "expected_hero_ids": list(operation["expected_hero_ids"]),
+            "forbidden_foreground_ids": list(operation["forbidden_foreground_ids"]),
+            "preflight": dict(operation["preflight"]),
+            "width": R2_WIDTH,
+            "height": R2_HEIGHT,
+            "relative_path": f"{IMAGES_DIR}/{ordinal:02d}-{file_id}.png",
+        })
+    if len({camera["semantic_id"] for camera in cameras}) != len(cameras):
+        _fail("VISTA_HOME_REVIEW_CAMERA_SET_INVALID", "r2 semantic camera IDs are duplicated")
+    if any(camera["expected_transform"]["rotation_deg"][0] != 0.0 for camera in cameras):
+        _fail("VISTA_HOME_REVIEW_LOOK_AT_INVALID", "r2 camera compiler produced nonzero roll")
+    return cameras
+
+
+def validate_realistic_camera_observation(
+    camera: Mapping[str, Any],
+    observation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Fail closed on retained UE obstruction/hero visibility observations."""
+
+    measured_clearance = observation.get("nearest_blocker_clearance_cm")
+    occlusion = observation.get("foreground_occlusion_fraction")
+    visible_hero_ids = observation.get("visible_hero_ids")
+    blocker_id = observation.get("nearest_blocker_id")
+    if (isinstance(measured_clearance, bool) or
+            not isinstance(measured_clearance, (int, float)) or
+            not math.isfinite(float(measured_clearance)) or float(measured_clearance) < 0.0):
+        _fail("VISTA_HOME_REVIEW_OBSERVATION_INVALID", "near-field clearance observation is invalid")
+    if (isinstance(occlusion, bool) or not isinstance(occlusion, (int, float)) or
+            not math.isfinite(float(occlusion)) or not 0.0 <= float(occlusion) <= 1.0):
+        _fail("VISTA_HOME_REVIEW_OBSERVATION_INVALID", "foreground occlusion observation is invalid")
+    if not isinstance(visible_hero_ids, list) or not all(isinstance(item, str) for item in visible_hero_ids):
+        _fail("VISTA_HOME_REVIEW_OBSERVATION_INVALID", "visible hero observation is invalid")
+    failures: list[dict[str, Any]] = []
+    minimum = float(camera["near_field_clearance_cm"])
+    if float(measured_clearance) < minimum:
+        failures.append({
+            "gate": "near_field_clearance",
+            "expected_minimum_cm": minimum,
+            "actual_cm": float(measured_clearance),
+            "blocker_id": blocker_id,
+        })
+    if camera.get("purpose") == "overview" and float(occlusion) > 0.25:
+        failures.append({
+            "gate": "overview_foreground_occlusion",
+            "expected_maximum_fraction": 0.25,
+            "actual_fraction": float(occlusion),
+        })
+    expected_heroes = set(camera.get("expected_hero_ids", []))
+    visible = set(visible_hero_ids)
+    minimum_visible = min(3, len(expected_heroes))
+    if len(expected_heroes & visible) < minimum_visible:
+        failures.append({
+            "gate": "expected_hero_visibility",
+            "expected_minimum_count": minimum_visible,
+            "actual_visible_ids": sorted(expected_heroes & visible),
+        })
+    forbidden = set(camera.get("forbidden_foreground_ids", []))
+    observed_foreground = set(observation.get("foreground_semantic_ids", []))
+    if forbidden & observed_foreground:
+        failures.append({
+            "gate": "forbidden_foreground",
+            "actual_ids": sorted(forbidden & observed_foreground),
+        })
+    return {
+        "status": "accepted_observation" if not failures else "rejected_observation",
+        "runtime_observation": True,
+        "camera_semantic_id": camera["semantic_id"],
+        "failures": failures,
+        "nearest_blocker_id": blocker_id,
+        "nearest_blocker_clearance_cm": float(measured_clearance),
+        "foreground_occlusion_fraction": float(occlusion),
+        "visible_hero_ids": sorted(visible),
+    }
 
 
 def _validate_project(path: Path) -> tuple[dict[str, Any], str]:

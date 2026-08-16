@@ -103,6 +103,32 @@ HSSD_BASIS_TRANSCODER_JS_SHA256 = (
 HSSD_BASIS_TRANSCODER_WASM_SHA256 = (
     "6cf17dc889352c42e9acf8897107978d127005fe3386c36a0e3845e27967630a"
 )
+RENDERER_OBSERVATION_SCHEMA = "simworld.vista.playable-home-renderer-observation-contract/v1"
+RENDERER_PROFILE_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+RENDERER_SCALABILITY_KEYS = (
+    "view_distance",
+    "anti_aliasing",
+    "shadow",
+    "global_illumination",
+    "reflection",
+    "post_process",
+    "texture",
+    "effects",
+    "foliage",
+    "shading",
+)
+RENDERER_SCALABILITY_CVARS = {
+    "view_distance": "sg.ViewDistanceQuality",
+    "anti_aliasing": "sg.AntiAliasingQuality",
+    "shadow": "sg.ShadowQuality",
+    "global_illumination": "sg.GlobalIlluminationQuality",
+    "reflection": "sg.ReflectionQuality",
+    "post_process": "sg.PostProcessQuality",
+    "texture": "sg.TextureQuality",
+    "effects": "sg.EffectsQuality",
+    "foliage": "sg.FoliageQuality",
+    "shading": "sg.ShadingQuality",
+}
 
 
 class BuildHomeError(RuntimeError):
@@ -119,6 +145,18 @@ class BuildHomeError(RuntimeError):
         if self.pointer:
             value["pointer"] = self.pointer
         return value
+
+
+@dataclass(frozen=True)
+class RendererProfileCompilation:
+    """Deterministic config request plus a separate runtime-observation gate."""
+
+    profile: dict[str, Any]
+    linux_target_lines: tuple[str, ...]
+    renderer_lines: tuple[str, ...]
+    console_lines: tuple[str, ...]
+    observation_contract: dict[str, Any]
+    content_digest: str
 
 
 def _fail(code: str, detail: str, *, pointer: str | None = None) -> None:
@@ -963,7 +1001,193 @@ def project_descriptor() -> dict[str, Any]:
     }
 
 
-def default_engine_ini(plan: Mapping[str, Any]) -> bytes:
+def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompilation:
+    """Compile the approved Linux high-desktop profile without claiming proof.
+
+    Config generation is a request.  The returned observation contract must be
+    satisfied by a packaged runtime receipt before the renderer tier can be
+    promoted; it deliberately separates requested settings from observed RHI,
+    feature level, shader platform, and effective CVars.
+    """
+
+    if not isinstance(profile, Mapping):
+        _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", "renderer profile must be an object")
+    profile_id = profile.get("profile_id")
+    if not isinstance(profile_id, str) or RENDERER_PROFILE_SAFE_ID_RE.fullmatch(profile_id) is None:
+        _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", "renderer profile ID is invalid")
+    exact_values = {
+        "platform": "linux",
+        "rhi": "vulkan",
+        "feature_level": "sm6",
+        "shading_path": "deferred",
+        "dynamic_gi": "lumen",
+        "reflections": "lumen",
+        "shadow_method": "virtual_shadow_maps",
+        "anti_aliasing": "tsr",
+        "nanite_policy": "eligible_static_opaque_only",
+    }
+    for key, expected in exact_values.items():
+        if profile.get(key) != expected:
+            _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", f"renderer profile {key} must be {expected}")
+    for key in ("extended_luminance_range", "pre_exposure"):
+        if profile.get(key) is not True:
+            _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", f"renderer profile {key} must be enabled")
+    if profile.get("hardware_ray_tracing") is not False:
+        _fail("VISTA_HOME_RENDERER_PROFILE_INVALID",
+              "the first Linux realism profile must use software Lumen")
+
+    screen_percentage = profile.get("screen_percentage")
+    if (isinstance(screen_percentage, bool) or
+            not isinstance(screen_percentage, (int, float)) or
+            not math.isfinite(float(screen_percentage)) or
+            not 50.0 <= float(screen_percentage) <= 200.0):
+        _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", "screen percentage is invalid")
+    texture_pool_mb = profile.get("texture_pool_mb")
+    if (isinstance(texture_pool_mb, bool) or not isinstance(texture_pool_mb, int) or
+            not 1024 <= texture_pool_mb <= 24 * 1024):
+        _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", "texture pool must be 1024 through 24576 MiB")
+    scalability = profile.get("scalability")
+    if not isinstance(scalability, Mapping) or set(scalability) != set(RENDERER_SCALABILITY_KEYS):
+        _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", "renderer scalability fields differ")
+    normalized_scalability: dict[str, int] = {}
+    for key in RENDERER_SCALABILITY_KEYS:
+        value = scalability[key]
+        if isinstance(value, bool) or not isinstance(value, int) or not 3 <= value <= 4:
+            _fail("VISTA_HOME_RENDERER_PROFILE_INVALID",
+                  f"high desktop scalability {key} must be 3 or 4")
+        normalized_scalability[key] = value
+
+    normalized = {
+        "profile_id": profile_id,
+        **exact_values,
+        "hardware_ray_tracing": False,
+        "extended_luminance_range": True,
+        "pre_exposure": True,
+        "screen_percentage": float(screen_percentage),
+        "texture_pool_mb": texture_pool_mb,
+        "scalability": normalized_scalability,
+    }
+    linux_target_lines = (
+        "DefaultGraphicsRHI=DefaultGraphicsRHI_Vulkan",
+        "-VulkanTargetedShaderFormats=SF_VULKAN_SM5",
+        "+VulkanTargetedShaderFormats=SF_VULKAN_SM6",
+    )
+    renderer_lines = (
+        "r.DynamicGlobalIlluminationMethod=1",
+        "r.ReflectionMethod=1",
+        "r.Shadow.Virtual.Enable=1",
+        "r.AntiAliasingMethod=4",
+        "r.Nanite.ProjectEnabled=True",
+        "r.GenerateMeshDistanceFields=True",
+        "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange=True",
+        "r.UsePreExposure=True",
+        "r.RayTracing=False",
+        "r.Lumen.HardwareRayTracing=0",
+    )
+    console_lines = (
+        f"r.ScreenPercentage={float(screen_percentage):.6f}",
+        f"r.Streaming.PoolSize={texture_pool_mb}",
+        *(
+            f"{RENDERER_SCALABILITY_CVARS[key]}={normalized_scalability[key]}"
+            for key in RENDERER_SCALABILITY_KEYS
+        ),
+    )
+    required_runtime_observations: list[dict[str, Any]] = [
+        {"source": "runtime", "name": "rhi", "comparison": "casefold_exact", "expected": "Vulkan"},
+        {"source": "runtime", "name": "feature_level", "comparison": "casefold_exact", "expected": "SM6"},
+        {"source": "runtime", "name": "shader_platform", "comparison": "contains", "expected": "VULKAN_SM6"},
+    ]
+    required_cvars: tuple[tuple[str, int | float], ...] = (
+        ("r.DynamicGlobalIlluminationMethod", 1),
+        ("r.ReflectionMethod", 1),
+        ("r.Shadow.Virtual.Enable", 1),
+        ("r.AntiAliasingMethod", 4),
+        ("r.Nanite", 1),
+        ("r.GenerateMeshDistanceFields", 1),
+        ("r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange", 1),
+        ("r.UsePreExposure", 1),
+        ("r.RayTracing", 0),
+        ("r.Lumen.HardwareRayTracing", 0),
+        ("r.ScreenPercentage", float(screen_percentage)),
+        ("r.Streaming.PoolSize", texture_pool_mb),
+        *tuple(
+            (RENDERER_SCALABILITY_CVARS[key], normalized_scalability[key])
+            for key in RENDERER_SCALABILITY_KEYS
+        ),
+    )
+    required_runtime_observations.extend(
+        {"source": "cvar", "name": name, "comparison": "numeric_exact", "expected": expected}
+        for name, expected in required_cvars
+    )
+    observation_contract = {
+        "schema_version": RENDERER_OBSERVATION_SCHEMA,
+        "profile_id": profile_id,
+        "status": "runtime_observation_required",
+        "config_is_runtime_proof": False,
+        "required_runtime_observations": required_runtime_observations,
+        "nanite_policy": {
+            "mode": "eligible_static_opaque_only",
+            "per_mesh_receipt_required": True,
+            "eligible": ["static", "opaque", "non_deforming"],
+            "excluded": ["skeletal", "deforming", "cloth", "translucent", "glass", "pickup", "door"],
+        },
+    }
+    digest_input = {
+        "profile": normalized,
+        "linux_target_lines": list(linux_target_lines),
+        "renderer_lines": list(renderer_lines),
+        "console_lines": list(console_lines),
+        "observation_contract": observation_contract,
+    }
+    digest = sha256_bytes(canonical_json(digest_input))
+    return RendererProfileCompilation(
+        profile=normalized,
+        linux_target_lines=linux_target_lines,
+        renderer_lines=renderer_lines,
+        console_lines=console_lines,
+        observation_contract=observation_contract,
+        content_digest=digest,
+    )
+
+
+def evaluate_renderer_observations(
+    compilation: RendererProfileCompilation,
+    observations: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare retained runtime observations against a compiled request."""
+
+    failures: list[dict[str, Any]] = []
+    for requirement in compilation.observation_contract["required_runtime_observations"]:
+        name = requirement["name"]
+        expected = requirement["expected"]
+        actual = observations.get(name)
+        comparison = requirement["comparison"]
+        matched = False
+        if comparison == "casefold_exact" and isinstance(actual, str):
+            matched = actual.casefold() == str(expected).casefold()
+        elif comparison == "contains" and isinstance(actual, str):
+            matched = str(expected).casefold() in actual.casefold()
+        elif comparison == "numeric_exact" and not isinstance(actual, bool):
+            try:
+                matched = math.isfinite(float(actual)) and abs(float(actual) - float(expected)) <= 1e-4
+            except (TypeError, ValueError):
+                matched = False
+        if not matched:
+            failures.append({"name": name, "expected": expected, "actual": actual})
+    return {
+        "schema_version": RENDERER_OBSERVATION_SCHEMA,
+        "profile_id": compilation.profile["profile_id"],
+        "renderer_profile_digest": compilation.content_digest,
+        "status": "accepted_observation" if not failures else "rejected_observation",
+        "runtime_proof": not failures,
+        "failures": failures,
+    }
+
+
+def default_engine_ini(
+    plan: Mapping[str, Any],
+    visual_profile: Mapping[str, Any] | None = None,
+) -> bytes:
     map_path = plan["unreal"]["map_path"]
     lines = [
         "[/Script/EngineSettings.GameMapsSettings]",
@@ -979,8 +1203,23 @@ def default_engine_ini(plan: Mapping[str, Any]) -> bytes:
         "",
         "[/Script/Engine.RendererSettings]",
         "r.AllowStaticLighting=False",
-        "",
     ]
+    if visual_profile is not None:
+        if not isinstance(visual_profile, Mapping) or not isinstance(
+                visual_profile.get("renderer_profile"), Mapping):
+            _fail("VISTA_HOME_RENDERER_PROFILE_INVALID",
+                  "visual profile renderer_profile is missing")
+        compiled = compile_renderer_profile(visual_profile["renderer_profile"])
+        lines.extend(compiled.renderer_lines)
+        lines.extend([
+            "",
+            "[/Script/LinuxTargetPlatform.LinuxTargetSettings]",
+            *compiled.linux_target_lines,
+            "",
+            "[ConsoleVariables]",
+            *compiled.console_lines,
+        ])
+    lines.append("")
     return "\n".join(lines).encode("utf-8")
 
 

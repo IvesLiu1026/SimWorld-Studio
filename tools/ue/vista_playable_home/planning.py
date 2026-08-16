@@ -80,6 +80,10 @@ ROLE_COLLISIONS = {
 }
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@=-]{0,223}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+VISUAL_PROFILE_SCHEMA = "simworld.vista.playable-home-visual-profile/v1"
+R2_REVIEW_CAMERA_TAG = "VistaVisualRevision=realistic_interior_r2"
+MIN_REVIEW_CLEARANCE_CM = 25.0
+MAX_REVIEW_CLEARANCE_CM = 500.0
 
 
 class VistaPlayableHomePlanError(ValueError):
@@ -166,6 +170,357 @@ def _bounds(value: Any, label: str) -> dict[str, list[float]]:
     return output
 
 
+def _finite_number(value: Any, label: str, *, minimum: float | None = None,
+                   maximum: float | None = None) -> float:
+    _require(isinstance(value, (int, float)) and not isinstance(value, bool) and
+             math.isfinite(float(value)), "VISTA_HOME_VISUAL_NUMBER_INVALID",
+             f"{label} must be finite")
+    result = float(value)
+    _require(minimum is None or result >= minimum,
+             "VISTA_HOME_VISUAL_NUMBER_INVALID", f"{label} is below its minimum")
+    _require(maximum is None or result <= maximum,
+             "VISTA_HOME_VISUAL_NUMBER_INVALID", f"{label} is above its maximum")
+    return result
+
+
+def _v3(value: Any, label: str) -> list[float]:
+    _require(isinstance(value, list) and len(value) == 3 and
+             all(isinstance(number, (int, float)) and not isinstance(number, bool) and
+                 math.isfinite(float(number)) for number in value),
+             "VISTA_HOME_VISUAL_VECTOR_INVALID", f"{label} must be a finite xyz vector")
+    return [float(number) for number in value]
+
+
+def look_at_rotation_deg(eye_location_cm: Any, look_at_target_cm: Any) -> list[float]:
+    """Return HouseSpec XYZ Euler values for an Unreal camera look direction.
+
+    HouseSpec XYZ rotations map to Unreal roll, pitch, yaw.  A camera looks
+    along Unreal +X, so yaw is the azimuth in XY and pitch is the elevation.
+    Roll is intentionally authored as exactly zero; this is the contract that
+    prevents the historic ``[-10, 0, yaw]`` value becoming a ten-degree roll.
+    """
+
+    eye = _v3(eye_location_cm, "review shot eye_location_cm")
+    target = _v3(look_at_target_cm, "review shot look_at_target_cm")
+    direction = [target[index] - eye[index] for index in range(3)]
+    horizontal = math.hypot(direction[0], direction[1])
+    distance = math.sqrt(sum(component * component for component in direction))
+    _require(distance > 1e-4, "VISTA_HOME_REVIEW_LOOK_AT_INVALID",
+             "review shot eye and look-at target must differ")
+    yaw = math.degrees(math.atan2(direction[1], direction[0]))
+    pitch = math.degrees(math.atan2(direction[2], horizontal))
+    result = [0.0, pitch, yaw]
+    _require(all(math.isfinite(value) for value in result) and result[0] == 0.0,
+             "VISTA_HOME_REVIEW_LOOK_AT_INVALID", "derived review rotation is invalid")
+    return result
+
+
+def _point_in_bounds(point: Sequence[float], bounds: Mapping[str, Any]) -> bool:
+    value = _bounds(bounds, "review eye bounds")
+    return all(low <= coordinate <= high for coordinate, low, high in
+               zip(point, value["min_cm"], value["max_cm"], strict=True))
+
+
+def _point_aabb_clearance_cm(point: Sequence[float], bounds: Mapping[str, Any]) -> float:
+    value = _bounds(bounds, "review blocking bounds")
+    squared = 0.0
+    for coordinate, low, high in zip(point, value["min_cm"], value["max_cm"], strict=True):
+        delta = low - coordinate if coordinate < low else coordinate - high if coordinate > high else 0.0
+        squared += delta * delta
+    return math.sqrt(squared)
+
+
+def compile_look_at_review_shot(
+    shot: Mapping[str, Any],
+    *,
+    room_bounds: Mapping[str, Any] | None = None,
+    approved_doorway_bounds: Sequence[Mapping[str, Any]] = (),
+    blocking_bounds: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Validate and compile one r2 ReviewShot into a CameraActor operation.
+
+    Bounds passed by callers are deterministic preflight hooks.  Their absence
+    is recorded as requiring Unreal runtime observation; it is never reported
+    as clearance proof.
+    """
+
+    value = dict(_mapping(shot, "review shot"))
+    _require(not {"rotation_deg", "world_transform_cm", "transform"} & set(value),
+             "VISTA_HOME_REVIEW_CALLER_EULER_REFUSED",
+             "r2 review shots cannot carry caller-authored Euler transforms")
+    shot_id = _safe_id(value.get("shot_id"), "review shot shot_id")
+    room_id = _safe_id(value.get("room_id"), "review shot room_id")
+    purpose = value.get("purpose")
+    _require(purpose in {"overview", "hero"},
+             "VISTA_HOME_REVIEW_SHOT_INVALID", f"review shot {shot_id} purpose is invalid")
+    eye = _v3(value.get("eye_location_cm"), f"review shot {shot_id}.eye_location_cm")
+    target = _v3(value.get("look_at_target_cm"),
+                 f"review shot {shot_id}.look_at_target_cm")
+    fov = _finite_number(value.get("horizontal_fov_deg"),
+                         f"review shot {shot_id}.horizontal_fov_deg",
+                         minimum=5.0, maximum=170.0)
+    clearance = _finite_number(value.get("near_field_clearance_cm"),
+                               f"review shot {shot_id}.near_field_clearance_cm",
+                               minimum=MIN_REVIEW_CLEARANCE_CM,
+                               maximum=MAX_REVIEW_CLEARANCE_CM)
+    rotation_deg = look_at_rotation_deg(eye, target)
+
+    containment_status = "runtime_observation_required"
+    if room_bounds is not None or approved_doorway_bounds:
+        contained = room_bounds is not None and _point_in_bounds(eye, room_bounds)
+        contained = contained or any(_point_in_bounds(eye, bounds)
+                                     for bounds in approved_doorway_bounds)
+        _require(contained, "VISTA_HOME_REVIEW_EYE_OUTSIDE_ALLOWED_BOUNDS",
+                 f"review shot {shot_id} eye is outside its room and approved doorways")
+        containment_status = "preflight_passed"
+
+    nearest_clearance: float | None = None
+    nearest_blocker: str | None = None
+    for index, raw_blocker in enumerate(blocking_bounds):
+        blocker = _mapping(raw_blocker, f"review blocking bounds[{index}]")
+        if blocker.get("translucent") is True:
+            continue
+        blocker_id = _safe_id(blocker.get("semantic_id"),
+                              f"review blocking bounds[{index}].semantic_id")
+        measured = _point_aabb_clearance_cm(eye, blocker.get("bounds"))
+        if nearest_clearance is None or measured < nearest_clearance:
+            nearest_clearance = measured
+            nearest_blocker = blocker_id
+    if nearest_clearance is not None:
+        _require(nearest_clearance >= clearance,
+                 "VISTA_HOME_REVIEW_NEAR_FIELD_BLOCKED",
+                 f"review shot {shot_id} is {nearest_clearance:.3f} cm from {nearest_blocker}, "
+                 f"below the {clearance:.3f} cm clearance")
+        clearance_status = "preflight_passed"
+    else:
+        clearance_status = "runtime_observation_required"
+
+    exposure = dict(_mapping(value.get("exposure"), f"review shot {shot_id}.exposure"))
+    _require(exposure.get("mode") == "pinned_physical_camera",
+             "VISTA_HOME_REVIEW_EXPOSURE_INVALID",
+             f"review shot {shot_id} exposure must be pinned physical camera")
+    normalized_exposure = {
+        "mode": "pinned_physical_camera",
+        "iso": _finite_number(exposure.get("iso"), "review exposure iso", minimum=1.0, maximum=102400.0),
+        "shutter_speed_s": _finite_number(exposure.get("shutter_speed_s"),
+                                          "review exposure shutter_speed_s",
+                                          minimum=1.0 / 32000.0, maximum=60.0),
+        "aperture_fstop": _finite_number(exposure.get("aperture_fstop"),
+                                         "review exposure aperture_fstop",
+                                         minimum=0.5, maximum=64.0),
+        "exposure_compensation_ev": _finite_number(
+            exposure.get("exposure_compensation_ev", 0.0),
+            "review exposure compensation", minimum=-16.0, maximum=16.0),
+    }
+    expected_hero_ids = list(value.get("expected_hero_ids", []))
+    forbidden_foreground_ids = list(value.get("forbidden_foreground_ids", []))
+    for label, identifiers in (("expected_hero_ids", expected_hero_ids),
+                               ("forbidden_foreground_ids", forbidden_foreground_ids)):
+        _require(all(isinstance(item, str) and SAFE_ID.fullmatch(item) is not None
+                     for item in identifiers) and len(identifiers) == len(set(identifiers)),
+                 "VISTA_HOME_REVIEW_SHOT_INVALID", f"review shot {shot_id} {label} is invalid")
+    _require(purpose != "overview" or len(expected_hero_ids) >= 3,
+             "VISTA_HOME_REVIEW_SHOT_INVALID",
+             f"overview shot {shot_id} must declare at least three room-defining heroes")
+    layers = list(value.get("allowed_visibility_layers", []))
+    _require(layers and all(isinstance(item, str) and SAFE_ID.fullmatch(item) is not None
+                            for item in layers) and len(layers) == len(set(layers)),
+             "VISTA_HOME_REVIEW_SHOT_INVALID",
+             f"review shot {shot_id} allowed visibility layers are invalid")
+
+    semantic_id = f"{room_id}/camera.{shot_id}"
+    return _operation("place_rooms", "place_review_camera", {
+        "semantic_id": semantic_id,
+        "room_id": room_id,
+        "review_shot_id": shot_id,
+        "purpose": purpose,
+        "eye_location_cm": eye,
+        "look_at_target_cm": target,
+        "transform": {
+            "location_cm": eye,
+            "rotation_deg": rotation_deg,
+            "scale": [1.0, 1.0, 1.0],
+        },
+        "fov_deg": fov,
+        "near_field_clearance_cm": clearance,
+        "exposure": normalized_exposure,
+        "allowed_visibility_layers": sorted(layers),
+        "expected_hero_ids": sorted(expected_hero_ids),
+        "forbidden_foreground_ids": sorted(forbidden_foreground_ids),
+        "preflight": {
+            "eye_containment": containment_status,
+            "near_field_clearance": clearance_status,
+            "nearest_blocker_id": nearest_blocker,
+            "nearest_blocker_clearance_cm": nearest_clearance,
+            "runtime_observation_required": (
+                containment_status != "preflight_passed" or
+                clearance_status != "preflight_passed"
+            ),
+        },
+        "tags": [TAG_PREFIX + semantic_id, "VistaRoom=" + room_id,
+                 R2_REVIEW_CAMERA_TAG, "VistaReviewShot=" + shot_id],
+    })
+
+
+def compile_realistic_review_operations(
+    visual_profile: Mapping[str, Any],
+    *,
+    room_bounds_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+    approved_doorway_bounds_by_room: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    blocking_bounds: Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """Compile a deterministic, unique r2 look-at review-shot set."""
+
+    profile = _mapping(visual_profile, "visual profile")
+    _require(profile.get("schema_version") == VISUAL_PROFILE_SCHEMA,
+             "VISTA_HOME_VISUAL_PROFILE_INVALID", "visual profile schema differs")
+    shots = _array(profile.get("review_shots"), "visual profile review_shots")
+    operations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw_shot in enumerate(shots):
+        shot = _mapping(raw_shot, f"review_shots[{index}]")
+        shot_id = shot.get("shot_id")
+        _require(isinstance(shot_id, str) and shot_id not in seen,
+                 "VISTA_HOME_REVIEW_SHOT_INVALID", "review shot IDs must be unique")
+        seen.add(shot_id)
+        room_id = shot.get("room_id")
+        operations.append(compile_look_at_review_shot(
+            shot,
+            room_bounds=(room_bounds_by_id or {}).get(room_id),
+            approved_doorway_bounds=(approved_doorway_bounds_by_room or {}).get(room_id, ()),
+            blocking_bounds=blocking_bounds,
+        ))
+    _require(operations, "VISTA_HOME_REVIEW_SHOT_INVALID", "r2 needs at least one review shot")
+    return operations
+
+
+def _unit_direction(value: Any, label: str) -> list[float]:
+    direction = _v3(value, label)
+    length = math.sqrt(sum(component * component for component in direction))
+    _require(length > 1e-6, "VISTA_HOME_LIGHT_DIRECTION_INVALID",
+             f"{label} cannot be zero")
+    return [component / length for component in direction]
+
+
+def compile_realistic_lighting_operation(
+    lighting_rig: Mapping[str, Any],
+    *,
+    room_ids: set[str],
+) -> dict[str, Any]:
+    """Compile the additive physical-lighting request for the r2 composer."""
+
+    value = _mapping(lighting_rig, "lighting rig")
+    rig_id = _safe_id(value.get("rig_id"), "lighting rig rig_id")
+    _require(value.get("profile") == "neutral_day",
+             "VISTA_HOME_LIGHTING_RIG_INVALID", "lighting profile must be neutral_day")
+    sun = _mapping(value.get("sun"), "lighting rig sun")
+    sun_direction = _unit_direction(sun.get("direction"), "lighting rig sun.direction")
+    normalized_sun = {
+        "direction": sun_direction,
+        "rotation_deg": look_at_rotation_deg([0.0, 0.0, 0.0], sun_direction),
+        "illuminance_lux": _finite_number(sun.get("illuminance_lux"),
+                                          "lighting rig sun.illuminance_lux",
+                                          minimum=0.01, maximum=200000.0),
+        "temperature_k": _finite_number(sun.get("temperature_k"),
+                                         "lighting rig sun.temperature_k",
+                                         minimum=1000.0, maximum=20000.0),
+    }
+    sky = _mapping(value.get("sky"), "lighting rig sky")
+    source = _safe_id(sky.get("source"), "lighting rig sky.source")
+    normalized_sky = {
+        "source": source,
+        "sky_intensity": _finite_number(sky.get("sky_intensity"),
+                                        "lighting rig sky.sky_intensity",
+                                        minimum=0.0, maximum=100.0),
+    }
+
+    apertures: list[dict[str, Any]] = []
+    seen_apertures: set[str] = set()
+    for index, raw in enumerate(_array(value.get("apertures"), "lighting rig apertures")):
+        aperture = _mapping(raw, f"lighting rig apertures[{index}]")
+        aperture_id = _safe_id(aperture.get("aperture_id"), "lighting aperture ID")
+        room_id = _safe_id(aperture.get("room_id"), "lighting aperture room ID")
+        _require(aperture_id not in seen_apertures and room_id in room_ids and
+                 aperture.get("visible_geometry_required") is True,
+                 "VISTA_HOME_LIGHTING_RIG_INVALID", "lighting aperture is invalid")
+        seen_apertures.add(aperture_id)
+        apertures.append({
+            "aperture_id": aperture_id,
+            "room_id": room_id,
+            "visible_geometry_required": True,
+        })
+
+    practicals: list[dict[str, Any]] = []
+    seen_lights: set[str] = set()
+    for index, raw in enumerate(_array(value.get("practical_lights"),
+                                       "lighting rig practical_lights")):
+        light = _mapping(raw, f"lighting rig practical_lights[{index}]")
+        light_id = _safe_id(light.get("light_id"), "practical light ID")
+        room_id = _safe_id(light.get("room_id"), "practical light room ID")
+        light_type = light.get("type")
+        unit = light.get("unit")
+        _require(light_id not in seen_lights and room_id in room_ids and
+                 light_type in {"rect", "spot"} and unit in {"lumens", "candelas"},
+                 "VISTA_HOME_LIGHTING_RIG_INVALID",
+                 "practical light must be a unique room-bound rect/spot light")
+        seen_lights.add(light_id)
+        direction = _unit_direction(light.get("direction"),
+                                    f"practical light {light_id}.direction")
+        fixture_id = _safe_id(light.get("visible_fixture_id"),
+                              f"practical light {light_id}.visible_fixture_id")
+        practicals.append({
+            "light_id": light_id,
+            "room_id": room_id,
+            "type": light_type,
+            "location_cm": _v3(light.get("location_cm"),
+                               f"practical light {light_id}.location_cm"),
+            "direction": direction,
+            "rotation_deg": look_at_rotation_deg([0.0, 0.0, 0.0], direction),
+            "intensity": _finite_number(light.get("intensity"),
+                                        f"practical light {light_id}.intensity",
+                                        minimum=0.01, maximum=1e7),
+            "unit": unit,
+            "temperature_k": _finite_number(light.get("temperature_k"),
+                                             f"practical light {light_id}.temperature_k",
+                                             minimum=1000.0, maximum=20000.0),
+            "visible_fixture_id": fixture_id,
+            "tags": [TAG_PREFIX + light_id, "VistaRoom=" + room_id,
+                     "VistaRole=lighting", R2_REVIEW_CAMERA_TAG],
+        })
+    _require(practicals, "VISTA_HOME_LIGHTING_RIG_INVALID",
+             "r2 lighting needs at least one visible-fixture practical light")
+
+    exposure = _mapping(value.get("gameplay_exposure"), "lighting rig gameplay_exposure")
+    _require(exposure.get("metering_mode") == "histogram",
+             "VISTA_HOME_LIGHTING_RIG_INVALID", "gameplay exposure must use histogram metering")
+    min_ev100 = _finite_number(exposure.get("min_ev100"), "gameplay exposure min_ev100",
+                               minimum=-16.0, maximum=32.0)
+    max_ev100 = _finite_number(exposure.get("max_ev100"), "gameplay exposure max_ev100",
+                               minimum=-16.0, maximum=32.0)
+    _require(min_ev100 < max_ev100, "VISTA_HOME_LIGHTING_RIG_INVALID",
+             "gameplay exposure EV100 range is empty")
+    normalized_exposure = {
+        "metering_mode": "histogram",
+        "min_ev100": min_ev100,
+        "max_ev100": max_ev100,
+        "speed_up": _finite_number(exposure.get("speed_up"), "gameplay exposure speed_up",
+                                   minimum=0.01, maximum=20.0),
+        "speed_down": _finite_number(exposure.get("speed_down"), "gameplay exposure speed_down",
+                                     minimum=0.01, maximum=20.0),
+    }
+    return _operation("configure_gameplay", "place_realistic_lighting", {
+        "rig_id": rig_id,
+        "profile": "neutral_day",
+        "light_mobility": "movable",
+        "sun": normalized_sun,
+        "sky": normalized_sky,
+        "apertures": sorted(apertures, key=lambda item: item["aperture_id"]),
+        "practical_lights": sorted(practicals, key=lambda item: item["light_id"]),
+        "gameplay_exposure": normalized_exposure,
+        "runtime_observation_required": True,
+    })
+
+
 def _operation(phase: str, kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     base = {"phase": phase, "kind": kind, **payload}
     operation_id = "ueop-" + hashlib.sha256(canonical_json(base)).hexdigest()[:24]
@@ -204,8 +559,16 @@ def _validate_graph(room_ids: set[str], portals: Sequence[Mapping[str, Any]]) ->
     _require(visited == room_ids, "VISTA_HOME_PLAN_GRAPH_DISCONNECTED", "navigable room graph is disconnected")
 
 
-def build_composition_spec(plan: Mapping[str, Any]) -> CompositionSpec:
-    """Validate critical invariants and compile stable Editor operations."""
+def build_composition_spec(
+    plan: Mapping[str, Any],
+    visual_profile: Mapping[str, Any] | None = None,
+) -> CompositionSpec:
+    """Validate critical invariants and compile stable Editor operations.
+
+    ``visual_profile=None`` is the accepted r1 compatibility path.  The r2
+    path is additive and replaces only materialized review cameras here; it
+    does not mutate the HouseSpec semantic, collision, or gameplay records.
+    """
 
     value = dict(_mapping(plan, "build plan"))
     _require(set(value) == TOP_LEVEL_KEYS, "VISTA_HOME_PLAN_SHAPE_INVALID", "top-level fields differ")
@@ -214,6 +577,16 @@ def build_composition_spec(plan: Mapping[str, Any]) -> CompositionSpec:
     plan_digest = _sha(value["content_digest"], "content_digest")
     house = _mapping(value["house"], "house")
     _sha(house.get("content_digest"), "house.content_digest")
+    visual: Mapping[str, Any] | None = None
+    if visual_profile is not None:
+        visual = _mapping(visual_profile, "visual profile")
+        _require(visual.get("schema_version") == VISUAL_PROFILE_SCHEMA,
+                 "VISTA_HOME_VISUAL_PROFILE_INVALID", "visual profile schema differs")
+        _require(visual.get("house_revision") == house.get("revision"),
+                 "VISTA_HOME_VISUAL_PROFILE_INVALID",
+                 "visual profile house revision differs")
+        _safe_id(visual.get("visual_profile_id"), "visual profile visual_profile_id")
+        _sha(visual.get("content_digest"), "visual profile content_digest")
 
     declared_assets: dict[str, Mapping[str, Any]] = {}
     for index, raw_asset in enumerate(_array(value["assets"], "assets")):
@@ -266,14 +639,42 @@ def build_composition_spec(plan: Mapping[str, Any]) -> CompositionSpec:
             "location_cm": [float(v) for v in anchor],
             "tags": [TAG_PREFIX + room_id + "/anchor.room_center", "VistaRoom=" + room_id],
         }))
-        for camera in sorted(_array(room.get("review_cameras"), f"room {room_id}.review_cameras"),
-                             key=lambda item: item["camera_id"]):
-            operations.append(_operation("place_rooms", "place_review_camera", {
-                "semantic_id": room_id + "/camera." + _safe_id(camera.get("camera_id"), "camera_id"),
-                "transform": _transform(camera.get("world_transform_cm"), "camera transform"),
-                "fov_deg": float(camera.get("fov_deg")),
-                "tags": [TAG_PREFIX + room_id + "/camera." + camera["camera_id"], "VistaRoom=" + room_id],
-            }))
+        if visual is None:
+            for camera in sorted(_array(room.get("review_cameras"), f"room {room_id}.review_cameras"),
+                                 key=lambda item: item["camera_id"]):
+                operations.append(_operation("place_rooms", "place_review_camera", {
+                    "semantic_id": room_id + "/camera." + _safe_id(camera.get("camera_id"), "camera_id"),
+                    "transform": _transform(camera.get("world_transform_cm"), "camera transform"),
+                    "fov_deg": float(camera.get("fov_deg")),
+                    "tags": [TAG_PREFIX + room_id + "/camera." + camera["camera_id"], "VistaRoom=" + room_id],
+                }))
+
+    if visual is not None:
+        finished_rooms = list(visual.get("finished_room_ids", []))
+        compatibility_rooms = list(visual.get("compatibility_room_ids", []))
+        _require(finished_rooms and all(room_id in rooms_by_id for room_id in finished_rooms) and
+                 len(finished_rooms) == len(set(finished_rooms)),
+                 "VISTA_HOME_VISUAL_PROFILE_INVALID", "finished room IDs are invalid")
+        _require(all(room_id in rooms_by_id for room_id in compatibility_rooms) and
+                 len(compatibility_rooms) == len(set(compatibility_rooms)) and
+                 not set(finished_rooms) & set(compatibility_rooms),
+                 "VISTA_HOME_VISUAL_PROFILE_INVALID", "compatibility room IDs are invalid")
+        shot_operations = compile_realistic_review_operations(
+            visual,
+            room_bounds_by_id={
+                room_id: _bounds(room["world_bounds_cm"], f"room {room_id}.bounds")
+                for room_id, room in rooms_by_id.items()
+            },
+        )
+        shots_per_finished_room = {
+            room_id: sum(operation["room_id"] == room_id for operation in shot_operations)
+            for room_id in finished_rooms
+        }
+        _require(all(count >= 2 for count in shots_per_finished_room.values()) and
+                 all(operation["room_id"] in set(finished_rooms) for operation in shot_operations),
+                 "VISTA_HOME_REVIEW_SHOT_INVALID",
+                 "r2 requires at least two review shots for every finished room and no others")
+        operations.extend(shot_operations)
 
     room_ids = set(rooms_by_id)
     portals: list[Mapping[str, Any]] = []
@@ -414,6 +815,22 @@ def build_composition_spec(plan: Mapping[str, Any]) -> CompositionSpec:
             "attenuation_radius_cm": max(350.0, float(xy_span) * 0.8),
             "tags": [TAG_PREFIX + room_id + "/light.ceiling", "VistaRoom=" + room_id],
         })
+    if visual is None:
+        lighting_operation = _operation("configure_gameplay", "place_lighting", {
+            "profile": "vista_playable_home_neutral_day_v2",
+            "light_mobility": "movable",
+            "exposure": {
+                "method": "manual",
+                "bias": -6.0,
+                "apply_physical_camera_exposure": False,
+            },
+            "indoor_lights": indoor_lights,
+        })
+    else:
+        lighting_operation = compile_realistic_lighting_operation(
+            _mapping(visual.get("lighting_rig"), "visual profile lighting_rig"),
+            room_ids=room_ids,
+        )
     operations.extend([
         _operation("configure_gameplay", "place_player_start", {
             "semantic_id": "home.r1/player_start.01",
@@ -429,16 +846,7 @@ def build_composition_spec(plan: Mapping[str, Any]) -> CompositionSpec:
             "interaction_distance_cm": float(runtime.get("interaction_distance_cm")),
             "event_plans": list(value["event_plans"]),
         }),
-        _operation("configure_gameplay", "place_lighting", {
-            "profile": "vista_playable_home_neutral_day_v2",
-            "light_mobility": "movable",
-            "exposure": {
-                "method": "manual",
-                "bias": -6.0,
-                "apply_physical_camera_exposure": False,
-            },
-            "indoor_lights": indoor_lights,
-        }),
+        lighting_operation,
         _operation("build_navigation", "place_navmesh_bounds", {
             "bounds": nav_bounds,
             "agent": dict(runtime.get("navigation_agent", {})),
@@ -463,5 +871,8 @@ def build_composition_spec(plan: Mapping[str, Any]) -> CompositionSpec:
         "stable_tag_prefix": TAG_PREFIX,
         "operations": operations,
     }
+    if visual is not None:
+        compiled["visual_profile_id"] = visual["visual_profile_id"]
+        compiled["visual_profile_content_digest"] = visual["content_digest"]
     raw = canonical_json(compiled)
     return CompositionSpec(compiled, raw, hashlib.sha256(raw).hexdigest())

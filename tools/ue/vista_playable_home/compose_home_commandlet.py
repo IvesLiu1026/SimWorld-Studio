@@ -1,6 +1,7 @@
 """Fixed UE commandlet that composes and reload-verifies one home revision."""
 
 import json
+import math
 import os
 import sys
 
@@ -96,6 +97,11 @@ def set_if_present(value, name, setting):
         return False
 
 
+def set_required(value, name, setting):
+    require(set_if_present(value, name, setting),
+            "required Unreal property is unavailable: " + name)
+
+
 def static_mesh_component(actor):
     try:
         component = actor.get_editor_property("static_mesh_component")
@@ -116,6 +122,116 @@ def static_mesh_component(actor):
 def light_component(actor):
     components = actor.get_components_by_class(unreal.LightComponentBase)
     return components[0] if components else None
+
+
+def configure_r2_review_camera(camera, operation):
+    require(operation["transform"]["rotation_deg"][0] == 0.0,
+            "r2 look-at camera roll is not zero")
+    component = camera.get_editor_property("camera_component")
+    set_required(component, "field_of_view", operation["fov_deg"])
+    set_required(component, "constrain_aspect_ratio", True)
+    set_required(component, "aspect_ratio", 16.0 / 9.0)
+    set_required(component, "post_process_blend_weight", 1.0)
+    exposure = operation["exposure"]
+    require(exposure.get("mode") == "pinned_physical_camera",
+            "r2 review camera exposure is not pinned physical camera")
+    settings = component.get_editor_property("post_process_settings")
+    required_settings = {
+        "override_auto_exposure_method": True,
+        "auto_exposure_method": unreal.AutoExposureMethod.AEM_MANUAL,
+        "override_auto_exposure_apply_physical_camera_exposure": True,
+        "auto_exposure_apply_physical_camera_exposure": True,
+        "override_camera_iso": True,
+        "camera_iso": exposure["iso"],
+        "override_camera_shutter_speed": True,
+        "camera_shutter_speed": 1.0 / exposure["shutter_speed_s"],
+        "override_depth_of_field_fstop": True,
+        "depth_of_field_fstop": exposure["aperture_fstop"],
+        "override_auto_exposure_bias": True,
+        "auto_exposure_bias": exposure["exposure_compensation_ev"],
+    }
+    for name, setting in required_settings.items():
+        set_required(settings, name, setting)
+    set_required(component, "post_process_settings", settings)
+
+
+def spawn_r2_lighting(actor_subsystem, operation):
+    require(operation.get("profile") == "neutral_day" and
+            operation.get("light_mobility") == "movable" and
+            operation.get("runtime_observation_required") is True,
+            "unsupported r2 lighting profile")
+    rig_tag = "VistaLightingRig=" + operation["rig_id"]
+    sun_spec = operation["sun"]
+    sun = actor_subsystem.spawn_actor_from_class(
+        unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 500.0),
+        rotation(sun_spec["rotation_deg"]), transient=False)
+    sky = actor_subsystem.spawn_actor_from_class(
+        unreal.SkyLight, unreal.Vector(0.0, 0.0, 400.0),
+        unreal.Rotator(), transient=False)
+    require(sun is not None and sky is not None, "failed to spawn r2 sun/sky")
+    sun.set_actor_label("VISTA_R2_DirectionalSun")
+    sky.set_actor_label("VISTA_R2_SkyLight")
+    set_tags(sun, ["VistaRole=lighting", rig_tag, "VistaLightType=sun"])
+    set_tags(sky, ["VistaRole=lighting", rig_tag, "VistaLightType=sky"])
+    sun_component = light_component(sun)
+    sky_component = light_component(sky)
+    require(sun_component is not None and sky_component is not None,
+            "failed to resolve r2 sun/sky components")
+    sun_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    sky_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    set_required(sun_component, "intensity", sun_spec["illuminance_lux"])
+    set_required(sun_component, "use_temperature", True)
+    set_required(sun_component, "temperature", sun_spec["temperature_k"])
+    set_required(sun_component, "cast_shadows", True)
+    set_required(sky_component, "intensity_scale", operation["sky"]["sky_intensity"])
+    created = [sun, sky]
+    for light_spec in operation["practical_lights"]:
+        actor_class = unreal.RectLight if light_spec["type"] == "rect" else unreal.SpotLight
+        practical = actor_subsystem.spawn_actor_from_class(
+            actor_class, vector(light_spec["location_cm"]),
+            rotation(light_spec["rotation_deg"]), transient=False)
+        require(practical is not None, "failed to place r2 practical light")
+        practical.set_actor_label(safe_label(light_spec["light_id"]))
+        set_tags(practical, list(light_spec["tags"]) + [rig_tag])
+        component = light_component(practical)
+        require(component is not None, "failed to resolve r2 practical light component")
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        set_required(component, "intensity", light_spec["intensity"])
+        set_required(component, "use_temperature", True)
+        set_required(component, "temperature", light_spec["temperature_k"])
+        set_required(component, "cast_shadows", True)
+        unit_name = "LUMENS" if light_spec["unit"] == "lumens" else "CANDELAS"
+        set_required(component, "intensity_units", getattr(unreal.LightUnits, unit_name))
+        created.append(practical)
+
+    exposure = operation["gameplay_exposure"]
+    post = actor_subsystem.spawn_actor_from_class(
+        unreal.PostProcessVolume, unreal.Vector(), unreal.Rotator(), transient=False)
+    require(post is not None, "failed to place r2 gameplay post process")
+    post.set_actor_label("VISTA_R2_PostProcess")
+    set_tags(post, ["VistaRole=post_process", rig_tag,
+                    "VistaExposureProfile=bounded_histogram"])
+    set_required(post, "unbound", True)
+    set_required(post, "priority", 100.0)
+    set_required(post, "blend_weight", 1.0)
+    settings = post.get_editor_property("settings")
+    required_exposure = {
+        "override_auto_exposure_method": True,
+        "auto_exposure_method": unreal.AutoExposureMethod.AEM_HISTOGRAM,
+        "override_auto_exposure_min_brightness": True,
+        "auto_exposure_min_brightness": exposure["min_ev100"],
+        "override_auto_exposure_max_brightness": True,
+        "auto_exposure_max_brightness": exposure["max_ev100"],
+        "override_auto_exposure_speed_up": True,
+        "auto_exposure_speed_up": exposure["speed_up"],
+        "override_auto_exposure_speed_down": True,
+        "auto_exposure_speed_down": exposure["speed_down"],
+    }
+    for name, setting in required_exposure.items():
+        set_required(settings, name, setting)
+    set_required(post, "settings", settings)
+    created.append(post)
+    return created
 
 
 def spawn(actor_subsystem, actor_class, value_transform, label, tags):
@@ -336,6 +452,7 @@ def run():
     require(os.path.isfile(input_config), "DefaultInput.ini is missing")
     input_config_sha = sha256_file(input_config)
     spec = execution["composition_spec"]
+    is_r2 = "visual_profile_id" in spec
     map_path = spec["map_path"]
     require(not unreal.EditorAssetLibrary.does_asset_exist(map_path),
             "target map already exists")
@@ -385,8 +502,11 @@ def run():
             elif kind == "place_review_camera":
                 camera = spawn(actor_subsystem, unreal.CameraActor, operation["transform"],
                                safe_label(operation["semantic_id"]), operation["tags"])
-                camera.get_editor_property("camera_component").set_editor_property(
-                    "field_of_view", operation["fov_deg"])
+                if "review_shot_id" in operation:
+                    configure_r2_review_camera(camera, operation)
+                else:
+                    camera.get_editor_property("camera_component").set_editor_property(
+                        "field_of_view", operation["fov_deg"])
                 created.append(camera)
             elif kind == "place_entity":
                 actor_class = unreal.load_class(None, operation["actor_class"])
@@ -465,6 +585,9 @@ def run():
                 settings.set_editor_property("auto_exposure_bias", exposure["bias"])
                 post.set_editor_property("settings", settings)
                 created.append(post)
+            elif kind == "place_realistic_lighting":
+                require(is_r2, "r2 lighting operation requires a visual profile")
+                created.extend(spawn_r2_lighting(actor_subsystem, operation))
             elif kind == "configure_game_mode":
                 game_mode_path = assets[operation["game_mode"]["asset_id"]]["object_path"]
                 pawn_path = assets[operation["pawn"]["asset_id"]]["object_path"]
@@ -548,9 +671,13 @@ def run():
         vista_lights = [actor for actor in reloaded
                         if unreal.Name("VistaRole=lighting") in
                         actor.get_editor_property("tags")]
-        require(len(vista_lights) == 2 + len(next(
-                    operation for operation in spec["operations"]
-                    if operation["kind"] == "place_lighting")["indoor_lights"]),
+        lighting_operation = next(
+            operation for operation in spec["operations"]
+            if operation["kind"] in {"place_lighting", "place_realistic_lighting"})
+        expected_light_count = 2 + len(
+            lighting_operation["practical_lights"] if is_r2
+            else lighting_operation["indoor_lights"])
+        require(len(vista_lights) == expected_light_count,
                 "reloaded map lost VISTA lights")
         require(all(light_component(actor) is not None and
                     light_component(actor).get_editor_property("mobility") ==
@@ -565,17 +692,55 @@ def run():
                 float(post_volumes[0].get_editor_property("priority")) == 100.0,
                 "reloaded map lost unbound VISTA post process")
         post_settings = post_volumes[0].get_editor_property("settings")
-        require(bool(post_settings.get_editor_property(
-                    "override_auto_exposure_method")) and
-                bool(post_settings.get_editor_property(
-                    "override_auto_exposure_apply_physical_camera_exposure")) and
-                bool(post_settings.get_editor_property("override_auto_exposure_bias")) and
-                post_settings.get_editor_property("auto_exposure_method") ==
-                unreal.AutoExposureMethod.AEM_MANUAL and
-                not bool(post_settings.get_editor_property(
-                    "auto_exposure_apply_physical_camera_exposure")) and
-                float(post_settings.get_editor_property("auto_exposure_bias")) == -6.0,
-                "reloaded map lost deterministic manual exposure")
+        if is_r2:
+            exposure = lighting_operation["gameplay_exposure"]
+            require(bool(post_settings.get_editor_property(
+                        "override_auto_exposure_method")) and
+                    post_settings.get_editor_property("auto_exposure_method") ==
+                    unreal.AutoExposureMethod.AEM_HISTOGRAM and
+                    float(post_settings.get_editor_property("auto_exposure_min_brightness")) ==
+                    exposure["min_ev100"] and
+                    float(post_settings.get_editor_property("auto_exposure_max_brightness")) ==
+                    exposure["max_ev100"] and
+                    float(post_settings.get_editor_property("auto_exposure_speed_up")) ==
+                    exposure["speed_up"] and
+                    float(post_settings.get_editor_property("auto_exposure_speed_down")) ==
+                    exposure["speed_down"],
+                    "reloaded map lost bounded histogram exposure")
+            camera_operations = [operation for operation in spec["operations"]
+                                 if operation["kind"] == "place_review_camera"]
+            for camera_operation in camera_operations:
+                semantic_tag = unreal.Name(
+                    spec["stable_tag_prefix"] + camera_operation["semantic_id"])
+                matches = [actor for actor in reloaded
+                           if isinstance(actor, unreal.CameraActor) and semantic_tag in
+                           actor.get_editor_property("tags")]
+                require(len(matches) == 1, "reloaded r2 review camera set is not exact")
+                actual_rotation = matches[0].get_actor_rotation()
+                expected_rotation = camera_operation["transform"]["rotation_deg"]
+                require(abs(float(actual_rotation.roll)) <= 0.01 and
+                        abs((float(actual_rotation.pitch) - expected_rotation[1] + 180.0) % 360.0 - 180.0) <= 0.05 and
+                        abs((float(actual_rotation.yaw) - expected_rotation[2] + 180.0) % 360.0 - 180.0) <= 0.05,
+                        "reloaded r2 review camera lost zero-roll look-at rotation")
+                component = matches[0].get_editor_property("camera_component")
+                camera_settings = component.get_editor_property("post_process_settings")
+                require(math.isclose(float(component.get_editor_property("field_of_view")),
+                                     camera_operation["fov_deg"], abs_tol=0.05) and
+                        bool(camera_settings.get_editor_property(
+                            "auto_exposure_apply_physical_camera_exposure")),
+                        "reloaded r2 review camera lost FOV or pinned physical exposure")
+        else:
+            require(bool(post_settings.get_editor_property(
+                        "override_auto_exposure_method")) and
+                    bool(post_settings.get_editor_property(
+                        "override_auto_exposure_apply_physical_camera_exposure")) and
+                    bool(post_settings.get_editor_property("override_auto_exposure_bias")) and
+                    post_settings.get_editor_property("auto_exposure_method") ==
+                    unreal.AutoExposureMethod.AEM_MANUAL and
+                    not bool(post_settings.get_editor_property(
+                        "auto_exposure_apply_physical_camera_exposure")) and
+                    float(post_settings.get_editor_property("auto_exposure_bias")) == -6.0,
+                    "reloaded map lost deterministic manual exposure")
         verify_legacy_input_mappings()
         dynamic_lighting_verified = True
         deterministic_exposure_verified = True
