@@ -1,0 +1,203 @@
+{
+  "schema_version": "simworld.vista.playable-home-poly-haven-acquisition/v1",
+  "assets": [
+    {
+      "asset_id": "white_oak_veneer",
+      "logical_asset_id": "visual.material.white_oak_veneer",
+      "asset_type": "texture",
+      "expected_files_hash": "26c153c913feebf19d0ce09ce70dcd3b2b7443b5",
+      "resolution": "4k",
+      "file_variant": "pbr_jpg",
+      "room_role": "authored_hero_material"
+    },
+    {
+      "asset_id": "poly_wool_herringbone",
+      "logical_asset_id": "visual.material.poly_wool_herringbone",
+      "asset_type": "texture",
+      "expected_files_hash": "4ef2868d578f407e6aa9c761d7743b5d0a9c3918",
+      "resolution": "4k",
+      "file_variant": "pbr_jpg",
+      "room_role": "authored_hero_material"
+    },
+    {
+      "asset_id": "modern_coffee_table_01",
+      "logical_asset_id": "visual.hero.living_coffee_table",
+      "asset_type": "model",
+      "expected_files_hash": "31772c0aab6f930a18de82606146c0a97f08b7d0",
+      "resolution": "4k",
+      "file_variant": "blend",
+      "room_role": "living_hero"
+    },
+    {
+      "asset_id": "electric_stove",
+      "logical_asset_id": "visual.hero.kitchen_stove",
+      "asset_type": "model",
+      "expected_files_hash": "750ee10bdfe78eb6b0b620ef7b5a898e436fb696",
+      "resolution": "4k",
+      "file_variant": "blend",
+      "room_role": "kitchen_event_hero"
+    },
+    {
+      "asset_id": "rubber_boots",
+      "logical_asset_id": "visual.dressing.entry.rubber_boots",
+      "asset_type": "model",
+      "expected_files_hash": "42cc529377cae934a22cdfb5f3cbf4db14a2a6bc",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "entry_dressing"
+    },
+    {
+      "asset_id": "postcard_set_01",
+      "logical_asset_id": "visual.dressing.entry.postcards",
+      "asset_type": "model",
+      "expected_files_hash": "fe10db91a4160ae11259ba78041a5520ab63e3f8",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "entry_dressing"
+    },
+    {
+      "asset_id": "wicker_basket_02",
+      "logical_asset_id": "visual.dressing.entry.wicker_basket",
+      "asset_type": "model",
+      "expected_files_hash": "7c68c52ddfcdec879003c2120929487b0c589837",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "entry_dressing"
+    },
+    {
+      "asset_id": "ceramic_vase_02",
+      "logical_asset_id": "visual.dressing.shared.ceramic_vase",
+      "asset_type": "model",
+      "expected_files_hash": "0643acdbc6d663ccbc2df4d00ba30a7126f3daac",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "shared_dressing"
+    },
+    {
+      "asset_id": "potted_plant_04",
+      "logical_asset_id": "visual.dressing.living.potted_plant",
+      "asset_type": "model",
+      "expected_files_hash": "c71ad499bc2ad1a95b689fc8895447eff788408b",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "living_dressing"
+    },
+    {
+      "asset_id": "book_encyclopedia_set_01",
+      "logical_asset_id": "visual.dressing.living.books",
+      "asset_type": "model",
+      "expected_files_hash": "e9912207a0e5af455662c910d23d34ccbabb26ac",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "living_dressing"
+    },
+    {
+      "asset_id": "modern_wooden_cabinet",
+      "logical_asset_id": "visual.dressing.living.media_cabinet",
+      "asset_type": "model",
+      "expected_files_hash": "ef2d266b0823d230f465b29bb32b110b4c71b3b2",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "living_dressing"
+    },
+    {
+      "asset_id": "modern_ceiling_lamp_01",
+      "logical_asset_id": "visual.dressing.living.ceiling_lamp",
+      "asset_type": "model",
+      "expected_files_hash": "d324ea2a3c480145e3cf8beca5ec9c408b257dbb",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "living_fixture"
+    },
+    {
+      "asset_id": "throw_pillows_01",
+      "logical_asset_id": "visual.dressing.living.throw_pillows",
+      "asset_type": "model",
+      "expected_files_hash": "8a475b95a0956bd700394e0f5ed32822071e2f54",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "living_dressing"
+    },
+    {
+      "asset_id": "modern_arm_chair_01",
+      "logical_asset_id": "visual.dressing.living.armchair",
+      "asset_type": "model",
+      "expected_files_hash": "6893f36e58dddba95bd0ae1f1ef38537c1852a0b",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "living_furniture"
+    },
+    {
+      "asset_id": "side_table_01",
+      "logical_asset_id": "visual.dressing.living.side_table",
+      "asset_type": "model",
+      "expected_files_hash": "c48d34c9a62887ad0c1175877ac69ffdd97e52b6",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "living_furniture"
+    },
+    {
+      "asset_id": "dining_chair_02",
+      "logical_asset_id": "visual.dressing.kitchen.dining_chair",
+      "asset_type": "model",
+      "expected_files_hash": "b99b2f907424bbc55b77541f9616fa9da770dcde",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "kitchen_furniture"
+    },
+    {
+      "asset_id": "wooden_cutting_board",
+      "logical_asset_id": "visual.dressing.kitchen.cutting_board",
+      "asset_type": "model",
+      "expected_files_hash": "bf62fd6c3b52e068d9f8f47a30ede3363c206b75",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "kitchen_dressing"
+    },
+    {
+      "asset_id": "wooden_bowl_01",
+      "logical_asset_id": "visual.dressing.kitchen.wooden_bowl",
+      "asset_type": "model",
+      "expected_files_hash": "ff38f8071c92479217e80fabee05cb78ca6ef1a0",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "kitchen_dressing"
+    },
+    {
+      "asset_id": "wooden_spoon",
+      "logical_asset_id": "visual.dressing.kitchen.wooden_spoon",
+      "asset_type": "model",
+      "expected_files_hash": "29a8451926fe0547d8dfe66b42fc835bb091e2c1",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "kitchen_dressing"
+    },
+    {
+      "asset_id": "carved_wooden_plate",
+      "logical_asset_id": "visual.dressing.kitchen.wooden_plate",
+      "asset_type": "model",
+      "expected_files_hash": "39a0c6ebce60b891533dad0fc0ed42be6b255bf1",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "kitchen_dressing"
+    },
+    {
+      "asset_id": "cardboard_box_01",
+      "logical_asset_id": "visual.dressing.kitchen.cardboard_box",
+      "asset_type": "model",
+      "expected_files_hash": "2a37ded0aeebc15100db0e1d285ad36cf40b8f42",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "kitchen_dressing"
+    },
+    {
+      "asset_id": "food_apple_01",
+      "logical_asset_id": "visual.dressing.kitchen.apple",
+      "asset_type": "model",
+      "expected_files_hash": "caabd8553fb0598968bd2fc19e0dd012f80e9546",
+      "resolution": "2k",
+      "file_variant": "blend",
+      "room_role": "kitchen_dressing"
+    }
+  ]
+}
