@@ -155,3 +155,53 @@ retention policy after the evidence is no longer needed.
 The r2 receipt omits only the scratch absolute paths; other evidence paths in
 the receipt remain intentionally explicit. The `fixed_r1` command and receipt
 contract remain unchanged and reject both r2 scratch options.
+
+## Deterministic package-project materialization
+
+`materialize_package_project.py` closes the project-preparation step before an
+operator runs `RunUAT`. It accepts only the pinned `accepted_candidate` build
+and its exact current project projection, then creates a fresh direct
+`package-linux-development/attempt-*` child. It copies verified
+`DefaultInput.ini`, `Content`, and the runtime plugin with reflink plus
+byte-copy fallback while excluding `Binaries`, `Intermediate`, `Saved`, and
+derived-data caches. The runtime-only project descriptor, host module/targets,
+and allowlisted `DefaultEngine.ini` are regenerated deterministically. The
+source engine config is SHA/size evidence only: its UE-generated Android File
+Server credential is never copied or emitted, and AFS is disabled in the
+materialized project.
+
+The reviewed r1 source currently has build-result pin
+`1b4853547bfa6ebd6d62ca2f1243ae2f74acdf67bfdfb11aa969c3013ccf1a2f`
+and project-projection pin
+`fbcb4aeeccc7e53a82c4fd558f33e4208c90f4c5788254ce7ac07350cb993456`.
+Run this command first without `--apply`; it is a zero-write dry run:
+
+```bash
+PYTHONPATH=. uv run --offline --no-sync --project tools python \
+  tools/ue/vista_playable_home/materialize_package_project.py \
+  --source-build-result \
+  /mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/attempt-10-placement-cross-room/result-receipt.json \
+  --source-build-result-sha256 \
+  1b4853547bfa6ebd6d62ca2f1243ae2f74acdf67bfdfb11aa969c3013ccf1a2f \
+  --source-project \
+  /mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/attempt-10-placement-cross-room/project \
+  --source-project-tree-sha256 \
+  fbcb4aeeccc7e53a82c4fd558f33e4208c90f4c5788254ce7ac07350cb993456 \
+  --attempt-root \
+  /mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/package-linux-development/attempt-11-materialized-project
+```
+
+For that exact source, review that the dry-run reports project tree SHA-256
+`82cf7bbd7740d79351bcf99026ff39bccbd551182fda2c0e54a4197f9274b184`,
+417 files, 172 directories, and 445580427 bytes. Then rerun the same command
+with `--apply` appended. The terminal `attempt-*` name must still be absent;
+choose a new lowercase attempt name if another operator has already used it.
+An accepted append-only `materialization-receipt.json` pins every output file,
+directory mode, and the full project tree. Attempt/project directories are
+forced to `0700` and files/receipts to `0600`, independent of the caller's
+umask. A failed or interrupted attempt is retained as `failed_quarantined`;
+the source is never deleted or modified.
+
+Materialization does not invoke Unreal or create a package archive. After an
+accepted receipt, use only the exact `runuat.argv` printed in the plan/receipt
+as the separately reviewed operator step.
