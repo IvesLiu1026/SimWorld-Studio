@@ -103,9 +103,8 @@ r.RayTracing=False
 r.Lumen.HardwareRayTracing=0
 
 [/Script/LinuxTargetPlatform.LinuxTargetSettings]
-DefaultGraphicsRHI=DefaultGraphicsRHI_Vulkan
--VulkanTargetedShaderFormats=SF_VULKAN_SM5
-+VulkanTargetedShaderFormats=SF_VULKAN_SM6
+-TargetedRHIs=SF_VULKAN_SM5
++TargetedRHIs=SF_VULKAN_SM6
 
 [ConsoleVariables]
 r.ScreenPercentage=100.000000
@@ -353,10 +352,12 @@ def test_dry_run_is_deterministic_zero_write_and_token_free(
         "renderer_contract_commit": package.PINNED_RENDERER_CONTRACT_COMMIT,
         "sanitized_policy": package.SOURCE_SANITIZATION_POLICY,
         "sha256": _sha256(fixture.source_engine),
-        "transformation": ("d543-r2-renderer-plus-token-free-afs-regeneration/v1"),
+        "transformation": (
+            "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration/v1"
+        ),
     }
     assert first.report["policy"]["default_engine"] == (
-        "d543-r2-renderer-plus-token-free-afs-regeneration/v2"
+        "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration/v1"
     )
     assert first.report["policy"]["destination_containment"] == (
         "plan-pinned-parent+exclusive-cooperative-lock+private-staging+"
@@ -364,7 +365,7 @@ def test_dry_run_is_deterministic_zero_write_and_token_free(
     )
 
 
-def test_generated_engine_config_is_exact_d543_r2_plus_token_free_afs() -> None:
+def test_generated_engine_config_is_exact_linux_sm6_plus_token_free_afs() -> None:
     raw = package._canonical_engine_ini()
 
     assert raw == EXPECTED_R2_ENGINE_CONFIG
@@ -374,7 +375,7 @@ def test_generated_engine_config_is_exact_d543_r2_plus_token_free_afs() -> None:
         b"r.Shadow.Virtual.Enable=1",
         b"r.AntiAliasingMethod=4",
         b"r.Nanite.ProjectEnabled=True",
-        b"+VulkanTargetedShaderFormats=SF_VULKAN_SM6",
+        b"+TargetedRHIs=SF_VULKAN_SM6",
         b"bEnablePlugin=False",
         b"bAllowNetworkConnection=False",
         b"bIncludeInShipping=False",
@@ -382,6 +383,8 @@ def test_generated_engine_config_is_exact_d543_r2_plus_token_free_afs() -> None:
         b"bCompileAFSProject=False",
     ):
         assert raw.count(setting) == 1
+    assert b"VulkanTargetedShaderFormats" not in raw
+    assert b"DefaultGraphicsRHI" not in raw
     assert b"r.UsePreExposure" not in raw
     assert _token_key().encode("utf-8") not in raw
 

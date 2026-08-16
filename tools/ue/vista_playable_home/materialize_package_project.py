@@ -54,7 +54,7 @@ PINNED_ENGINE_BUILD_VERSION_SHA256 = (
 )
 PINNED_ENGINE_VERSION = "5.7.3"
 PINNED_ENGINE_CHANGELIST = 50162420
-PINNED_RENDERER_CONTRACT_COMMIT = "d543de99064fcdfef678fa0d9129d1d0f2daa9c1"
+PINNED_RENDERER_CONTRACT_COMMIT = "3ce8ef48a2cb0aee881efeff94c3ea3a634fc56c"
 PROVEN_RUN_UAT_LOG = Path(
     "/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/"
     "20260815T110115Z-navfix/ue/package-linux-development/"
@@ -810,9 +810,8 @@ def _canonical_engine_ini() -> bytes:
         "r.Lumen.HardwareRayTracing=0",
         "",
         "[/Script/LinuxTargetPlatform.LinuxTargetSettings]",
-        "DefaultGraphicsRHI=DefaultGraphicsRHI_Vulkan",
-        "-VulkanTargetedShaderFormats=SF_VULKAN_SM5",
-        "+VulkanTargetedShaderFormats=SF_VULKAN_SM6",
+        "-TargetedRHIs=SF_VULKAN_SM5",
+        "+TargetedRHIs=SF_VULKAN_SM6",
         "",
         "[ConsoleVariables]",
         "r.ScreenPercentage=100.000000",
@@ -1407,7 +1406,9 @@ def _source_binding_record(source: SourceEvidence) -> dict[str, Any]:
             "renderer_contract_commit": PINNED_RENDERER_CONTRACT_COMMIT,
             "sanitized_policy": SOURCE_SANITIZATION_POLICY,
             "sha256": engine.sha256,
-            "transformation": ("d543-r2-renderer-plus-token-free-afs-regeneration/v1"),
+            "transformation": (
+                "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration/v1"
+            ),
         },
         "verified_default_input": {
             "bytes": input_config.size_bytes,
@@ -1501,7 +1502,9 @@ def plan_materialization(
             "private_directory_mode": PRIVATE_DIRECTORY_MODE,
             "private_file_mode": PRIVATE_FILE_MODE,
             "project_descriptor": "canonical_runtime_only/v1",
-            "default_engine": ("d543-r2-renderer-plus-token-free-afs-regeneration/v2"),
+            "default_engine": (
+                "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration/v1"
+            ),
             "default_input": "preserve_verified_bytes/v1",
             "copy_transport": "reflink_with_byte_fallback/v1",
             "secret_scan": "final_copy_eligible_and_output_zero_hits/v1",
