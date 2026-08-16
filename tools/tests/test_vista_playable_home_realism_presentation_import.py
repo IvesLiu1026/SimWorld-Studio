@@ -1157,6 +1157,96 @@ def test_external_v2_receipts_retain_content_and_verify_nanite_disabled(
         )
 
 
+def test_external_v2_scene_receipt_proves_exact_hidden_r1_semantic_targets(
+    tmp_path: Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, _manifest, _receipt = (
+        _external_presentation_contracts(
+            tmp_path / "inputs" / "external-semantic-visuals", fixture
+        )
+    )
+    planned = build_home.plan_build(
+        _presentation_config(fixture, manifest_path, receipt_path)
+    )
+    base_scene_sha = "b" * 64
+    presentation_import_sha = "c" * 64
+    receipt = _presentation_scene_receipt(
+        planned, base_scene_sha, presentation_import_sha
+    )
+    build_home._verify_presentation_scene_receipt(
+        receipt,
+        planned.execution,
+        base_scene_sha,
+        presentation_import_sha,
+    )
+
+    targets = [
+        target
+        for room in receipt["room_observations"]
+        for target in room["r1_semantic_visual_observations"]
+    ]
+    assert len(targets) == 5
+    corruptions = []
+
+    missing = copy.deepcopy(receipt)
+    missing["room_observations"][0][
+        "r1_semantic_visual_observations"
+    ].pop()
+    corruptions.append(missing)
+
+    duplicate_actor = copy.deepcopy(receipt)
+    duplicate_targets = [
+        target
+        for room in duplicate_actor["room_observations"]
+        for target in room["r1_semantic_visual_observations"]
+    ]
+    duplicate_targets[1]["actor_path"] = duplicate_targets[0]["actor_path"]
+    corruptions.append(duplicate_actor)
+
+    visible = copy.deepcopy(receipt)
+    visible["room_observations"][0][
+        "r1_semantic_visual_observations"
+    ][0]["render_components"][0]["visible"] = True
+    corruptions.append(visible)
+
+    collision_disabled = copy.deepcopy(receipt)
+    collision_disabled["room_observations"][0][
+        "r1_semantic_visual_observations"
+    ][0]["render_components"][0]["collision_enabled"] = False
+    corruptions.append(collision_disabled)
+
+    collision_profile = copy.deepcopy(receipt)
+    collision_profile["room_observations"][0][
+        "r1_semantic_visual_observations"
+    ][0]["render_components"][0]["collision_profile"] = "NoCollision"
+    corruptions.append(collision_profile)
+
+    unhidden = copy.deepcopy(receipt)
+    unhidden["room_observations"][0][
+        "r1_semantic_visual_observations"
+    ][0]["actor_hidden_in_game"] = False
+    corruptions.append(unhidden)
+
+    interaction_lost = copy.deepcopy(receipt)
+    interaction_lost["room_observations"][0][
+        "r1_semantic_visual_observations"
+    ][0]["interaction_affordances"] = []
+    corruptions.append(interaction_lost)
+
+    for corrupted in corruptions:
+        with pytest.raises(
+            build_home.BuildHomeError,
+            match=r"semantic visual target|semantic visual observations",
+        ):
+            build_home._verify_presentation_scene_receipt(
+                corrupted,
+                planned.execution,
+                base_scene_sha,
+                presentation_import_sha,
+            )
+
+
 def _presentation_scene_receipt(
     planned: build_home.PlannedBuild,
     base_scene_sha: str,
@@ -1171,7 +1261,13 @@ def _presentation_scene_receipt(
         item for item in execution["composition_spec"]["operations"]
         if item["kind"] == "place_room_presentation_bundle"
     ]
+    entity_operations = {
+        item["semantic_id"]: item
+        for item in execution["composition_spec"]["operations"]
+        if item["kind"] == "place_entity"
+    }
     observations = []
+    semantic_target_index = 0
     for index, operation in enumerate(operations):
         source = bindings[operation["artifact_id"]]
         authority_path = f"{execution['composition_spec']['map_path']}:PersistentLevel.R1_{index}"
@@ -1196,10 +1292,41 @@ def _presentation_scene_receipt(
             "r1_authority_component_visible": False,
         }
         if "external_content" in source:
+            semantic_visual_observations = []
+            for semantic_target_id in source["external_content"][
+                "semantic_target_ids"
+            ]:
+                expected_entity = entity_operations[semantic_target_id]
+                target_path = (
+                    f"{execution['composition_spec']['map_path']}:"
+                    f"PersistentLevel.R1Semantic_{semantic_target_index}"
+                )
+                semantic_visual_observations.append({
+                    "semantic_target_id": semantic_target_id,
+                    "actor_path": target_path,
+                    "actor_class_path": expected_entity["actor_class"],
+                    "semantic_id_property": semantic_target_id,
+                    "actor_hidden_in_game": True,
+                    "interaction_affordances": sorted(
+                        expected_entity["affordances"]
+                    ),
+                    "render_components": [{
+                        "component_path": target_path + ".Mesh",
+                        "visible": False,
+                        "collision_profile": expected_entity["collision"][
+                            "profile"
+                        ],
+                        "collision_enabled": True,
+                    }],
+                })
+                semantic_target_index += 1
             observation.update({
                 "external_content": copy.deepcopy(source["external_content"]),
                 "nanite_policy": build_home.PRESENTATION_EXTERNAL_NANITE_POLICY,
                 "nanite_enabled": False,
+                "r1_semantic_visual_observations": (
+                    semantic_visual_observations
+                ),
             })
         observations.append(observation)
     gates = {
@@ -1214,6 +1341,7 @@ def _presentation_scene_receipt(
     }
     if build_home._presentation_is_external(execution):
         gates["external_nanite_disabled_verified"] = True
+        gates["external_r1_semantic_visual_targets_verified"] = True
     return {
         "schema_version": build_home._presentation_scene_schema(execution),
         "status": "saved_reloaded_candidate",
@@ -1346,6 +1474,9 @@ def test_presentation_sources_compile_without_launching_unreal() -> None:
     assert 'actor.get_editor_property("hidden")' in composer
     assert "Actor.hidden is unavailable" in composer
     assert 'getattr(actor, "is_hidden"' not in composer
+    assert 'binding["external_content"]["semantic_target_ids"]' in composer
+    assert "hide_semantic_target_visuals(actor)" in composer
+    assert "r1_semantic_visual_observations" in composer
 
 
 def test_presentation_collision_clear_is_commandlet_safe_and_reloaded() -> None:

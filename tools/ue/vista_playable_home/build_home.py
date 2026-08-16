@@ -4299,6 +4299,7 @@ def _verify_presentation_scene_receipt(
     }
     if is_external:
         expected_gates["external_nanite_disabled_verified"] = True
+        expected_gates["external_r1_semantic_visual_targets_verified"] = True
     if receipt.get("gates") != expected_gates:
         _fail(
             "VISTA_HOME_BUILD_RECEIPT_INVALID",
@@ -4365,10 +4366,39 @@ def _verify_presentation_scene_receipt(
     if is_external:
         observation_keys.update({
             "external_content", "nanite_policy", "nanite_enabled",
+            "r1_semantic_visual_observations",
         })
+    entity_operations = {
+        item["semantic_id"]: item
+        for item in spec["operations"]
+        if item.get("kind") == "place_entity"
+    }
+    expected_semantic_target_ids = [
+        semantic_target_id
+        for binding in presentation_bindings.values()
+        for semantic_target_id in binding.get("external_content", {}).get(
+            "semantic_target_ids", []
+        )
+    ]
+    if is_external and (
+        not expected_semantic_target_ids
+        or len(expected_semantic_target_ids)
+        != len(set(expected_semantic_target_ids))
+        or any(
+            semantic_target_id not in entity_operations
+            for semantic_target_id in expected_semantic_target_ids
+        )
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation semantic target execution inventory differs",
+        )
     seen_artifacts: set[str] = set()
     actor_paths: set[str] = set()
     authority_paths: set[str] = set()
+    seen_semantic_target_ids: set[str] = set()
+    semantic_target_actor_paths: set[str] = set()
+    semantic_target_component_paths: set[str] = set()
     for observation in observations:
         artifact_id = (
             observation.get("artifact_id")
@@ -4425,6 +4455,102 @@ def _verify_presentation_scene_receipt(
                 "VISTA_HOME_BUILD_RECEIPT_INVALID",
                 f"presentation room observation {artifact_id} differs",
             )
+        if is_external:
+            target_observations = observation.get(
+                "r1_semantic_visual_observations"
+            )
+            expected_room_target_ids = source["external_content"][
+                "semantic_target_ids"
+            ]
+            if (
+                not isinstance(target_observations, list)
+                or len(target_observations) != len(expected_room_target_ids)
+                or [
+                    item.get("semantic_target_id")
+                    if isinstance(item, Mapping) else None
+                    for item in target_observations
+                ] != expected_room_target_ids
+            ):
+                _fail(
+                    "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                    f"presentation room semantic visual target inventory "
+                    f"{artifact_id} differs",
+                )
+            for target_observation in target_observations:
+                target_keys = {
+                    "semantic_target_id", "actor_path", "actor_class_path",
+                    "semantic_id_property", "actor_hidden_in_game",
+                    "interaction_affordances", "render_components",
+                }
+                component_keys = {
+                    "component_path", "visible", "collision_profile",
+                    "collision_enabled",
+                }
+                semantic_target_id = (
+                    target_observation.get("semantic_target_id")
+                    if isinstance(target_observation, Mapping) else None
+                )
+                expected_entity = entity_operations.get(semantic_target_id)
+                target_actor_path = (
+                    target_observation.get("actor_path")
+                    if isinstance(target_observation, Mapping) else None
+                )
+                components = (
+                    target_observation.get("render_components")
+                    if isinstance(target_observation, Mapping) else None
+                )
+                if (
+                    not isinstance(target_observation, Mapping)
+                    or set(target_observation) != target_keys
+                    or expected_entity is None
+                    or semantic_target_id in seen_semantic_target_ids
+                    or target_observation.get("semantic_id_property")
+                    != semantic_target_id
+                    or target_observation.get("actor_class_path")
+                    != expected_entity["actor_class"]
+                    or not isinstance(target_actor_path, str)
+                    or not target_actor_path
+                    or target_actor_path in semantic_target_actor_paths
+                    or target_actor_path in actor_paths
+                    or target_actor_path in authority_paths
+                    or target_observation.get("actor_hidden_in_game") is not True
+                    or target_observation.get("interaction_affordances")
+                    != sorted(expected_entity["affordances"])
+                    or not isinstance(components, list)
+                    or not components
+                ):
+                    _fail(
+                        "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                        f"presentation semantic visual target "
+                        f"{semantic_target_id} differs",
+                    )
+                local_component_paths: set[str] = set()
+                for component in components:
+                    component_path = (
+                        component.get("component_path")
+                        if isinstance(component, Mapping) else None
+                    )
+                    if (
+                        not isinstance(component, Mapping)
+                        or set(component) != component_keys
+                        or not isinstance(component_path, str)
+                        or not component_path
+                        or component_path in local_component_paths
+                        or component_path in semantic_target_component_paths
+                        or component.get("visible") is not False
+                        or component.get("collision_enabled") is not True
+                        or component.get("collision_profile")
+                        != expected_entity["collision"]["profile"]
+                    ):
+                        _fail(
+                            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                            f"presentation semantic visual target component "
+                            f"{semantic_target_id} differs",
+                        )
+                    local_component_paths.add(component_path)
+                    semantic_target_component_paths.add(component_path)
+                seen_semantic_target_ids.add(semantic_target_id)
+                semantic_target_actor_paths.add(target_actor_path)
         seen_artifacts.add(artifact_id)
         actor_paths.add(observation["actor_path"])
         authority_paths.add(observation["r1_authority_actor_path"])
@@ -4432,6 +4558,20 @@ def _verify_presentation_scene_receipt(
         _fail(
             "VISTA_HOME_BUILD_RECEIPT_INVALID",
             "presentation room observations do not cover the exact room slice",
+        )
+    if is_external and seen_semantic_target_ids != set(
+        expected_semantic_target_ids
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation semantic visual observations do not cover every target",
+        )
+    if is_external and semantic_target_actor_paths & (
+        actor_paths | authority_paths
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation semantic visual actors overlap presentation authorities",
         )
 
 

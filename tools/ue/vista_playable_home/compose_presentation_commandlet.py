@@ -110,6 +110,94 @@ def actor_hidden(actor):
     return hidden
 
 
+def actor_class_path(actor):
+    actor_class = actor.get_class()
+    require(actor_class is not None, "semantic target actor class is unavailable")
+    value = str(actor_class.get_path_name())
+    require(value.startswith("/Script/"),
+            "semantic target actor class path is unavailable")
+    return value
+
+
+def semantic_id_property(actor):
+    try:
+        value = actor.get_editor_property("semantic_id")
+    except Exception as exc:
+        require(False, "semantic target identity property is unavailable: " + str(exc))
+    require(isinstance(value, str) and value,
+            "semantic target identity property is invalid")
+    return value
+
+
+def interaction_affordances(actor):
+    try:
+        values = actor.get_editor_property("allowed_affordances")
+        result = []
+        for value in values:
+            name = str(value).rsplit(".", 1)[-1].lower()
+            require(name and name not in result,
+                    "semantic target affordance inventory is invalid")
+            result.append(name)
+    except Exception as exc:
+        require(False, "semantic target affordances are unavailable: " + str(exc))
+    return sorted(result)
+
+
+def render_component_observations(actor):
+    components = actor.get_components_by_class(unreal.StaticMeshComponent)
+    require(components, "semantic target has no StaticMeshComponent")
+    result = []
+    paths = set()
+    for component in components:
+        path = str(component.get_path_name())
+        require(path and path not in paths,
+                "semantic target render component identity is not exact")
+        paths.add(path)
+        try:
+            visible = component.get_editor_property("visible")
+            collision_enabled = (
+                component.get_collision_enabled()
+                != unreal.CollisionEnabled.NO_COLLISION
+            )
+            collision_profile = str(component.get_collision_profile_name())
+        except Exception as exc:
+            require(False,
+                    "semantic target render/collision state is unavailable: "
+                    + str(exc))
+        require(isinstance(visible, bool) and collision_profile,
+                "semantic target render/collision state is invalid")
+        result.append({
+            "component_path": path,
+            "visible": visible,
+            "collision_profile": collision_profile,
+            "collision_enabled": collision_enabled,
+        })
+    return sorted(result, key=lambda item: item["component_path"])
+
+
+def semantic_target_observation(actor, semantic_target_id):
+    tags = actor.get_editor_property("tags")
+    require(unreal.Name("VistaSemanticId=" + semantic_target_id) in tags,
+            "semantic target actor lost its exact semantic tag")
+    return {
+        "semantic_target_id": semantic_target_id,
+        "actor_path": str(actor.get_path_name()),
+        "actor_class_path": actor_class_path(actor),
+        "semantic_id_property": semantic_id_property(actor),
+        "actor_hidden_in_game": actor_hidden(actor),
+        "interaction_affordances": interaction_affordances(actor),
+        "render_components": render_component_observations(actor),
+    }
+
+
+def hide_semantic_target_visuals(actor):
+    actor.set_actor_hidden_in_game(True)
+    components = actor.get_components_by_class(unreal.StaticMeshComponent)
+    require(components, "semantic target has no visual render component")
+    for component in components:
+        component.set_visibility(False, True)
+
+
 def attach_keep_world(child, parent):
     try:
         child.attach_to_actor(
@@ -181,6 +269,11 @@ def run():
     bindings_by_artifact = {
         item["artifact_id"]: item for item in execution["presentation_bindings"]
     }
+    entity_operations = {
+        item["semantic_id"]: item
+        for item in execution["composition_spec"]["operations"]
+        if item["kind"] == "place_entity"
+    }
 
     actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -206,7 +299,57 @@ def run():
     stage = {"phase": "presentation_compose", "operation_id": None}
     reload_verified = False
     room_observations = []
+    semantic_target_baselines = {}
     try:
+        if is_external:
+            seen_target_ids = set()
+            seen_target_actor_paths = set()
+            for operation in operations:
+                binding = bindings_by_artifact[operation["artifact_id"]]
+                target_ids = binding["external_content"]["semantic_target_ids"]
+                require(target_ids and target_ids == sorted(set(target_ids)),
+                        "presentation semantic target inventory is not exact")
+                for semantic_target_id in target_ids:
+                    require(semantic_target_id not in seen_target_ids,
+                            "presentation semantic target is bound more than once")
+                    semantic_tag = unreal.Name(
+                        "VistaSemanticId=" + semantic_target_id
+                    )
+                    matches = [
+                        actor for actor in actors
+                        if semantic_tag in actor.get_editor_property("tags")
+                    ]
+                    require(len(matches) == 1,
+                            "r1 semantic visual target is not exact: "
+                            + semantic_target_id)
+                    actor = matches[0]
+                    baseline = semantic_target_observation(
+                        actor, semantic_target_id
+                    )
+                    expected = entity_operations.get(semantic_target_id)
+                    require(
+                        expected is not None
+                        and baseline["actor_path"] not in seen_target_actor_paths
+                        and baseline["actor_class_path"] == expected["actor_class"]
+                        and baseline["semantic_id_property"] == semantic_target_id
+                        and baseline["actor_hidden_in_game"] is False
+                        and baseline["interaction_affordances"]
+                        == sorted(expected["affordances"])
+                        and all(
+                            component["visible"] is True
+                            and component["collision_enabled"] is True
+                            and component["collision_profile"]
+                            == expected["collision"]["profile"]
+                            for component in baseline["render_components"]
+                        ),
+                        "r1 semantic target baseline differs: "
+                        + semantic_target_id,
+                    )
+                    seen_target_ids.add(semantic_target_id)
+                    seen_target_actor_paths.add(baseline["actor_path"])
+                    semantic_target_baselines[semantic_target_id] = baseline
+                    hide_semantic_target_visuals(actor)
+
         for operation in operations:
             stage = {
                 "phase": "presentation_compose",
@@ -357,10 +500,61 @@ def run():
                 "r1_authority_component_visible": authority_visible,
             }
             if is_external:
+                target_observations = []
+                target_ids = binding["external_content"]["semantic_target_ids"]
+                for semantic_target_id in target_ids:
+                    semantic_tag = unreal.Name(
+                        "VistaSemanticId=" + semantic_target_id
+                    )
+                    matches = [
+                        actor for actor in reloaded
+                        if semantic_tag in actor.get_editor_property("tags")
+                    ]
+                    require(len(matches) == 1,
+                            "reloaded r1 semantic visual target is not exact: "
+                            + semantic_target_id)
+                    target_observation = semantic_target_observation(
+                        matches[0], semantic_target_id
+                    )
+                    baseline = semantic_target_baselines.get(semantic_target_id)
+                    require(
+                        baseline is not None
+                        and target_observation["actor_path"]
+                        == baseline["actor_path"]
+                        and target_observation["actor_class_path"]
+                        == baseline["actor_class_path"]
+                        and target_observation["semantic_id_property"]
+                        == baseline["semantic_id_property"]
+                        and target_observation["interaction_affordances"]
+                        == baseline["interaction_affordances"]
+                        and target_observation["actor_hidden_in_game"] is True
+                        and [
+                            component["component_path"]
+                            for component in target_observation["render_components"]
+                        ] == [
+                            component["component_path"]
+                            for component in baseline["render_components"]
+                        ]
+                        and all(
+                            current["visible"] is False
+                            and current["collision_enabled"]
+                            == original["collision_enabled"] is True
+                            and current["collision_profile"]
+                            == original["collision_profile"]
+                            for current, original in zip(
+                                target_observation["render_components"],
+                                baseline["render_components"],
+                            )
+                        ),
+                        "reloaded r1 semantic target lost identity, interaction, "
+                        "hidden visuals, or collision: " + semantic_target_id,
+                    )
+                    target_observations.append(target_observation)
                 observation.update({
                     "external_content": binding["external_content"],
                     "nanite_policy": PRESENTATION_EXTERNAL_NANITE_POLICY,
                     "nanite_enabled": nanite_enabled(mesh),
+                    "r1_semantic_visual_observations": target_observations,
                 })
             room_observations.append(observation)
         reload_verified = True
@@ -388,12 +582,24 @@ def run():
         "runtime_play_proof": "pending",
     }
     if is_external:
+        expected_target_count = sum(
+            len(binding["external_content"]["semantic_target_ids"])
+            for binding in execution["presentation_bindings"]
+        )
         gates["external_nanite_disabled_verified"] = (
             reload_verified and all(
                 item.get("nanite_policy") == PRESENTATION_EXTERNAL_NANITE_POLICY
                 and item.get("nanite_enabled") is False
                 for item in room_observations
             )
+        )
+        gates["external_r1_semantic_visual_targets_verified"] = (
+            reload_verified
+            and len(semantic_target_baselines) == expected_target_count
+            and sum(
+                len(item.get("r1_semantic_visual_observations", []))
+                for item in room_observations
+            ) == expected_target_count
         )
     receipt = {
         "schema_version": presentation_scene_receipt_schema(execution),
