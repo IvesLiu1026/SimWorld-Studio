@@ -9,10 +9,10 @@ file; callers cannot supply Python source or a script path.
 
 Inside Unreal, every worker revalidates the full materialized ``CameraActor``
 tag set, pilots its selected actor, and requests exactly one native
-``HighResShot`` into a host-created private local scratch directory.  Only the
-host may strict-decode those exact bytes, copy them with ``O_EXCL`` into final
-evidence paths, rehash them, and aggregate a receipt after all six distinct
-images have passed.
+``HighResShot`` into a host-created profile-bound private scratch directory.
+Only the host may strict-decode those exact bytes, copy them with ``O_EXCL``
+into final evidence paths, rehash them, and aggregate a receipt after all six
+distinct images have passed.
 
 Normal invocations are validation-only.  Add ``--apply`` to launch Unreal::
 
@@ -39,6 +39,7 @@ import math
 import os
 import pathlib
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -50,7 +51,7 @@ import tempfile
 import time
 import zlib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -62,17 +63,17 @@ if str(REPO_ROOT) not in sys.path:
 
 BUILD_PLAN_SCHEMA = "simworld.vista.playable-home-build-plan/v1"
 EXECUTION_SCHEMA = "simworld.vista.playable-home-review-capture-execution/v2"
-R2_EXECUTION_SCHEMA = "simworld.vista.playable-home-review-capture-execution/v3"
+R2_EXECUTION_SCHEMA = "simworld.vista.playable-home-review-capture-execution/v4"
 WORKER_EXECUTION_SCHEMA = (
     "simworld.vista.playable-home-review-capture-worker-execution/v1"
 )
 R2_WORKER_EXECUTION_SCHEMA = (
-    "simworld.vista.playable-home-review-capture-worker-execution/v2"
+    "simworld.vista.playable-home-review-capture-worker-execution/v3"
 )
 UE_RESULT_SCHEMA = "simworld.vista.playable-home-review-capture-ue-result/v2"
 R2_UE_RESULT_SCHEMA = "simworld.vista.playable-home-review-capture-ue-result/v3"
 RECEIPT_SCHEMA = "simworld.vista.playable-home-review-capture-receipt/v2"
-R2_RECEIPT_SCHEMA = "simworld.vista.playable-home-review-capture-receipt/v3"
+R2_RECEIPT_SCHEMA = "simworld.vista.playable-home-review-capture-receipt/v4"
 EXPECTED_REVISION = "vista_playable_home_r1"
 EXPECTED_HOUSE_ID = "home.r1"
 R1_CAPTURE_PROFILE = "fixed_r1"
@@ -109,6 +110,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DISPLAY_RE = re.compile(r"^:[0-9]{1,5}(?:\.[0-9]{1,3})?$")
 ATTEMPT_RE = re.compile(r"^attempt-[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 SAFE_LOCAL_PATH_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
+SAFE_PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 EXECUTION_ENV = "VISTA_PLAYABLE_HOME_REVIEW_EXECUTION"
 EXECUTION_SHA_ENV = "VISTA_PLAYABLE_HOME_REVIEW_EXECUTION_SHA256"
 WORKER_ENV = "VISTA_PLAYABLE_HOME_REVIEW_WORKER"
@@ -120,6 +122,10 @@ EDITOR_STDOUT_FILE = "unreal-editor-stdout.log"
 IMAGES_DIR = "images"
 WORKERS_DIR = "workers"
 LOCAL_SCRATCH_PARENT = Path("/tmp")
+R1_SCRATCH_PREFIX = "vista-home-review-"
+R2_SCRATCH_PREFIX = "vista-home-review-r2-"
+R2_SCRATCH_LIFECYCLE = "append_only_retained_evidence"
+R2_SCRATCH_CLEANUP_POLICY = "descriptor_close_only"
 NVIDIA_VULKAN_ICD = Path("/usr/share/vulkan/icd.d/nvidia_icd.json")
 PASSTHROUGH_ENV_KEYS = (
     "LANG",
@@ -355,6 +361,643 @@ def _require_child(path: Path, root: Path, label: str, *, strict: bool = True) -
     if strict and not relative.parts:
         _fail("VISTA_HOME_REVIEW_PATH_ESCAPE", f"{label} must be below attempt root", pointer=str(path))
     return path
+
+
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | os.O_DIRECTORY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+_R2_ALLOWED_SCRATCH_FILESYSTEMS = frozenset({"nfs", "nfs4"})
+_MOUNTINFO_DECIMAL_RE = re.compile(br"^[1-9][0-9]*$")
+_MOUNTINFO_MAJOR_MINOR_RE = re.compile(br"^[0-9]+:[0-9]+$")
+_MOUNTINFO_FILESYSTEM_RE = re.compile(br"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_MOUNTINFO_PROPAGATION_RE = re.compile(
+    br"^(?:shared|master|propagate_from):[1-9][0-9]*$"
+)
+
+
+def _fd_mount_id(descriptor: int) -> int:
+    try:
+        raw = Path(f"/proc/self/fdinfo/{descriptor}").read_bytes()
+    except OSError as exc:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "cannot read scratch mount identity")
+        raise AssertionError("unreachable") from exc
+    matches = re.findall(br"^mnt_id:\s*([0-9]+)\s*$", raw, re.MULTILINE)
+    if len(matches) != 1 or _MOUNTINFO_DECIMAL_RE.fullmatch(matches[0]) is None:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch mount identity is unavailable")
+    return int(matches[0])
+
+
+def _decode_mountinfo_field(value: bytes, label: str) -> bytes:
+    if not value:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", f"mountinfo {label} is empty")
+    decoded = bytearray()
+    index = 0
+    while index < len(value):
+        current = value[index]
+        if current == ord("\\"):
+            escape = value[index + 1 : index + 4]
+            if len(escape) != 3 or any(byte not in b"01234567" for byte in escape):
+                _fail(
+                    "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                    f"mountinfo {label} has an invalid octal escape",
+                )
+            decoded_byte = int(escape, 8)
+            if decoded_byte > 0xFF:
+                _fail(
+                    "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                    f"mountinfo {label} octal escape is outside one byte",
+                )
+            decoded.append(decoded_byte)
+            index += 4
+            continue
+        if current <= 0x20 or current == 0x7F:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                f"mountinfo {label} contains an unescaped control byte",
+            )
+        decoded.append(current)
+        index += 1
+    if b"\x00" in decoded:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", f"mountinfo {label} contains NUL")
+    return bytes(decoded)
+
+
+def _validate_mountinfo_options(value: bytes, label: str) -> None:
+    decoded = _decode_mountinfo_field(value, label)
+    if any(not option for option in decoded.split(b",")):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            f"mountinfo {label} has an empty option",
+        )
+
+
+def _parse_mountinfo_identity(raw: bytes, mount_id: int) -> tuple[int, str, str]:
+    expected_id = str(mount_id).encode("ascii")
+    matches: list[list[bytes]] = []
+    for line in raw.splitlines():
+        fields = line.split(b" ")
+        if fields and fields[0] == expected_id:
+            matches.append(fields)
+    if len(matches) != 1:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "scratch mount table identity is missing or ambiguous",
+        )
+    fields = matches[0]
+    if any(not field for field in fields) or fields.count(b"-") != 1:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch mount table entry is malformed")
+    separator = fields.index(b"-")
+    if separator < 6 or len(fields) != separator + 4:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "scratch mount table entry field count differs",
+        )
+    if (
+        _MOUNTINFO_DECIMAL_RE.fullmatch(fields[0]) is None
+        or _MOUNTINFO_DECIMAL_RE.fullmatch(fields[1]) is None
+        or _MOUNTINFO_MAJOR_MINOR_RE.fullmatch(fields[2]) is None
+        or int(fields[0]) != mount_id
+    ):
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch mount numeric identity is invalid")
+    root = _decode_mountinfo_field(fields[3], "root")
+    mount_point = _decode_mountinfo_field(fields[4], "mount point")
+    if not root.startswith(b"/") or not mount_point.startswith(b"/"):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "scratch mount root and mount point must be absolute",
+        )
+    _validate_mountinfo_options(fields[5], "mount options")
+    for optional in fields[6:separator]:
+        decoded = _decode_mountinfo_field(optional, "optional field")
+        if (
+            decoded != b"unbindable"
+            and _MOUNTINFO_PROPAGATION_RE.fullmatch(decoded) is None
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "scratch mount optional field is not recognized",
+            )
+    filesystem_raw = fields[separator + 1]
+    if _MOUNTINFO_FILESYSTEM_RE.fullmatch(filesystem_raw) is None:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch filesystem type is invalid")
+    mount_source = _decode_mountinfo_field(fields[separator + 2], "mount source")
+    _validate_mountinfo_options(fields[separator + 3], "super options")
+    return mount_id, filesystem_raw.decode("ascii"), sha256_bytes(mount_source)
+
+
+def _fd_mount_identity(descriptor: int) -> tuple[int, str, str]:
+    """Return the mount id, filesystem type, and hashed mount source for an fd."""
+
+    mount_id = _fd_mount_id(descriptor)
+    try:
+        raw = Path("/proc/self/mountinfo").read_bytes()
+    except OSError as exc:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "cannot read scratch mount table")
+        raise AssertionError("unreachable") from exc
+    return _parse_mountinfo_identity(raw, mount_id)
+
+
+def _require_r2_nas_mount(identity: tuple[int, str, str]) -> None:
+    _, filesystem_type, mount_source_sha256 = identity
+    if (
+        filesystem_type not in _R2_ALLOWED_SCRATCH_FILESYSTEMS
+        or SHA256_RE.fullmatch(mount_source_sha256) is None
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_STORAGE_INVALID",
+            "r2 scratch policy root must be on an approved NFS or NFS4 mount",
+        )
+
+
+def _open_directory_fd(path: Path, label: str) -> tuple[Path, int, os.stat_result]:
+    candidate = _existing_directory(path, label)
+    if SAFE_LOCAL_PATH_RE.fullmatch(str(candidate)) is None or not str(candidate).isascii():
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", f"{label} is not safe ASCII")
+    try:
+        descriptor = os.open(candidate, _DIRECTORY_FLAGS)
+    except OSError as exc:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", f"cannot open {label}: {exc}", pointer=str(candidate))
+        raise AssertionError("unreachable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        observed = os.lstat(candidate)
+        if (metadata.st_dev, metadata.st_ino) != (observed.st_dev, observed.st_ino):
+            _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", f"{label} changed while opening")
+    except Exception:
+        os.close(descriptor)
+        raise
+    return candidate, descriptor, metadata
+
+
+def _open_directory_entry_at(parent_fd: int, name: str, label: str) -> tuple[int, os.stat_result]:
+    if (
+        not name
+        or name in {".", ".."}
+        or "/" in name
+        or not name.isascii()
+        or SAFE_PATH_COMPONENT_RE.fullmatch(name) is None
+    ):
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", f"{label} has an unsafe component")
+    descriptor = -1
+    try:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+        opened = os.fstat(descriptor)
+        after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not _same_inode(before, opened)
+            or not _same_inode(opened, after)
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH",
+                f"{label} entry changed while opening",
+            )
+        return descriptor, opened
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH",
+            f"cannot open {label} relative to retained authority: {exc}",
+        )
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    raise AssertionError("unreachable")
+
+
+def _require_private_directory_fd(
+    descriptor: int,
+    label: str,
+) -> os.stat_result:
+    """Force and verify mode 0700 on a newly created owned directory."""
+
+    try:
+        os.fchmod(descriptor, 0o700)
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_PRIVATE_DIRECTORY_INVALID",
+            f"cannot secure {label}: {exc}",
+        )
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o700:
+        _fail(
+            "VISTA_HOME_REVIEW_PRIVATE_DIRECTORY_INVALID",
+            f"{label} did not retain required mode 0700",
+        )
+    return metadata
+
+
+def _mkdir_private_directory_at(
+    parent_fd: int,
+    name: str,
+    label: str,
+) -> tuple[int, os.stat_result]:
+    """Create and secure a directory relative to retained parent authority."""
+
+    os.mkdir(name, 0o700, dir_fd=parent_fd)
+    descriptor = -1
+    try:
+        descriptor, _ = _open_directory_entry_at(parent_fd, name, label)
+        metadata = _require_private_directory_fd(descriptor, label)
+        entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_inode(metadata, entry):
+            _fail(
+                "VISTA_HOME_REVIEW_PRIVATE_DIRECTORY_INVALID",
+                f"{label} entry changed while securing it",
+            )
+        return descriptor, metadata
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _open_relative_directory_fd(
+    root_fd: int,
+    parts: Sequence[str],
+    label: str,
+) -> tuple[int, os.stat_result]:
+    if not parts:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", f"{label} must be below policy root")
+    current = os.dup(root_fd)
+    try:
+        metadata = os.fstat(current)
+        for index, component in enumerate(parts, start=1):
+            child, metadata = _open_directory_entry_at(
+                current,
+                component,
+                f"{label} component {index}",
+            )
+            os.close(current)
+            current = child
+        return current, metadata
+    except Exception:
+        os.close(current)
+        raise
+
+
+def _validate_directory_path_entry(path: Path, descriptor: int, label: str) -> None:
+    try:
+        entry = os.lstat(path)
+        opened = os.fstat(descriptor)
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH",
+            f"cannot rebind {label} path to retained descriptor: {exc}",
+        )
+    if not _same_inode(entry, opened):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH",
+            f"{label} path no longer names its retained descriptor",
+        )
+
+
+def _validate_relative_directory_entry(
+    root_fd: int,
+    parts: Sequence[str],
+    expected_fd: int,
+    label: str,
+) -> None:
+    observed_fd, observed = _open_relative_directory_fd(root_fd, parts, label)
+    try:
+        if not _same_inode(observed, os.fstat(expected_fd)):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH",
+                f"{label} path no longer names its retained descriptor",
+            )
+    finally:
+        os.close(observed_fd)
+
+
+def _prove_directory_control(
+    descriptor: int,
+    *,
+    device: int,
+    mount_id: int,
+    filesystem_type: str,
+    mount_source_sha256: str,
+    mapped_owner_uid: int,
+) -> None:
+    name = f".vista-home-authority-{secrets.token_hex(16)}"
+    token = -1
+    created = False
+    try:
+        token = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=descriptor,
+        )
+        created = True
+        proof = b"vista-home-scratch-authority-v1\n"
+        if os.write(token, proof) != len(proof):
+            _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "scratch authority token write was partial")
+        os.fsync(token)
+        metadata = os.fstat(token)
+        if (
+            metadata.st_dev != device
+            or metadata.st_uid != mapped_owner_uid
+            or _fd_mount_identity(token)
+            != (mount_id, filesystem_type, mount_source_sha256)
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "scratch authority token differs")
+        os.fsync(descriptor)
+        os.unlink(name, dir_fd=descriptor)
+        created = False
+        os.fsync(descriptor)
+    except OSError as exc:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", f"scratch authority proof failed: {exc}")
+    finally:
+        if token >= 0:
+            os.close(token)
+        if created:
+            try:
+                os.unlink(name, dir_fd=descriptor)
+            except OSError:
+                pass
+
+
+@dataclass
+class R2ScratchAuthority:
+    policy_root: Path
+    parent: Path
+    policy_root_fd: int
+    parent_fd: int
+    policy_root_stat: os.stat_result
+    parent_stat: os.stat_result
+    parent_relative_parts: tuple[str, ...]
+    mount_id: int
+    filesystem_type: str
+    mount_source_sha256: str
+    closed: bool = False
+
+    def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            for descriptor in (self.parent_fd, self.policy_root_fd):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+    def __del__(self) -> None:
+        self.close()
+
+
+def _trees_overlap(first: Path, second: Path) -> bool:
+    for child, parent in ((first, second), (second, first)):
+        try:
+            child.relative_to(parent)
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _validate_r2_scratch_parent(
+    path: Path,
+    policy_root_path: Path,
+    attempt_root: Path,
+) -> R2ScratchAuthority:
+    policy_root, root_fd, root_stat = _open_directory_fd(policy_root_path, "r2 scratch policy root")
+    parent_fd = -1
+    try:
+        candidate = _absolute_lexical(path, "r2 scratch parent")
+        _reject_symlink_components(candidate, "r2 scratch parent")
+        _require_child(candidate, policy_root, "r2 scratch parent")
+        relative_parts = candidate.relative_to(policy_root).parts
+        parent_fd, parent_stat = _open_relative_directory_fd(
+            root_fd,
+            relative_parts,
+            "r2 scratch parent",
+        )
+        _validate_directory_path_entry(policy_root, root_fd, "r2 scratch policy root")
+        _validate_relative_directory_entry(
+            root_fd,
+            relative_parts,
+            parent_fd,
+            "r2 scratch parent",
+        )
+        root_mount = _fd_mount_identity(root_fd)
+        parent_mount = _fd_mount_identity(parent_fd)
+        _require_r2_nas_mount(root_mount)
+        _require_r2_nas_mount(parent_mount)
+        if root_stat.st_dev != parent_stat.st_dev or root_mount != parent_mount:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_MOUNT_MISMATCH",
+                "r2 scratch parent crosses a nested mount or bind mount",
+            )
+        if (
+            root_stat.st_uid != parent_stat.st_uid
+            or stat.S_IMODE(root_stat.st_mode) != 0o700
+            or stat.S_IMODE(parent_stat.st_mode) != 0o700
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH",
+                "r2 policy root and parent require the same mapped owner and mode 0700",
+            )
+        if _trees_overlap(candidate, attempt_root):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch parent and UE attempt trees must be disjoint",
+            )
+        _prove_directory_control(
+            parent_fd,
+            device=parent_stat.st_dev,
+            mount_id=root_mount[0],
+            filesystem_type=root_mount[1],
+            mount_source_sha256=root_mount[2],
+            mapped_owner_uid=root_stat.st_uid,
+        )
+        return R2ScratchAuthority(
+            policy_root=policy_root,
+            parent=candidate,
+            policy_root_fd=root_fd,
+            parent_fd=parent_fd,
+            policy_root_stat=root_stat,
+            parent_stat=parent_stat,
+            parent_relative_parts=tuple(relative_parts),
+            mount_id=root_mount[0],
+            filesystem_type=root_mount[1],
+            mount_source_sha256=root_mount[2],
+        )
+    except Exception:
+        if parent_fd >= 0:
+            os.close(parent_fd)
+        os.close(root_fd)
+        raise
+
+
+def _validate_r2_scratch_authority(authority: R2ScratchAuthority) -> None:
+    if authority.closed:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "r2 scratch authority is closed")
+    root = os.fstat(authority.policy_root_fd)
+    parent = os.fstat(authority.parent_fd)
+    _validate_directory_path_entry(
+        authority.policy_root,
+        authority.policy_root_fd,
+        "r2 scratch policy root",
+    )
+    _validate_relative_directory_entry(
+        authority.policy_root_fd,
+        authority.parent_relative_parts,
+        authority.parent_fd,
+        "r2 scratch parent",
+    )
+    expected_mount = (
+        authority.mount_id,
+        authority.filesystem_type,
+        authority.mount_source_sha256,
+    )
+    _require_r2_nas_mount(expected_mount)
+    if (
+        (root.st_dev, root.st_ino)
+        != (authority.policy_root_stat.st_dev, authority.policy_root_stat.st_ino)
+        or (parent.st_dev, parent.st_ino)
+        != (authority.parent_stat.st_dev, authority.parent_stat.st_ino)
+        or _fd_mount_identity(authority.policy_root_fd) != expected_mount
+        or _fd_mount_identity(authority.parent_fd) != expected_mount
+        or root.st_dev != parent.st_dev
+        or root.st_uid != parent.st_uid
+        or stat.S_IMODE(root.st_mode) != 0o700
+        or stat.S_IMODE(parent.st_mode) != 0o700
+    ):
+        _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "retained scratch authority changed")
+
+
+def _r2_scratch_parent_binding(authority: R2ScratchAuthority) -> dict[str, Any]:
+    _validate_r2_scratch_authority(authority)
+    root = authority.policy_root_stat
+    parent = authority.parent_stat
+    return {
+        "storage_class": "private_nas_retained_evidence",
+        "policy_root_path_sha256": sha256_bytes(str(authority.policy_root).encode("ascii")),
+        "policy_root_device": root.st_dev,
+        "policy_root_inode": root.st_ino,
+        "policy_root_mount_id": authority.mount_id,
+        "filesystem_type": authority.filesystem_type,
+        "mount_source_sha256": authority.mount_source_sha256,
+        "mapped_owner_uid": root.st_uid,
+        "parent_path_sha256": sha256_bytes(str(authority.parent).encode("ascii")),
+        "parent_device": parent.st_dev,
+        "parent_inode": parent.st_ino,
+        "parent_mount_id": authority.mount_id,
+        "parent_relative_components": len(authority.parent_relative_parts),
+        "parent_mode": "0700",
+        "authority_check": "parent_dirfd_o_excl_create_fsync_unlink",
+        "child_creation": "unique_mkdirat_eexist_fail",
+        "lifecycle": R2_SCRATCH_LIFECYCLE,
+        "cleanup_policy": R2_SCRATCH_CLEANUP_POLICY,
+        "receipt_discloses_scratch_absolute_path": False,
+    }
+
+
+def _validate_r2_scratch_parent_binding(value: Any) -> dict[str, Any]:
+    integers = {
+        "policy_root_device", "policy_root_inode", "policy_root_mount_id",
+        "mapped_owner_uid", "parent_device", "parent_inode", "parent_mount_id",
+        "parent_relative_components",
+    }
+    expected = integers | {
+        "storage_class", "policy_root_path_sha256", "parent_path_sha256",
+        "filesystem_type", "mount_source_sha256",
+        "parent_mode", "authority_check", "child_creation", "lifecycle",
+        "cleanup_policy",
+        "receipt_discloses_scratch_absolute_path",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "r2 scratch-parent binding fields differ")
+    if (
+        value.get("storage_class") != "private_nas_retained_evidence"
+        or any(isinstance(value.get(key), bool) or not isinstance(value.get(key), int) or value[key] < 0 for key in integers)
+        or any(value[key] <= 0 for key in ("policy_root_inode", "policy_root_mount_id", "parent_inode", "parent_mount_id"))
+        or value["parent_relative_components"] <= 0
+        or any(
+            SHA256_RE.fullmatch(value.get(key, "")) is None
+            for key in (
+                "policy_root_path_sha256",
+                "parent_path_sha256",
+                "mount_source_sha256",
+            )
+        )
+        or value.get("filesystem_type") not in _R2_ALLOWED_SCRATCH_FILESYSTEMS
+        or value["policy_root_device"] != value["parent_device"]
+        or value["policy_root_mount_id"] != value["parent_mount_id"]
+        or value.get("parent_mode") != "0700"
+        or value.get("authority_check") != "parent_dirfd_o_excl_create_fsync_unlink"
+        or value.get("child_creation") != "unique_mkdirat_eexist_fail"
+        or value.get("lifecycle") != R2_SCRATCH_LIFECYCLE
+        or value.get("cleanup_policy") != R2_SCRATCH_CLEANUP_POLICY
+        or value.get("receipt_discloses_scratch_absolute_path") is not False
+    ):
+        _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "r2 scratch-parent binding policy differs")
+    return dict(value)
+
+
+def _open_observed_r2_parent(parent: Path, binding: Mapping[str, Any]) -> int:
+    expected = _validate_r2_scratch_parent_binding(binding)
+    component_count = expected["parent_relative_components"]
+    if len(parent.parts) <= component_count:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "scratch parent depth differs")
+    policy_root = parent.parents[component_count - 1]
+    if sha256_bytes(str(policy_root).encode("ascii")) != expected["policy_root_path_sha256"]:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "scratch policy-root path differs")
+    candidate, root_fd, root_metadata = _open_directory_fd(
+        policy_root,
+        "r2 scratch policy root",
+    )
+    parent_fd = -1
+    try:
+        relative_parts = parent.relative_to(candidate).parts
+        if len(relative_parts) != component_count:
+            _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "scratch parent depth differs")
+        parent_fd, metadata = _open_relative_directory_fd(
+            root_fd,
+            relative_parts,
+            "r2 scratch parent",
+        )
+        mount_identity = _fd_mount_identity(parent_fd)
+        _require_r2_nas_mount(mount_identity)
+        if (
+            sha256_bytes(str(parent).encode("ascii")) != expected["parent_path_sha256"]
+            or root_metadata.st_dev != expected["policy_root_device"]
+            or root_metadata.st_ino != expected["policy_root_inode"]
+            or metadata.st_dev != expected["parent_device"]
+            or metadata.st_ino != expected["parent_inode"]
+            or root_metadata.st_uid != expected["mapped_owner_uid"]
+            or metadata.st_uid != root_metadata.st_uid
+            or _fd_mount_identity(root_fd) != mount_identity
+            or mount_identity
+            != (
+                expected["parent_mount_id"],
+                expected["filesystem_type"],
+                expected["mount_source_sha256"],
+            )
+            or stat.S_IMODE(root_metadata.st_mode) != 0o700
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            _fail("VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH", "observed scratch parent differs")
+        _validate_directory_path_entry(candidate, root_fd, "r2 scratch policy root")
+        _validate_relative_directory_entry(
+            root_fd,
+            relative_parts,
+            parent_fd,
+            "r2 scratch parent",
+        )
+        result = parent_fd
+        parent_fd = -1
+        return result
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
+        os.close(root_fd)
 
 
 def _write_exclusive(path: Path, raw: bytes) -> None:
@@ -761,6 +1404,13 @@ class CaptureInputs:
     visual_profile_path: Path | None = None
     visual_profile_sha256: str | None = None
     visual_profile_content_digest: str | None = None
+    scratch_policy_root: Path | None = None
+    scratch_parent: Path | None = None
+    scratch_authority: R2ScratchAuthority | None = None
+
+    def close(self) -> None:
+        if self.scratch_authority is not None:
+            self.scratch_authority.close()
 
 
 def _tree_snapshot(root: Path) -> tuple[str, int, int]:
@@ -933,6 +1583,24 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
             "VISTA_HOME_REVIEW_CAPTURE_PROFILE_INVALID",
             "capture profile is not one of the closed profiles",
         )
+    scratch_policy_root_arg = getattr(args, "scratch_policy_root", None)
+    scratch_parent_arg = getattr(args, "scratch_parent", None)
+    scratch_policy_root: Path | None = None
+    scratch_parent: Path | None = None
+    if capture_profile == R1_CAPTURE_PROFILE:
+        if scratch_policy_root_arg is not None or scratch_parent_arg is not None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "the fixed r1 capture does not accept r2 scratch options",
+            )
+    else:
+        if scratch_policy_root_arg is None or scratch_parent_arg is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "realistic_interior_r2 requires --scratch-policy-root and --scratch-parent",
+            )
+        scratch_policy_root = Path(scratch_policy_root_arg)
+        scratch_parent = Path(scratch_parent_arg)
     visual_profile_arg = getattr(args, "visual_profile", None)
     visual_profile_sha_arg = getattr(args, "visual_profile_sha256", None)
     if bool(visual_profile_arg) != bool(visual_profile_sha_arg):
@@ -1039,12 +1707,26 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
             _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "DDC seed tree SHA-256 differs")
         ddc_seed_tree_sha256 = actual_tree
     script = _existing_file(Path(__file__).resolve(strict=True), "fixed review capture script")
+    map_asset_sha256 = sha256_file(map_asset)
+    unreal_editor_sha256 = sha256_file(unreal_editor)
+    script_sha256 = sha256_file(script)
+    nvidia_icd_sha256 = sha256_file(NVIDIA_VULKAN_ICD)
+    scratch_authority: R2ScratchAuthority | None = None
+    if capture_profile == R2_CAPTURE_PROFILE:
+        assert scratch_policy_root is not None and scratch_parent is not None
+        scratch_authority = _validate_r2_scratch_parent(
+            scratch_parent,
+            scratch_policy_root,
+            attempt_root,
+        )
+        scratch_policy_root = scratch_authority.policy_root
+        scratch_parent = scratch_authority.parent
     return CaptureInputs(
         attempt_root=attempt_root,
         project=project,
         project_sha256=project_sha,
         map_asset=map_asset,
-        map_asset_sha256=sha256_file(map_asset),
+        map_asset_sha256=map_asset_sha256,
         build_plan=build_plan,
         build_plan_sha256=plan_sha,
         plan=plan,
@@ -1052,14 +1734,14 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
         build_result_sha256=build_result_sha,
         map_path=args.map_path,
         unreal_editor=unreal_editor,
-        unreal_editor_sha256=sha256_file(unreal_editor),
+        unreal_editor_sha256=unreal_editor_sha256,
         output_dir=output_dir,
         display=args.display,
         graphics_adapter=args.graphics_adapter,
         timeout_seconds=args.timeout_seconds,
         script=script,
-        script_sha256=sha256_file(script),
-        nvidia_icd_sha256=sha256_file(NVIDIA_VULKAN_ICD),
+        script_sha256=script_sha256,
+        nvidia_icd_sha256=nvidia_icd_sha256,
         ddc_seed=ddc_seed,
         ddc_seed_tree_sha256=ddc_seed_tree_sha256,
         cameras=tuple(cameras),
@@ -1068,6 +1750,9 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
         visual_profile_path=visual_profile_path,
         visual_profile_sha256=visual_profile_sha256,
         visual_profile_content_digest=visual_profile_content_digest,
+        scratch_policy_root=scratch_policy_root,
+        scratch_parent=scratch_parent,
+        scratch_authority=scratch_authority,
     )
 
 
@@ -1170,6 +1855,14 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
             "sha256": inputs.visual_profile_sha256,
             "content_digest": inputs.visual_profile_content_digest,
         }
+        if inputs.scratch_parent is None or inputs.scratch_authority is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 capture inputs lost their scratch-parent binding",
+            )
+        execution["scratch"] = _r2_scratch_parent_binding(
+            inputs.scratch_authority,
+        )
         execution["engine"]["graphics_adapter"] = 0
         execution["engine"]["display"] = R2_DISPLAY
         capture.update(
@@ -1184,8 +1877,14 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
                 "visual_profile_sha256_required": True,
                 "graphics_adapter_zero_required": True,
                 "runtime_camera_observations_required": True,
+                "scratch_policy_root_required": True,
+                "scratch_parent_required": True,
+                "native_png_uses_private_nas_retained_evidence": True,
+                "scratch_retained_append_only": True,
+                "scratch_cleanup_descriptor_close_only": True,
             }
         )
+        del policy["native_png_uses_private_local_scratch"]
     return execution
 
 
@@ -1201,6 +1900,7 @@ class WorkerRun:
     result_path: Path
     editor_log: Path
     editor_stdout: Path
+    scratch_ownership: ScratchOwnership | None = None
 
 
 @dataclass(frozen=True)
@@ -1225,6 +1925,9 @@ def _validate_scratch_png(
     ordinal: int,
     attempt_root: Path,
     require_parent: bool,
+    r2_scratch_binding: Mapping[str, Any] | None = None,
+    r2_worker_binding: Mapping[str, Any] | None = None,
+    expected_scratch_parent: Path | None = None,
 ) -> Path:
     candidate = _absolute_lexical(path, "worker scratch PNG")
     if SAFE_LOCAL_PATH_RE.fullmatch(str(candidate)) is None or not str(candidate).isascii():
@@ -1232,20 +1935,119 @@ def _validate_scratch_png(
     if candidate.name != "capture.png" or candidate.parent.name != f"worker-{ordinal:02d}":
         _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG path does not bind the immutable ordinal")
     scratch_root = candidate.parent.parent
-    if scratch_root.parent != LOCAL_SCRATCH_PARENT or not scratch_root.name.startswith("vista-home-review-"):
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG must use a direct host-owned local scratch root")
+    scratch_parent = scratch_root.parent
+    if r2_scratch_binding is None:
+        if r2_worker_binding is not None:
+            _fail(
+                "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+                "r1 scratch path cannot carry an r2 capability",
+            )
+        if (
+            scratch_parent != LOCAL_SCRATCH_PARENT
+            or not scratch_root.name.startswith(R1_SCRATCH_PREFIX)
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "scratch PNG must use a direct host-owned local scratch root",
+            )
+    else:
+        capability = _validate_r2_worker_scratch_binding(
+            r2_worker_binding,
+            ordinal,
+        )
+        if _trees_overlap(scratch_parent, attempt_root):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch parent and UE attempt trees must be disjoint",
+            )
+        if (
+            expected_scratch_parent is not None
+            and scratch_parent != expected_scratch_parent
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch PNG parent differs from validated inputs",
+                pointer=str(scratch_parent),
+            )
+        if not scratch_root.name.startswith(R2_SCRATCH_PREFIX):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch root prefix differs",
+                pointer=str(scratch_root),
+            )
+        parent_fd = _open_observed_r2_parent(
+            scratch_parent,
+            r2_scratch_binding,
+        )
+        scratch_root_fd = -1
+        worker_fd = -1
+        try:
+            scratch_root_fd, root_metadata = _open_directory_entry_at(
+                parent_fd,
+                scratch_root.name,
+                "r2 scratch root",
+            )
+            worker_fd, worker_metadata = _open_directory_entry_at(
+                scratch_root_fd,
+                candidate.parent.name,
+                "r2 worker directory",
+            )
+            expected_mount = (
+                r2_scratch_binding["parent_mount_id"],
+                r2_scratch_binding["filesystem_type"],
+                r2_scratch_binding["mount_source_sha256"],
+            )
+            if (
+                (root_metadata.st_dev, root_metadata.st_ino)
+                != (
+                    capability["scratch_root_device"],
+                    capability["scratch_root_inode"],
+                )
+                or (worker_metadata.st_dev, worker_metadata.st_ino)
+                != (capability["worker_device"], capability["worker_inode"])
+                or root_metadata.st_uid
+                != r2_scratch_binding["mapped_owner_uid"]
+                or worker_metadata.st_uid != root_metadata.st_uid
+                or stat.S_IMODE(root_metadata.st_mode) != 0o700
+                or stat.S_IMODE(worker_metadata.st_mode) != 0o700
+                or _fd_mount_identity(scratch_root_fd) != expected_mount
+                or _fd_mount_identity(worker_fd) != expected_mount
+            ):
+                _fail(
+                    "VISTA_HOME_REVIEW_SCRATCH_AUTHORITY_MISMATCH",
+                    "r2 scratch path differs from retained host capability",
+                )
+            try:
+                os.stat(
+                    capability["png_name"],
+                    dir_fd=worker_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                _fail(
+                    "VISTA_HOME_REVIEW_OUTPUT_EXISTS",
+                    "r2 native PNG already exists before capture",
+                )
+        finally:
+            if worker_fd >= 0:
+                os.close(worker_fd)
+            if scratch_root_fd >= 0:
+                os.close(scratch_root_fd)
+            os.close(parent_fd)
     try:
         candidate.relative_to(attempt_root)
     except ValueError:
         pass
     else:
         _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG must remain outside the UE attempt")
-    if require_parent:
+    if require_parent and r2_scratch_binding is None:
         root = _existing_directory(scratch_root, "scratch root")
         parent = _existing_directory(candidate.parent, "worker scratch directory")
         if stat.S_IMODE(os.lstat(root).st_mode) != 0o700 or stat.S_IMODE(os.lstat(parent).st_mode) != 0o700:
             _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch root or worker directory mode is not 0700")
-    else:
+    elif r2_scratch_binding is None:
         _reject_symlink_components(candidate, "worker scratch PNG", allow_missing_tail=True)
     return candidate
 
@@ -1255,18 +2057,48 @@ def build_worker_execution(
     aggregate_execution_sha256: str,
     ordinal: int,
     scratch_png: Path,
+    scratch_ownership: ScratchOwnership | None = None,
 ) -> dict[str, Any]:
     if SHA256_RE.fullmatch(aggregate_execution_sha256) is None:
         _fail("VISTA_HOME_REVIEW_PIN_INVALID", "aggregate execution pin is invalid")
+    if _is_r2(inputs) and (
+        inputs.scratch_parent is None or inputs.scratch_authority is None
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 capture inputs lost their scratch-parent binding",
+        )
     camera = _camera_for_ordinal(inputs, ordinal)
+    scratch_capability = None
+    if _is_r2(inputs):
+        if scratch_ownership is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 worker manifest requires retained scratch ownership",
+            )
+        scratch_capability = _r2_worker_scratch_binding(
+            scratch_ownership,
+            ordinal,
+        )
     scratch = _validate_scratch_png(
         scratch_png,
         ordinal=ordinal,
         attempt_root=inputs.attempt_root,
         require_parent=True,
+        r2_scratch_binding=(
+            _r2_scratch_parent_binding(
+                inputs.scratch_authority,
+            )
+            if _is_r2(inputs) and inputs.scratch_authority is not None
+            else None
+        ),
+        r2_worker_binding=scratch_capability,
+        expected_scratch_parent=(
+            inputs.scratch_parent if _is_r2(inputs) else None
+        ),
     )
     worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
-    return {
+    manifest = {
         "schema_version": _worker_execution_schema(inputs),
         "aggregate_execution": {
             "path": str(inputs.output_dir / EXECUTION_FILE),
@@ -1288,6 +2120,9 @@ def build_worker_execution(
             "host_accepts_and_copies_png": True,
         },
     }
+    if _is_r2(inputs):
+        manifest["scratch_capability"] = scratch_capability
+    return manifest
 
 
 def build_editor_command(inputs: CaptureInputs, ordinal: int = 1) -> list[str]:
@@ -1322,21 +2157,44 @@ def build_editor_command(inputs: CaptureInputs, ordinal: int = 1) -> list[str]:
 
 
 def _prepare_output(inputs: CaptureInputs, execution_raw: bytes) -> None:
+    parent_fd = -1
+    output_fd = -1
     try:
-        os.mkdir(inputs.output_dir, 0o700)
-        os.mkdir(inputs.output_dir / IMAGES_DIR, 0o700)
-        os.mkdir(inputs.output_dir / WORKERS_DIR, 0o700)
-        os.mkdir(inputs.output_dir / "ue-user", 0o700)
-        os.mkdir(inputs.output_dir / "ddc", 0o700)
-        os.mkdir(inputs.output_dir / "xdg-cache", 0o700)
-        os.mkdir(inputs.output_dir / "xdg-config", 0o700)
+        _, parent_fd, _ = _open_directory_fd(
+            inputs.output_dir.parent,
+            "review output parent",
+        )
+        output_fd, _ = _mkdir_private_directory_at(
+            parent_fd,
+            inputs.output_dir.name,
+            "review output attempt",
+        )
+        directory_names = [
+            IMAGES_DIR,
+            WORKERS_DIR,
+            "ue-user",
+            "ddc",
+            "xdg-cache",
+            "xdg-config",
+        ]
         if _is_r2(inputs):
-            os.mkdir(inputs.output_dir / "tmp", 0o700)
-            os.mkdir(inputs.output_dir / "xdg-data", 0o700)
+            directory_names.extend(("tmp", "xdg-data"))
+        for name in directory_names:
+            child_fd, _ = _mkdir_private_directory_at(
+                output_fd,
+                name,
+                f"review output {name} directory",
+            )
+            os.close(child_fd)
     except FileExistsError:
         _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "append-only output attempt already exists", pointer=str(inputs.output_dir))
     except OSError as exc:
         _fail("VISTA_HOME_REVIEW_OUTPUT_CREATE_FAILED", f"cannot create output attempt: {exc}", pointer=str(inputs.output_dir))
+    finally:
+        if output_fd >= 0:
+            os.close(output_fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
     _write_exclusive(inputs.output_dir / EXECUTION_FILE, execution_raw)
     if inputs.ddc_seed is not None:
         target_root = (
@@ -1459,6 +2317,13 @@ def run_editor(inputs: CaptureInputs, worker: WorkerRun) -> int:
             "pinned NVIDIA Vulkan ICD is unavailable",
             pointer=str(NVIDIA_VULKAN_ICD),
         )
+    if _is_r2(inputs):
+        if worker.scratch_ownership is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 editor launch lost retained scratch ownership",
+            )
+        _validate_owned_r2_worker_dir(worker.scratch_ownership, worker.ordinal)
     env = build_editor_environment(inputs, worker.manifest_path, worker.manifest_sha256)
     command = build_editor_command(inputs, worker.ordinal)
     stdout_path = worker.editor_stdout
@@ -1837,11 +2702,25 @@ def _probe_worker_success(inputs: CaptureInputs, worker: WorkerRun) -> WorkerSuc
     PNG, pin, distinctness, and receipt gates.
     """
 
-    if not worker.result_path.exists() or not worker.scratch_png.exists():
+    if not worker.result_path.exists():
         return None
     try:
         result, result_sha256 = _load_worker_result(inputs, worker)
-        raw = _read_exact_regular(worker.scratch_png, "native worker PNG proof")
+        if _is_r2(inputs):
+            if worker.scratch_ownership is None:
+                _fail(
+                    "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                    "r2 PNG proof lost retained scratch ownership",
+                )
+            raw = _read_owned_r2_worker_png(
+                worker.scratch_ownership,
+                worker.ordinal,
+                "native worker PNG proof",
+            )
+        else:
+            if not worker.scratch_png.exists():
+                return None
+            raw = _read_exact_regular(worker.scratch_png, "native worker PNG proof")
         capture_result = result["captures"][0]
         png_sha256 = sha256_bytes(raw)
         if capture_result["bytes"] != len(raw) or capture_result["sha256"] != png_sha256:
@@ -1918,14 +2797,33 @@ def _accept_worker_png(
     worker: WorkerRun,
     ue_result: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if _is_r2(inputs) and (
+        inputs.scratch_parent is None or inputs.scratch_authority is None
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 capture inputs lost their scratch-parent binding",
+        )
     capture = ue_result["captures"][0]
-    _validate_scratch_png(
-        worker.scratch_png,
-        ordinal=worker.ordinal,
-        attempt_root=inputs.attempt_root,
-        require_parent=True,
-    )
-    raw = _read_exact_regular(worker.scratch_png, "native worker PNG")
+    if _is_r2(inputs):
+        if worker.scratch_ownership is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 PNG acceptance lost retained scratch ownership",
+            )
+        raw = _read_owned_r2_worker_png(
+            worker.scratch_ownership,
+            worker.ordinal,
+            "native worker PNG",
+        )
+    else:
+        _validate_scratch_png(
+            worker.scratch_png,
+            ordinal=worker.ordinal,
+            attempt_root=inputs.attempt_root,
+            require_parent=True,
+        )
+        raw = _read_exact_regular(worker.scratch_png, "native worker PNG")
     source_sha = sha256_bytes(raw)
     if capture.get("bytes") != len(raw) or capture.get("sha256") != source_sha:
         _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal native PNG size or hash differs")
@@ -1995,10 +2893,362 @@ class WorkerOutcome:
     image: dict[str, Any]
 
 
+@dataclass
+class ScratchOwnership:
+    """Single owner for retained r2 descriptors or one legacy r1 path."""
+
+    path: Path
+    parent: Path
+    attempt_root: Path
+    capture_profile: str
+    parent_device: int
+    parent_inode: int
+    device: int
+    inode: int
+    policy_root: Path | None = None
+    policy_root_fd: int | None = None
+    parent_fd: int | None = None
+    child_fd: int | None = None
+    parent_relative_parts: tuple[str, ...] = ()
+    worker_fds: dict[int, int] = field(default_factory=dict)
+    mount_id: int | None = None
+    filesystem_type: str | None = None
+    mount_source_sha256: str | None = None
+    mapped_owner_uid: int | None = None
+    closed: bool = False
+
+    def register_worker_fd(self, ordinal: int, descriptor: int) -> None:
+        if self.closed or ordinal in self.worker_fds:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 scratch worker descriptor ownership differs",
+            )
+        self.worker_fds[ordinal] = descriptor
+
+    def worker_fd(self, ordinal: int) -> int:
+        if self.closed or ordinal not in self.worker_fds:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 scratch worker descriptor is unavailable",
+            )
+        return self.worker_fds[ordinal]
+
+    def close(self) -> None:
+        descriptors = list(self.worker_fds.values())
+        self.worker_fds.clear()
+        for field_name in ("child_fd", "parent_fd", "policy_root_fd"):
+            descriptor = getattr(self, field_name)
+            setattr(self, field_name, None)
+            if descriptor is not None:
+                descriptors.append(descriptor)
+        self.closed = True
+        for descriptor in dict.fromkeys(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _validate_owned_r2_scratch(ownership: ScratchOwnership) -> os.stat_result:
+    if (
+        ownership.closed
+        or ownership.policy_root is None
+        or ownership.policy_root_fd is None
+        or ownership.parent_fd is None
+        or ownership.child_fd is None
+        or ownership.mount_id is None
+        or ownership.filesystem_type is None
+        or ownership.mount_source_sha256 is None
+        or ownership.mapped_owner_uid is None
+        or not ownership.parent_relative_parts
+    ):
+        _fail("VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH", "r2 scratch descriptors are missing")
+    root = os.fstat(ownership.policy_root_fd)
+    parent = os.fstat(ownership.parent_fd)
+    child = os.fstat(ownership.child_fd)
+    expected_mount = (
+        ownership.mount_id,
+        ownership.filesystem_type,
+        ownership.mount_source_sha256,
+    )
+    _require_r2_nas_mount(expected_mount)
+    _validate_directory_path_entry(
+        ownership.policy_root,
+        ownership.policy_root_fd,
+        "r2 scratch policy root",
+    )
+    _validate_relative_directory_entry(
+        ownership.policy_root_fd,
+        ownership.parent_relative_parts,
+        ownership.parent_fd,
+        "r2 scratch parent",
+    )
+    try:
+        entry = os.stat(ownership.path.name, dir_fd=ownership.parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH", f"r2 scratch entry is missing: {exc}")
+    if (
+        (parent.st_dev, parent.st_ino) != (ownership.parent_device, ownership.parent_inode)
+        or (child.st_dev, child.st_ino) != (ownership.device, ownership.inode)
+        or (entry.st_dev, entry.st_ino) != (ownership.device, ownership.inode)
+        or root.st_dev != parent.st_dev
+        or parent.st_dev != child.st_dev
+        or not stat.S_ISDIR(child.st_mode)
+        or any(stat.S_IMODE(item.st_mode) != 0o700 for item in (root, parent, child))
+        or any(
+            _fd_mount_identity(fd) != expected_mount
+            for fd in (
+                ownership.policy_root_fd,
+                ownership.parent_fd,
+                ownership.child_fd,
+            )
+        )
+        or any(item.st_uid != ownership.mapped_owner_uid for item in (root, parent, child))
+    ):
+        _fail("VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH", "r2 scratch descriptor or entry changed")
+    return child
+
+
+def _validate_owned_r2_worker_dir(
+    ownership: ScratchOwnership,
+    ordinal: int,
+) -> os.stat_result:
+    root = _validate_owned_r2_scratch(ownership)
+    if ownership.child_fd is None:
+        raise AssertionError("validated r2 child descriptor is missing")
+    worker_fd = ownership.worker_fd(ordinal)
+    name = f"worker-{ordinal:02d}"
+    try:
+        entry = os.stat(name, dir_fd=ownership.child_fd, follow_symlinks=False)
+        opened = os.fstat(worker_fd)
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            f"r2 worker directory entry is unavailable: {exc}",
+        )
+    expected_mount = (
+        ownership.mount_id,
+        ownership.filesystem_type,
+        ownership.mount_source_sha256,
+    )
+    if (
+        not _same_inode(entry, opened)
+        or not stat.S_ISDIR(opened.st_mode)
+        or stat.S_IMODE(opened.st_mode) != 0o700
+        or opened.st_dev != root.st_dev
+        or opened.st_uid != ownership.mapped_owner_uid
+        or _fd_mount_identity(worker_fd) != expected_mount
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "r2 worker directory descriptor or entry changed",
+        )
+    return opened
+
+
+def _r2_worker_scratch_binding(
+    ownership: ScratchOwnership,
+    ordinal: int,
+) -> dict[str, Any]:
+    root = _validate_owned_r2_scratch(ownership)
+    worker = _validate_owned_r2_worker_dir(ownership, ordinal)
+    return {
+        "lifecycle": R2_SCRATCH_LIFECYCLE,
+        "scratch_root_device": root.st_dev,
+        "scratch_root_inode": root.st_ino,
+        "worker_device": worker.st_dev,
+        "worker_inode": worker.st_ino,
+        "worker_name": f"worker-{ordinal:02d}",
+        "png_name": "capture.png",
+    }
+
+
+def _validate_r2_worker_scratch_binding(
+    value: Any,
+    ordinal: int,
+) -> dict[str, Any]:
+    expected_keys = {
+        "lifecycle",
+        "scratch_root_device",
+        "scratch_root_inode",
+        "worker_device",
+        "worker_inode",
+        "worker_name",
+        "png_name",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        _fail(
+            "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+            "r2 worker scratch-capability fields differ",
+        )
+    integer_keys = (
+        "scratch_root_device",
+        "scratch_root_inode",
+        "worker_device",
+        "worker_inode",
+    )
+    if (
+        value.get("lifecycle") != R2_SCRATCH_LIFECYCLE
+        or any(
+            isinstance(value.get(key), bool)
+            or not isinstance(value.get(key), int)
+            or value[key] < 0
+            for key in integer_keys
+        )
+        or value["scratch_root_inode"] <= 0
+        or value["worker_inode"] <= 0
+        or value["scratch_root_device"] != value["worker_device"]
+        or value.get("worker_name") != f"worker-{ordinal:02d}"
+        or value.get("png_name") != "capture.png"
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+            "r2 worker scratch-capability policy differs",
+        )
+    return dict(value)
+
+
+def _read_owned_r2_worker_png(
+    ownership: ScratchOwnership,
+    ordinal: int,
+    label: str,
+) -> bytes:
+    _validate_owned_r2_worker_dir(ownership, ordinal)
+    worker_fd = ownership.worker_fd(ordinal)
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            "capture.png",
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=worker_fd,
+        )
+        opened = os.fstat(descriptor)
+        entry = os.stat("capture.png", dir_fd=worker_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not _same_inode(opened, entry)
+            or not 0 < opened.st_size <= MAX_PNG_BYTES
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                f"{label} entry does not match its retained descriptor",
+            )
+        chunks: list[bytes] = []
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                _fail("VISTA_HOME_REVIEW_PNG_TRUNCATED", f"{label} ended early")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            _fail("VISTA_HOME_REVIEW_PNG_TOO_LARGE", f"{label} grew while reading")
+        final = os.fstat(descriptor)
+        final_entry = os.stat(
+            "capture.png",
+            dir_fd=worker_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not _same_inode(opened, final)
+            or not _same_inode(final, final_entry)
+            or opened.st_size != final.st_size
+            or opened.st_mtime_ns != final.st_mtime_ns
+            or opened.st_ctime_ns != final.st_ctime_ns
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                f"{label} changed while reading",
+            )
+        raw = b"".join(chunks)
+    except OSError as exc:
+        _fail("VISTA_HOME_REVIEW_PATH_MISSING", f"{label} is unavailable: {exc}")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    _validate_owned_r2_worker_dir(ownership, ordinal)
+    return raw
+
+
+def _validate_owned_scratch(
+    ownership: ScratchOwnership,
+    *,
+    require_exists: bool = True,
+) -> os.stat_result | None:
+    if not isinstance(ownership, ScratchOwnership):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "scratch cleanup requires an ownership record",
+        )
+    if ownership.capture_profile == R2_CAPTURE_PROFILE:
+        return _validate_owned_r2_scratch(ownership)
+    parent = _existing_directory(ownership.parent, "owned scratch parent")
+    parent_metadata = os.lstat(parent)
+    if (
+        parent_metadata.st_dev != ownership.parent_device
+        or parent_metadata.st_ino != ownership.parent_inode
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch parent device/inode changed",
+            pointer=str(parent),
+        )
+    if ownership.capture_profile == R1_CAPTURE_PROFILE:
+        if parent != LOCAL_SCRATCH_PARENT:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r1 scratch ownership parent differs",
+                pointer=str(parent),
+            )
+        expected_prefix = R1_SCRATCH_PREFIX
+    else:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch ownership capture profile differs",
+        )
+    if (
+        ownership.path.parent != parent
+        or not ownership.path.name.startswith(expected_prefix)
+        or SAFE_LOCAL_PATH_RE.fullmatch(str(ownership.path)) is None
+        or not str(ownership.path).isascii()
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch ownership path differs",
+            pointer=str(ownership.path),
+        )
+    try:
+        metadata = os.lstat(ownership.path)
+    except FileNotFoundError:
+        if not require_exists:
+            return None
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "owned scratch child is missing",
+            pointer=str(ownership.path),
+        )
+        raise AssertionError("unreachable")
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_dev != ownership.device
+        or metadata.st_ino != ownership.inode
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch child device/inode changed",
+            pointer=str(ownership.path),
+        )
+    return metadata
+
+
 def build_receipt(
     inputs: CaptureInputs,
     execution_sha256: str,
     outcomes: Sequence[WorkerOutcome],
+    *,
+    scratch_ownership: ScratchOwnership | None = None,
 ) -> dict[str, Any]:
     _verify_input_pins(inputs)
     _load_json(
@@ -2164,6 +3414,51 @@ def build_receipt(
                 "runtime_observation_status": "pending",
             }
         )
+        if scratch_ownership is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 receipt requires its live scratch ownership record",
+            )
+        _validate_owned_scratch(scratch_ownership)
+        if (
+            scratch_ownership.capture_profile != R2_CAPTURE_PROFILE
+            or scratch_ownership.attempt_root != inputs.attempt_root
+            or scratch_ownership.parent != inputs.scratch_parent
+            or scratch_ownership.policy_root != inputs.scratch_policy_root
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 receipt scratch ownership binding differs",
+            )
+        receipt["scratch"] = {
+            "storage_class": "private_nas_retained_evidence",
+            "policy_root_path_sha256": sha256_bytes(
+                str(scratch_ownership.policy_root).encode("ascii")
+            ),
+            "policy_root_device": os.fstat(
+                scratch_ownership.policy_root_fd
+            ).st_dev,
+            "policy_root_mount_id": scratch_ownership.mount_id,
+            "filesystem_type": scratch_ownership.filesystem_type,
+            "mount_source_sha256": scratch_ownership.mount_source_sha256,
+            "mapped_owner_uid": scratch_ownership.mapped_owner_uid,
+            "parent_path_sha256": sha256_bytes(
+                str(scratch_ownership.parent).encode("ascii")
+            ),
+            "parent_device": scratch_ownership.parent_device,
+            "parent_inode": scratch_ownership.parent_inode,
+            "parent_mount_id": scratch_ownership.mount_id,
+            "owned_child_device": scratch_ownership.device,
+            "owned_child_inode": scratch_ownership.inode,
+            "owned_child_mount_id": scratch_ownership.mount_id,
+            "mode": "0700",
+            "authority_check": "parent_dirfd_o_excl_create_fsync_unlink",
+            "child_creation": "unique_mkdirat_eexist_fail",
+            "lifecycle": R2_SCRATCH_LIFECYCLE,
+            "cleanup_policy": R2_SCRATCH_CLEANUP_POLICY,
+            "cleanup_status_at_receipt": "retained",
+            "scratch_absolute_path_disclosed": False,
+        }
         receipt["verification"] = {
             "exact_review_shot_set": True,
             "exact_materialized_r2_camera_actor_set": True,
@@ -2178,7 +3473,9 @@ def build_receipt(
             "caller_python_allowed": False,
             "six_sequential_owned_editor_children": True,
             "one_native_highres_shot_per_child": True,
-            "native_png_private_local_scratch": True,
+            "native_png_private_nas_retained_evidence": True,
+            "scratch_retained_append_only": True,
+            "scratch_cleanup_descriptor_close_only": True,
             "native_and_final_bytes_equal": True,
             "near_field_clearance_observation": "pending",
             "foreground_occlusion_observation": "pending",
@@ -2189,37 +3486,256 @@ def build_receipt(
     return receipt
 
 
-def _create_scratch_root(inputs: CaptureInputs) -> Path:
-    parent = _existing_directory(LOCAL_SCRATCH_PARENT, "local scratch parent")
-    scratch = Path(tempfile.mkdtemp(prefix="vista-home-review-", dir=str(parent)))
-    if SAFE_LOCAL_PATH_RE.fullmatch(str(scratch)) is None or not str(scratch).isascii():
-        shutil.rmtree(scratch, ignore_errors=True)
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is not safe ASCII")
-    if scratch.parent != parent or stat.S_IMODE(os.lstat(scratch).st_mode) != 0o700:
-        shutil.rmtree(scratch, ignore_errors=True)
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is not private local storage")
+def _create_scratch_root(inputs: CaptureInputs) -> ScratchOwnership:
+    if _is_r2(inputs):
+        return _create_r2_scratch_root(inputs)
+    parent = _existing_directory(
+        LOCAL_SCRATCH_PARENT,
+        "local scratch parent",
+    )
+    prefix = R1_SCRATCH_PREFIX
+    parent_metadata = os.lstat(parent)
     try:
-        scratch.relative_to(inputs.attempt_root)
-    except ValueError:
-        return scratch
-    shutil.rmtree(scratch, ignore_errors=True)
-    _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is inside the UE attempt")
-    raise AssertionError("unreachable")
+        scratch = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            f"cannot create unique scratch child: {exc}",
+            pointer=str(parent),
+        )
+        raise AssertionError("unreachable") from exc
+    scratch_fd = -1
+    try:
+        _, scratch_fd, _ = _open_directory_fd(
+            scratch,
+            "host-created scratch child",
+        )
+        metadata = _require_private_directory_fd(
+            scratch_fd,
+            "host-created scratch child",
+        )
+        if not _same_inode(metadata, os.lstat(scratch)):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "host-created scratch child changed while securing it",
+                pointer=str(scratch),
+            )
+    finally:
+        if scratch_fd >= 0:
+            os.close(scratch_fd)
+    ownership = ScratchOwnership(
+        path=scratch,
+        parent=parent,
+        attempt_root=inputs.attempt_root,
+        capture_profile=inputs.capture_profile,
+        parent_device=parent_metadata.st_dev,
+        parent_inode=parent_metadata.st_ino,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+    )
+    try:
+        if (
+            scratch.parent != parent
+            or not scratch.name.startswith(prefix)
+            or SAFE_LOCAL_PATH_RE.fullmatch(str(scratch)) is None
+            or not str(scratch).isascii()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or scratch.resolve(strict=True) != scratch
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "host-created scratch child is not canonical private storage",
+                pointer=str(scratch),
+            )
+        if (
+            os.lstat(parent).st_dev != ownership.parent_device
+            or os.lstat(parent).st_ino != ownership.parent_inode
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "scratch parent changed during child creation",
+                pointer=str(parent),
+            )
+        try:
+            scratch.relative_to(inputs.attempt_root)
+        except ValueError:
+            pass
+        else:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "host-created scratch child is inside the UE attempt",
+                pointer=str(scratch),
+            )
+        _validate_owned_scratch(ownership)
+        return ownership
+    except ReviewCaptureError:
+        try:
+            _remove_scratch_root(ownership)
+        except ReviewCaptureError:
+            pass
+        raise
+
+
+def _create_r2_scratch_root(inputs: CaptureInputs) -> ScratchOwnership:
+    authority = inputs.scratch_authority
+    if authority is None:
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "r2 capture lost its scratch authority")
+    _validate_r2_scratch_authority(authority)
+    name = f"{R2_SCRATCH_PREFIX}{secrets.token_hex(16)}"
+    created = False
+    created_metadata: os.stat_result | None = None
+    child_fd = -1
+    policy_root_fd = -1
+    parent_fd = -1
+    try:
+        os.mkdir(name, 0o700, dir_fd=authority.parent_fd)
+        created = True
+        child_fd, _ = _open_directory_entry_at(
+            authority.parent_fd,
+            name,
+            "r2 scratch child",
+        )
+        child = _require_private_directory_fd(child_fd, "r2 scratch child")
+        created_metadata = os.stat(
+            name,
+            dir_fd=authority.parent_fd,
+            follow_symlinks=False,
+        )
+        if not _same_inode(child, created_metadata):
+            raise OSError("r2 scratch child changed while opening")
+        os.fsync(authority.parent_fd)
+        policy_root_fd = os.dup(authority.policy_root_fd)
+        parent_fd = os.dup(authority.parent_fd)
+        ownership = ScratchOwnership(
+            path=authority.parent / name,
+            parent=authority.parent,
+            attempt_root=inputs.attempt_root,
+            capture_profile=R2_CAPTURE_PROFILE,
+            parent_device=authority.parent_stat.st_dev,
+            parent_inode=authority.parent_stat.st_ino,
+            device=child.st_dev,
+            inode=child.st_ino,
+            policy_root=authority.policy_root,
+            policy_root_fd=policy_root_fd,
+            parent_fd=parent_fd,
+            child_fd=child_fd,
+            parent_relative_parts=authority.parent_relative_parts,
+            mount_id=authority.mount_id,
+            filesystem_type=authority.filesystem_type,
+            mount_source_sha256=authority.mount_source_sha256,
+            mapped_owner_uid=authority.policy_root_stat.st_uid,
+        )
+        _validate_owned_r2_scratch(ownership)
+        created = False
+        policy_root_fd = -1
+        parent_fd = -1
+        child_fd = -1
+        return ownership
+    except (OSError, ReviewCaptureError) as exc:
+        for descriptor in (parent_fd, policy_root_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+        if child_fd >= 0:
+            os.close(child_fd)
+        if isinstance(exc, ReviewCaptureError):
+            if created:
+                raise ReviewCaptureError(
+                    exc.code,
+                    f"{exc.detail}; append-only partial evidence was retained",
+                    pointer=exc.pointer,
+                ) from exc
+            raise
+        detail = f"cannot create r2 scratch child: {exc}"
+        if created:
+            detail = f"{detail}; append-only partial evidence was retained"
+        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", detail)
 
 
 def _prepare_worker_runs(
     inputs: CaptureInputs,
     execution_sha256: str,
-    scratch_root: Path,
+    scratch: ScratchOwnership | Path,
 ) -> tuple[WorkerRun, ...]:
+    if _is_r2(inputs):
+        if not isinstance(scratch, ScratchOwnership):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 worker preparation requires retained scratch ownership",
+            )
+        scratch_ownership: ScratchOwnership | None = scratch
+        scratch_root = scratch.path
+    else:
+        scratch_ownership = (
+            scratch if isinstance(scratch, ScratchOwnership) else None
+        )
+        scratch_root = scratch.path if isinstance(scratch, ScratchOwnership) else scratch
     workers: list[WorkerRun] = []
     for ordinal in range(1, len(inputs.cameras) + 1):
         worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
         scratch_dir = scratch_root / f"worker-{ordinal:02d}"
-        os.mkdir(worker_dir, 0o700)
-        os.mkdir(scratch_dir, 0o700)
+        output_workers_fd = -1
+        worker_dir_fd = -1
+        try:
+            _, output_workers_fd, _ = _open_directory_fd(
+                inputs.output_dir / WORKERS_DIR,
+                "review output workers directory",
+            )
+            worker_dir_fd, _ = _mkdir_private_directory_at(
+                output_workers_fd,
+                f"{ordinal:02d}",
+                f"review output worker directory {ordinal}",
+            )
+        finally:
+            if worker_dir_fd >= 0:
+                os.close(worker_dir_fd)
+            if output_workers_fd >= 0:
+                os.close(output_workers_fd)
+        if _is_r2(inputs):
+            assert scratch_ownership is not None
+            _validate_owned_r2_scratch(scratch_ownership)
+            if scratch_ownership.child_fd is None:
+                raise AssertionError("validated r2 child descriptor is missing")
+            scratch_name = f"worker-{ordinal:02d}"
+            scratch_dir_fd = -1
+            try:
+                scratch_dir_fd, _ = _mkdir_private_directory_at(
+                    scratch_ownership.child_fd,
+                    scratch_name,
+                    f"r2 worker directory {ordinal}",
+                )
+                scratch_ownership.register_worker_fd(ordinal, scratch_dir_fd)
+                scratch_dir_fd = -1
+                _validate_owned_r2_worker_dir(scratch_ownership, ordinal)
+            finally:
+                if scratch_dir_fd >= 0:
+                    os.close(scratch_dir_fd)
+        else:
+            scratch_root_fd = -1
+            scratch_dir_fd = -1
+            try:
+                _, scratch_root_fd, _ = _open_directory_fd(
+                    scratch_root,
+                    "local scratch root",
+                )
+                scratch_dir_fd, _ = _mkdir_private_directory_at(
+                    scratch_root_fd,
+                    f"worker-{ordinal:02d}",
+                    f"local scratch worker directory {ordinal}",
+                )
+            finally:
+                if scratch_dir_fd >= 0:
+                    os.close(scratch_dir_fd)
+                if scratch_root_fd >= 0:
+                    os.close(scratch_root_fd)
         scratch_png = scratch_dir / "capture.png"
-        manifest = build_worker_execution(inputs, execution_sha256, ordinal, scratch_png)
+        manifest = build_worker_execution(
+            inputs,
+            execution_sha256,
+            ordinal,
+            scratch_png,
+            scratch_ownership=scratch_ownership,
+        )
         manifest_raw = canonical_json(manifest)
         manifest_path = worker_dir / EXECUTION_FILE
         _write_exclusive(manifest_path, manifest_raw)
@@ -2235,29 +3751,58 @@ def _prepare_worker_runs(
                 result_path=worker_dir / UE_RESULT_FILE,
                 editor_log=worker_dir / EDITOR_LOG_FILE,
                 editor_stdout=worker_dir / EDITOR_STDOUT_FILE,
+                scratch_ownership=scratch_ownership,
             )
         )
     return tuple(workers)
 
 
-def _remove_scratch_root(path: Path) -> None:
-    if (
-        path.parent != LOCAL_SCRATCH_PARENT
-        or not path.name.startswith("vista-home-review-")
-        or SAFE_LOCAL_PATH_RE.fullmatch(str(path)) is None
-    ):
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "refusing to remove an unowned scratch root")
-    shutil.rmtree(path)
+def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:
+    return (first.st_dev, first.st_ino, stat.S_IFMT(first.st_mode)) == (
+        second.st_dev,
+        second.st_ino,
+        stat.S_IFMT(second.st_mode),
+    )
+
+
+def _remove_scratch_root(ownership: ScratchOwnership) -> None:
+    if ownership.capture_profile == R2_CAPTURE_PROFILE:
+        ownership.close()
+        return
+    _validate_owned_scratch(ownership)
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "platform cannot safely remove the owned scratch child",
+        )
+    try:
+        shutil.rmtree(ownership.path)
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            f"cannot remove owned scratch child: {exc}",
+            pointer=str(ownership.path),
+        )
+    if os.path.lexists(ownership.path):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "owned scratch child remains after cleanup",
+            pointer=str(ownership.path),
+        )
 
 
 def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha256: str) -> dict[str, Any]:
     """Run six owned Unreal children sequentially and accept their exact PNG bytes."""
 
     _prepare_output(inputs, execution_raw)
-    scratch_root: Path | None = None
+    scratch_ownership: ScratchOwnership | None = None
     try:
-        scratch_root = _create_scratch_root(inputs)
-        workers = _prepare_worker_runs(inputs, execution_sha256, scratch_root)
+        scratch_ownership = _create_scratch_root(inputs)
+        workers = _prepare_worker_runs(
+            inputs,
+            execution_sha256,
+            scratch_ownership,
+        )
         outcomes: list[WorkerOutcome] = []
         for worker in workers:
             _verify_input_pins(inputs)
@@ -2277,7 +3822,12 @@ def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha25
                     image=image,
                 )
             )
-        receipt = build_receipt(inputs, execution_sha256, outcomes)
+        receipt = build_receipt(
+            inputs,
+            execution_sha256,
+            outcomes,
+            scratch_ownership=scratch_ownership,
+        )
         receipt_raw = canonical_json(receipt)
         receipt_path = inputs.output_dir / RECEIPT_FILE
         _write_exclusive(receipt_path, receipt_raw)
@@ -2288,11 +3838,12 @@ def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha25
             "image_count": len(receipt["capture"]["images"]),
         }
     finally:
-        if scratch_root is not None and scratch_root.exists():
-            _remove_scratch_root(scratch_root)
+        if scratch_ownership is not None:
+            _remove_scratch_root(scratch_ownership)
 
 
 def _host_main(args: argparse.Namespace) -> int:
+    inputs: CaptureInputs | None = None
     try:
         inputs = validate_inputs(args)
         execution = build_execution(inputs)
@@ -2324,6 +3875,9 @@ def _host_main(args: argparse.Namespace) -> int:
     except ReviewCaptureError as exc:
         sys.stderr.buffer.write(canonical_json({"status": "failed", "error": exc.public_dict()}))
         return 2
+    finally:
+        if inputs is not None:
+            inputs.close()
 
 
 def _angle_delta(first: float, second: float) -> float:
@@ -2393,7 +3947,7 @@ def _validate_aggregate_worker_inputs(
         "policy",
     }
     if is_r2:
-        expected_fields.add("visual_profile")
+        expected_fields.update({"visual_profile", "scratch"})
     expected_policy = {
         "append_only_output": True,
         "caller_python_allowed": False,
@@ -2405,11 +3959,17 @@ def _validate_aggregate_worker_inputs(
         "native_png_uses_private_local_scratch": True,
     }
     if is_r2:
+        del expected_policy["native_png_uses_private_local_scratch"]
         expected_policy.update(
             {
                 "visual_profile_sha256_required": True,
                 "graphics_adapter_zero_required": True,
                 "runtime_camera_observations_required": True,
+                "scratch_policy_root_required": True,
+                "scratch_parent_required": True,
+                "native_png_uses_private_nas_retained_evidence": True,
+                "scratch_retained_append_only": True,
+                "scratch_cleanup_descriptor_close_only": True,
             }
         )
     if (
@@ -2484,6 +4044,8 @@ def _validate_aggregate_worker_inputs(
     if plan.get("content_digest") != build_plan["content_digest"]:
         _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker build plan content digest differs")
     attempt_root = _existing_directory(Path(execution.get("attempt_root", "")), "attempt root")
+    if is_r2:
+        _validate_r2_scratch_parent_binding(execution.get("scratch"))
     visual_profile_sha256: str | None = None
     visual_profile_content_digest: str | None = None
     if is_r2:
@@ -2619,11 +4181,21 @@ def _load_worker_execution() -> tuple[dict[str, Any], dict[str, Any], str]:
         "at_most_one_native_highres_shot": True,
         "host_accepts_and_copies_png": True,
     }
+    worker_schema = worker.get("schema_version")
+    expected_worker_keys = {
+        "schema_version",
+        "aggregate_execution",
+        "ordinal",
+        "camera",
+        "scratch_png",
+        "artifacts",
+        "policy",
+    }
+    if worker_schema == R2_WORKER_EXECUTION_SCHEMA:
+        expected_worker_keys.add("scratch_capability")
     if (
-        set(worker)
-        != {"schema_version", "aggregate_execution", "ordinal", "camera", "scratch_png", "artifacts", "policy"}
-        or worker.get("schema_version")
-        not in {WORKER_EXECUTION_SCHEMA, R2_WORKER_EXECUTION_SCHEMA}
+        set(worker) != expected_worker_keys
+        or worker_schema not in {WORKER_EXECUTION_SCHEMA, R2_WORKER_EXECUTION_SCHEMA}
         or worker.get("policy") != expected_worker_policy
     ):
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker execution schema or policy differs")
@@ -2661,6 +4233,16 @@ def _load_worker_execution() -> tuple[dict[str, Any], dict[str, Any], str]:
         ordinal=ordinal,
         attempt_root=Path(execution["attempt_root"]),
         require_parent=True,
+        r2_scratch_binding=(
+            execution.get("scratch")
+            if execution.get("schema_version") == R2_EXECUTION_SCHEMA
+            else None
+        ),
+        r2_worker_binding=(
+            worker.get("scratch_capability")
+            if execution.get("schema_version") == R2_EXECUTION_SCHEMA
+            else None
+        ),
     )
     artifacts = worker.get("artifacts")
     if not isinstance(artifacts, Mapping) or set(artifacts) != {
@@ -2676,7 +4258,14 @@ def _load_worker_execution() -> tuple[dict[str, Any], dict[str, Any], str]:
     for key, expected_path in expected_artifacts.items():
         if _safe_execution_child(artifacts[key], output_root, key) != expected_path:
             _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", f"worker {key} path differs")
-    if expected_artifacts["ue_result"].exists() or expected_artifacts["final_image"].exists() or scratch_png.exists():
+    if (
+        expected_artifacts["ue_result"].exists()
+        or expected_artifacts["final_image"].exists()
+        or (
+            execution.get("schema_version") != R2_EXECUTION_SCHEMA
+            and scratch_png.exists()
+        )
+    ):
         _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "worker output already exists before capture")
     return execution, worker, expected_sha
 
@@ -3010,6 +4599,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--visual-profile-sha256",
         help="lowercase SHA-256 pin paired with --visual-profile",
+    )
+    parser.add_argument(
+        "--scratch-policy-root",
+        help=(
+            "approved private 0700 NFS/NFS4 policy root for append-only "
+            "retained r2 evidence; rejected by fixed_r1"
+        ),
+    )
+    parser.add_argument(
+        "--scratch-parent",
+        help=(
+            "existing private 0700 same-mount directory below "
+            "--scratch-policy-root; r2 children are retained and cleanup "
+            "closes descriptors only"
+        ),
     )
     parser.add_argument("--display", required=True, help="local X11 display, for example :117")
     parser.add_argument("--graphics-adapter", type=int, default=0, help="bounded Unreal graphics adapter index")

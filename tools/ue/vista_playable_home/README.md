@@ -100,3 +100,51 @@ are updated under one publication lock only after both commandlet receipts and
 markers pass. Each apply owns its attempt through an unguessable sentinel and
 reaps its UE process group on timeout or interruption; a failed or partial
 attempt remains quarantined and cannot replace either pointer.
+
+## Realistic r2 review capture
+
+The production r2 capture invocation must pass both the selected profile and
+its exact visual-profile byte pin. It must also name an approved private NAS
+policy root and a private scratch parent below that root; both directories
+must already be mode `0700`, have the same NAS-mapped owner, and resolve to the
+same `st_dev` and Linux `mnt_id`. The mount identity is accepted only when
+`/proc/self/mountinfo` reports `nfs` or `nfs4`; the execution binding and
+receipt seal the filesystem type and a SHA-256 of the mount source, never the
+raw source. The scratch and UE-attempt trees must not contain one another.
+
+```bash
+uv run --offline --project tools python \
+  tools/ue/vista_playable_home/capture_review_views.py \
+  --attempt-root /abs/nas/run/ue/attempt-01 \
+  --project /abs/nas/run/ue/attempt-01/project/VistaPlayableHome.uproject \
+  --build-plan /abs/nas/run/ue/attempt-01/contracts/build-plan.json \
+  --build-plan-sha256 <build-plan-file-sha256> \
+  --map-path /Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome \
+  --unreal-editor /abs/UnrealEngine/Engine/Binaries/Linux/UnrealEditor \
+  --output-dir /abs/nas/run/ue/attempt-01/review-cameras/attempt-01 \
+  --capture-profile realistic_interior_r2 \
+  --visual-profile /abs/nas/run/ue/attempt-01/contracts/visual-profile.json \
+  --visual-profile-sha256 <visual-profile-file-sha256> \
+  --scratch-policy-root /abs/nas/approved-runs \
+  --scratch-parent /abs/nas/approved-runs/run-id/review-scratch \
+  --display :119 --graphics-adapter 0 --apply
+```
+
+Validation retains `O_DIRECTORY|O_NOFOLLOW` descriptors for the approved
+root, opens every parent component relative to that root with
+`O_DIRECTORY|O_NOFOLLOW`, and proves parent control with a dirfd-relative
+exclusive token. Each r2 attempt creates one append-only retained evidence
+child. Worker directories are created relative to its retained descriptor,
+and the host opens native PNGs relative to retained worker descriptors for
+proof and acceptance; Unreal receives the absolute pathname only as an output
+hint.
+
+R2 does not recursively delete this evidence. Finalization is explicitly
+`descriptor_close_only`, is idempotent, and leaves the child and native PNGs
+retained under the caller-selected parent. The receipt records lifecycle
+`append_only_retained_evidence`, cleanup status `retained`, and never claims
+replacement-preserving deletion. Operators may apply a separately reviewed
+retention policy after the evidence is no longer needed.
+The r2 receipt omits only the scratch absolute paths; other evidence paths in
+the receipt remain intentionally explicit. The `fixed_r1` command and receipt
+contract remain unchanged and reject both r2 scratch options.

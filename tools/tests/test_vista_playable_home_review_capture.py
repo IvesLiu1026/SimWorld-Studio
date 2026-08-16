@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import binascii
 import copy
+import dataclasses
 import inspect
 import json
 import os
@@ -27,6 +28,14 @@ PACK = ROOT / "world_packs/vista_playable_home_r1"
 R2_PROFILE_SOURCE = (
     PACK / "visual_profiles" / "realistic_interior_r2.json"
 )
+MOCK_NFS_SOURCE_SHA256 = "e" * 64
+
+
+def mkdir_private(path: pathlib.Path, *, parents: bool = False) -> None:
+    """Build a 0700 fixture even on NAS mounts with inheritable default ACLs."""
+
+    path.mkdir(mode=0o700, parents=parents)
+    path.chmod(0o700)
 
 
 def transform(seed: int) -> dict:
@@ -126,9 +135,26 @@ class ReviewCameraPlanTests(unittest.TestCase):
         destinations = {action.dest for action in parser._actions}
         self.assertFalse({"script", "python", "python_script", "execute_python_script"} & destinations)
         self.assertTrue(
-            {"capture_profile", "visual_profile", "visual_profile_sha256"}
+            {
+                "capture_profile",
+                "visual_profile",
+                "visual_profile_sha256",
+                "scratch_policy_root",
+                "scratch_parent",
+            }
             <= destinations
         )
+        runbook = (
+            ROOT / "tools/ue/vista_playable_home/README.md"
+        ).read_text(encoding="utf-8")
+        for option in (
+            "--capture-profile realistic_interior_r2",
+            "--visual-profile ",
+            "--visual-profile-sha256 ",
+            "--scratch-policy-root ",
+            "--scratch-parent ",
+        ):
+            self.assertIn(option, runbook)
 
         root = pathlib.Path("/tmp/vista-review-fixture")
         inputs = capture.CaptureInputs(
@@ -170,7 +196,25 @@ class ReviewCameraPlanTests(unittest.TestCase):
             {"width", "height", "room_kinds", "cameras"},
         )
         self.assertNotIn("visual_profile", execution)
+        self.assertNotIn("scratch", execution)
         self.assertNotIn("graphics_adapter", execution["engine"])
+        self.assertTrue(
+            execution["policy"]["native_png_uses_private_local_scratch"]
+        )
+        self.assertNotIn(
+            "native_png_uses_private_nas_retained_evidence",
+            execution["policy"],
+        )
+        stable_r1 = dataclasses.replace(
+            inputs,
+            script=pathlib.Path("/stable/capture_review_views.py"),
+        )
+        self.assertEqual(
+            capture.sha256_bytes(
+                capture.canonical_json(capture.build_execution(stable_r1))
+            ),
+            "5a6c2e503b579cd072d7c4f92e498d9fda0b85b11eeff04128e86a084de8dc1d",
+        )
 
     def test_worker_uses_post_tick_fixed_actor_capture(self) -> None:
         source = inspect.getsource(capture._unreal_worker)
@@ -227,7 +271,97 @@ class ReviewPngValidationTests(unittest.TestCase):
                 capture.inspect_png(corrupt, expected_width=16, expected_height=16)
 
 
+class MountInfoParserTests(unittest.TestCase):
+    @staticmethod
+    def mountinfo(
+        filesystem_type: bytes = b"nfs4",
+        *,
+        source: bytes = b"server:/export\\040with-space",
+    ) -> bytes:
+        return (
+            b"680 42 0:99 / /mnt/NAS2 rw,relatime shared:7 - "
+            + filesystem_type
+            + b" "
+            + source
+            + b" rw,vers=4.2\n"
+        )
+
+    def test_strict_mountinfo_decodes_escapes_and_closes_filesystem_policy(
+        self,
+    ) -> None:
+        expected_source = capture.sha256_bytes(b"server:/export with-space")
+        for filesystem_type in (b"nfs", b"nfs4", b"ext4"):
+            with self.subTest(filesystem_type=filesystem_type):
+                identity = capture._parse_mountinfo_identity(
+                    self.mountinfo(filesystem_type),
+                    680,
+                )
+                self.assertEqual(
+                    identity,
+                    (680, filesystem_type.decode("ascii"), expected_source),
+                )
+                if filesystem_type == b"ext4":
+                    with self.assertRaisesRegex(
+                        capture.ReviewCaptureError,
+                        "STORAGE_INVALID",
+                    ):
+                        capture._require_r2_nas_mount(identity)
+                else:
+                    capture._require_r2_nas_mount(identity)
+
+    def test_strict_mountinfo_rejects_duplicate_and_malformed_records(self) -> None:
+        valid = self.mountinfo()
+        malformed = {
+            "duplicate": valid + valid,
+            "separator_before_fixed_fields": (
+                b"680 42 0:99 / /mnt/NAS2 - nfs4 server:/export rw\n"
+            ),
+            "extra_post_field": valid.rstrip(b"\n") + b" extra\n",
+            "invalid_parent_id": valid.replace(b"680 42 ", b"680 zero "),
+            "invalid_major_minor": valid.replace(b"0:99", b"0:x"),
+            "relative_root": valid.replace(b"0:99 / /mnt", b"0:99 relative /mnt"),
+            "relative_mount_point": valid.replace(
+                b"/ /mnt/NAS2", b"/ relative"
+            ),
+            "invalid_escape": valid.replace(b"\\040", b"\\04x"),
+            "unrecognized_optional": valid.replace(
+                b"shared:7 -", b"future:7 -"
+            ),
+            "empty_option": valid.replace(b"rw,relatime", b"rw,,relatime"),
+        }
+        for label, raw in malformed.items():
+            with self.subTest(label=label), self.assertRaises(
+                capture.ReviewCaptureError
+            ):
+                capture._parse_mountinfo_identity(raw, 680)
+
+
 class ReviewCaptureInputTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._mount_identity_patcher = mock.patch.object(
+            capture,
+            "_fd_mount_identity",
+            side_effect=self._mock_nfs_mount_identity,
+        )
+        self._mount_identity_patcher.start()
+        self._r2_allowed_temp = tempfile.TemporaryDirectory()
+        self.r2_allowed_run_root = pathlib.Path(
+            self._r2_allowed_temp.name
+        ).resolve()
+        self.r2_allowed_run_root.chmod(0o700)
+
+    def tearDown(self) -> None:
+        self._mount_identity_patcher.stop()
+        self._r2_allowed_temp.cleanup()
+
+    @staticmethod
+    def _mock_nfs_mount_identity(descriptor: int) -> tuple[int, str, str]:
+        return (
+            capture._fd_mount_id(descriptor),
+            "nfs4",
+            MOCK_NFS_SOURCE_SHA256,
+        )
+
     def make_args(self, root: pathlib.Path) -> argparse.Namespace:
         project_dir = root / "project"
         contracts_dir = root / "contracts"
@@ -335,6 +469,10 @@ class ReviewCaptureInputTests(unittest.TestCase):
         args.visual_profile = str(profile_path)
         args.visual_profile_sha256 = profile_sha256
         args.display = capture.R2_DISPLAY
+        scratch_parent = self.r2_allowed_run_root / f"run-{root.name}"
+        mkdir_private(scratch_parent)
+        args.scratch_policy_root = str(self.r2_allowed_run_root)
+        args.scratch_parent = str(scratch_parent)
         return args
 
     def test_inputs_require_real_unreal_name_and_fresh_append_only_output(self) -> None:
@@ -404,6 +542,44 @@ class ReviewCaptureInputTests(unittest.TestCase):
             )
             self.assertEqual(execution["engine"]["graphics_adapter"], 0)
             self.assertEqual(execution["engine"]["display"], ":119")
+            self.assertEqual(
+                execution["scratch"]["storage_class"],
+                "private_nas_retained_evidence",
+            )
+            self.assertEqual(
+                execution["scratch"]["lifecycle"],
+                capture.R2_SCRATCH_LIFECYCLE,
+            )
+            self.assertEqual(
+                execution["scratch"]["cleanup_policy"],
+                capture.R2_SCRATCH_CLEANUP_POLICY,
+            )
+            self.assertFalse(
+                execution["scratch"][
+                    "receipt_discloses_scratch_absolute_path"
+                ]
+            )
+            self.assertNotIn(
+                "receipt_discloses_absolute_path",
+                execution["scratch"],
+            )
+            self.assertNotIn(
+                args.scratch_parent,
+                capture.canonical_json(execution).decode("utf-8"),
+            )
+            self.assertTrue(
+                execution["policy"][
+                    "native_png_uses_private_nas_retained_evidence"
+                ]
+            )
+            self.assertTrue(execution["policy"]["scratch_retained_append_only"])
+            self.assertTrue(
+                execution["policy"]["scratch_cleanup_descriptor_close_only"]
+            )
+            self.assertNotIn(
+                "native_png_uses_private_local_scratch",
+                execution["policy"],
+            )
             self.assertEqual(
                 execution["visual_profile"]["sha256"],
                 args.visual_profile_sha256,
@@ -511,6 +687,497 @@ class ReviewCaptureInputTests(unittest.TestCase):
             ):
                 capture.validate_inputs(args)
 
+    def test_r2_scratch_parent_is_required_closed_and_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            valid_parent = pathlib.Path(args.scratch_parent)
+
+            args.scratch_policy_root = None
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "requires --scratch-policy-root and --scratch-parent",
+            ):
+                capture.validate_inputs(args)
+
+            args.scratch_policy_root = str(self.r2_allowed_run_root)
+            args.scratch_parent = None
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "requires --scratch-policy-root and --scratch-parent",
+            ):
+                capture.validate_inputs(args)
+
+            args.scratch_parent = str(valid_parent)
+            valid_parent.chmod(0o755)
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "mode 0700",
+            ):
+                capture.validate_inputs(args)
+            valid_parent.chmod(0o700)
+
+            link = self.r2_allowed_run_root / "linked-scratch"
+            link.symlink_to(valid_parent, target_is_directory=True)
+            args.scratch_parent = str(link)
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "SYMLINK_REJECTED",
+            ):
+                capture.validate_inputs(args)
+
+            args.scratch_parent = str(
+                valid_parent / ".." / "escaped-scratch"
+            )
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "absolute and normalized",
+            ):
+                capture.validate_inputs(args)
+
+            args.scratch_parent = "/tmp"
+            with self.assertRaises(capture.ReviewCaptureError):
+                capture.validate_inputs(args)
+
+            args.scratch_parent = os.environ["HOME"]
+            with self.assertRaises(capture.ReviewCaptureError):
+                capture.validate_inputs(args)
+
+            r1_root = root / "r1"
+            r1_root.mkdir()
+            r1_args = self.make_args(r1_root)
+            r1_args.scratch_policy_root = str(self.r2_allowed_run_root)
+            r1_args.scratch_parent = str(valid_parent)
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "fixed r1 capture does not accept",
+            ):
+                capture.validate_inputs(r1_args)
+
+    def test_r2_policy_accepts_mapped_nas_owner_but_rejects_mount_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+
+            with mock.patch.object(os, "geteuid", return_value=987654321):
+                inputs = capture.validate_inputs(args)
+            execution = capture.build_execution(inputs)
+            self.assertEqual(
+                execution["scratch"]["mapped_owner_uid"],
+                self.r2_allowed_run_root.stat().st_uid,
+            )
+            self.assertEqual(
+                execution["scratch"]["policy_root_mount_id"],
+                execution["scratch"]["parent_mount_id"],
+            )
+            self.assertEqual(execution["scratch"]["filesystem_type"], "nfs4")
+            self.assertEqual(
+                execution["scratch"]["mount_source_sha256"],
+                MOCK_NFS_SOURCE_SHA256,
+            )
+
+            parent_identity = (
+                pathlib.Path(args.scratch_parent).stat().st_dev,
+                pathlib.Path(args.scratch_parent).stat().st_ino,
+            )
+
+            def nested_mount(descriptor: int) -> tuple[int, str, str]:
+                metadata = os.fstat(descriptor)
+                observed = self._mock_nfs_mount_identity(descriptor)
+                if (metadata.st_dev, metadata.st_ino) == parent_identity:
+                    return observed[0] + 1, observed[1], observed[2]
+                return observed
+
+            with (
+                mock.patch.object(
+                    capture,
+                    "_fd_mount_identity",
+                    side_effect=nested_mount,
+                ),
+                self.assertRaisesRegex(
+                    capture.ReviewCaptureError,
+                    "MOUNT_MISMATCH",
+                ),
+            ):
+                capture.validate_inputs(args)
+
+            with (
+                mock.patch.object(
+                    capture,
+                    "_fd_mount_identity",
+                    side_effect=lambda descriptor: (
+                        capture._fd_mount_id(descriptor),
+                        "ext4",
+                        "f" * 64,
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    capture.ReviewCaptureError,
+                    "STORAGE_INVALID",
+                ),
+            ):
+                capture.validate_inputs(args)
+
+    def test_r2_scratch_and_attempt_trees_are_disjoint_both_ways(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            policy = workspace / "policy"
+            mkdir_private(policy)
+            parent = policy / "scratch"
+            mkdir_private(parent)
+            nested_attempt = parent / "attempt"
+            mkdir_private(nested_attempt)
+            args = self.make_r2_args(nested_attempt)
+            args.scratch_policy_root = str(policy)
+            args.scratch_parent = str(parent)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "trees must be disjoint",
+            ):
+                capture.validate_inputs(args)
+
+        with tempfile.TemporaryDirectory() as directory:
+            attempt = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(attempt)
+            nested_policy = attempt / "scratch-policy"
+            mkdir_private(nested_policy)
+            nested_parent = nested_policy / "scratch"
+            mkdir_private(nested_parent)
+            args.scratch_policy_root = str(nested_policy)
+            args.scratch_parent = str(nested_parent)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "trees must be disjoint",
+            ):
+                capture.validate_inputs(args)
+
+    def test_r2_close_is_idempotent_and_retains_append_only_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            inputs = capture.validate_inputs(args)
+            protected = inputs.scratch_parent / "protected"
+            mkdir_private(protected)
+            (protected / "marker").write_bytes(b"keep")
+
+            first = capture._create_scratch_root(inputs)
+            second = capture._create_scratch_root(inputs)
+            self.assertNotEqual(first.path, second.path)
+            self.assertNotEqual((first.device, first.inode), (second.device, second.inode))
+            self.assertEqual(stat.S_IMODE(first.path.stat().st_mode), 0o700)
+            self.assertEqual(first.parent, inputs.scratch_parent)
+            marker = first.path / "retained-marker"
+            marker.write_bytes(b"retain")
+            owned_child_fd = first.child_fd
+            self.assertIsNotNone(owned_child_fd)
+            assert owned_child_fd is not None
+
+            capture._remove_scratch_root(first)
+            self.assertTrue(first.path.is_dir())
+            self.assertEqual(marker.read_bytes(), b"retain")
+            self.assertTrue(first.closed)
+            self.assertIsNone(first.child_fd)
+            self.assertIsNone(first.parent_fd)
+            self.assertIsNone(first.policy_root_fd)
+            self.assertEqual(first.worker_fds, {})
+            probe = os.open("/dev/null", os.O_RDONLY)
+            if probe != owned_child_fd:
+                os.dup2(probe, owned_child_fd)
+                os.close(probe)
+            capture._remove_scratch_root(first)
+            os.fstat(owned_child_fd)
+            os.close(owned_child_fd)
+            self.assertTrue(second.path.is_dir())
+            self.assertTrue((protected / "marker").is_file())
+
+            moved = second.parent / f"moved-{second.path.name}"
+            second.path.rename(moved)
+            mkdir_private(second.path)
+            (second.path / "replacement").write_bytes(b"do-not-delete")
+            capture._remove_scratch_root(second)
+            self.assertTrue((second.path / "replacement").is_file())
+            self.assertTrue(moved.is_dir())
+            self.assertTrue((protected / "marker").is_file())
+
+    def test_r2_child_fchmod_overrides_inherited_default_acl(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            inputs = capture.validate_inputs(args)
+            self.addCleanup(inputs.close)
+            authority = inputs.scratch_authority
+            self.assertIsNotNone(authority)
+            assert authority is not None
+            real_mkdir = os.mkdir
+            inherited_modes: list[int] = []
+
+            def inherit_permissive_default_acl(
+                path: os.PathLike[str] | str,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> None:
+                real_mkdir(path, mode, dir_fd=dir_fd)
+                if (
+                    isinstance(path, str)
+                    and path.startswith(capture.R2_SCRATCH_PREFIX)
+                    and dir_fd == authority.parent_fd
+                ):
+                    os.chmod(path, 0o777, dir_fd=dir_fd)
+                    inherited_modes.append(
+                        stat.S_IMODE(
+                            os.stat(
+                                path,
+                                dir_fd=dir_fd,
+                                follow_symlinks=False,
+                            ).st_mode
+                        )
+                    )
+
+            with mock.patch.object(
+                os,
+                "mkdir",
+                side_effect=inherit_permissive_default_acl,
+            ):
+                ownership = capture._create_scratch_root(inputs)
+            try:
+                self.assertEqual(inherited_modes, [0o777])
+                self.assertIsNotNone(ownership.child_fd)
+                assert ownership.child_fd is not None
+                self.assertEqual(
+                    stat.S_IMODE(os.fstat(ownership.child_fd).st_mode),
+                    0o700,
+                )
+                self.assertEqual(stat.S_IMODE(ownership.path.stat().st_mode), 0o700)
+            finally:
+                capture._remove_scratch_root(ownership)
+            self.assertTrue(ownership.path.is_dir())
+
+    def test_r2_policy_root_swap_is_rejected_after_relative_open(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = pathlib.Path(directory).resolve()
+            attempt = workspace / "attempt"
+            attempt.mkdir()
+            args = self.make_r2_args(attempt)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            policy = workspace / "policy"
+            mkdir_private(policy)
+            parent = policy / "scratch"
+            mkdir_private(parent)
+            args.scratch_policy_root = str(policy)
+            args.scratch_parent = str(parent)
+            moved = workspace / "moved-policy"
+            real_open_relative = capture._open_relative_directory_fd
+            swapped = False
+
+            def swap_policy_after_root_open(
+                root_fd: int,
+                parts: tuple[str, ...],
+                label: str,
+            ) -> tuple[int, os.stat_result]:
+                nonlocal swapped
+                if not swapped and label == "r2 scratch parent":
+                    swapped = True
+                    policy.rename(moved)
+                    mkdir_private(policy)
+                    replacement = policy / "scratch"
+                    mkdir_private(replacement)
+                    (replacement / "replacement").write_bytes(b"do-not-trust")
+                return real_open_relative(root_fd, parts, label)
+
+            with (
+                mock.patch.object(
+                    capture,
+                    "_open_relative_directory_fd",
+                    side_effect=swap_policy_after_root_open,
+                ),
+                self.assertRaisesRegex(
+                    capture.ReviewCaptureError,
+                    "AUTHORITY_MISMATCH",
+                ),
+            ):
+                capture.validate_inputs(args)
+            self.assertTrue(swapped)
+            self.assertEqual(
+                (policy / "scratch" / "replacement").read_bytes(),
+                b"do-not-trust",
+            )
+            self.assertTrue((moved / "scratch").is_dir())
+
+    def test_r2_worker_path_replacement_is_not_host_acceptance_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            inputs = capture.validate_inputs(args)
+            execution_raw = capture.canonical_json(capture.build_execution(inputs))
+            execution_sha = capture.sha256_bytes(execution_raw)
+            capture._prepare_output(inputs, execution_raw)
+            ownership = capture._create_scratch_root(inputs)
+            try:
+                worker = capture._prepare_worker_runs(
+                    inputs,
+                    execution_sha,
+                    ownership,
+                )[0]
+                self.write_fake_worker_success(inputs, worker, seed=3)
+                ue_result, _ = capture._load_worker_result(inputs, worker)
+                moved = ownership.path / "moved-worker-01"
+                worker.scratch_dir.rename(moved)
+                mkdir_private(worker.scratch_dir)
+                (worker.scratch_dir / "capture.png").write_bytes(b"replacement")
+                with self.assertRaisesRegex(
+                    capture.ReviewCaptureError,
+                    "OWNERSHIP_MISMATCH",
+                ):
+                    capture._accept_worker_png(inputs, worker, ue_result)
+                self.assertEqual(
+                    (worker.scratch_dir / "capture.png").read_bytes(),
+                    b"replacement",
+                )
+                self.assertTrue((moved / "capture.png").is_file())
+            finally:
+                capture._remove_scratch_root(ownership)
+            self.assertTrue(ownership.path.is_dir())
+
+    def test_r2_create_failures_retain_partial_child_and_close_opened_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            inputs = capture.validate_inputs(args)
+            self.addCleanup(inputs.close)
+            authority = inputs.scratch_authority
+            self.assertIsNotNone(authority)
+            assert authority is not None
+            real_open = os.open
+            failed_open = False
+
+            def reject_first_child_open(
+                path: os.PathLike[str] | str,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                nonlocal failed_open
+                if (
+                    not failed_open
+                    and isinstance(path, str)
+                    and path.startswith(capture.R2_SCRATCH_PREFIX)
+                    and dir_fd == authority.parent_fd
+                ):
+                    failed_open = True
+                    raise OSError("injected child open failure")
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with (
+                mock.patch.object(os, "open", side_effect=reject_first_child_open),
+                self.assertRaisesRegex(
+                    capture.ReviewCaptureError,
+                    "append-only partial evidence was retained",
+                ),
+            ):
+                capture._create_scratch_root(inputs)
+            self.assertTrue(failed_open)
+            retained = [
+                child
+                for child in inputs.scratch_parent.iterdir()
+                if child.name.startswith(capture.R2_SCRATCH_PREFIX)
+            ]
+            self.assertEqual(len(retained), 1)
+            self.assertTrue(retained[0].is_dir())
+
+            real_fsync = os.fsync
+            failed_fsync = False
+            opened_child_fds: list[int] = []
+
+            def track_child_open(
+                path: os.PathLike[str] | str,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+                if (
+                    isinstance(path, str)
+                    and path.startswith(capture.R2_SCRATCH_PREFIX)
+                    and dir_fd == authority.parent_fd
+                ):
+                    opened_child_fds.append(descriptor)
+                return descriptor
+
+            def reject_first_parent_fsync(descriptor: int) -> None:
+                nonlocal failed_fsync
+                if descriptor == authority.parent_fd and not failed_fsync:
+                    failed_fsync = True
+                    raise OSError("injected parent fsync failure")
+                real_fsync(descriptor)
+
+            with (
+                mock.patch.object(os, "open", side_effect=track_child_open),
+                mock.patch.object(os, "fsync", side_effect=reject_first_parent_fsync),
+                self.assertRaisesRegex(
+                    capture.ReviewCaptureError,
+                    "append-only partial evidence was retained",
+                ),
+            ):
+                capture._create_scratch_root(inputs)
+            self.assertTrue(failed_fsync)
+            self.assertEqual(len(opened_child_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened_child_fds[0])
+            retained = [
+                child
+                for child in inputs.scratch_parent.iterdir()
+                if child.name.startswith(capture.R2_SCRATCH_PREFIX)
+            ]
+            self.assertEqual(len(retained), 2)
+            self.assertTrue(all(child.is_dir() for child in retained))
+
     def test_r2_receipt_never_claims_unmeasured_camera_review(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory).resolve()
@@ -573,7 +1240,16 @@ class ReviewCaptureInputTests(unittest.TestCase):
                 mock.patch.object(capture, "_load_json", return_value=({}, b"")),
                 mock.patch.object(capture, "inspect_png_bytes"),
             ):
-                receipt = capture.build_receipt(inputs, "a" * 64, outcomes)
+                scratch_ownership = capture._create_scratch_root(inputs)
+                try:
+                    receipt = capture.build_receipt(
+                        inputs,
+                        "a" * 64,
+                        outcomes,
+                        scratch_ownership=scratch_ownership,
+                    )
+                finally:
+                    capture._remove_scratch_root(scratch_ownership)
 
             self.assertEqual(receipt["schema_version"], capture.R2_RECEIPT_SCHEMA)
             self.assertEqual(
@@ -582,6 +1258,57 @@ class ReviewCaptureInputTests(unittest.TestCase):
             )
             self.assertEqual(receipt["capture"]["shot_ids"], list(capture.R2_ORDERED_SHOT_IDS))
             self.assertEqual(receipt["capture"]["runtime_observation_status"], "pending")
+            self.assertEqual(
+                receipt["scratch"]["storage_class"],
+                "private_nas_retained_evidence",
+            )
+            self.assertEqual(
+                receipt["scratch"]["lifecycle"],
+                capture.R2_SCRATCH_LIFECYCLE,
+            )
+            self.assertEqual(
+                receipt["scratch"]["cleanup_policy"],
+                capture.R2_SCRATCH_CLEANUP_POLICY,
+            )
+            self.assertEqual(
+                receipt["scratch"]["cleanup_status_at_receipt"],
+                "retained",
+            )
+            self.assertEqual(
+                receipt["scratch"]["policy_root_mount_id"],
+                receipt["scratch"]["parent_mount_id"],
+            )
+            self.assertEqual(
+                receipt["scratch"]["parent_mount_id"],
+                receipt["scratch"]["owned_child_mount_id"],
+            )
+            self.assertEqual(receipt["scratch"]["filesystem_type"], "nfs4")
+            self.assertEqual(
+                receipt["scratch"]["mount_source_sha256"],
+                MOCK_NFS_SOURCE_SHA256,
+            )
+            self.assertFalse(
+                receipt["scratch"]["scratch_absolute_path_disclosed"]
+            )
+            self.assertNotIn("absolute_path_disclosed", receipt["scratch"])
+            self.assertEqual(receipt["attempt_root"], str(inputs.attempt_root))
+            self.assertEqual(receipt["output_root"], str(inputs.output_dir))
+            receipt_text = capture.canonical_json(receipt).decode("utf-8")
+            self.assertNotIn(str(scratch_ownership.path), receipt_text)
+            self.assertNotIn(str(scratch_ownership.parent), receipt_text)
+            self.assertTrue(
+                receipt["verification"][
+                    "native_png_private_nas_retained_evidence"
+                ]
+            )
+            self.assertTrue(receipt["verification"]["scratch_retained_append_only"])
+            self.assertTrue(
+                receipt["verification"]["scratch_cleanup_descriptor_close_only"]
+            )
+            self.assertNotIn(
+                "native_png_private_local_scratch",
+                receipt["verification"],
+            )
             for key in (
                 "near_field_clearance_observation",
                 "foreground_occlusion_observation",
@@ -673,11 +1400,11 @@ class ReviewCaptureInputTests(unittest.TestCase):
             attempt.mkdir()
             inputs = self.make_valid_inputs(attempt)
             local = workspace / "local-scratch"
-            local.mkdir(mode=0o700)
+            mkdir_private(local)
             scratch_root = local / "vista-home-review-fixture"
-            scratch_root.mkdir(mode=0o700)
+            mkdir_private(scratch_root)
             scratch_dir = scratch_root / "worker-04"
-            scratch_dir.mkdir(mode=0o700)
+            mkdir_private(scratch_dir)
             scratch_png = scratch_dir / "capture.png"
 
             with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
@@ -712,7 +1439,7 @@ class ReviewCaptureInputTests(unittest.TestCase):
             attempt.mkdir()
             inputs = self.make_valid_inputs(attempt)
             local = workspace / "local-scratch"
-            local.mkdir(mode=0o700)
+            mkdir_private(local)
             execution_raw = capture.canonical_json(capture.build_execution(inputs))
             execution_sha = capture.sha256_bytes(execution_raw)
             lifecycle: list[tuple[str, int]] = []
@@ -747,6 +1474,10 @@ class ReviewCaptureInputTests(unittest.TestCase):
             self.assertTrue(all(item["native_and_final_sha256_equal"] for item in receipt["capture"]["images"]))
             self.assertFalse((inputs.output_dir / capture.UE_RESULT_FILE).exists())
             self.assertEqual(list(local.iterdir()), [])
+            self.assertNotIn("scratch", receipt)
+            self.assertTrue(
+                receipt["verification"]["native_png_private_local_scratch"]
+            )
             for ordinal in range(1, 7):
                 manifest = json.loads(
                     (inputs.output_dir / capture.WORKERS_DIR / f"{ordinal:02d}" / capture.EXECUTION_FILE).read_text(
@@ -770,7 +1501,7 @@ class ReviewCaptureInputTests(unittest.TestCase):
             attempt.mkdir()
             inputs = self.make_valid_inputs(attempt)
             local = workspace / "local-scratch"
-            local.mkdir(mode=0o700)
+            mkdir_private(local)
             execution_raw = capture.canonical_json(capture.build_execution(inputs))
             execution_sha = capture.sha256_bytes(execution_raw)
             launched: list[int] = []
@@ -802,7 +1533,7 @@ class ReviewCaptureInputTests(unittest.TestCase):
             attempt.mkdir()
             inputs = self.make_valid_inputs(attempt)
             local = workspace / "local-scratch"
-            local.mkdir(mode=0o700)
+            mkdir_private(local)
             execution_raw = capture.canonical_json(capture.build_execution(inputs))
             execution_sha = capture.sha256_bytes(execution_raw)
 
@@ -826,14 +1557,18 @@ class ReviewCaptureInputTests(unittest.TestCase):
             attempt.mkdir()
             inputs = self.make_valid_inputs(attempt)
             local = workspace / "local-scratch"
-            local.mkdir(mode=0o700)
+            mkdir_private(local)
             execution_raw = capture.canonical_json(capture.build_execution(inputs))
             execution_sha = capture.sha256_bytes(execution_raw)
             with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
                 capture._prepare_output(inputs, execution_raw)
-                scratch_root = capture._create_scratch_root(inputs)
+                scratch_ownership = capture._create_scratch_root(inputs)
                 try:
-                    worker = capture._prepare_worker_runs(inputs, execution_sha, scratch_root)[0]
+                    worker = capture._prepare_worker_runs(
+                        inputs,
+                        execution_sha,
+                        scratch_ownership.path,
+                    )[0]
                     self.write_fake_worker_success(inputs, worker, seed=1)
                     ue_result, _sha = capture._load_worker_result(inputs, worker)
                     final = inputs.output_dir / worker.camera["relative_path"]
@@ -843,7 +1578,7 @@ class ReviewCaptureInputTests(unittest.TestCase):
                         capture._accept_worker_png(inputs, worker, ue_result)
                     self.assertEqual(final.read_bytes(), sentinel)
                 finally:
-                    capture._remove_scratch_root(scratch_root)
+                    capture._remove_scratch_root(scratch_ownership)
 
     def test_stable_valid_worker_proof_terminates_owned_child_and_returns_success(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -852,7 +1587,7 @@ class ReviewCaptureInputTests(unittest.TestCase):
             attempt.mkdir()
             inputs = self.make_valid_inputs(attempt)
             local = workspace / "local-scratch"
-            local.mkdir(mode=0o700)
+            mkdir_private(local)
             execution_raw = capture.canonical_json(capture.build_execution(inputs))
             execution_sha = capture.sha256_bytes(execution_raw)
 
@@ -866,9 +1601,13 @@ class ReviewCaptureInputTests(unittest.TestCase):
             process = RunningProcess()
             with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
                 capture._prepare_output(inputs, execution_raw)
-                scratch_root = capture._create_scratch_root(inputs)
+                scratch_ownership = capture._create_scratch_root(inputs)
                 try:
-                    worker = capture._prepare_worker_runs(inputs, execution_sha, scratch_root)[0]
+                    worker = capture._prepare_worker_runs(
+                        inputs,
+                        execution_sha,
+                        scratch_ownership.path,
+                    )[0]
                     self.write_fake_worker_success(inputs, worker, seed=1)
                     worker.editor_stdout.unlink()
                     with (
@@ -888,7 +1627,7 @@ class ReviewCaptureInputTests(unittest.TestCase):
                     self.assertGreaterEqual(probe.call_count, 2)
                     terminate.assert_called_once_with(process)
                 finally:
-                    capture._remove_scratch_root(scratch_root)
+                    capture._remove_scratch_root(scratch_ownership)
 
     def test_partial_or_invalid_worker_proof_cannot_synthesize_success(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -897,15 +1636,19 @@ class ReviewCaptureInputTests(unittest.TestCase):
             attempt.mkdir()
             inputs = self.make_valid_inputs(attempt)
             local = workspace / "local-scratch"
-            local.mkdir(mode=0o700)
+            mkdir_private(local)
             execution_raw = capture.canonical_json(capture.build_execution(inputs))
             execution_sha = capture.sha256_bytes(execution_raw)
 
             with mock.patch.object(capture, "LOCAL_SCRATCH_PARENT", local):
                 capture._prepare_output(inputs, execution_raw)
-                scratch_root = capture._create_scratch_root(inputs)
+                scratch_ownership = capture._create_scratch_root(inputs)
                 try:
-                    worker = capture._prepare_worker_runs(inputs, execution_sha, scratch_root)[0]
+                    worker = capture._prepare_worker_runs(
+                        inputs,
+                        execution_sha,
+                        scratch_ownership.path,
+                    )[0]
                     self.write_fake_worker_success(inputs, worker, seed=1)
                     good_result = worker.result_path.read_bytes()
                     good_png = worker.scratch_png.read_bytes()
@@ -943,7 +1686,7 @@ class ReviewCaptureInputTests(unittest.TestCase):
                     self.assertEqual(returncode, 17)
                     terminate.assert_called_once_with(process)
                 finally:
-                    capture._remove_scratch_root(scratch_root)
+                    capture._remove_scratch_root(scratch_ownership)
 
     def test_input_pin_drift_is_rejected_before_child_launch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
