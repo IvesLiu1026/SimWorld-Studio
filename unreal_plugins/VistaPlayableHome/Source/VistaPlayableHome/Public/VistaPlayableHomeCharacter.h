@@ -15,6 +15,52 @@ class USpringArmComponent;
 class UVistaInteractionComponent;
 struct FInputActionValue;
 
+/** Closed, measured settings for the realistic-interior gameplay camera. */
+USTRUCT(BlueprintType)
+struct VISTAPLAYABLEHOME_API FVistaIndoorCameraProfile
+{
+    GENERATED_BODY()
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    FName ProfileId = NAME_None;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    float TargetBoomLengthCm = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    float FieldOfViewDegrees = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    FVector SocketOffsetCm = FVector::ZeroVector;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    float CollisionProbeSizeCm = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    float CameraLagSpeed = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    float CameraLagMaxDistanceCm = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    float CollisionRecoverySpeed = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    float RecoverySnapThresholdCm = 0.0f;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    bool bEnableCameraCollision = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    bool bEnableCameraLag = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Camera")
+    bool bEnableCameraLagSubstepping = false;
+
+    static FVistaIndoorCameraProfile RealisticInteriorR2();
+    bool IsValid(FString& OutReason) const;
+};
+
 UCLASS(Blueprintable)
 class VISTAPLAYABLEHOME_API AVistaPlayableHomeCharacter final
     : public ACharacter,
@@ -73,6 +119,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "VISTA|Location")
     FString CurrentRoomId;
 
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "VISTA|Camera")
+    FName ActiveCameraProfileId = TEXT("legacy_r1");
+
     UFUNCTION(BlueprintPure, Category = "VISTA|Carry")
     AVistaPickupActor* GetHeldPickup() const { return HeldItem; }
 
@@ -81,6 +130,10 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "VISTA|Carry")
     FVistaInteractionResult DropHeldItem();
+
+    /** Applies all camera settings atomically after closed-range validation. */
+    UFUNCTION(BlueprintCallable, Category = "VISTA|Camera")
+    bool ApplyIndoorCameraProfile(const FVistaIndoorCameraProfile& Profile);
 
     virtual USceneComponent* VistaGetCarryAnchor_Implementation() const override;
     virtual AActor* VistaGetHeldItem_Implementation() const override;
@@ -114,6 +167,7 @@ private:
     void MoveRightLegacy(float Value);
     void LookYawLegacy(float Value);
     void LookPitchLegacy(float Value);
+    void ApplyRequestedCameraProfile();
     EVistaAffordance ChooseDefaultAffordance(AActor* Target) const;
 
     UFUNCTION(Server, Reliable)

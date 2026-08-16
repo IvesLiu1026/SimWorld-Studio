@@ -14,11 +14,97 @@
 #include "InputMappingContext.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/LocalPlayer.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Net/UnrealNetwork.h"
+#include "VistaIndoorSpringArmComponent.h"
 #include "VistaInteractable.h"
 #include "VistaInteractionComponent.h"
 #include "VistaPickupActor.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogVistaPlayableHomeCamera, Log, All);
+
+namespace
+{
+const FName RealisticInteriorR2CameraProfileId(TEXT("realistic_interior_r2"));
+const TCHAR* CameraProfileCommandLineKey = TEXT("VistaCameraProfile=");
+}
+
+FVistaIndoorCameraProfile FVistaIndoorCameraProfile::RealisticInteriorR2()
+{
+    FVistaIndoorCameraProfile Profile;
+    Profile.ProfileId = RealisticInteriorR2CameraProfileId;
+    Profile.TargetBoomLengthCm = 220.0f;
+    Profile.FieldOfViewDegrees = 80.0f;
+    Profile.SocketOffsetCm = FVector(0.0f, 45.0f, 62.0f);
+    Profile.CollisionProbeSizeCm = 18.0f;
+    Profile.CameraLagSpeed = 14.0f;
+    Profile.CameraLagMaxDistanceCm = 30.0f;
+    Profile.CollisionRecoverySpeed = 8.0f;
+    Profile.RecoverySnapThresholdCm = 1.0f;
+    Profile.bEnableCameraCollision = true;
+    Profile.bEnableCameraLag = true;
+    Profile.bEnableCameraLagSubstepping = true;
+    return Profile;
+}
+
+bool FVistaIndoorCameraProfile::IsValid(FString& OutReason) const
+{
+    OutReason.Reset();
+    const bool bFinite =
+        FMath::IsFinite(TargetBoomLengthCm) &&
+        FMath::IsFinite(FieldOfViewDegrees) &&
+        !SocketOffsetCm.ContainsNaN() &&
+        FMath::IsFinite(CollisionProbeSizeCm) &&
+        FMath::IsFinite(CameraLagSpeed) &&
+        FMath::IsFinite(CameraLagMaxDistanceCm) &&
+        FMath::IsFinite(CollisionRecoverySpeed) &&
+        FMath::IsFinite(RecoverySnapThresholdCm);
+    if (!bFinite)
+    {
+        OutReason = TEXT("non_finite_setting");
+        return false;
+    }
+    if (ProfileId != RealisticInteriorR2CameraProfileId)
+    {
+        OutReason = TEXT("unknown_profile_id");
+        return false;
+    }
+    if (TargetBoomLengthCm < 180.0f || TargetBoomLengthCm > 240.0f)
+    {
+        OutReason = TEXT("target_boom_out_of_range");
+        return false;
+    }
+    if (FieldOfViewDegrees < 75.0f || FieldOfViewDegrees > 85.0f)
+    {
+        OutReason = TEXT("field_of_view_out_of_range");
+        return false;
+    }
+    if (!FMath::IsNearlyZero(SocketOffsetCm.X) ||
+        FMath::Abs(SocketOffsetCm.Y) > 65.0f ||
+        SocketOffsetCm.Z < 45.0f || SocketOffsetCm.Z > 80.0f)
+    {
+        OutReason = TEXT("socket_offset_out_of_range");
+        return false;
+    }
+    if (CollisionProbeSizeCm < 12.0f || CollisionProbeSizeCm > 24.0f ||
+        CameraLagSpeed < 8.0f || CameraLagSpeed > 30.0f ||
+        CameraLagMaxDistanceCm < 0.0f || CameraLagMaxDistanceCm > 50.0f ||
+        CollisionRecoverySpeed < 4.0f || CollisionRecoverySpeed > 20.0f ||
+        RecoverySnapThresholdCm < 0.1f || RecoverySnapThresholdCm > 5.0f)
+    {
+        OutReason = TEXT("collision_or_lag_setting_out_of_range");
+        return false;
+    }
+    if (!bEnableCameraCollision || !bEnableCameraLag ||
+        !bEnableCameraLagSubstepping)
+    {
+        OutReason = TEXT("required_safety_feature_disabled");
+        return false;
+    }
+    return true;
+}
 
 AVistaPlayableHomeCharacter::AVistaPlayableHomeCharacter()
 {
@@ -51,7 +137,7 @@ AVistaPlayableHomeCharacter::AVistaPlayableHomeCharacter()
         GetMesh()->SetAnimInstanceClass(MannyAnimBlueprint.Class);
     }
 
-    CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+    CameraBoom = CreateDefaultSubobject<UVistaIndoorSpringArmComponent>(TEXT("CameraBoom"));
     CameraBoom->SetupAttachment(RootComponent);
     CameraBoom->TargetArmLength = 320.0f;
     CameraBoom->SocketOffset = FVector(0.0f, 55.0f, 65.0f);
@@ -80,6 +166,8 @@ void AVistaPlayableHomeCharacter::BeginPlay()
         Tags.AddUnique(FName(*SemanticId));
     }
 
+    ApplyRequestedCameraProfile();
+
     const APlayerController* PlayerController = Cast<APlayerController>(Controller);
     if (IsValid(PlayerController) && IsValid(DefaultMappingContext))
     {
@@ -92,6 +180,93 @@ void AVistaPlayableHomeCharacter::BeginPlay()
             }
         }
     }
+}
+
+void AVistaPlayableHomeCharacter::ApplyRequestedCameraProfile()
+{
+    FString RequestedProfileId;
+    if (!FParse::Value(
+            FCommandLine::Get(),
+            CameraProfileCommandLineKey,
+            RequestedProfileId))
+    {
+        // No r2 selection means the accepted r1 camera remains untouched.
+        return;
+    }
+    RequestedProfileId.TrimStartAndEndInline();
+    if (!RequestedProfileId.Equals(
+            RealisticInteriorR2CameraProfileId.ToString(),
+            ESearchCase::CaseSensitive))
+    {
+        UE_LOG(
+            LogVistaPlayableHomeCamera,
+            Error,
+            TEXT("VISTA_CAMERA_PROFILE_REJECTED unknown profile '%s'; keeping legacy_r1"),
+            *RequestedProfileId);
+        return;
+    }
+
+    if (!ApplyIndoorCameraProfile(FVistaIndoorCameraProfile::RealisticInteriorR2()))
+    {
+        UE_LOG(
+            LogVistaPlayableHomeCamera,
+            Error,
+            TEXT("VISTA_CAMERA_PROFILE_REJECTED invalid realistic_interior_r2 profile; keeping legacy_r1"));
+    }
+}
+
+bool AVistaPlayableHomeCharacter::ApplyIndoorCameraProfile(
+    const FVistaIndoorCameraProfile& Profile)
+{
+    FString ValidationReason;
+    if (!Profile.IsValid(ValidationReason))
+    {
+        UE_LOG(
+            LogVistaPlayableHomeCamera,
+            Error,
+            TEXT("VISTA_CAMERA_PROFILE_REJECTED %s; camera settings unchanged"),
+            *ValidationReason);
+        return false;
+    }
+
+    UVistaIndoorSpringArmComponent* IndoorBoom =
+        Cast<UVistaIndoorSpringArmComponent>(CameraBoom);
+    if (!IsValid(IndoorBoom) || !IsValid(FollowCamera))
+    {
+        UE_LOG(
+            LogVistaPlayableHomeCamera,
+            Error,
+            TEXT("VISTA_CAMERA_PROFILE_REJECTED required camera components missing"));
+        return false;
+    }
+
+    // Validation completes before the first mutation, so malformed settings
+    // cannot leave the pawn in a partially-applied camera state.
+    IndoorBoom->TargetArmLength = Profile.TargetBoomLengthCm;
+    IndoorBoom->SocketOffset = Profile.SocketOffsetCm;
+    IndoorBoom->bDoCollisionTest = Profile.bEnableCameraCollision;
+    IndoorBoom->ProbeSize = Profile.CollisionProbeSizeCm;
+    IndoorBoom->ProbeChannel = ECC_Camera;
+    IndoorBoom->bEnableCameraLag = Profile.bEnableCameraLag;
+    IndoorBoom->CameraLagSpeed = Profile.CameraLagSpeed;
+    IndoorBoom->CameraLagMaxDistance = Profile.CameraLagMaxDistanceCm;
+    IndoorBoom->bUseCameraLagSubstepping = Profile.bEnableCameraLagSubstepping;
+    IndoorBoom->CameraLagMaxTimeStep = 1.0f / 60.0f;
+    IndoorBoom->ConfigureIndoorCollisionRecovery(
+        Profile.bEnableCameraCollision,
+        Profile.CollisionRecoverySpeed,
+        Profile.RecoverySnapThresholdCm);
+    FollowCamera->SetFieldOfView(Profile.FieldOfViewDegrees);
+    ActiveCameraProfileId = Profile.ProfileId;
+
+    UE_LOG(
+        LogVistaPlayableHomeCamera,
+        Display,
+        TEXT("VISTA_CAMERA_PROFILE_ACTIVE id=%s boom_cm=%.1f fov_deg=%.1f"),
+        *ActiveCameraProfileId.ToString(),
+        IndoorBoom->TargetArmLength,
+        FollowCamera->FieldOfView);
+    return true;
 }
 
 void AVistaPlayableHomeCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
