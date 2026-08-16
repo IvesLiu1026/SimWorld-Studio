@@ -23,6 +23,9 @@ if __package__ in {None, ""}:
     from tools.runtime.vista_playable_home.runtime import (  # type: ignore
         RESERVED_GPU_INDICES,
         RESERVED_PORTS,
+        R2_CAMERA_PROFILE,
+        R2_RUNTIME_PROFILE,
+        R2_SCHEMA,
         SCHEMA,
         GameRuntimeConfig,
         RuntimeSafetyError,
@@ -31,11 +34,15 @@ if __package__ in {None, ""}:
         validate_display,
         validate_gpu,
         validate_map,
+        validate_runtime_profile_binding,
     )
 else:
     from .runtime import (
         RESERVED_GPU_INDICES,
         RESERVED_PORTS,
+        R2_CAMERA_PROFILE,
+        R2_RUNTIME_PROFILE,
+        R2_SCHEMA,
         SCHEMA,
         GameRuntimeConfig,
         RuntimeSafetyError,
@@ -44,10 +51,12 @@ else:
         validate_display,
         validate_gpu,
         validate_map,
+        validate_runtime_profile_binding,
     )
 
 
 PLAN_MODE = "unreal-editor-game-preview"
+R2_PLAN_MODE = "unreal-editor-game-preview-realistic"
 MAX_JSON_BYTES = 64 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OUTPUT_RE = re.compile(
@@ -82,12 +91,20 @@ PLAN_CONFIG_KEYS = frozenset(
         "nvidia_compat",
     }
 )
+R2_PLAN_CONFIG_KEYS = PLAN_CONFIG_KEYS | frozenset(
+    {"runtime_profile", "camera_profile"}
+)
 PLAN_SECURITY = {
     "editor_chrome": False,
     "render_offscreen": False,
     "reserved_gpu_indices": sorted(RESERVED_GPU_INDICES),
     "reserved_ports": sorted(RESERVED_PORTS),
     "arbitrary_command": False,
+}
+R2_PLAN_SECURITY = {
+    **PLAN_SECURITY,
+    "runtime_profile_closed": True,
+    "camera_profile_closed": True,
 }
 
 PROFILE_REQUIRED_FIELDS = frozenset({"workspace", "project", "ue_editor", "map"})
@@ -104,6 +121,9 @@ PROFILE_OPTIONAL_FIELDS = frozenset(
     }
 )
 PROFILE_FIELDS = PROFILE_REQUIRED_FIELDS | PROFILE_OPTIONAL_FIELDS
+R2_PROFILE_FIELDS = PROFILE_FIELDS | frozenset(
+    {"runtime_profile", "camera_profile"}
+)
 PROFILE_PATH_FIELDS = frozenset(
     {"workspace", "project", "ue_editor", "nvidia_icd", "nvidia_compat"}
 )
@@ -289,9 +309,19 @@ def _validate_created_at(value: Any) -> None:
         raise ProfileError("launch plan created_at must include a timezone")
 
 
-def _config_from_plan(value: Any) -> tuple[GameRuntimeConfig, Path]:
-    if not isinstance(value, dict) or set(value) != PLAN_CONFIG_KEYS:
+def _config_from_plan(
+    value: Any,
+    *,
+    r2: bool,
+) -> tuple[GameRuntimeConfig, Path]:
+    expected_keys = R2_PLAN_CONFIG_KEYS if r2 else PLAN_CONFIG_KEYS
+    if not isinstance(value, dict) or set(value) != expected_keys:
         raise ProfileError("launch plan config fields differ")
+    if r2 and (
+        value.get("runtime_profile") != R2_RUNTIME_PROFILE
+        or value.get("camera_profile") != R2_CAMERA_PROFILE
+    ):
+        raise ProfileError("launch plan r2 profile binding differs")
     workspace_raw = _absolute_string(value.get("workspace"), "plan workspace")
     if workspace_raw is None:  # unreachable for a required field, kept fail-closed
         raise ProfileError("plan workspace is missing")
@@ -356,8 +386,7 @@ def _config_from_plan(value: Any) -> tuple[GameRuntimeConfig, Path]:
         )
     except RuntimeSafetyError as exc:
         raise ProfileError(f"launch plan config is invalid: {exc}") from exc
-    return (
-        GameRuntimeConfig(
+    config = GameRuntimeConfig(
             workspace=workspace,
             project=project,
             ue_editor=ue_editor,
@@ -371,7 +400,14 @@ def _config_from_plan(value: Any) -> tuple[GameRuntimeConfig, Path]:
             title=value["title"],
             nvidia_icd=nvidia_icd,
             nvidia_compat=nvidia_compat,
-        ),
+            runtime_profile=R2_RUNTIME_PROFILE if r2 else None,
+        )
+    try:
+        validate_runtime_profile_binding(config)
+    except RuntimeSafetyError as exc:
+        raise ProfileError(f"launch plan runtime profile is invalid: {exc}") from exc
+    return (
+        config,
         workspace,
     )
 
@@ -381,10 +417,21 @@ def validate_launch_plan(path: Path, expected_sha256: str) -> ValidatedLaunchPla
     plan, _raw = _read_pinned_json(plan_path, expected_sha256, "launch plan")
     if not isinstance(plan, dict) or set(plan) != PLAN_KEYS:
         raise ProfileError("launch plan fields differ")
-    if plan.get("schema") != SCHEMA or plan.get("mode") != PLAN_MODE:
+    schema = plan.get("schema")
+    if schema == SCHEMA:
+        r2 = False
+        expected_mode = PLAN_MODE
+        expected_security = PLAN_SECURITY
+    elif schema == R2_SCHEMA:
+        r2 = True
+        expected_mode = R2_PLAN_MODE
+        expected_security = R2_PLAN_SECURITY
+    else:
+        raise ProfileError("launch plan schema or mode differs")
+    if plan.get("mode") != expected_mode:
         raise ProfileError("launch plan schema or mode differs")
     _validate_created_at(plan.get("created_at"))
-    config, workspace = _config_from_plan(plan.get("config"))
+    config, workspace = _config_from_plan(plan.get("config"), r2=r2)
     _contained(plan_path, workspace, "launch plan")
     expected_command = build_game_command(config)
     command = plan.get("command")
@@ -395,7 +442,7 @@ def validate_launch_plan(path: Path, expected_sha256: str) -> ValidatedLaunchPla
         or plan.get("command_shell_preview") != shlex.join(expected_command)
     ):
         raise ProfileError("launch plan command/config binding differs")
-    if plan.get("security") != PLAN_SECURITY:
+    if plan.get("security") != expected_security:
         raise ProfileError("launch plan security contract differs")
     return ValidatedLaunchPlan(
         path=plan_path,
@@ -422,7 +469,24 @@ def profile_from_config(config: GameRuntimeConfig) -> dict[str, Any]:
         profile["nvidia_icd"] = str(config.nvidia_icd)
     if config.nvidia_compat is not None:
         profile["nvidia_compat"] = str(config.nvidia_compat)
-    if not PROFILE_REQUIRED_FIELDS.issubset(profile) or set(profile) - PROFILE_FIELDS:
+    expected_fields = PROFILE_FIELDS
+    if config.runtime_profile is not None:
+        spec = validate_runtime_profile_binding(config)
+        profile.update(
+            {
+                "runtime_profile": spec.runtime_profile,
+                "camera_profile": spec.camera_profile,
+            }
+        )
+        expected_fields = R2_PROFILE_FIELDS
+    if (
+        not PROFILE_REQUIRED_FIELDS.issubset(profile)
+        or set(profile) - expected_fields
+        or (
+            config.runtime_profile is not None
+            and not {"runtime_profile", "camera_profile"}.issubset(profile)
+        )
+    ):
         raise ProfileError("generated profile fields differ")
     return profile
 

@@ -29,6 +29,14 @@ if __package__ in {None, ""}:
     from tools.runtime.vista_playable_home.runtime import (  # type: ignore
         DEFAULT_VISTA_WORLD_PORT,
         DEFAULT_WORLD_REVISION,
+        R2_CAMERA_PROFILE,
+        R2_DISPLAY,
+        R2_FPS,
+        R2_GPU,
+        R2_HEIGHT,
+        R2_RUNTIME_PROFILE,
+        R2_VISTA_WORLD_PORT,
+        R2_WIDTH,
         TYPED_RESPONSE_MAX_BYTES,
         identity_is_live,
     )
@@ -36,16 +44,30 @@ else:
     from .runtime import (
         DEFAULT_VISTA_WORLD_PORT,
         DEFAULT_WORLD_REVISION,
+        R2_CAMERA_PROFILE,
+        R2_DISPLAY,
+        R2_FPS,
+        R2_GPU,
+        R2_HEIGHT,
+        R2_RUNTIME_PROFILE,
+        R2_VISTA_WORLD_PORT,
+        R2_WIDTH,
         TYPED_RESPONSE_MAX_BYTES,
         identity_is_live,
     )
 
 
 RECEIPT_SCHEMA = "simworld.vista.playable-home-runtime-acceptance/v1"
+R2_RECEIPT_SCHEMA = "simworld.vista.playable-home-runtime-acceptance/v2"
 RUNTIME_POINTER_SCHEMA = "simworld.vista.playable-home-runtime-pointer/v1"
 RUNTIME_STATE_SCHEMA = "simworld.vista.playable-home-runtime-state/v1"
+R2_RUNTIME_STATE_SCHEMA = "simworld.vista.playable-home-runtime-state/v2"
 BUILD_RESULT_SCHEMA = "simworld.vista.playable-home-ue-build-result/v1"
 LOOPBACK_HOST = "127.0.0.1"
+R2_PRESENTATION_COLLISION_POLICY = (
+    "presentation_no_collision_use_hidden_r1_proxies"
+)
+R2_PRESENTATION_BUNDLE_COUNT = 3
 
 PLAYER_ID = "home.r1/player.01"
 DOOR_ID = "home.r1/room.entry_hall/entity.interior_door.01"
@@ -129,6 +151,7 @@ class AcceptanceConfig:
     socket_timeout_s: float = 1.0
     npc_timeout_s: float = 30.0
     npc_poll_interval_s: float = 0.25
+    runtime_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -142,9 +165,19 @@ class EvidenceBinding:
     source_commit: str
     map_path: str
     project_path: Path
+    port: int = DEFAULT_VISTA_WORLD_PORT
+    runtime_profile: str | None = None
+    camera_profile: str | None = None
+    display: str | None = None
+    gpu: int | None = None
+    width: int | None = None
+    height: int | None = None
+    fps: int | None = None
+    launch_plan_path: Path | None = None
+    launch_plan_sha256: str | None = None
 
     def receipt_value(self) -> dict[str, Any]:
-        return {
+        value = {
             "workspace": str(self.workspace),
             "runtime_state": str(self.runtime_state_path),
             "runtime_state_sha256": self.runtime_state_sha256,
@@ -154,11 +187,26 @@ class EvidenceBinding:
             "source_commit": self.source_commit,
             "source_clean": True,
             "host": LOOPBACK_HOST,
-            "port": DEFAULT_VISTA_WORLD_PORT,
+            "port": self.port,
             "world_revision": DEFAULT_WORLD_REVISION,
             "map_path": self.map_path,
             "project": str(self.project_path),
         }
+        if self.runtime_profile is not None:
+            value.update(
+                {
+                    "runtime_profile": self.runtime_profile,
+                    "camera_profile": self.camera_profile,
+                    "display": self.display,
+                    "gpu": self.gpu,
+                    "width": self.width,
+                    "height": self.height,
+                    "fps": self.fps,
+                    "launch_plan": str(self.launch_plan_path),
+                    "launch_plan_sha256": self.launch_plan_sha256,
+                }
+            )
+        return value
 
 
 Exchange = Callable[[Mapping[str, Any], float], Any]
@@ -407,7 +455,51 @@ def _validate_identity(identity: Any, role: str) -> None:
         _fail("RUNTIME_IDENTITY_INVALID", f"{role} process identity is not live")
 
 
-def _validate_runtime_state(path: Path, expected_sha: str, workspace: Path) -> dict[str, Any]:
+def _validate_r2_launch_plan(
+    path: Path,
+    expected_sha: str,
+    *,
+    workspace: Path,
+    state: Mapping[str, Any],
+) -> Path:
+    if __package__ in {None, ""}:
+        from tools.runtime.vista_playable_home import profile as profile_contract  # type: ignore
+    else:
+        from . import profile as profile_contract
+    try:
+        validated = profile_contract.validate_launch_plan(path, expected_sha)
+    except (OSError, profile_contract.ProfileError) as exc:
+        raise AcceptanceError(
+            "RUNTIME_LAUNCH_PLAN_INVALID",
+            "r2 launch plan or its SHA-256 binding differs",
+        ) from exc
+    config = validated.config
+    if (
+        validated.workspace != workspace
+        or config.runtime_profile != R2_RUNTIME_PROFILE
+        or config.map_path != state.get("map")
+        or str(config.project) != state.get("project")
+        or config.display != R2_DISPLAY
+        or config.gpu != R2_GPU
+        or config.vista_world_port != R2_VISTA_WORLD_PORT
+        or config.width != R2_WIDTH
+        or config.height != R2_HEIGHT
+        or config.fps != R2_FPS
+    ):
+        _fail(
+            "RUNTIME_LAUNCH_PLAN_INVALID",
+            "r2 launch plan does not bind the running profile and port",
+        )
+    return validated.path
+
+
+def _validate_runtime_state(
+    path: Path,
+    expected_sha: str,
+    workspace: Path,
+    *,
+    runtime_profile: str | None = None,
+) -> dict[str, Any]:
     if sha256_file(path) != expected_sha:
         _fail("RUNTIME_STATE_DIGEST_MISMATCH", "runtime-state SHA-256 differs")
     state = _load_strict_file(path, label="runtime state")
@@ -425,12 +517,33 @@ def _validate_runtime_state(path: Path, expected_sha: str, workspace: Path) -> d
         "supervisor",
         "readiness",
     }
+    if runtime_profile == R2_RUNTIME_PROFILE:
+        required.update(
+            {
+                "runtime_profile",
+                "camera_profile",
+                "width",
+                "height",
+                "fps",
+                "launch_plan_sha256",
+            }
+        )
     if not isinstance(state, dict) or set(state) != required:
         _fail("RUNTIME_STATE_INVALID", "running runtime-state fields differ")
+    expected_schema = (
+        R2_RUNTIME_STATE_SCHEMA
+        if runtime_profile == R2_RUNTIME_PROFILE
+        else RUNTIME_STATE_SCHEMA
+    )
+    expected_port = (
+        R2_VISTA_WORLD_PORT
+        if runtime_profile == R2_RUNTIME_PROFILE
+        else DEFAULT_VISTA_WORLD_PORT
+    )
     if (
-        state.get("schema") != RUNTIME_STATE_SCHEMA
+        state.get("schema") != expected_schema
         or state.get("status") != "running"
-        or state.get("vista_world_port") != DEFAULT_VISTA_WORLD_PORT
+        or state.get("vista_world_port") != expected_port
         or not isinstance(state.get("created_at"), str)
         or not isinstance(state.get("updated_at"), str)
         or not isinstance(state.get("display"), str)
@@ -440,6 +553,18 @@ def _validate_runtime_state(path: Path, expected_sha: str, workspace: Path) -> d
         or not isinstance(state.get("project"), str)
     ):
         _fail("RUNTIME_STATE_INVALID", "runtime-state identity is not accepted")
+    if runtime_profile == R2_RUNTIME_PROFILE and (
+        state.get("runtime_profile") != R2_RUNTIME_PROFILE
+        or state.get("camera_profile") != R2_CAMERA_PROFILE
+        or state.get("display") != R2_DISPLAY
+        or state.get("gpu") != R2_GPU
+        or state.get("width") != R2_WIDTH
+        or state.get("height") != R2_HEIGHT
+        or state.get("fps") != R2_FPS
+        or not isinstance(state.get("launch_plan_sha256"), str)
+        or SHA256_RE.fullmatch(state["launch_plan_sha256"]) is None
+    ):
+        _fail("RUNTIME_STATE_INVALID", "r2 runtime profile binding differs")
     _validate_identity(state["process"], "unreal-game")
     _validate_identity(state["supervisor"], "vista-world-supervisor")
 
@@ -462,6 +587,13 @@ def _validate_runtime_state(path: Path, expected_sha: str, workspace: Path) -> d
     if project.suffix != ".uproject":
         _fail("RUNTIME_STATE_INVALID", "runtime project is not a .uproject")
     state["_project_path"] = project
+    if runtime_profile == R2_RUNTIME_PROFILE:
+        state["_launch_plan_path"] = _validate_r2_launch_plan(
+            path.parent / "launch-plan.json",
+            state["launch_plan_sha256"],
+            workspace=workspace,
+            state=state,
+        )
     return state
 
 
@@ -495,14 +627,50 @@ def _validate_build_result(
         "runtime_play_proof",
         "content_digest",
     }
+    r2 = runtime_state.get("runtime_profile") == R2_RUNTIME_PROFILE
+    if r2:
+        required.update(
+            {
+                "visual_profile_id",
+                "visual_profile_sha256",
+                "visual_profile_content_digest",
+                "renderer_profile_request_sha256",
+                "renderer_profile_request_content_digest",
+                "renderer_runtime_observation",
+                "base_scene_receipt_sha256",
+                "presentation_import_receipt_sha256",
+                "presentation_scene_receipt_sha256",
+                "presentation_manifest_sha256",
+                "presentation_artifact_receipt_sha256",
+                "presentation_bundle_count",
+                "presentation_collision_policy",
+                "presentation_ue_import_observation",
+                "presentation_runtime_play_proof",
+            }
+        )
     if not isinstance(result, dict) or set(result) != required:
         _fail("BUILD_RESULT_INVALID", "accepted build-result fields differ")
-    digests = (
+    digests = [
         result.get("execution_sha256"),
         result.get("import_receipt_sha256"),
         result.get("scene_receipt_sha256"),
         result.get("content_digest"),
-    )
+    ]
+    if r2:
+        digests.extend(
+            result.get(key)
+            for key in (
+                "visual_profile_sha256",
+                "visual_profile_content_digest",
+                "renderer_profile_request_sha256",
+                "renderer_profile_request_content_digest",
+                "base_scene_receipt_sha256",
+                "presentation_import_receipt_sha256",
+                "presentation_scene_receipt_sha256",
+                "presentation_manifest_sha256",
+                "presentation_artifact_receipt_sha256",
+            )
+        )
     copy_methods = result.get("copy_methods")
     if (
         result.get("schema_version") != BUILD_RESULT_SCHEMA
@@ -521,6 +689,23 @@ def _validate_build_result(
         or result.get("content_digest") != _content_digest(result)
     ):
         _fail("BUILD_RESULT_INVALID", "accepted build-result identity differs")
+    if r2 and (
+        result.get("visual_profile_id") != R2_RUNTIME_PROFILE
+        or result.get("renderer_runtime_observation") != "pending"
+        or result.get("base_scene_receipt_sha256")
+        != result.get("scene_receipt_sha256")
+        or result.get("presentation_bundle_count")
+        != R2_PRESENTATION_BUNDLE_COUNT
+        or result.get("presentation_collision_policy")
+        != R2_PRESENTATION_COLLISION_POLICY
+        or result.get("presentation_ue_import_observation")
+        != "verified_by_commandlet"
+        or result.get("presentation_runtime_play_proof") != "pending"
+    ):
+        _fail(
+            "BUILD_RESULT_INVALID",
+            "accepted r2 build/presentation profile binding differs",
+        )
     return result
 
 
@@ -574,9 +759,16 @@ def validate_binding(config: AcceptanceConfig) -> EvidenceBinding:
         _fail("TIMEOUT_INVALID", "NPC poll interval must be from 0.01 through 2 seconds")
     if config.npc_poll_interval_s > config.npc_timeout_s:
         _fail("TIMEOUT_INVALID", "NPC poll interval exceeds its deadline")
+    if config.runtime_profile not in {None, R2_RUNTIME_PROFILE}:
+        _fail("RUNTIME_PROFILE_INVALID", "runtime profile is not accepted")
 
     state_path = resolve_current_state_path(workspace)
-    runtime_state = _validate_runtime_state(state_path, runtime_sha, workspace)
+    runtime_state = _validate_runtime_state(
+        state_path,
+        runtime_sha,
+        workspace,
+        runtime_profile=config.runtime_profile,
+    )
     build_path = _canonical_existing_file(workspace / "result-receipt.json", "build result")
     _validate_build_result(
         build_path,
@@ -595,6 +787,16 @@ def validate_binding(config: AcceptanceConfig) -> EvidenceBinding:
         source_commit=config.source_commit,
         map_path=runtime_state["map"],
         project_path=runtime_state["_project_path"],
+        port=runtime_state["vista_world_port"],
+        runtime_profile=runtime_state.get("runtime_profile"),
+        camera_profile=runtime_state.get("camera_profile"),
+        display=runtime_state.get("display"),
+        gpu=runtime_state.get("gpu"),
+        width=runtime_state.get("width"),
+        height=runtime_state.get("height"),
+        fps=runtime_state.get("fps"),
+        launch_plan_path=runtime_state.get("_launch_plan_path"),
+        launch_plan_sha256=runtime_state.get("launch_plan_sha256"),
     )
 
 
@@ -605,6 +807,11 @@ def assert_binding_stable(binding: EvidenceBinding) -> None:
         _fail("RUNTIME_STATE_CHANGED", "runtime-state changed during acceptance")
     if sha256_file(binding.build_result_path) != binding.build_result_sha256:
         _fail("BUILD_RESULT_CHANGED", "build-result changed during acceptance")
+    if binding.launch_plan_path is not None and (
+        binding.launch_plan_sha256 is None
+        or sha256_file(binding.launch_plan_path) != binding.launch_plan_sha256
+    ):
+        _fail("RUNTIME_LAUNCH_PLAN_CHANGED", "r2 launch plan changed during acceptance")
     _validate_source(binding.repo_root, binding.source_commit)
 
 
@@ -1189,11 +1396,11 @@ def execute_acceptance(
         resolved_exchange = exchange
         if resolved_exchange is None:
             resolved_exchange = lambda request, timeout: exchange_loopback(  # noqa: E731
-                request, timeout, port=DEFAULT_VISTA_WORLD_PORT
+                request, timeout, port=binding.port
             )
         session = ProtocolSession(resolved_exchange, config.socket_timeout_s)
         session = run_protocol(
-            DEFAULT_VISTA_WORLD_PORT,
+            binding.port,
             socket_timeout_s=config.socket_timeout_s,
             npc_timeout_s=config.npc_timeout_s,
             npc_poll_interval_s=config.npc_poll_interval_s,
@@ -1222,7 +1429,11 @@ def execute_acceptance(
                 "step": session.current_step if session is not None else None,
             }
     receipt: dict[str, Any] = {
-        "schema": RECEIPT_SCHEMA,
+        "schema": (
+            R2_RECEIPT_SCHEMA
+            if config.runtime_profile == R2_RUNTIME_PROFILE
+            else RECEIPT_SCHEMA
+        ),
         "status": status,
         "created_at": created_at,
         "completed_at": utc_now(),
@@ -1248,6 +1459,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--socket-timeout-s", type=float, default=1.0)
     result.add_argument("--npc-timeout-s", type=float, default=30.0)
     result.add_argument("--npc-poll-interval-s", type=float, default=0.25)
+    result.add_argument(
+        "--runtime-profile",
+        choices=[R2_RUNTIME_PROFILE],
+        default=None,
+    )
     return result
 
 
@@ -1262,6 +1478,7 @@ def config_from_args(args: argparse.Namespace) -> AcceptanceConfig:
         socket_timeout_s=args.socket_timeout_s,
         npc_timeout_s=args.npc_timeout_s,
         npc_poll_interval_s=args.npc_poll_interval_s,
+        runtime_profile=getattr(args, "runtime_profile", None),
     )
 
 

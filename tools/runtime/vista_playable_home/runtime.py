@@ -17,12 +17,21 @@ from typing import Any, Mapping, Sequence
 
 
 SCHEMA = "simworld.vista.playable-home-runtime/v1"
+R2_SCHEMA = "simworld.vista.playable-home-runtime/v2"
 PREFLIGHT_SCHEMA = "simworld.vista.playable-home-preflight/v1"
 RUNTIME_POINTER_SCHEMA = "simworld.vista.playable-home-runtime-pointer/v1"
 DEFAULT_DISPLAY = ":117"
 DEFAULT_GPU = 0
 DEFAULT_VISTA_WORLD_PORT = 55620
 DEFAULT_WORLD_REVISION = "vista_playable_home_r1"
+R2_RUNTIME_PROFILE = "realistic_interior_r2"
+R2_CAMERA_PROFILE = "realistic_interior_r2"
+R2_DISPLAY = ":119"
+R2_GPU = 0
+R2_VISTA_WORLD_PORT = 55630
+R2_WIDTH = 1920
+R2_HEIGHT = 1080
+R2_FPS = 60
 TYPED_RESPONSE_MAX_BYTES = 64 * 1024
 RESERVED_GPU_INDICES = frozenset({1})
 RESERVED_PORTS = frozenset(
@@ -35,6 +44,40 @@ ATTEMPT_RE = re.compile(r"^attempt-[0-9]{8}T[0-9]{6}\.[0-9]{6}Z-[0-9]+$")
 
 class RuntimeSafetyError(RuntimeError):
     """Raised before a request can affect an unowned runtime."""
+
+
+@dataclass(frozen=True)
+class RuntimeProfileSpec:
+    runtime_profile: str | None
+    camera_profile: str | None
+    display: str
+    gpu: int
+    vista_world_port: int
+    width: int
+    height: int
+    fps: int
+
+
+LEGACY_RUNTIME_SPEC = RuntimeProfileSpec(
+    runtime_profile=None,
+    camera_profile=None,
+    display=DEFAULT_DISPLAY,
+    gpu=DEFAULT_GPU,
+    vista_world_port=DEFAULT_VISTA_WORLD_PORT,
+    width=1280,
+    height=720,
+    fps=60,
+)
+R2_RUNTIME_SPEC = RuntimeProfileSpec(
+    runtime_profile=R2_RUNTIME_PROFILE,
+    camera_profile=R2_CAMERA_PROFILE,
+    display=R2_DISPLAY,
+    gpu=R2_GPU,
+    vista_world_port=R2_VISTA_WORLD_PORT,
+    width=R2_WIDTH,
+    height=R2_HEIGHT,
+    fps=R2_FPS,
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +95,39 @@ class GameRuntimeConfig:
     title: str = "VISTA World"
     nvidia_icd: Path | None = None
     nvidia_compat: Path | None = None
+    runtime_profile: str | None = None
+
+
+def resolve_runtime_profile(value: str | None) -> RuntimeProfileSpec:
+    if value is None:
+        return LEGACY_RUNTIME_SPEC
+    if value == R2_RUNTIME_PROFILE:
+        return R2_RUNTIME_SPEC
+    raise RuntimeSafetyError("runtime profile is not one of the closed profiles")
+
+
+def validate_runtime_profile_binding(config: GameRuntimeConfig) -> RuntimeProfileSpec:
+    spec = resolve_runtime_profile(config.runtime_profile)
+    if spec.runtime_profile is not None and (
+        config.display,
+        config.gpu,
+        config.vista_world_port,
+        config.width,
+        config.height,
+        config.fps,
+    ) != (
+        spec.display,
+        spec.gpu,
+        spec.vista_world_port,
+        spec.width,
+        spec.height,
+        spec.fps,
+    ):
+        raise RuntimeSafetyError(
+            "realistic_interior_r2 runtime must use :119, GPU 0, port 55630, "
+            "1920x1080, and 60 fps"
+        )
+    return spec
 
 
 def utc_now() -> str:
@@ -265,7 +341,7 @@ def validate_config(config: GameRuntimeConfig, *, create_workspace: bool) -> Gam
         )
 
     width, height, fps = validate_dimensions(config.width, config.height, config.fps)
-    return GameRuntimeConfig(
+    validated = GameRuntimeConfig(
         workspace=workspace,
         project=project,
         ue_editor=ue_editor,
@@ -279,13 +355,22 @@ def validate_config(config: GameRuntimeConfig, *, create_workspace: bool) -> Gam
         title=str(config.title or "VISTA World")[:80],
         nvidia_icd=nvidia_icd,
         nvidia_compat=nvidia_compat,
+        runtime_profile=config.runtime_profile,
     )
+    validate_runtime_profile_binding(validated)
+    return validated
 
 
 def build_game_command(config: GameRuntimeConfig) -> list[str]:
     """Build a fixed game-only command; notably, it never uses RenderOffScreen."""
 
-    return [
+    spec = validate_runtime_profile_binding(config)
+    user_root = (
+        config.workspace / "runtime-user"
+        if spec.runtime_profile is not None
+        else config.workspace
+    )
+    command = [
         str(config.ue_editor),
         str(config.project),
         config.map_path,
@@ -304,13 +389,20 @@ def build_game_command(config: GameRuntimeConfig) -> list[str]:
         "-ddc=InstalledNoZenLocalFallback",
         f"-ExecCmds=t.MaxFPS {config.fps}",
         "-SaveToUserDir",
-        f"-UserDir={config.workspace / 'ue-user'}",
-        f"-LocalDataCachePath={config.workspace / 'xdg-cache' / 'UnrealEngine' / 'DDC'}",
+        f"-UserDir={user_root / 'ue-user'}",
+        f"-LocalDataCachePath={user_root / 'xdg-cache' / 'UnrealEngine' / 'DDC'}",
         "-log",
     ]
+    if spec.camera_profile is not None:
+        command.insert(
+            10,
+            f"-VistaCameraProfile={spec.camera_profile}",
+        )
+    return command
 
 
 def sanitized_environment(config: GameRuntimeConfig) -> dict[str, str]:
+    spec = validate_runtime_profile_binding(config)
     allowed = {
         "HOME",
         "LANG",
@@ -327,6 +419,21 @@ def sanitized_environment(config: GameRuntimeConfig) -> dict[str, str]:
         str(config.nvidia_icd) if config.nvidia_icd else os.environ.get("VK_ICD_FILENAMES", "")
     )
     environment["VISTA_RUNTIME_GPU"] = str(config.gpu)
+    if spec.runtime_profile is not None:
+        user_root = config.workspace / "runtime-user"
+        environment.update(
+            {
+                "HOME": str(user_root / "home"),
+                "TMPDIR": str(user_root / "tmp"),
+                "TMP": str(user_root / "tmp"),
+                "TEMP": str(user_root / "tmp"),
+                "XDG_CACHE_HOME": str(user_root / "xdg-cache"),
+                "XDG_CONFIG_HOME": str(user_root / "xdg-config"),
+                "XDG_DATA_HOME": str(user_root / "xdg-data"),
+                "VISTA_RUNTIME_PROFILE": spec.runtime_profile,
+                "VISTA_CAMERA_PROFILE": spec.camera_profile or "",
+            }
+        )
     if config.nvidia_compat:
         existing = os.environ.get("LD_LIBRARY_PATH", "")
         environment["LD_LIBRARY_PATH"] = str(config.nvidia_compat) + (
@@ -513,25 +620,43 @@ def command_result(command: Sequence[str], timeout: float = 5.0) -> dict[str, An
 
 
 def redacted_plan(config: GameRuntimeConfig) -> dict[str, Any]:
+    spec = validate_runtime_profile_binding(config)
+    config_payload = {
+        **asdict(config),
+        "workspace": str(config.workspace),
+        "project": str(config.project),
+        "ue_editor": str(config.ue_editor),
+        "nvidia_icd": str(config.nvidia_icd) if config.nvidia_icd else None,
+        "nvidia_compat": str(config.nvidia_compat) if config.nvidia_compat else None,
+    }
+    if spec.runtime_profile is None:
+        config_payload.pop("runtime_profile")
+    else:
+        config_payload["camera_profile"] = spec.camera_profile
+    security = {
+        "editor_chrome": False,
+        "render_offscreen": False,
+        "reserved_gpu_indices": sorted(RESERVED_GPU_INDICES),
+        "reserved_ports": sorted(RESERVED_PORTS),
+        "arbitrary_command": False,
+    }
+    if spec.runtime_profile is not None:
+        security.update(
+            {
+                "runtime_profile_closed": True,
+                "camera_profile_closed": True,
+            }
+        )
     return {
-        "schema": SCHEMA,
+        "schema": R2_SCHEMA if spec.runtime_profile is not None else SCHEMA,
         "created_at": utc_now(),
-        "mode": "unreal-editor-game-preview",
-        "config": {
-            **asdict(config),
-            "workspace": str(config.workspace),
-            "project": str(config.project),
-            "ue_editor": str(config.ue_editor),
-            "nvidia_icd": str(config.nvidia_icd) if config.nvidia_icd else None,
-            "nvidia_compat": str(config.nvidia_compat) if config.nvidia_compat else None,
-        },
+        "mode": (
+            "unreal-editor-game-preview-realistic"
+            if spec.runtime_profile is not None
+            else "unreal-editor-game-preview"
+        ),
+        "config": config_payload,
         "command": build_game_command(config),
         "command_shell_preview": shlex.join(build_game_command(config)),
-        "security": {
-            "editor_chrome": False,
-            "render_offscreen": False,
-            "reserved_gpu_indices": sorted(RESERVED_GPU_INDICES),
-            "reserved_ports": sorted(RESERVED_PORTS),
-            "arbitrary_command": False,
-        },
+        "security": security,
     }

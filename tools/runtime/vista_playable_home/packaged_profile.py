@@ -26,13 +26,27 @@ from typing import Any, Mapping, Sequence
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from tools.runtime.vista_playable_home.runtime import (  # type: ignore
+        R2_CAMERA_PROFILE,
+        R2_RUNTIME_PROFILE,
+        RuntimeSafetyError,
+        resolve_runtime_profile,
+    )
     from tools.ue.vista_playable_home import package_receipt as package_verifier  # type: ignore
 else:
+    from .runtime import (
+        R2_CAMERA_PROFILE,
+        R2_RUNTIME_PROFILE,
+        RuntimeSafetyError,
+        resolve_runtime_profile,
+    )
     from tools.ue.vista_playable_home import package_receipt as package_verifier
 
 
 PROFILE_SCHEMA = "simworld.vista.playable-home-sunshine-packaged-profile/v1"
 PROFILE_MODE = "linux-development-package"
+R2_PROFILE_SCHEMA = "simworld.vista.playable-home-sunshine-packaged-profile/v2"
+R2_PROFILE_MODE = "linux-development-package-realistic"
 EXPECTED_MAP_PATH = package_verifier.EXPECTED_MAP_PATH
 EXPECTED_WORLD_REVISION = package_verifier.EXPECTED_REVISION
 EXPECTED_DISPLAY = ":117"
@@ -75,6 +89,9 @@ PROFILE_KEYS = frozenset(
         "unreal_pak",
         "unreal_pak_sha256",
     }
+)
+R2_PROFILE_KEYS = PROFILE_KEYS | frozenset(
+    {"runtime_profile", "camera_profile"}
 )
 RECEIPT_KEYS = frozenset(
     {
@@ -152,6 +169,14 @@ class PackagedProfileInputs:
     package: PackageBinding
     nvidia_icd: Path
     nvidia_icd_sha256: str
+    runtime_profile: str | None = None
+    camera_profile: str | None = None
+    display: str = EXPECTED_DISPLAY
+    gpu: int = EXPECTED_GPU
+    vista_world_port: int = EXPECTED_PORT
+    width: int = EXPECTED_WIDTH
+    height: int = EXPECTED_HEIGHT
+    fps: int = EXPECTED_FPS
 
 
 @dataclass(frozen=True)
@@ -583,11 +608,23 @@ def _validate_nvidia_icd(path: Path) -> Path:
     return icd
 
 
-def profile_from_binding(binding: PackageBinding, nvidia_icd: Path) -> dict[str, Any]:
+def profile_from_binding(
+    binding: PackageBinding,
+    nvidia_icd: Path,
+    *,
+    runtime_profile: str | None = None,
+) -> dict[str, Any]:
     validated_icd = _validate_nvidia_icd(nvidia_icd)
-    return {
-        "schema": PROFILE_SCHEMA,
-        "mode": PROFILE_MODE,
+    try:
+        spec = resolve_runtime_profile(runtime_profile)
+    except RuntimeSafetyError as exc:
+        raise PackagedProfileError(
+            "PROFILE_FIXED_VALUE_INVALID",
+            "runtime profile is not one of the closed profiles",
+        ) from exc
+    profile = {
+        "schema": R2_PROFILE_SCHEMA if runtime_profile is not None else PROFILE_SCHEMA,
+        "mode": R2_PROFILE_MODE if runtime_profile is not None else PROFILE_MODE,
         "package_attempt": str(binding.attempt_root),
         "package_receipt": str(binding.receipt),
         "package_receipt_sha256": binding.receipt_sha256,
@@ -601,16 +638,24 @@ def profile_from_binding(binding: PackageBinding, nvidia_icd: Path) -> dict[str,
         "unreal_pak_sha256": binding.unreal_pak_sha256,
         "map": binding.map_path,
         "world_revision": binding.world_revision,
-        "display": EXPECTED_DISPLAY,
-        "gpu": EXPECTED_GPU,
-        "vista_world_port": EXPECTED_PORT,
-        "width": EXPECTED_WIDTH,
-        "height": EXPECTED_HEIGHT,
-        "fps": EXPECTED_FPS,
+        "display": spec.display,
+        "gpu": spec.gpu,
+        "vista_world_port": spec.vista_world_port,
+        "width": spec.width,
+        "height": spec.height,
+        "fps": spec.fps,
         "title": EXPECTED_TITLE,
         "nvidia_icd": str(validated_icd),
         "nvidia_icd_sha256": sha256_file(validated_icd),
     }
+    if runtime_profile is not None:
+        profile.update(
+            {
+                "runtime_profile": spec.runtime_profile,
+                "camera_profile": spec.camera_profile,
+            }
+        )
+    return profile
 
 
 def _output_path(path: Path, root: Path) -> Path:
@@ -668,10 +713,18 @@ def write_profile(
     package_receipt_sha256: str,
     nvidia_icd: Path,
     output: Path,
+    *,
+    runtime_profile: str | None = None,
 ) -> ProfileWriteResult:
     binding = validate_package_attempt(package_attempt, package_receipt_sha256)
     output_path = _output_path(output, binding.attempt_root)
-    raw = canonical_json(profile_from_binding(binding, nvidia_icd))
+    raw = canonical_json(
+        profile_from_binding(
+            binding,
+            nvidia_icd,
+            runtime_profile=runtime_profile,
+        )
+    )
     _write_private_exclusive(output_path, raw)
     return ProfileWriteResult(
         output=output_path,
@@ -697,21 +750,49 @@ def load_profile(
         "packaged profile",
         maximum_bytes=MAX_PROFILE_BYTES,
     )
-    if set(payload) != PROFILE_KEYS:
+    schema = payload.get("schema")
+    if schema == PROFILE_SCHEMA:
+        runtime_profile = None
+        expected_keys = PROFILE_KEYS
+        expected_mode = PROFILE_MODE
+    elif schema == R2_PROFILE_SCHEMA:
+        runtime_profile = R2_RUNTIME_PROFILE
+        expected_keys = R2_PROFILE_KEYS
+        expected_mode = R2_PROFILE_MODE
+    else:
+        raise PackagedProfileError(
+            "PROFILE_FIXED_VALUE_INVALID",
+            "packaged profile schema differs",
+        )
+    if set(payload) != expected_keys:
         raise PackagedProfileError("PROFILE_SHAPE_INVALID", "packaged profile fields differ")
+    try:
+        spec = resolve_runtime_profile(runtime_profile)
+    except RuntimeSafetyError as exc:
+        raise PackagedProfileError(
+            "PROFILE_FIXED_VALUE_INVALID",
+            "runtime profile is not one of the closed profiles",
+        ) from exc
     fixed = {
-        "schema": PROFILE_SCHEMA,
-        "mode": PROFILE_MODE,
+        "schema": schema,
+        "mode": expected_mode,
         "map": EXPECTED_MAP_PATH,
         "world_revision": EXPECTED_WORLD_REVISION,
-        "display": EXPECTED_DISPLAY,
-        "gpu": EXPECTED_GPU,
-        "vista_world_port": EXPECTED_PORT,
-        "width": EXPECTED_WIDTH,
-        "height": EXPECTED_HEIGHT,
-        "fps": EXPECTED_FPS,
+        "display": spec.display,
+        "gpu": spec.gpu,
+        "vista_world_port": spec.vista_world_port,
+        "width": spec.width,
+        "height": spec.height,
+        "fps": spec.fps,
         "title": EXPECTED_TITLE,
     }
+    if runtime_profile is not None:
+        fixed.update(
+            {
+                "runtime_profile": R2_RUNTIME_PROFILE,
+                "camera_profile": R2_CAMERA_PROFILE,
+            }
+        )
     if any(payload.get(key) != value for key, value in fixed.items()):
         raise PackagedProfileError("PROFILE_FIXED_VALUE_INVALID", "fixed profile values differ")
     attempt_value = payload.get("package_attempt")
@@ -735,7 +816,11 @@ def load_profile(
             "PROFILE_IDENTITY_INVALID", "profile is not a direct package-attempt profile"
         )
     nvidia_icd = _validate_nvidia_icd(Path(icd_value))
-    expected = profile_from_binding(binding, nvidia_icd)
+    expected = profile_from_binding(
+        binding,
+        nvidia_icd,
+        runtime_profile=runtime_profile,
+    )
     if dict(payload) != expected:
         raise PackagedProfileError(
             "PROFILE_BINDING_MISMATCH", "profile differs from its sealed package receipt"
@@ -746,6 +831,14 @@ def load_profile(
         package=binding,
         nvidia_icd=nvidia_icd,
         nvidia_icd_sha256=expected["nvidia_icd_sha256"],
+        runtime_profile=runtime_profile,
+        camera_profile=spec.camera_profile,
+        display=spec.display,
+        gpu=spec.gpu,
+        vista_world_port=spec.vista_world_port,
+        width=spec.width,
+        height=spec.height,
+        fps=spec.fps,
     )
 
 
@@ -755,6 +848,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--package-receipt-sha256", required=True)
     parser.add_argument("--nvidia-icd", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--runtime-profile",
+        choices=[R2_RUNTIME_PROFILE],
+        default=None,
+    )
     return parser
 
 
@@ -765,6 +863,7 @@ def main(argv: list[str] | None = None) -> int:
         args.package_receipt_sha256,
         args.nvidia_icd,
         args.output,
+        runtime_profile=args.runtime_profile,
     )
     print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
     return 0

@@ -16,7 +16,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.runtime.vista_playable_home import acceptance
+from tools.runtime.vista_playable_home import acceptance, runtime
 from tools.runtime.vista_playable_home.runtime import process_start_ticks
 
 
@@ -313,7 +313,12 @@ class FakeVistaRuntime:
 
 
 class RuntimeAcceptanceFixture:
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        runtime_profile: str | None = None,
+    ) -> None:
         self.root = root
         self.repo = root / "repo"
         self.workspace = root / "workspace"
@@ -367,6 +372,56 @@ class RuntimeAcceptanceFixture:
                 "active_event": None,
             },
         }
+        if runtime_profile == runtime.R2_RUNTIME_PROFILE:
+            editor = (
+                self.root
+                / "UE"
+                / "Engine"
+                / "Binaries"
+                / "Linux"
+                / "UnrealEditor"
+            )
+            editor.parent.mkdir(parents=True)
+            editor.write_text("#!/bin/sh\n", encoding="utf-8")
+            editor.chmod(0o700)
+            r2_config = runtime.GameRuntimeConfig(
+                workspace=self.workspace,
+                project=project,
+                ue_editor=editor,
+                map_path=MAP_PATH,
+                display=runtime.R2_DISPLAY,
+                gpu=runtime.R2_GPU,
+                vista_world_port=runtime.R2_VISTA_WORLD_PORT,
+                width=runtime.R2_WIDTH,
+                height=runtime.R2_HEIGHT,
+                fps=runtime.R2_FPS,
+                runtime_profile=runtime.R2_RUNTIME_PROFILE,
+            )
+            launch_plan = runtime.redacted_plan(r2_config)
+            self.launch_plan_path = runtime_attempt / "launch-plan.json"
+            self.launch_plan_path.write_bytes(
+                acceptance._canonical_json_bytes(launch_plan)
+            )
+            state.update(
+                {
+                    "schema": acceptance.R2_RUNTIME_STATE_SCHEMA,
+                    "display": runtime.R2_DISPLAY,
+                    "gpu": runtime.R2_GPU,
+                    "vista_world_port": runtime.R2_VISTA_WORLD_PORT,
+                    "runtime_profile": runtime.R2_RUNTIME_PROFILE,
+                    "camera_profile": runtime.R2_CAMERA_PROFILE,
+                    "width": runtime.R2_WIDTH,
+                    "height": runtime.R2_HEIGHT,
+                    "fps": runtime.R2_FPS,
+                    "launch_plan_sha256": acceptance.sha256_file(
+                        self.launch_plan_path
+                    ),
+                }
+            )
+        elif runtime_profile is not None:
+            raise AssertionError("fixture runtime profile is unsupported")
+        else:
+            self.launch_plan_path = None
         self.state_path = runtime_attempt / "runtime-state.json"
         self.state_path.write_bytes(acceptance._canonical_json_bytes(state))
         pointer = {
@@ -390,6 +445,30 @@ class RuntimeAcceptanceFixture:
             "copy_methods": {"copy": 1},
             "runtime_play_proof": "pending",
         }
+        if runtime_profile == runtime.R2_RUNTIME_PROFILE:
+            build.update(
+                {
+                    "visual_profile_id": runtime.R2_RUNTIME_PROFILE,
+                    "visual_profile_sha256": "4" * 64,
+                    "visual_profile_content_digest": "5" * 64,
+                    "renderer_profile_request_sha256": "6" * 64,
+                    "renderer_profile_request_content_digest": "7" * 64,
+                    "renderer_runtime_observation": "pending",
+                    "base_scene_receipt_sha256": "3" * 64,
+                    "presentation_import_receipt_sha256": "8" * 64,
+                    "presentation_scene_receipt_sha256": "9" * 64,
+                    "presentation_manifest_sha256": "a" * 64,
+                    "presentation_artifact_receipt_sha256": "b" * 64,
+                    "presentation_bundle_count": 3,
+                    "presentation_collision_policy": (
+                        acceptance.R2_PRESENTATION_COLLISION_POLICY
+                    ),
+                    "presentation_ue_import_observation": (
+                        "verified_by_commandlet"
+                    ),
+                    "presentation_runtime_play_proof": "pending",
+                }
+            )
         build["content_digest"] = acceptance._content_digest(build)
         self.build_path = self.workspace / "result-receipt.json"
         self.build_path.write_bytes(acceptance._canonical_json_bytes(build))
@@ -404,6 +483,7 @@ class RuntimeAcceptanceFixture:
             socket_timeout_s=0.5,
             npc_timeout_s=2.0,
             npc_poll_interval_s=0.01,
+            runtime_profile=runtime_profile,
         )
 
     def _git(self, *args: str) -> str:
@@ -540,6 +620,82 @@ class VistaPlayableHomeRuntimeAcceptanceTests(unittest.TestCase):
         for event_id in acceptance.EVENT_IDS:
             self.assertIn(f"event.{event_id}.start", event_steps)
             self.assertIn(f"event.{event_id}.reset", event_steps)
+
+    def test_realistic_r2_acceptance_binds_profile_plan_build_and_port(self) -> None:
+        fixture = RuntimeAcceptanceFixture(
+            self.root,
+            runtime_profile=runtime.R2_RUNTIME_PROFILE,
+        )
+        with FakeVistaRuntime() as server:
+            code, receipt = acceptance.execute_acceptance(
+                fixture.config,
+                exchange=self._exchange(server),
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["schema"], acceptance.R2_RECEIPT_SCHEMA)
+        self.assertEqual(receipt["status"], "accepted")
+        bindings = receipt["bindings"]
+        self.assertEqual(bindings["runtime_profile"], runtime.R2_RUNTIME_PROFILE)
+        self.assertEqual(bindings["camera_profile"], runtime.R2_CAMERA_PROFILE)
+        self.assertEqual(bindings["display"], runtime.R2_DISPLAY)
+        self.assertEqual(bindings["gpu"], runtime.R2_GPU)
+        self.assertEqual(bindings["port"], runtime.R2_VISTA_WORLD_PORT)
+        self.assertEqual(bindings["width"], runtime.R2_WIDTH)
+        self.assertEqual(bindings["height"], runtime.R2_HEIGHT)
+        self.assertEqual(bindings["fps"], runtime.R2_FPS)
+        self.assertEqual(bindings["launch_plan"], str(fixture.launch_plan_path))
+        self.assertEqual(
+            bindings["launch_plan_sha256"],
+            acceptance.sha256_file(fixture.launch_plan_path),
+        )
+
+    def test_realistic_r2_acceptance_rejects_state_plan_and_build_drift(self) -> None:
+        cases = (
+            ("state_port", "RUNTIME_STATE_INVALID"),
+            ("camera_profile", "RUNTIME_STATE_INVALID"),
+            ("launch_plan", "RUNTIME_LAUNCH_PLAN_INVALID"),
+            ("build_renderer", "BUILD_RESULT_INVALID"),
+        )
+        for index, (case, expected_code) in enumerate(cases):
+            with self.subTest(case=case):
+                root = self.root / f"r2-{index}"
+                root.mkdir()
+                fixture = RuntimeAcceptanceFixture(
+                    root,
+                    runtime_profile=runtime.R2_RUNTIME_PROFILE,
+                )
+                config_values = dict(fixture.config.__dict__)
+                if case in {"state_port", "camera_profile"}:
+                    state = json.loads(fixture.state_path.read_text(encoding="utf-8"))
+                    if case == "state_port":
+                        state["vista_world_port"] = runtime.R2_VISTA_WORLD_PORT + 1
+                    else:
+                        state["camera_profile"] = "default"
+                    fixture.state_path.write_bytes(
+                        acceptance._canonical_json_bytes(state)
+                    )
+                    config_values["runtime_state_sha256"] = acceptance.sha256_file(
+                        fixture.state_path
+                    )
+                elif case == "launch_plan":
+                    fixture.launch_plan_path.write_bytes(
+                        fixture.launch_plan_path.read_bytes() + b"\n"
+                    )
+                else:
+                    build = json.loads(fixture.build_path.read_text(encoding="utf-8"))
+                    build["renderer_runtime_observation"] = "observed"
+                    build["content_digest"] = acceptance._content_digest(build)
+                    fixture.build_path.write_bytes(
+                        acceptance._canonical_json_bytes(build)
+                    )
+                    config_values["build_result_sha256"] = acceptance.sha256_file(
+                        fixture.build_path
+                    )
+                with self.assertRaises(acceptance.AcceptanceError) as caught:
+                    acceptance.validate_binding(
+                        acceptance.AcceptanceConfig(**config_values)
+                    )
+                self.assertEqual(caught.exception.code, expected_code)
 
     def test_generation_drift_fails_closed(self) -> None:
         with FakeVistaRuntime(drift_at=1) as server:

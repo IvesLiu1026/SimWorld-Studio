@@ -16,6 +16,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.runtime.vista_playable_home import launch, preflight, profile_entrypoint, stop, sunshine_app
 from tools.runtime.vista_playable_home.runtime import (
     GameRuntimeConfig,
+    R2_CAMERA_PROFILE,
+    R2_DISPLAY,
+    R2_FPS,
+    R2_GPU,
+    R2_HEIGHT,
+    R2_RUNTIME_PROFILE,
+    R2_SCHEMA,
+    R2_VISTA_WORLD_PORT,
+    R2_WIDTH,
     RuntimeSafetyError,
     allocate_runtime_attempt,
     atomic_write_json,
@@ -126,6 +135,145 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
         environment = sanitized_environment(config)
         self.assertNotIn("ANTHROPIC_API_KEY", environment)
         self.assertNotIn("OPENAI_API_KEY", environment)
+
+    def test_realistic_r2_runtime_is_closed_and_attempt_local(self) -> None:
+        base = self.make_config()
+        r2 = GameRuntimeConfig(
+            **{
+                **base.__dict__,
+                "runtime_profile": R2_RUNTIME_PROFILE,
+                "display": R2_DISPLAY,
+                "gpu": R2_GPU,
+                "vista_world_port": R2_VISTA_WORLD_PORT,
+                "width": R2_WIDTH,
+                "height": R2_HEIGHT,
+                "fps": R2_FPS,
+            }
+        )
+        with mock.patch(
+            "tools.runtime.vista_playable_home.runtime.port_is_available",
+            return_value=True,
+        ):
+            config = validate_config(r2, create_workspace=False)
+
+        command = build_game_command(config)
+        self.assertIn(f"-VistaCameraProfile={R2_CAMERA_PROFILE}", command)
+        self.assertIn(f"-VistaWorldPort={R2_VISTA_WORLD_PORT}", command)
+        self.assertIn(f"-ResX={R2_WIDTH}", command)
+        self.assertIn(f"-ResY={R2_HEIGHT}", command)
+        self.assertIn(f"-graphicsadapter={R2_GPU}", command)
+        self.assertIn(
+            f"-UserDir={config.workspace / 'runtime-user' / 'ue-user'}",
+            command,
+        )
+
+        environment = sanitized_environment(config)
+        user_root = config.workspace / "runtime-user"
+        self.assertEqual(environment["DISPLAY"], R2_DISPLAY)
+        self.assertEqual(environment["HOME"], str(user_root / "home"))
+        self.assertEqual(environment["TMPDIR"], str(user_root / "tmp"))
+        self.assertEqual(environment["XDG_DATA_HOME"], str(user_root / "xdg-data"))
+        self.assertEqual(environment["VISTA_RUNTIME_PROFILE"], R2_RUNTIME_PROFILE)
+        self.assertEqual(environment["VISTA_CAMERA_PROFILE"], R2_CAMERA_PROFILE)
+
+        plan = redacted_plan(config)
+        self.assertEqual(plan["schema"], R2_SCHEMA)
+        self.assertEqual(plan["mode"], "unreal-editor-game-preview-realistic")
+        self.assertEqual(plan["config"]["runtime_profile"], R2_RUNTIME_PROFILE)
+        self.assertEqual(plan["config"]["camera_profile"], R2_CAMERA_PROFILE)
+        self.assertTrue(plan["security"]["runtime_profile_closed"])
+
+    def test_realistic_r2_runtime_rejects_any_fixed_tuple_drift(self) -> None:
+        base = self.make_config()
+        values = {
+            "runtime_profile": R2_RUNTIME_PROFILE,
+            "display": R2_DISPLAY,
+            "gpu": R2_GPU,
+            "vista_world_port": R2_VISTA_WORLD_PORT,
+            "width": R2_WIDTH,
+            "height": R2_HEIGHT,
+            "fps": R2_FPS,
+        }
+        for field, wrong in (
+            ("display", ":120"),
+            ("gpu", 2),
+            ("vista_world_port", 55631),
+            ("width", 1280),
+            ("height", 720),
+            ("fps", 59),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                RuntimeSafetyError, "1920x1080"
+            ):
+                build_game_command(
+                    GameRuntimeConfig(
+                        **{
+                            **base.__dict__,
+                            **values,
+                            field: wrong,
+                        }
+                    )
+                )
+
+    def test_launch_cli_selects_r2_defaults_without_changing_legacy_defaults(self) -> None:
+        base = self.make_config()
+        required = [
+            "--workspace",
+            str(base.workspace),
+            "--project",
+            str(base.project),
+            "--ue-editor",
+            str(base.ue_editor),
+            "--map",
+            base.map_path,
+        ]
+        legacy = launch.config_from_args(launch.parser().parse_args(required))
+        self.assertEqual(
+            (
+                legacy.runtime_profile,
+                legacy.display,
+                legacy.gpu,
+                legacy.vista_world_port,
+                legacy.width,
+                legacy.height,
+                legacy.fps,
+            ),
+            (None, ":117", 0, 55620, 1280, 720, 60),
+        )
+        r2 = launch.config_from_args(
+            launch.parser().parse_args(
+                [*required, "--runtime-profile", R2_RUNTIME_PROFILE]
+            )
+        )
+        self.assertEqual(
+            (
+                r2.runtime_profile,
+                r2.display,
+                r2.gpu,
+                r2.vista_world_port,
+                r2.width,
+                r2.height,
+                r2.fps,
+            ),
+            (
+                R2_RUNTIME_PROFILE,
+                R2_DISPLAY,
+                R2_GPU,
+                R2_VISTA_WORLD_PORT,
+                R2_WIDTH,
+                R2_HEIGHT,
+                R2_FPS,
+            ),
+        )
+
+    def test_legacy_runtime_plan_shape_does_not_gain_r2_fields(self) -> None:
+        plan = redacted_plan(self.make_config())
+        self.assertNotIn("runtime_profile", plan["config"])
+        self.assertNotIn("camera_profile", plan["config"])
+        self.assertNotIn("runtime_profile_closed", plan["security"])
+        self.assertFalse(
+            any("VistaCameraProfile" in item for item in plan["command"])
+        )
 
     def test_toolchain_report_is_honest(self) -> None:
         config = self.make_config()

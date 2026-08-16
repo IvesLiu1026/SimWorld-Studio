@@ -127,12 +127,16 @@ class PackagedProfileFixture:
     def receipt_sha256(self) -> str:
         return packaged_profile.sha256_file(self.receipt_path)
 
-    def write_profile(self) -> packaged_profile.ProfileWriteResult:
+    def write_profile(
+        self,
+        runtime_profile: str | None = None,
+    ) -> packaged_profile.ProfileWriteResult:
         return packaged_profile.write_profile(
             self.attempt,
             self.receipt_sha256,
             self.icd,
             self.profile_path,
+            runtime_profile=runtime_profile,
         )
 
     def load_profile(self) -> packaged_profile.PackagedProfileInputs:
@@ -193,6 +197,74 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertIn("-VistaWorldPort=55620", command)
         self.assertIn("-ResX=1280", command)
         self.assertIn("-ResY=720", command)
+
+    def test_realistic_r2_profile_command_environment_and_plan_are_closed(self) -> None:
+        result = self.fixture.write_profile(runtime.R2_RUNTIME_PROFILE)
+        inputs = packaged_profile.load_profile(
+            self.fixture.profile_path,
+            result.profile_sha256,
+        )
+        payload = json.loads(self.fixture.profile_path.read_text(encoding="utf-8"))
+        self.assertEqual(set(payload), packaged_profile.R2_PROFILE_KEYS)
+        self.assertEqual(payload["schema"], packaged_profile.R2_PROFILE_SCHEMA)
+        self.assertEqual(payload["runtime_profile"], runtime.R2_RUNTIME_PROFILE)
+        self.assertEqual(payload["camera_profile"], runtime.R2_CAMERA_PROFILE)
+        self.assertEqual(payload["display"], runtime.R2_DISPLAY)
+        self.assertEqual(payload["vista_world_port"], runtime.R2_VISTA_WORLD_PORT)
+        self.assertEqual(payload["width"], runtime.R2_WIDTH)
+        self.assertEqual(payload["height"], runtime.R2_HEIGHT)
+
+        command = packaged_entrypoint.build_command(inputs)
+        self.assertIn(
+            f"-VistaCameraProfile={runtime.R2_CAMERA_PROFILE}",
+            command,
+        )
+        self.assertIn(f"-VistaWorldPort={runtime.R2_VISTA_WORLD_PORT}", command)
+        self.assertIn(f"-ResX={runtime.R2_WIDTH}", command)
+        self.assertIn(f"-ResY={runtime.R2_HEIGHT}", command)
+        environment = packaged_entrypoint.sanitized_environment(inputs)
+        user_root = self.fixture.attempt / "interactive-user"
+        self.assertEqual(environment["DISPLAY"], runtime.R2_DISPLAY)
+        self.assertEqual(environment["TMPDIR"], str(user_root / "tmp"))
+        self.assertEqual(environment["XDG_DATA_HOME"], str(user_root / "xdg-data"))
+        self.assertEqual(environment["VISTA_RUNTIME_PROFILE"], runtime.R2_RUNTIME_PROFILE)
+        self.assertEqual(environment["VISTA_CAMERA_PROFILE"], runtime.R2_CAMERA_PROFILE)
+        plan = packaged_entrypoint.launch_plan(inputs)
+        self.assertEqual(plan["schema"], packaged_entrypoint.R2_PLAN_SCHEMA)
+        self.assertEqual(plan["mode"], packaged_profile.R2_PROFILE_MODE)
+        self.assertEqual(plan["runtime"]["runtime_profile"], runtime.R2_RUNTIME_PROFILE)
+        self.assertEqual(plan["runtime"]["camera_profile"], runtime.R2_CAMERA_PROFILE)
+        self.assertEqual(plan["runtime"]["vista_world_port"], runtime.R2_VISTA_WORLD_PORT)
+
+    def test_realistic_r2_profile_fixed_tuple_tampering_is_refused(self) -> None:
+        result = self.fixture.write_profile(runtime.R2_RUNTIME_PROFILE)
+        original = json.loads(self.fixture.profile_path.read_text(encoding="utf-8"))
+        for field, value in (
+            ("runtime_profile", "realistic_interior_r3"),
+            ("camera_profile", "default"),
+            ("display", ":120"),
+            ("vista_world_port", runtime.R2_VISTA_WORLD_PORT + 1),
+            ("width", 1280),
+        ):
+            with self.subTest(field=field):
+                candidate = copy.deepcopy(original)
+                candidate[field] = value
+                raw = packaged_profile.canonical_json(candidate)
+                self.fixture.profile_path.write_bytes(raw)
+                self.fixture.profile_path.chmod(0o600)
+                with self.assertRaises(packaged_profile.PackagedProfileError):
+                    packaged_profile.load_profile(
+                        self.fixture.profile_path,
+                        hashlib.sha256(raw).hexdigest(),
+                    )
+                self.fixture.profile_path.write_bytes(
+                    packaged_profile.canonical_json(original)
+                )
+                self.fixture.profile_path.chmod(0o600)
+        self.assertEqual(
+            packaged_profile.sha256_file(self.fixture.profile_path),
+            result.profile_sha256,
+        )
 
     def test_environment_is_fixed_x11_gpu_zero_and_does_not_copy_secrets(self) -> None:
         self.fixture.write_profile()
@@ -390,6 +462,82 @@ class PackagedProfileTests(unittest.TestCase):
         pointer_path, pointer_state = runtime.resolve_current_runtime_state(self.fixture.attempt)
         self.assertEqual(pointer_path, state_path)
         self.assertEqual(pointer_state["status"], "stopped")
+
+    def test_realistic_r2_packaged_state_binds_profile_plan_and_port(self) -> None:
+        self.fixture.write_profile(runtime.R2_RUNTIME_PROFILE)
+        inputs = self.fixture.load_profile()
+        stop_checks = 0
+
+        def stop_requested() -> bool:
+            nonlocal stop_checks
+            stop_checks += 1
+            return stop_checks >= 3
+
+        def ready(process, *, stop_requested):
+            self.assertIsNone(process.poll())
+            self.assertFalse(stop_requested())
+            return {
+                "command_id": "vwc-" + "c" * 24,
+                "status": "success",
+                "code": "READY",
+                "world_revision": packaged_profile.EXPECTED_WORLD_REVISION,
+                "session_generation": 0,
+                "event_status": "idle",
+                "active_event": None,
+            }
+
+        listener_calls: list[tuple[int, int]] = []
+
+        def listener(port: int, process_group: int) -> dict[str, object]:
+            listener_calls.append((port, process_group))
+            return {
+                "host": "127.0.0.1",
+                "port": port,
+                "process_group": process_group,
+                "socket_inode": 789,
+                "owner_pids": [process_group],
+            }
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                packaged_entrypoint,
+                "validate_vista_world_port",
+                return_value=runtime.R2_VISTA_WORLD_PORT,
+            ),
+            mock.patch.object(packaged_entrypoint.time, "sleep", return_value=None),
+            contextlib.redirect_stdout(output),
+        ):
+            code = packaged_entrypoint.run_packaged(
+                inputs,
+                stop_requested=stop_requested,
+                readiness_waiter=ready,
+                listener_prover=listener,
+            )
+
+        self.assertEqual(code, 0)
+        state_path = Path(json.loads(output.getvalue())["state"])
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["schema"], packaged_entrypoint.R2_STATE_SCHEMA)
+        self.assertEqual(state["mode"], packaged_profile.R2_PROFILE_MODE)
+        self.assertEqual(state["runtime_profile"], runtime.R2_RUNTIME_PROFILE)
+        self.assertEqual(state["camera_profile"], runtime.R2_CAMERA_PROFILE)
+        self.assertEqual(state["display"], runtime.R2_DISPLAY)
+        self.assertEqual(state["vista_world_port"], runtime.R2_VISTA_WORLD_PORT)
+        self.assertEqual(state["width"], runtime.R2_WIDTH)
+        self.assertEqual(state["height"], runtime.R2_HEIGHT)
+        plan_path = state_path.parent / "launch-plan.json"
+        self.assertEqual(
+            state["launch_plan_sha256"],
+            packaged_profile.sha256_file(plan_path),
+        )
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        self.assertEqual(plan["schema"], packaged_entrypoint.R2_PLAN_SCHEMA)
+        self.assertEqual(
+            listener_calls,
+            [(runtime.R2_VISTA_WORLD_PORT, state["process"]["pid"])],
+        )
+        self.assertFalse(runtime.identity_is_live(state["process"]))
 
     def test_post_readiness_archive_drift_terminates_owned_process_and_marks_failed(self) -> None:
         self.fixture.write_profile()

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import signal
@@ -57,7 +58,9 @@ else:
 
 
 PLAN_SCHEMA = "simworld.vista.playable-home-packaged-launch-plan/v1"
+R2_PLAN_SCHEMA = "simworld.vista.playable-home-packaged-launch-plan/v2"
 STATE_SCHEMA = "simworld.vista.playable-home-runtime-state/v1"
+R2_STATE_SCHEMA = "simworld.vista.playable-home-runtime-state/v2"
 DEFAULT_READY_TIMEOUT_SECONDS = 480.0
 TRUSTED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ReadinessWaiter = Callable[..., dict[str, Any]]
@@ -70,23 +73,23 @@ def build_command(inputs: packaged_profile.PackagedProfileInputs) -> list[str]:
 
     package = inputs.package
     user_root = package.attempt_root / "interactive-user"
-    return [
+    command = [
         str(package.executable),
         "VistaPlayableHome",
         package.map_path,
         "-Windowed",
         "-ForceRes",
-        f"-ResX={packaged_profile.EXPECTED_WIDTH}",
-        f"-ResY={packaged_profile.EXPECTED_HEIGHT}",
-        f"-graphicsadapter={packaged_profile.EXPECTED_GPU}",
-        f"-VistaWorldPort={packaged_profile.EXPECTED_PORT}",
+        f"-ResX={inputs.width}",
+        f"-ResY={inputs.height}",
+        f"-graphicsadapter={inputs.gpu}",
+        f"-VistaWorldPort={inputs.vista_world_port}",
         "-NOSPLASH",
         "-NOSOUND",
         "-NoAnalytics",
         "-UDPMESSAGING_TRANSPORT_ENABLE=0",
         "-ini:Engine:[/Script/TcpMessaging.TcpMessagingSettings]:EnableTransport=False",
         "-ddc=InstalledNoZenLocalFallback",
-        f"-ExecCmds=t.MaxFPS {packaged_profile.EXPECTED_FPS}",
+        f"-ExecCmds=t.MaxFPS {inputs.fps}",
         "-SaveToUserDir",
         f"-UserDir={user_root / 'ue-user'}",
         f"-LocalDataCachePath={user_root / 'xdg-cache' / 'UnrealEngine' / 'DDC'}",
@@ -94,24 +97,39 @@ def build_command(inputs: packaged_profile.PackagedProfileInputs) -> list[str]:
         "-FullStdOutLogOutput",
         "-log",
     ]
+    if inputs.camera_profile is not None:
+        command.insert(9, f"-VistaCameraProfile={inputs.camera_profile}")
+    return command
 
 
 def sanitized_environment(
     inputs: packaged_profile.PackagedProfileInputs,
 ) -> dict[str, str]:
     user_root = inputs.package.attempt_root / "interactive-user"
-    return {
+    environment = {
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "PATH": TRUSTED_PATH,
         "HOME": str(user_root / "home"),
         "XDG_CACHE_HOME": str(user_root / "xdg-cache"),
         "XDG_CONFIG_HOME": str(user_root / "xdg-config"),
-        "DISPLAY": packaged_profile.EXPECTED_DISPLAY,
+        "DISPLAY": inputs.display,
         "SDL_VIDEODRIVER": "x11",
         "VK_ICD_FILENAMES": str(inputs.nvidia_icd),
-        "VISTA_RUNTIME_GPU": str(packaged_profile.EXPECTED_GPU),
+        "VISTA_RUNTIME_GPU": str(inputs.gpu),
     }
+    if inputs.runtime_profile is not None:
+        environment.update(
+            {
+                "TMPDIR": str(user_root / "tmp"),
+                "TMP": str(user_root / "tmp"),
+                "TEMP": str(user_root / "tmp"),
+                "XDG_DATA_HOME": str(user_root / "xdg-data"),
+                "VISTA_RUNTIME_PROFILE": inputs.runtime_profile,
+                "VISTA_CAMERA_PROFILE": inputs.camera_profile or "",
+            }
+        )
+    return environment
 
 
 def _prepare_user_directories(inputs: packaged_profile.PackagedProfileInputs) -> None:
@@ -127,6 +145,11 @@ def _prepare_user_directories(inputs: packaged_profile.PackagedProfileInputs) ->
         Path("xdg-cache"),
         Path("xdg-config"),
         Path("xdg-cache/UnrealEngine/DDC"),
+        *(
+            (Path("tmp"), Path("xdg-data"))
+            if inputs.runtime_profile is not None
+            else ()
+        ),
     ):
         target = user_root / relative
         if target.is_symlink():
@@ -138,10 +161,14 @@ def _prepare_user_directories(inputs: packaged_profile.PackagedProfileInputs) ->
 
 def launch_plan(inputs: packaged_profile.PackagedProfileInputs) -> dict[str, Any]:
     package = inputs.package
-    return {
-        "schema": PLAN_SCHEMA,
+    plan = {
+        "schema": R2_PLAN_SCHEMA if inputs.runtime_profile is not None else PLAN_SCHEMA,
         "created_at": utc_now(),
-        "mode": packaged_profile.PROFILE_MODE,
+        "mode": (
+            packaged_profile.R2_PROFILE_MODE
+            if inputs.runtime_profile is not None
+            else packaged_profile.PROFILE_MODE
+        ),
         "profile": {
             "path": str(inputs.profile),
             "sha256": inputs.profile_sha256,
@@ -162,12 +189,12 @@ def launch_plan(inputs: packaged_profile.PackagedProfileInputs) -> dict[str, Any
             "world_revision": package.world_revision,
         },
         "runtime": {
-            "display": packaged_profile.EXPECTED_DISPLAY,
-            "gpu": packaged_profile.EXPECTED_GPU,
-            "vista_world_port": packaged_profile.EXPECTED_PORT,
-            "width": packaged_profile.EXPECTED_WIDTH,
-            "height": packaged_profile.EXPECTED_HEIGHT,
-            "fps": packaged_profile.EXPECTED_FPS,
+            "display": inputs.display,
+            "gpu": inputs.gpu,
+            "vista_world_port": inputs.vista_world_port,
+            "width": inputs.width,
+            "height": inputs.height,
+            "fps": inputs.fps,
             "nvidia_icd": str(inputs.nvidia_icd),
             "nvidia_icd_sha256": inputs.nvidia_icd_sha256,
         },
@@ -182,6 +209,14 @@ def launch_plan(inputs: packaged_profile.PackagedProfileInputs) -> dict[str, Any
             "loopback_listener_process_group_proof": True,
         },
     }
+    if inputs.runtime_profile is not None:
+        plan["runtime"].update(
+            {
+                "runtime_profile": inputs.runtime_profile,
+                "camera_profile": inputs.camera_profile,
+            }
+        )
+    return plan
 
 
 def wait_for_readiness(
@@ -189,6 +224,7 @@ def wait_for_readiness(
     *,
     stop_requested: Callable[[], bool],
     timeout_seconds: float = DEFAULT_READY_TIMEOUT_SECONDS,
+    port: int = packaged_profile.EXPECTED_PORT,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     last_error: RuntimeSafetyError | None = None
@@ -199,7 +235,7 @@ def wait_for_readiness(
             raise RuntimeSafetyError("packaged executable exited before typed readiness")
         try:
             return probe_typed_runtime(
-                packaged_profile.EXPECTED_PORT,
+                port,
                 expected_revision=packaged_profile.EXPECTED_WORLD_REVISION,
                 timeout=1.0,
             )
@@ -232,9 +268,9 @@ def run_packaged(
     readiness_waiter: ReadinessWaiter = wait_for_readiness,
     listener_prover: ListenerProver = prove_loopback_listener_ownership,
 ) -> int:
-    validate_display(packaged_profile.EXPECTED_DISPLAY)
-    validate_gpu(packaged_profile.EXPECTED_GPU)
-    validate_vista_world_port(packaged_profile.EXPECTED_PORT)
+    validate_display(inputs.display)
+    validate_gpu(inputs.gpu)
+    validate_vista_world_port(inputs.vista_world_port)
     _prepare_user_directories(inputs)
 
     runtime_root_path = runtime_root(inputs.package.attempt_root)
@@ -258,7 +294,9 @@ def run_packaged(
     state: dict[str, Any] | None = None
     try:
         runtime_dir = allocate_runtime_attempt(inputs.package.attempt_root)
-        atomic_write_json(runtime_dir / "launch-plan.json", launch_plan(inputs))
+        launch_plan_path = runtime_dir / "launch-plan.json"
+        atomic_write_json(launch_plan_path, launch_plan(inputs))
+        launch_plan_sha256 = hashlib.sha256(launch_plan_path.read_bytes()).hexdigest()
         log_handle = _open_private_log(runtime_dir / "packaged-game.log")
         if stop_requested():
             raise RuntimeSafetyError("packaged launch was cancelled")
@@ -278,16 +316,20 @@ def run_packaged(
         supervisor = process_identity(os.getpid(), "vista-world-packaged-supervisor")
         state_path = runtime_dir / "runtime-state.json"
         state = {
-            "schema": STATE_SCHEMA,
+            "schema": R2_STATE_SCHEMA if inputs.runtime_profile is not None else STATE_SCHEMA,
             "status": "starting",
             "created_at": utc_now(),
             "updated_at": utc_now(),
-            "mode": packaged_profile.PROFILE_MODE,
+            "mode": (
+                packaged_profile.R2_PROFILE_MODE
+                if inputs.runtime_profile is not None
+                else packaged_profile.PROFILE_MODE
+            ),
             "map": inputs.package.map_path,
             "world_revision": inputs.package.world_revision,
-            "display": packaged_profile.EXPECTED_DISPLAY,
-            "gpu": packaged_profile.EXPECTED_GPU,
-            "vista_world_port": packaged_profile.EXPECTED_PORT,
+            "display": inputs.display,
+            "gpu": inputs.gpu,
+            "vista_world_port": inputs.vista_world_port,
             "profile": str(inputs.profile),
             "profile_sha256": inputs.profile_sha256,
             "package_receipt": str(inputs.package.receipt),
@@ -303,6 +345,17 @@ def run_packaged(
             "process": identity,
             "supervisor": supervisor,
         }
+        if inputs.runtime_profile is not None:
+            state.update(
+                {
+                    "runtime_profile": inputs.runtime_profile,
+                    "camera_profile": inputs.camera_profile,
+                    "width": inputs.width,
+                    "height": inputs.height,
+                    "fps": inputs.fps,
+                    "launch_plan_sha256": launch_plan_sha256,
+                }
+            )
         atomic_write_json(state_path, state)
         publish_current_runtime(inputs.package.attempt_root, state_path)
     except BaseException:
@@ -318,12 +371,22 @@ def run_packaged(
     assert process is not None and log_handle is not None and state is not None
     assert state_path is not None
     try:
-        typed_readiness = readiness_waiter(process, stop_requested=stop_requested)
+        if readiness_waiter is wait_for_readiness:
+            typed_readiness = readiness_waiter(
+                process,
+                stop_requested=stop_requested,
+                port=inputs.vista_world_port,
+            )
+        else:
+            typed_readiness = readiness_waiter(
+                process,
+                stop_requested=stop_requested,
+            )
         packaged_profile.revalidate_package(inputs.package)
         if process.poll() is not None:
             raise RuntimeSafetyError("packaged executable exited during archive re-hash")
         listener_ownership = listener_prover(
-            packaged_profile.EXPECTED_PORT,
+            inputs.vista_world_port,
             process.pid,
         )
     except BaseException as error:

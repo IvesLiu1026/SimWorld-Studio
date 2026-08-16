@@ -140,6 +140,95 @@ class VistaPlayableHomeProfileTests(unittest.TestCase):
             ],
         )
 
+    def test_realistic_r2_plan_writes_a_pinned_profile(self) -> None:
+        r2_config = runtime.GameRuntimeConfig(
+            **{
+                **self.fixture.config.__dict__,
+                "runtime_profile": runtime.R2_RUNTIME_PROFILE,
+                "display": runtime.R2_DISPLAY,
+                "gpu": runtime.R2_GPU,
+                "vista_world_port": runtime.R2_VISTA_WORLD_PORT,
+                "width": runtime.R2_WIDTH,
+                "height": runtime.R2_HEIGHT,
+                "fps": runtime.R2_FPS,
+            }
+        )
+        plan = runtime.redacted_plan(r2_config)
+        digest = self.fixture.write_plan(plan)
+        with mock.patch.object(
+            runtime,
+            "port_is_available",
+            side_effect=AssertionError("profile writer must not probe a live port"),
+        ):
+            result = profile.write_profile(
+                self.fixture.plan_path,
+                digest,
+                self.fixture.output,
+            )
+        payload = json.loads(self.fixture.output.read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(payload),
+            {
+                "workspace",
+                "project",
+                "ue_editor",
+                "map",
+                "display",
+                "gpu",
+                "vista_world_port",
+                "width",
+                "height",
+                "fps",
+                "runtime_profile",
+                "camera_profile",
+            },
+        )
+        self.assertEqual(payload["runtime_profile"], runtime.R2_RUNTIME_PROFILE)
+        self.assertEqual(payload["camera_profile"], runtime.R2_CAMERA_PROFILE)
+        self.assertEqual(payload["display"], runtime.R2_DISPLAY)
+        self.assertEqual(payload["vista_world_port"], runtime.R2_VISTA_WORLD_PORT)
+        self.assertEqual(payload["width"], runtime.R2_WIDTH)
+        self.assertEqual(payload["height"], runtime.R2_HEIGHT)
+        self.assertEqual(
+            result.profile_sha256,
+            hashlib.sha256(self.fixture.output.read_bytes()).hexdigest(),
+        )
+
+    def test_realistic_r2_plan_rejects_profile_port_and_camera_drift(self) -> None:
+        r2_config = runtime.GameRuntimeConfig(
+            **{
+                **self.fixture.config.__dict__,
+                "runtime_profile": runtime.R2_RUNTIME_PROFILE,
+                "display": runtime.R2_DISPLAY,
+                "gpu": runtime.R2_GPU,
+                "vista_world_port": runtime.R2_VISTA_WORLD_PORT,
+                "width": runtime.R2_WIDTH,
+                "height": runtime.R2_HEIGHT,
+                "fps": runtime.R2_FPS,
+            }
+        )
+        original = runtime.redacted_plan(r2_config)
+        cases: list[tuple[str, object]] = [
+            ("runtime_profile", "realistic_interior_r3"),
+            ("camera_profile", "default"),
+            ("vista_world_port", runtime.R2_VISTA_WORLD_PORT + 1),
+        ]
+        for field, value in cases:
+            with self.subTest(field=field):
+                candidate = copy.deepcopy(original)
+                candidate["config"][field] = value
+                digest = self.fixture.write_plan(candidate)
+                with self.assertRaises(profile.ProfileError):
+                    profile.validate_launch_plan(self.fixture.plan_path, digest)
+
+    def test_legacy_profile_contract_shape_remains_closed(self) -> None:
+        self.assertNotIn("runtime_profile", profile.PROFILE_FIELDS)
+        self.assertNotIn("camera_profile", profile.PROFILE_FIELDS)
+        self.assertEqual(
+            profile.R2_PROFILE_FIELDS - profile.PROFILE_FIELDS,
+            {"runtime_profile", "camera_profile"},
+        )
+
     def test_cli_prints_source_and_profile_digests(self) -> None:
         output = self.fixture.workspace / "sunshine-profile.json"
         stdout = io.StringIO()

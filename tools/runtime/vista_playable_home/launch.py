@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import signal
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_READY_TIMEOUT_S = 480.0
+R2_RUNTIME_STATE_SCHEMA = "simworld.vista.playable-home-runtime-state/v2"
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -23,6 +25,7 @@ if __package__ in {None, ""}:
         DEFAULT_GPU,
         DEFAULT_VISTA_WORLD_PORT,
         DEFAULT_WORLD_REVISION,
+        R2_RUNTIME_PROFILE,
         GameRuntimeConfig,
         RuntimeSafetyError,
         allocate_runtime_attempt,
@@ -33,6 +36,7 @@ if __package__ in {None, ""}:
         probe_typed_runtime,
         publish_current_runtime,
         redacted_plan,
+        resolve_runtime_profile,
         runtime_root,
         sanitized_environment,
         utc_now,
@@ -44,6 +48,7 @@ else:
         DEFAULT_GPU,
         DEFAULT_VISTA_WORLD_PORT,
         DEFAULT_WORLD_REVISION,
+        R2_RUNTIME_PROFILE,
         GameRuntimeConfig,
         RuntimeSafetyError,
         allocate_runtime_attempt,
@@ -54,6 +59,7 @@ else:
         probe_typed_runtime,
         publish_current_runtime,
         redacted_plan,
+        resolve_runtime_profile,
         runtime_root,
         sanitized_environment,
         utc_now,
@@ -67,12 +73,17 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--project", required=True, type=Path)
     result.add_argument("--ue-editor", required=True, type=Path)
     result.add_argument("--map", dest="map_path", required=True)
-    result.add_argument("--display", default=DEFAULT_DISPLAY)
-    result.add_argument("--gpu", type=int, default=DEFAULT_GPU)
-    result.add_argument("--vista-world-port", type=int, default=DEFAULT_VISTA_WORLD_PORT)
-    result.add_argument("--width", type=int, default=1280)
-    result.add_argument("--height", type=int, default=720)
-    result.add_argument("--fps", type=int, default=60)
+    result.add_argument(
+        "--runtime-profile",
+        choices=[R2_RUNTIME_PROFILE],
+        default=None,
+    )
+    result.add_argument("--display", default=None)
+    result.add_argument("--gpu", type=int, default=None)
+    result.add_argument("--vista-world-port", type=int, default=None)
+    result.add_argument("--width", type=int, default=None)
+    result.add_argument("--height", type=int, default=None)
+    result.add_argument("--fps", type=int, default=None)
     result.add_argument("--nvidia-icd", type=Path)
     result.add_argument("--nvidia-compat", type=Path)
     result.add_argument("--preflight-only", action="store_true")
@@ -80,19 +91,26 @@ def parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args: argparse.Namespace) -> GameRuntimeConfig:
+    runtime_profile = getattr(args, "runtime_profile", None)
+    spec = resolve_runtime_profile(runtime_profile)
     return GameRuntimeConfig(
         workspace=args.workspace,
         project=args.project,
         ue_editor=args.ue_editor,
         map_path=args.map_path,
-        display=args.display,
-        gpu=args.gpu,
-        vista_world_port=args.vista_world_port,
-        width=args.width,
-        height=args.height,
-        fps=args.fps,
+        display=args.display if args.display is not None else spec.display,
+        gpu=args.gpu if args.gpu is not None else spec.gpu,
+        vista_world_port=(
+            args.vista_world_port
+            if args.vista_world_port is not None
+            else spec.vista_world_port
+        ),
+        width=args.width if args.width is not None else spec.width,
+        height=args.height if args.height is not None else spec.height,
+        fps=args.fps if args.fps is not None else spec.fps,
         nvidia_icd=args.nvidia_icd,
         nvidia_compat=args.nvidia_compat,
+        runtime_profile=runtime_profile,
     )
 
 
@@ -155,6 +173,7 @@ def wait_for_typed_runtime(
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     config = validate_config(config_from_args(args), create_workspace=True)
+    runtime_spec = resolve_runtime_profile(config.runtime_profile)
     plan = redacted_plan(config)
     if args.preflight_only:
         print(json.dumps(plan, indent=2, sort_keys=True))
@@ -169,10 +188,28 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 
-    (config.workspace / "ue-user").mkdir(mode=0o700, exist_ok=True)
-    (config.workspace / "xdg-cache" / "UnrealEngine" / "DDC").mkdir(
-        mode=0o700, parents=True, exist_ok=True
-    )
+    if runtime_spec.runtime_profile is None:
+        (config.workspace / "ue-user").mkdir(mode=0o700, exist_ok=True)
+        (config.workspace / "xdg-cache" / "UnrealEngine" / "DDC").mkdir(
+            mode=0o700, parents=True, exist_ok=True
+        )
+    else:
+        user_root = config.workspace / "runtime-user"
+        for relative in (
+            "home",
+            "tmp",
+            "ue-user",
+            "xdg-cache",
+            "xdg-config",
+            "xdg-data",
+            "xdg-cache/UnrealEngine/DDC",
+        ):
+            target = user_root / relative
+            if target.is_symlink():
+                raise RuntimeSafetyError("r2 runtime user directory must not be a symlink")
+            target.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if target.resolve(strict=True) != target or not target.is_dir():
+                raise RuntimeSafetyError("r2 runtime user directory identity differs")
     runtime_root_path = runtime_root(config.workspace)
     lock_descriptor = os.open(
         runtime_root_path / ".launch.lock",
@@ -188,7 +225,9 @@ def main(argv: list[str] | None = None) -> int:
     process = None
     try:
         runtime_dir = allocate_runtime_attempt(config.workspace)
-        atomic_write_json(runtime_dir / "launch-plan.json", plan)
+        launch_plan_path = runtime_dir / "launch-plan.json"
+        atomic_write_json(launch_plan_path, plan)
+        launch_plan_sha256 = hashlib.sha256(launch_plan_path.read_bytes()).hexdigest()
         log_handle = open_private_log(runtime_dir / "unreal-game.log")
         if stopping:
             raise RuntimeSafetyError("VISTA World launch was cancelled")
@@ -205,7 +244,11 @@ def main(argv: list[str] | None = None) -> int:
         supervisor = process_identity(os.getpid(), "vista-world-supervisor")
         state_path = runtime_dir / "runtime-state.json"
         state: dict[str, Any] = {
-            "schema": "simworld.vista.playable-home-runtime-state/v1",
+            "schema": (
+                R2_RUNTIME_STATE_SCHEMA
+                if runtime_spec.runtime_profile is not None
+                else "simworld.vista.playable-home-runtime-state/v1"
+            ),
             "status": "starting",
             "created_at": utc_now(),
             "updated_at": utc_now(),
@@ -217,6 +260,17 @@ def main(argv: list[str] | None = None) -> int:
             "process": identity,
             "supervisor": supervisor,
         }
+        if runtime_spec.runtime_profile is not None:
+            state.update(
+                {
+                    "runtime_profile": runtime_spec.runtime_profile,
+                    "camera_profile": runtime_spec.camera_profile,
+                    "width": runtime_spec.width,
+                    "height": runtime_spec.height,
+                    "fps": runtime_spec.fps,
+                    "launch_plan_sha256": launch_plan_sha256,
+                }
+            )
         atomic_write_json(state_path, state)
         publish_current_runtime(config.workspace, state_path)
     except BaseException:
