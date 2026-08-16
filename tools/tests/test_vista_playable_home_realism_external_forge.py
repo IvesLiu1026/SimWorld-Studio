@@ -1563,9 +1563,11 @@ def test_no_external_v1_path_is_byte_stable_and_runtime_source_is_fail_closed() 
     profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
     plan = build_forge_plan(house, profile)
     manifest_bytes = canonical_json_bytes(normalized_manifest(plan, texture_size_px=512))
-    assert plan.content_digest == "56d07c9664dfe6d054124ca08acac007f6aef7338f0fdbaa81377fcaff34f008"
-    assert hashlib.sha256(canonical_json_bytes(plan)).hexdigest() == "8f9ef316cbc5a20fd1ccb5413eac704ef3d39a58bf48bd2d3cca995491c26b13"
-    assert hashlib.sha256(manifest_bytes).hexdigest() == "9e11ad06fe7f7bff581a097e451eba02e500ae7c8af386fb79ae52fcc7b5ac8a"
+    # The byte lock advances only when an input profile receipt is truthfully
+    # resealed.  The v1 serialization shape and length remain unchanged.
+    assert plan.content_digest == "d4c85631aedae5244f32661ebbf13b4b1a281571371c5d2bef6e80af0fc0dedf"
+    assert hashlib.sha256(canonical_json_bytes(plan)).hexdigest() == "58ed83fa34a51d289db319e0ad850a3c813758f547066929f42fe2dbe71ae61b"
+    assert hashlib.sha256(manifest_bytes).hexdigest() == "ede9831a42e7e5fa52d4730b8750f6ded2262471a90b0dad5fd557b8978ba340"
     assert len(manifest_bytes) == 116578
 
     import tools.blender.vista_playable_home_realism.external_assets as runtime

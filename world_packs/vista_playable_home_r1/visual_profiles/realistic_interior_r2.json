@@ -226,7 +226,7 @@
         "entitlement_status": "verified",
         "entitlement_record": "local-audit://poly-haven-cc0-20260816/electric_stove",
         "attribution": "Electric Stove by Poly Haven, provided under CC0 1.0.",
-        "modification_notice": "The Poly Haven source is floor-centered, uniformly scaled, and exported as an identity-root presentation bundle; source geometry and textures are otherwise retained.",
+        "modification_notice": "The Poly Haven source is floor-centered and exported as an identity-root presentation bundle. Its receipt-bound opacity texture is preserved; the direct opacity-to-Principled Alpha link is sanitized in Blender 4.5.8 to a GREATER_THAN 0.5 clip graph so glTF exports alphaMode MASK (effective alphaCutoff 0.5), and VISTA source/digest/active-semantic/alpha-policy material extras are added. Geometry and other receipt-bound PBR texture semantics are otherwise retained.",
         "commercial_use": "allowed",
         "redistribution_restriction": "project_policy"
       },
@@ -249,7 +249,7 @@
         "lod_policy": "single_mesh_measured",
         "collision_policy": "hidden_r1_proxy"
       },
-      "receipt_digest": "f608bc5af0b28546377d6cab48d0308bfb1e94662d9897a0c179957e53db842b"
+      "receipt_digest": "2f053518117c2738a9f98379ffacfe11f78e2e4d8e5d34b0cd0c9e0a36a8d339"
     },
     {
       "receipt_id": "source.hero.kitchen_dining_table",
@@ -671,5 +671,5 @@
       "home.r1/room.bedroom/entity.phone.01"
     ]
   },
-  "content_digest": "ad6f53ee847755579918c88c87779b8053032e5cb269e564266a2f71276fd162"
+  "content_digest": "a6b9ccb043c1f92778d28b9b6fe5033e80853cc2ec5675c9b5aad30612cb4179"
 }

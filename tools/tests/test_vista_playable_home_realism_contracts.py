@@ -68,7 +68,7 @@ class RealisticInteriorContractTests(unittest.TestCase):
         self.assertEqual(self.profile["architecture_profile"]["collision_policy"], "hidden_r1_proxies")
 
     def test_profile_and_receipt_digests_are_canonical_and_repeatable(self) -> None:
-        expected = "ad6f53ee847755579918c88c87779b8053032e5cb269e564266a2f71276fd162"
+        expected = "a6b9ccb043c1f92778d28b9b6fe5033e80853cc2ec5675c9b5aad30612cb4179"
         self.assertEqual(self.profile["content_digest"], expected)
         self.assertEqual(contract.content_digest(self.profile), expected)
         first = self.reseal(self.profile)
@@ -97,6 +97,10 @@ class RealisticInteriorContractTests(unittest.TestCase):
                 "texture_count": 3,
                 "entitlement_record": "local-audit://poly-haven-cc0-20260816/modern_coffee_table_01",
                 "attribution": "Modern Coffee Table 01 by Poly Haven, provided under CC0 1.0.",
+                "modification_notice": (
+                    "The Poly Haven source is floor-centered, uniformly scaled, and exported as an "
+                    "identity-root presentation bundle; source geometry and textures are otherwise retained."
+                ),
                 "receipt_digest": "b1ab6a246f9e80c94c29e2fc4d08be6f2dfed5d19561c9ba8825e387700996d8",
             },
             "visual.hero.kitchen_stove": {
@@ -110,7 +114,15 @@ class RealisticInteriorContractTests(unittest.TestCase):
                 "texture_count": 5,
                 "entitlement_record": "local-audit://poly-haven-cc0-20260816/electric_stove",
                 "attribution": "Electric Stove by Poly Haven, provided under CC0 1.0.",
-                "receipt_digest": "f608bc5af0b28546377d6cab48d0308bfb1e94662d9897a0c179957e53db842b",
+                "modification_notice": (
+                    "The Poly Haven source is floor-centered and exported as an identity-root presentation "
+                    "bundle. Its receipt-bound opacity texture is preserved; the direct opacity-to-Principled "
+                    "Alpha link is sanitized in Blender 4.5.8 to a GREATER_THAN 0.5 clip graph so glTF exports "
+                    "alphaMode MASK (effective alphaCutoff 0.5), and VISTA source/digest/active-semantic/"
+                    "alpha-policy material extras are added. Geometry and other receipt-bound PBR texture "
+                    "semantics are otherwise retained."
+                ),
+                "receipt_digest": "2f053518117c2738a9f98379ffacfe11f78e2e4d8e5d34b0cd0c9e0a36a8d339",
             },
         }
 
@@ -130,8 +142,10 @@ class RealisticInteriorContractTests(unittest.TestCase):
             self.assertEqual(receipt["license"]["entitlement_status"], "verified")
             self.assertEqual(receipt["license"]["entitlement_record"], pinned["entitlement_record"])
             self.assertEqual(receipt["license"]["attribution"], pinned["attribution"])
-            self.assertIn("floor-centered", receipt["license"]["modification_notice"])
-            self.assertIn("identity-root", receipt["license"]["modification_notice"])
+            self.assertEqual(
+                receipt["license"]["modification_notice"],
+                pinned["modification_notice"],
+            )
             self.assertEqual(receipt["license"]["commercial_use"], "allowed")
             self.assertEqual(receipt["license"]["redistribution_restriction"], "project_policy")
             slot = receipt["material_inventory"]["slots"][0]

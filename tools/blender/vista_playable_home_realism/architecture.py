@@ -122,6 +122,10 @@ _PINNED_EXTERNAL_HERO_CONTRACTS = {
         "presentation_role": "hero",
         "slot_id": "table_surface",
         "attribution": "Modern Coffee Table 01 by Poly Haven, provided under CC0 1.0.",
+        "modification_notice": (
+            "The Poly Haven source is floor-centered, uniformly scaled, and exported as an "
+            "identity-root presentation bundle; source geometry and textures are otherwise retained."
+        ),
     },
     "home.r1/room.kitchen_dining/entity.stove.01": {
         "logical_asset_id": "visual.hero.kitchen_stove",
@@ -131,12 +135,16 @@ _PINNED_EXTERNAL_HERO_CONTRACTS = {
         "presentation_role": "event_critical",
         "slot_id": "stove_surface",
         "attribution": "Electric Stove by Poly Haven, provided under CC0 1.0.",
+        "modification_notice": (
+            "The Poly Haven source is floor-centered and exported as an identity-root presentation "
+            "bundle. Its receipt-bound opacity texture is preserved; the direct opacity-to-Principled "
+            "Alpha link is sanitized in Blender 4.5.8 to a GREATER_THAN 0.5 clip graph so glTF exports "
+            "alphaMode MASK (effective alphaCutoff 0.5), and VISTA source/digest/active-semantic/"
+            "alpha-policy material extras are added. Geometry and other receipt-bound PBR texture "
+            "semantics are otherwise retained."
+        ),
     },
 }
-_PINNED_EXTERNAL_MODIFICATION_NOTICE = (
-    "The Poly Haven source is floor-centered, uniformly scaled, and exported as an "
-    "identity-root presentation bundle; source geometry and textures are otherwise retained."
-)
 
 
 def _slug(value: str) -> str:
@@ -1089,7 +1097,7 @@ def _validate_external_source_receipt(
         "entitlement_status": "verified",
         "entitlement_record": f"local-audit://poly-haven-cc0-20260816/{asset.asset_id}",
         "attribution": pinned["attribution"],
-        "modification_notice": _PINNED_EXTERNAL_MODIFICATION_NOTICE,
+        "modification_notice": pinned["modification_notice"],
         "commercial_use": "allowed",
         "redistribution_restriction": "project_policy",
     }
