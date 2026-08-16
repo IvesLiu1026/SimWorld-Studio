@@ -16,6 +16,17 @@ from unittest import mock
 
 
 from tools.ue.vista_playable_home import capture_review_views as capture
+from tools.worlds import playable_home as world_contract
+from world_packs.vista_playable_home_r1.visual_profiles import (
+    contract as visual_profile_contract,
+)
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+PACK = ROOT / "world_packs/vista_playable_home_r1"
+R2_PROFILE_SOURCE = (
+    PACK / "visual_profiles" / "realistic_interior_r2.json"
+)
 
 
 def transform(seed: int) -> dict:
@@ -114,6 +125,10 @@ class ReviewCameraPlanTests(unittest.TestCase):
         parser = capture.build_parser()
         destinations = {action.dest for action in parser._actions}
         self.assertFalse({"script", "python", "python_script", "execute_python_script"} & destinations)
+        self.assertTrue(
+            {"capture_profile", "visual_profile", "visual_profile_sha256"}
+            <= destinations
+        )
 
         root = pathlib.Path("/tmp/vista-review-fixture")
         inputs = capture.CaptureInputs(
@@ -148,6 +163,14 @@ class ReviewCameraPlanTests(unittest.TestCase):
         self.assertIn("-Windowed", command)
         self.assertIn("-ResX=1280", command)
         self.assertIn("-ResY=720", command)
+        execution = capture.build_execution(inputs)
+        self.assertEqual(execution["schema_version"], capture.EXECUTION_SCHEMA)
+        self.assertEqual(
+            set(execution["capture"]),
+            {"width", "height", "room_kinds", "cameras"},
+        )
+        self.assertNotIn("visual_profile", execution)
+        self.assertNotIn("graphics_adapter", execution["engine"])
 
     def test_worker_uses_post_tick_fixed_actor_capture(self) -> None:
         source = inspect.getsource(capture._unreal_worker)
@@ -271,6 +294,49 @@ class ReviewCaptureInputTests(unittest.TestCase):
         args.unreal_editor = str(fixed_editor)
         return capture.validate_inputs(args)
 
+    def make_r2_args(self, root: pathlib.Path) -> argparse.Namespace:
+        args = self.make_args(root)
+        plan = world_contract.compile_build_plan(
+            world_contract.load_json(PACK / "house.json"),
+            world_contract.load_events(PACK / "events"),
+        )
+        plan_path = pathlib.Path(args.build_plan)
+        plan_path.write_bytes(capture.canonical_json(plan))
+        args.build_plan_sha256 = capture.sha256_file(plan_path)
+        profile_path = root / capture.EXPECTED_VISUAL_PROFILE_RELATIVE
+        profile_path.write_bytes(R2_PROFILE_SOURCE.read_bytes())
+        profile = visual_profile_contract.load_json(profile_path)
+        profile_sha256 = capture.sha256_file(profile_path)
+        build_result_path = root / capture.EXPECTED_BUILD_RESULT_NAME
+        result = json.loads(build_result_path.read_text(encoding="utf-8"))
+        result.update(
+            {
+                "visual_profile_id": capture.R2_CAPTURE_PROFILE,
+                "visual_profile_sha256": profile_sha256,
+                "visual_profile_content_digest": profile["content_digest"],
+                "renderer_profile_request_sha256": "7" * 64,
+                "renderer_profile_request_content_digest": "8" * 64,
+                "renderer_runtime_observation": "pending",
+                "base_scene_receipt_sha256": "9" * 64,
+                "presentation_import_receipt_sha256": "a" * 64,
+                "presentation_scene_receipt_sha256": "b" * 64,
+                "presentation_manifest_sha256": "c" * 64,
+                "presentation_artifact_receipt_sha256": "d" * 64,
+                "presentation_bundle_count": 3,
+                "presentation_collision_policy": (
+                    "presentation_no_collision_use_hidden_r1_proxies"
+                ),
+                "presentation_ue_import_observation": "verified_by_commandlet",
+                "presentation_runtime_play_proof": "pending",
+            }
+        )
+        build_result_path.write_bytes(capture.canonical_json(result))
+        args.capture_profile = capture.R2_CAPTURE_PROFILE
+        args.visual_profile = str(profile_path)
+        args.visual_profile_sha256 = profile_sha256
+        args.display = capture.R2_DISPLAY
+        return args
+
     def test_inputs_require_real_unreal_name_and_fresh_append_only_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory).resolve()
@@ -308,6 +374,192 @@ class ReviewCaptureInputTests(unittest.TestCase):
             args.display = "remote.example:0"
             with self.assertRaisesRegex(capture.ReviewCaptureError, "DISPLAY_INVALID"):
                 capture.validate_inputs(args)
+
+    def test_r2_profile_is_sha_bound_six_shot_1080p_and_adapter_zero(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+
+            inputs = capture.validate_inputs(args)
+            execution = capture.build_execution(inputs)
+            command = capture.build_editor_command(inputs)
+
+            self.assertEqual(inputs.capture_profile, capture.R2_CAPTURE_PROFILE)
+            self.assertEqual(
+                tuple(camera["camera_id"] for camera in inputs.cameras),
+                capture.R2_ORDERED_SHOT_IDS,
+            )
+            self.assertEqual(execution["schema_version"], capture.R2_EXECUTION_SCHEMA)
+            self.assertEqual(execution["capture"]["shot_ids"], list(capture.R2_ORDERED_SHOT_IDS))
+            self.assertEqual(
+                (execution["capture"]["width"], execution["capture"]["height"]),
+                (1920, 1080),
+            )
+            self.assertEqual(execution["engine"]["graphics_adapter"], 0)
+            self.assertEqual(execution["engine"]["display"], ":119")
+            self.assertEqual(
+                execution["visual_profile"]["sha256"],
+                args.visual_profile_sha256,
+            )
+            self.assertEqual(execution["capture"]["runtime_observation_status"], "pending")
+            self.assertIn("-ResX=1920", command)
+            self.assertIn("-ResY=1080", command)
+            self.assertIn("-graphicsadapter=0", command)
+
+            args.graphics_adapter = 1
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "pinned to graphics adapter 0",
+            ):
+                capture.validate_inputs(args)
+
+            args.graphics_adapter = 0
+            args.display = ":118"
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "pinned to DISPLAY :119",
+            ):
+                capture.validate_inputs(args)
+
+    def test_r2_profile_pair_location_order_and_build_binding_fail_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+
+            profile = visual_profile_contract.load_json(args.visual_profile)
+            reordered = copy.deepcopy(profile)
+            reordered["review_shots"][0], reordered["review_shots"][1] = (
+                reordered["review_shots"][1],
+                reordered["review_shots"][0],
+            )
+            reordered = visual_profile_contract.seal_document(reordered)
+            plan = world_contract.compile_build_plan(
+                world_contract.load_json(PACK / "house.json"),
+                world_contract.load_events(PACK / "events"),
+            )
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "exact ordered six-shot",
+            ):
+                capture._compile_r2_capture_cameras(
+                    reordered,
+                    plan,
+                    capture.EXPECTED_MAP_PATH,
+                )
+
+            args.visual_profile_sha256 = None
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "must be supplied together",
+            ):
+                capture.validate_inputs(args)
+
+            args.visual_profile_sha256 = capture.sha256_file(
+                pathlib.Path(args.visual_profile)
+            )
+            result_path = root / capture.EXPECTED_BUILD_RESULT_NAME
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["visual_profile_sha256"] = "0" * 64
+            result_path.write_bytes(capture.canonical_json(result))
+            with self.assertRaisesRegex(
+                capture.ReviewCaptureError,
+                "r2 visual-profile binding differs",
+            ):
+                capture.validate_inputs(args)
+
+    def test_r2_receipt_never_claims_unmeasured_camera_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            args = self.make_r2_args(root)
+            fake_editor = pathlib.Path(args.unreal_editor)
+            fixed_editor = fake_editor.with_name("UnrealEditor")
+            fake_editor.rename(fixed_editor)
+            args.unreal_editor = str(fixed_editor)
+            self.addCleanup(lambda: fixed_editor.unlink(missing_ok=True))
+            inputs = capture.validate_inputs(args)
+            inputs.output_dir.mkdir()
+            (inputs.output_dir / capture.IMAGES_DIR).mkdir()
+            (inputs.output_dir / capture.WORKERS_DIR).mkdir()
+            outcomes = []
+            for camera in inputs.cameras:
+                ordinal = camera["ordinal"]
+                worker_dir = inputs.output_dir / capture.WORKERS_DIR / f"{ordinal:02d}"
+                worker_dir.mkdir()
+                manifest_path = worker_dir / capture.EXECUTION_FILE
+                manifest_path.write_bytes(b"worker manifest")
+                result_path = worker_dir / capture.UE_RESULT_FILE
+                result_path.write_bytes(f"worker result {ordinal}".encode())
+                editor_log = worker_dir / capture.EDITOR_LOG_FILE
+                editor_stdout = worker_dir / capture.EDITOR_STDOUT_FILE
+                editor_log.write_bytes(b"editor log")
+                editor_stdout.write_bytes(b"editor stdout")
+                final_path = inputs.output_dir / camera["relative_path"]
+                raw = f"distinct image {ordinal}".encode()
+                final_path.write_bytes(raw)
+                worker = capture.WorkerRun(
+                    ordinal=ordinal,
+                    camera=dict(camera),
+                    worker_dir=worker_dir,
+                    manifest_path=manifest_path,
+                    manifest_sha256=capture.sha256_file(manifest_path),
+                    scratch_dir=root / f"scratch-{ordinal}",
+                    scratch_png=root / f"scratch-{ordinal}/capture.png",
+                    result_path=result_path,
+                    editor_log=editor_log,
+                    editor_stdout=editor_stdout,
+                )
+                outcomes.append(
+                    capture.WorkerOutcome(
+                        worker=worker,
+                        ue_result={"engine_version": "5.7.0-test"},
+                        ue_result_sha256=capture.sha256_file(result_path),
+                        image={
+                            "ordinal": ordinal,
+                            "room_kind": camera["room_kind"],
+                            "room_id": camera["room_id"],
+                            "camera_id": camera["camera_id"],
+                            "semantic_id": camera["semantic_id"],
+                            "bytes": len(raw),
+                            "sha256": capture.sha256_bytes(raw),
+                        },
+                    )
+                )
+            with (
+                mock.patch.object(capture, "_verify_input_pins"),
+                mock.patch.object(capture, "_load_json", return_value=({}, b"")),
+                mock.patch.object(capture, "inspect_png_bytes"),
+            ):
+                receipt = capture.build_receipt(inputs, "a" * 64, outcomes)
+
+            self.assertEqual(receipt["schema_version"], capture.R2_RECEIPT_SCHEMA)
+            self.assertEqual(
+                receipt["status"],
+                "captured_pending_runtime_observation",
+            )
+            self.assertEqual(receipt["capture"]["shot_ids"], list(capture.R2_ORDERED_SHOT_IDS))
+            self.assertEqual(receipt["capture"]["runtime_observation_status"], "pending")
+            for key in (
+                "near_field_clearance_observation",
+                "foreground_occlusion_observation",
+                "expected_hero_visibility_observation",
+                "forbidden_foreground_observation",
+                "physical_exposure_observation",
+            ):
+                self.assertEqual(receipt["verification"][key], "pending")
 
     def test_editor_environment_is_allowlisted_and_pins_nvidia_icd(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

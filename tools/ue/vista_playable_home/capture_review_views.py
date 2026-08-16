@@ -32,12 +32,14 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import copy
 import hashlib
 import json
 import math
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -54,15 +56,29 @@ from typing import Any
 
 
 Path = pathlib.Path
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 BUILD_PLAN_SCHEMA = "simworld.vista.playable-home-build-plan/v1"
 EXECUTION_SCHEMA = "simworld.vista.playable-home-review-capture-execution/v2"
+R2_EXECUTION_SCHEMA = "simworld.vista.playable-home-review-capture-execution/v3"
 WORKER_EXECUTION_SCHEMA = (
     "simworld.vista.playable-home-review-capture-worker-execution/v1"
 )
+R2_WORKER_EXECUTION_SCHEMA = (
+    "simworld.vista.playable-home-review-capture-worker-execution/v2"
+)
 UE_RESULT_SCHEMA = "simworld.vista.playable-home-review-capture-ue-result/v2"
+R2_UE_RESULT_SCHEMA = "simworld.vista.playable-home-review-capture-ue-result/v3"
 RECEIPT_SCHEMA = "simworld.vista.playable-home-review-capture-receipt/v2"
+R2_RECEIPT_SCHEMA = "simworld.vista.playable-home-review-capture-receipt/v3"
 EXPECTED_REVISION = "vista_playable_home_r1"
 EXPECTED_HOUSE_ID = "home.r1"
+R1_CAPTURE_PROFILE = "fixed_r1"
+R2_CAPTURE_PROFILE = "realistic_interior_r2"
+CAPTURE_PROFILES = (R1_CAPTURE_PROFILE, R2_CAPTURE_PROFILE)
+R2_CAMERA_ACTOR_TAG = "VistaVisualRevision=realistic_interior_r2"
 EXPECTED_MAP_PATH = (
     "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
 )
@@ -73,11 +89,14 @@ EXPECTED_MAP_ASSET_RELATIVE = Path(
 EXPECTED_PROJECT_NAME = "VistaPlayableHome.uproject"
 EXPECTED_BUILD_RESULT_NAME = "result-receipt.json"
 EXPECTED_BUILD_RESULT_SCHEMA = "simworld.vista.playable-home-ue-build-result/v1"
+EXPECTED_VISUAL_PROFILE_RELATIVE = Path("contracts/visual-profile.json")
+EXPECTED_VISUAL_PROFILE_SCHEMA = "simworld.vista.playable-home-visual-profile/v1"
 EXPECTED_ENGINE_PREFIX = "5.7."
 WIDTH = 1280
 HEIGHT = 720
 R2_WIDTH = 1920
 R2_HEIGHT = 1080
+R2_DISPLAY = ":119"
 CAPTURE_METHOD = "camera_actor_pilot_highres_console"
 SCREENSHOT_TIMEOUT_SECONDS = 120.0
 WORKER_PROOF_POLL_INTERVAL_SECONDS = 0.25
@@ -127,6 +146,49 @@ FIXED_REVIEW_CAMERAS: tuple[tuple[str, str, str], ...] = (
         "bathroom_overview",
     ),
 )
+
+# The r2 evidence lane is deliberately a closed vertical slice: two shots for
+# each of the three presentation-finished rooms.  It is not a caller-defined
+# camera surface and its order is part of the execution and receipt contract.
+R2_REVIEW_SHOTS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "shot.entry_hall.overview",
+        "entry_hall",
+        "home.r1/room.entry_hall",
+        "overview",
+    ),
+    (
+        "shot.entry_hall.hero",
+        "entry_hall",
+        "home.r1/room.entry_hall",
+        "hero",
+    ),
+    (
+        "shot.living_room.overview",
+        "living_room",
+        "home.r1/room.living_room",
+        "overview",
+    ),
+    (
+        "shot.living_room.hero",
+        "living_room",
+        "home.r1/room.living_room",
+        "hero",
+    ),
+    (
+        "shot.kitchen_dining.overview",
+        "kitchen_dining",
+        "home.r1/room.kitchen_dining",
+        "overview",
+    ),
+    (
+        "shot.kitchen_dining.hero",
+        "kitchen_dining",
+        "home.r1/room.kitchen_dining",
+        "hero",
+    ),
+)
+R2_ORDERED_SHOT_IDS = tuple(item[0] for item in R2_REVIEW_SHOTS)
 
 
 class ReviewCaptureError(RuntimeError):
@@ -429,6 +491,10 @@ def compile_realistic_cameras(
     except realism_planning.VistaPlayableHomePlanError as exc:
         _fail(exc.code, exc.detail)
     ordered = operations
+    room_kind_by_id = {
+        room_id: room_kind
+        for _shot_id, room_kind, room_id, _purpose in R2_REVIEW_SHOTS
+    }
     cameras: list[dict[str, Any]] = []
     for ordinal, operation in enumerate(ordered, start=1):
         shot_id = operation["review_shot_id"]
@@ -436,6 +502,10 @@ def compile_realistic_cameras(
         cameras.append({
             "ordinal": ordinal,
             "visual_profile_id": visual_profile.get("visual_profile_id"),
+            "room_kind": room_kind_by_id.get(
+                operation["room_id"],
+                operation["room_id"].rsplit(".", 1)[-1],
+            ),
             "room_id": operation["room_id"],
             "camera_id": shot_id,
             "purpose": operation["purpose"],
@@ -458,6 +528,126 @@ def compile_realistic_cameras(
         _fail("VISTA_HOME_REVIEW_CAMERA_SET_INVALID", "r2 semantic camera IDs are duplicated")
     if any(camera["expected_transform"]["rotation_deg"][0] != 0.0 for camera in cameras):
         _fail("VISTA_HOME_REVIEW_LOOK_AT_INVALID", "r2 camera compiler produced nonzero roll")
+    return cameras
+
+
+def _visual_profile_content_digest(profile: Mapping[str, Any]) -> str:
+    body = copy.deepcopy(dict(profile))
+    body.pop("content_digest", None)
+    try:
+        raw = json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8", "strict")
+    except (TypeError, ValueError, OverflowError, UnicodeError) as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+            "visual profile is not finite canonical JSON",
+        )
+        raise AssertionError from exc
+    return sha256_bytes(raw)
+
+
+def _visual_profile_house_view(plan: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        rooms = [
+            {
+                "room_id": room["room_id"],
+                "transform": {
+                    "location_m": [0.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0],
+                },
+                "bounds_m": {
+                    "min_m": [
+                        float(value) / 100.0
+                        for value in room["world_bounds_cm"]["min_cm"]
+                    ],
+                    "max_m": [
+                        float(value) / 100.0
+                        for value in room["world_bounds_cm"]["max_cm"]
+                    ],
+                },
+            }
+            for room in plan["rooms"]
+        ]
+        entities = [
+            {"entity_id": entity["entity_id"]}
+            for entity in plan["entities"]
+        ]
+        return {
+            "revision": plan["house"]["revision"],
+            "content_digest": plan["house"]["content_digest"],
+            "rooms": rooms,
+            "entities": entities,
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_PLAN_INVALID",
+            "build plan cannot provide the visual-profile house view",
+        )
+        raise AssertionError from exc
+
+
+def _room_bounds_by_id(plan: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    try:
+        return {
+            room["room_id"]: room["world_bounds_cm"]
+            for room in plan["rooms"]
+        }
+    except (KeyError, TypeError) as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_PLAN_INVALID",
+            "build plan room bounds are unavailable",
+        )
+        raise AssertionError from exc
+
+
+def _compile_r2_capture_cameras(
+    profile: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    map_path: str,
+) -> list[dict[str, Any]]:
+    if (
+        profile.get("schema_version") != EXPECTED_VISUAL_PROFILE_SCHEMA
+        or profile.get("visual_profile_id") != R2_CAPTURE_PROFILE
+        or profile.get("house_revision") != EXPECTED_REVISION
+        or profile.get("content_digest") != _visual_profile_content_digest(profile)
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+            "r2 visual profile identity, revision, or content digest differs",
+        )
+    budget = profile.get("performance_budget")
+    if not isinstance(budget, Mapping) or budget.get("resolution_px") != [
+        R2_WIDTH,
+        R2_HEIGHT,
+    ]:
+        _fail(
+            "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+            "r2 visual profile does not pin 1920x1080 capture",
+        )
+    cameras = compile_realistic_cameras(
+        profile,
+        map_path,
+        room_bounds_by_id=_room_bounds_by_id(plan),
+    )
+    observed = tuple(
+        (
+            camera["camera_id"],
+            camera["room_kind"],
+            camera["room_id"],
+            camera["purpose"],
+        )
+        for camera in cameras
+    )
+    if observed != R2_REVIEW_SHOTS:
+        _fail(
+            "VISTA_HOME_REVIEW_CAMERA_SET_INVALID",
+            "r2 profile does not contain the exact ordered six-shot contract",
+        )
     return cameras
 
 
@@ -566,6 +756,11 @@ class CaptureInputs:
     ddc_seed: Path | None
     ddc_seed_tree_sha256: str | None
     cameras: tuple[dict[str, Any], ...]
+    capture_profile: str = R1_CAPTURE_PROFILE
+    visual_profile: dict[str, Any] | None = None
+    visual_profile_path: Path | None = None
+    visual_profile_sha256: str | None = None
+    visual_profile_content_digest: str | None = None
 
 
 def _tree_snapshot(root: Path) -> tuple[str, int, int]:
@@ -596,7 +791,15 @@ def _tree_snapshot(root: Path) -> tuple[str, int, int]:
     return sha256_bytes(canonical_json(records)), len(records), total_bytes
 
 
-def _validate_build_result(path: Path, attempt_root: Path, map_path: str) -> tuple[dict[str, Any], str]:
+def _validate_build_result(
+    path: Path,
+    attempt_root: Path,
+    map_path: str,
+    *,
+    visual_profile_id: str | None = None,
+    visual_profile_sha256: str | None = None,
+    visual_profile_content_digest: str | None = None,
+) -> tuple[dict[str, Any], str]:
     if path != attempt_root / EXPECTED_BUILD_RESULT_NAME:
         _fail("VISTA_HOME_REVIEW_BUILD_RESULT_INVALID", "build result location differs")
     result, raw = _load_json(path, label="accepted UE build result")
@@ -608,7 +811,106 @@ def _validate_build_result(path: Path, attempt_root: Path, map_path: str) -> tup
         or result.get("map_path") != map_path
     ):
         _fail("VISTA_HOME_REVIEW_BUILD_RESULT_INVALID", "accepted UE build result binding differs")
+    if visual_profile_id is not None:
+        if (
+            result.get("visual_profile_id") != visual_profile_id
+            or result.get("visual_profile_sha256") != visual_profile_sha256
+            or result.get("visual_profile_content_digest")
+            != visual_profile_content_digest
+            or result.get("renderer_runtime_observation") != "pending"
+            or not isinstance(result.get("renderer_profile_request_sha256"), str)
+            or SHA256_RE.fullmatch(result["renderer_profile_request_sha256"])
+            is None
+            or not isinstance(
+                result.get("renderer_profile_request_content_digest"), str
+            )
+            or SHA256_RE.fullmatch(
+                result["renderer_profile_request_content_digest"]
+            )
+            is None
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_BUILD_RESULT_INVALID",
+                "accepted UE build result r2 visual-profile binding differs",
+            )
+        presentation_keys = {
+            "base_scene_receipt_sha256",
+            "presentation_import_receipt_sha256",
+            "presentation_scene_receipt_sha256",
+            "presentation_manifest_sha256",
+            "presentation_artifact_receipt_sha256",
+            "presentation_bundle_count",
+            "presentation_collision_policy",
+            "presentation_ue_import_observation",
+            "presentation_runtime_play_proof",
+        }
+        if (
+            not presentation_keys.issubset(result)
+            or any(
+                not isinstance(result.get(key), str)
+                or SHA256_RE.fullmatch(result[key]) is None
+                for key in (
+                    "base_scene_receipt_sha256",
+                    "presentation_import_receipt_sha256",
+                    "presentation_scene_receipt_sha256",
+                    "presentation_manifest_sha256",
+                    "presentation_artifact_receipt_sha256",
+                )
+            )
+            or isinstance(result.get("presentation_bundle_count"), bool)
+            or not isinstance(result.get("presentation_bundle_count"), int)
+            or result["presentation_bundle_count"] <= 0
+            or result.get("presentation_collision_policy")
+            != "presentation_no_collision_use_hidden_r1_proxies"
+            or result.get("presentation_ue_import_observation")
+            != "verified_by_commandlet"
+            or result.get("presentation_runtime_play_proof") != "pending"
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_BUILD_RESULT_INVALID",
+                "accepted UE build result presentation status differs",
+            )
     return result, sha256_bytes(raw)
+
+
+def _load_r2_visual_profile(
+    path: Path,
+    expected_sha256: str,
+    plan: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    if SHA256_RE.fullmatch(expected_sha256 or "") is None:
+        _fail(
+            "VISTA_HOME_REVIEW_PIN_INVALID",
+            "visual profile pin must be a lowercase SHA-256",
+        )
+    profile, raw = _load_json(
+        path,
+        label="r2 visual profile",
+        expected_sha256=expected_sha256,
+    )
+    try:
+        from world_packs.vista_playable_home_r1.visual_profiles import (
+            contract as visual_profile_contract,
+        )
+
+        visual_profile_contract.validate_profile(
+            profile,
+            _visual_profile_house_view(plan),
+        )
+    except ImportError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+            "visual-profile contract validator is unavailable",
+        )
+        raise AssertionError from exc
+    except visual_profile_contract.VisualProfileContractError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+            str(exc),
+            pointer=str(path),
+        )
+    _compile_r2_capture_cameras(profile, plan, EXPECTED_MAP_PATH)
+    return profile, sha256_bytes(raw)
 
 
 def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
@@ -625,9 +927,71 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
         _fail("VISTA_HOME_REVIEW_PIN_INVALID", "build plan pin must be a lowercase SHA-256")
     plan, raw = _load_json(build_plan, label="build plan", expected_sha256=args.build_plan_sha256)
     plan_sha = sha256_bytes(raw)
-    cameras = compile_fixed_cameras(plan, args.map_path)
+    capture_profile = getattr(args, "capture_profile", R1_CAPTURE_PROFILE)
+    if capture_profile not in CAPTURE_PROFILES:
+        _fail(
+            "VISTA_HOME_REVIEW_CAPTURE_PROFILE_INVALID",
+            "capture profile is not one of the closed profiles",
+        )
+    visual_profile_arg = getattr(args, "visual_profile", None)
+    visual_profile_sha_arg = getattr(args, "visual_profile_sha256", None)
+    if bool(visual_profile_arg) != bool(visual_profile_sha_arg):
+        _fail(
+            "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+            "visual profile path and SHA-256 pin must be supplied together",
+        )
+    visual_profile: dict[str, Any] | None = None
+    visual_profile_path: Path | None = None
+    visual_profile_sha256: str | None = None
+    visual_profile_content_digest: str | None = None
+    if capture_profile == R1_CAPTURE_PROFILE:
+        if visual_profile_arg is not None:
+            _fail(
+                "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+                "the fixed r1 capture does not accept a visual profile",
+            )
+        cameras = compile_fixed_cameras(plan, args.map_path)
+    else:
+        if visual_profile_arg is None or visual_profile_sha_arg is None:
+            _fail(
+                "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+                "realistic_interior_r2 requires a visual profile and SHA-256 pin",
+            )
+        visual_profile_path = _require_child(
+            _existing_file(Path(visual_profile_arg), "r2 visual profile"),
+            attempt_root,
+            "r2 visual profile",
+        )
+        if visual_profile_path != attempt_root / EXPECTED_VISUAL_PROFILE_RELATIVE:
+            _fail(
+                "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+                "r2 visual profile must be the attempt-local materialized contract",
+                pointer=str(visual_profile_path),
+            )
+        visual_profile, visual_profile_sha256 = _load_r2_visual_profile(
+            visual_profile_path,
+            visual_profile_sha_arg,
+            plan,
+        )
+        visual_profile_content_digest = visual_profile["content_digest"]
+        cameras = _compile_r2_capture_cameras(
+            visual_profile,
+            plan,
+            args.map_path,
+        )
     build_result = _existing_file(attempt_root / EXPECTED_BUILD_RESULT_NAME, "accepted UE build result")
-    _, build_result_sha = _validate_build_result(build_result, attempt_root, args.map_path)
+    _, build_result_sha = _validate_build_result(
+        build_result,
+        attempt_root,
+        args.map_path,
+        visual_profile_id=(
+            R2_CAPTURE_PROFILE
+            if capture_profile == R2_CAPTURE_PROFILE
+            else None
+        ),
+        visual_profile_sha256=visual_profile_sha256,
+        visual_profile_content_digest=visual_profile_content_digest,
+    )
     unreal_editor = _existing_file(Path(args.unreal_editor), "UnrealEditor", executable=True)
     if unreal_editor.name != "UnrealEditor":
         _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "engine executable must be UnrealEditor")
@@ -635,8 +999,18 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
         _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "pinned NVIDIA Vulkan ICD is unavailable")
     if DISPLAY_RE.fullmatch(args.display or "") is None:
         _fail("VISTA_HOME_REVIEW_DISPLAY_INVALID", "DISPLAY must be a local X11 display such as :117")
+    if capture_profile == R2_CAPTURE_PROFILE and args.display != R2_DISPLAY:
+        _fail(
+            "VISTA_HOME_REVIEW_DISPLAY_INVALID",
+            f"realistic_interior_r2 capture is pinned to DISPLAY {R2_DISPLAY}",
+        )
     if isinstance(args.graphics_adapter, bool) or not 0 <= args.graphics_adapter <= 31:
         _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "graphics adapter must be between 0 and 31")
+    if capture_profile == R2_CAPTURE_PROFILE and args.graphics_adapter != 0:
+        _fail(
+            "VISTA_HOME_REVIEW_ENGINE_INVALID",
+            "realistic_interior_r2 capture is pinned to graphics adapter 0",
+        )
     if isinstance(args.timeout_seconds, bool) or not 60 <= args.timeout_seconds <= 900:
         _fail("VISTA_HOME_REVIEW_TIMEOUT_INVALID", "timeout must be between 60 and 900 seconds")
     output_dir = _absolute_lexical(Path(args.output_dir), "output directory")
@@ -689,7 +1063,32 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
         ddc_seed=ddc_seed,
         ddc_seed_tree_sha256=ddc_seed_tree_sha256,
         cameras=tuple(cameras),
+        capture_profile=capture_profile,
+        visual_profile=visual_profile,
+        visual_profile_path=visual_profile_path,
+        visual_profile_sha256=visual_profile_sha256,
+        visual_profile_content_digest=visual_profile_content_digest,
     )
+
+
+def _is_r2(inputs: CaptureInputs) -> bool:
+    return inputs.capture_profile == R2_CAPTURE_PROFILE
+
+
+def _capture_dimensions(inputs: CaptureInputs) -> tuple[int, int]:
+    return (R2_WIDTH, R2_HEIGHT) if _is_r2(inputs) else (WIDTH, HEIGHT)
+
+
+def _execution_schema(inputs: CaptureInputs) -> str:
+    return R2_EXECUTION_SCHEMA if _is_r2(inputs) else EXECUTION_SCHEMA
+
+
+def _worker_execution_schema(inputs: CaptureInputs) -> str:
+    return R2_WORKER_EXECUTION_SCHEMA if _is_r2(inputs) else WORKER_EXECUTION_SCHEMA
+
+
+def _ue_result_schema(inputs: CaptureInputs) -> str:
+    return R2_UE_RESULT_SCHEMA if _is_r2(inputs) else UE_RESULT_SCHEMA
 
 
 def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
@@ -701,8 +1100,25 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
     """
 
     output = inputs.output_dir
-    return {
-        "schema_version": EXECUTION_SCHEMA,
+    width, height = _capture_dimensions(inputs)
+    capture: dict[str, Any] = {
+        "width": width,
+        "height": height,
+        "room_kinds": [camera["room_kind"] for camera in inputs.cameras],
+        "cameras": [dict(camera) for camera in inputs.cameras],
+    }
+    policy: dict[str, Any] = {
+        "append_only_output": True,
+        "caller_python_allowed": False,
+        "fixed_camera_actor_tags": True,
+        "regular_editor_x11": True,
+        "receipt_requires_host_png_validation": True,
+        "sequential_owned_editor_children": True,
+        "one_native_highres_shot_per_child": True,
+        "native_png_uses_private_local_scratch": True,
+    }
+    execution = {
+        "schema_version": _execution_schema(inputs),
         "attempt_root": str(inputs.attempt_root),
         "project": {"path": str(inputs.project), "sha256": inputs.project_sha256},
         "map_asset": {"path": str(inputs.map_asset), "sha256": inputs.map_asset_sha256},
@@ -730,28 +1146,47 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
         "map_path": inputs.map_path,
         "output_root": str(output),
         "script": {"path": str(inputs.script), "sha256": inputs.script_sha256},
-        "capture": {
-            "width": WIDTH,
-            "height": HEIGHT,
-            "room_kinds": [camera["room_kind"] for camera in inputs.cameras],
-            "cameras": [dict(camera) for camera in inputs.cameras],
-        },
+        "capture": capture,
         "artifacts": {
             "images_dir": str(output / IMAGES_DIR),
             "workers_dir": str(output / WORKERS_DIR),
             "receipt": str(output / RECEIPT_FILE),
         },
-        "policy": {
-            "append_only_output": True,
-            "caller_python_allowed": False,
-            "fixed_camera_actor_tags": True,
-            "regular_editor_x11": True,
-            "receipt_requires_host_png_validation": True,
-            "sequential_owned_editor_children": True,
-            "one_native_highres_shot_per_child": True,
-            "native_png_uses_private_local_scratch": True,
-        },
+        "policy": policy,
     }
+    if _is_r2(inputs):
+        if (
+            inputs.visual_profile is None
+            or inputs.visual_profile_path is None
+            or inputs.visual_profile_sha256 is None
+            or inputs.visual_profile_content_digest is None
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+                "r2 capture inputs lost their visual-profile binding",
+            )
+        execution["visual_profile"] = {
+            "path": str(inputs.visual_profile_path),
+            "sha256": inputs.visual_profile_sha256,
+            "content_digest": inputs.visual_profile_content_digest,
+        }
+        execution["engine"]["graphics_adapter"] = 0
+        execution["engine"]["display"] = R2_DISPLAY
+        capture.update(
+            {
+                "profile_id": R2_CAPTURE_PROFILE,
+                "shot_ids": [camera["camera_id"] for camera in inputs.cameras],
+                "runtime_observation_status": "pending",
+            }
+        )
+        policy.update(
+            {
+                "visual_profile_sha256_required": True,
+                "graphics_adapter_zero_required": True,
+                "runtime_camera_observations_required": True,
+            }
+        )
+    return execution
 
 
 @dataclass(frozen=True)
@@ -832,7 +1267,7 @@ def build_worker_execution(
     )
     worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
     return {
-        "schema_version": WORKER_EXECUTION_SCHEMA,
+        "schema_version": _worker_execution_schema(inputs),
         "aggregate_execution": {
             "path": str(inputs.output_dir / EXECUTION_FILE),
             "sha256": aggregate_execution_sha256,
@@ -857,6 +1292,7 @@ def build_worker_execution(
 
 def build_editor_command(inputs: CaptureInputs, ordinal: int = 1) -> list[str]:
     worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
+    width, height = _capture_dimensions(inputs)
     return [
         str(inputs.unreal_editor),
         str(inputs.project),
@@ -865,8 +1301,8 @@ def build_editor_command(inputs: CaptureInputs, ordinal: int = 1) -> list[str]:
         "-unattended",
         "-Windowed",
         "-ForceRes",
-        f"-ResX={WIDTH}",
-        f"-ResY={HEIGHT}",
+        f"-ResX={width}",
+        f"-ResY={height}",
         f"-graphicsadapter={inputs.graphics_adapter}",
         "-NOSPLASH",
         "-NOSOUND",
@@ -1306,7 +1742,10 @@ def _load_worker_result(inputs: CaptureInputs, worker: WorkerRun) -> tuple[dict[
         "captures",
         "error",
     }
-    if set(result) != expected_keys or result.get("schema_version") != UE_RESULT_SCHEMA:
+    if (
+        set(result) != expected_keys
+        or result.get("schema_version") != _ue_result_schema(inputs)
+    ):
         _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal result fields or schema differ")
     if result.get("status") != "captured_candidate" or result.get("error") is not None:
         error = result.get("error")
@@ -1395,7 +1834,13 @@ def _probe_worker_success(inputs: CaptureInputs, worker: WorkerRun) -> WorkerSuc
         png_sha256 = sha256_bytes(raw)
         if capture_result["bytes"] != len(raw) or capture_result["sha256"] != png_sha256:
             return None
-        inspect_png_bytes(raw, source_label=str(worker.scratch_png))
+        width, height = _capture_dimensions(inputs)
+        inspect_png_bytes(
+            raw,
+            expected_width=width,
+            expected_height=height,
+            source_label=str(worker.scratch_png),
+        )
     except (OSError, ReviewCaptureError):
         return None
     return WorkerSuccessProof(
@@ -1406,7 +1851,7 @@ def _probe_worker_success(inputs: CaptureInputs, worker: WorkerRun) -> WorkerSuc
 
 
 def _verify_input_pins(inputs: CaptureInputs) -> None:
-    pins = (
+    pins: tuple[tuple[Path, str, str], ...] = (
         (inputs.project, inputs.project_sha256, "project"),
         (inputs.map_asset, inputs.map_asset_sha256, "materialized map asset"),
         (inputs.build_plan, inputs.build_plan_sha256, "build plan"),
@@ -1415,10 +1860,30 @@ def _verify_input_pins(inputs: CaptureInputs) -> None:
         (inputs.unreal_editor, inputs.unreal_editor_sha256, "UnrealEditor"),
         (NVIDIA_VULKAN_ICD, inputs.nvidia_icd_sha256, "NVIDIA Vulkan ICD"),
     )
+    if _is_r2(inputs):
+        if inputs.visual_profile_path is None or inputs.visual_profile_sha256 is None:
+            _fail(
+                "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+                "r2 capture inputs lost their visual-profile pin",
+            )
+        pins += (
+            (
+                inputs.visual_profile_path,
+                inputs.visual_profile_sha256,
+                "r2 visual profile",
+            ),
+        )
     for path, expected, label in pins:
         if sha256_file(_existing_file(path, label)) != expected:
             _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", f"{label} changed during capture")
-    _validate_build_result(inputs.build_result, inputs.attempt_root, inputs.map_path)
+    _validate_build_result(
+        inputs.build_result,
+        inputs.attempt_root,
+        inputs.map_path,
+        visual_profile_id=R2_CAPTURE_PROFILE if _is_r2(inputs) else None,
+        visual_profile_sha256=inputs.visual_profile_sha256,
+        visual_profile_content_digest=inputs.visual_profile_content_digest,
+    )
 
 
 def _inspection_dict(inspection: PngInspection) -> dict[str, Any]:
@@ -1452,7 +1917,13 @@ def _accept_worker_png(
     source_sha = sha256_bytes(raw)
     if capture.get("bytes") != len(raw) or capture.get("sha256") != source_sha:
         _fail("VISTA_HOME_REVIEW_UE_RESULT_INVALID", "Unreal native PNG size or hash differs")
-    inspection = inspect_png_bytes(raw, source_label=str(worker.scratch_png))
+    width, height = _capture_dimensions(inputs)
+    inspection = inspect_png_bytes(
+        raw,
+        expected_width=width,
+        expected_height=height,
+        source_label=str(worker.scratch_png),
+    )
     final_path = inputs.output_dir / worker.camera["relative_path"]
     _require_child(final_path, inputs.output_dir, "final PNG")
     try:
@@ -1463,8 +1934,13 @@ def _accept_worker_png(
     accepted_sha = sha256_bytes(accepted_raw)
     if accepted_raw != raw or accepted_sha != source_sha:
         _fail("VISTA_HOME_REVIEW_PNG_COPY_MISMATCH", "accepted PNG bytes differ from native scratch bytes")
-    inspect_png_bytes(accepted_raw, source_label=str(final_path))
-    return {
+    inspect_png_bytes(
+        accepted_raw,
+        expected_width=width,
+        expected_height=height,
+        source_label=str(final_path),
+    )
+    image = {
         "ordinal": worker.camera["ordinal"],
         "room_kind": worker.camera["room_kind"],
         "room_id": worker.camera["room_id"],
@@ -1480,6 +1956,23 @@ def _accept_worker_png(
         "native_and_final_sha256_equal": True,
         "png": _inspection_dict(inspection),
     }
+    if _is_r2(inputs):
+        image.update(
+            {
+                "purpose": worker.camera["purpose"],
+                "visual_profile_id": R2_CAPTURE_PROFILE,
+                "runtime_observation": {
+                    "status": "pending",
+                    "required_gates": [
+                        "near_field_clearance",
+                        "foreground_occlusion",
+                        "expected_hero_visibility",
+                        "forbidden_foreground",
+                    ],
+                },
+            }
+        )
+    return image
 
 
 @dataclass(frozen=True)
@@ -1507,9 +2000,17 @@ def build_receipt(
         _fail("VISTA_HOME_REVIEW_ORDINAL_INVALID", "worker outcomes are not the fixed sequential ordinals")
     images = [dict(item.image) for item in outcomes]
     room_kinds = [image["room_kind"] for image in images]
-    expected_room_kinds = [camera[0] for camera in FIXED_REVIEW_CAMERAS]
-    if room_kinds != expected_room_kinds:
-        _fail("VISTA_HOME_REVIEW_ROOM_SET_INVALID", "receipt room order differs")
+    if _is_r2(inputs):
+        shot_ids = [image["camera_id"] for image in images]
+        if tuple(shot_ids) != R2_ORDERED_SHOT_IDS:
+            _fail(
+                "VISTA_HOME_REVIEW_CAMERA_SET_INVALID",
+                "receipt r2 shot order differs",
+            )
+    else:
+        expected_room_kinds = [camera[0] for camera in FIXED_REVIEW_CAMERAS]
+        if room_kinds != expected_room_kinds:
+            _fail("VISTA_HOME_REVIEW_ROOM_SET_INVALID", "receipt room order differs")
     if len({image["sha256"] for image in images}) != len(images):
         _fail("VISTA_HOME_REVIEW_PNG_DUPLICATE", "fixed room screenshots are not all distinct")
     engine_versions = {item.ue_result.get("engine_version") for item in outcomes}
@@ -1531,7 +2032,13 @@ def build_receipt(
         final_raw = _read_exact_regular(final_path, "accepted final PNG")
         if len(final_raw) != outcome.image["bytes"] or sha256_bytes(final_raw) != outcome.image["sha256"]:
             _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "accepted final PNG changed before receipt")
-        inspect_png_bytes(final_raw, source_label=str(final_path))
+        width, height = _capture_dimensions(inputs)
+        inspect_png_bytes(
+            final_raw,
+            expected_width=width,
+            expected_height=height,
+            source_label=str(final_path),
+        )
         editor_log = _existing_file(worker.editor_log, "UnrealEditor log")
         editor_stdout = _existing_file(worker.editor_stdout, "UnrealEditor stdout")
         worker_bindings.append(
@@ -1558,9 +2065,14 @@ def build_receipt(
                 },
             }
         )
-    return {
-        "schema_version": RECEIPT_SCHEMA,
-        "status": "accepted",
+    width, height = _capture_dimensions(inputs)
+    receipt: dict[str, Any] = {
+        "schema_version": R2_RECEIPT_SCHEMA if _is_r2(inputs) else RECEIPT_SCHEMA,
+        "status": (
+            "captured_pending_runtime_observation"
+            if _is_r2(inputs)
+            else "accepted"
+        ),
         "accepted_at": _utc_now(),
         "attempt_root": str(inputs.attempt_root),
         "output_root": str(inputs.output_dir),
@@ -1594,8 +2106,8 @@ def build_receipt(
         },
         "logs": logs,
         "capture": {
-            "width": WIDTH,
-            "height": HEIGHT,
+            "width": width,
+            "height": height,
             "room_kinds": room_kinds,
             "images": images,
         },
@@ -1614,6 +2126,55 @@ def build_receipt(
             "native_and_final_bytes_equal": True,
         },
     }
+    if _is_r2(inputs):
+        if (
+            inputs.visual_profile_path is None
+            or inputs.visual_profile_sha256 is None
+            or inputs.visual_profile_content_digest is None
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_VISUAL_PROFILE_INVALID",
+                "r2 receipt lost its visual-profile binding",
+            )
+        receipt["bindings"].update(
+            {
+                "visual_profile_path": str(inputs.visual_profile_path),
+                "visual_profile_sha256": inputs.visual_profile_sha256,
+                "visual_profile_content_digest": (
+                    inputs.visual_profile_content_digest
+                ),
+            }
+        )
+        receipt["capture"].update(
+            {
+                "profile_id": R2_CAPTURE_PROFILE,
+                "shot_ids": [image["camera_id"] for image in images],
+                "runtime_observation_status": "pending",
+            }
+        )
+        receipt["verification"] = {
+            "exact_review_shot_set": True,
+            "exact_materialized_r2_camera_actor_set": True,
+            "every_png_exact_dimensions": True,
+            "every_png_nonblank": True,
+            "every_shot_png_distinct": True,
+            "map_asset_pre_and_post_pinned": True,
+            "accepted_build_result_pinned": True,
+            "visual_profile_bytes_pinned": True,
+            "graphics_adapter_zero": inputs.graphics_adapter == 0,
+            "display_119": inputs.display == R2_DISPLAY,
+            "caller_python_allowed": False,
+            "six_sequential_owned_editor_children": True,
+            "one_native_highres_shot_per_child": True,
+            "native_png_private_local_scratch": True,
+            "native_and_final_bytes_equal": True,
+            "near_field_clearance_observation": "pending",
+            "foreground_occlusion_observation": "pending",
+            "expected_hero_visibility_observation": "pending",
+            "forbidden_foreground_observation": "pending",
+            "physical_exposure_observation": "pending",
+        }
+    return receipt
 
 
 def _create_scratch_root(inputs: CaptureInputs) -> Path:
@@ -1709,7 +2270,7 @@ def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha25
         receipt_path = inputs.output_dir / RECEIPT_FILE
         _write_exclusive(receipt_path, receipt_raw)
         return {
-            "status": "accepted",
+            "status": receipt["status"],
             "receipt": str(receipt_path),
             "receipt_sha256": sha256_bytes(receipt_raw),
             "image_count": len(receipt["capture"]["images"]),
@@ -1734,6 +2295,14 @@ def _host_main(args: argparse.Namespace) -> int:
             "commands": [build_editor_command(inputs, ordinal) for ordinal in range(1, 7)],
             "policy": execution["policy"],
         }
+        if _is_r2(inputs):
+            preview.update(
+                {
+                    "capture_profile": R2_CAPTURE_PROFILE,
+                    "shot_ids": [camera["camera_id"] for camera in inputs.cameras],
+                    "runtime_observation_status": "pending",
+                }
+            )
         if not args.apply:
             sys.stdout.buffer.write(canonical_json(preview))
             return 0
@@ -1788,6 +2357,13 @@ def _validate_aggregate_worker_inputs(
     execution: Mapping[str, Any],
     aggregate_manifest_path: Path,
 ) -> tuple[Path, list[dict[str, Any]]]:
+    schema = execution.get("schema_version")
+    if schema not in {EXECUTION_SCHEMA, R2_EXECUTION_SCHEMA}:
+        _fail(
+            "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+            "aggregate execution schema differs",
+        )
+    is_r2 = schema == R2_EXECUTION_SCHEMA
     expected_fields = {
         "schema_version",
         "attempt_root",
@@ -1804,6 +2380,8 @@ def _validate_aggregate_worker_inputs(
         "artifacts",
         "policy",
     }
+    if is_r2:
+        expected_fields.add("visual_profile")
     expected_policy = {
         "append_only_output": True,
         "caller_python_allowed": False,
@@ -1814,9 +2392,16 @@ def _validate_aggregate_worker_inputs(
         "one_native_highres_shot_per_child": True,
         "native_png_uses_private_local_scratch": True,
     }
+    if is_r2:
+        expected_policy.update(
+            {
+                "visual_profile_sha256_required": True,
+                "graphics_adapter_zero_required": True,
+                "runtime_camera_observations_required": True,
+            }
+        )
     if (
         set(execution) != expected_fields
-        or execution.get("schema_version") != EXECUTION_SCHEMA
         or execution.get("policy") != expected_policy
     ):
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "aggregate execution schema or policy differs")
@@ -1842,11 +2427,21 @@ def _validate_aggregate_worker_inputs(
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "build plan binding differs")
     if not isinstance(build_result, Mapping) or set(build_result) != {"path", "sha256"}:
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "build result binding differs")
+    expected_engine_fields = {
+        "executable",
+        "executable_sha256",
+        "nvidia_icd",
+        "nvidia_icd_sha256",
+        "required_version_prefix",
+    }
+    if is_r2:
+        expected_engine_fields.update({"graphics_adapter", "display"})
     if (
         not isinstance(engine, Mapping)
-        or set(engine)
-        != {"executable", "executable_sha256", "nvidia_icd", "nvidia_icd_sha256", "required_version_prefix"}
+        or set(engine) != expected_engine_fields
         or engine.get("required_version_prefix") != EXPECTED_ENGINE_PREFIX
+        or (is_r2 and engine.get("graphics_adapter") != 0)
+        or (is_r2 and engine.get("display") != R2_DISPLAY)
     ):
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "engine binding differs")
     project_path = _existing_file(Path(project["path"]), "project")
@@ -1868,11 +2463,78 @@ def _validate_aggregate_worker_inputs(
         _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "running UnrealEditor identity differs")
     if os.environ.get("VK_ICD_FILENAMES") != str(icd_path):
         _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "running Vulkan ICD binding differs")
+    if is_r2 and os.environ.get("DISPLAY") != R2_DISPLAY:
+        _fail(
+            "VISTA_HOME_REVIEW_ENGINE_INVALID",
+            "running r2 DISPLAY binding differs",
+        )
     plan, _ = _load_json(plan_path, label="build plan", expected_sha256=build_plan["sha256"])
     if plan.get("content_digest") != build_plan["content_digest"]:
         _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker build plan content digest differs")
     attempt_root = _existing_directory(Path(execution.get("attempt_root", "")), "attempt root")
-    _validate_build_result(build_result_path, attempt_root, execution.get("map_path"))
+    visual_profile_sha256: str | None = None
+    visual_profile_content_digest: str | None = None
+    if is_r2:
+        visual_profile_binding = execution.get("visual_profile")
+        if (
+            not isinstance(visual_profile_binding, Mapping)
+            or set(visual_profile_binding) != {"path", "sha256", "content_digest"}
+            or not isinstance(visual_profile_binding.get("path"), str)
+            or not isinstance(visual_profile_binding.get("sha256"), str)
+            or SHA256_RE.fullmatch(visual_profile_binding["sha256"]) is None
+            or not isinstance(visual_profile_binding.get("content_digest"), str)
+            or SHA256_RE.fullmatch(visual_profile_binding["content_digest"])
+            is None
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+                "r2 visual-profile binding differs",
+            )
+        visual_profile_path = _require_child(
+            _existing_file(
+                Path(visual_profile_binding["path"]),
+                "r2 visual profile",
+            ),
+            attempt_root,
+            "r2 visual profile",
+        )
+        if visual_profile_path != attempt_root / EXPECTED_VISUAL_PROFILE_RELATIVE:
+            _fail(
+                "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+                "r2 visual-profile location differs",
+            )
+        visual_profile, visual_profile_raw = _load_json(
+            visual_profile_path,
+            label="r2 visual profile",
+            expected_sha256=visual_profile_binding["sha256"],
+        )
+        visual_profile_sha256 = sha256_bytes(visual_profile_raw)
+        visual_profile_content_digest = visual_profile.get("content_digest")
+        if (
+            visual_profile_content_digest
+            != visual_profile_binding["content_digest"]
+            or visual_profile_content_digest
+            != _visual_profile_content_digest(visual_profile)
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_PIN_MISMATCH",
+                "r2 visual-profile content digest differs",
+            )
+        cameras = _compile_r2_capture_cameras(
+            visual_profile,
+            plan,
+            execution.get("map_path"),
+        )
+    else:
+        cameras = compile_fixed_cameras(plan, execution.get("map_path"))
+    _validate_build_result(
+        build_result_path,
+        attempt_root,
+        execution.get("map_path"),
+        visual_profile_id=R2_CAPTURE_PROFILE if is_r2 else None,
+        visual_profile_sha256=visual_profile_sha256,
+        visual_profile_content_digest=visual_profile_content_digest,
+    )
     ddc_seed = execution.get("ddc_seed")
     if ddc_seed is not None:
         if not isinstance(ddc_seed, Mapping) or set(ddc_seed) != {"path", "tree_sha256"}:
@@ -1881,11 +2543,33 @@ def _validate_aggregate_worker_inputs(
         seed_sha, _entries, _bytes = _tree_snapshot(seed_path)
         if seed_sha != ddc_seed["tree_sha256"]:
             _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker DDC seed pin differs")
-    cameras = compile_fixed_cameras(plan, execution.get("map_path"))
     capture = execution.get("capture")
-    if not isinstance(capture, Mapping) or capture.get("width") != WIDTH or capture.get("height") != HEIGHT:
+    expected_capture_fields = {"width", "height", "room_kinds", "cameras"}
+    expected_width, expected_height = WIDTH, HEIGHT
+    if is_r2:
+        expected_capture_fields.update(
+            {"profile_id", "shot_ids", "runtime_observation_status"}
+        )
+        expected_width, expected_height = R2_WIDTH, R2_HEIGHT
+    if (
+        not isinstance(capture, Mapping)
+        or set(capture) != expected_capture_fields
+        or capture.get("width") != expected_width
+        or capture.get("height") != expected_height
+    ):
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker capture dimensions differ")
-    if capture.get("room_kinds") != [camera["room_kind"] for camera in cameras] or capture.get("cameras") != cameras:
+    if (
+        capture.get("room_kinds") != [camera["room_kind"] for camera in cameras]
+        or capture.get("cameras") != cameras
+        or (
+            is_r2
+            and (
+                capture.get("profile_id") != R2_CAPTURE_PROFILE
+                or tuple(capture.get("shot_ids", ())) != R2_ORDERED_SHOT_IDS
+                or capture.get("runtime_observation_status") != "pending"
+            )
+        )
+    ):
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker fixed camera plan differs")
     aggregate_artifacts = execution.get("artifacts")
     if not isinstance(aggregate_artifacts, Mapping) or set(aggregate_artifacts) != {
@@ -1926,7 +2610,8 @@ def _load_worker_execution() -> tuple[dict[str, Any], dict[str, Any], str]:
     if (
         set(worker)
         != {"schema_version", "aggregate_execution", "ordinal", "camera", "scratch_png", "artifacts", "policy"}
-        or worker.get("schema_version") != WORKER_EXECUTION_SCHEMA
+        or worker.get("schema_version")
+        not in {WORKER_EXECUTION_SCHEMA, R2_WORKER_EXECUTION_SCHEMA}
         or worker.get("policy") != expected_worker_policy
     ):
         _fail("VISTA_HOME_REVIEW_EXECUTION_INVALID", "worker execution schema or policy differs")
@@ -1940,6 +2625,16 @@ def _load_worker_execution() -> tuple[dict[str, Any], dict[str, Any], str]:
         expected_sha256=aggregate_ref["sha256"],
     )
     output_root, cameras = _validate_aggregate_worker_inputs(execution, aggregate_path)
+    expected_worker_schema = (
+        R2_WORKER_EXECUTION_SCHEMA
+        if execution.get("schema_version") == R2_EXECUTION_SCHEMA
+        else WORKER_EXECUTION_SCHEMA
+    )
+    if worker.get("schema_version") != expected_worker_schema:
+        _fail(
+            "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+            "worker and aggregate capture profiles differ",
+        )
     ordinal = worker.get("ordinal")
     if isinstance(ordinal, bool) or not isinstance(ordinal, int) or not 1 <= ordinal <= len(cameras):
         _fail("VISTA_HOME_REVIEW_ORDINAL_INVALID", "worker ordinal is invalid")
@@ -1992,7 +2687,11 @@ def _worker_result(
     map_path: str | None,
 ) -> dict[str, Any]:
     return {
-        "schema_version": UE_RESULT_SCHEMA,
+        "schema_version": (
+            R2_UE_RESULT_SCHEMA
+            if worker.get("schema_version") == R2_WORKER_EXECUTION_SCHEMA
+            else UE_RESULT_SCHEMA
+        ),
         "status": status,
         "captured_at": _utc_now(),
         "engine_version": engine_version,
@@ -2026,6 +2725,24 @@ def _unreal_worker() -> int:
         engine_version = str(unreal.SystemLibrary.get_engine_version())
         if not engine_version.startswith(EXPECTED_ENGINE_PREFIX):
             _fail("VISTA_HOME_REVIEW_ENGINE_INVALID", "Unreal Engine version is not 5.7")
+        if execution.get("schema_version") == R2_EXECUTION_SCHEMA:
+            command_line = str(unreal.SystemLibrary.get_command_line())
+            try:
+                adapter_flags = [
+                    token.lower()
+                    for token in shlex.split(command_line)
+                    if token.lower().startswith("-graphicsadapter=")
+                ]
+            except ValueError:
+                _fail(
+                    "VISTA_HOME_REVIEW_ENGINE_INVALID",
+                    "running Unreal command line cannot be parsed",
+                )
+            if adapter_flags != ["-graphicsadapter=0"]:
+                _fail(
+                    "VISTA_HOME_REVIEW_ENGINE_INVALID",
+                    "running r2 Unreal process is not uniquely pinned to graphics adapter 0",
+                )
         editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
         actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
         world = editor.get_editor_world()
@@ -2037,6 +2754,7 @@ def _unreal_worker() -> int:
 
         expected_cameras = execution["capture"]["cameras"]
         selected_camera = worker_execution["camera"]
+        is_r2_execution = execution.get("schema_version") == R2_EXECUTION_SCHEMA
         expected_tags = {camera["semantic_tag"] for camera in expected_cameras}
         actors_by_tag: dict[str, list[Any]] = {tag: [] for tag in expected_tags}
         vista_camera_tags: set[str] = set()
@@ -2044,6 +2762,8 @@ def _unreal_worker() -> int:
             if not isinstance(actor, unreal.CameraActor):
                 continue
             tags = {str(tag) for tag in actor.get_editor_property("tags")}
+            if is_r2_execution and R2_CAMERA_ACTOR_TAG not in tags:
+                continue
             for tag in tags:
                 if tag.startswith("VistaSemanticId=home.r1/room.") and "/camera." in tag:
                     vista_camera_tags.add(tag)
@@ -2162,7 +2882,12 @@ def _unreal_worker() -> int:
                     if state["shot_requested"]:
                         _fail("VISTA_HOME_REVIEW_SCREENSHOT_REJECTED", "worker attempted a second native capture")
                     image_path = Path(worker_execution["scratch_png"])
-                    command = f'HighResShot {WIDTH}x{HEIGHT} filename="{image_path}"'
+                    capture_width = execution["capture"]["width"]
+                    capture_height = execution["capture"]["height"]
+                    command = (
+                        f'HighResShot {capture_width}x{capture_height} '
+                        f'filename="{image_path}"'
+                    )
                     state["shot_requested"] = True
                     unreal.log(f"VISTA_PLAYABLE_HOME_REVIEW_SCREENSHOT_REQUESTED {selected_camera['semantic_id']}")
                     unreal.SystemLibrary.execute_console_command(world, command)
@@ -2257,6 +2982,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-path", required=True, help="must equal the fixed r1 map in the pinned plan")
     parser.add_argument("--unreal-editor", required=True, help="regular Linux UnrealEditor executable")
     parser.add_argument("--output-dir", required=True, help="new attempt-<id> directory below the UE attempt")
+    parser.add_argument(
+        "--capture-profile",
+        choices=CAPTURE_PROFILES,
+        default=R1_CAPTURE_PROFILE,
+        help="closed review-camera profile; fixed_r1 remains the compatibility default",
+    )
+    parser.add_argument(
+        "--visual-profile",
+        help=(
+            "attempt-local contracts/visual-profile.json; required only for "
+            "realistic_interior_r2"
+        ),
+    )
+    parser.add_argument(
+        "--visual-profile-sha256",
+        help="lowercase SHA-256 pin paired with --visual-profile",
+    )
     parser.add_argument("--display", required=True, help="local X11 display, for example :117")
     parser.add_argument("--graphics-adapter", type=int, default=0, help="bounded Unreal graphics adapter index")
     parser.add_argument("--timeout-seconds", type=int, default=300, help="owned editor timeout (60-900 seconds)")
