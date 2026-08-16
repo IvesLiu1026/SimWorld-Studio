@@ -75,6 +75,98 @@ PLACEMENT_PATH = (
 )
 
 
+def _source_tree_digest(files: tuple[AcquiredFile, ...]) -> str:
+    rows = [
+        {
+            "relative_path": item.relative_path,
+            "size_bytes": item.size_bytes,
+            "sha256": item.sha256,
+        }
+        for item in files
+    ]
+    return hashlib.sha256(_canonical_acquisition_json(rows)).hexdigest()
+
+
+def _coffee_source_files() -> tuple[AcquiredFile, ...]:
+    return (
+        AcquiredFile(
+            "modern_coffee_table_01_4k.blend",
+            235731,
+            "119594affca76664a182fedf0acf6b62c5d9d700681a004d442e7f3488956b6f",
+            (),
+            None,
+        ),
+        AcquiredFile(
+            "textures/modern_coffee_table_01_diff_4k.jpg",
+            6200991,
+            "37cbe0f2aa7f00c7792ff34280e7905c263e359958144aa8e2de8429f5837b11",
+            ("base_color",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/modern_coffee_table_01_nor_gl_4k.exr",
+            14235190,
+            "5dd497f102a11695d3840cd1e486d12698c1f1dd32d6ccb0d583c4984d4b0bf8",
+            ("normal",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/modern_coffee_table_01_rough_4k.exr",
+            10164849,
+            "239df397bae3e792fab67f866a4e05cdeda44c3d19d76d6e6dc23534b985d419",
+            ("roughness",),
+            (4096, 4096),
+        ),
+    )
+
+
+def _stove_source_files() -> tuple[AcquiredFile, ...]:
+    return (
+        AcquiredFile(
+            "electric_stove_4k.blend",
+            517140,
+            "f485d6ec71cfb27a78ff71717c2ac4a8dd0aab6aaa594c228b3bb4a27f4c195b",
+            (),
+            None,
+        ),
+        AcquiredFile(
+            "textures/electric_stove_diff_4k.jpg",
+            6200676,
+            "20af305630d5f4e0ee042ce0010615b0d1072194cdf9eb31e4aef493b36ea032",
+            ("base_color",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_metal_4k.exr",
+            7193171,
+            "fb2236f76c78b23e36e9d7faeb077a0024c8989eef8ed68bd4c8e98af1312ed9",
+            ("metalness",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_nor_gl_4k.exr",
+            13682521,
+            "8d017983d440ec3cbd31ec877713cc4450ff4f5b4a86d51561f75908609e903f",
+            ("normal",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_opacity_4k.png",
+            252946,
+            "304c294d75e1d6b916d1bba8018e31c798f12e33f43ff7407b5a7915e961dba9",
+            ("opacity",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_rough_4k.exr",
+            12301920,
+            "ac431bc9486799ea0cf7d46e9df7101147aafcbc6cb0d30a0a735e635d482e87",
+            ("roughness",),
+            (4096, 4096),
+        ),
+    )
+
+
 def _sources(
     logical_id: str,
     asset_type: str,
@@ -83,8 +175,8 @@ def _sources(
     *,
     asset_id: str | None = None,
     provider_hash: str | None = None,
-    source_tree: str | None = None,
     semantics=("base_color", "normal", "roughness"),
+    files: tuple[AcquiredFile, ...] | None = None,
 ) -> AcquiredAsset:
     resolved_asset_id = asset_id or logical_id.rsplit(".", 1)[-1]
     texture_files = tuple(
@@ -104,7 +196,9 @@ def _sources(
         semantic=(),
         dimensions_px=None,
     )
-    files = (primary_file, *texture_files) if asset_type == "model" else texture_files
+    acquired_files = files or (
+        (primary_file, *texture_files) if asset_type == "model" else texture_files
+    )
     return AcquiredAsset(
         asset_id=resolved_asset_id,
         logical_asset_id=logical_id,
@@ -114,14 +208,10 @@ def _sources(
         file_variant="blend" if asset_type == "model" else "pbr_jpg",
         provider_files_hash=provider_hash or hashlib.sha1(logical_id.encode()).hexdigest(),
         source_relative_root=f"assets/{resolved_asset_id}",
-        primary_relative_path=(
-            f"assets/{resolved_asset_id}/fixture.blend"
-            if asset_type == "model"
-            else f"assets/{resolved_asset_id}/{texture_files[0].relative_path}"
-        ),
-        source_tree_sha256=source_tree or hashlib.sha256(f"tree:{logical_id}".encode()).hexdigest(),
+        primary_relative_path=f"assets/{resolved_asset_id}/{acquired_files[0].relative_path}",
+        source_tree_sha256=_source_tree_digest(acquired_files),
         catalog_dimensions_m=dimensions,
-        files=files,
+        files=acquired_files,
     )
 
 
@@ -136,7 +226,7 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
             (1.2018300294876099, 0.6000000834465027, 0.38999998569488525),
             asset_id="modern_coffee_table_01",
             provider_hash="31772c0aab6f930a18de82606146c0a97f08b7d0",
-            source_tree="cf5fac22ac00b8725f91ad4565ddaa32dc5f10b213a0938a92de9e2432c1ddfe",
+            files=_coffee_source_files(),
         ),
         _sources(
             "visual.hero.kitchen_stove",
@@ -145,8 +235,7 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
             (0.5025948286056519, 0.6476211845874786, 0.8586971759796143),
             asset_id="electric_stove",
             provider_hash="750ee10bdfe78eb6b0b620ef7b5a898e436fb696",
-            source_tree="c55acbd188af4674ce5c1c8605f2447c5fb830a05b1650b0d03296b419b38795",
-            semantics=("base_color", "metalness", "normal", "opacity", "roughness"),
+            files=_stove_source_files(),
         ),
         _sources("visual.dressing.entry.rubber_boots", "model", "2k", (0.4, 0.2, 0.4)),
     )
