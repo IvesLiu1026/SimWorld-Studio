@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 
 from .architecture import ForgePlan
 from .config import canonical_json_bytes, normalized, sha256_file
+from .external_assets import external_material_alpha_policy
 from .placement import bundle_external_content
 
 
@@ -64,6 +65,17 @@ def normalized_manifest(
     for component in plan.components:
         role_counts[component.export_role] = role_counts.get(component.export_role, 0) + 1
         room_counts[component.room_id] = room_counts.get(component.room_id, 0) + 1
+    export_contract: dict[str, Any] = {
+        "coordinate_system": "Blender metric metres, glTF Y-up export",
+        "semantic_policy": "presentation_only_preserve_r1_authority",
+        "collision_policy": "presentation_no_collision_use_hidden_r1_proxies",
+        "cameras_exported": False,
+        "lights_exported": False,
+        "custom_properties_exported_as_extras": True,
+    }
+    external = getattr(plan, "external_placement", None)
+    if external is not None:
+        export_contract["external_material_alpha_policy"] = external_material_alpha_policy()
     payload: dict[str, Any] = {
         "schema_version": plan.schema_version,
         "forge_id": plan.forge_id,
@@ -81,17 +93,9 @@ def normalized_manifest(
         "materials": list(material_receipts) if material_receipts is not None else list(plan.material_plan),
         "role_counts": role_counts,
         "room_component_counts": room_counts,
-        "export_contract": {
-            "coordinate_system": "Blender metric metres, glTF Y-up export",
-            "semantic_policy": "presentation_only_preserve_r1_authority",
-            "collision_policy": "presentation_no_collision_use_hidden_r1_proxies",
-            "cameras_exported": False,
-            "lights_exported": False,
-            "custom_properties_exported_as_extras": True,
-        },
+        "export_contract": export_contract,
         "ue_import_bundles": list(ue_import_bundles or ()),
     }
-    external = getattr(plan, "external_placement", None)
     if external is not None:
         payload["external_placement"] = asdict(external)
     return normalized(payload)
@@ -338,14 +342,17 @@ def _export_ue_import_bundles(
                 contract,
             )
             _export_one(bpy, path, [bundle])
-            inspection = inspect_glb(path)
+            is_external = "external_content" in contract
+            inspection = inspect_glb(
+                path,
+                include_external_material_alpha=is_external,
+            )
             if inspection["mesh_count"] != 1 or inspection["mesh_node_count"] != 1:
                 raise RuntimeError(f"UE bundle did not export as exactly one mesh: {path}")
             if inspection["camera_count"] != 0 or inspection["light_count"] != 0:
                 raise RuntimeError(f"UE bundle unexpectedly contains a camera or light: {path}")
             if inspection["bundle_root_is_identity"] is not True:
                 raise RuntimeError(f"UE bundle root transform is not identity: {path}")
-            is_external = "external_content" in contract
             if inspection["material_count"] != len(contract["material_ids"]):
                 raise RuntimeError(f"UE bundle material set differs from its source contract: {path}")
             if is_external and sorted(inspection["material_names"]) != contract["material_ids"]:

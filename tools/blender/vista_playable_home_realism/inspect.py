@@ -11,6 +11,18 @@ import struct
 from typing import Any, Mapping, Sequence
 
 from .config import ForgeInputError, canonical_json_bytes, load_json_object, sha256_file
+from .external_assets import (
+    EXTERNAL_MATERIAL_ALPHA_CUTOFF,
+    EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY,
+    EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY,
+    EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY,
+    EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    EXTERNAL_MATERIAL_SEMANTICS_PROPERTY,
+    EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY,
+    EXTERNAL_MATERIAL_SOURCE_PROPERTY,
+    external_material_alpha_policy,
+    external_material_name_prefix,
+)
 
 
 GLB_MAGIC = 0x46546C67
@@ -112,7 +124,40 @@ def _pbr_material_record(material: Any) -> dict[str, Any]:
     }
 
 
-def inspect_glb(path: pathlib.Path) -> dict[str, Any]:
+def _external_material_alpha_record(material: Any, material_index: int) -> dict[str, Any]:
+    if not isinstance(material, Mapping):
+        material = {}
+    extras = material.get("extras", {})
+    if not isinstance(extras, Mapping):
+        extras = {}
+    raw_mode = material.get("alphaMode", "OPAQUE")
+    explicit_cutoff = "alphaCutoff" in material
+    raw_cutoff = material.get("alphaCutoff")
+    effective_cutoff = (
+        (EXTERNAL_MATERIAL_ALPHA_CUTOFF if raw_cutoff is None else raw_cutoff)
+        if raw_mode == "MASK"
+        else None
+    )
+    return {
+        "material_index": material_index,
+        "name": material.get("name"),
+        "source_logical_asset_id": extras.get(EXTERNAL_MATERIAL_SOURCE_PROPERTY),
+        "source_tree_sha256": extras.get(EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY),
+        "receipt_texture_semantics_json": extras.get(EXTERNAL_MATERIAL_SEMANTICS_PROPERTY),
+        "declared_alpha_mode": extras.get(EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY),
+        "declared_alpha_cutoff": extras.get(EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY),
+        "sanitization_policy": extras.get(EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY),
+        "gltf_alpha_mode": raw_mode,
+        "gltf_alpha_cutoff": effective_cutoff,
+        "gltf_alpha_cutoff_explicit": explicit_cutoff,
+    }
+
+
+def inspect_glb(
+    path: pathlib.Path,
+    *,
+    include_external_material_alpha: bool = False,
+) -> dict[str, Any]:
     with path.open("rb") as handle:
         header = handle.read(12)
         if len(header) != 12:
@@ -161,7 +206,7 @@ def inspect_glb(path: pathlib.Path) -> dict[str, Any]:
     meshes = document.get("meshes", [])
     if not isinstance(meshes, list):
         meshes = []
-    return {
+    result = {
         "relative_or_absolute_path": str(path),
         "sha256": sha256_file(path),
         "size_bytes": path.stat().st_size,
@@ -195,6 +240,12 @@ def inspect_glb(path: pathlib.Path) -> dict[str, Any]:
         "extensions_used": sorted(document.get("extensionsUsed", [])),
         "extensions_required": sorted(document.get("extensionsRequired", [])),
     }
+    if include_external_material_alpha:
+        result["external_material_alpha_contracts"] = [
+            _external_material_alpha_record(item, index)
+            for index, item in enumerate(materials)
+        ]
+    return result
 
 
 def _safe_artifact_path(output_root: pathlib.Path, relative_path: Any) -> tuple[pathlib.Path, str]:
@@ -568,6 +619,197 @@ def _validate_external_manifest_binding(
         raise ForgeInputError("UE bundle external identity coverage differs from normalized manifest")
 
 
+_SUPPORTED_EXTERNAL_MATERIAL_SEMANTICS = frozenset(
+    {"base_color", "normal", "roughness", "metalness", "opacity"}
+)
+
+
+def _validate_external_material_alpha_contract(
+    manifest: Mapping[str, Any],
+    record: Mapping[str, Any],
+    inspection: Mapping[str, Any],
+) -> None:
+    """Bind a room placement and receipt semantics to exact GLB materials.
+
+    This is intentionally independent of material counts.  The proof chain is
+    placement source ID -> receipt source digest/texture semantics ->
+    deterministic material name and exported material extras -> actual glTF
+    ``alphaMode``/effective ``alphaCutoff``.
+    """
+
+    export_contract = manifest.get("export_contract")
+    expected_policy = external_material_alpha_policy()
+    if (
+        not isinstance(export_contract, Mapping)
+        or export_contract.get("custom_properties_exported_as_extras") is not True
+        or export_contract.get("external_material_alpha_policy") != expected_policy
+    ):
+        raise ForgeInputError("external material alpha sanitization policy is absent or changed")
+    external = manifest.get("external_placement")
+    if not isinstance(external, Mapping):
+        raise ForgeInputError("external material alpha proof lacks a placement plan")
+    placements = external.get("placements")
+    sources = external.get("asset_sources")
+    if not isinstance(placements, list) or not isinstance(sources, list):
+        raise ForgeInputError("external material alpha proof placement/source inventory is invalid")
+    stove_target = "home.r1/room.kitchen_dining/entity.stove.01"
+    stove_rows = [
+        item
+        for item in placements
+        if isinstance(item, Mapping) and item.get("semantic_target_id") == stove_target
+    ]
+    if (
+        len(stove_rows) != 1
+        or stove_rows[0].get("room_id") != "home.r1/room.kitchen_dining"
+        or stove_rows[0].get("category") != "stove"
+        or stove_rows[0].get("realization_mode") != "external_blend"
+        or stove_rows[0].get("source_logical_asset_id") != "visual.hero.kitchen_stove"
+    ):
+        raise ForgeInputError("external material alpha proof lost the truthful stove placement binding")
+
+    room_id = record.get("room_id")
+    room_source_ids = sorted(
+        {
+            item.get("source_logical_asset_id")
+            for item in placements
+            if isinstance(item, Mapping)
+            and item.get("room_id") == room_id
+            and item.get("realization_mode") == "external_blend"
+            and isinstance(item.get("source_logical_asset_id"), str)
+        }
+    )
+    if not room_source_ids:
+        raise ForgeInputError("external material alpha proof room has no acquired model sources")
+    source_by_id = {
+        item.get("logical_asset_id"): item
+        for item in sources
+        if isinstance(item, Mapping) and item.get("logical_asset_id") in room_source_ids
+    }
+    if set(source_by_id) != set(room_source_ids):
+        raise ForgeInputError("external material alpha proof sources differ from room placements")
+    receipt_external = record.get("external_content")
+    if not isinstance(receipt_external, Mapping):
+        raise ForgeInputError("external material alpha proof lacks bundle source provenance")
+    receipt_sources = receipt_external.get("asset_sources", [])
+    receipt_by_id = {
+        item.get("logical_asset_id"): item
+        for item in receipt_sources
+        if isinstance(item, Mapping) and item.get("logical_asset_id") in room_source_ids
+    }
+    if receipt_by_id != source_by_id:
+        raise ForgeInputError("external material alpha proof sources differ from bundle receipt")
+
+    prefixes: dict[str, str] = {}
+    expected_semantics: dict[str, tuple[str, ...]] = {}
+    for source_id in room_source_ids:
+        source = source_by_id[source_id]
+        if source.get("asset_type") != "model":
+            raise ForgeInputError("external material alpha proof source is not a model")
+        prefix = external_material_name_prefix(source_id)
+        if prefix in prefixes.values():
+            raise ForgeInputError("external material alpha source namespaces collide")
+        prefixes[source_id] = prefix
+        files = source.get("files")
+        if not isinstance(files, list):
+            raise ForgeInputError("external material alpha source files are invalid")
+        semantics = sorted(
+            {
+                semantic
+                for file in files
+                if isinstance(file, Mapping)
+                for semantic in file.get("texture_semantics", [])
+                if semantic in _SUPPORTED_EXTERNAL_MATERIAL_SEMANTICS
+            }
+        )
+        if not {"base_color", "normal", "roughness"}.issubset(semantics):
+            raise ForgeInputError("external material alpha source lacks required PBR semantics")
+        expected_semantics[source_id] = tuple(semantics)
+    if room_id == "home.r1/room.kitchen_dining" and "opacity" not in expected_semantics.get(
+        "visual.hero.kitchen_stove", ()
+    ):
+        raise ForgeInputError("external stove acquisition receipt lacks opacity semantics")
+
+    material_records = inspection.get("external_material_alpha_contracts")
+    if not isinstance(material_records, list) or len(material_records) != record.get("material_count"):
+        raise ForgeInputError("external material alpha GLB inspection inventory is absent")
+    material_ids = record.get("material_ids")
+    if not isinstance(material_ids, list):
+        raise ForgeInputError("external material alpha bundle material inventory is invalid")
+    observed_semantics: dict[str, set[str]] = {source_id: set() for source_id in room_source_ids}
+    observed_materials: dict[str, int] = {source_id: 0 for source_id in room_source_ids}
+    for material in material_records:
+        if not isinstance(material, Mapping):
+            raise ForgeInputError("external material alpha GLB material record is invalid")
+        name = material.get("name")
+        if not isinstance(name, str):
+            raise ForgeInputError("external material alpha GLB material name is invalid")
+        matching_sources = [
+            source_id for source_id, prefix in prefixes.items() if name.startswith(prefix)
+        ]
+        declared_source = material.get("source_logical_asset_id")
+        if not matching_sources:
+            if declared_source is not None:
+                raise ForgeInputError("external material alpha extras claim an unbound room source")
+            continue
+        if len(matching_sources) != 1:
+            raise ForgeInputError("external material alpha material namespace is ambiguous")
+        source_id = matching_sources[0]
+        prefix = prefixes[source_id]
+        if re.fullmatch(re.escape(prefix) + r"[0-9]{2}\.[a-z0-9_]+", name) is None:
+            raise ForgeInputError("external material alpha material name is not deterministic")
+        if name not in material_ids or declared_source != source_id:
+            raise ForgeInputError("external material alpha name and source extras differ")
+        source = source_by_id[source_id]
+        if material.get("source_tree_sha256") != source.get("source_tree_sha256"):
+            raise ForgeInputError("external material alpha source digest differs from acquisition")
+        raw_semantics = material.get("receipt_texture_semantics_json")
+        try:
+            semantics = json.loads(raw_semantics) if isinstance(raw_semantics, str) else None
+        except json.JSONDecodeError as exc:
+            raise ForgeInputError("external material alpha semantic extras are invalid JSON") from exc
+        if (
+            not isinstance(semantics, list)
+            or semantics != sorted(set(semantics))
+            or any(
+                not isinstance(item, str)
+                or item not in expected_semantics[source_id]
+                for item in semantics
+            )
+            or not {"base_color", "normal", "roughness"}.issubset(semantics)
+            or raw_semantics != json.dumps(semantics, separators=(",", ":"))
+        ):
+            raise ForgeInputError("external material alpha semantic extras differ from receipt")
+        observed_semantics[source_id].update(semantics)
+        observed_materials[source_id] += 1
+        if material.get("sanitization_policy") != EXTERNAL_MATERIAL_ALPHA_SANITIZATION:
+            raise ForgeInputError("external material alpha sanitization extras are absent or changed")
+        gltf_mode = material.get("gltf_alpha_mode")
+        declared_mode = material.get("declared_alpha_mode")
+        if gltf_mode == "BLEND" or declared_mode == "BLEND":
+            raise ForgeInputError("external material alpha BLEND is forbidden")
+        if "opacity" in semantics:
+            if (
+                gltf_mode != "MASK"
+                or declared_mode != "MASK"
+                or material.get("gltf_alpha_cutoff") != EXTERNAL_MATERIAL_ALPHA_CUTOFF
+                or material.get("declared_alpha_cutoff") != EXTERNAL_MATERIAL_ALPHA_CUTOFF
+            ):
+                raise ForgeInputError("external opacity material is not observed as MASK cutoff 0.5")
+        elif (
+            gltf_mode != "OPAQUE"
+            or declared_mode != "OPAQUE"
+            or material.get("gltf_alpha_cutoff") is not None
+            or material.get("declared_alpha_cutoff") is not None
+            or material.get("gltf_alpha_cutoff_explicit") is not False
+        ):
+            raise ForgeInputError("external non-opacity material is not observed as OPAQUE")
+    for source_id in room_source_ids:
+        if observed_materials[source_id] == 0:
+            raise ForgeInputError("external material alpha source has no mapped GLB material")
+        if observed_semantics[source_id] != set(expected_semantics[source_id]):
+            raise ForgeInputError("external material alpha GLB semantics differ from source receipt")
+
+
 def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
     output_root = output_root.resolve(strict=True)
     manifest_path = output_root / "normalized-manifest.json"
@@ -576,6 +818,9 @@ def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
         raise ForgeInputError("output root is missing normalized-manifest.json or artifact-receipt.json")
     manifest = load_json_object(manifest_path, label="normalized manifest")
     receipt = load_json_object(artifact_path, label="artifact receipt")
+    is_external_manifest = (
+        manifest.get("schema_version") == "simworld.vista.playable-home-realism-forge/v2"
+    )
     components = manifest.get("components", [])
     if not isinstance(components, list) or len(components) < 60:
         raise ForgeInputError("normalized manifest has insufficient architectural components")
@@ -653,13 +898,22 @@ def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
         if artifact.get("media_type") != "model/gltf-binary":
             continue
         path, relative_path = _safe_artifact_path(output_root, artifact.get("relative_path"))
-        inspection = inspect_glb(path)
+        is_external_bundle = (
+            artifact.get("artifact_kind") == UE_BUNDLE_ARTIFACT_KIND
+            and "external_content" in artifact
+        )
+        inspection = inspect_glb(
+            path,
+            include_external_material_alpha=is_external_bundle,
+        )
         if inspection["camera_count"] != 0:
             raise ForgeInputError(f"production GLB unexpectedly contains cameras: {path}")
         if inspection["light_count"] != 0:
             raise ForgeInputError(f"production GLB unexpectedly contains lights: {path}")
         if artifact.get("artifact_kind") == UE_BUNDLE_ARTIFACT_KIND:
             _validate_bundle_glb(artifact, inspection)
+            if is_external_bundle:
+                _validate_external_material_alpha_contract(manifest, artifact, inspection)
         elif inspection["component_extra_count"] == 0:
             raise ForgeInputError(f"production GLB lacks presentation role metadata: {path}")
         # ``inspect_glb`` remains useful as a standalone diagnostic and may
@@ -668,13 +922,16 @@ def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
         inspection.pop("relative_or_absolute_path", None)
         inspection["relative_path"] = relative_path
         glbs.append(inspection)
-    return {
+    result = {
         "schema_version": "simworld.vista.playable-home-realism-inspection/v1",
         "forge_plan_digest": manifest.get("forge_plan_digest"),
         "build_quality": manifest.get("build_quality"),
         "component_count": len(components),
         "glbs": glbs,
     }
+    if is_external_manifest:
+        result["external_material_alpha_policy"] = external_material_alpha_policy()
+    return result
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

@@ -32,6 +32,29 @@ _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 _REQUIRED_PBR = frozenset({"base_color", "normal", "roughness"})
+EXTERNAL_MATERIAL_ALPHA_POLICY_SCHEMA = (
+    "simworld.vista.playable-home-external-material-alpha/v1"
+)
+EXTERNAL_MATERIAL_ALPHA_SANITIZATION = (
+    "blender-4.5.8-principled-alpha-greater-than-v1"
+)
+EXTERNAL_MATERIAL_ALPHA_CUTOFF = 0.5
+EXTERNAL_MATERIAL_SOURCE_PROPERTY = "vista_external_source_logical_asset_id"
+EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY = "vista_external_source_tree_sha256"
+EXTERNAL_MATERIAL_SEMANTICS_PROPERTY = "vista_receipt_texture_semantics_json"
+EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY = "vista_gltf_alpha_mode"
+EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY = "vista_gltf_alpha_cutoff"
+EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY = "vista_alpha_sanitization_policy"
+EXTERNAL_MATERIAL_CONTRACT_PROPERTIES = frozenset(
+    {
+        EXTERNAL_MATERIAL_SOURCE_PROPERTY,
+        EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY,
+        EXTERNAL_MATERIAL_SEMANTICS_PROPERTY,
+        EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY,
+        EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY,
+        EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY,
+    }
+)
 AUTHORED_UV_METERS_PER_TILE = 1.0
 AUTHORED_RECIPE_MATERIAL_IDS: Mapping[str, tuple[str, ...]] = {
     "contemporary_shoe_bench_v1": (
@@ -512,6 +535,52 @@ def asset_digest_record(asset: AcquiredAsset) -> dict[str, Any]:
 
 def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def external_material_alpha_policy() -> dict[str, Any]:
+    """Return the closed v2 source-to-GLB alpha sanitization contract.
+
+    Blender 4.5's glTF exporter derives ``alphaMode`` from the Principled
+    Alpha node graph.  ``surface_render_method`` is deliberately documented as
+    non-authoritative here: both imported OPAQUE and MASK materials use
+    ``DITHERED`` in Blender 4.5.
+    """
+
+    return {
+        "schema_version": EXTERNAL_MATERIAL_ALPHA_POLICY_SCHEMA,
+        "blender_version": [4, 5, 8],
+        "gltf_exporter_alpha_detection": "gather_alpha_info.detect_alpha_clip",
+        "source_mapping": "material_extras_source_digest_and_active_semantics_v1",
+        "sanitization": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+        "opacity_semantic": "opacity",
+        "masked_alpha_mode": "MASK",
+        "masked_alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF,
+        "non_opacity_alpha_mode": "OPAQUE",
+        "blend_alpha_mode_forbidden": True,
+        "export_extras_required": True,
+        "surface_render_method_authoritative": False,
+    }
+
+
+def external_material_name_prefix(logical_asset_id: str) -> str:
+    """Return the deterministic material namespace for one acquired model."""
+
+    slug = _slug(logical_asset_id)
+    if not slug:
+        raise RuntimeError("external material source logical asset ID has no safe slug")
+    prefix = f"r2.external.{slug}."
+    # Two ordinal digits plus a separator must remain visible even when Blender
+    # truncates the original source material name to its 63-character limit.
+    if len(prefix) + 3 > 63:
+        raise RuntimeError("external material source logical asset ID is too long to namespace safely")
+    return prefix
+
+
+def external_material_name(logical_asset_id: str, ordinal: int, original_name: str) -> str:
+    if type(ordinal) is not int or not 0 <= ordinal <= 99:
+        raise RuntimeError("external source has too many materials for a stable two-digit identity")
+    original_slug = _slug(original_name) or "material"
+    return f"{external_material_name_prefix(logical_asset_id)}{ordinal:02d}.{original_slug}"[:63]
 
 
 def _receipt_file_fingerprint(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
@@ -1432,6 +1501,157 @@ def _active_surface_semantic_images(material: Any) -> dict[str, Any]:
     return semantic_nodes
 
 
+def _indexed_socket(sockets: Any, index: int, *, label: str) -> Any:
+    try:
+        socket = sockets[index]
+    except (IndexError, KeyError, TypeError) as error:
+        raise RuntimeError(f"external material lacks required {label} socket {index}") from error
+    if socket is None:
+        raise RuntimeError(f"external material lacks required {label} socket {index}")
+    return socket
+
+
+def _require_dithered_surface(material: Any) -> None:
+    """Set Blender's viewport mode, while refusing to treat it as glTF proof."""
+
+    if not hasattr(material, "surface_render_method"):
+        raise RuntimeError("external material lacks Blender 4.5 surface_render_method")
+    try:
+        material.surface_render_method = "DITHERED"
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError("external material cannot use Blender 4.5 DITHERED rendering") from error
+    if material.surface_render_method != "DITHERED":
+        raise RuntimeError("external material did not retain Blender 4.5 DITHERED rendering")
+
+
+def _validate_masked_alpha_graph(material: Any, opacity_node: Any) -> None:
+    """Revalidate the exact graph Blender 4.5 exports as glTF MASK."""
+
+    opacity_links = _all_output_links(opacity_node)
+    if len(opacity_links) != 1:
+        raise RuntimeError("external opacity image must feed exactly one alpha-clip node")
+    opacity_link = opacity_links[0]
+    clip = getattr(opacity_link, "to_node", None)
+    clip_input = getattr(opacity_link, "to_socket", None)
+    if (
+        getattr(opacity_link, "from_node", None) != opacity_node
+        or getattr(getattr(opacity_link, "from_socket", None), "name", None)
+        not in {"Color", "Alpha"}
+        or getattr(clip, "type", None) != "MATH"
+        or getattr(clip, "operation", None) != "GREATER_THAN"
+        or clip_input != _indexed_socket(clip.inputs, 0, label="alpha-clip input")
+    ):
+        raise RuntimeError("external opacity image is not connected to the exact alpha-clip input")
+    threshold = _indexed_socket(clip.inputs, 1, label="alpha-clip threshold")
+    if _socket_links(threshold) or float(getattr(threshold, "default_value", math.nan)) != EXTERNAL_MATERIAL_ALPHA_CUTOFF:
+        raise RuntimeError("external alpha-clip threshold differs from the closed 0.5 policy")
+    clip_output = _indexed_socket(clip.outputs, 0, label="alpha-clip output")
+    output_links = _socket_links(clip_output)
+    if len(output_links) != 1:
+        raise RuntimeError("external alpha-clip output must feed exactly one Principled Alpha socket")
+    output_link = output_links[0]
+    shader = getattr(output_link, "to_node", None)
+    alpha_socket = getattr(output_link, "to_socket", None)
+    if (
+        getattr(output_link, "from_node", None) != clip
+        or getattr(output_link, "from_socket", None) != clip_output
+        or getattr(shader, "type", None) != "BSDF_PRINCIPLED"
+        or getattr(alpha_socket, "name", None) != "Alpha"
+        or alpha_socket != _named_socket(shader.inputs, "Alpha", label="Principled Alpha")
+        or _socket_links(alpha_socket) != (output_link,)
+    ):
+        raise RuntimeError("external alpha-clip output is not exclusively connected to Principled Alpha")
+    _require_dithered_surface(material)
+
+
+def _validate_opaque_alpha_graph(material: Any, semantic_nodes: Mapping[str, Any]) -> None:
+    """Require an unlinked constant-one Alpha input for non-opacity materials."""
+
+    base_links = _all_output_links(semantic_nodes["base_color"])
+    if len(base_links) != 1:
+        raise RuntimeError("external base color does not identify one Principled shader")
+    shader = getattr(base_links[0], "to_node", None)
+    if getattr(shader, "type", None) != "BSDF_PRINCIPLED":
+        raise RuntimeError("external base color does not feed Principled BSDF")
+    alpha_socket = _named_socket(shader.inputs, "Alpha", label="Principled Alpha")
+    if _socket_links(alpha_socket):
+        raise RuntimeError("external non-opacity material retains a linked Alpha socket")
+    try:
+        alpha_socket.default_value = 1.0
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError("external non-opacity material Alpha cannot be fixed to one") from error
+    if float(getattr(alpha_socket, "default_value", math.nan)) != 1.0:
+        raise RuntimeError("external non-opacity material Alpha differs from one")
+    _require_dithered_surface(material)
+
+
+def _configure_external_material_alpha_contract(
+    material: Any,
+    asset: AcquiredAsset,
+    semantic_nodes: Mapping[str, Any],
+) -> None:
+    """Sanitize one verified source material and persist its export mapping."""
+
+    existing = set(material.keys())
+    spoofed = sorted(existing & EXTERNAL_MATERIAL_CONTRACT_PROPERTIES)
+    if spoofed:
+        raise RuntimeError(f"external source material predefines reserved VISTA alpha properties: {spoofed}")
+    semantics = tuple(sorted(semantic_nodes))
+    if not _REQUIRED_PBR.issubset(semantics):
+        raise RuntimeError("external source material lacks the required active PBR semantics")
+    opacity_node = semantic_nodes.get("opacity")
+    if opacity_node is not None:
+        direct_links = _all_output_links(opacity_node)
+        if len(direct_links) != 1:
+            raise RuntimeError("external opacity image lacks one direct Principled Alpha link")
+        direct = direct_links[0]
+        shader = getattr(direct, "to_node", None)
+        alpha_socket = getattr(direct, "to_socket", None)
+        if (
+            getattr(shader, "type", None) != "BSDF_PRINCIPLED"
+            or getattr(alpha_socket, "name", None) != "Alpha"
+            or alpha_socket != _named_socket(shader.inputs, "Alpha", label="Principled Alpha")
+        ):
+            raise RuntimeError("external receipt opacity is not connected directly to Principled Alpha")
+        tree = material.node_tree
+        source_socket = getattr(direct, "from_socket", None)
+        try:
+            tree.links.remove(direct)
+            clip = tree.nodes.new("ShaderNodeMath")
+            clip.name = "VISTA_GLTF_MASK_0_5"
+            clip.label = "VISTA glTF MASK cutoff 0.5"
+            clip.operation = "GREATER_THAN"
+            _indexed_socket(clip.inputs, 1, label="alpha-clip threshold").default_value = (
+                EXTERNAL_MATERIAL_ALPHA_CUTOFF
+            )
+            tree.links.new(source_socket, _indexed_socket(clip.inputs, 0, label="alpha-clip input"))
+            tree.links.new(_indexed_socket(clip.outputs, 0, label="alpha-clip output"), alpha_socket)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as error:
+            raise RuntimeError("external material alpha-clip graph could not be constructed") from error
+        _validate_masked_alpha_graph(material, opacity_node)
+        alpha_mode = "MASK"
+    else:
+        _validate_opaque_alpha_graph(material, semantic_nodes)
+        alpha_mode = "OPAQUE"
+    try:
+        material[EXTERNAL_MATERIAL_SOURCE_PROPERTY] = asset.logical_asset_id
+        material[EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY] = asset.source_tree_sha256
+        material[EXTERNAL_MATERIAL_SEMANTICS_PROPERTY] = json.dumps(
+            semantics, separators=(",", ":")
+        )
+        material[EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY] = alpha_mode
+        material[EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY] = EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        if alpha_mode == "MASK":
+            material[EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY] = EXTERNAL_MATERIAL_ALPHA_CUTOFF
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("external material alpha provenance could not be persisted") from error
+    expected_properties = EXTERNAL_MATERIAL_CONTRACT_PROPERTIES - (
+        set() if alpha_mode == "MASK" else {EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY}
+    )
+    if not expected_properties.issubset(set(material.keys())):
+        raise RuntimeError("external material alpha provenance did not persist")
+
+
 def _validate_receipt_image(
     bpy: Any,
     image: Any,
@@ -1506,7 +1726,7 @@ def _validate_runtime_material_images(
     meshes: Sequence[Any],
     asset_set: ExternalAssetSet,
     asset: AcquiredAsset,
-) -> None:
+) -> list[tuple[Any, dict[str, Any]]]:
     expected = _runtime_receipt_texture_paths(asset_set, asset)
     materials: list[Any] = []
     for obj in meshes:
@@ -1514,11 +1734,13 @@ def _validate_runtime_material_images(
             if slot.material not in materials:
                 materials.append(slot.material)
     used_semantics: set[str] = set()
+    material_semantics: list[tuple[Any, dict[str, Any]]] = []
     available_semantics = {semantic for receipt_file in expected.values() for semantic in receipt_file.semantic}
     for material in materials:
         if not material.use_nodes or material.node_tree is None:
             raise RuntimeError(f"external material is not node-based PBR: {material.name}")
         semantic_nodes = _active_surface_semantic_images(material)
+        material_semantics.append((material, semantic_nodes))
         for semantic, node in semantic_nodes.items():
             image = node.image
             resolved = _resolved_runtime_image_path(bpy, image)
@@ -1554,6 +1776,7 @@ def _validate_runtime_material_images(
             f"external runtime materials do not use all receipt-bound PBR semantics: "
             f"{asset.logical_asset_id}: missing={sorted(required_semantics - used_semantics)}"
         )
+    return material_semantics
 
 
 def _matrix_is_identity(value: Any, tolerance: float = 1e-9) -> bool:
@@ -1706,16 +1929,29 @@ def _append_static_blend(
     before_actions = set(bpy.data.actions)
     loaded = _load_verified_blend_objects(bpy, asset_set, asset)
     meshes = _validate_static_source(bpy, loaded, [item for item in bpy.data.actions if item not in before_actions])
-    _validate_runtime_material_images(bpy, meshes, asset_set, asset)
+    material_semantics = _validate_runtime_material_images(bpy, meshes, asset_set, asset)
     bpy.context.view_layer.update()
     unique_materials: list[Any] = []
     for obj in meshes:
         for slot in obj.material_slots:
             if slot.material not in unique_materials:
                 unique_materials.append(slot.material)
+    semantics_by_material = {id(material): semantics for material, semantics in material_semantics}
+    if set(semantics_by_material) != {id(material) for material in unique_materials}:
+        raise RuntimeError("external material validation inventory differs from mesh material slots")
+    realized_names: set[str] = set()
     for ordinal, material in enumerate(unique_materials):
         original = material.name
-        material.name = f"r2.external.{_slug(logical_id)}.{ordinal:02d}.{_slug(original)}"[:63]
+        expected_name = external_material_name(logical_id, ordinal, original)
+        material.name = expected_name
+        if material.name != expected_name or material.name in realized_names:
+            raise RuntimeError("external material name is not a unique deterministic source identity")
+        realized_names.add(material.name)
+        _configure_external_material_alpha_contract(
+            material,
+            asset,
+            semantics_by_material[id(material)],
+        )
     minimum, maximum = _combined_bounds(mathutils, meshes)
     measured = tuple(maximum[index] - minimum[index] for index in range(3))
     for actual, expected in zip(measured, expected_dimensions_m):
