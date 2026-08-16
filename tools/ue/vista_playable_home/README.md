@@ -168,7 +168,7 @@ derived-data caches. The runtime-only project descriptor, host module/targets,
 and `DefaultEngine.ini` are regenerated deterministically. The generated
 engine config is the closed `realistic_interior_r2` / `desktop_high_sm6`
 renderer projection from commit
-`d543de99064fcdfef678fa0d9129d1d0f2daa9c1`, combined with a token-free,
+`3ce8ef48a2cb0aee881efeff94c3ea3a634fc56c`, combined with a token-free,
 fully disabled Android File Server block. The source engine config is
 SHA/size evidence only: its UE-generated Android File Server credential is
 never copied or emitted. This config is a renderer request, not packaged
