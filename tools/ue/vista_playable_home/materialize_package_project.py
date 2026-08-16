@@ -48,6 +48,24 @@ PRIVATE_DIRECTORY_MODE = 0o700
 TREE_ALGORITHM = "framed-canonical-project-entry-exact-mode-sha256/v1"
 SOURCE_SANITIZATION_POLICY = "regenerate_not_copy"
 MATERIALIZATION_RECEIPT = "materialization-receipt.json"
+EXPECTED_RUN_UAT_SUFFIX = Path("Engine/Build/BatchFiles/RunUAT.sh")
+PINNED_ENGINE_BUILD_VERSION_SHA256 = (
+    "ffe01f6d1e96ef86cd06158cfb561150971823fc77e5c8df352910bcf4d365ef"
+)
+PINNED_ENGINE_VERSION = "5.7.3"
+PINNED_ENGINE_CHANGELIST = 50162420
+PINNED_RENDERER_CONTRACT_COMMIT = "d543de99064fcdfef678fa0d9129d1d0f2daa9c1"
+PROVEN_RUN_UAT_LOG = Path(
+    "/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/"
+    "20260815T110115Z-navfix/ue/package-linux-development/"
+    "attempt-04-no-afs-clean/runuat.log"
+)
+PROVEN_RUN_UAT_LOG_SHA256 = (
+    "acfb038af51bcc9ac14ede87e654be432b3c64e5256e87a4c0c351eeaae1b517"
+)
+PROVEN_PACKAGE_RECEIPT_SHA256 = (
+    "c7dcd0bea0c2cb0de8f874857add910acfeca43af4caaf28295210c224734787"
+)
 
 EXCLUDED_DIRECTORY_NAMES = frozenset(
     {
@@ -765,6 +783,10 @@ def _canonical_project_descriptor() -> bytes:
 
 
 def _canonical_engine_ini() -> bytes:
+    # Exact closed projection of build_home.py at PINNED_RENDERER_CONTRACT_COMMIT
+    # for realistic_interior_r2 / desktop_high_sm6.  This is configuration,
+    # not runtime renderer proof; the packaged observation contract remains a
+    # separate post-package gate.
     lines = [
         "[/Script/EngineSettings.GameMapsSettings]",
         f"GameDefaultMap={EXPECTED_MAP_PATH}",
@@ -776,6 +798,35 @@ def _canonical_engine_ini() -> bytes:
         "",
         "[/Script/Engine.RendererSettings]",
         "r.AllowStaticLighting=False",
+        "r.DynamicGlobalIlluminationMethod=1",
+        "r.ReflectionMethod=1",
+        "r.Shadow.Virtual.Enable=1",
+        "r.AntiAliasingMethod=4",
+        "r.Nanite.ProjectEnabled=True",
+        "r.GenerateMeshDistanceFields=True",
+        "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange=True",
+        "r.EyeAdaptation.PreExposureOverride=0",
+        "r.RayTracing=False",
+        "r.Lumen.HardwareRayTracing=0",
+        "",
+        "[/Script/LinuxTargetPlatform.LinuxTargetSettings]",
+        "DefaultGraphicsRHI=DefaultGraphicsRHI_Vulkan",
+        "-VulkanTargetedShaderFormats=SF_VULKAN_SM5",
+        "+VulkanTargetedShaderFormats=SF_VULKAN_SM6",
+        "",
+        "[ConsoleVariables]",
+        "r.ScreenPercentage=100.000000",
+        "r.Streaming.PoolSize=8192",
+        "sg.ViewDistanceQuality=3",
+        "sg.AntiAliasingQuality=3",
+        "sg.ShadowQuality=3",
+        "sg.GlobalIlluminationQuality=3",
+        "sg.ReflectionQuality=3",
+        "sg.PostProcessQuality=3",
+        "sg.TextureQuality=3",
+        "sg.EffectsQuality=3",
+        "sg.FoliageQuality=3",
+        "sg.ShadingQuality=3",
         "",
         "[/Script/AndroidFileServerEditor.AndroidFileServerRuntimeSettings]",
         "bEnablePlugin=False",
@@ -810,7 +861,49 @@ class MaterializationConfig:
     source_build_result_sha256: str
     source_project: Path
     source_project_tree_sha256: str
+    run_uat: Path
+    run_uat_sha256: str
     attempt_root: Path
+
+
+@dataclass(frozen=True)
+class RunUatEvidence:
+    run_uat: FileSeal
+    build_version: FileSeal
+    engine_root: Path
+
+    def receipt_record(self) -> dict[str, Any]:
+        return {
+            "engine_root": str(self.engine_root),
+            "engine_version": PINNED_ENGINE_VERSION,
+            "engine_changelist": PINNED_ENGINE_CHANGELIST,
+            "run_uat": {
+                "path": str(self.run_uat.path),
+                "sha256": self.run_uat.sha256,
+                "bytes": self.run_uat.size_bytes,
+                "mode": self.run_uat.mode,
+            },
+            "build_version": {
+                "path": str(self.build_version.path),
+                "sha256": self.build_version.sha256,
+                "bytes": self.build_version.size_bytes,
+                "mode": self.build_version.mode,
+            },
+        }
+
+
+@dataclass(frozen=True)
+class DestinationEvidence:
+    parent: Path
+    identity: tuple[int, int]
+
+    def receipt_record(self) -> dict[str, Any]:
+        return {
+            "parent": str(self.parent),
+            "parent_st_dev": self.identity[0],
+            "parent_st_ino": self.identity[1],
+            "policy": "plan-pinned-parent-st_dev-st_ino/v1",
+        }
 
 
 @dataclass(frozen=True)
@@ -868,7 +961,9 @@ class OutputSnapshot:
 class MaterializationPlan:
     config: MaterializationConfig
     attempt_root: Path
+    destination: DestinationEvidence
     source: SourceEvidence
+    run_uat: RunUatEvidence
     output: OutputSnapshot
     report: dict[str, Any]
 
@@ -896,6 +991,66 @@ def _same_file_observation(first: FileSeal, second: FileSeal) -> bool:
         and first.size_bytes == second.size_bytes
         and first.mode == second.mode
         and first.identity == second.identity
+    )
+
+
+def _validate_run_uat(config: MaterializationConfig) -> RunUatEvidence:
+    run_uat_path = _existing_path(
+        config.run_uat,
+        label="pinned RunUAT",
+        directory=False,
+    )
+    if len(run_uat_path.parents) < 4:
+        _fail("RUN_UAT_INVALID", "RunUAT path is outside an Unreal engine root")
+    engine_root = run_uat_path.parents[3]
+    if run_uat_path != engine_root / EXPECTED_RUN_UAT_SUFFIX:
+        _fail("RUN_UAT_INVALID", "RunUAT path does not have the fixed engine layout")
+    run_uat = _seal_file(
+        run_uat_path,
+        label="pinned RunUAT",
+        scan_secrets=True,
+        maximum_bytes=MAX_JSON_BYTES,
+    )
+    expected_sha = _require_sha256(config.run_uat_sha256, label="RunUAT pin")
+    if not hmac.compare_digest(run_uat.sha256, expected_sha):
+        _fail("RUN_UAT_PIN_MISMATCH", "RunUAT SHA-256 differs")
+    if run_uat.mode & 0o111 == 0:
+        _fail("RUN_UAT_INVALID", "pinned RunUAT is not executable")
+
+    build_version_path = _existing_path(
+        engine_root / "Engine/Build/Build.version",
+        label="pinned Unreal Build.version",
+        directory=False,
+    )
+    build_version = _seal_file(
+        build_version_path,
+        label="pinned Unreal Build.version",
+        capture=True,
+        maximum_bytes=MAX_JSON_BYTES,
+    )
+    if not hmac.compare_digest(
+        build_version.sha256, PINNED_ENGINE_BUILD_VERSION_SHA256
+    ):
+        _fail("RUN_UAT_ENGINE_MISMATCH", "Unreal Build.version SHA-256 differs")
+    if build_version.raw is None:
+        raise AssertionError("captured Build.version bytes are unavailable")
+    build = _strict_json(
+        build_version.raw,
+        label="pinned Unreal Build.version",
+        require_canonical=False,
+    )
+    if (
+        build.get("MajorVersion") != 5
+        or build.get("MinorVersion") != 7
+        or build.get("PatchVersion") != 3
+        or build.get("Changelist") != PINNED_ENGINE_CHANGELIST
+        or build.get("BranchName") != "++UE5+Release-5.7"
+    ):
+        _fail("RUN_UAT_ENGINE_MISMATCH", "Unreal engine identity differs")
+    return RunUatEvidence(
+        run_uat=run_uat,
+        build_version=build_version,
+        engine_root=engine_root,
     )
 
 
@@ -1133,6 +1288,22 @@ def _validate_destination(
     return attempt
 
 
+def _seal_destination(attempt: Path) -> DestinationEvidence:
+    parent = attempt.parent
+    try:
+        metadata = os.lstat(parent)
+    except OSError as exc:
+        raise PackageProjectError(
+            "DESTINATION_CHANGED", "could not seal package destination parent"
+        ) from exc
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        _fail("DESTINATION_CHANGED", "package destination parent is not real")
+    return DestinationEvidence(
+        parent=parent,
+        identity=(metadata.st_dev, metadata.st_ino),
+    )
+
+
 def _output_tree_hash(directories: Sequence[str], files: Sequence[OutputFile]) -> str:
     digest = hashlib.sha256()
     records: list[dict[str, Any]] = [
@@ -1232,8 +1403,11 @@ def _source_binding_record(source: SourceEvidence) -> dict[str, Any]:
         },
         "source_default_engine": {
             "bytes": engine.size_bytes,
+            "package_config_sha256": sha256_bytes(_canonical_engine_ini()),
+            "renderer_contract_commit": PINNED_RENDERER_CONTRACT_COMMIT,
             "sanitized_policy": SOURCE_SANITIZATION_POLICY,
             "sha256": engine.sha256,
+            "transformation": ("d543-r2-renderer-plus-token-free-afs-regeneration/v1"),
         },
         "verified_default_input": {
             "bytes": input_config.size_bytes,
@@ -1249,28 +1423,52 @@ def _source_binding_record(source: SourceEvidence) -> dict[str, Any]:
     }
 
 
-def _runuat_contract(attempt: Path) -> dict[str, Any]:
+def _runuat_contract(attempt: Path, evidence: RunUatEvidence) -> dict[str, Any]:
     project = attempt / "project" / EXPECTED_PROJECT_NAME
     return {
+        "input": evidence.receipt_record(),
         "argv": [
-            "<absolute-Engine/Build/BatchFiles/RunUAT.sh>",
+            str(evidence.run_uat.path),
+            "-nocompileuat",
             "BuildCookRun",
             f"-project={project}",
-            "-noP4",
+            "-target=VistaPlayableHome",
+            "-nop4",
             "-platform=Linux",
             "-clientconfig=Development",
             "-build",
             "-cook",
+            f"-map={EXPECTED_MAP_PATH}",
+            f"-CookOutputDir={attempt / 'cooked/Linux'}",
+            (
+                "-AdditionalCookerOptions=-nullrhi -unattended -NoSplash "
+                "-NoSound -NoAnalytics -ddc=InstalledNoZenLocalFallback"
+            ),
+            "-ubtargs=-NoUBA -MaxParallelActions=6",
             "-stage",
+            "-package",
             "-pak",
             "-skipiostore",
             "-archive",
+            f"-stagingdirectory={attempt / 'stage'}",
             f"-archivedirectory={attempt / 'archive'}",
-            f"-map={EXPECTED_MAP_PATH}",
+            "-NoCodeSign",
+            "-unattended",
             "-utf8output",
         ],
         "log": str(attempt / "runuat.log"),
-        "policy": "operator-runs-pinned-runuat-after-materialization/v1",
+        "policy": "operator-runs-pinned-proven-runuat-after-materialization/v2",
+        "consumer_precondition": (
+            "pin-terminal-accepted-receipt-sha256+recompute-project-tree-"
+            "immediately-before-runuat/v1"
+        ),
+        "provenance": {
+            "runuat_log": str(PROVEN_RUN_UAT_LOG),
+            "runuat_log_sha256": PROVEN_RUN_UAT_LOG_SHA256,
+            "accepted_package_receipt_sha256": PROVEN_PACKAGE_RECEIPT_SHA256,
+            "contract": "successful-linux-development-build-cook-stage-package-archive/v1",
+            "scope": "packaging_mechanics_only_not_r2_renderer_runtime_proof",
+        },
     }
 
 
@@ -1278,7 +1476,9 @@ def plan_materialization(
     config: MaterializationConfig, *, apply: bool = False
 ) -> MaterializationPlan:
     source = _validate_source_evidence(config)
+    run_uat = _validate_run_uat(config)
     attempt = _validate_destination(config, source)
+    destination = _seal_destination(attempt)
     output = _build_output_snapshot(source)
     report: dict[str, Any] = {
         "schema_version": PLAN_SCHEMA,
@@ -1286,6 +1486,7 @@ def plan_materialization(
         "mode": "apply" if apply else "dry_run",
         "attempt_root": str(attempt),
         "project_root": str(attempt / "project"),
+        "destination": destination.receipt_record(),
         "source": _source_binding_record(source),
         "project": output.receipt_record(),
         "policy": {
@@ -1300,14 +1501,23 @@ def plan_materialization(
             "private_directory_mode": PRIVATE_DIRECTORY_MODE,
             "private_file_mode": PRIVATE_FILE_MODE,
             "project_descriptor": "canonical_runtime_only/v1",
-            "default_engine": "canonical_allowlisted_regeneration/v1",
+            "default_engine": ("d543-r2-renderer-plus-token-free-afs-regeneration/v2"),
             "default_input": "preserve_verified_bytes/v1",
             "copy_transport": "reflink_with_byte_fallback/v1",
             "secret_scan": "final_copy_eligible_and_output_zero_hits/v1",
             "failed_attempt_retention": "failed_quarantined_never_deleted/v1",
+            "failed_partial_outputs": "retain_never_unlink/v1",
+            "receipt_commit": (
+                "pending-readback+final-resnapshot+atomic-noreplace-publication/v1"
+            ),
             "source_mutation": "pre_copy_post_copy_final_fail_closed/v1",
+            "run_uat_mutation": "pre_create_post_copy_final_fail_closed/v1",
+            "destination_containment": (
+                "plan-pinned-parent+exclusive-cooperative-lock+private-staging+"
+                "retained-dirfd-openat-no-follow/v3"
+            ),
         },
-        "runuat": _runuat_contract(attempt),
+        "runuat": _runuat_contract(attempt, run_uat),
         "output": str(attempt / MATERIALIZATION_RECEIPT),
     }
     report["content_digest"] = _content_digest(report)
@@ -1316,20 +1526,12 @@ def plan_materialization(
     return MaterializationPlan(
         config=config,
         attempt_root=attempt,
+        destination=destination,
         source=source,
+        run_uat=run_uat,
         output=output,
         report=report,
     )
-
-
-def _mkdir_private(path: Path) -> None:
-    try:
-        path.mkdir(mode=PRIVATE_DIRECTORY_MODE, exist_ok=False)
-        os.chmod(path, PRIVATE_DIRECTORY_MODE, follow_symlinks=False)
-    except OSError as exc:
-        raise PackageProjectError(
-            "MATERIALIZATION_WRITE_FAILED", "could not create private directory"
-        ) from exc
 
 
 def _close_best_effort(descriptor: int) -> None:
@@ -1337,15 +1539,6 @@ def _close_best_effort(descriptor: int) -> None:
         return
     try:
         os.close(descriptor)
-    except OSError:
-        pass
-
-
-def _unlink_best_effort(path: Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
     except OSError:
         pass
 
@@ -1359,41 +1552,554 @@ def _write_all(descriptor: int, raw: bytes) -> None:
         view = view[written:]
 
 
-def _write_exclusive(path: Path, raw: bytes) -> None:
+@dataclass(frozen=True)
+class DestinationAnchor:
+    parent_path: Path
+    attempt_name: str
+    parent_fd: int
+    parent_identity: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class AnchoredTarget:
+    parent_fd: int
+    name: str
+    display_path: Path
+
+
+def _directory_inode(metadata: os.stat_result) -> tuple[int, int]:
+    return (metadata.st_dev, metadata.st_ino)
+
+
+def _safe_component(name: str) -> str:
+    if not name or name in {".", ".."} or "/" in name or "\x00" in name:
+        _fail("OUTPUT_PATH_INVALID", "anchored output component is unsafe")
+    return name
+
+
+def _open_directory_at(parent_fd: int, name: str) -> int:
+    component = _safe_component(name)
     descriptor = -1
-    committed = False
+    try:
+        before = os.stat(
+            component,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+            _fail("SYMLINK_REFUSED", "anchored output directory is not real")
+        descriptor = os.open(
+            component,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(descriptor)
+        if not stat.S_ISDIR(opened.st_mode) or _directory_inode(
+            opened
+        ) != _directory_inode(before):
+            _fail("DESTINATION_CHANGED", "anchored output directory changed")
+        return descriptor
+    except PackageProjectError:
+        _close_best_effort(descriptor)
+        raise
+    except OSError as exc:
+        _close_best_effort(descriptor)
+        raise PackageProjectError(
+            "MATERIALIZATION_WRITE_FAILED", "could not open anchored output directory"
+        ) from exc
+
+
+def _open_destination_anchor(plan: MaterializationPlan) -> DestinationAnchor:
+    attempt = _validate_destination(plan.config, plan.source)
+    if attempt != plan.attempt_root:
+        raise AssertionError("apply destination differs from the validated plan")
+    parent = attempt.parent
+    if parent != plan.destination.parent:
+        raise AssertionError("apply destination parent differs from the plan")
+    descriptor = -1
     try:
         descriptor = os.open(
-            path,
-            os.O_WRONLY
+            parent,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        opened = os.fstat(descriptor)
+        _reject_symlink_components(parent, label="package-linux-development root")
+        path_metadata = os.lstat(parent)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(path_metadata.st_mode)
+            or stat.S_ISLNK(path_metadata.st_mode)
+            or parent.resolve(strict=True) != parent
+            or _directory_inode(opened) != _directory_inode(path_metadata)
+            or _directory_inode(opened) != plan.destination.identity
+        ):
+            _fail("DESTINATION_CHANGED", "package root changed while anchoring")
+        try:
+            os.stat(attempt.name, dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            _fail("DESTINATION_EXISTS", "append-only package attempt already exists")
+        return DestinationAnchor(
+            parent_path=parent,
+            attempt_name=attempt.name,
+            parent_fd=descriptor,
+            parent_identity=_directory_inode(opened),
+        )
+    except PackageProjectError:
+        _close_best_effort(descriptor)
+        raise
+    except OSError as exc:
+        _close_best_effort(descriptor)
+        raise PackageProjectError(
+            "DESTINATION_CHANGED", "could not anchor package destination"
+        ) from exc
+
+
+def _assert_destination_anchor_stable(anchor: DestinationAnchor) -> None:
+    try:
+        _reject_symlink_components(
+            anchor.parent_path,
+            label="package-linux-development root",
+        )
+        current = os.lstat(anchor.parent_path)
+        opened = os.fstat(anchor.parent_fd)
+        resolved = anchor.parent_path.resolve(strict=True)
+    except PackageProjectError:
+        raise
+    except OSError as exc:
+        raise PackageProjectError(
+            "DESTINATION_CHANGED", "package destination binding disappeared"
+        ) from exc
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or stat.S_ISLNK(current.st_mode)
+        or resolved != anchor.parent_path
+        or _directory_inode(current) != anchor.parent_identity
+        or _directory_inode(opened) != anchor.parent_identity
+    ):
+        _fail("DESTINATION_CHANGED", "package destination binding changed")
+
+
+def _assert_attempt_anchor_stable(
+    anchor: DestinationAnchor,
+    attempt_fd: int,
+) -> None:
+    try:
+        entry = os.stat(
+            anchor.attempt_name,
+            dir_fd=anchor.parent_fd,
+            follow_symlinks=False,
+        )
+        opened = os.fstat(attempt_fd)
+    except OSError as exc:
+        raise PackageProjectError(
+            "DESTINATION_CHANGED", "package attempt binding disappeared"
+        ) from exc
+    if (
+        not stat.S_ISDIR(entry.st_mode)
+        or stat.S_ISLNK(entry.st_mode)
+        or not stat.S_ISDIR(opened.st_mode)
+        or _directory_inode(entry) != _directory_inode(opened)
+    ):
+        _fail("DESTINATION_CHANGED", "package attempt binding changed")
+
+
+def _assert_project_directory_bindings_stable(
+    attempt_fd: int,
+    directory_fds: Mapping[str, int],
+) -> None:
+    project_fd = directory_fds.get(".")
+    if project_fd is None:
+        _fail("DESTINATION_CHANGED", "materialized project binding is unavailable")
+    bindings: list[tuple[int, str, int]] = [(attempt_fd, "project", project_fd)]
+    for relative, child_fd in directory_fds.items():
+        if relative == ".":
+            continue
+        path = PurePosixPath(relative)
+        parent_fd = directory_fds.get(path.parent.as_posix())
+        if parent_fd is None:
+            _fail("DESTINATION_CHANGED", "materialized directory parent is unavailable")
+        bindings.append((parent_fd, path.name, child_fd))
+    try:
+        for parent_fd, name, child_fd in bindings:
+            entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            opened = os.fstat(child_fd)
+            if (
+                not stat.S_ISDIR(entry.st_mode)
+                or stat.S_ISLNK(entry.st_mode)
+                or not stat.S_ISDIR(opened.st_mode)
+                or _directory_inode(entry) != _directory_inode(opened)
+            ):
+                _fail(
+                    "DESTINATION_CHANGED",
+                    "materialized directory pathname binding changed",
+                )
+    except PackageProjectError:
+        raise
+    except OSError as exc:
+        raise PackageProjectError(
+            "DESTINATION_CHANGED",
+            "materialized directory pathname binding disappeared",
+        ) from exc
+
+
+def _bind_created_directory_at(parent_fd: int, name: str) -> int:
+    """Bind a just-created directory and secure it under a hostile umask.
+
+    Linux ``O_PATH`` can bind a mode-000 directory without traversing it.  The
+    procfs descriptor link applies chmod and obtains a readable directory fd
+    from that exact bound inode rather than resolving the destination name a
+    second time.
+    """
+
+    component = _safe_component(name)
+    path_flag = getattr(os, "O_PATH", 0)
+    if path_flag == 0:  # pragma: no cover - this tool is Linux-only by contract.
+        _fail("MATERIALIZATION_WRITE_FAILED", "Linux O_PATH support is required")
+    path_descriptor = -1
+    descriptor = -1
+    try:
+        path_descriptor = os.open(
+            component,
+            path_flag
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(path_descriptor)
+        before = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not stat.S_ISDIR(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+        ):
+            _fail("DESTINATION_CHANGED", "created output directory was replaced")
+        if _directory_inode(opened) != _directory_inode(before):
+            _fail("DESTINATION_CHANGED", "created output directory changed")
+        descriptor_path = Path("/proc/self/fd") / str(path_descriptor)
+        os.chmod(descriptor_path, PRIVATE_DIRECTORY_MODE)
+        descriptor = os.open(
+            descriptor_path,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0),
+        )
+        after_open = os.fstat(descriptor)
+        after_entry = os.stat(
+            component,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            _directory_inode(after_open) != _directory_inode(before)
+            or _directory_inode(after_entry) != _directory_inode(before)
+            or stat.S_IMODE(after_open.st_mode) != PRIVATE_DIRECTORY_MODE
+        ):
+            _fail("DESTINATION_CHANGED", "created output directory changed")
+        return descriptor
+    except PackageProjectError:
+        _close_best_effort(descriptor)
+        raise
+    except OSError as exc:
+        _close_best_effort(descriptor)
+        raise PackageProjectError(
+            "MATERIALIZATION_WRITE_FAILED",
+            "could not secure created output directory",
+        ) from exc
+    finally:
+        _close_best_effort(path_descriptor)
+
+
+def _link_noreplace_at(
+    parent_fd: int,
+    source_name: str,
+    destination_name: str,
+    expected: FileSeal,
+) -> None:
+    try:
+        os.link(
+            _safe_component(source_name),
+            _safe_component(destination_name),
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except BaseException as exc:
+        terminal_state = _terminal_receipt_state_at(
+            parent_fd,
+            source_name,
+            destination_name,
+            expected,
+        )
+        if terminal_state == "match":
+            return
+        if isinstance(exc, FileExistsError) and terminal_state == "different":
+            raise PackageProjectError(
+                "DESTINATION_EXISTS",
+                "terminal materialization receipt already exists",
+            ) from exc
+        if terminal_state in {"missing", "different", "unknown"}:
+            raise PackageProjectError(
+                "RECEIPT_COMMIT_OUTCOME_UNKNOWN",
+                "terminal receipt publication could not be reconciled",
+            ) from exc
+        raise AssertionError("unhandled terminal receipt reconciliation state")
+
+
+def _terminal_receipt_state_at(
+    parent_fd: int,
+    pending_name: str,
+    terminal_name: str,
+    expected: FileSeal,
+) -> str:
+    try:
+        pending = os.stat(
+            _safe_component(pending_name),
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        terminal = os.stat(
+            _safe_component(terminal_name),
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(pending.st_mode)
+            or not stat.S_ISREG(terminal.st_mode)
+            or _directory_inode(pending) != _directory_inode(terminal)
+            or _directory_inode(terminal)
+            != (expected.identity[0], expected.identity[1])
+        ):
+            return "different"
+        observed = _seal_file_at(
+            parent_fd,
+            terminal_name,
+            expected.path,
+            label="terminal materialization receipt",
+        )
+    except FileNotFoundError:
+        return "missing"
+    except BaseException:
+        return "unknown"
+    matches = (
+        observed.sha256 == expected.sha256
+        and observed.size_bytes == expected.size_bytes
+        and observed.mode == expected.mode
+    )
+    return "match" if matches else "different"
+
+
+def _publish_staged_attempt_at(
+    anchor: DestinationAnchor,
+    staging_name: str,
+    staging_fd: int,
+    publication_lock_name: str,
+    publication_lock: FileSeal,
+) -> None:
+    _assert_file_binding_stable(
+        anchor.parent_fd,
+        publication_lock_name,
+        publication_lock,
+    )
+    staging_entry = os.stat(
+        staging_name,
+        dir_fd=anchor.parent_fd,
+        follow_symlinks=False,
+    )
+    if (
+        not stat.S_ISDIR(staging_entry.st_mode)
+        or stat.S_ISLNK(staging_entry.st_mode)
+        or _directory_inode(staging_entry) != _directory_inode(os.fstat(staging_fd))
+    ):
+        _fail("DESTINATION_CHANGED", "private attempt staging binding changed")
+    try:
+        os.stat(
+            anchor.attempt_name,
+            dir_fd=anchor.parent_fd,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        pass
+    else:
+        _fail("DESTINATION_EXISTS", "append-only package attempt already exists")
+    try:
+        os.rename(
+            staging_name,
+            anchor.attempt_name,
+            src_dir_fd=anchor.parent_fd,
+            dst_dir_fd=anchor.parent_fd,
+        )
+    except OSError as exc:
+        raise PackageProjectError(
+            "MATERIALIZATION_WRITE_FAILED",
+            "could not publish anchored package attempt",
+        ) from exc
+
+
+def _create_attempt_at(anchor: DestinationAnchor) -> int:
+    publication_lock_name = f".attempt-publication-{anchor.attempt_name}.lock"
+    publication_lock = _write_exclusive_at(
+        AnchoredTarget(
+            parent_fd=anchor.parent_fd,
+            name=publication_lock_name,
+            display_path=anchor.parent_path / publication_lock_name,
+        ),
+        canonical_json(
+            {
+                "attempt_name": anchor.attempt_name,
+                "policy": "exclusive-cooperative-publication-lock/v1",
+            }
+        ),
+    )
+    staging_name = f".materializing-{anchor.attempt_name}-{os.urandom(16).hex()}"
+    descriptor = -1
+    try:
+        os.mkdir(
+            staging_name,
+            PRIVATE_DIRECTORY_MODE,
+            dir_fd=anchor.parent_fd,
+        )
+        descriptor = _bind_created_directory_at(anchor.parent_fd, staging_name)
+        _publish_staged_attempt_at(
+            anchor,
+            staging_name,
+            descriptor,
+            publication_lock_name,
+            publication_lock,
+        )
+        # Successful rename under the retained exclusive publication lock is
+        # the cooperative publication commit.
+        return descriptor
+    except FileExistsError as exc:
+        _close_best_effort(descriptor)
+        raise PackageProjectError(
+            "DESTINATION_EXISTS", "append-only package attempt already exists"
+        ) from exc
+    except PackageProjectError:
+        _close_best_effort(descriptor)
+        raise
+    except OSError as exc:
+        _close_best_effort(descriptor)
+        raise PackageProjectError(
+            "MATERIALIZATION_WRITE_FAILED", "could not create anchored package attempt"
+        ) from exc
+
+
+def _mkdir_private_at(parent_fd: int, name: str) -> int:
+    component = _safe_component(name)
+    try:
+        os.mkdir(component, PRIVATE_DIRECTORY_MODE, dir_fd=parent_fd)
+        return _bind_created_directory_at(parent_fd, component)
+    except PackageProjectError:
+        raise
+    except OSError as exc:
+        raise PackageProjectError(
+            "MATERIALIZATION_WRITE_FAILED",
+            "could not create private anchored directory",
+        ) from exc
+
+
+def _write_exclusive_at(target: AnchoredTarget, raw: bytes) -> FileSeal:
+    descriptor = -1
+    committed = False
+    committed_seal: FileSeal | None = None
+    try:
+        descriptor = os.open(
+            _safe_component(target.name),
+            os.O_RDWR
             | os.O_CREAT
             | os.O_EXCL
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0),
             PRIVATE_FILE_MODE,
+            dir_fd=target.parent_fd,
         )
         os.fchmod(descriptor, PRIVATE_FILE_MODE)
         _write_all(descriptor, raw)
         os.fsync(descriptor)
+        written = os.fstat(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        observed_bytes = 0
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            observed_bytes += len(block)
+            digest.update(block)
+        opened = os.fstat(descriptor)
+        entry = os.stat(
+            _safe_component(target.name),
+            dir_fd=target.parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(entry.st_mode)
+            or _identity(written) != _identity(opened)
+            or _identity(opened) != _identity(entry)
+            or _directory_inode(opened) != _directory_inode(entry)
+            or observed_bytes != len(raw)
+            or digest.hexdigest() != sha256_bytes(raw)
+            or opened.st_size != len(raw)
+            or entry.st_size != len(raw)
+            or stat.S_IMODE(opened.st_mode) != PRIVATE_FILE_MODE
+            or stat.S_IMODE(entry.st_mode) != PRIVATE_FILE_MODE
+        ):
+            _fail("DESTINATION_CHANGED", "exclusive output binding or bytes changed")
+        committed_seal = FileSeal(
+            path=target.display_path,
+            sha256=digest.hexdigest(),
+            size_bytes=observed_bytes,
+            mode=stat.S_IMODE(opened.st_mode),
+            identity=_identity(opened),
+        )
         committed = True
     except BaseException:
         _close_best_effort(descriptor)
         descriptor = -1
-        _unlink_best_effort(path)
         raise
     finally:
         _close_best_effort(descriptor)
     if not committed:  # pragma: no cover - defensive state assertion.
         raise AssertionError("exclusive write did not commit")
+    if committed_seal is None:  # pragma: no cover - defensive state assertion.
+        raise AssertionError("exclusive write seal is unavailable")
+    return committed_seal
 
 
-def _copy_source_file(output: OutputFile, destination: Path) -> str:
+def _assert_file_binding_stable(
+    parent_fd: int,
+    name: str,
+    expected: FileSeal,
+) -> None:
+    observed = _seal_file_at(
+        parent_fd,
+        name,
+        expected.path,
+        label="sealed materialization receipt",
+    )
+    if (
+        observed.sha256 != expected.sha256
+        or observed.size_bytes != expected.size_bytes
+        or observed.mode != expected.mode
+        or observed.identity != expected.identity
+    ):
+        _fail("DESTINATION_CHANGED", "sealed output binding or bytes changed")
+
+
+def _copy_source_file(output: OutputFile, target: AnchoredTarget) -> str:
     if output.source is None:
         raise AssertionError("copy output has no source")
     source = output.source.seal
     source_descriptor = -1
     target_descriptor = -1
-    target_committed = False
     method = ""
     try:
         before = os.lstat(source.path)
@@ -1406,13 +2112,14 @@ def _copy_source_file(output: OutputFile, destination: Path) -> str:
         if _identity(os.fstat(source_descriptor)) != source.identity:
             _fail("SOURCE_CHANGED", "copy source changed while opening")
         target_descriptor = os.open(
-            destination,
-            os.O_WRONLY
+            _safe_component(target.name),
+            os.O_RDWR
             | os.O_CREAT
             | os.O_EXCL
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0),
             PRIVATE_FILE_MODE,
+            dir_fd=target.parent_fd,
         )
         os.fchmod(target_descriptor, PRIVATE_FILE_MODE)
         try:
@@ -1444,14 +2151,43 @@ def _copy_source_file(output: OutputFile, destination: Path) -> str:
             _fail("COPY_DRIFT", "copied file size or mode differs")
         if _identity(os.fstat(source_descriptor)) != source.identity:
             _fail("SOURCE_CHANGED", "copy source changed while copying")
-        target_committed = True
+        os.lseek(target_descriptor, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        hits: set[str] = set()
+        tail = b""
+        observed_bytes = 0
+        while True:
+            block = os.read(target_descriptor, 1024 * 1024)
+            if not block:
+                break
+            observed_bytes += len(block)
+            digest.update(block)
+            window = tail + block
+            for secret_name, pattern in SECRET_PATTERNS:
+                if pattern.search(window):
+                    hits.add(secret_name)
+            tail = window[-512:]
+        if hits:
+            _fail(
+                "SECRET_REFUSED",
+                "materialized copied file matched forbidden credential policy",
+            )
+        target_path_metadata = os.stat(
+            _safe_component(target.name),
+            dir_fd=target.parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            _identity(target_path_metadata) != _identity(os.fstat(target_descriptor))
+            or observed_bytes != output.size_bytes
+            or digest.hexdigest() != output.sha256
+        ):
+            _fail("COPY_DRIFT", "copied file bytes or identity differ")
     except BaseException:
         _close_best_effort(target_descriptor)
         target_descriptor = -1
         _close_best_effort(source_descriptor)
         source_descriptor = -1
-        if not target_committed:
-            _unlink_best_effort(destination)
         raise
     finally:
         _close_best_effort(target_descriptor)
@@ -1465,33 +2201,145 @@ def _copy_source_file(output: OutputFile, destination: Path) -> str:
         ) from exc
     if _identity(after) != source.identity:
         _fail("SOURCE_CHANGED", "copy source changed after copying")
-    observed = _seal_file(
-        destination,
-        label="materialized copied file",
-        scan_secrets=True,
-    )
-    if (
-        observed.sha256 != output.sha256
-        or observed.size_bytes != output.size_bytes
-        or observed.mode != output.mode
-    ):
-        _fail("COPY_DRIFT", "copied file bytes or mode differ")
     return method
 
 
-def _snapshot_materialized_project(project_root: Path) -> TreeSnapshot:
-    root = _existing_path(project_root, label="materialized project", directory=True)
-    directories, files = _walk_source_tree(
-        root,
-        project_root=root,
-        copy_to_target=False,
-        scan_secrets=True,
-        excluded_names=frozenset(),
+def _seal_file_at(
+    parent_fd: int,
+    name: str,
+    path_hint: Path,
+    *,
+    label: str,
+) -> FileSeal:
+    descriptor = -1
+    digest = hashlib.sha256()
+    hits: set[str] = set()
+    tail = b""
+    observed_bytes = 0
+    try:
+        before = os.stat(
+            _safe_component(name),
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size < 0
+            or before.st_size > MAX_SOURCE_FILE_BYTES
+        ):
+            _fail("COPY_DRIFT", f"{label} is not an allowed regular file")
+        descriptor = os.open(
+            _safe_component(name),
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        if _identity(os.fstat(descriptor)) != _identity(before):
+            _fail("COPY_DRIFT", f"{label} changed while opening")
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            observed_bytes += len(block)
+            digest.update(block)
+            window = tail + block
+            for secret_name, pattern in SECRET_PATTERNS:
+                if pattern.search(window):
+                    hits.add(secret_name)
+            tail = window[-512:]
+        after_open = os.fstat(descriptor)
+        after_entry = os.stat(
+            _safe_component(name),
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except PackageProjectError:
+        raise
+    except OSError as exc:
+        raise PackageProjectError(
+            "COPY_DRIFT", f"could not read {label} through its anchor"
+        ) from exc
+    finally:
+        _close_best_effort(descriptor)
+    if (
+        _identity(after_open) != _identity(before)
+        or _identity(after_entry) != _identity(before)
+        or observed_bytes != before.st_size
+    ):
+        _fail("COPY_DRIFT", f"{label} changed while reading")
+    if hits:
+        _fail("SECRET_REFUSED", f"{label} matched forbidden credential policy")
+    return FileSeal(
+        path=path_hint,
+        sha256=digest.hexdigest(),
+        size_bytes=observed_bytes,
+        mode=stat.S_IMODE(before.st_mode),
+        identity=_identity(before),
     )
+
+
+def _snapshot_materialized_project_at(
+    project_fd: int,
+    project_root: Path,
+) -> TreeSnapshot:
+    directories: list[DirectorySeal] = []
+    files: list[SourceFile] = []
+
+    def visit(directory_fd: int, relative_path: str) -> None:
+        metadata = os.fstat(directory_fd)
+        if not stat.S_ISDIR(metadata.st_mode):
+            _fail("COPY_DRIFT", "materialized directory anchor is invalid")
+        directories.append(
+            DirectorySeal(
+                relative_path=relative_path,
+                mode=stat.S_IMODE(metadata.st_mode),
+                identity=_identity(metadata),
+            )
+        )
+        try:
+            names = sorted(os.listdir(directory_fd))
+        except OSError as exc:
+            raise PackageProjectError(
+                "COPY_DRIFT", "could not enumerate anchored materialized project"
+            ) from exc
+        for name in names:
+            try:
+                entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise PackageProjectError(
+                    "COPY_DRIFT", "could not inspect anchored materialized entry"
+                ) from exc
+            if stat.S_ISLNK(entry.st_mode):
+                _fail("SYMLINK_REFUSED", "materialized project contains a symlink")
+            relative = name if relative_path == "." else f"{relative_path}/{name}"
+            if stat.S_ISDIR(entry.st_mode):
+                child_fd = _open_directory_at(directory_fd, name)
+                try:
+                    visit(child_fd, relative)
+                finally:
+                    _close_best_effort(child_fd)
+            elif stat.S_ISREG(entry.st_mode):
+                files.append(
+                    SourceFile(
+                        relative_path=relative,
+                        seal=_seal_file_at(
+                            directory_fd,
+                            name,
+                            project_root / relative,
+                            label=f"materialized file {relative}",
+                        ),
+                        copy_to_target=False,
+                    )
+                )
+                if len(files) > MAX_SOURCE_FILES:
+                    _fail("COPY_DRIFT", "materialized file count exceeds policy")
+            else:
+                _fail("COPY_DRIFT", "materialized project contains a special file")
+
+    visit(project_fd, ".")
     directories = sorted(directories, key=lambda item: item.relative_path)
     files = sorted(files, key=lambda item: item.relative_path)
     return TreeSnapshot(
-        root=root,
+        root=project_root,
         directories=tuple(directories),
         files=tuple(files),
         tree_sha256=_entry_hash(directories, files),
@@ -1562,6 +2410,25 @@ def _assert_source_stable(plan: MaterializationPlan) -> None:
         _fail("SOURCE_CHANGED", "accepted source changed after planning")
 
 
+def _assert_run_uat_stable(plan: MaterializationPlan) -> None:
+    current_run_uat = _seal_file(
+        plan.run_uat.run_uat.path,
+        label="pinned RunUAT",
+        scan_secrets=True,
+        maximum_bytes=MAX_JSON_BYTES,
+    )
+    current_build_version = _seal_file(
+        plan.run_uat.build_version.path,
+        label="pinned Unreal Build.version",
+        capture=True,
+        maximum_bytes=MAX_JSON_BYTES,
+    )
+    if not _same_file_observation(
+        current_run_uat, plan.run_uat.run_uat
+    ) or not _same_file_observation(current_build_version, plan.run_uat.build_version):
+        _fail("RUN_UAT_CHANGED", "pinned RunUAT input changed after planning")
+
+
 def _accepted_receipt(
     plan: MaterializationPlan,
     observed: TreeSnapshot,
@@ -1575,6 +2442,7 @@ def _accepted_receipt(
         "status": "accepted",
         "attempt_root": str(plan.attempt_root),
         "project_root": str(plan.attempt_root / "project"),
+        "destination": plan.destination.receipt_record(),
         "plan_content_digest": plan.report["content_digest"],
         "source": _source_binding_record(plan.source),
         "project": project_record,
@@ -1608,18 +2476,13 @@ def _failure_receipt(plan: MaterializationPlan, error: BaseException) -> dict[st
         "status": "failed_quarantined",
         "attempt_root": str(plan.attempt_root),
         "plan_content_digest": plan.report["content_digest"],
+        "destination": plan.destination.receipt_record(),
         "source": {
             "build_result_sha256": plan.source.result_seal.sha256,
             "project_tree_sha256": plan.source.project_snapshot.tree_sha256,
-            "source_default_engine": {
-                "bytes": _source_file(
-                    plan.source.project_snapshot, "Config/DefaultEngine.ini"
-                ).seal.size_bytes,
-                "sanitized_policy": SOURCE_SANITIZATION_POLICY,
-                "sha256": _source_file(
-                    plan.source.project_snapshot, "Config/DefaultEngine.ini"
-                ).seal.sha256,
-            },
+            "source_default_engine": _source_binding_record(plan.source)[
+                "source_default_engine"
+            ],
         },
         "error": error_record,
         "quarantine": {
@@ -1637,6 +2500,7 @@ def _failure_receipt(plan: MaterializationPlan, error: BaseException) -> dict[st
             "status": "failed_quarantined",
             "attempt_root": str(plan.attempt_root),
             "plan_content_digest": plan.report["content_digest"],
+            "destination": plan.destination.receipt_record(),
             "error": {
                 "type": "PackageProjectError",
                 "code": "SECRET_REFUSED",
@@ -1652,15 +2516,33 @@ def _failure_receipt(plan: MaterializationPlan, error: BaseException) -> dict[st
     return receipt
 
 
-def _retain_failure_receipt(plan: MaterializationPlan, error: BaseException) -> None:
-    path = plan.attempt_root / MATERIALIZATION_RECEIPT
-    if path.exists() or path.is_symlink():
-        return
+def _retain_failure_receipt_at(
+    plan: MaterializationPlan,
+    error: BaseException,
+    attempt_fd: int,
+) -> None:
     try:
+        try:
+            os.stat(
+                MATERIALIZATION_RECEIPT,
+                dir_fd=attempt_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        else:
+            return
         failure = _failure_receipt(plan, error)
         if "content_digest" not in failure:
             failure["content_digest"] = _content_digest(failure)
-        _write_exclusive(path, canonical_json(failure))
+        _write_exclusive_at(
+            AnchoredTarget(
+                parent_fd=attempt_fd,
+                name=MATERIALIZATION_RECEIPT,
+                display_path=plan.attempt_root / MATERIALIZATION_RECEIPT,
+            ),
+            canonical_json(failure),
+        )
     except BaseException:
         # The append-only attempt itself remains quarantine evidence.  Never
         # delete it or mutate the accepted source when receipt sealing fails.
@@ -1672,52 +2554,157 @@ def apply_materialization(
 ) -> tuple[dict[str, Any], str]:
     if plan.report.get("mode") != "apply":
         _fail("APPLY_PLAN_REQUIRED", "apply requires an apply-mode plan")
-    if _validate_destination(plan.config, plan.source) != plan.attempt_root:
-        raise AssertionError("apply destination differs from the validated plan")
-    _assert_source_stable(plan)
-    if _validate_destination(plan.config, plan.source) != plan.attempt_root:
-        raise AssertionError("apply destination changed after source validation")
-
+    anchor = _open_destination_anchor(plan)
     created_attempt = False
+    attempt_fd = -1
+    project_fd = -1
+    directory_fds: dict[str, int] = {}
+    terminal_candidate: tuple[dict[str, Any], str, str, FileSeal] | None = None
     try:
-        plan.attempt_root.mkdir(mode=PRIVATE_DIRECTORY_MODE, exist_ok=False)
+        _assert_source_stable(plan)
+        _assert_run_uat_stable(plan)
+        _assert_destination_anchor_stable(anchor)
+        attempt_fd = _create_attempt_at(anchor)
         created_attempt = True
-        os.chmod(
-            plan.attempt_root,
-            PRIVATE_DIRECTORY_MODE,
-            follow_symlinks=False,
-        )
+        _assert_attempt_anchor_stable(anchor, attempt_fd)
+        _assert_destination_anchor_stable(anchor)
+
         project_root = plan.attempt_root / "project"
+        project_fd = _mkdir_private_at(attempt_fd, "project")
+        directory_fds["."] = project_fd
         for relative in sorted(
-            plan.output.directories,
+            (path for path in plan.output.directories if path != "."),
             key=lambda value: (len(PurePosixPath(value).parts), value),
         ):
-            destination = project_root if relative == "." else project_root / relative
-            _mkdir_private(destination)
+            relative_path = PurePosixPath(relative)
+            parent_fd = directory_fds[relative_path.parent.as_posix()]
+            directory_fds[relative] = _mkdir_private_at(
+                parent_fd,
+                relative_path.name,
+            )
+        _assert_project_directory_bindings_stable(attempt_fd, directory_fds)
 
         copy_methods: Counter[str] = Counter()
         for output in plan.output.files:
-            destination = project_root / output.relative_path
+            relative_path = PurePosixPath(output.relative_path)
+            parent_fd = directory_fds[relative_path.parent.as_posix()]
+            target = AnchoredTarget(
+                parent_fd=parent_fd,
+                name=relative_path.name,
+                display_path=project_root / output.relative_path,
+            )
             if output.raw is not None:
-                _write_exclusive(destination, output.raw)
+                _write_exclusive_at(target, output.raw)
             elif output.source is not None:
-                copy_methods[_copy_source_file(output, destination)] += 1
+                copy_methods[_copy_source_file(output, target)] += 1
             else:  # pragma: no cover - OutputFile invariant.
                 raise AssertionError("output has neither source nor generated bytes")
 
+        _assert_project_directory_bindings_stable(attempt_fd, directory_fds)
         _assert_source_stable(plan)
-        observed = _snapshot_materialized_project(project_root)
+        _assert_run_uat_stable(plan)
+        _assert_destination_anchor_stable(anchor)
+        _assert_attempt_anchor_stable(anchor, attempt_fd)
+        _assert_project_directory_bindings_stable(attempt_fd, directory_fds)
+        observed = _snapshot_materialized_project_at(project_fd, project_root)
         _assert_materialized_project(observed, plan.output)
+        _assert_project_directory_bindings_stable(attempt_fd, directory_fds)
         _assert_source_stable(plan)
+        _assert_run_uat_stable(plan)
+        _assert_destination_anchor_stable(anchor)
+        _assert_attempt_anchor_stable(anchor, attempt_fd)
+        _assert_project_directory_bindings_stable(attempt_fd, directory_fds)
         receipt = _accepted_receipt(plan, observed, copy_methods)
-        receipt_path = plan.attempt_root / MATERIALIZATION_RECEIPT
         raw = canonical_json(receipt)
-        _write_exclusive(receipt_path, raw)
-        return receipt, sha256_bytes(raw)
+        receipt_sha256 = sha256_bytes(raw)
+        pending_receipt_name = (
+            f".{MATERIALIZATION_RECEIPT}.pending-{os.urandom(16).hex()}"
+        )
+        pending_receipt_seal = _write_exclusive_at(
+            AnchoredTarget(
+                parent_fd=attempt_fd,
+                name=pending_receipt_name,
+                display_path=plan.attempt_root / pending_receipt_name,
+            ),
+            raw,
+        )
+
+        # Everything fallible happens before terminal receipt publication.
+        # A raised apply therefore cannot leave this tool's accepted receipt
+        # at the canonical terminal name.
+        _assert_destination_anchor_stable(anchor)
+        _assert_attempt_anchor_stable(anchor, attempt_fd)
+        _assert_project_directory_bindings_stable(attempt_fd, directory_fds)
+        final_observed = _snapshot_materialized_project_at(project_fd, project_root)
+        _assert_materialized_project(final_observed, plan.output)
+        _assert_source_stable(plan)
+        _assert_run_uat_stable(plan)
+        _assert_destination_anchor_stable(anchor)
+        _assert_attempt_anchor_stable(anchor, attempt_fd)
+        _assert_project_directory_bindings_stable(attempt_fd, directory_fds)
+        _assert_file_binding_stable(
+            attempt_fd,
+            pending_receipt_name,
+            pending_receipt_seal,
+        )
+        terminal_candidate = (
+            receipt,
+            receipt_sha256,
+            pending_receipt_name,
+            pending_receipt_seal,
+        )
+        _link_noreplace_at(
+            attempt_fd,
+            pending_receipt_name,
+            MATERIALIZATION_RECEIPT,
+            pending_receipt_seal,
+        )
+        # Successful hard-link publication is the accepted terminal commit.  Do not
+        # add a fallible post-commit step that could contradict that state.
+        return receipt, receipt_sha256
     except BaseException as exc:
+        if terminal_candidate is not None and attempt_fd >= 0:
+            (
+                committed_receipt,
+                committed_sha256,
+                committed_pending_name,
+                committed_pending_seal,
+            ) = terminal_candidate
+            terminal_state = _terminal_receipt_state_at(
+                attempt_fd,
+                committed_pending_name,
+                MATERIALIZATION_RECEIPT,
+                committed_pending_seal,
+            )
+            if terminal_state == "match":
+                return committed_receipt, committed_sha256
+            if terminal_state in {"missing", "unknown"} or (
+                isinstance(exc, PackageProjectError)
+                and exc.code == "RECEIPT_COMMIT_OUTCOME_UNKNOWN"
+            ):
+                raise PackageProjectError(
+                    "RECEIPT_COMMIT_OUTCOME_UNKNOWN",
+                    "terminal receipt state is unknown after interruption",
+                ) from exc
         if created_attempt:
-            _retain_failure_receipt(plan, exc)
+            if attempt_fd < 0:
+                try:
+                    attempt_fd = _open_directory_at(
+                        anchor.parent_fd,
+                        anchor.attempt_name,
+                    )
+                except BaseException:
+                    attempt_fd = -1
+            if attempt_fd >= 0:
+                _retain_failure_receipt_at(plan, exc, attempt_fd)
         raise
+    finally:
+        for relative, descriptor in directory_fds.items():
+            if relative != ".":
+                _close_best_effort(descriptor)
+        _close_best_effort(project_fd)
+        _close_best_effort(attempt_fd)
+        _close_best_effort(anchor.parent_fd)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1726,6 +2713,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-build-result-sha256", required=True)
     parser.add_argument("--source-project", required=True, type=Path)
     parser.add_argument("--source-project-tree-sha256", required=True)
+    parser.add_argument("--run-uat", required=True, type=Path)
+    parser.add_argument("--run-uat-sha256", required=True)
     parser.add_argument("--attempt-root", required=True, type=Path)
     parser.add_argument(
         "--apply",
@@ -1741,6 +2730,8 @@ def _config_from_args(args: argparse.Namespace) -> MaterializationConfig:
         source_build_result_sha256=args.source_build_result_sha256,
         source_project=args.source_project,
         source_project_tree_sha256=args.source_project_tree_sha256,
+        run_uat=args.run_uat,
+        run_uat_sha256=args.run_uat_sha256,
         attempt_root=args.attempt_root,
     )
 

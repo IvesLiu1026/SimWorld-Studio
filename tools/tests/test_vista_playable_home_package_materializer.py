@@ -73,6 +73,62 @@ DEFAULT_INPUT = b"""[/Script/Engine.InputSettings]
 +ActionMappings=(ActionName="Drop",Key=Q)
 """
 
+PINNED_BUILD_VERSION = (
+    b'{\r\n\t"MajorVersion": 5,\r\n\t"MinorVersion": 7,'
+    b'\r\n\t"PatchVersion": 3,\r\n\t"Changelist": 50162420,'
+    b'\r\n\t"CompatibleChangelist": 47537391,'
+    b'\r\n\t"IsLicenseeVersion": 0,\r\n\t"IsPromotedBuild": 1,'
+    b'\r\n\t"BranchName": "++UE5+Release-5.7"\r\n}'
+)
+
+EXPECTED_R2_ENGINE_CONFIG = b"""[/Script/EngineSettings.GameMapsSettings]
+GameDefaultMap=/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome
+EditorStartupMap=/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome
+GlobalDefaultGameMode=/Script/VistaPlayableHome.VistaPlayableHomeGameMode
+
+[/Script/NavigationSystem.RecastNavMesh]
+RuntimeGeneration=Dynamic
+
+[/Script/Engine.RendererSettings]
+r.AllowStaticLighting=False
+r.DynamicGlobalIlluminationMethod=1
+r.ReflectionMethod=1
+r.Shadow.Virtual.Enable=1
+r.AntiAliasingMethod=4
+r.Nanite.ProjectEnabled=True
+r.GenerateMeshDistanceFields=True
+r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange=True
+r.EyeAdaptation.PreExposureOverride=0
+r.RayTracing=False
+r.Lumen.HardwareRayTracing=0
+
+[/Script/LinuxTargetPlatform.LinuxTargetSettings]
+DefaultGraphicsRHI=DefaultGraphicsRHI_Vulkan
+-VulkanTargetedShaderFormats=SF_VULKAN_SM5
++VulkanTargetedShaderFormats=SF_VULKAN_SM6
+
+[ConsoleVariables]
+r.ScreenPercentage=100.000000
+r.Streaming.PoolSize=8192
+sg.ViewDistanceQuality=3
+sg.AntiAliasingQuality=3
+sg.ShadowQuality=3
+sg.GlobalIlluminationQuality=3
+sg.ReflectionQuality=3
+sg.PostProcessQuality=3
+sg.TextureQuality=3
+sg.EffectsQuality=3
+sg.FoliageQuality=3
+sg.ShadingQuality=3
+
+[/Script/AndroidFileServerEditor.AndroidFileServerRuntimeSettings]
+bEnablePlugin=False
+bAllowNetworkConnection=False
+bIncludeInShipping=False
+bAllowExternalStartInShipping=False
+bCompileAFSProject=False
+"""
+
 
 class Fixture:
     def __init__(
@@ -87,6 +143,16 @@ class Fixture:
         self.project = self.source_attempt / "project"
         self.package_parent = self.root / package.EXPECTED_PARENT_NAME
         self.package_parent.mkdir(parents=True)
+        engine_root = self.root / "UE_5.7.3_prebuilt"
+        self.run_uat = _write(
+            engine_root / package.EXPECTED_RUN_UAT_SUFFIX,
+            b"#!/bin/bash\nexit 99\n",
+            0o755,
+        )
+        _write(
+            engine_root / "Engine/Build/Build.version",
+            PINNED_BUILD_VERSION,
+        )
 
         descriptor = {
             "FileVersion": 3,
@@ -215,6 +281,8 @@ class Fixture:
             source_build_result_sha256=self.result_sha256,
             source_project=self.project,
             source_project_tree_sha256=self.project_tree_sha256,
+            run_uat=self.run_uat,
+            run_uat_sha256=_sha256(self.run_uat),
             attempt_root=self.package_parent / name,
         )
 
@@ -232,6 +300,23 @@ class Fixture:
 def _read_receipt(attempt: pathlib.Path) -> tuple[dict, bytes]:
     raw = (attempt / package.MATERIALIZATION_RECEIPT).read_bytes()
     return json.loads(raw), raw
+
+
+def _overwrite_anchored_target(
+    target: package.AnchoredTarget,
+    raw: bytes,
+) -> None:
+    descriptor = os.open(
+        target.name,
+        os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=target.parent_fd,
+    )
+    try:
+        package._write_all(descriptor, raw)
+        os.fchmod(descriptor, package.PRIVATE_FILE_MODE)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _assert_private_tree(attempt: pathlib.Path) -> None:
@@ -264,11 +349,86 @@ def test_dry_run_is_deterministic_zero_write_and_token_free(
     assert b"source-fixture-value-that-must-not-escape" not in raw
     assert first.report["source"]["source_default_engine"] == {
         "bytes": fixture.source_engine.stat().st_size,
+        "package_config_sha256": hashlib.sha256(EXPECTED_R2_ENGINE_CONFIG).hexdigest(),
+        "renderer_contract_commit": package.PINNED_RENDERER_CONTRACT_COMMIT,
         "sanitized_policy": package.SOURCE_SANITIZATION_POLICY,
         "sha256": _sha256(fixture.source_engine),
+        "transformation": ("d543-r2-renderer-plus-token-free-afs-regeneration/v1"),
     }
     assert first.report["policy"]["default_engine"] == (
-        "canonical_allowlisted_regeneration/v1"
+        "d543-r2-renderer-plus-token-free-afs-regeneration/v2"
+    )
+    assert first.report["policy"]["destination_containment"] == (
+        "plan-pinned-parent+exclusive-cooperative-lock+private-staging+"
+        "retained-dirfd-openat-no-follow/v3"
+    )
+
+
+def test_generated_engine_config_is_exact_d543_r2_plus_token_free_afs() -> None:
+    raw = package._canonical_engine_ini()
+
+    assert raw == EXPECTED_R2_ENGINE_CONFIG
+    for setting in (
+        b"r.DynamicGlobalIlluminationMethod=1",
+        b"r.ReflectionMethod=1",
+        b"r.Shadow.Virtual.Enable=1",
+        b"r.AntiAliasingMethod=4",
+        b"r.Nanite.ProjectEnabled=True",
+        b"+VulkanTargetedShaderFormats=SF_VULKAN_SM6",
+        b"bEnablePlugin=False",
+        b"bAllowNetworkConnection=False",
+        b"bIncludeInShipping=False",
+        b"bAllowExternalStartInShipping=False",
+        b"bCompileAFSProject=False",
+    ):
+        assert raw.count(setting) == 1
+    assert b"r.UsePreExposure" not in raw
+    assert _token_key().encode("utf-8") not in raw
+
+
+def test_run_uat_contract_is_exact_pinned_proven_mechanics_only(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config("attempt-runuat-contract")
+    plan = package.plan_materialization(config)
+    attempt = config.attempt_root
+
+    assert hashlib.sha256(PINNED_BUILD_VERSION).hexdigest() == (
+        package.PINNED_ENGINE_BUILD_VERSION_SHA256
+    )
+    assert plan.report["runuat"]["argv"] == [
+        str(config.run_uat),
+        "-nocompileuat",
+        "BuildCookRun",
+        f"-project={attempt / 'project' / package.EXPECTED_PROJECT_NAME}",
+        "-target=VistaPlayableHome",
+        "-nop4",
+        "-platform=Linux",
+        "-clientconfig=Development",
+        "-build",
+        "-cook",
+        f"-map={package.EXPECTED_MAP_PATH}",
+        f"-CookOutputDir={attempt / 'cooked/Linux'}",
+        (
+            "-AdditionalCookerOptions=-nullrhi -unattended -NoSplash "
+            "-NoSound -NoAnalytics -ddc=InstalledNoZenLocalFallback"
+        ),
+        "-ubtargs=-NoUBA -MaxParallelActions=6",
+        "-stage",
+        "-package",
+        "-pak",
+        "-skipiostore",
+        "-archive",
+        f"-stagingdirectory={attempt / 'stage'}",
+        f"-archivedirectory={attempt / 'archive'}",
+        "-NoCodeSign",
+        "-unattended",
+        "-utf8output",
+    ]
+    assert plan.report["runuat"]["input"] == plan.run_uat.receipt_record()
+    assert plan.report["runuat"]["provenance"]["scope"] == (
+        "packaging_mechanics_only_not_r2_renderer_runtime_proof"
     )
 
 
@@ -289,6 +449,10 @@ def test_cli_defaults_to_dry_run_without_creating_attempt(
                 str(config.source_project),
                 "--source-project-tree-sha256",
                 config.source_project_tree_sha256,
+                "--run-uat",
+                str(config.run_uat),
+                "--run-uat-sha256",
+                config.run_uat_sha256,
                 "--attempt-root",
                 str(config.attempt_root),
             ]
@@ -507,6 +671,467 @@ def test_destination_parent_symlink_swap_after_plan_is_refused(
     assert fixture.source_attempt.exists()
 
 
+def test_real_destination_parent_replacement_after_plan_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config("attempt-real-parent-replacement")
+    plan = package.plan_materialization(config, apply=True)
+    original_parent = fixture.root / "original-package-parent"
+    fixture.package_parent.rename(original_parent)
+    fixture.package_parent.mkdir()
+
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert caught.value.code == "DESTINATION_CHANGED"
+    assert list(fixture.package_parent.iterdir()) == []
+    assert list(original_parent.iterdir()) == []
+    assert not config.attempt_root.exists()
+    assert fixture.source_attempt.exists()
+
+
+def test_parent_swap_after_anchor_never_writes_redirect_and_receipt_is_anchored(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config("attempt-parent-swap-anchored")
+    plan = package.plan_materialization(config, apply=True)
+    original_create = package._create_attempt_at
+    moved_parent = fixture.root / "original-package-parent-moved"
+    redirected_parent = fixture.root / "redirected-package-parent"
+
+    def swap_parent_then_create(anchor: package.DestinationAnchor) -> int:
+        fixture.package_parent.rename(moved_parent)
+        redirected_parent.mkdir()
+        fixture.package_parent.symlink_to(
+            redirected_parent,
+            target_is_directory=True,
+        )
+        return original_create(anchor)
+
+    monkeypatch.setattr(package, "_create_attempt_at", swap_parent_then_create)
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert caught.value.code in {"DESTINATION_CHANGED", "SYMLINK_REFUSED"}
+    assert list(redirected_parent.iterdir()) == []
+    assert not config.attempt_root.exists()
+    retained_attempt = moved_parent / config.attempt_root.name
+    failure, raw = _read_receipt(retained_attempt)
+    assert failure["status"] == "failed_quarantined"
+    assert failure["error"]["code"] in {"DESTINATION_CHANGED", "SYMLINK_REFUSED"}
+    assert raw == package.canonical_json(failure)
+    assert fixture.source_attempt.exists()
+    _assert_private_tree(retained_attempt)
+
+
+def test_attempt_replacement_after_binding_never_receives_project_or_receipt(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config("attempt-child-swap-anchored")
+    plan = package.plan_materialization(config, apply=True)
+    original_create = package._create_attempt_at
+    retained_attempt = fixture.package_parent / "retained-original-attempt"
+
+    def bind_then_replace(anchor: package.DestinationAnchor) -> int:
+        descriptor = original_create(anchor)
+        config.attempt_root.rename(retained_attempt)
+        config.attempt_root.mkdir(mode=package.PRIVATE_DIRECTORY_MODE)
+        return descriptor
+
+    monkeypatch.setattr(package, "_create_attempt_at", bind_then_replace)
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert caught.value.code == "DESTINATION_CHANGED"
+    assert list(config.attempt_root.iterdir()) == []
+    failure, raw = _read_receipt(retained_attempt)
+    assert failure["status"] == "failed_quarantined"
+    assert failure["error"]["code"] == "DESTINATION_CHANGED"
+    assert raw == package.canonical_json(failure)
+    _assert_private_tree(retained_attempt)
+
+
+def test_private_staging_replacement_before_publication_is_refused(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config("attempt-staging-publication-swap")
+    plan = package.plan_materialization(config, apply=True)
+    original_publish = package._publish_staged_attempt_at
+    retained_staging = fixture.package_parent / "retained-original-staging"
+    swapped = False
+
+    def replace_staging_then_publish(
+        anchor: package.DestinationAnchor,
+        source_name: str,
+        staging_fd: int,
+        lock_name: str,
+        lock_seal: package.FileSeal,
+    ) -> None:
+        nonlocal swapped
+        swapped = True
+        staging = fixture.package_parent / source_name
+        staging.rename(retained_staging)
+        staging.mkdir(mode=package.PRIVATE_DIRECTORY_MODE)
+        staging.chmod(package.PRIVATE_DIRECTORY_MODE)
+        original_publish(anchor, source_name, staging_fd, lock_name, lock_seal)
+
+    monkeypatch.setattr(
+        package,
+        "_publish_staged_attempt_at",
+        replace_staging_then_publish,
+    )
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert swapped is True
+    assert caught.value.code == "DESTINATION_CHANGED"
+    assert not config.attempt_root.exists()
+    assert list(retained_staging.iterdir()) == []
+
+
+@pytest.mark.parametrize("swapped_name", ["project", "Content"])
+def test_project_directory_replacement_is_never_accepted(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    swapped_name: str,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config(f"attempt-{swapped_name.lower()}-binding-swap")
+    plan = package.plan_materialization(config, apply=True)
+    original_mkdir = package._mkdir_private_at
+    swapped = False
+
+    def create_bind_then_replace(parent_fd: int, name: str) -> int:
+        nonlocal swapped
+        descriptor = original_mkdir(parent_fd, name)
+        if not swapped and name == swapped_name:
+            swapped = True
+            if name == "project":
+                public_path = config.attempt_root / "project"
+                retained_path = config.attempt_root / "retained-project"
+            else:
+                public_path = config.attempt_root / "project/Content"
+                retained_path = config.attempt_root / "project/retained-Content"
+            public_path.rename(retained_path)
+            public_path.mkdir(mode=package.PRIVATE_DIRECTORY_MODE)
+            public_path.chmod(package.PRIVATE_DIRECTORY_MODE)
+        return descriptor
+
+    monkeypatch.setattr(package, "_mkdir_private_at", create_bind_then_replace)
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert swapped is True
+    assert caught.value.code == "DESTINATION_CHANGED"
+    public_path = (
+        config.attempt_root / "project"
+        if swapped_name == "project"
+        else config.attempt_root / "project/Content"
+    )
+    assert list(public_path.iterdir()) == []
+    failure, raw = _read_receipt(config.attempt_root)
+    assert failure["status"] == "failed_quarantined"
+    assert failure["error"]["code"] == "DESTINATION_CHANGED"
+    assert raw == package.canonical_json(failure)
+
+
+def test_exclusive_write_never_unlinks_preexisting_or_replacement_entry(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "anchored-write"
+    parent.mkdir()
+    parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        preexisting = parent / "preexisting.bin"
+        preexisting.write_bytes(b"preexisting\n")
+        with pytest.raises(FileExistsError):
+            package._write_exclusive_at(
+                package.AnchoredTarget(parent_fd, preexisting.name, preexisting),
+                b"new bytes\n",
+            )
+        assert preexisting.read_bytes() == b"preexisting\n"
+
+        target_path = parent / "swapped.bin"
+        retained_created = parent / "retained-created.bin"
+
+        def replace_then_fail(_descriptor: int, _raw: bytes) -> None:
+            target_path.rename(retained_created)
+            target_path.write_bytes(b"replacement\n")
+            raise RuntimeError("injected write failure after replacement")
+
+        monkeypatch.setattr(package, "_write_all", replace_then_fail)
+        with pytest.raises(RuntimeError, match="injected write failure"):
+            package._write_exclusive_at(
+                package.AnchoredTarget(parent_fd, target_path.name, target_path),
+                b"planned bytes\n",
+            )
+        assert target_path.read_bytes() == b"replacement\n"
+        assert retained_created.exists()
+    finally:
+        os.close(parent_fd)
+
+
+def test_exclusive_write_refuses_silent_post_open_name_replacement(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = tmp_path / "anchored-silent-write"
+    parent.mkdir()
+    parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    target_path = parent / "swapped.bin"
+    retained_created = parent / "retained-created.bin"
+    original_write_all = package._write_all
+
+    def write_then_replace(descriptor: int, raw: bytes) -> None:
+        original_write_all(descriptor, raw)
+        target_path.rename(retained_created)
+        target_path.write_bytes(b"replacement\n")
+        target_path.chmod(package.PRIVATE_FILE_MODE)
+
+    monkeypatch.setattr(package, "_write_all", write_then_replace)
+    try:
+        with pytest.raises(package.PackageProjectError) as caught:
+            package._write_exclusive_at(
+                package.AnchoredTarget(parent_fd, target_path.name, target_path),
+                b"planned bytes\n",
+            )
+        assert caught.value.code == "DESTINATION_CHANGED"
+        assert target_path.read_bytes() == b"replacement\n"
+        assert retained_created.read_bytes() == b"planned bytes\n"
+    finally:
+        os.close(parent_fd)
+
+
+def test_copy_never_unlinks_preexisting_or_replacement_entry(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = Fixture(tmp_path)
+    plan = package.plan_materialization(
+        fixture.config("attempt-copy-unlink-races"),
+        apply=True,
+    )
+    output = next(item for item in plan.output.files if item.source is not None)
+    parent = fixture.root / "anchored-copy"
+    parent.mkdir()
+    parent_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        preexisting = parent / "preexisting.bin"
+        preexisting.write_bytes(b"preexisting\n")
+        with pytest.raises(FileExistsError):
+            package._copy_source_file(
+                output,
+                package.AnchoredTarget(parent_fd, preexisting.name, preexisting),
+            )
+        assert preexisting.read_bytes() == b"preexisting\n"
+
+        target_path = parent / "swapped.bin"
+        retained_created = parent / "retained-created.bin"
+
+        def replace_then_fail(
+            _target: int,
+            _request: int,
+            _source: int,
+        ) -> None:
+            target_path.rename(retained_created)
+            target_path.write_bytes(b"replacement\n")
+            raise OSError(errno.EIO, "injected reflink failure after replacement")
+
+        monkeypatch.setattr(package.fcntl, "ioctl", replace_then_fail)
+        with pytest.raises(OSError, match="injected reflink failure"):
+            package._copy_source_file(
+                output,
+                package.AnchoredTarget(parent_fd, target_path.name, target_path),
+            )
+        assert target_path.read_bytes() == b"replacement\n"
+        assert retained_created.exists()
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("receipt_bytes", "DESTINATION_CHANGED"),
+        ("project_bytes", "COPY_DRIFT"),
+        ("project_binding", "DESTINATION_CHANGED"),
+    ],
+)
+def test_precommit_mutation_publishes_only_failed_terminal_receipt(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config(f"attempt-precommit-{mutation.replace('_', '-')}")
+    plan = package.plan_materialization(config, apply=True)
+    original_write = package._write_exclusive_at
+    mutated = False
+
+    def mutate_after_pending_receipt(
+        target: package.AnchoredTarget,
+        raw: bytes,
+    ) -> package.FileSeal:
+        nonlocal mutated
+        seal = original_write(target, raw)
+        if not mutated and target.name.startswith(
+            f".{package.MATERIALIZATION_RECEIPT}.pending-"
+        ):
+            mutated = True
+            if mutation == "receipt_bytes":
+                target.display_path.write_bytes(b"X" + raw[1:])
+                target.display_path.chmod(package.PRIVATE_FILE_MODE)
+            elif mutation == "project_bytes":
+                project_file = config.attempt_root / "project/Config/DefaultEngine.ini"
+                project_raw = project_file.read_bytes()
+                project_file.write_bytes(b"X" + project_raw[1:])
+                project_file.chmod(package.PRIVATE_FILE_MODE)
+            else:
+                project = config.attempt_root / "project"
+                retained = config.attempt_root / "retained-project-precommit"
+                project.rename(retained)
+                project.mkdir(mode=package.PRIVATE_DIRECTORY_MODE)
+                project.chmod(package.PRIVATE_DIRECTORY_MODE)
+        return seal
+
+    monkeypatch.setattr(package, "_write_exclusive_at", mutate_after_pending_receipt)
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert mutated is True
+    assert caught.value.code == expected_code
+    terminal, terminal_raw = _read_receipt(config.attempt_root)
+    assert terminal["status"] == "failed_quarantined"
+    assert terminal["error"]["code"] == expected_code
+    assert terminal_raw == package.canonical_json(terminal)
+    assert not any(
+        json.loads(path.read_bytes()).get("status") == "accepted"
+        for path in config.attempt_root.glob(package.MATERIALIZATION_RECEIPT)
+    )
+
+
+@pytest.mark.parametrize("interruption", ["eio", "keyboard_interrupt"])
+def test_ambiguous_nfs_link_outcome_reconciles_exact_terminal_commit(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: str,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config(f"attempt-link-reconcile-{interruption.replace('_', '-')}")
+    plan = package.plan_materialization(config, apply=True)
+    original_link = package.os.link
+    injected = False
+
+    def link_then_interrupt(*args: object, **kwargs: object) -> None:
+        nonlocal injected
+        original_link(*args, **kwargs)
+        injected = True
+        if interruption == "eio":
+            raise OSError(errno.EIO, "simulated lost NFS reply")
+        raise KeyboardInterrupt("simulated interrupt after NFS commit")
+
+    monkeypatch.setattr(package.os, "link", link_then_interrupt)
+    receipt, receipt_sha256 = package.apply_materialization(plan)
+
+    assert injected is True
+    terminal, raw = _read_receipt(config.attempt_root)
+    assert terminal == receipt
+    assert terminal["status"] == "accepted"
+    assert hashlib.sha256(raw).hexdigest() == receipt_sha256
+
+
+def test_ambiguous_nfs_error_with_missing_terminal_stays_outcome_unknown(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config("attempt-link-outcome-unknown")
+    plan = package.plan_materialization(config, apply=True)
+
+    def invisible_ambiguous_error(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.EIO, "simulated ambiguous NFS error before visibility")
+
+    monkeypatch.setattr(package.os, "link", invisible_ambiguous_error)
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert caught.value.code == "RECEIPT_COMMIT_OUTCOME_UNKNOWN"
+    assert not (config.attempt_root / package.MATERIALIZATION_RECEIPT).exists()
+    pending = list(
+        config.attempt_root.glob(f".{package.MATERIALIZATION_RECEIPT}.pending-*")
+    )
+    assert len(pending) == 1
+    assert json.loads(pending[0].read_bytes())["status"] == "accepted"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("pin", "RUN_UAT_PIN_MISMATCH"),
+        ("not_executable", "RUN_UAT_INVALID"),
+        ("engine", "RUN_UAT_ENGINE_MISMATCH"),
+    ],
+)
+def test_run_uat_and_engine_pins_fail_closed_before_target_creation(
+    tmp_path: pathlib.Path,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config(f"attempt-runuat-{mutation.replace('_', '-')}")
+    if mutation == "pin":
+        config = dataclasses.replace(config, run_uat_sha256="0" * 64)
+    elif mutation == "not_executable":
+        fixture.run_uat.chmod(0o600)
+        config = dataclasses.replace(config, run_uat_sha256=_sha256(fixture.run_uat))
+    else:
+        (fixture.run_uat.parents[1] / "Build.version").write_bytes(
+            PINNED_BUILD_VERSION + b"\n"
+        )
+
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.plan_materialization(config, apply=True)
+
+    assert caught.value.code == expected_code
+    assert not config.attempt_root.exists()
+
+
+@pytest.mark.parametrize("mutate_engine", [False, True])
+def test_run_uat_mutation_after_plan_creates_no_attempt(
+    tmp_path: pathlib.Path,
+    mutate_engine: bool,
+) -> None:
+    fixture = Fixture(tmp_path)
+    config = fixture.config(
+        "attempt-runuat-changed-engine"
+        if mutate_engine
+        else "attempt-runuat-changed-wrapper"
+    )
+    plan = package.plan_materialization(config, apply=True)
+    target = (
+        fixture.run_uat.parents[1] / "Build.version"
+        if mutate_engine
+        else fixture.run_uat
+    )
+    target.write_bytes(target.read_bytes() + b"\n")
+
+    with pytest.raises(package.PackageProjectError) as caught:
+        package.apply_materialization(plan)
+
+    assert caught.value.code == "RUN_UAT_CHANGED"
+    assert not config.attempt_root.exists()
+    assert fixture.source_attempt.exists()
+
+
 def test_source_mutation_before_apply_creates_no_attempt(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -533,10 +1158,10 @@ def test_source_mutation_during_copy_is_quarantined_and_never_deleted(
     mutated = False
 
     def mutate_after_first_copy(
-        output: package.OutputFile, destination: pathlib.Path
+        output: package.OutputFile, target: package.AnchoredTarget
     ) -> str:
         nonlocal mutated
-        method = original(output, destination)
+        method = original(output, target)
         if not mutated:
             mutated = True
             fixture.plugin_source.write_bytes(b"source changed during copy\n")
@@ -577,14 +1202,13 @@ def test_target_drift_or_secret_injection_is_quarantined(
     injected = False
 
     def inject_after_first_copy(
-        output: package.OutputFile, destination: pathlib.Path
+        output: package.OutputFile, target: package.AnchoredTarget
     ) -> str:
         nonlocal injected
-        method = original(output, destination)
+        method = original(output, target)
         if not injected:
             injected = True
-            destination.write_bytes(payload)
-            destination.chmod(package.PRIVATE_FILE_MODE)
+            _overwrite_anchored_target(target, payload)
         return method
 
     monkeypatch.setattr(package, "_copy_source_file", inject_after_first_copy)
@@ -609,13 +1233,13 @@ def test_unexpected_partial_copy_failure_is_retained_with_safe_receipt(
     calls = 0
 
     def fail_after_one_copy(
-        output: package.OutputFile, destination: pathlib.Path
+        output: package.OutputFile, target: package.AnchoredTarget
     ) -> str:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise RuntimeError("injected fixture failure")
-        return original(output, destination)
+        return original(output, target)
 
     monkeypatch.setattr(package, "_copy_source_file", fail_after_one_copy)
     with pytest.raises(RuntimeError, match="injected fixture failure"):

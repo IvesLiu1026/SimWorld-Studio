@@ -165,10 +165,32 @@ and its exact current project projection, then creates a fresh direct
 `DefaultInput.ini`, `Content`, and the runtime plugin with reflink plus
 byte-copy fallback while excluding `Binaries`, `Intermediate`, `Saved`, and
 derived-data caches. The runtime-only project descriptor, host module/targets,
-and allowlisted `DefaultEngine.ini` are regenerated deterministically. The
-source engine config is SHA/size evidence only: its UE-generated Android File
-Server credential is never copied or emitted, and AFS is disabled in the
-materialized project.
+and `DefaultEngine.ini` are regenerated deterministically. The generated
+engine config is the closed `realistic_interior_r2` / `desktop_high_sm6`
+renderer projection from commit
+`d543de99064fcdfef678fa0d9129d1d0f2daa9c1`, combined with a token-free,
+fully disabled Android File Server block. The source engine config is
+SHA/size evidence only: its UE-generated Android File Server credential is
+never copied or emitted. This config is a renderer request, not packaged
+runtime renderer evidence.
+
+The Unreal Automation Tool is also a mandatory input. Its canonical executable
+path, executable mode, caller-provided SHA-256, UE 5.7.3 `Build.version` bytes,
+and changelist 50162420 are validated and sealed in the plan. Apply retains the
+package-parent descriptor, requires its `st_dev`/`st_ino` to equal the identity
+sealed by the plan, creates the attempt under an unpredictable 128-bit private
+staging name, binds that inode, and publishes it while holding a fixed
+O_EXCL-created append-only publication lock for the attempt name. The lock
+provides no-reuse/no-concurrent-publication semantics to every cooperating
+materializer without relying on `renameat2` flags unsupported by this NFS
+mount. It creates/opens every output relative to retained directory
+descriptors with no-follow semantics and verifies the complete
+parent-entry/child-fd graph. A destination-parent pathname or real-directory
+swap therefore cannot redirect project files or the failure receipt. This
+assumes the selected private package parent is not concurrently controlled by
+a non-cooperating same-UID process capable of ignoring the publication lock or
+discovering and replacing the random staging entry in the minimal
+`mkdirat`-to-`O_PATH` interval.
 
 The reviewed r1 source currently has build-result pin
 `1b4853547bfa6ebd6d62ca2f1243ae2f74acdf67bfdfb11aa969c3013ccf1a2f`
@@ -187,21 +209,83 @@ PYTHONPATH=. uv run --offline --no-sync --project tools python \
   /mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/attempt-10-placement-cross-room/project \
   --source-project-tree-sha256 \
   fbcb4aeeccc7e53a82c4fd558f33e4208c90f4c5788254ce7ac07350cb993456 \
+  --run-uat \
+  /mnt/NAS2/yhliu/UE_5.7.3_prebuilt/Engine/Build/BatchFiles/RunUAT.sh \
+  --run-uat-sha256 \
+  bd2de2987858b349d6501b8b8a261f9fc79ebb44185ce36b00dc66c5cfa2641b \
   --attempt-root \
   /mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/package-linux-development/attempt-11-materialized-project
 ```
 
 For that exact source, review that the dry-run reports project tree SHA-256
-`82cf7bbd7740d79351bcf99026ff39bccbd551182fda2c0e54a4197f9274b184`,
-417 files, 172 directories, and 445580427 bytes. Then rerun the same command
+`118c9bb3f006f3b7750327741bb09fe1dc1d221d3b4519397da7aec926b28f2c`,
+417 files, 172 directories, and 445581230 bytes. Then rerun the same command
 with `--apply` appended. The terminal `attempt-*` name must still be absent;
 choose a new lowercase attempt name if another operator has already used it.
 An accepted append-only `materialization-receipt.json` pins every output file,
 directory mode, and the full project tree. Attempt/project directories are
 forced to `0700` and files/receipts to `0600`, independent of the caller's
 umask. A failed or interrupted attempt is retained as `failed_quarantined`;
-the source is never deleted or modified.
+partial outputs are never unlinked, and the source is never deleted or
+modified. More precisely, once the public `attempt-*` has been published, a
+pre-commit failure gets the canonical failed receipt on a best-effort basis.
+A failure before attempt publication retains only its append-only lock/private
+staging evidence; it cannot claim the public terminal attempt name.
+
+Acceptance uses a terminal commit protocol. The complete accepted receipt is
+first written under an unpredictable pending name and read back through its
+retained fd. Source/tool pins, directory bindings, and the full project tree
+are checked again after that write. Only then is the receipt atomically
+published to the exact `materialization-receipt.json` terminal name with an
+O_EXCL-semantics hard link; no fallible operation follows that commit. Pending
+files are non-terminal quarantine evidence and must never be interpreted as
+an accepted receipt. If NFS reports an error or interruption after the server
+may have created the link, the materializer reconciles pending and terminal
+names by exact inode and byte seal. An exact match completes idempotently;
+an ambiguous missing, mismatched, or uninspectable terminal is reported as
+`RECEIPT_COMMIT_OUTCOME_UNKNOWN`, never mislabelled as a failed terminal
+receipt. Only a visible nonmatching terminal paired with a definite
+already-exists result is classified as a collision.
 
 Materialization does not invoke Unreal or create a package archive. After an
 accepted receipt, use only the exact `runuat.argv` printed in the plan/receipt
-as the separately reviewed operator step.
+as the separately reviewed operator step. For the attempt above, that array is
+the following shell invocation; both quoted option values are each one argv:
+
+```bash
+/mnt/NAS2/yhliu/UE_5.7.3_prebuilt/Engine/Build/BatchFiles/RunUAT.sh \
+  -nocompileuat \
+  BuildCookRun \
+  -project=/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/package-linux-development/attempt-11-materialized-project/project/VistaPlayableHome.uproject \
+  -target=VistaPlayableHome \
+  -nop4 \
+  -platform=Linux \
+  -clientconfig=Development \
+  -build \
+  -cook \
+  -map=/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome \
+  -CookOutputDir=/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/package-linux-development/attempt-11-materialized-project/cooked/Linux \
+  '-AdditionalCookerOptions=-nullrhi -unattended -NoSplash -NoSound -NoAnalytics -ddc=InstalledNoZenLocalFallback' \
+  '-ubtargs=-NoUBA -MaxParallelActions=6' \
+  -stage \
+  -package \
+  -pak \
+  -skipiostore \
+  -archive \
+  -stagingdirectory=/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/package-linux-development/attempt-11-materialized-project/stage \
+  -archivedirectory=/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/20260815T110115Z-navfix/ue/package-linux-development/attempt-11-materialized-project/archive \
+  -NoCodeSign \
+  -unattended \
+  -utf8output
+```
+
+The successful retained RunUAT log pinned by the plan proves only the Linux
+Development Build/Cook/Stage/Package/Archive mechanics. Its accepted package
+was the earlier r1/SM5 configuration, so it is explicitly not proof that this
+r2/SM6 request rendered at runtime. That claim requires a new packaged launch
+and renderer observation receipt after the separate RunUAT step succeeds.
+Because ordinary project files remain mutable after the materializer exits,
+the RunUAT consumer must pin the SHA-256 of the exact terminal accepted receipt
+and recompute the project tree against that receipt immediately before invoking
+the printed argv. An unpinned receipt or stale/mismatched tree is not an
+authorized packaging input.
