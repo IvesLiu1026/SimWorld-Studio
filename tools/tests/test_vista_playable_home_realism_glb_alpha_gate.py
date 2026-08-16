@@ -9,7 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from tools.blender.vista_playable_home_realism.config import ForgeInputError
+from tools.blender.vista_playable_home_realism.config import (
+    ForgeInputError,
+    canonical_json_bytes,
+)
 from tools.blender.vista_playable_home_realism.external_assets import (
     EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY,
     EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY,
@@ -18,6 +21,7 @@ from tools.blender.vista_playable_home_realism.external_assets import (
     EXTERNAL_MATERIAL_SEMANTICS_PROPERTY,
     EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY,
     EXTERNAL_MATERIAL_SOURCE_PROPERTY,
+    EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
     _configure_external_material_alpha_contract,
     _validate_masked_alpha_graph,
     external_material_alpha_policy,
@@ -30,6 +34,7 @@ from tools.blender.vista_playable_home_realism.inspect import (
     GLB_MAGIC,
     _validate_external_material_alpha_contract,
     inspect_glb,
+    inspect_output,
 )
 
 
@@ -158,6 +163,29 @@ def _source_record() -> dict:
     }
 
 
+def _material_contract(
+    material_name: str,
+    *,
+    ordinal: int = 0,
+    source_material_name: str = "surface",
+    semantics: list[str] | None = None,
+) -> dict:
+    active_semantics = list(STOVE_SEMANTICS if semantics is None else semantics)
+    alpha_mode = "MASK" if "opacity" in active_semantics else "OPAQUE"
+    return {
+        "schema_version": EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
+        "material_id": material_name,
+        "source_logical_asset_id": STOVE_SOURCE_ID,
+        "source_tree_sha256": STOVE_SOURCE_DIGEST,
+        "source_material_name": source_material_name,
+        "material_ordinal": ordinal,
+        "active_texture_semantics": active_semantics,
+        "alpha_mode": alpha_mode,
+        "alpha_cutoff": 0.5 if alpha_mode == "MASK" else None,
+        "sanitization_policy": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    }
+
+
 def _manifest_and_record(material_name: str) -> tuple[dict, dict]:
     source = _source_record()
     placement = {
@@ -175,6 +203,7 @@ def _manifest_and_record(material_name: str) -> tuple[dict, dict]:
             "custom_properties_exported_as_extras": True,
             "external_material_alpha_policy": external_material_alpha_policy(),
         },
+        "materials": [_material_contract(material_name)],
         "external_placement": {
             "placements": [placement],
             "asset_sources": [source],
@@ -189,31 +218,45 @@ def _manifest_and_record(material_name: str) -> tuple[dict, dict]:
     return manifest, record
 
 
-def _stove_material(material_name: str) -> dict:
-    return {
+def _external_material(material_name: str, semantics: list[str]) -> dict:
+    alpha_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+    result = {
         "name": material_name,
-        "alphaMode": "MASK",
-        # Blender 4.5 intentionally omits glTF's default alphaCutoff=0.5.
-        # The material extra below persists the explicit sanitization value.
         "extras": {
             EXTERNAL_MATERIAL_SOURCE_PROPERTY: STOVE_SOURCE_ID,
             EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY: STOVE_SOURCE_DIGEST,
             EXTERNAL_MATERIAL_SEMANTICS_PROPERTY: json.dumps(
-                STOVE_SEMANTICS, separators=(",", ":")
+                semantics, separators=(",", ":")
             ),
-            EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY: "MASK",
-            EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY: 0.5,
+            EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY: alpha_mode,
             EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY: EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
         },
     }
+    if alpha_mode == "MASK":
+        # Blender 4.5 intentionally omits glTF's default alphaCutoff=0.5.
+        # The material extra below persists the explicit sanitization value.
+        result["alphaMode"] = "MASK"
+        result["extras"][EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY] = 0.5
+    return result
 
 
-def _write_synthetic_glb(path: Path, stove_material: dict) -> None:
+def _stove_material(material_name: str) -> dict:
+    return _external_material(material_name, STOVE_SEMANTICS)
+
+
+def _write_synthetic_glb(
+    path: Path,
+    stove_material: dict,
+    *,
+    internal_material: dict | None = None,
+    additional_materials: list[dict] | None = None,
+) -> None:
     document = {
         "asset": {"version": "2.0"},
         "materials": [
-            {"name": "r2.architecture.wall"},
+            internal_material or {"name": "r2.architecture.wall"},
             stove_material,
+            *(additional_materials or []),
         ],
     }
     chunk = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -225,11 +268,23 @@ def _write_synthetic_glb(path: Path, stove_material: dict) -> None:
     )
 
 
-def _inspect_and_validate(tmp_path: Path, stove_material: dict):
+def _inspect_and_validate(
+    tmp_path: Path,
+    stove_material: dict,
+    *,
+    internal_material: dict | None = None,
+    additional_materials: list[dict] | None = None,
+    manifest_and_record: tuple[dict, dict] | None = None,
+):
     path = tmp_path / "kitchen_dining_presentation_bundle.glb"
-    _write_synthetic_glb(path, stove_material)
+    _write_synthetic_glb(
+        path,
+        stove_material,
+        internal_material=internal_material,
+        additional_materials=additional_materials,
+    )
     inspection = inspect_glb(path, include_external_material_alpha=True)
-    manifest, record = _manifest_and_record(stove_material["name"])
+    manifest, record = manifest_and_record or _manifest_and_record(stove_material["name"])
     _validate_external_material_alpha_contract(manifest, record, inspection)
     return inspection
 
@@ -317,6 +372,144 @@ def test_synthetic_glb_binds_stove_receipt_semantics_to_mask_default_cutoff(
 
 
 @pytest.mark.parametrize(
+    "cutoff",
+    [None, True, "0.5", -0.01, float("nan"), float("inf"), float("-inf")],
+    ids=("null", "bool", "string", "negative", "nan", "positive-infinity", "negative-infinity"),
+)
+def test_explicit_invalid_mask_cutoff_is_never_treated_as_default(
+    tmp_path: Path,
+    cutoff,
+) -> None:
+    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    material = _stove_material(name)
+    material["alphaCutoff"] = cutoff
+    with pytest.raises(ForgeInputError, match="cutoff must be a finite non-negative number"):
+        _inspect_and_validate(tmp_path, material)
+
+
+@pytest.mark.parametrize(
+    "internal_material",
+    [
+        {"name": "r2.architecture.wall", "alphaMode": "BLEND"},
+        {
+            "name": "r2.architecture.wall",
+            "extras": {EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY: "BLEND"},
+        },
+    ],
+    ids=("gltf-blend", "declared-blend"),
+)
+def test_any_internal_v2_bundle_blend_material_is_rejected(
+    tmp_path: Path,
+    internal_material: dict,
+) -> None:
+    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    with pytest.raises(ForgeInputError, match="BLEND is forbidden in every v2 bundle material"):
+        _inspect_and_validate(
+            tmp_path,
+            _stove_material(name),
+            internal_material=internal_material,
+        )
+
+
+def test_unmapped_internal_material_cannot_spoof_external_extras(tmp_path: Path) -> None:
+    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    internal = {
+        "name": "r2.architecture.wall",
+        "extras": {EXTERNAL_MATERIAL_SOURCE_PROPERTY: STOVE_SOURCE_ID},
+    }
+    with pytest.raises(ForgeInputError, match="spoofs external alpha extras"):
+        _inspect_and_validate(
+            tmp_path,
+            _stove_material(name),
+            internal_material=internal,
+        )
+
+
+def _two_material_contract_fixture() -> tuple[dict, dict, dict, dict]:
+    first_semantics = ["base_color", "metalness", "normal", "roughness"]
+    second_semantics = ["base_color", "normal", "opacity", "roughness"]
+    first_name = external_material_name(STOVE_SOURCE_ID, 0, "body")
+    second_name = external_material_name(STOVE_SOURCE_ID, 1, "vent")
+    manifest, record = _manifest_and_record(first_name)
+    manifest["materials"] = [
+        _material_contract(
+            first_name,
+            ordinal=0,
+            source_material_name="body",
+            semantics=first_semantics,
+        ),
+        _material_contract(
+            second_name,
+            ordinal=1,
+            source_material_name="vent",
+            semantics=second_semantics,
+        ),
+    ]
+    record["material_count"] = 3
+    record["material_ids"] = ["r2.architecture.wall", first_name, second_name]
+    return (
+        manifest,
+        record,
+        _external_material(first_name, first_semantics),
+        _external_material(second_name, second_semantics),
+    )
+
+
+def test_legitimate_multiple_external_materials_are_closed_per_material(
+    tmp_path: Path,
+) -> None:
+    manifest, record, first, second = _two_material_contract_fixture()
+    inspection = _inspect_and_validate(
+        tmp_path,
+        first,
+        additional_materials=[second],
+        manifest_and_record=(manifest, record),
+    )
+    assert [
+        item["name"] for item in inspection["external_material_alpha_contracts"][1:]
+    ] == [first["name"], second["name"]]
+
+
+def test_duplicate_material_ordinal_is_rejected_even_with_unique_names(
+    tmp_path: Path,
+) -> None:
+    manifest, record, first, second = _two_material_contract_fixture()
+    duplicate_name = external_material_name(STOVE_SOURCE_ID, 0, "vent")
+    manifest["materials"][1]["material_id"] = duplicate_name
+    manifest["materials"][1]["material_ordinal"] = 0
+    record["material_ids"][2] = duplicate_name
+    second["name"] = duplicate_name
+    with pytest.raises(ForgeInputError, match="ordinals are not unique and contiguous"):
+        _inspect_and_validate(
+            tmp_path,
+            first,
+            additional_materials=[second],
+            manifest_and_record=(manifest, record),
+        )
+
+
+def test_equal_semantic_union_cannot_hide_per_material_reassignment(
+    tmp_path: Path,
+) -> None:
+    manifest, record, first, second = _two_material_contract_fixture()
+    first_semantics = ["base_color", "normal", "roughness"]
+    second_semantics = ["base_color", "metalness", "normal", "opacity", "roughness"]
+    first["extras"][EXTERNAL_MATERIAL_SEMANTICS_PROPERTY] = json.dumps(
+        first_semantics, separators=(",", ":")
+    )
+    second["extras"][EXTERNAL_MATERIAL_SEMANTICS_PROPERTY] = json.dumps(
+        second_semantics, separators=(",", ":")
+    )
+    with pytest.raises(ForgeInputError, match="semantic extras differ from receipt"):
+        _inspect_and_validate(
+            tmp_path,
+            first,
+            additional_materials=[second],
+            manifest_and_record=(manifest, record),
+        )
+
+
+@pytest.mark.parametrize(
     ("mutation", "error"),
     [
         (lambda material: material.__setitem__("alphaMode", "BLEND"), "BLEND is forbidden"),
@@ -324,7 +517,7 @@ def test_synthetic_glb_binds_stove_receipt_semantics_to_mask_default_cutoff(
         (lambda material: material.pop("extras"), "name and source extras differ"),
         (
             lambda material: material["extras"].pop(EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY),
-            "MASK cutoff 0.5",
+            "closed per-material contract",
         ),
         (
             lambda material: material["extras"].__setitem__(
@@ -368,3 +561,90 @@ def test_manifest_policy_and_export_extras_are_required(tmp_path: Path) -> None:
     manifest["export_contract"].pop("external_material_alpha_policy")
     with pytest.raises(ForgeInputError, match="policy is absent or changed"):
         _validate_external_material_alpha_contract(manifest, record, inspection)
+
+
+def _write_empty_v2_output(root: Path) -> tuple[dict, dict]:
+    manifest = {
+        "schema_version": "simworld.vista.playable-home-realism-forge/v2",
+        "forge_id": "forge.test",
+        "house_revision": "r1",
+        "visual_profile_id": "realistic_interior_r2",
+        "seed": 7,
+        "source_house_digest": "1" * 64,
+        "source_profile_digest": "2" * 64,
+        "forge_plan_digest": "3" * 64,
+        "build_quality": {},
+        "rooms": [],
+        "openings": [],
+        "components": [{} for _ in range(60)],
+        "dressing": {},
+        "materials": [],
+        "role_counts": {
+            "architecture_shell": 1,
+            "architectural_detail": 1,
+            "cabinetry": 1,
+        },
+        "room_component_counts": {},
+        "export_contract": {
+            "coordinate_system": "Blender metric metres, glTF Y-up export",
+            "semantic_policy": "presentation_only_preserve_r1_authority",
+            "collision_policy": "presentation_no_collision_use_hidden_r1_proxies",
+            "cameras_exported": False,
+            "lights_exported": False,
+            "custom_properties_exported_as_extras": True,
+            "external_material_alpha_policy": external_material_alpha_policy(),
+        },
+        "ue_import_bundles": [],
+        "external_placement": {},
+    }
+    receipt = {
+        "schema_version": "simworld.vista.playable-home-realism-artifacts/v2",
+        "artifacts": [],
+        "ue_import_bundles": [],
+    }
+    root.mkdir()
+    (root / "normalized-manifest.json").write_bytes(canonical_json_bytes(manifest))
+    (root / "artifact-receipt.json").write_bytes(canonical_json_bytes(receipt))
+    return manifest, receipt
+
+
+def test_v2_output_cannot_pass_without_three_external_bundle_arrays(tmp_path: Path) -> None:
+    root = tmp_path / "no-bundles"
+    _write_empty_v2_output(root)
+    with pytest.raises(ForgeInputError, match="requires exactly three identical external"):
+        inspect_output(root)
+
+
+@pytest.mark.parametrize(
+    ("document", "missing_key", "error"),
+    [
+        ("manifest", "export_contract", "v2 manifest fields are not closed"),
+        ("manifest", "external_placement", "v2 manifest fields are not closed"),
+        ("manifest", "ue_import_bundles", "v2 manifest fields are not closed"),
+        ("receipt", "artifacts", "v2 receipt fields or schema are not closed"),
+        ("receipt", "ue_import_bundles", "v2 receipt fields or schema are not closed"),
+    ],
+)
+def test_v2_evidence_envelope_rejects_omitted_fields(
+    tmp_path: Path,
+    document: str,
+    missing_key: str,
+    error: str,
+) -> None:
+    root = tmp_path / f"missing-{document}-{missing_key}"
+    manifest, receipt = _write_empty_v2_output(root)
+    target = manifest if document == "manifest" else receipt
+    target.pop(missing_key)
+    filename = "normalized-manifest.json" if document == "manifest" else "artifact-receipt.json"
+    (root / filename).write_bytes(canonical_json_bytes(target))
+    with pytest.raises(ForgeInputError, match=error):
+        inspect_output(root)
+
+
+def test_v2_output_never_backfills_missing_alpha_policy(tmp_path: Path) -> None:
+    root = tmp_path / "missing-alpha-policy"
+    manifest, _ = _write_empty_v2_output(root)
+    manifest["export_contract"].pop("external_material_alpha_policy")
+    (root / "normalized-manifest.json").write_bytes(canonical_json_bytes(manifest))
+    with pytest.raises(ForgeInputError, match="v2 export contract is absent or changed"):
+        inspect_output(root)

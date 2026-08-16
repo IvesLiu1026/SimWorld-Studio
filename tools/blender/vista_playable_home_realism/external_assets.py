@@ -35,6 +35,9 @@ _REQUIRED_PBR = frozenset({"base_color", "normal", "roughness"})
 EXTERNAL_MATERIAL_ALPHA_POLICY_SCHEMA = (
     "simworld.vista.playable-home-external-material-alpha/v1"
 )
+EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA = (
+    "simworld.vista.playable-home-external-model-material/v1"
+)
 EXTERNAL_MATERIAL_ALPHA_SANITIZATION = (
     "blender-4.5.8-principled-alpha-greater-than-v1"
 )
@@ -1652,6 +1655,50 @@ def _configure_external_material_alpha_contract(
         raise RuntimeError("external material alpha provenance did not persist")
 
 
+def _external_model_material_contract(
+    material: Any,
+    asset: AcquiredAsset,
+    *,
+    ordinal: int,
+    source_material_name: str,
+    semantic_nodes: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Seal the per-material inventory produced from receipt-validated nodes."""
+
+    semantics = sorted(semantic_nodes)
+    alpha_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+    expected_name = external_material_name(
+        asset.logical_asset_id,
+        ordinal,
+        source_material_name,
+    )
+    if (
+        material.name != expected_name
+        or material.get(EXTERNAL_MATERIAL_SOURCE_PROPERTY) != asset.logical_asset_id
+        or material.get(EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY) != asset.source_tree_sha256
+        or material.get(EXTERNAL_MATERIAL_SEMANTICS_PROPERTY)
+        != json.dumps(semantics, separators=(",", ":"))
+        or material.get(EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY) != alpha_mode
+        or material.get(EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY)
+        != EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        or material.get(EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY)
+        != (EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None)
+    ):
+        raise RuntimeError("external model material contract differs from realized Blender material")
+    return {
+        "schema_version": EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
+        "material_id": expected_name,
+        "source_logical_asset_id": asset.logical_asset_id,
+        "source_tree_sha256": asset.source_tree_sha256,
+        "source_material_name": source_material_name,
+        "material_ordinal": ordinal,
+        "active_texture_semantics": semantics,
+        "alpha_mode": alpha_mode,
+        "alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None,
+        "sanitization_policy": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    }
+
+
 def _validate_receipt_image(
     bpy: Any,
     image: Any,
@@ -1921,7 +1968,7 @@ def _append_static_blend(
     asset_set: ExternalAssetSet,
     asset: AcquiredAsset,
     collection: Any,
-) -> tuple[list[Any], tuple[float, float, float]]:
+) -> tuple[list[Any], tuple[float, float, float], list[dict[str, Any]]]:
     logical_id = asset.logical_asset_id
     expected_dimensions_m = asset.catalog_dimensions_m
     if expected_dimensions_m is None:
@@ -1940,6 +1987,7 @@ def _append_static_blend(
     if set(semantics_by_material) != {id(material) for material in unique_materials}:
         raise RuntimeError("external material validation inventory differs from mesh material slots")
     realized_names: set[str] = set()
+    material_contracts: list[dict[str, Any]] = []
     for ordinal, material in enumerate(unique_materials):
         original = material.name
         expected_name = external_material_name(logical_id, ordinal, original)
@@ -1951,6 +1999,15 @@ def _append_static_blend(
             material,
             asset,
             semantics_by_material[id(material)],
+        )
+        material_contracts.append(
+            _external_model_material_contract(
+                material,
+                asset,
+                ordinal=ordinal,
+                source_material_name=original,
+                semantic_nodes=semantics_by_material[id(material)],
+            )
         )
     minimum, maximum = _combined_bounds(mathutils, meshes)
     measured = tuple(maximum[index] - minimum[index] for index in range(3))
@@ -1983,7 +2040,7 @@ def _append_static_blend(
         or any(abs(normalized_dimensions[index] - measured[index]) > 1e-5 for index in range(3))
     ):
         raise RuntimeError(f"external source failed floor-center normalization: {logical_id}")
-    return meshes, normalized_dimensions
+    return meshes, normalized_dimensions, material_contracts
 
 
 def realize_external_placements(
@@ -2014,6 +2071,7 @@ def realize_external_placements(
     }
     objects: dict[str, list[Any]] = {}
     used_authored_materials: set[str] = set()
+    external_model_material_contracts: list[dict[str, Any]] = []
     for placement in external_plan.placements:
         collection = room_collections[placement.room_id]
         actual_recipe_materials: tuple[str, ...] = ()
@@ -2037,13 +2095,14 @@ def realize_external_placements(
             asset = asset_set.asset(placement.source_logical_asset_id)
             if asset.catalog_dimensions_m is None:
                 raise RuntimeError(f"external model lacks a pinned measurement: {asset.logical_asset_id}")
-            meshes, measured_dimensions = _append_static_blend(
+            meshes, measured_dimensions, placement_material_contracts = _append_static_blend(
                 bpy,
                 mathutils,
                 asset_set,
                 asset,
                 collection,
             )
+            external_model_material_contracts.extend(placement_material_contracts)
         scaled_dimensions = tuple(value * placement.uniform_scale for value in measured_dimensions)
         planned = placement.source_dimensions_m
         if any(abs(scaled_dimensions[index] - planned[index]) > max(0.03, planned[index] * 0.08) for index in range(3)):
@@ -2083,4 +2142,11 @@ def realize_external_placements(
         }
         for logical_id in sorted(used_authored_materials)
     ]
+    if len({item["material_id"] for item in external_model_material_contracts}) != len(
+        external_model_material_contracts
+    ):
+        raise RuntimeError("external model material contract identities are duplicated")
+    material_receipts.extend(
+        sorted(external_model_material_contracts, key=lambda item: item["material_id"])
+    )
     return objects, material_receipts
