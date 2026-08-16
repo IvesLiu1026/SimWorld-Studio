@@ -11,6 +11,19 @@ from typing import Any, Iterable
 from .config import DEFAULT_TEXTURE_SIZE_PX, sha256_file
 
 
+PROJECT_MATERIAL_ID_PROPERTY = "vista_material_id"
+PROJECT_MATERIAL_SEMANTICS_PROPERTY = "vista_pbr_semantics"
+PROJECT_MATERIAL_RECEIPT_PROPERTY = "vista_material_receipt"
+PROJECT_MATERIAL_PBR_SEMANTICS = "base_color+normal+roughness"
+PROJECT_MATERIAL_CONTRACT_PROPERTIES = frozenset(
+    {
+        PROJECT_MATERIAL_ID_PROPERTY,
+        PROJECT_MATERIAL_SEMANTICS_PROPERTY,
+        PROJECT_MATERIAL_RECEIPT_PROPERTY,
+    }
+)
+
+
 @dataclass(frozen=True)
 class MaterialSpec:
     material_id: str
@@ -62,6 +75,14 @@ def material_specs() -> tuple[MaterialSpec, ...]:
 
 def material_by_id() -> dict[str, MaterialSpec]:
     return {item.material_id: item for item in material_specs()}
+
+
+def project_material_export_name(material_id: str) -> str:
+    """Return the exact Blender/glTF name for one canonical project material."""
+
+    if material_id not in material_by_id():
+        raise ValueError(f"unknown project material ID: {material_id!r}")
+    return f"VISTA_M_{material_id.replace('.', '_')}"
 
 
 def _noise(material_id: str, x: int, y: int, channel: str) -> float:
@@ -214,12 +235,12 @@ def realize_blender_materials(
             receipt_by_id[spec.material_id]["channels"][semantic]["sha256"] = sha256_file(path)
             path.chmod(0o600)
 
-        material = bpy.data.materials.new(name=f"VISTA_M_{spec.material_id.replace('.', '_')}")
+        material = bpy.data.materials.new(name=project_material_export_name(spec.material_id))
         material.use_nodes = True
         material.diffuse_color = (*spec.base_color, 0.35 if spec.blend_mode == "BLEND" else 1.0)
-        material["vista_material_id"] = spec.material_id
-        material["vista_pbr_semantics"] = "base_color+normal+roughness"
-        material["vista_material_receipt"] = f"materials/{spec.material_id}"
+        material[PROJECT_MATERIAL_ID_PROPERTY] = spec.material_id
+        material[PROJECT_MATERIAL_SEMANTICS_PROPERTY] = PROJECT_MATERIAL_PBR_SEMANTICS
+        material[PROJECT_MATERIAL_RECEIPT_PROPERTY] = f"materials/{spec.material_id}"
         nodes = material.node_tree.nodes
         links = material.node_tree.links
         for node in tuple(nodes):

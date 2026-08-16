@@ -33,11 +33,17 @@ from tools.blender.vista_playable_home_realism.external_assets import (
     AcquiredAsset,
     AcquiredFile,
     ExternalAssetSet,
+    EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY,
     _apply_metric_box_uv,
+    _bounds_record_from_minimum_maximum,
     _canonical_acquisition_json,
+    _combined_bounds,
     _load_fresh_receipt_image,
     _load_verified_blend_objects,
     _metric_box_uv,
+    _mesh_bounds_record,
+    _remove_source_custom_properties,
+    _validate_staticization_bounds,
     _validate_authored_recipe_material_use,
     _validate_normalized_mesh_state,
     _validate_runtime_material_images,
@@ -361,6 +367,50 @@ def _redigest(payload: dict) -> dict:
     payload.pop("content_digest", None)
     payload["content_digest"] = content_digest(payload)
     return payload
+
+
+def test_build_acceptance_rejects_zero_exit_traceback_without_terminal_marker(
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "failed-blender-run"
+    output_root.mkdir()
+    (output_root / "blender.log").write_text(
+        "Traceback (most recent call last):\nRuntimeError: inspector rejected output\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ForgeInputError, match="missing regular file forge-accepted.json"):
+        forge_build.validate_build_acceptance(output_root)
+
+
+def test_build_acceptance_rejects_marker_with_stale_receipt_hash(tmp_path: Path) -> None:
+    output_root = tmp_path / "stale-marker"
+    output_root.mkdir()
+    receipt_names = (
+        "normalized-manifest.json",
+        "artifact-receipt.json",
+        "inspection-receipt.json",
+        "build-receipt.json",
+    )
+    for name in receipt_names:
+        (output_root / name).write_bytes(b"{}\n")
+    empty_object_sha256 = hashlib.sha256(b"{}\n").hexdigest()
+    marker = {
+        "schema_version": forge_build.BUILD_ACCEPTANCE_SCHEMA,
+        "status": "accepted",
+        "normalized_manifest_sha256": "0" * 64,
+        "artifact_receipt_sha256": empty_object_sha256,
+        "inspection_receipt_sha256": empty_object_sha256,
+        "build_receipt_sha256": empty_object_sha256,
+        "external_staticization_receipt_sha256": None,
+    }
+    (output_root / forge_build.BUILD_ACCEPTANCE_FILENAME).write_bytes(
+        canonical_json_bytes(marker)
+    )
+    with pytest.raises(
+        ForgeInputError,
+        match="normalized_manifest_sha256 differs from normalized-manifest.json",
+    ):
+        forge_build.validate_build_acceptance(output_root)
 
 
 def test_external_plan_uses_room_local_meters_and_keeps_world_room_offset(tmp_path: Path) -> None:
@@ -787,7 +837,7 @@ class _FakeMaterial:
         self.node_tree = SimpleNamespace(nodes=list(nodes), animation_data=None, library=None)
         self._properties = {}
         if source is not None:
-            self._properties["vista_external_material_source"] = source
+            self._properties[EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY] = source
 
     def get(self, key: str, default=None):
         return self._properties.get(key, default)
@@ -1050,9 +1100,9 @@ def test_runtime_material_images_bind_active_surface_semantics_to_exact_full_pat
     # dimensions differ, so a basename-keyed implementation cannot pass.
     _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
     assert Counter(path_api.calls) == Counter(
-        (image.filepath_raw, library) for image in images for _ in range(3)
+        (image.filepath_raw, library) for image in images for _ in range(6)
     )
-    assert [image.reload_count for image in images] == [1] * len(images)
+    assert [image.reload_count for image in images] == [2] * len(images)
 
 
 def _runtime_material(tmp_path: Path):
@@ -1069,7 +1119,32 @@ def test_active_surface_rejects_disconnected_impostor_swapped_semantics_and_ambi
     material.node_tree.nodes.append(
         _FakeNode("TEX_IMAGE", "Disconnected Impostor", outputs=("Color",), image=images[0])
     )
-    with pytest.raises(RuntimeError, match="disconnected image impostors"):
+    validated = _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+    assert [node.name for node in material.node_tree.nodes].count("Disconnected Impostor") == 0
+    assert validated[0][2] == [
+        {
+            "node_name": "Disconnected Impostor",
+            "image_name": asset.files[0].relative_path,
+            "relative_path": asset.files[0].relative_path,
+            "sha256": asset.files[0].sha256,
+            "reason": "inactive_disconnected_receipt_bound_image",
+        }
+    ]
+
+    (bpy, _path_api, mesh, asset_set, asset, _images, _library), material = _runtime_material(
+        tmp_path / "outside-receipt"
+    )
+    outside_path = tmp_path / "outside.png"
+    outside_path.write_bytes(b"outside receipt")
+    material.node_tree.nodes.append(
+        _FakeNode(
+            "TEX_IMAGE",
+            "Outside Receipt",
+            outputs=("Color",),
+            image=_FakeImage(outside_path, (2048, 2048)),
+        )
+    )
+    with pytest.raises(RuntimeError, match="outside its verified receipt"):
         _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
 
     (bpy, _path_api, mesh, asset_set, asset, _images, _library), material = _runtime_material(
@@ -1359,7 +1434,12 @@ def test_normalized_external_mesh_state_rejects_parent_and_matrix_residue() -> N
     )
     obj = SimpleNamespace(
         name="NormalizedMesh",
+        type="MESH",
         parent=None,
+        modifiers=[],
+        constraints=[],
+        animation_data=None,
+        data=SimpleNamespace(animation_data=None, shape_keys=None),
         rotation_mode="XYZ",
         location=(0.0, 0.0, 0.0),
         rotation_euler=(0.0, 0.0, 0.0),
@@ -1383,6 +1463,79 @@ def test_normalized_external_mesh_state_rejects_parent_and_matrix_residue() -> N
     obj.parent = object()
     with pytest.raises(RuntimeError, match="parent helper"):
         _validate_normalized_mesh_state(obj)
+
+
+def test_combined_bounds_use_transformed_vertices_and_survive_transform_bake() -> None:
+    class RotateZ45:
+        def __matmul__(self, value):
+            x, y, z = value
+            scale = 2**-0.5
+            return ((x - y) * scale, (x + y) * scale, z)
+
+    class Identity:
+        def __matmul__(self, value):
+            return value
+
+    local = [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 1.0, 1.0), (0.0, 1.0, 1.0)]
+    source = SimpleNamespace(
+        matrix_world=RotateZ45(),
+        data=SimpleNamespace(vertices=[SimpleNamespace(co=value) for value in local]),
+        # A transformed local AABB would use these corners and is deliberately
+        # a loose/poisoned envelope.  Exact bounds must ignore it.
+        bound_box=[(-100.0, -100.0, -100.0), (100.0, 100.0, 100.0)],
+    )
+    before = _combined_bounds(None, [source])
+    baked = [source.matrix_world @ value for value in local]
+    normalized = SimpleNamespace(
+        matrix_world=Identity(),
+        data=SimpleNamespace(vertices=[SimpleNamespace(co=value) for value in baked]),
+        bound_box=[],
+    )
+    assert _combined_bounds(None, [normalized]) == before
+    assert tuple(before[1][index] - before[0][index] for index in range(3)) == pytest.approx(
+        (3 * 2**-0.5, 3 * 2**-0.5, 1.0)
+    )
+
+
+def test_staticization_bounds_derive_dimensions_from_persistent_endpoints() -> None:
+    # The exact endpoint difference rounds to 0.166679, while the difference
+    # between independently persisted six-decimal endpoints is 0.166678.
+    # Deriving dimensions after endpoint normalization prevents that one-micro
+    # discrepancy from invalidating a receipt after its JSON round trip.
+    minimum = (-0.0833394, -0.0000004, 0.0)
+    maximum = (0.0833394, 0.0000004, 1.0)
+    expected = {
+        "minimum": [-0.083339, 0.0, 0.0],
+        "maximum": [0.083339, 0.0, 1.0],
+        "dimensions": [0.166678, 0.0, 1.0],
+    }
+    combined = _bounds_record_from_minimum_maximum(minimum, maximum)
+    mesh = SimpleNamespace(
+        vertices=[
+            SimpleNamespace(co=minimum),
+            SimpleNamespace(co=maximum),
+        ]
+    )
+    per_mesh = _mesh_bounds_record(mesh)
+    assert combined == expected
+    assert per_mesh == expected
+    for record in (combined, per_mesh):
+        persisted = json.loads(canonical_json_bytes(record))
+        assert persisted == record
+        _validate_staticization_bounds(persisted, label="round-trip bounds")
+
+
+def test_source_custom_properties_are_removed_with_digest_only_receipts() -> None:
+    material = {
+        "scalar": 1.234567891,
+        "yp": {"private_note": "source-only", "weights": [1, 2.5, False]},
+    }
+    rows = _remove_source_custom_properties(material)
+    assert material == {}
+    assert [row["property_name"] for row in rows] == ["scalar", "yp"]
+    assert [row["value_type"] for row in rows] == ["number", "mapping"]
+    assert all(len(row["value_sha256"]) == 64 for row in rows)
+    assert "source-only" not in json.dumps(rows)
 
 
 def test_metric_box_uv_scales_in_metres_and_uses_deterministic_axis_ties() -> None:

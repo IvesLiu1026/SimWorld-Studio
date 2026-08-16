@@ -15,6 +15,7 @@ from .external_assets import (
     AcquiredAsset,
     ExternalAssetSet,
     asset_digest_record,
+    external_source_selected_dimensions_m,
 )
 
 
@@ -181,9 +182,18 @@ def _intersects_exclusion(aabb: PlacementAabb, volume: Any) -> bool:
 
 
 def _source_dimensions(asset: AcquiredAsset, uniform_scale: float) -> tuple[float, float, float]:
-    if asset.catalog_dimensions_m is None:
-        raise ForgeInputError(f"external model has no provider measurement: {asset.logical_asset_id}")
-    return tuple(round(value * uniform_scale, 6) for value in asset.catalog_dimensions_m)  # type: ignore[return-value]
+    try:
+        # Synthetic planning fixtures and future acquisition candidates may
+        # not yet have a retained Blender selection policy.  Staticization is
+        # the strict policy gate; planning uses the catalog envelope unless
+        # the exact retained source has a selected-object override.
+        dimensions = external_source_selected_dimensions_m(
+            asset,
+            require_exact_policy=False,
+        )
+    except RuntimeError as error:
+        raise ForgeInputError(str(error)) from error
+    return tuple(round(value * uniform_scale, 6) for value in dimensions)  # type: ignore[return-value]
 
 
 def _manifest_digest_valid(payload: Mapping[str, Any]) -> bool:

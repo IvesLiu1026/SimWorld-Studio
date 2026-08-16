@@ -21,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any, Iterator, Mapping, Sequence
 
-from .config import ForgeInputError, sha256_file
+from .config import ForgeInputError, normalized, sha256_file
 
 
 ACQUISITION_RECEIPT_FILENAME = "acquisition-receipt.json"
@@ -32,6 +32,169 @@ _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 _REQUIRED_PBR = frozenset({"base_color", "normal", "roughness"})
+_SUPPORTED_EXTERNAL_IDENTITY_SEMANTICS = frozenset(
+    {"base_color", "normal", "roughness", "metalness", "opacity"}
+)
+EXTERNAL_MATERIAL_ALPHA_POLICY_SCHEMA = (
+    "simworld.vista.playable-home-external-material-alpha/v1"
+)
+EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA = (
+    "simworld.vista.playable-home-external-model-material/v3"
+)
+EXTERNAL_MATERIAL_IDENTITY_SCHEMA = (
+    "simworld.vista.playable-home-external-material-identity/v1"
+)
+EXTERNAL_SOURCE_MATERIAL_REGISTRY_SCHEMA = (
+    "simworld.vista.playable-home-external-source-material-registry/v1"
+)
+EXTERNAL_MATERIAL_ALPHA_SANITIZATION = (
+    "blender-4.5.8-receipt-bound-principled-alpha-greater-than-v2"
+)
+EXTERNAL_MATERIAL_ALPHA_CUTOFF = 0.5
+EXTERNAL_MATERIAL_SOURCE_PROPERTY = "vista_external_source_logical_asset_id"
+EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY = "vista_external_source_tree_sha256"
+EXTERNAL_MATERIAL_SEMANTICS_PROPERTY = "vista_receipt_texture_semantics_json"
+EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY = "vista_gltf_alpha_mode"
+EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY = "vista_gltf_alpha_cutoff"
+EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY = "vista_alpha_sanitization_policy"
+EXTERNAL_MATERIAL_IDENTITY_PROPERTY = "vista_external_material_identity_sha256"
+EXTERNAL_MATERIAL_CONTRACT_PROPERTIES = frozenset(
+    {
+        EXTERNAL_MATERIAL_SOURCE_PROPERTY,
+        EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY,
+        EXTERNAL_MATERIAL_SEMANTICS_PROPERTY,
+        EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY,
+        EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY,
+        EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY,
+        EXTERNAL_MATERIAL_IDENTITY_PROPERTY,
+    }
+)
+EXTERNAL_TEXTURE_MATERIAL_CONTRACT_SCHEMA = (
+    "simworld.vista.playable-home-external-texture-material/v1"
+)
+EXTERNAL_TEXTURE_MATERIAL_IDENTITY_SCHEMA = (
+    "simworld.vista.playable-home-external-texture-material-identity/v1"
+)
+EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY = (
+    "vista_external_texture_source_logical_asset_id"
+)
+EXTERNAL_TEXTURE_MATERIAL_SOURCE_DIGEST_PROPERTY = (
+    "vista_external_texture_source_tree_sha256"
+)
+EXTERNAL_TEXTURE_MATERIAL_SEMANTICS_PROPERTY = (
+    "vista_external_texture_semantics_json"
+)
+EXTERNAL_TEXTURE_MATERIAL_ALPHA_MODE_PROPERTY = (
+    "vista_external_texture_alpha_mode"
+)
+EXTERNAL_TEXTURE_MATERIAL_IDENTITY_PROPERTY = (
+    "vista_external_texture_material_identity_sha256"
+)
+EXTERNAL_TEXTURE_MATERIAL_RECEIPT_PROPERTY = "vista_external_texture_material_receipt"
+EXTERNAL_TEXTURE_MATERIAL_CONTRACT_PROPERTIES = frozenset(
+    {
+        EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY,
+        EXTERNAL_TEXTURE_MATERIAL_SOURCE_DIGEST_PROPERTY,
+        EXTERNAL_TEXTURE_MATERIAL_SEMANTICS_PROPERTY,
+        EXTERNAL_TEXTURE_MATERIAL_ALPHA_MODE_PROPERTY,
+        EXTERNAL_TEXTURE_MATERIAL_IDENTITY_PROPERTY,
+        EXTERNAL_TEXTURE_MATERIAL_RECEIPT_PROPERTY,
+    }
+)
+EXTERNAL_TEXTURE_MATERIAL_CONTRACT_KEYS = frozenset(
+    {
+        "schema_version",
+        "material_id",
+        "source_logical_asset_id",
+        "source_tree_sha256",
+        "material_identity_sha256",
+        "active_texture_semantics",
+        "alpha_mode",
+        "alpha_cutoff",
+        "pbr_source",
+    }
+)
+EXTERNAL_STATICIZATION_SCHEMA = "simworld.vista.playable-home-external-staticization/v1"
+EXTERNAL_STATICIZATION_LEDGER_SCHEMA = (
+    "simworld.vista.playable-home-external-staticization-ledger/v1"
+)
+EXTERNAL_STATICIZATION_SELECTION_SCHEMA = (
+    "simworld.vista.playable-home-external-staticization-selection/v1"
+)
+EXTERNAL_STATICIZATION_POLICY = (
+    "blender-4.5.8-frame-1-depsgraph-viewport-render-equivalent-evaluated-mesh/v1"
+)
+EXTERNAL_STATICIZATION_FRAME = 1
+EXTERNAL_STATICIZATION_DEPSGRAPH_MODE = "VIEWPORT"
+EXTERNAL_STATICIZATION_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "source_logical_asset_id",
+        "source_tree_sha256",
+        "blender_version",
+        "frame",
+        "depsgraph_mode",
+        "evaluation_policy",
+        "selection_policy",
+        "input_inventory",
+        "input_inventory_sha256",
+        "input_actions",
+        "exclusions",
+        "output_meshes",
+        "output_bounds_m",
+        "output_digest",
+        "content_digest",
+    }
+)
+EXTERNAL_STATICIZATION_LEDGER_KEYS = frozenset(
+    {"schema_version", "blender_version", "sources", "content_digest"}
+)
+EXTERNAL_STATICIZATION_OUTPUT_MESH_KEYS = frozenset(
+    {
+        "source_object_name",
+        "object_name",
+        "topology",
+        "bounds_m",
+        "material_ids",
+        "mesh_sha256",
+        "stripped_state",
+    }
+)
+EXTERNAL_STATICIZATION_TOPOLOGY_KEYS = frozenset(
+    {"vertices", "edges", "loops", "polygons", "uv_layers"}
+)
+EXTERNAL_STATICIZATION_BOUNDS_KEYS = frozenset(
+    {"minimum", "maximum", "dimensions"}
+)
+EXTERNAL_STATICIZATION_STRIPPED_STATE = {
+    "parent": None,
+    "modifier_count": 0,
+    "constraint_count": 0,
+    "object_animation": False,
+    "mesh_animation": False,
+    "shape_keys": False,
+    "identity_transform": True,
+}
+EXTERNAL_STATICIZATION_INPUT_OBJECT_KEYS = frozenset(
+    {
+        "object_name",
+        "object_type",
+        "data_name",
+        "parent_name",
+        "parent_type",
+        "hide_render",
+        "hide_viewport",
+        "matrix_world",
+        "source_topology",
+        "material_slots",
+        "modifiers",
+        "constraints",
+        "action",
+    }
+)
+EXTERNAL_STATICIZATION_EXCLUSION_KEYS = frozenset(
+    {"object_name", "reason", "evaluated_polygon_count", "used_materials"}
+)
 AUTHORED_UV_METERS_PER_TILE = 1.0
 AUTHORED_RECIPE_MATERIAL_IDS: Mapping[str, tuple[str, ...]] = {
     "contemporary_shoe_bench_v1": (
@@ -107,6 +270,140 @@ class ExternalAssetSet:
             "receipt_file_sha256": self.receipt_file_sha256,
             "acquisition_manifest_sha256": self.acquisition_manifest_sha256,
         }
+
+
+@dataclass(frozen=True)
+class ExternalSourceSelectionPolicy:
+    """Exact receipt-pinned render selection for one retained model source."""
+
+    source_tree_sha256: str
+    selected_object_names: tuple[str, ...]
+    excluded_renderable_objects: tuple[tuple[str, str], ...] = ()
+    selected_dimensions_m: tuple[float, float, float] | None = None
+
+
+_POSTCARD_OBJECT_NAMES = tuple(f"postcard_{index:02d}" for index in range(1, 21))
+_BOOK_OBJECT_NAMES = tuple(
+    f"book_encyclopedia_set_01_book{index:02d}" for index in range(1, 21)
+)
+_STOVE_OBJECT_NAMES = tuple(
+    sorted(
+        (
+            *(f"dial_{index}" for index in range(1, 7)),
+            "door_top",
+            "grid",
+            "handle_bottom_attachment",
+            "hinge_bottom_attachment_left",
+            "hinge_bottom_attachment_right",
+            "hinge_bottom_rotator_left",
+            "hinge_bottom_rotator_right",
+            "hinge_top_attachment_left",
+            "hinge_top_attachment_right",
+            "hinge_top_rotator_left",
+            "hinge_top_rotator_right",
+            "sheet",
+            "stovetop",
+        )
+    )
+)
+EXTERNAL_SOURCE_SELECTION_POLICIES: Mapping[str, ExternalSourceSelectionPolicy] = {
+    "visual.dressing.entry.postcards": ExternalSourceSelectionPolicy(
+        "1a9a8add26df9b5dfc7afdd99d1ebe1a91823a0a451b3209a4db85094e5273f2",
+        _POSTCARD_OBJECT_NAMES,
+    ),
+    "visual.dressing.entry.rubber_boots": ExternalSourceSelectionPolicy(
+        "696eecc64d80fe7413b1cb524c6a74995b2d0ed424a93430dcd5f61052a20362",
+        ("rubber_boots_dirt_r_LOD0", "rubber_boots_dirty_l_LOD0"),
+        tuple(
+            sorted(
+                (
+                    ("rubber_boots_dirty_l_LOD1", "alternate_dirty_lod1"),
+                    ("rubber_boots_dirty_r_LOD1", "alternate_dirty_lod1"),
+                    ("rubber_boots_l_LOD0", "alternate_clean_variant"),
+                    ("rubber_boots_l_LOD1", "alternate_clean_lod1"),
+                    ("rubber_boots_r_LOD0", "alternate_clean_variant"),
+                    ("rubber_boots_r_LOD1", "alternate_clean_lod1"),
+                )
+            )
+        ),
+        # Poly Haven's catalog envelope spans every clean/dirty and LOD
+        # alternate in the .blend.  The closed dirty-LOD0 pair is narrower.
+        selected_dimensions_m=(
+            0.2906568646430969,
+            0.2662065029144287,
+            0.37276914715766907,
+        ),
+    ),
+    "visual.dressing.entry.wicker_basket": ExternalSourceSelectionPolicy(
+        "7762ce8b5ff25ad68de6d86a437384eb6c922a3a5153a4f68f170d0b10fd0d00",
+        ("wicker_basket_02_base", "wicker_basket_02_lid"),
+    ),
+    "visual.dressing.kitchen.cardboard_box": ExternalSourceSelectionPolicy(
+        "ded40d48a23ad5e2a01604be031dbc6d4ff17bc7ceb3668840473931c34dcadd",
+        ("cardboard_box_01",),
+    ),
+    "visual.dressing.kitchen.cutting_board": ExternalSourceSelectionPolicy(
+        "2ade9177a149033cd46f0c8afab3612d719489caf95705376250d6d93bced414",
+        ("wooden_cutting_board",),
+    ),
+    "visual.dressing.kitchen.dining_chair": ExternalSourceSelectionPolicy(
+        "9ec44864c1d376f0f51347d880701aec48d50f0b7c4cb41d899dbc9f01c9a3d0",
+        ("dining_chair_02",),
+    ),
+    "visual.dressing.kitchen.wooden_bowl": ExternalSourceSelectionPolicy(
+        "cf2db4b371e9aa675bbca0e7fdf98df31bb55f00a5893ebc0264d337f3e45949",
+        ("wooden_bowl_01",),
+    ),
+    "visual.dressing.kitchen.wooden_plate": ExternalSourceSelectionPolicy(
+        "d963bc0402232c124c0c996dd46df1d79bd2cf88b73ba3755c8747c6de892279",
+        ("carved_wooden_plate",),
+    ),
+    "visual.dressing.kitchen.wooden_spoon": ExternalSourceSelectionPolicy(
+        "0b9bf4a5098f1164596af4244fef51b87be6f1b8ccc57dcc5a7a7ecba54e1cd2",
+        ("wooden_spoon",),
+    ),
+    "visual.dressing.living.armchair": ExternalSourceSelectionPolicy(
+        "79118e13383af850d801f14b9ace7a65f91d520ce54b3a5bc8b4cf5e2089a7b1",
+        ("modern_arm_chair_01",),
+    ),
+    "visual.dressing.living.books": ExternalSourceSelectionPolicy(
+        "d2f5d87cc2c90c4f23c25de10b0e6642835d82dcb0106c480c4ab146909cae27",
+        _BOOK_OBJECT_NAMES,
+    ),
+    "visual.dressing.living.media_cabinet": ExternalSourceSelectionPolicy(
+        "0e0e1f733d0beee82ca9ecd7428b4731765836b56fa9a54aeea0dda80c718123",
+        (
+            "modern_wooden_cabinet_body",
+            "modern_wooden_cabinet_door_l",
+            "modern_wooden_cabinet_door_r",
+        ),
+    ),
+    "visual.dressing.living.potted_plant": ExternalSourceSelectionPolicy(
+        "084884b0a341699d76764e4f0186cb0cabbff1cd87f0536cfe168ba38e683da2",
+        (
+            "potted_plant_04_dirt",
+            "potted_plant_04_ground",
+            "potted_plant_04_plant",
+            "potted_plant_04_pot",
+        ),
+    ),
+    "visual.dressing.living.side_table": ExternalSourceSelectionPolicy(
+        "c4d1d727051e9b443a0a1496b7ef2e3b018d83d45b55b2bd2c737becccf1f1e4",
+        ("side_table_01",),
+    ),
+    "visual.dressing.shared.ceramic_vase": ExternalSourceSelectionPolicy(
+        "a00fa716f81ea8536163618a4d34a4753e4fc0b6872783660258a29f33486597",
+        ("ceramic_vase_02",),
+    ),
+    "visual.hero.kitchen_stove": ExternalSourceSelectionPolicy(
+        "c55acbd188af4674ce5c1c8605f2447c5fb830a05b1650b0d03296b419b38795",
+        _STOVE_OBJECT_NAMES,
+    ),
+    "visual.hero.living_coffee_table": ExternalSourceSelectionPolicy(
+        "cf5fac22ac00b8725f91ad4565ddaa32dc5f10b213a0938a92de9e2432c1ddfe",
+        ("modern_coffee_table_01",),
+    ),
+}
 
 
 def _canonical_acquisition_json(value: Any) -> bytes:
@@ -514,6 +811,499 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
 
 
+def _canonical_runtime_json(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _runtime_json_sha256(value: Any) -> str:
+    # Persistent forge JSON is recursively normalized to six decimals.  Hash
+    # that exact representation so receipt digests survive both standalone
+    # serialization and embedding in the normalized manifest.
+    return hashlib.sha256(_canonical_runtime_json(normalized(value))).hexdigest()
+
+
+def _receipt_float(value: Any) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise RuntimeError("external receipt value is not numeric") from error
+    if not math.isfinite(result):
+        raise RuntimeError("external receipt value is non-finite")
+    # Receipt JSON is normalized to six decimal places before it is written.
+    # Round once at this boundary so derived values (especially dimensions)
+    # are calculated from the exact endpoints that persist on disk.
+    rounded = round(result, 6)
+    return 0.0 if rounded == 0.0 else rounded
+
+
+def _external_source_selection_policy_for_identity(
+    logical_asset_id: str,
+    source_tree_sha256: str,
+) -> dict[str, Any]:
+    policy = EXTERNAL_SOURCE_SELECTION_POLICIES.get(logical_asset_id)
+    if policy is None or policy.source_tree_sha256 != source_tree_sha256:
+        raise RuntimeError(
+            f"external source lacks an exact retained staticization policy: {logical_asset_id}"
+        )
+    selected = list(policy.selected_object_names)
+    excluded = [
+        {"object_name": name, "reason": reason}
+        for name, reason in policy.excluded_renderable_objects
+    ]
+    if (
+        not selected
+        or selected != sorted(set(selected))
+        or [item["object_name"] for item in excluded]
+        != sorted({item["object_name"] for item in excluded})
+        or set(selected) & {item["object_name"] for item in excluded}
+        or any(not item["reason"] for item in excluded)
+    ):
+        raise RuntimeError("external staticization selection policy is not closed")
+    body = {
+        "schema_version": EXTERNAL_STATICIZATION_SELECTION_SCHEMA,
+        "source_logical_asset_id": logical_asset_id,
+        "source_tree_sha256": source_tree_sha256,
+        "selected_object_names": selected,
+        "excluded_renderable_objects": excluded,
+    }
+    return {**body, "content_digest": _runtime_json_sha256(body)}
+
+
+def external_source_selection_policy(asset: AcquiredAsset) -> dict[str, Any]:
+    """Return one exact-name, exact-source selection contract."""
+
+    return _external_source_selection_policy_for_identity(
+        asset.logical_asset_id,
+        asset.source_tree_sha256,
+    )
+
+
+def external_source_selected_dimensions_m(
+    asset: AcquiredAsset,
+    *,
+    require_exact_policy: bool = True,
+) -> tuple[float, float, float]:
+    """Return the pinned envelope for the exact retained object selection."""
+
+    # Validate the logical ID and source digest even though the selected
+    # dimensions are runtime planning data rather than a serialized policy
+    # field.  This prevents a measurement from being reused for different
+    # source bytes.
+    policy = EXTERNAL_SOURCE_SELECTION_POLICIES.get(asset.logical_asset_id)
+    exact_policy = policy is not None and policy.source_tree_sha256 == asset.source_tree_sha256
+    if require_exact_policy:
+        _external_source_selection_policy_for_identity(
+            asset.logical_asset_id,
+            asset.source_tree_sha256,
+        )
+    dimensions = (
+        policy.selected_dimensions_m
+        if exact_policy and policy is not None and policy.selected_dimensions_m is not None
+        else asset.catalog_dimensions_m
+    )
+    if (
+        dimensions is None
+        or len(dimensions) != 3
+        or any(not math.isfinite(float(value)) or float(value) <= 0 for value in dimensions)
+    ):
+        raise RuntimeError(
+            f"external source lacks a pinned selected-object measurement: "
+            f"{asset.logical_asset_id}"
+        )
+    return tuple(float(value) for value in dimensions)  # type: ignore[return-value]
+
+
+def external_texture_material_identity_for_source(
+    logical_asset_id: str,
+    source_tree_sha256: str,
+    active_texture_semantics: Sequence[str],
+) -> str:
+    semantics = list(active_texture_semantics)
+    if (
+        type(logical_asset_id) is not str
+        or _SAFE_ID.fullmatch(logical_asset_id) is None
+        or type(source_tree_sha256) is not str
+        or _SHA256.fullmatch(source_tree_sha256) is None
+        or semantics != sorted(_REQUIRED_PBR)
+    ):
+        raise RuntimeError("external texture material identity source is invalid")
+    payload = {
+        "schema_version": EXTERNAL_TEXTURE_MATERIAL_IDENTITY_SCHEMA,
+        "source_logical_asset_id": logical_asset_id,
+        "source_tree_sha256": source_tree_sha256,
+        "active_texture_semantics": semantics,
+        "alpha_mode": "OPAQUE",
+        "alpha_cutoff": None,
+    }
+    return _runtime_json_sha256(payload)
+
+
+def external_texture_material_identity_sha256(asset: AcquiredAsset) -> str:
+    if asset.asset_type != "texture" or not _REQUIRED_PBR.issubset(asset.pbr_semantics):
+        raise RuntimeError("external texture material identity source is not a complete texture")
+    return external_texture_material_identity_for_source(
+        asset.logical_asset_id,
+        asset.source_tree_sha256,
+        sorted(_REQUIRED_PBR),
+    )
+
+
+def external_texture_material_name_for_source(
+    logical_asset_id: str,
+    source_tree_sha256: str,
+    active_texture_semantics: Sequence[str],
+) -> str:
+    identity = external_texture_material_identity_for_source(
+        logical_asset_id,
+        source_tree_sha256,
+        active_texture_semantics,
+    )
+    slug = _slug(logical_asset_id)
+    if not slug:
+        raise RuntimeError("external texture material source has no safe slug")
+    name = f"r2.external.texture.{slug[:24]}.{identity[:16]}"
+    if len(name) > 63:
+        raise RuntimeError("external texture material identity exceeds Blender's name limit")
+    return name
+
+
+def external_texture_material_name(asset: AcquiredAsset) -> str:
+    return external_texture_material_name_for_source(
+        asset.logical_asset_id,
+        asset.source_tree_sha256,
+        sorted(_REQUIRED_PBR),
+    )
+
+
+def external_material_alpha_policy() -> dict[str, Any]:
+    """Return the closed v2 source-to-GLB alpha sanitization contract.
+
+    Blender 4.5's glTF exporter derives ``alphaMode`` from the Principled
+    Alpha node graph.  ``surface_render_method`` is deliberately documented as
+    non-authoritative here: both imported OPAQUE and MASK materials use
+    ``DITHERED`` in Blender 4.5.
+    """
+
+    return {
+        "schema_version": EXTERNAL_MATERIAL_ALPHA_POLICY_SCHEMA,
+        "blender_version": [4, 5, 8],
+        "gltf_exporter_alpha_detection": "gather_alpha_info.detect_alpha_clip",
+        "source_mapping": "material_extras_source_material_identity_v2",
+        "material_contract_schema": EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
+        "material_identity_schema": EXTERNAL_MATERIAL_IDENTITY_SCHEMA,
+        "source_registry_schema": EXTERNAL_SOURCE_MATERIAL_REGISTRY_SCHEMA,
+        "external_texture_material_contract_schema": (
+            EXTERNAL_TEXTURE_MATERIAL_CONTRACT_SCHEMA
+        ),
+        "staticization_schema": EXTERNAL_STATICIZATION_SCHEMA,
+        "staticization_ledger_schema": EXTERNAL_STATICIZATION_LEDGER_SCHEMA,
+        "staticization_policy": EXTERNAL_STATICIZATION_POLICY,
+        "sanitization": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+        "opacity_semantic": "opacity",
+        "masked_alpha_mode": "MASK",
+        "masked_alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF,
+        "non_opacity_alpha_mode": "OPAQUE",
+        "external_model_blend_alpha_mode_forbidden": True,
+        "export_extras_required": True,
+        "surface_render_method_authoritative": False,
+    }
+
+
+def external_material_name_prefix(logical_asset_id: str) -> str:
+    """Return the deterministic material namespace for one acquired model."""
+
+    if type(logical_asset_id) is not str or _SAFE_ID.fullmatch(logical_asset_id) is None:
+        raise RuntimeError("external material source logical asset ID is invalid")
+    slug = _slug(logical_asset_id)
+    if not slug:
+        raise RuntimeError("external material source logical asset ID has no safe slug")
+    source_digest = hashlib.sha256(logical_asset_id.encode("utf-8")).hexdigest()[:16]
+    # The full source ID is hash-bound so IDs that slugify alike, or IDs longer
+    # than Blender's 63-character datablock limit, never share a namespace.
+    prefix = f"r2.external.{slug[:14].ljust(14, '_')}.{source_digest}."
+    if len(prefix) != 44:
+        raise RuntimeError("external material source namespace length is not closed")
+    return prefix
+
+
+def external_material_identity_sha256(
+    logical_asset_id: str,
+    source_tree_sha256: str,
+    ordinal: int,
+    source_material_name: str,
+    active_texture_semantics: Sequence[str],
+) -> str:
+    """Hash the exact receipt-pinned source material identity.
+
+    The source-tree digest pins the original Blender graph and its texture
+    bytes.  The remaining fields prevent graph slots or active semantics from
+    being silently reassigned while still producing the same exported name.
+    """
+
+    if type(logical_asset_id) is not str or _SAFE_ID.fullmatch(logical_asset_id) is None:
+        raise RuntimeError("external material source logical asset ID is invalid")
+    if type(source_tree_sha256) is not str or _SHA256.fullmatch(source_tree_sha256) is None:
+        raise RuntimeError("external material source tree SHA-256 is invalid")
+    if type(ordinal) is not int or not 0 <= ordinal <= 99:
+        raise RuntimeError("external source has too many materials for a stable two-digit identity")
+    if (
+        type(source_material_name) is not str
+        or not source_material_name
+        or "\x00" in source_material_name
+    ):
+        raise RuntimeError("external source material name is invalid")
+    semantics = list(active_texture_semantics)
+    if (
+        any(type(item) is not str or item not in _SUPPORTED_EXTERNAL_IDENTITY_SEMANTICS for item in semantics)
+        or semantics != sorted(set(semantics))
+        or not _REQUIRED_PBR.issubset(semantics)
+    ):
+        raise RuntimeError("external source material identity semantics are invalid")
+    alpha_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+    payload = {
+        "schema_version": EXTERNAL_MATERIAL_IDENTITY_SCHEMA,
+        "source_logical_asset_id": logical_asset_id,
+        "source_tree_sha256": source_tree_sha256,
+        "material_ordinal": ordinal,
+        "source_material_name": source_material_name,
+        "active_texture_semantics": semantics,
+        "alpha_mode": alpha_mode,
+        "alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None,
+        "sanitization_policy": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def external_material_name(
+    logical_asset_id: str,
+    ordinal: int,
+    material_identity_sha256: str,
+) -> str:
+    if type(ordinal) is not int or not 0 <= ordinal <= 99:
+        raise RuntimeError("external source has too many materials for a stable two-digit identity")
+    if (
+        type(material_identity_sha256) is not str
+        or _SHA256.fullmatch(material_identity_sha256) is None
+    ):
+        raise RuntimeError("external material identity SHA-256 is invalid")
+    name = (
+        f"{external_material_name_prefix(logical_asset_id)}"
+        f"{ordinal:02d}.{material_identity_sha256[:16]}"
+    )
+    if len(name) != 63:
+        raise RuntimeError("external material identity does not fit Blender's closed name limit")
+    return name
+
+
+EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS = frozenset(
+    {
+        "schema_version",
+        "material_id",
+        "source_logical_asset_id",
+        "source_tree_sha256",
+        "source_material_name",
+        "material_ordinal",
+        "material_identity_sha256",
+        "active_texture_semantics",
+        "inactive_image_normalizations",
+        "removed_source_custom_properties",
+        "alpha_mode",
+        "alpha_cutoff",
+        "sanitization_policy",
+    }
+)
+
+
+def external_source_material_registry_sha256(
+    logical_asset_id: str,
+    source_tree_sha256: str,
+    material_contracts: Sequence[Mapping[str, Any]],
+) -> str:
+    """Validate and digest one exact source-level material inventory."""
+
+    if type(logical_asset_id) is not str or _SAFE_ID.fullmatch(logical_asset_id) is None:
+        raise RuntimeError("external material registry source logical asset ID is invalid")
+    if type(source_tree_sha256) is not str or _SHA256.fullmatch(source_tree_sha256) is None:
+        raise RuntimeError("external material registry source tree SHA-256 is invalid")
+    if any(not isinstance(item, Mapping) for item in material_contracts):
+        raise RuntimeError("external material registry contains a non-object contract")
+    contracts = [dict(item) for item in material_contracts]
+    if not contracts:
+        raise RuntimeError("external material registry inventory is empty")
+    if any(type(item.get("material_ordinal")) is not int for item in contracts):
+        raise RuntimeError("external material registry ordinal is invalid")
+    contracts.sort(key=lambda item: item.get("material_ordinal", -1))
+    seen_ids: set[str] = set()
+    for expected_ordinal, item in enumerate(contracts):
+        if set(item) != EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS:
+            raise RuntimeError("external material registry contract fields are not closed")
+        semantics = item.get("active_texture_semantics")
+        normalizations = item.get("inactive_image_normalizations")
+        property_normalizations = item.get("removed_source_custom_properties")
+        source_name = item.get("source_material_name")
+        if (
+            item.get("schema_version") != EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA
+            or item.get("source_logical_asset_id") != logical_asset_id
+            or item.get("source_tree_sha256") != source_tree_sha256
+            or item.get("material_ordinal") != expected_ordinal
+            or type(source_name) is not str
+            or not source_name
+            or "\x00" in source_name
+            or not isinstance(semantics, list)
+            or semantics != sorted(set(semantics))
+            or not isinstance(normalizations, list)
+            or any(
+                not isinstance(row, Mapping)
+                or set(row)
+                != {"node_name", "image_name", "relative_path", "sha256", "reason"}
+                or type(row.get("node_name")) is not str
+                or not row.get("node_name")
+                or type(row.get("image_name")) is not str
+                or not row.get("image_name")
+                or type(row.get("relative_path")) is not str
+                or not row.get("relative_path")
+                or type(row.get("sha256")) is not str
+                or _SHA256.fullmatch(row["sha256"]) is None
+                or row.get("reason") != "inactive_disconnected_receipt_bound_image"
+                for row in normalizations
+            )
+            or normalizations
+            != sorted(
+                normalizations,
+                key=lambda row: (row["node_name"], row["relative_path"]),
+            )
+            or not isinstance(property_normalizations, list)
+            or any(
+                not isinstance(row, Mapping)
+                or set(row)
+                != {"property_name", "value_type", "value_sha256", "reason"}
+                or type(row.get("property_name")) is not str
+                or not row["property_name"]
+                or row.get("value_type")
+                not in {"boolean", "integer", "number", "string", "mapping", "array"}
+                or type(row.get("value_sha256")) is not str
+                or _SHA256.fullmatch(row["value_sha256"]) is None
+                or row.get("reason")
+                != "receipt_bound_source_only_custom_property_removed"
+                for row in property_normalizations
+            )
+            or property_normalizations
+            != sorted(property_normalizations, key=lambda row: row["property_name"])
+        ):
+            raise RuntimeError("external material registry source identity differs")
+        identity = external_material_identity_sha256(
+            logical_asset_id,
+            source_tree_sha256,
+            expected_ordinal,
+            source_name,
+            semantics,
+        )
+        material_id = external_material_name(logical_asset_id, expected_ordinal, identity)
+        expected_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+        expected_cutoff = (
+            EXTERNAL_MATERIAL_ALPHA_CUTOFF if expected_mode == "MASK" else None
+        )
+        if (
+            item.get("material_identity_sha256") != identity
+            or item.get("material_id") != material_id
+            or material_id in seen_ids
+            or item.get("alpha_mode") != expected_mode
+            or item.get("alpha_cutoff") != expected_cutoff
+            or item.get("sanitization_policy") != EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        ):
+            raise RuntimeError("external material registry contract identity differs")
+        seen_ids.add(material_id)
+    payload = {
+        "schema_version": EXTERNAL_SOURCE_MATERIAL_REGISTRY_SCHEMA,
+        "source_logical_asset_id": logical_asset_id,
+        "source_tree_sha256": source_tree_sha256,
+        "materials": contracts,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class _ExternalSourcePrototype:
+    logical_asset_id: str
+    source_tree_sha256: str
+    material_registry_sha256: str
+    meshes: tuple[Any, ...]
+    normalized_dimensions_m: tuple[float, float, float]
+    material_contracts: tuple[Mapping[str, Any], ...]
+
+
+class _ExternalSourceMaterialRegistry:
+    """Closed source prototypes reused by every placement in one forge run."""
+
+    def __init__(self) -> None:
+        self._by_source: dict[str, _ExternalSourcePrototype] = {}
+        self._material_owner: dict[str, str] = {}
+
+    def get(self, asset: AcquiredAsset) -> _ExternalSourcePrototype | None:
+        prototype = self._by_source.get(asset.logical_asset_id)
+        if prototype is None:
+            return None
+        if (
+            prototype.source_tree_sha256 != asset.source_tree_sha256
+            or prototype.material_registry_sha256
+            != external_source_material_registry_sha256(
+                asset.logical_asset_id,
+                asset.source_tree_sha256,
+                prototype.material_contracts,
+            )
+        ):
+            raise RuntimeError("external material registry source digest or inventory changed")
+        return prototype
+
+    def add(
+        self,
+        asset: AcquiredAsset,
+        meshes: Sequence[Any],
+        normalized_dimensions_m: Sequence[float],
+        material_contracts: Sequence[Mapping[str, Any]],
+    ) -> _ExternalSourcePrototype:
+        if asset.logical_asset_id in self._by_source:
+            raise RuntimeError("external material registry source was registered twice")
+        registry_digest = external_source_material_registry_sha256(
+            asset.logical_asset_id,
+            asset.source_tree_sha256,
+            material_contracts,
+        )
+        for contract in material_contracts:
+            material_id = str(contract["material_id"])
+            owner = self._material_owner.get(material_id)
+            if owner is not None and owner != asset.logical_asset_id:
+                raise RuntimeError("external material registry identities collide across sources")
+        dimensions = tuple(float(value) for value in normalized_dimensions_m)
+        if len(dimensions) != 3 or any(not math.isfinite(value) or value <= 0 for value in dimensions):
+            raise RuntimeError("external material registry normalized dimensions are invalid")
+        prototype = _ExternalSourcePrototype(
+            logical_asset_id=asset.logical_asset_id,
+            source_tree_sha256=asset.source_tree_sha256,
+            material_registry_sha256=registry_digest,
+            meshes=tuple(meshes),
+            normalized_dimensions_m=dimensions,
+            material_contracts=tuple(dict(item) for item in material_contracts),
+        )
+        if not prototype.meshes:
+            raise RuntimeError("external material registry prototype has no meshes")
+        self._by_source[asset.logical_asset_id] = prototype
+        for contract in material_contracts:
+            self._material_owner[str(contract["material_id"])] = asset.logical_asset_id
+        return prototype
+
+    def values(self) -> tuple[_ExternalSourcePrototype, ...]:
+        return tuple(self._by_source[source_id] for source_id in sorted(self._by_source))
+
+
 def _receipt_file_fingerprint(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
     return (
         value.st_dev,
@@ -755,7 +1545,8 @@ def _realize_pbr_material(bpy: Any, asset_set: ExternalAssetSet, logical_id: str
     asset = asset_set.asset(logical_id)
     if asset.asset_type != "texture":
         raise RuntimeError(f"project-authored material source is not a texture: {logical_id}")
-    material = bpy.data.materials.new(name=f"r2.external.{_slug(logical_id)}")
+    identity = external_texture_material_identity_sha256(asset)
+    material = bpy.data.materials.new(name=external_texture_material_name(asset))
     created_images: list[Any] = []
     try:
         material.use_nodes = True
@@ -783,8 +1574,18 @@ def _realize_pbr_material(bpy: Any, asset_set: ExternalAssetSet, logical_id: str
         normal.inputs["Strength"].default_value = 0.65
         material.node_tree.links.new(texture.outputs["Color"], normal.inputs["Color"])
         material.node_tree.links.new(normal.outputs["Normal"], shader.inputs["Normal"])
-        material["vista_external_material_source"] = logical_id
-        material["vista_source_tree_sha256"] = asset.source_tree_sha256
+        material[EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY] = logical_id
+        material[EXTERNAL_TEXTURE_MATERIAL_SOURCE_DIGEST_PROPERTY] = asset.source_tree_sha256
+        material[EXTERNAL_TEXTURE_MATERIAL_SEMANTICS_PROPERTY] = json.dumps(
+            sorted(_REQUIRED_PBR), separators=(",", ":")
+        )
+        material[EXTERNAL_TEXTURE_MATERIAL_ALPHA_MODE_PROPERTY] = "OPAQUE"
+        material[EXTERNAL_TEXTURE_MATERIAL_IDENTITY_PROPERTY] = identity
+        material[EXTERNAL_TEXTURE_MATERIAL_RECEIPT_PROPERTY] = (
+            f"external_placement/asset_sources/{logical_id}"
+        )
+        if set(material.keys()) != EXTERNAL_TEXTURE_MATERIAL_CONTRACT_PROPERTIES:
+            raise RuntimeError("external texture material extras are not a closed contract")
         return material
     except BaseException:
         for image in reversed(created_images):
@@ -797,6 +1598,43 @@ def _realize_pbr_material(bpy: Any, asset_set: ExternalAssetSet, logical_id: str
         except (ReferenceError, RuntimeError, TypeError):
             pass
         raise
+
+
+def _external_texture_material_contract(
+    material: Any,
+    asset: AcquiredAsset,
+) -> dict[str, Any]:
+    identity = external_texture_material_identity_sha256(asset)
+    semantics = sorted(_REQUIRED_PBR)
+    expected_name = external_texture_material_name(asset)
+    if (
+        material.name != expected_name
+        or set(material.keys()) != EXTERNAL_TEXTURE_MATERIAL_CONTRACT_PROPERTIES
+        or material.get(EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY) != asset.logical_asset_id
+        or material.get(EXTERNAL_TEXTURE_MATERIAL_SOURCE_DIGEST_PROPERTY)
+        != asset.source_tree_sha256
+        or material.get(EXTERNAL_TEXTURE_MATERIAL_SEMANTICS_PROPERTY)
+        != json.dumps(semantics, separators=(",", ":"))
+        or material.get(EXTERNAL_TEXTURE_MATERIAL_ALPHA_MODE_PROPERTY) != "OPAQUE"
+        or material.get(EXTERNAL_TEXTURE_MATERIAL_IDENTITY_PROPERTY) != identity
+        or material.get(EXTERNAL_TEXTURE_MATERIAL_RECEIPT_PROPERTY)
+        != f"external_placement/asset_sources/{asset.logical_asset_id}"
+    ):
+        raise RuntimeError("external texture material differs from its closed receipt contract")
+    contract = {
+        "schema_version": EXTERNAL_TEXTURE_MATERIAL_CONTRACT_SCHEMA,
+        "material_id": expected_name,
+        "source_logical_asset_id": asset.logical_asset_id,
+        "source_tree_sha256": asset.source_tree_sha256,
+        "material_identity_sha256": identity,
+        "active_texture_semantics": semantics,
+        "alpha_mode": "OPAQUE",
+        "alpha_cutoff": None,
+        "pbr_source": asset_digest_record(asset),
+    }
+    if set(contract) != EXTERNAL_TEXTURE_MATERIAL_CONTRACT_KEYS:
+        raise RuntimeError("external texture material receipt fields are not closed")
+    return contract
 
 
 def _relink(obj: Any, collection: Any) -> None:
@@ -984,7 +1822,7 @@ def _authored_recipe_material_sources(meshes: Sequence[Any]) -> frozenset[str]:
             material = obj.material_slots[index].material
             if material is None:
                 raise RuntimeError(f"project-authored recipe part has an unbound material: {obj.name}")
-            logical_id = material.get("vista_external_material_source")
+            logical_id = material.get(EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY)
             if type(logical_id) is not str:
                 raise RuntimeError(f"project-authored recipe material lacks provenance: {material.name}")
             sources.add(logical_id)
@@ -1011,7 +1849,10 @@ def _validate_authored_recipe_material_use(
             raise RuntimeError(f"project-authored recipe used an unrealized material: {logical_id}")
         for obj in meshes:
             for slot in obj.material_slots:
-                if slot.material is not None and slot.material.get("vista_external_material_source") == logical_id:
+                if (
+                    slot.material is not None
+                    and slot.material.get(EXTERNAL_TEXTURE_MATERIAL_SOURCE_PROPERTY) == logical_id
+                ):
                     if slot.material is not expected_material:
                         raise RuntimeError(
                             f"project-authored material provenance points at the wrong datablock: {logical_id}"
@@ -1020,7 +1861,14 @@ def _validate_authored_recipe_material_use(
 
 
 def _combined_bounds(mathutils: Any, objects: Sequence[Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    points = [obj.matrix_world @ mathutils.Vector(corner) for obj in objects for corner in obj.bound_box]
+    # Transform actual vertices.  A transformed local AABB is only an outer
+    # envelope for rotated meshes and changes when the same transform is baked
+    # into vertex coordinates, which would make normalization non-invariant.
+    points = [
+        obj.matrix_world @ vertex.co
+        for obj in objects
+        for vertex in getattr(getattr(obj, "data", None), "vertices", ())
+    ]
     if not points:
         raise RuntimeError("external source contains no measurable mesh bounds")
     minimum = tuple(min(float(point[index]) for point in points) for index in range(3))
@@ -1041,13 +1889,25 @@ def _has_collection_items(value: Any) -> bool:
         return bool(tuple(value))
 
 
+def _runtime_identity(value: Any) -> tuple[str, int]:
+    as_pointer = getattr(value, "as_pointer", None)
+    if callable(as_pointer):
+        try:
+            pointer = int(as_pointer())
+        except (ReferenceError, RuntimeError, TypeError, ValueError, OverflowError):
+            pointer = 0
+        if pointer > 0:
+            return "bpy", pointer
+    return "python", id(value)
+
+
 def _node_trees(material: Any) -> tuple[Any, ...]:
     pending = [material.node_tree]
     result: list[Any] = []
-    seen: set[int] = set()
+    seen: set[tuple[str, int]] = set()
     while pending:
         tree = pending.pop()
-        identity = id(tree)
+        identity = _runtime_identity(tree)
         if identity in seen:
             continue
         seen.add(identity)
@@ -1079,6 +1939,176 @@ def _identity_vector(value: Any, expected: Sequence[float], tolerance: float = 1
         math.isfinite(actual[index]) and abs(actual[index] - float(expected[index])) <= tolerance
         for index in range(len(expected))
     )
+
+
+@dataclass(frozen=True)
+class _StaticizedSource:
+    meshes: tuple[Any, ...]
+    source_object_names: tuple[str, ...]
+    selection_policy: Mapping[str, Any]
+    input_inventory: tuple[Mapping[str, Any], ...]
+    input_inventory_sha256: str
+    input_actions: tuple[Mapping[str, Any], ...]
+    exclusions: tuple[Mapping[str, Any], ...]
+    depsgraph_mode: str
+    source_collection: Any
+
+
+def _flat_matrix(value: Any) -> list[float]:
+    try:
+        result = [
+            _receipt_float(value[row][column])
+            for row in range(4)
+            for column in range(4)
+        ]
+    except (IndexError, TypeError, ValueError, OverflowError) as error:
+        raise RuntimeError("external source matrix cannot be serialized") from error
+    if any(not math.isfinite(item) for item in result):
+        raise RuntimeError("external source matrix contains a non-finite value")
+    return result
+
+
+def _driver_count(block: Any) -> int:
+    animation = getattr(block, "animation_data", None)
+    return len(getattr(animation, "drivers", ())) if animation is not None else 0
+
+
+def _action_name(block: Any) -> str | None:
+    animation = getattr(block, "animation_data", None)
+    action = getattr(animation, "action", None) if animation is not None else None
+    return str(action.name) if action is not None else None
+
+
+def _staticization_input_inventory(objects: Sequence[Any]) -> tuple[dict[str, Any], ...]:
+    loaded_identities = {_runtime_identity(obj) for obj in objects}
+    rows: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    materials: list[Any] = []
+    supported_types = {"MESH", "CURVE", "ARMATURE", "EMPTY"}
+    for obj in sorted(objects, key=lambda item: item.name):
+        if obj.name in seen_names:
+            raise RuntimeError("external staticization input object names are duplicated")
+        seen_names.add(obj.name)
+        if obj.type not in supported_types:
+            raise RuntimeError(
+                f"external staticization input type is unsupported: {obj.name}: {obj.type}"
+            )
+        _require_local_id(obj, label=f"object {obj.name}")
+        _require_local_id(getattr(obj, "data", None), label=f"object data {obj.name}")
+        parent = getattr(obj, "parent", None)
+        if parent is not None and _runtime_identity(parent) not in loaded_identities:
+            raise RuntimeError(f"external object has a parent outside the appended source: {obj.name}")
+        if _driver_count(obj) or _driver_count(getattr(obj, "data", None)):
+            raise RuntimeError(f"external source contains drivers: {obj.name}")
+        if getattr(obj, "rigid_body", None) is not None:
+            raise RuntimeError(f"external object contains rigid-body state: {obj.name}")
+        if getattr(obj, "rigid_body_constraint", None) is not None:
+            raise RuntimeError(f"external object contains a rigid-body constraint: {obj.name}")
+        if getattr(obj, "soft_body", None) is not None:
+            raise RuntimeError(f"external object contains soft-body state: {obj.name}")
+        if _has_collection_items(getattr(obj, "particle_systems", ())):
+            raise RuntimeError(f"external object contains particle-system state: {obj.name}")
+        force_field = getattr(obj, "field", None)
+        if force_field is not None and getattr(force_field, "type", "NONE") != "NONE":
+            raise RuntimeError(f"external object contains a non-NONE force field: {obj.name}")
+        if (
+            getattr(obj, "instance_type", "NONE") != "NONE"
+            or getattr(obj, "instance_collection", None) is not None
+        ):
+            raise RuntimeError(f"external object uses unsupported instancing: {obj.name}")
+        modifier_rows: list[dict[str, Any]] = []
+        for modifier in getattr(obj, "modifiers", ()):
+            if bool(modifier.show_viewport) != bool(modifier.show_render):
+                raise RuntimeError(
+                    f"external modifier viewport/render evaluation differs: {obj.name}.{modifier.name}"
+                )
+            node_group = getattr(modifier, "node_group", None)
+            _require_local_id(node_group, label=f"modifier node group {obj.name}.{modifier.name}")
+            if node_group is not None and _driver_count(node_group):
+                raise RuntimeError(
+                    f"external modifier node group contains drivers: {obj.name}.{modifier.name}"
+                )
+            modifier_rows.append(
+                {
+                    "name": str(modifier.name),
+                    "type": str(modifier.type),
+                    "show_viewport": bool(modifier.show_viewport),
+                    "show_render": bool(modifier.show_render),
+                    "node_group": str(node_group.name) if node_group is not None else None,
+                }
+            )
+        constraint_rows = [
+            {
+                "name": str(constraint.name),
+                "type": str(constraint.type),
+                "mute": bool(getattr(constraint, "mute", False)),
+                "influence": _receipt_float(getattr(constraint, "influence", 1.0)),
+            }
+            for constraint in getattr(obj, "constraints", ())
+        ]
+        if any(not math.isfinite(item["influence"]) for item in constraint_rows):
+            raise RuntimeError(f"external constraint influence is non-finite: {obj.name}")
+        slots = [
+            str(slot.material.name) if slot.material is not None else None
+            for slot in getattr(obj, "material_slots", ())
+        ]
+        for slot in getattr(obj, "material_slots", ()):
+            material = getattr(slot, "material", None)
+            if material is not None and material not in materials:
+                materials.append(material)
+        data = getattr(obj, "data", None)
+        topology = None
+        if obj.type == "MESH":
+            topology = {
+                "vertices": len(data.vertices),
+                "edges": len(data.edges),
+                "loops": len(data.loops),
+                "polygons": len(data.polygons),
+            }
+        rows.append(
+            {
+                "object_name": str(obj.name),
+                "object_type": str(obj.type),
+                "data_name": str(data.name) if data is not None else None,
+                "parent_name": str(parent.name) if parent is not None else None,
+                "parent_type": str(getattr(obj, "parent_type", "OBJECT")),
+                "hide_render": bool(getattr(obj, "hide_render", False)),
+                "hide_viewport": bool(getattr(obj, "hide_viewport", False)),
+                "matrix_world": _flat_matrix(obj.matrix_world),
+                "source_topology": topology,
+                "material_slots": slots,
+                "modifiers": modifier_rows,
+                "constraints": constraint_rows,
+                "action": _action_name(obj),
+            }
+        )
+    for material in materials:
+        _require_local_id(material, label=f"material {material.name}")
+        if _block_has_animation_or_drivers(material):
+            raise RuntimeError(f"external material contains animations or drivers: {material.name}")
+        if getattr(material, "node_tree", None) is not None:
+            for tree in _node_trees(material):
+                _require_local_id(tree, label=f"material node tree {material.name}")
+                if _block_has_animation_or_drivers(tree):
+                    raise RuntimeError(
+                        f"external material nodes contain animations or drivers: {material.name}"
+                    )
+    return tuple(rows)
+
+
+def _staticization_action_inventory(actions: Sequence[Any]) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for action in sorted(actions, key=lambda item: item.name):
+        _require_local_id(action, label=f"action {action.name}")
+        start, end = (_receipt_float(value) for value in action.frame_range)
+        rows.append(
+            {
+                "name": str(action.name),
+                "frame_range": [start, end],
+                "fcurve_count": len(getattr(action, "fcurves", ())),
+            }
+        )
+    return tuple(rows)
 
 
 def _validate_static_source(bpy: Any, objects: Sequence[Any], new_actions: Sequence[Any]) -> list[Any]:
@@ -1312,10 +2342,10 @@ def _normal_semantic_image_node(shader: Any) -> Any:
 def _reachable_upstream_nodes(start: Any) -> tuple[Any, ...]:
     pending = [start]
     result: list[Any] = []
-    seen: set[int] = set()
+    seen: set[tuple[str, int]] = set()
     while pending:
         node = pending.pop()
-        identity = id(node)
+        identity = _runtime_identity(node)
         if identity in seen:
             continue
         seen.add(identity)
@@ -1328,7 +2358,11 @@ def _reachable_upstream_nodes(start: Any) -> tuple[Any, ...]:
     return tuple(result)
 
 
-def _active_surface_semantic_images(material: Any) -> dict[str, Any]:
+def _active_surface_semantic_images(
+    material: Any,
+    *,
+    allow_inactive_receipt_images: bool = False,
+) -> dict[str, Any]:
     tree = material.node_tree
     nodes = tuple(tree.nodes)
     if any(
@@ -1407,21 +2441,27 @@ def _active_surface_semantic_images(material: Any) -> dict[str, Any]:
                 semantic,
                 output_names=output_names,
             )
-    if len({id(node) for node in semantic_nodes.values()}) != len(semantic_nodes):
+    if len({_runtime_identity(node) for node in semantic_nodes.values()}) != len(semantic_nodes):
         raise RuntimeError("external material reuses one image node for ambiguous PBR semantics")
     reachable = _reachable_upstream_nodes(shader)
     reachable_images = {
-        id(node): node for node in reachable if getattr(node, "image", None) is not None
+        _runtime_identity(node): node
+        for node in reachable
+        if getattr(node, "image", None) is not None
     }
-    all_images = {id(node): node for node in nodes if getattr(node, "image", None) is not None}
+    all_images = {
+        _runtime_identity(node): node
+        for node in nodes
+        if getattr(node, "image", None) is not None
+    }
     disconnected = sorted(
         getattr(node, "name", "<unnamed>")
         for identity, node in all_images.items()
         if identity not in reachable_images
     )
-    if disconnected:
+    if disconnected and not allow_inactive_receipt_images:
         raise RuntimeError(f"external material contains disconnected image impostors: {disconnected}")
-    mapped = {id(node) for node in semantic_nodes.values()}
+    mapped = {_runtime_identity(node) for node in semantic_nodes.values()}
     unexpected = sorted(
         getattr(node, "name", "<unnamed>")
         for identity, node in reachable_images.items()
@@ -1430,6 +2470,315 @@ def _active_surface_semantic_images(material: Any) -> dict[str, Any]:
     if unexpected:
         raise RuntimeError(f"external material routes images through unsupported sockets: {unexpected}")
     return semantic_nodes
+
+
+def _inactive_image_nodes(
+    material: Any,
+    semantic_nodes: Mapping[str, Any],
+) -> tuple[Any, ...]:
+    base_links = _all_output_links(semantic_nodes["base_color"])
+    if len(base_links) != 1:
+        raise RuntimeError("external material base color graph is no longer closed")
+    shader = getattr(base_links[0], "to_node", None)
+    if getattr(shader, "type", None) != "BSDF_PRINCIPLED":
+        raise RuntimeError("external material base color no longer identifies Principled BSDF")
+    reachable = {
+        _runtime_identity(node)
+        for node in _reachable_upstream_nodes(shader)
+        if getattr(node, "image", None) is not None
+    }
+    return tuple(
+        sorted(
+            (
+                node
+                for node in material.node_tree.nodes
+                if getattr(node, "image", None) is not None
+                and _runtime_identity(node) not in reachable
+            ),
+            key=lambda node: getattr(node, "name", ""),
+        )
+    )
+
+
+def _indexed_socket(sockets: Any, index: int, *, label: str) -> Any:
+    try:
+        socket = sockets[index]
+    except (IndexError, KeyError, TypeError) as error:
+        raise RuntimeError(f"external material lacks required {label} socket {index}") from error
+    if socket is None:
+        raise RuntimeError(f"external material lacks required {label} socket {index}")
+    return socket
+
+
+def _require_dithered_surface(material: Any) -> None:
+    """Set Blender's viewport mode, while refusing to treat it as glTF proof."""
+
+    if not hasattr(material, "surface_render_method"):
+        raise RuntimeError("external material lacks Blender 4.5 surface_render_method")
+    try:
+        material.surface_render_method = "DITHERED"
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError("external material cannot use Blender 4.5 DITHERED rendering") from error
+    if material.surface_render_method != "DITHERED":
+        raise RuntimeError("external material did not retain Blender 4.5 DITHERED rendering")
+
+
+def _validate_masked_alpha_graph(material: Any, opacity_node: Any) -> None:
+    """Revalidate the exact graph Blender 4.5 exports as glTF MASK."""
+
+    opacity_links = _all_output_links(opacity_node)
+    if len(opacity_links) != 1:
+        raise RuntimeError("external opacity image must feed exactly one alpha-clip node")
+    opacity_link = opacity_links[0]
+    clip = getattr(opacity_link, "to_node", None)
+    clip_input = getattr(opacity_link, "to_socket", None)
+    if (
+        getattr(opacity_link, "from_node", None) != opacity_node
+        or getattr(getattr(opacity_link, "from_socket", None), "name", None)
+        not in {"Color", "Alpha"}
+        or getattr(clip, "type", None) != "MATH"
+        or getattr(clip, "operation", None) != "GREATER_THAN"
+        or clip_input != _indexed_socket(clip.inputs, 0, label="alpha-clip input")
+    ):
+        raise RuntimeError("external opacity image is not connected to the exact alpha-clip input")
+    threshold = _indexed_socket(clip.inputs, 1, label="alpha-clip threshold")
+    if _socket_links(threshold) or float(getattr(threshold, "default_value", math.nan)) != EXTERNAL_MATERIAL_ALPHA_CUTOFF:
+        raise RuntimeError("external alpha-clip threshold differs from the closed 0.5 policy")
+    clip_output = _indexed_socket(clip.outputs, 0, label="alpha-clip output")
+    output_links = _socket_links(clip_output)
+    if len(output_links) != 1:
+        raise RuntimeError("external alpha-clip output must feed exactly one Principled Alpha socket")
+    output_link = output_links[0]
+    shader = getattr(output_link, "to_node", None)
+    alpha_socket = getattr(output_link, "to_socket", None)
+    if (
+        getattr(output_link, "from_node", None) != clip
+        or getattr(output_link, "from_socket", None) != clip_output
+        or getattr(shader, "type", None) != "BSDF_PRINCIPLED"
+        or getattr(alpha_socket, "name", None) != "Alpha"
+        or alpha_socket != _named_socket(shader.inputs, "Alpha", label="Principled Alpha")
+        or _socket_links(alpha_socket) != (output_link,)
+    ):
+        raise RuntimeError("external alpha-clip output is not exclusively connected to Principled Alpha")
+    _require_dithered_surface(material)
+
+
+def _validate_opaque_alpha_graph(material: Any, semantic_nodes: Mapping[str, Any]) -> None:
+    """Require an unlinked constant-one Alpha input for non-opacity materials."""
+
+    base_links = _all_output_links(semantic_nodes["base_color"])
+    if len(base_links) != 1:
+        raise RuntimeError("external base color does not identify one Principled shader")
+    shader = getattr(base_links[0], "to_node", None)
+    if getattr(shader, "type", None) != "BSDF_PRINCIPLED":
+        raise RuntimeError("external base color does not feed Principled BSDF")
+    alpha_socket = _named_socket(shader.inputs, "Alpha", label="Principled Alpha")
+    if _socket_links(alpha_socket):
+        raise RuntimeError("external non-opacity material retains a linked Alpha socket")
+    try:
+        alpha_socket.default_value = 1.0
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RuntimeError("external non-opacity material Alpha cannot be fixed to one") from error
+    if float(getattr(alpha_socket, "default_value", math.nan)) != 1.0:
+        raise RuntimeError("external non-opacity material Alpha differs from one")
+    _require_dithered_surface(material)
+
+
+def _source_custom_property_digest_value(value: Any) -> tuple[str, Any]:
+    if isinstance(value, bool):
+        return "boolean", value
+    if isinstance(value, int):
+        return "integer", value
+    if isinstance(value, float):
+        return "number", _receipt_float(value)
+    if isinstance(value, str):
+        return "string", value
+    value_type_name = type(value).__name__
+    if isinstance(value, Mapping) or value_type_name == "IDPropertyGroup":
+        normalized: dict[str, Any] = {}
+        try:
+            keys = sorted(value.keys())
+        except (AttributeError, RuntimeError, TypeError, ValueError) as error:
+            raise RuntimeError("external source custom property mapping cannot be read") from error
+        for key in keys:
+            if type(key) is not str:
+                raise RuntimeError("external source custom property mapping key is not a string")
+            child_type, child = _source_custom_property_digest_value(value[key])
+            normalized[key] = {"type": child_type, "value": child}
+        return "mapping", normalized
+    if (
+        isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+    ) or value_type_name == "IDPropertyArray":
+        normalized_items = []
+        for item in value:
+            child_type, child = _source_custom_property_digest_value(item)
+            normalized_items.append({"type": child_type, "value": child})
+        return "array", normalized_items
+    raise RuntimeError(
+        f"external source custom property type cannot be normalized: {type(value).__name__}"
+    )
+
+
+def _remove_source_custom_properties(material: Any) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for key in sorted(material.keys()):
+        if type(key) is not str or not key or "\x00" in key:
+            raise RuntimeError("external source custom property name is invalid")
+        value_type, normalized = _source_custom_property_digest_value(material[key])
+        result.append(
+            {
+                "property_name": key,
+                "value_type": value_type,
+                "value_sha256": _runtime_json_sha256(
+                    {"type": value_type, "value": normalized}
+                ),
+                "reason": "receipt_bound_source_only_custom_property_removed",
+            }
+        )
+        del material[key]
+    if set(material.keys()):
+        raise RuntimeError("external source custom properties could not be removed")
+    return result
+
+
+def _configure_external_material_alpha_contract(
+    material: Any,
+    asset: AcquiredAsset,
+    semantic_nodes: Mapping[str, Any],
+    *,
+    material_identity_sha256: str,
+) -> None:
+    """Sanitize one verified source material and persist its export mapping."""
+
+    existing = set(material.keys())
+    if existing:
+        raise RuntimeError(
+            f"external source material custom properties are not in the closed contract: "
+            f"{sorted(existing)}"
+        )
+    semantics = tuple(sorted(semantic_nodes))
+    if not _REQUIRED_PBR.issubset(semantics):
+        raise RuntimeError("external source material lacks the required active PBR semantics")
+    if (
+        type(material_identity_sha256) is not str
+        or _SHA256.fullmatch(material_identity_sha256) is None
+    ):
+        raise RuntimeError("external material identity SHA-256 is invalid")
+    opacity_node = semantic_nodes.get("opacity")
+    if opacity_node is not None:
+        direct_links = _all_output_links(opacity_node)
+        if len(direct_links) != 1:
+            raise RuntimeError("external opacity image lacks one direct Principled Alpha link")
+        direct = direct_links[0]
+        shader = getattr(direct, "to_node", None)
+        alpha_socket = getattr(direct, "to_socket", None)
+        if (
+            getattr(shader, "type", None) != "BSDF_PRINCIPLED"
+            or getattr(alpha_socket, "name", None) != "Alpha"
+            or alpha_socket != _named_socket(shader.inputs, "Alpha", label="Principled Alpha")
+        ):
+            raise RuntimeError("external receipt opacity is not connected directly to Principled Alpha")
+        tree = material.node_tree
+        source_socket = getattr(direct, "from_socket", None)
+        try:
+            tree.links.remove(direct)
+            clip = tree.nodes.new("ShaderNodeMath")
+            clip.name = "VISTA_GLTF_MASK_0_5"
+            clip.label = "VISTA glTF MASK cutoff 0.5"
+            clip.operation = "GREATER_THAN"
+            _indexed_socket(clip.inputs, 1, label="alpha-clip threshold").default_value = (
+                EXTERNAL_MATERIAL_ALPHA_CUTOFF
+            )
+            tree.links.new(source_socket, _indexed_socket(clip.inputs, 0, label="alpha-clip input"))
+            tree.links.new(_indexed_socket(clip.outputs, 0, label="alpha-clip output"), alpha_socket)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as error:
+            raise RuntimeError("external material alpha-clip graph could not be constructed") from error
+        _validate_masked_alpha_graph(material, opacity_node)
+        alpha_mode = "MASK"
+    else:
+        _validate_opaque_alpha_graph(material, semantic_nodes)
+        alpha_mode = "OPAQUE"
+    try:
+        material[EXTERNAL_MATERIAL_SOURCE_PROPERTY] = asset.logical_asset_id
+        material[EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY] = asset.source_tree_sha256
+        material[EXTERNAL_MATERIAL_SEMANTICS_PROPERTY] = json.dumps(
+            semantics, separators=(",", ":")
+        )
+        material[EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY] = alpha_mode
+        material[EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY] = EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        material[EXTERNAL_MATERIAL_IDENTITY_PROPERTY] = material_identity_sha256
+        if alpha_mode == "MASK":
+            material[EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY] = EXTERNAL_MATERIAL_ALPHA_CUTOFF
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("external material alpha provenance could not be persisted") from error
+    expected_properties = EXTERNAL_MATERIAL_CONTRACT_PROPERTIES - (
+        set() if alpha_mode == "MASK" else {EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY}
+    )
+    if set(material.keys()) != expected_properties:
+        raise RuntimeError("external material alpha provenance did not persist as a closed contract")
+
+
+def _external_model_material_contract(
+    material: Any,
+    asset: AcquiredAsset,
+    *,
+    ordinal: int,
+    source_material_name: str,
+    semantic_nodes: Mapping[str, Any],
+    inactive_image_normalizations: Sequence[Mapping[str, Any]],
+    removed_source_custom_properties: Sequence[Mapping[str, Any]],
+    material_identity_sha256: str,
+) -> dict[str, Any]:
+    """Seal the per-material inventory produced from receipt-validated nodes."""
+
+    semantics = sorted(semantic_nodes)
+    alpha_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+    expected_identity = external_material_identity_sha256(
+        asset.logical_asset_id,
+        asset.source_tree_sha256,
+        ordinal,
+        source_material_name,
+        semantics,
+    )
+    expected_name = external_material_name(
+        asset.logical_asset_id,
+        ordinal,
+        expected_identity,
+    )
+    if (
+        material_identity_sha256 != expected_identity
+        or material.name != expected_name
+        or material.get(EXTERNAL_MATERIAL_SOURCE_PROPERTY) != asset.logical_asset_id
+        or material.get(EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY) != asset.source_tree_sha256
+        or material.get(EXTERNAL_MATERIAL_SEMANTICS_PROPERTY)
+        != json.dumps(semantics, separators=(",", ":"))
+        or material.get(EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY) != alpha_mode
+        or material.get(EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY)
+        != EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        or material.get(EXTERNAL_MATERIAL_IDENTITY_PROPERTY) != expected_identity
+        or material.get(EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY)
+        != (EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None)
+    ):
+        raise RuntimeError("external model material contract differs from realized Blender material")
+    return {
+        "schema_version": EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
+        "material_id": expected_name,
+        "source_logical_asset_id": asset.logical_asset_id,
+        "source_tree_sha256": asset.source_tree_sha256,
+        "source_material_name": source_material_name,
+        "material_ordinal": ordinal,
+        "material_identity_sha256": expected_identity,
+        "active_texture_semantics": semantics,
+        "inactive_image_normalizations": [
+            dict(item) for item in inactive_image_normalizations
+        ],
+        "removed_source_custom_properties": [
+            dict(item) for item in removed_source_custom_properties
+        ],
+        "alpha_mode": alpha_mode,
+        "alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None,
+        "sanitization_policy": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    }
 
 
 def _validate_receipt_image(
@@ -1506,7 +2855,7 @@ def _validate_runtime_material_images(
     meshes: Sequence[Any],
     asset_set: ExternalAssetSet,
     asset: AcquiredAsset,
-) -> None:
+) -> list[tuple[Any, dict[str, Any], list[dict[str, Any]]]]:
     expected = _runtime_receipt_texture_paths(asset_set, asset)
     materials: list[Any] = []
     for obj in meshes:
@@ -1514,11 +2863,60 @@ def _validate_runtime_material_images(
             if slot.material not in materials:
                 materials.append(slot.material)
     used_semantics: set[str] = set()
+    material_semantics: list[tuple[Any, dict[str, Any], list[dict[str, Any]]]] = []
     available_semantics = {semantic for receipt_file in expected.values() for semantic in receipt_file.semantic}
     for material in materials:
         if not material.use_nodes or material.node_tree is None:
             raise RuntimeError(f"external material is not node-based PBR: {material.name}")
+        semantic_nodes = _active_surface_semantic_images(
+            material,
+            allow_inactive_receipt_images=True,
+        )
+        bound_images: dict[tuple[str, int], tuple[pathlib.Path, AcquiredFile]] = {}
+        for node in material.node_tree.nodes:
+            image = getattr(node, "image", None)
+            if image is None:
+                continue
+            resolved = _resolved_runtime_image_path(bpy, image)
+            receipt_file = expected.get(resolved)
+            if receipt_file is None:
+                raise RuntimeError(
+                    f"external material references a texture outside its verified receipt: {resolved}"
+                )
+            _validate_receipt_image(
+                bpy,
+                image,
+                resolved,
+                receipt_file,
+                label="external material image normalization input",
+                reload_image=True,
+            )
+            bound_images[_runtime_identity(node)] = (resolved, receipt_file)
+        inactive_nodes = _inactive_image_nodes(material, semantic_nodes)
+        normalizations: list[dict[str, Any]] = []
+        for node in inactive_nodes:
+            bound = bound_images.get(_runtime_identity(node))
+            if bound is None:
+                raise RuntimeError(
+                    "external inactive image cannot be normalized without an exact receipt path"
+                )
+            _resolved, receipt_file = bound
+            normalizations.append(
+                {
+                    "node_name": str(node.name),
+                    "image_name": str(
+                        getattr(node.image, "name", receipt_file.relative_path)
+                    ),
+                    "relative_path": receipt_file.relative_path,
+                    "sha256": receipt_file.sha256,
+                    "reason": "inactive_disconnected_receipt_bound_image",
+                }
+            )
+        for node in inactive_nodes:
+            material.node_tree.nodes.remove(node)
+        normalizations.sort(key=lambda row: (row["node_name"], row["relative_path"]))
         semantic_nodes = _active_surface_semantic_images(material)
+        material_semantics.append((material, semantic_nodes, normalizations))
         for semantic, node in semantic_nodes.items():
             image = node.image
             resolved = _resolved_runtime_image_path(bpy, image)
@@ -1554,6 +2952,7 @@ def _validate_runtime_material_images(
             f"external runtime materials do not use all receipt-bound PBR semantics: "
             f"{asset.logical_asset_id}: missing={sorted(required_semantics - used_semantics)}"
         )
+    return material_semantics
 
 
 def _matrix_is_identity(value: Any, tolerance: float = 1e-9) -> bool:
@@ -1571,8 +2970,9 @@ def _matrix_is_identity(value: Any, tolerance: float = 1e-9) -> bool:
     )
 
 
-def _normalize_external_mesh(obj: Any, transform: Any) -> None:
-    obj.data = obj.data.copy()
+def _normalize_external_mesh(obj: Any, transform: Any, *, copy_data: bool = True) -> None:
+    if copy_data:
+        obj.data = obj.data.copy()
     obj.data.transform(transform)
     obj.parent = None
     if hasattr(obj, "parent_type"):
@@ -1598,8 +2998,21 @@ def _normalize_external_mesh(obj: Any, transform: Any) -> None:
 
 
 def _validate_normalized_mesh_state(obj: Any) -> None:
+    if getattr(obj, "type", "MESH") != "MESH":
+        raise RuntimeError(f"external normalized output is not a mesh: {obj.name}")
     if getattr(obj, "parent", None) is not None:
         raise RuntimeError(f"external mesh retains a parent helper after normalization: {obj.name}")
+    if _has_collection_items(getattr(obj, "modifiers", ())):
+        raise RuntimeError(f"external mesh retains modifiers after staticization: {obj.name}")
+    if _has_collection_items(getattr(obj, "constraints", ())):
+        raise RuntimeError(f"external mesh retains constraints after staticization: {obj.name}")
+    if getattr(obj, "animation_data", None) is not None:
+        raise RuntimeError(f"external mesh retains object animation after staticization: {obj.name}")
+    data = getattr(obj, "data", None)
+    if data is None or getattr(data, "animation_data", None) is not None:
+        raise RuntimeError(f"external mesh retains mesh animation after staticization: {obj.name}")
+    if getattr(data, "shape_keys", None) is not None:
+        raise RuntimeError(f"external mesh retains shape keys after staticization: {obj.name}")
     if getattr(obj, "rotation_mode", None) != "XYZ":
         raise RuntimeError(f"external mesh rotation mode changed after normalization: {obj.name}")
     if (
@@ -1621,6 +3034,423 @@ def _validate_normalized_mesh_state(obj: Any) -> None:
             raise RuntimeError(
                 f"external mesh retains {label} influence after normalization: {obj.name}"
             )
+
+
+def _mesh_bounds_record(mesh: Any) -> dict[str, list[float]]:
+    coordinates = [
+        tuple(_receipt_float(value) for value in vertex.co)
+        for vertex in mesh.vertices
+    ]
+    if not coordinates:
+        raise RuntimeError("external staticized mesh has no vertices")
+    minimum = [min(item[index] for item in coordinates) for index in range(3)]
+    maximum = [max(item[index] for item in coordinates) for index in range(3)]
+    dimensions = [
+        _receipt_float(maximum[index] - minimum[index]) for index in range(3)
+    ]
+    return {
+        "minimum": minimum,
+        "maximum": maximum,
+        "dimensions": dimensions,
+    }
+
+
+def _staticized_mesh_sha256(obj: Any) -> str:
+    mesh = obj.data
+    materials = [str(item.name) for item in mesh.materials]
+    uv_layers = [str(item.name) for item in mesh.uv_layers]
+    metadata = {
+        "schema_version": "simworld.vista.playable-home-staticized-mesh-digest/v1",
+        "topology": {
+            "vertices": len(mesh.vertices),
+            "edges": len(mesh.edges),
+            "loops": len(mesh.loops),
+            "polygons": len(mesh.polygons),
+            "uv_layers": len(mesh.uv_layers),
+        },
+        "materials": materials,
+        "uv_layer_names": uv_layers,
+    }
+    digest = hashlib.sha256()
+    digest.update(_canonical_runtime_json(metadata))
+
+    def update_floats(values: Sequence[Any]) -> None:
+        numbers = [float(value) for value in values]
+        if any(not math.isfinite(value) for value in numbers):
+            raise RuntimeError("external staticized mesh contains non-finite geometry")
+        digest.update(struct.pack(f"<{len(numbers)}d", *numbers))
+
+    for vertex in mesh.vertices:
+        update_floats(vertex.co)
+    for edge in mesh.edges:
+        digest.update(struct.pack("<2q", *(int(value) for value in edge.vertices)))
+    for loop in mesh.loops:
+        digest.update(struct.pack("<q", int(loop.vertex_index)))
+    for polygon in mesh.polygons:
+        digest.update(
+            struct.pack(
+                "<4q?",
+                int(polygon.loop_start),
+                int(polygon.loop_total),
+                int(polygon.material_index),
+                int(getattr(polygon, "index", 0)),
+                bool(polygon.use_smooth),
+            )
+        )
+    corner_normals = getattr(mesh, "corner_normals", ())
+    digest.update(struct.pack("<q", len(corner_normals)))
+    for normal in corner_normals:
+        update_floats(normal.vector)
+    for layer in mesh.uv_layers:
+        digest.update(_canonical_runtime_json(str(layer.name)))
+        for value in layer.data:
+            update_floats(value.uv)
+    return digest.hexdigest()
+
+
+def _staticization_output_mesh_row(
+    obj: Any,
+    source_object_name: str,
+) -> dict[str, Any]:
+    _validate_normalized_mesh_state(obj)
+    mesh = obj.data
+    topology = {
+        "vertices": len(mesh.vertices),
+        "edges": len(mesh.edges),
+        "loops": len(mesh.loops),
+        "polygons": len(mesh.polygons),
+        "uv_layers": len(mesh.uv_layers),
+    }
+    material_ids = [str(item.name) for item in mesh.materials]
+    used_indices = {int(item.material_index) for item in mesh.polygons}
+    if (
+        not mesh.polygons
+        or not material_ids
+        or len(set(material_ids)) != len(material_ids)
+        or used_indices != set(range(len(material_ids)))
+    ):
+        raise RuntimeError(
+            f"external staticized mesh material topology is not compact: {obj.name}: "
+            f"material_ids={material_ids}, used_indices={sorted(used_indices)}"
+        )
+    return {
+        "source_object_name": source_object_name,
+        "object_name": str(obj.name),
+        "topology": topology,
+        "bounds_m": _mesh_bounds_record(mesh),
+        "material_ids": material_ids,
+        "mesh_sha256": _staticized_mesh_sha256(obj),
+        "stripped_state": dict(EXTERNAL_STATICIZATION_STRIPPED_STATE),
+    }
+
+
+def _bounds_record_from_minimum_maximum(
+    minimum: Sequence[Any],
+    maximum: Sequence[Any],
+) -> dict[str, list[float]]:
+    low = [_receipt_float(value) for value in minimum]
+    high = [_receipt_float(value) for value in maximum]
+    if len(low) != 3 or len(high) != 3 or any(
+        high[index] < low[index] for index in range(3)
+    ):
+        raise RuntimeError("external staticization bounds are invalid")
+    return {
+        "minimum": low,
+        "maximum": high,
+        "dimensions": [
+            _receipt_float(high[index] - low[index]) for index in range(3)
+        ],
+    }
+
+
+def _staticization_output_digest_payload(
+    source_logical_asset_id: str,
+    source_tree_sha256: str,
+    output_meshes: Sequence[Mapping[str, Any]],
+    output_bounds_m: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "simworld.vista.playable-home-staticized-output/v1",
+        "source_logical_asset_id": source_logical_asset_id,
+        "source_tree_sha256": source_tree_sha256,
+        "output_meshes": [dict(item) for item in output_meshes],
+        "output_bounds_m": dict(output_bounds_m),
+    }
+
+
+def _external_staticization_receipt(
+    bpy: Any,
+    mathutils: Any,
+    asset: AcquiredAsset,
+    staticized: _StaticizedSource,
+) -> dict[str, Any]:
+    meshes = list(staticized.meshes)
+    if len(meshes) != len(staticized.source_object_names):
+        raise RuntimeError("external staticization output/source-name cardinality differs")
+    output_meshes = [
+        _staticization_output_mesh_row(obj, source_name)
+        for obj, source_name in zip(meshes, staticized.source_object_names)
+    ]
+    minimum, maximum = _combined_bounds(mathutils, meshes)
+    output_bounds = _bounds_record_from_minimum_maximum(minimum, maximum)
+    output_digest = _runtime_json_sha256(
+        _staticization_output_digest_payload(
+            asset.logical_asset_id,
+            asset.source_tree_sha256,
+            output_meshes,
+            output_bounds,
+        )
+    )
+    body = {
+        "schema_version": EXTERNAL_STATICIZATION_SCHEMA,
+        "source_logical_asset_id": asset.logical_asset_id,
+        "source_tree_sha256": asset.source_tree_sha256,
+        "blender_version": list(bpy.app.version),
+        "frame": EXTERNAL_STATICIZATION_FRAME,
+        "depsgraph_mode": staticized.depsgraph_mode,
+        "evaluation_policy": EXTERNAL_STATICIZATION_POLICY,
+        "selection_policy": dict(staticized.selection_policy),
+        "input_inventory": [dict(item) for item in staticized.input_inventory],
+        "input_inventory_sha256": staticized.input_inventory_sha256,
+        "input_actions": [dict(item) for item in staticized.input_actions],
+        "exclusions": [dict(item) for item in staticized.exclusions],
+        "output_meshes": output_meshes,
+        "output_bounds_m": output_bounds,
+        "output_digest": output_digest,
+    }
+    receipt = {**body, "content_digest": _runtime_json_sha256(body)}
+    validate_external_staticization_receipt(receipt)
+    return receipt
+
+
+def _validate_staticization_bounds(value: Any, *, label: str) -> None:
+    if not isinstance(value, Mapping) or set(value) != EXTERNAL_STATICIZATION_BOUNDS_KEYS:
+        raise RuntimeError(f"{label} fields are not closed")
+    vectors = []
+    for key in ("minimum", "maximum", "dimensions"):
+        vector = value.get(key)
+        if (
+            not isinstance(vector, list)
+            or len(vector) != 3
+            or any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in vector)
+        ):
+            raise RuntimeError(f"{label} vector is invalid")
+        vectors.append([_receipt_float(item) for item in vector])
+    minimum, maximum, dimensions = vectors
+    if any(
+        maximum[index] < minimum[index]
+        or dimensions[index] != _receipt_float(maximum[index] - minimum[index])
+        for index in range(3)
+    ):
+        raise RuntimeError(f"{label} dimensions differ from its bounds")
+
+
+def validate_external_staticization_receipt(value: Any) -> dict[str, Any]:
+    """Validate one closed, source-pinned evaluated-mesh receipt."""
+
+    if not isinstance(value, Mapping) or set(value) != EXTERNAL_STATICIZATION_RECEIPT_KEYS:
+        raise RuntimeError("external staticization receipt fields are not closed")
+    receipt = dict(value)
+    source_id = receipt.get("source_logical_asset_id")
+    source_digest = receipt.get("source_tree_sha256")
+    if (
+        receipt.get("schema_version") != EXTERNAL_STATICIZATION_SCHEMA
+        or type(source_id) is not str
+        or _SAFE_ID.fullmatch(source_id) is None
+        or type(source_digest) is not str
+        or _SHA256.fullmatch(source_digest) is None
+        or receipt.get("blender_version") != [4, 5, 8]
+        or receipt.get("frame") != EXTERNAL_STATICIZATION_FRAME
+        or receipt.get("depsgraph_mode") != EXTERNAL_STATICIZATION_DEPSGRAPH_MODE
+        or receipt.get("evaluation_policy") != EXTERNAL_STATICIZATION_POLICY
+    ):
+        raise RuntimeError("external staticization receipt identity or evaluation policy differs")
+    expected_selection = _external_source_selection_policy_for_identity(
+        source_id,
+        source_digest,
+    )
+    if receipt.get("selection_policy") != expected_selection:
+        raise RuntimeError("external staticization exact selection policy differs")
+    inventory = receipt.get("input_inventory")
+    actions = receipt.get("input_actions")
+    exclusions = receipt.get("exclusions")
+    outputs = receipt.get("output_meshes")
+    if (
+        not isinstance(inventory, list)
+        or not inventory
+        or any(not isinstance(item, Mapping) for item in inventory)
+        or not isinstance(actions, list)
+        or any(not isinstance(item, Mapping) for item in actions)
+        or not isinstance(exclusions, list)
+        or any(not isinstance(item, Mapping) for item in exclusions)
+        or not isinstance(outputs, list)
+        or any(not isinstance(item, Mapping) for item in outputs)
+    ):
+        raise RuntimeError("external staticization receipt inventories are invalid")
+    input_names: list[str] = []
+    action_names = [item.get("name") for item in actions]
+    if (
+        action_names != sorted(set(action_names))
+        or any(
+            set(item) != {"name", "frame_range", "fcurve_count"}
+            or type(item.get("name")) is not str
+            or not item["name"]
+            or not isinstance(item.get("frame_range"), list)
+            or len(item["frame_range"]) != 2
+            or any(
+                isinstance(number, bool) or not isinstance(number, (int, float))
+                for number in item["frame_range"]
+            )
+            or type(item.get("fcurve_count")) is not int
+            or item["fcurve_count"] < 0
+            for item in actions
+        )
+    ):
+        raise RuntimeError("external staticization action inventory is not closed")
+    for item in inventory:
+        if set(item) != EXTERNAL_STATICIZATION_INPUT_OBJECT_KEYS:
+            raise RuntimeError("external staticization input object fields are not closed")
+        name = item.get("object_name")
+        object_type = item.get("object_type")
+        if (
+            type(name) is not str
+            or not name
+            or object_type not in {"MESH", "CURVE", "ARMATURE", "EMPTY"}
+            or not isinstance(item.get("matrix_world"), list)
+            or len(item["matrix_world"]) != 16
+            or any(
+                isinstance(number, bool) or not isinstance(number, (int, float))
+                for number in item["matrix_world"]
+            )
+            or not isinstance(item.get("material_slots"), list)
+            or any(value is not None and type(value) is not str for value in item["material_slots"])
+            or not isinstance(item.get("modifiers"), list)
+            or not isinstance(item.get("constraints"), list)
+            or item.get("action") not in ({None} | set(action_names))
+        ):
+            raise RuntimeError("external staticization input object inventory is invalid")
+        input_names.append(name)
+    if input_names != sorted(set(input_names)):
+        raise RuntimeError("external staticization input object identities are not deterministic")
+    expected_input_digest = _runtime_json_sha256(
+        {"objects": inventory, "actions": actions}
+    )
+    if receipt.get("input_inventory_sha256") != expected_input_digest:
+        raise RuntimeError("external staticization input inventory digest differs")
+    selected = list(expected_selection["selected_object_names"])
+    if not set(selected).issubset(input_names):
+        raise RuntimeError("external staticization selected inputs are absent")
+    exclusion_names = [item.get("object_name") for item in exclusions]
+    if (
+        exclusion_names != sorted(set(exclusion_names))
+        or set(exclusion_names) != set(input_names) - set(selected)
+        or any(
+            set(item) != EXTERNAL_STATICIZATION_EXCLUSION_KEYS
+            or type(item.get("reason")) is not str
+            or not item["reason"]
+            or type(item.get("evaluated_polygon_count")) is not int
+            or item["evaluated_polygon_count"] < 0
+            or not isinstance(item.get("used_materials"), list)
+            or any(type(name) is not str or not name for name in item["used_materials"])
+            for item in exclusions
+        )
+    ):
+        raise RuntimeError("external staticization exclusion inventory differs from inputs")
+    explicit = {
+        item["object_name"]: item["reason"]
+        for item in expected_selection["excluded_renderable_objects"]
+    }
+    if any(
+        name in explicit and item["reason"] != explicit[name]
+        for name, item in zip(exclusion_names, exclusions)
+    ):
+        raise RuntimeError("external staticization explicit renderable exclusions differ")
+    output_names = [item.get("source_object_name") for item in outputs]
+    if output_names != selected:
+        raise RuntimeError("external staticization output selection differs")
+    for index, item in enumerate(outputs):
+        if set(item) != EXTERNAL_STATICIZATION_OUTPUT_MESH_KEYS:
+            raise RuntimeError("external staticization output mesh fields are not closed")
+        topology = item.get("topology")
+        material_ids = item.get("material_ids")
+        expected_name = f"VISTA_External_{_slug(source_id)}_{index:02d}"[:63]
+        if (
+            item.get("object_name") != expected_name
+            or not isinstance(topology, Mapping)
+            or set(topology) != EXTERNAL_STATICIZATION_TOPOLOGY_KEYS
+            or any(type(topology.get(key)) is not int or topology[key] < 0 for key in topology)
+            or topology["vertices"] == 0
+            or topology["polygons"] == 0
+            or not isinstance(material_ids, list)
+            or not material_ids
+            or material_ids != list(dict.fromkeys(material_ids))
+            or any(type(name) is not str or not name for name in material_ids)
+            or type(item.get("mesh_sha256")) is not str
+            or _SHA256.fullmatch(item["mesh_sha256"]) is None
+            or item.get("stripped_state") != EXTERNAL_STATICIZATION_STRIPPED_STATE
+        ):
+            raise RuntimeError("external staticization output mesh inventory is invalid")
+        _validate_staticization_bounds(
+            item.get("bounds_m"),
+            label="external staticization output mesh bounds",
+        )
+    _validate_staticization_bounds(
+        receipt.get("output_bounds_m"),
+        label="external staticization combined bounds",
+    )
+    expected_output_digest = _runtime_json_sha256(
+        _staticization_output_digest_payload(
+            source_id,
+            source_digest,
+            outputs,
+            receipt["output_bounds_m"],
+        )
+    )
+    if receipt.get("output_digest") != expected_output_digest:
+        raise RuntimeError("external staticization output digest differs")
+    body = {key: receipt[key] for key in receipt if key != "content_digest"}
+    if receipt.get("content_digest") != _runtime_json_sha256(body):
+        raise RuntimeError("external staticization receipt content digest differs")
+    return receipt
+
+
+def external_staticization_ledger(
+    receipts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    sources = [validate_external_staticization_receipt(item) for item in receipts]
+    sources.sort(key=lambda item: item["source_logical_asset_id"])
+    expected_sources = sorted(EXTERNAL_SOURCE_SELECTION_POLICIES)
+    if [item["source_logical_asset_id"] for item in sources] != expected_sources:
+        raise RuntimeError("external staticization ledger source inventory differs")
+    body = {
+        "schema_version": EXTERNAL_STATICIZATION_LEDGER_SCHEMA,
+        "blender_version": [4, 5, 8],
+        "sources": sources,
+    }
+    ledger = {**body, "content_digest": _runtime_json_sha256(body)}
+    validate_external_staticization_ledger(ledger)
+    return ledger
+
+
+def validate_external_staticization_ledger(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != EXTERNAL_STATICIZATION_LEDGER_KEYS:
+        raise RuntimeError("external staticization ledger fields are not closed")
+    ledger = dict(value)
+    sources = ledger.get("sources")
+    if (
+        ledger.get("schema_version") != EXTERNAL_STATICIZATION_LEDGER_SCHEMA
+        or ledger.get("blender_version") != [4, 5, 8]
+        or not isinstance(sources, list)
+    ):
+        raise RuntimeError("external staticization ledger identity is invalid")
+    validated = [validate_external_staticization_receipt(item) for item in sources]
+    expected_sources = sorted(EXTERNAL_SOURCE_SELECTION_POLICIES)
+    if [item["source_logical_asset_id"] for item in validated] != expected_sources:
+        raise RuntimeError("external staticization ledger source inventory differs")
+    body = {key: ledger[key] for key in ledger if key != "content_digest"}
+    if ledger.get("content_digest") != _runtime_json_sha256(body):
+        raise RuntimeError("external staticization ledger content digest differs")
+    return ledger
 
 
 def _primary_receipt_file(asset: AcquiredAsset) -> AcquiredFile:
@@ -1692,30 +3522,345 @@ def _load_verified_blend_objects(
     return [obj for obj in target.objects if obj is not None]
 
 
+def _remove_loaded_source_state(
+    bpy: Any,
+    objects: Sequence[Any],
+    actions: Sequence[Any],
+    source_collection: Any,
+) -> None:
+    scene_children = bpy.context.scene.collection.children
+    if source_collection.name not in scene_children:
+        raise RuntimeError("external source dependency collection left the active scene unexpectedly")
+    scene_children.unlink(source_collection)
+    bpy.context.view_layer.update()
+    removal_ids: list[Any] = [*objects, source_collection, *actions]
+    for obj in objects:
+        data = getattr(obj, "data", None)
+        if data is not None and all(
+            _runtime_identity(data) != _runtime_identity(item)
+            for item in removal_ids
+        ):
+            removal_ids.append(data)
+    bpy.data.batch_remove(ids=tuple(removal_ids))
+    bpy.context.view_layer.update()
+    # This function is called only after the staticizer has returned and its
+    # evaluated depsgraph/RNA proxies have been released. The collection is
+    # detached and flushed while all IDs remain alive, then its dependency IDs
+    # are removed in one batch. Output meshes bind original writable materials,
+    # never evaluated material proxies, so no source/helper IDs remain live.
+
+
+def _evaluated_mesh_snapshot(
+    bpy: Any,
+    depsgraph: Any,
+    source: Any,
+) -> tuple[Any | None, list[Any], list[int]]:
+    if source.type not in {"MESH", "CURVE"}:
+        return None, [], []
+    evaluated = source.evaluated_get(depsgraph)
+    try:
+        mesh = bpy.data.meshes.new_from_object(
+            evaluated,
+            preserve_all_data_layers=True,
+            depsgraph=depsgraph,
+        )
+    except RuntimeError as error:
+        raise RuntimeError(
+            f"external source could not be evaluated as a static mesh: {source.name}"
+        ) from error
+    evaluated_slots = [
+        slot.material for slot in getattr(evaluated, "material_slots", ())
+    ]
+    slots = [slot.material for slot in getattr(source, "material_slots", ())]
+    if [getattr(item, "name", None) for item in evaluated_slots] != [
+        getattr(item, "name", None) for item in slots
+    ]:
+        raise RuntimeError(
+            f"external evaluated material slots differ from source slots: {source.name}"
+        )
+    used_indices = sorted({int(polygon.material_index) for polygon in mesh.polygons})
+    return mesh, slots, used_indices
+
+
+def _compact_evaluated_material_slots(
+    mesh: Any,
+    slot_materials: Sequence[Any],
+    used_indices: Sequence[int],
+    *,
+    object_name: str,
+) -> list[str]:
+    if not mesh.polygons:
+        return []
+    polygon_material_indices = [int(polygon.material_index) for polygon in mesh.polygons]
+    if (
+        not used_indices
+        or sorted(set(polygon_material_indices)) != list(used_indices)
+        or any(index < 0 or index >= len(slot_materials) for index in used_indices)
+        or any(slot_materials[index] is None for index in used_indices)
+    ):
+        return []
+    index_map = {old: new for new, old in enumerate(used_indices)}
+    mesh.materials.clear()
+    names: list[str] = []
+    for index in used_indices:
+        material = slot_materials[index]
+        _require_local_id(material, label=f"evaluated material {object_name}")
+        mesh.materials.append(material)
+        names.append(str(material.name))
+    # Blender resets polygon material indices when the slot list is cleared,
+    # so remap from the captured evaluated indices rather than reading the
+    # post-clear values back from the mesh.
+    for polygon, old_index in zip(mesh.polygons, polygon_material_indices):
+        polygon.material_index = index_map[old_index]
+    if len(mesh.materials) != len(names) or any(item is None for item in mesh.materials):
+        raise RuntimeError(f"external evaluated mesh lost material bindings: {object_name}")
+    return names
+
+
+def _staticize_external_source(
+    bpy: Any,
+    asset: AcquiredAsset,
+    loaded: Sequence[Any],
+    new_actions: Sequence[Any],
+    output_collection: Any,
+) -> _StaticizedSource:
+    """Bake one receipt-pinned source through a fixed depsgraph frame."""
+
+    selection_policy = external_source_selection_policy(asset)
+    selected_names = tuple(selection_policy["selected_object_names"])
+    explicit_exclusions = {
+        item["object_name"]: item["reason"]
+        for item in selection_policy["excluded_renderable_objects"]
+    }
+    loaded_by_name = {str(obj.name): obj for obj in loaded}
+    if len(loaded_by_name) != len(loaded):
+        raise RuntimeError("external staticization loaded duplicate object names")
+    required_names = set(selected_names) | set(explicit_exclusions)
+    if not required_names.issubset(loaded_by_name):
+        raise RuntimeError(
+            f"external staticization exact-name policy differs from source: {asset.logical_asset_id}"
+        )
+    scene = bpy.context.scene
+    scene.frame_start = EXTERNAL_STATICIZATION_FRAME
+    scene.frame_end = EXTERNAL_STATICIZATION_FRAME
+    scene.frame_set(EXTERNAL_STATICIZATION_FRAME)
+    source_collection = bpy.data.collections.new(
+        f"VISTA_Staticization_Source_{_slug(asset.logical_asset_id)}"[:63]
+    )
+    bpy.context.scene.collection.children.link(source_collection)
+    created: list[Any] = []
+    output_by_name: dict[str, Any] = {}
+    exclusions: list[dict[str, Any]] = []
+    depsgraph: Any | None = None
+    try:
+        for obj in loaded:
+            _relink(obj, source_collection)
+        bpy.context.view_layer.update()
+        input_inventory = _staticization_input_inventory(loaded)
+        action_inventory = _staticization_action_inventory(new_actions)
+        input_inventory_sha256 = _runtime_json_sha256(
+            {"objects": list(input_inventory), "actions": list(action_inventory)}
+        )
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        depsgraph_mode = str(getattr(depsgraph, "mode", ""))
+        if depsgraph_mode != EXTERNAL_STATICIZATION_DEPSGRAPH_MODE:
+            raise RuntimeError(
+                f"external staticization depsgraph mode differs: {depsgraph_mode!r}"
+            )
+        for source_name in sorted(loaded_by_name):
+            source = loaded_by_name[source_name]
+            mesh, slot_materials, used_indices = _evaluated_mesh_snapshot(
+                bpy,
+                depsgraph,
+                source,
+            )
+            polygon_count = len(mesh.polygons) if mesh is not None else 0
+            bound_materials: list[str] = []
+            if mesh is not None and polygon_count:
+                bound_materials = _compact_evaluated_material_slots(
+                    mesh,
+                    slot_materials,
+                    used_indices,
+                    object_name=source_name,
+                )
+            is_renderable = bool(
+                source.type == "MESH"
+                and not bool(source.hide_render)
+                and polygon_count > 0
+                and bound_materials
+            )
+            if source_name in selected_names:
+                if not is_renderable or mesh is None:
+                    if mesh is not None:
+                        bpy.data.meshes.remove(mesh)
+                    raise RuntimeError(
+                        f"external selected object is not an evaluated material-bound mesh: {source_name}"
+                    )
+                output = bpy.data.objects.new(
+                    f"VISTA_Staticized_{_slug(asset.logical_asset_id)}_{len(created):02d}"[:63],
+                    mesh,
+                )
+                output_collection.objects.link(output)
+                output.matrix_world = source.evaluated_get(depsgraph).matrix_world.copy()
+                output.hide_render = False
+                output["vista_staticization_source_object"] = source_name
+                created.append(output)
+                output_by_name[source_name] = output
+                continue
+            explicit_reason = explicit_exclusions.get(source_name)
+            if explicit_reason is not None:
+                if not is_renderable:
+                    if mesh is not None:
+                        bpy.data.meshes.remove(mesh)
+                    raise RuntimeError(
+                        f"external explicit renderable exclusion no longer matches source: {source_name}"
+                    )
+                reason = explicit_reason
+            elif is_renderable:
+                if mesh is not None:
+                    bpy.data.meshes.remove(mesh)
+                raise RuntimeError(
+                    f"external receipt-pinned source has an unselected renderable object: {source_name}"
+                )
+            elif source.type not in {"MESH", "CURVE"}:
+                reason = f"dependency_only_{source.type.lower()}"
+            elif polygon_count == 0:
+                reason = "zero_face_dependency"
+            elif not bound_materials:
+                reason = "materialless_dependency"
+            elif bool(source.hide_render):
+                reason = "hidden_render_dependency"
+            else:
+                reason = "non_renderable_dependency"
+            exclusions.append(
+                {
+                    "object_name": source_name,
+                    "reason": reason,
+                    "evaluated_polygon_count": polygon_count,
+                    "used_materials": bound_materials,
+                }
+            )
+            if mesh is not None:
+                bpy.data.meshes.remove(mesh)
+        if set(output_by_name) != set(selected_names):
+            raise RuntimeError("external staticization did not realize every exact selected object")
+        ordered = tuple(output_by_name[name] for name in selected_names)
+        depsgraph = None
+        return _StaticizedSource(
+            meshes=ordered,
+            source_object_names=selected_names,
+            selection_policy=selection_policy,
+            input_inventory=input_inventory,
+            input_inventory_sha256=input_inventory_sha256,
+            input_actions=action_inventory,
+            exclusions=tuple(sorted(exclusions, key=lambda row: row["object_name"])),
+            depsgraph_mode=depsgraph_mode,
+            source_collection=source_collection,
+        )
+    except BaseException:
+        depsgraph = None
+        # The process aborts this forge on any error. Do not free IDs while
+        # exception frames may still retain evaluated RNA proxies.
+        raise
+
+
 def _append_static_blend(
     bpy: Any,
     mathutils: Any,
     asset_set: ExternalAssetSet,
     asset: AcquiredAsset,
     collection: Any,
-) -> tuple[list[Any], tuple[float, float, float]]:
+) -> tuple[
+    list[Any],
+    tuple[float, float, float],
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
     logical_id = asset.logical_asset_id
-    expected_dimensions_m = asset.catalog_dimensions_m
-    if expected_dimensions_m is None:
-        raise RuntimeError(f"external model lacks a pinned measurement: {logical_id}")
-    before_actions = set(bpy.data.actions)
+    expected_dimensions_m = external_source_selected_dimensions_m(asset)
+    before_actions = {_runtime_identity(item) for item in bpy.data.actions}
     loaded = _load_verified_blend_objects(bpy, asset_set, asset)
-    meshes = _validate_static_source(bpy, loaded, [item for item in bpy.data.actions if item not in before_actions])
-    _validate_runtime_material_images(bpy, meshes, asset_set, asset)
+    new_actions = [
+        item
+        for item in bpy.data.actions
+        if _runtime_identity(item) not in before_actions
+    ]
+    staticized = _staticize_external_source(
+        bpy,
+        asset,
+        loaded,
+        new_actions,
+        collection,
+    )
+    # The staticizer must return before source IDs are removed: its evaluation
+    # frame owns depsgraph/evaluated RNA proxies. Refresh once with sources
+    # intact, then clean them from the outer lifetime.
+    bpy.context.view_layer.update()
+    _remove_loaded_source_state(
+        bpy,
+        loaded,
+        new_actions,
+        staticized.source_collection,
+    )
+    meshes = list(staticized.meshes)
+    material_semantics = _validate_runtime_material_images(bpy, meshes, asset_set, asset)
     bpy.context.view_layer.update()
     unique_materials: list[Any] = []
     for obj in meshes:
         for slot in obj.material_slots:
             if slot.material not in unique_materials:
                 unique_materials.append(slot.material)
+    semantics_by_material = {
+        _runtime_identity(material): semantics
+        for material, semantics, _normalizations in material_semantics
+    }
+    normalizations_by_material = {
+        _runtime_identity(material): normalizations
+        for material, _semantics, normalizations in material_semantics
+    }
+    material_identities = {_runtime_identity(material) for material in unique_materials}
+    if (
+        set(semantics_by_material) != material_identities
+        or set(normalizations_by_material) != material_identities
+    ):
+        raise RuntimeError("external material validation inventory differs from mesh material slots")
+    realized_names: set[str] = set()
+    material_contracts: list[dict[str, Any]] = []
     for ordinal, material in enumerate(unique_materials):
         original = material.name
-        material.name = f"r2.external.{_slug(logical_id)}.{ordinal:02d}.{_slug(original)}"[:63]
+        runtime_identity = _runtime_identity(material)
+        semantics = sorted(semantics_by_material[runtime_identity])
+        material_identity = external_material_identity_sha256(
+            logical_id,
+            asset.source_tree_sha256,
+            ordinal,
+            original,
+            semantics,
+        )
+        expected_name = external_material_name(logical_id, ordinal, material_identity)
+        material.name = expected_name
+        if material.name != expected_name or material.name in realized_names:
+            raise RuntimeError("external material name is not a unique deterministic source identity")
+        realized_names.add(material.name)
+        property_normalizations = _remove_source_custom_properties(material)
+        _configure_external_material_alpha_contract(
+            material,
+            asset,
+            semantics_by_material[runtime_identity],
+            material_identity_sha256=material_identity,
+        )
+        material_contracts.append(
+            _external_model_material_contract(
+                material,
+                asset,
+                ordinal=ordinal,
+                source_material_name=original,
+                semantic_nodes=semantics_by_material[runtime_identity],
+                inactive_image_normalizations=normalizations_by_material[runtime_identity],
+                removed_source_custom_properties=property_normalizations,
+                material_identity_sha256=material_identity,
+            )
+        )
     minimum, maximum = _combined_bounds(mathutils, meshes)
     measured = tuple(maximum[index] - minimum[index] for index in range(3))
     for actual, expected in zip(measured, expected_dimensions_m):
@@ -1727,12 +3872,9 @@ def _append_static_blend(
     origin = mathutils.Vector(((minimum[0] + maximum[0]) / 2, (minimum[1] + maximum[1]) / 2, minimum[2]))
     for index, obj in enumerate(meshes):
         transform = mathutils.Matrix.Translation(-origin) @ obj.matrix_world.copy()
-        _normalize_external_mesh(obj, transform)
+        _normalize_external_mesh(obj, transform, copy_data=False)
         _relink(obj, collection)
         obj.name = f"VISTA_External_{_slug(logical_id)}_{index:02d}"[:63]
-    for obj in loaded:
-        if obj not in meshes:
-            bpy.data.objects.remove(obj, do_unlink=True)
     bpy.context.view_layer.update()
     for obj in meshes:
         _validate_normalized_mesh_state(obj)
@@ -1746,8 +3888,100 @@ def _append_static_blend(
         or abs(normalized_minimum[2]) > 1e-5
         or any(abs(normalized_dimensions[index] - measured[index]) > 1e-5 for index in range(3))
     ):
-        raise RuntimeError(f"external source failed floor-center normalization: {logical_id}")
-    return meshes, normalized_dimensions
+        raise RuntimeError(
+            f"external source failed floor-center normalization: {logical_id}: "
+            f"before_min={minimum}, before_max={maximum}, "
+            f"after_min={normalized_minimum}, after_max={normalized_maximum}, "
+            f"before_dimensions={measured}, after_dimensions={normalized_dimensions}"
+        )
+    staticization_receipt = _external_staticization_receipt(
+        bpy,
+        mathutils,
+        asset,
+        staticized,
+    )
+    return meshes, normalized_dimensions, material_contracts, staticization_receipt
+
+
+def _detach_external_source_prototype(meshes: Sequence[Any]) -> None:
+    for obj in meshes:
+        for collection in tuple(obj.users_collection):
+            collection.objects.unlink(obj)
+        if tuple(obj.users_collection):
+            raise RuntimeError("external source prototype could not be detached")
+
+
+def _clone_external_source_prototype(
+    prototype: _ExternalSourcePrototype,
+    collection: Any,
+    placement_id: str,
+) -> list[Any]:
+    """Instantiate normalized geometry while reusing verified materials."""
+
+    placement_slug = _slug(placement_id)[:24] or "placement"
+    placement_digest = hashlib.sha256(placement_id.encode("utf-8")).hexdigest()[:12]
+    clones: list[Any] = []
+    try:
+        for index, source in enumerate(prototype.meshes):
+            _validate_normalized_mesh_state(source)
+            duplicate = source.copy()
+            duplicate.data = source.data.copy()
+            duplicate.parent = None
+            if hasattr(duplicate, "parent_type"):
+                duplicate.parent_type = "OBJECT"
+            if hasattr(duplicate, "parent_bone"):
+                duplicate.parent_bone = ""
+            duplicate.rotation_mode = "XYZ"
+            duplicate.location = (0.0, 0.0, 0.0)
+            duplicate.rotation_euler = (0.0, 0.0, 0.0)
+            duplicate.scale = (1.0, 1.0, 1.0)
+            duplicate.delta_location = (0.0, 0.0, 0.0)
+            duplicate.delta_rotation_euler = (0.0, 0.0, 0.0)
+            duplicate.delta_scale = (1.0, 1.0, 1.0)
+            if hasattr(duplicate, "rotation_quaternion"):
+                duplicate.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            if hasattr(duplicate, "delta_rotation_quaternion"):
+                duplicate.delta_rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            if hasattr(duplicate, "rotation_axis_angle"):
+                duplicate.rotation_axis_angle = (0.0, 0.0, 1.0, 0.0)
+            duplicate.matrix_parent_inverse.identity()
+            duplicate.matrix_basis.identity()
+            duplicate.matrix_world.identity()
+            for key in tuple(duplicate.keys()):
+                del duplicate[key]
+            duplicate.name = (
+                f"VISTA_External_{placement_slug}_{placement_digest}_{index:02d}"
+            )[:63]
+            collection.objects.link(duplicate)
+            _validate_normalized_mesh_state(duplicate)
+            clones.append(duplicate)
+    except BaseException:
+        for duplicate in reversed(clones):
+            try:
+                for current in tuple(duplicate.users_collection):
+                    current.objects.unlink(duplicate)
+            except (ReferenceError, RuntimeError, TypeError):
+                pass
+        raise
+    return clones
+
+
+def _dispose_external_source_prototypes(
+    bpy: Any,
+    registry: _ExternalSourceMaterialRegistry,
+) -> None:
+    for prototype in registry.values():
+        for obj in prototype.meshes:
+            mesh = getattr(obj, "data", None)
+            try:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            except (ReferenceError, RuntimeError, TypeError):
+                continue
+            if mesh is not None and getattr(mesh, "users", 1) == 0:
+                try:
+                    bpy.data.meshes.remove(mesh)
+                except (ReferenceError, RuntimeError, TypeError):
+                    pass
 
 
 def realize_external_placements(
@@ -1758,8 +3992,8 @@ def realize_external_placements(
     *,
     room_roots: Mapping[str, Any],
     room_collections: Mapping[str, Any],
-) -> tuple[dict[str, list[Any]], list[dict[str, Any]]]:
-    """Realize verified placements; return meshes and material provenance."""
+) -> tuple[dict[str, list[Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Realize verified placements and return material/staticization receipts."""
 
     required_authored_materials: set[str] = set()
     for placement in external_plan.placements:
@@ -1778,6 +4012,9 @@ def realize_external_placements(
     }
     objects: dict[str, list[Any]] = {}
     used_authored_materials: set[str] = set()
+    external_model_material_contracts: list[dict[str, Any]] = []
+    staticization_receipts: list[dict[str, Any]] = []
+    source_registry = _ExternalSourceMaterialRegistry()
     for placement in external_plan.placements:
         collection = room_collections[placement.room_id]
         actual_recipe_materials: tuple[str, ...] = ()
@@ -1799,14 +4036,37 @@ def realize_external_placements(
             measured_dimensions = tuple(measured[1][index] - measured[0][index] for index in range(3))
         else:
             asset = asset_set.asset(placement.source_logical_asset_id)
-            if asset.catalog_dimensions_m is None:
-                raise RuntimeError(f"external model lacks a pinned measurement: {asset.logical_asset_id}")
-            meshes, measured_dimensions = _append_static_blend(
-                bpy,
-                mathutils,
-                asset_set,
-                asset,
+            external_source_selected_dimensions_m(asset)
+            prototype = source_registry.get(asset)
+            if prototype is None:
+                (
+                    prototype_meshes,
+                    measured_dimensions,
+                    source_material_contracts,
+                    staticization_receipt,
+                ) = (
+                    _append_static_blend(
+                        bpy,
+                        mathutils,
+                        asset_set,
+                        asset,
+                        collection,
+                    )
+                )
+                staticization_receipts.append(staticization_receipt)
+                _detach_external_source_prototype(prototype_meshes)
+                prototype = source_registry.add(
+                    asset,
+                    prototype_meshes,
+                    measured_dimensions,
+                    source_material_contracts,
+                )
+                external_model_material_contracts.extend(source_material_contracts)
+            measured_dimensions = prototype.normalized_dimensions_m
+            meshes = _clone_external_source_prototype(
+                prototype,
                 collection,
+                placement.placement_id,
             )
         scaled_dimensions = tuple(value * placement.uniform_scale for value in measured_dimensions)
         planned = placement.source_dimensions_m
@@ -1834,17 +4094,26 @@ def realize_external_placements(
             obj["vista_collision_policy"] = "presentation_no_collision"
             obj["vista_unreal_collision_profile"] = "NoCollision"
         objects[placement.placement_id] = meshes
+    _dispose_external_source_prototypes(bpy, source_registry)
     if used_authored_materials != required_authored_materials:
         raise RuntimeError(
             "project-authored material provenance differs from realized recipe use: "
             f"actual={sorted(used_authored_materials)}, expected={sorted(required_authored_materials)}"
         )
     material_receipts = [
-        {
-            "material_id": materials_by_logical_id[logical_id].name,
-            "source": logical_id,
-            "pbr_source": asset_digest_record(asset_set.asset(logical_id)),
-        }
+        _external_texture_material_contract(
+            materials_by_logical_id[logical_id],
+            asset_set.asset(logical_id),
+        )
         for logical_id in sorted(used_authored_materials)
     ]
-    return objects, material_receipts
+    if len({item["material_id"] for item in external_model_material_contracts}) != len(
+        external_model_material_contracts
+    ):
+        raise RuntimeError("external model material contract identities are duplicated")
+    material_receipts.extend(
+        sorted(external_model_material_contracts, key=lambda item: item["material_id"])
+    )
+    return objects, material_receipts, external_staticization_ledger(
+        staticization_receipts
+    )

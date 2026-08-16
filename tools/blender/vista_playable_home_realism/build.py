@@ -37,6 +37,7 @@ if __package__ in {None, ""}:
     from blender.vista_playable_home_realism.config import (  # type: ignore[import-not-found]
         DEFAULT_TEXTURE_SIZE_PX,
         EXPECTED_BLENDER_VERSION,
+        ForgeInputError,
         canonical_json_bytes,
         content_digest,
         load_json_object,
@@ -67,6 +68,7 @@ else:
     from .config import (
         DEFAULT_TEXTURE_SIZE_PX,
         EXPECTED_BLENDER_VERSION,
+        ForgeInputError,
         canonical_json_bytes,
         content_digest,
         load_json_object,
@@ -93,6 +95,172 @@ else:
 
 PREVIEW_WIDTH = 1280
 PREVIEW_HEIGHT = 720
+BUILD_ACCEPTANCE_SCHEMA = "simworld.vista.playable-home-realism-forge-acceptance/v1"
+BUILD_ACCEPTANCE_FILENAME = "forge-accepted.json"
+_BUILD_ACCEPTANCE_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "normalized_manifest_sha256",
+        "artifact_receipt_sha256",
+        "inspection_receipt_sha256",
+        "build_receipt_sha256",
+        "external_staticization_receipt_sha256",
+    }
+)
+
+
+def _acceptance_output_root(output_root: pathlib.Path) -> pathlib.Path:
+    if not output_root.is_absolute():
+        raise ForgeInputError("accepted forge output root must be absolute")
+    if output_root.is_symlink():
+        raise ForgeInputError("accepted forge output root may not be a symbolic link")
+    try:
+        resolved = output_root.resolve(strict=True)
+    except OSError as error:
+        raise ForgeInputError("accepted forge output root is unavailable") from error
+    if not resolved.is_dir():
+        raise ForgeInputError("accepted forge output root must be a directory")
+    return resolved
+
+
+def _acceptance_file(output_root: pathlib.Path, name: str) -> pathlib.Path:
+    path = output_root / name
+    if path.is_symlink() or not path.is_file():
+        raise ForgeInputError(f"accepted forge output is missing regular file {name}")
+    return path
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _validate_build_acceptance_payload(
+    output_root: pathlib.Path,
+    acceptance: Mapping[str, Any],
+) -> dict[str, Any]:
+    if set(acceptance) != _BUILD_ACCEPTANCE_KEYS:
+        raise ForgeInputError("forge acceptance marker fields are not closed")
+    if (
+        acceptance.get("schema_version") != BUILD_ACCEPTANCE_SCHEMA
+        or acceptance.get("status") != "accepted"
+    ):
+        raise ForgeInputError("forge acceptance marker schema/status is invalid")
+    for field in (
+        "normalized_manifest_sha256",
+        "artifact_receipt_sha256",
+        "inspection_receipt_sha256",
+        "build_receipt_sha256",
+    ):
+        if not _is_sha256(acceptance.get(field)):
+            raise ForgeInputError(f"forge acceptance marker {field} is invalid")
+
+    manifest_path = _acceptance_file(output_root, "normalized-manifest.json")
+    artifact_path = _acceptance_file(output_root, "artifact-receipt.json")
+    inspection_path = _acceptance_file(output_root, "inspection-receipt.json")
+    build_path = _acceptance_file(output_root, "build-receipt.json")
+    bound_files = {
+        "normalized_manifest_sha256": manifest_path,
+        "artifact_receipt_sha256": artifact_path,
+        "inspection_receipt_sha256": inspection_path,
+        "build_receipt_sha256": build_path,
+    }
+    for field, path in bound_files.items():
+        if acceptance[field] != sha256_file(path):
+            raise ForgeInputError(
+                f"forge acceptance marker {field} differs from {path.name}"
+            )
+
+    manifest = load_json_object(manifest_path, label="accepted normalized manifest")
+    inspection_receipt = load_json_object(
+        inspection_path,
+        label="accepted inspection receipt",
+    )
+    build_receipt = load_json_object(build_path, label="accepted build receipt")
+    recomputed_inspection = inspect_output(output_root)
+    if inspection_receipt != recomputed_inspection:
+        raise ForgeInputError("accepted inspection receipt differs from fresh inspection")
+    if build_receipt.get("normalized_manifest_sha256") != acceptance[
+        "normalized_manifest_sha256"
+    ]:
+        raise ForgeInputError("accepted build receipt normalized manifest binding differs")
+    if build_receipt.get("inspection_digest") != content_digest(recomputed_inspection):
+        raise ForgeInputError("accepted build receipt inspection binding differs")
+
+    manifest_schema = manifest.get("schema_version")
+    staticization_marker = acceptance.get("external_staticization_receipt_sha256")
+    if manifest_schema == "simworld.vista.playable-home-realism-forge/v2":
+        staticization_path = _acceptance_file(
+            output_root,
+            "external-staticization-receipt.json",
+        )
+        if not _is_sha256(staticization_marker):
+            raise ForgeInputError(
+                "external forge acceptance lacks a staticization receipt binding"
+            )
+        staticization_sha256 = sha256_file(staticization_path)
+        if staticization_marker != staticization_sha256:
+            raise ForgeInputError(
+                "forge acceptance staticization binding differs from its receipt"
+            )
+        if (
+            build_receipt.get("schema_version")
+            != "simworld.vista.playable-home-realism-blender-build/v2"
+            or build_receipt.get("external_staticization_receipt_sha256")
+            != staticization_sha256
+        ):
+            raise ForgeInputError("accepted external build receipt binding differs")
+    elif manifest_schema == "simworld.vista.playable-home-realism-forge/v1":
+        if (
+            staticization_marker is not None
+            or build_receipt.get("schema_version")
+            != "simworld.vista.playable-home-realism-blender-build/v1"
+        ):
+            raise ForgeInputError("accepted v1 build receipt binding differs")
+    else:
+        raise ForgeInputError("accepted normalized manifest schema is unsupported")
+    return dict(acceptance)
+
+
+def validate_build_acceptance(output_root: pathlib.Path) -> dict[str, Any]:
+    """Require the terminal marker and independently revalidate all bound receipts."""
+
+    root = _acceptance_output_root(output_root)
+    marker_path = _acceptance_file(root, BUILD_ACCEPTANCE_FILENAME)
+    marker = load_json_object(marker_path, label="forge acceptance marker")
+    return _validate_build_acceptance_payload(root, marker)
+
+
+def _write_build_acceptance(output_root: pathlib.Path) -> dict[str, Any]:
+    root = _acceptance_output_root(output_root)
+    manifest_path = _acceptance_file(root, "normalized-manifest.json")
+    artifact_path = _acceptance_file(root, "artifact-receipt.json")
+    inspection_path = _acceptance_file(root, "inspection-receipt.json")
+    build_path = _acceptance_file(root, "build-receipt.json")
+    staticization_path = root / "external-staticization-receipt.json"
+    marker = {
+        "schema_version": BUILD_ACCEPTANCE_SCHEMA,
+        "status": "accepted",
+        "normalized_manifest_sha256": sha256_file(manifest_path),
+        "artifact_receipt_sha256": sha256_file(artifact_path),
+        "inspection_receipt_sha256": sha256_file(inspection_path),
+        "build_receipt_sha256": sha256_file(build_path),
+        "external_staticization_receipt_sha256": (
+            sha256_file(_acceptance_file(root, staticization_path.name))
+            if staticization_path.exists()
+            else None
+        ),
+    }
+    # Validate the complete output before emitting the terminal marker.  A
+    # failed forge therefore cannot leave behind a truthful-looking accepted
+    # status file merely because Blender returned an OS success code.
+    _validate_build_acceptance_payload(root, marker)
+    write_json(root / BUILD_ACCEPTANCE_FILENAME, marker)
+    return validate_build_acceptance(root)
 
 
 def parse_blender_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -425,8 +593,13 @@ def _build_with_blender_runtime(
         bpy, plan, materials
     )
     external_objects: dict[str, list[Any]] = {}
+    external_staticization: dict[str, Any] | None = None
     if external_asset_set is not None:
-        external_objects, external_material_receipts = realize_external_placements(
+        (
+            external_objects,
+            external_material_receipts,
+            external_staticization,
+        ) = realize_external_placements(
             bpy,
             mathutils,
             external_asset_set,
@@ -444,6 +617,18 @@ def _build_with_blender_runtime(
         metadata_objects=metadata_objects,
         external_objects=external_objects,
     )
+    staticization_path: pathlib.Path | None = None
+    if external_staticization is not None:
+        staticization_path = output_root / "external-staticization-receipt.json"
+        write_json(staticization_path, external_staticization)
+        artifacts.append(
+            _artifact(
+                staticization_path,
+                output_root,
+                "receipt.external_staticization",
+                "application/json",
+            )
+        )
     # The normalized manifest binds the exact import-ready GLB bytes.  Export
     # precedes manifest emission deliberately; the GLBs do not embed the
     # manifest hash, so this ordering is deterministic and non-circular.
@@ -455,6 +640,7 @@ def _build_with_blender_runtime(
         material_receipts=material_receipts,
         texture_size_px=texture_size_px,
         ue_import_bundles=ue_import_bundles,
+        external_staticization=external_staticization,
     )
     manifest_path = output_root / "normalized-manifest.json"
     write_json(manifest_path, manifest)
@@ -507,6 +693,8 @@ def _build_with_blender_runtime(
         "inspection_digest": content_digest(inspection),
     }
     if external_asset_set is not None:
+        if staticization_path is None or external_staticization is None:
+            raise RuntimeError("external build lacks its staticization receipt")
         build_receipt["external_placement_plan_sha256"] = plan.external_placement.content_digest
         build_receipt["acquisition_receipt"] = external_asset_set.receipt_reference()
         build_receipt["external_placement_count"] = len(plan.external_placement.placements)
@@ -514,8 +702,15 @@ def _build_with_blender_runtime(
             plan.external_placement.semantic_target_ids
         )
         build_receipt["external_dressing_count"] = len(plan.external_placement.dressing_ids)
+        build_receipt["external_staticization_content_digest"] = (
+            external_staticization["content_digest"]
+        )
+        build_receipt["external_staticization_receipt_sha256"] = sha256_file(
+            staticization_path
+        )
     build_path = output_root / "build-receipt.json"
     write_json(build_path, build_receipt)
+    _write_build_acceptance(output_root)
     return build_receipt
 
 
