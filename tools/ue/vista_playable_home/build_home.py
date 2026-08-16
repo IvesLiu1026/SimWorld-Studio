@@ -43,6 +43,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.blender.vista_playable_home import contract_scene as blender_contract  # noqa: E402
+from tools.blender.vista_playable_home_realism import (  # noqa: E402
+    external_assets as realism_external_assets,
+)
 from tools.blender.vista_playable_home_hssd import planner as hssd_contract  # noqa: E402
 from tools.ue.vista_playable_home import contract, planning  # noqa: E402
 from tools.ue.vista_playable_home.commandlet_common import (  # noqa: E402
@@ -199,8 +202,13 @@ PRESENTATION_EXTERNAL_MANIFEST_KEYS = frozenset({
     "forge_plan_digest", "build_quality", "rooms", "openings",
     "components", "dressing", "materials", "role_counts",
     "room_component_counts", "export_contract", "ue_import_bundles",
-    "external_placement",
+    "external_placement", "external_staticization",
 })
+PRESENTATION_EXTERNAL_STATICIZATION_ARTIFACT_KEYS = frozenset({
+    "artifact_id", "relative_path", "media_type", "sha256", "size_bytes",
+})
+PRESENTATION_EXTERNAL_STATICIZATION_ARTIFACT_ID = "receipt.external_staticization"
+PRESENTATION_EXTERNAL_STATICIZATION_FILENAME = "external-staticization-receipt.json"
 PRESENTATION_EXTERNAL_PLACEMENT_KEYS = frozenset({
     "schema_version", "placement_id", "normalization_policy",
     "acquisition_receipt", "placement_manifest_sha256",
@@ -1493,6 +1501,76 @@ def _validate_presentation_glb(
         _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB extras differ from their receipt", pointer=str(path))
 
 
+def _validate_presentation_staticization(
+    manifest_root: Path,
+    manifest_ledger: Any,
+    artifacts: Sequence[Any],
+) -> None:
+    """Bind the v2 staticization ledger to its exact retained artifact bytes."""
+
+    matches = [
+        item
+        for item in artifacts
+        if isinstance(item, Mapping)
+        and item.get("artifact_id") == PRESENTATION_EXTERNAL_STATICIZATION_ARTIFACT_ID
+    ]
+    if len(matches) != 1:
+        _fail(
+            "VISTA_HOME_PRESENTATION_EXTERNAL_INVALID",
+            "presentation requires exactly one external staticization artifact",
+        )
+    record = matches[0]
+    if (
+        set(record) != PRESENTATION_EXTERNAL_STATICIZATION_ARTIFACT_KEYS
+        or record.get("relative_path") != PRESENTATION_EXTERNAL_STATICIZATION_FILENAME
+        or record.get("media_type") != "application/json"
+    ):
+        _fail(
+            "VISTA_HOME_PRESENTATION_EXTERNAL_INVALID",
+            "presentation external staticization artifact fields differ",
+        )
+    source = _contained_artifact(
+        manifest_root,
+        record["relative_path"],
+        "presentation external staticization artifact",
+    )
+    expected_sha256 = _require_sha(
+        record.get("sha256"),
+        "presentation external staticization artifact SHA-256",
+    )
+    size_bytes = record.get("size_bytes")
+    if (
+        isinstance(size_bytes, bool)
+        or not isinstance(size_bytes, int)
+        or size_bytes <= 0
+        or source.stat().st_size != size_bytes
+        or sha256_file(source) != expected_sha256
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_PIN_MISMATCH",
+            "presentation external staticization artifact bytes or SHA-256 differ",
+            pointer=str(source),
+        )
+    ledger, raw = _load_json(
+        source,
+        expected_sha256=expected_sha256,
+        label="presentation external staticization artifact",
+    )
+    if raw != canonical_json(ledger) or ledger != manifest_ledger:
+        _fail(
+            "VISTA_HOME_PRESENTATION_EXTERNAL_INVALID",
+            "presentation external staticization ledger differs from its manifest",
+        )
+    try:
+        realism_external_assets.validate_external_staticization_ledger(ledger)
+    except Exception as exc:
+        _fail(
+            "VISTA_HOME_PRESENTATION_EXTERNAL_INVALID",
+            "presentation external staticization ledger is invalid",
+        )
+        raise AssertionError from exc
+
+
 def validate_presentation_inputs(
     manifest_path: Path,
     manifest_sha256: str,
@@ -1552,6 +1630,12 @@ def validate_presentation_inputs(
     artifacts = receipt.get("artifacts")
     if not isinstance(manifest_bundles, list) or not isinstance(receipt_bundles, list) or not isinstance(artifacts, list):
         _fail("VISTA_HOME_PRESENTATION_INVALID", "presentation bundle inventories must be arrays")
+    if is_external:
+        _validate_presentation_staticization(
+            manifest_root,
+            manifest.get("external_staticization"),
+            artifacts,
+        )
     artifact_bundles = [
         item for item in artifacts
         if isinstance(item, Mapping) and item.get("artifact_kind") == planning.PRESENTATION_ARTIFACT_KIND

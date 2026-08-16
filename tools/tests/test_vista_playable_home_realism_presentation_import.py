@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 from tools.tests.test_vista_playable_home_build_home import Fixture as BuildFixture
+from tools.tests.test_vista_playable_home_realism_glb_alpha_gate import (
+    _staticization_ledger_fixture,
+)
 from tools.ue.vista_playable_home import build_home, planning
 
 
@@ -423,6 +426,18 @@ def _external_presentation_contracts(
         record["sha256"] = build_home.sha256_file(path)
         record["size_bytes"] = path.stat().st_size
         bundles.append(record)
+    staticization = _staticization_ledger_fixture()
+    staticization_path = (
+        root / build_home.PRESENTATION_EXTERNAL_STATICIZATION_FILENAME
+    )
+    staticization_path.write_bytes(build_home.canonical_json(staticization))
+    staticization_artifact = {
+        "artifact_id": build_home.PRESENTATION_EXTERNAL_STATICIZATION_ARTIFACT_ID,
+        "relative_path": build_home.PRESENTATION_EXTERNAL_STATICIZATION_FILENAME,
+        "media_type": "application/json",
+        "sha256": build_home.sha256_file(staticization_path),
+        "size_bytes": staticization_path.stat().st_size,
+    }
     manifest = {
         "schema_version": build_home.PRESENTATION_FORGE_SCHEMA_V2,
         "forge_id": "vista_playable_home.realistic_interior_r2",
@@ -443,10 +458,11 @@ def _external_presentation_contracts(
         "export_contract": {},
         "ue_import_bundles": bundles,
         "external_placement": external_placement,
+        "external_staticization": staticization,
     }
     receipt = {
         "schema_version": build_home.PRESENTATION_ARTIFACT_RECEIPT_SCHEMA_V2,
-        "artifacts": copy.deepcopy(bundles),
+        "artifacts": [*copy.deepcopy(bundles), staticization_artifact],
         "ue_import_bundles": copy.deepcopy(bundles),
     }
     manifest_path = root / "normalized-manifest.json"
@@ -794,6 +810,73 @@ def test_external_v2_contract_compiles_exact_content_and_nanite_policy(
             ),
         )
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_manifest_ledger",
+        "missing_artifact",
+        "artifact_pin",
+        "manifest_ledger_mismatch",
+        "nested_type",
+        "invalid_ledger",
+    ],
+)
+def test_external_v2_staticization_ledger_is_exact_and_fail_closed(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    root = tmp_path / "inputs" / case
+    manifest_path, receipt_path, manifest, receipt = (
+        _external_presentation_contracts(root, fixture)
+    )
+    artifact = next(
+        item
+        for item in receipt["artifacts"]
+        if item.get("artifact_id")
+        == build_home.PRESENTATION_EXTERNAL_STATICIZATION_ARTIFACT_ID
+    )
+    staticization_path = (
+        root / build_home.PRESENTATION_EXTERNAL_STATICIZATION_FILENAME
+    )
+    if case == "missing_manifest_ledger":
+        manifest.pop("external_staticization")
+    elif case == "missing_artifact":
+        receipt["artifacts"].remove(artifact)
+    elif case == "artifact_pin":
+        artifact["sha256"] = "0" * 64
+    elif case == "manifest_ledger_mismatch":
+        manifest["external_staticization"]["content_digest"] = "0" * 64
+    else:
+        if case == "nested_type":
+            manifest["external_staticization"]["sources"][0][
+                "input_actions"
+            ] = [
+                {
+                    "name": [],
+                    "frame_range": [1.0, 1.0],
+                    "fcurve_count": 0,
+                }
+            ]
+        else:
+            manifest["external_staticization"]["blender_version"] = [4, 5, 9]
+        staticization_path.write_bytes(
+            build_home.canonical_json(manifest["external_staticization"])
+        )
+        artifact["sha256"] = build_home.sha256_file(staticization_path)
+        artifact["size_bytes"] = staticization_path.stat().st_size
+    manifest_path.write_bytes(build_home.canonical_json(manifest))
+    receipt_path.write_bytes(build_home.canonical_json(receipt))
+
+    with pytest.raises(
+        build_home.BuildHomeError,
+        match=r"PRESENTATION(?:_EXTERNAL)?_INVALID|BUILD_PIN_MISMATCH",
+    ):
+        build_home.plan_build(
+            _presentation_config(fixture, manifest_path, receipt_path)
+        )
 
 
 @pytest.mark.parametrize(
