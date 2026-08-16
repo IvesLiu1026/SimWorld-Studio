@@ -25,7 +25,7 @@ Depends on: requirements.md, design.md
   - Validation: requirements/design/tasks contain no blocking ambiguity; user
     approval and chosen procurement policy are recorded.
 
-- [ ] T2. Add closed visual-profile and receipt contracts
+- [x] T2. Add closed visual-profile and receipt contracts
   - Files: world_packs/schemas/vista-playable-home-visual-profile-v1.schema.json,
     world_packs/vista_playable_home_r1/visual_profiles/realistic_interior_r2.json,
     focused contract tests
@@ -35,7 +35,7 @@ Depends on: requirements.md, design.md
     house revisions, duplicate bindings, invalid transforms, missing licenses,
     and path escapes fail closed; normalized digests repeat.
 
-- [ ] T3. Implement provider-neutral visual source and entitlement resolution
+- [x] T3. Implement provider-neutral visual source and entitlement resolution
   - Files: new resolver module under tools/blender/vista_playable_home_realism,
     focused resolver/provenance tests
   - Depends on: T2
@@ -44,7 +44,7 @@ Depends on: requirements.md, design.md
     normalize to one AssetSourceReceipt; unverified entitlements and silent
     fallback are rejected.
 
-- [ ] T4. Replace ambiguous review-camera Euler input with look-at shots
+- [x] T4. Replace ambiguous review-camera Euler input with look-at shots
   - Files: visual profile, tools/ue/vista_playable_home/planning.py,
     compose_home_commandlet.py, capture_review_views.py, focused camera tests
   - Depends on: T2
@@ -61,6 +61,12 @@ Depends on: requirements.md, design.md
   - Validation: two pinned Blender 4.5.8 builds match normalized manifests;
     walls, openings, trim, floor transitions, ceilings, windows, and kitchen
     cabinetry pass metric, join, back-face, and GLB inspection.
+  - Current evidence: the deterministic forge, complete material channels,
+    append-only receipts, and two matching normalized smoke manifests are
+    implemented.  Three one-mesh, identity-root UE presentation bundles now
+    cross-check against their GLB bytes and receipts.  The retained 64 px run
+    is smoke-only; production texture, join/back-face, and human image gates
+    remain open.
 
 - [ ] T6. Implement material authoring and import receipts
   - Files: tools/blender/vista_playable_home_realism/materials.py,
@@ -70,8 +76,14 @@ Depends on: requirements.md, design.md
   - Validation: required base-colour/normal/roughness data, channel packing,
     texture dimensions, colour space, UV set, texel density, effective Unreal
     Texture2D use, and absence of default materials are independently proven.
+  - Current evidence: Blender emits 15 image-backed base-colour, normal, and
+    roughness material sets and records their hashes.  The room bundle gate
+    proves 5/7/12 complete PBR material slots and 15/21/36 textures survive
+    GLB export for entry/living/kitchen.  The four-phase host plan now binds
+    these exact GLBs and receipts to the Unreal presentation import phase.
+    UE 5.7 import and effective Texture2D/material observation remain open.
 
-- [ ] T7. Author deterministic dressing anchors and exclusion volumes
+- [x] T7. Author deterministic dressing anchors and exclusion volumes
   - Files: visual profile, tools/blender/vista_playable_home_realism/dressing.py,
     focused placement tests
   - Depends on: T2, T5
@@ -91,6 +103,12 @@ Depends on: requirements.md, design.md
     reviewed for category, style, dimensions, license, and material coverage;
     known HSSD mismatches such as chair/stool, pot/planter, table/desk,
     slipper/shoe, and ladder/stall-bar cannot pass by semantic alias alone.
+  - Current evidence: the deterministic coverage matrix and contact-sheet plan
+    contracts are implemented; category/style/dimension/license/PBR failures
+    and the listed semantic-alias mismatches fail closed.  An actual five-hero
+    HSSD audit is retained: every candidate failed the 2K PBR gate and remained
+    style-unreviewed, so no promotion gate was emitted.  Expanded YCB/Poly
+    Haven review, any rendered contact sheet, and human decisions remain open.
 
 - [ ] T9. Execute the external asset acquisition gate if local coverage is
       insufficient
@@ -111,6 +129,12 @@ Depends on: requirements.md, design.md
   - Validation: visible r2 components have disabled or explicitly allowlisted
     collision; hidden r1 proxies retain collision/navigation; semantic parent,
     tags, affordances, and event targets are unchanged after save/reload.
+  - Current evidence: the source path now imports one exact presentation
+    bundle per room, composes it as `NoCollision`, hides but preserves the
+    blocking r1 authority, and requires closed post-reload observations for
+    object identity, transform, material slots, collision, attachment, and
+    authority state.  Exact attempt-05 inputs pass the host plan; actual UE 5.7
+    import/save/reload observation remains open, so this task is not promoted.
 
 - [ ] T11. Add and observe the high-quality Unreal renderer profile
   - Files: tools/ue/vista_playable_home/build_home.py, planning.py,
@@ -120,6 +144,9 @@ Depends on: requirements.md, design.md
   - Validation: generated config and packaged-runtime evidence agree on Vulkan
     desktop deferred/SM6, Lumen GI/reflections, VSM, eligible Nanite, TSR,
     extended luminance range, pre-exposure, scalability, and screen percentage.
+  - Current evidence: the pinned profile compiles the requested Engine INI and
+    a renderer observation contract.  Receipts truthfully remain
+    `runtime_proof=false` and runtime observation is pending.
 
 - [ ] T12. Replace validation point lights with the r2 physical lighting rig
   - Files: visual profile, planning.py, compose_home_commandlet.py, focused tests
@@ -128,6 +155,9 @@ Depends on: requirements.md, design.md
   - Validation: sun/sky, apertures, practical fixtures, light types/units,
     gameplay exposure bounds, and fixed-shot exposure survive save/reload;
     centre-point-light parity is rejected for the r2 profile.
+  - Current evidence: source planning rejects the r1 centre-point-light path
+    for r2 and validates each practical light inside its declared room.  UE
+    save/reload and captured exposure/contact-shadow evidence remain open.
 
 - [ ] T13. Add the indoor third-person camera profile
   - Files: unreal_plugins/VistaPlayableHome character/camera source,
@@ -138,6 +168,10 @@ Depends on: requirements.md, design.md
     75–85 degree FOV profile; doorway and wall approach/recovery do not trap the
     view or cause persistent wall-filled framing; r1 retains its existing
     default when the r2 profile is absent.
+  - Current evidence: opt-in source wiring, closed-range validation, 220 cm
+    boom, 80 degree FOV, immediate collision retraction, damped clear-line
+    recovery, and the unchanged r1 default are implemented.  UE compilation,
+    package flag propagation, and doorway/wall runtime traversal remain open.
 
 - [ ] T14. Execute and seal the first living-room hero-shot attempt
   - Files: no generated Git content; one fresh append-only Blender/UE attempt
