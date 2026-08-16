@@ -42,6 +42,7 @@ class PackageReceiptTests(unittest.TestCase):
         self.executable.write_bytes(b"ELF-fixture\n")
         self.executable.chmod(0o700)
         self.pak.write_bytes(b"PAK-fixture\n")
+        self.pak.chmod(0o644)
         project = self.attempt / package.PROJECT_RELATIVE
         project.parent.mkdir(parents=True)
         project.write_text(
@@ -82,6 +83,7 @@ class PackageReceiptTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        config.chmod(0o644)
         (self.attempt / "runuat.log").write_text(
             " ".join(
                 (

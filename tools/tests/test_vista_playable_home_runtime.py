@@ -428,6 +428,7 @@ class VistaPlayableHomeRuntimeTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
+        profile.chmod(0o600)
         arguments = profile_entrypoint.load_profile(profile)
         self.assertIn("--workspace", arguments)
         self.assertIn("--gpu", arguments)
