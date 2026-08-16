@@ -3,13 +3,17 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import struct
+from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 
+from tools.blender.vista_playable_home_realism import build as forge_build
 from tools.blender.vista_playable_home_realism.architecture import (
     build_external_forge_plan,
     build_forge_plan,
@@ -31,12 +35,15 @@ from tools.blender.vista_playable_home_realism.external_assets import (
     ExternalAssetSet,
     _apply_metric_box_uv,
     _canonical_acquisition_json,
+    _load_fresh_receipt_image,
+    _load_verified_blend_objects,
     _metric_box_uv,
     _validate_authored_recipe_material_use,
     _validate_normalized_mesh_state,
     _validate_runtime_material_images,
     _validate_static_source,
     load_external_asset_set,
+    staged_external_asset_set,
 )
 from tools.blender.vista_playable_home_realism.inspect import (
     _validate_bundle_glb,
@@ -463,12 +470,232 @@ def test_acquisition_root_verifies_sha_resolution_and_rejects_symlink(tmp_path: 
         load_external_asset_set(link)
 
 
+def _private_tmpdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    private_tmp = tmp_path / "private-tmp"
+    private_tmp.mkdir(mode=0o700)
+    monkeypatch.setenv("TMPDIR", str(private_tmp.resolve()))
+    return private_tmp
+
+
+def test_private_snapshot_pins_content_for_full_context_lifetime_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "acquisition"
+    root.mkdir()
+    _write_acquisition(root)
+    asset_set = load_external_asset_set(root)
+    private_tmp = _private_tmpdir(tmp_path, monkeypatch)
+    source = root / "assets/fixture_model/fixture_model_2k.blend"
+    original = source.read_bytes()
+
+    with staged_external_asset_set(asset_set) as staged:
+        stage_root = staged.root
+        staged_primary = staged.source_path("visual.dressing.fixture_model")
+        assert stage_root.parent == private_tmp.resolve()
+        assert stage_root.exists()
+        assert staged_primary.read_bytes() == original
+        assert hashlib.sha256(
+            (stage_root / "acquisition-receipt.json").read_bytes()
+        ).hexdigest() == asset_set.receipt_file_sha256
+        # A concurrent write to the acquisition pathname cannot affect the
+        # already verified private tree consumed by Blender.
+        source.write_bytes(b"X" * len(original))
+        assert staged_primary.read_bytes() == original
+    assert not stage_root.exists()
+    assert list(private_tmp.glob("vista-external-assets-*")) == []
+
+
+def test_external_build_wrapper_keeps_snapshot_alive_through_runtime_then_removes_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "wrapped-acquisition"
+    root.mkdir()
+    _write_acquisition(root)
+    asset_set = load_external_asset_set(root)
+    _private_tmpdir(tmp_path, monkeypatch)
+    observed: dict[str, Path] = {}
+
+    def fake_runtime(*_args, external_asset_set=None, **_kwargs):
+        observed["root"] = external_asset_set.root
+        assert observed["root"].exists()
+        assert external_asset_set.source_path("visual.dressing.fixture_model").is_file()
+        return {"status": "ok"}
+
+    monkeypatch.setattr(forge_build, "_build_with_blender_runtime", fake_runtime)
+    result = forge_build.build_with_blender(
+        object(),
+        object(),
+        {},
+        {},
+        tmp_path / "output",
+        texture_size_px=512,
+        external_asset_set=asset_set,
+        external_placement_manifest=object(),
+    )
+    assert result == {"status": "ok"}
+    assert not observed["root"].exists()
+
+
+def test_private_snapshot_requires_a_current_user_nonwritable_staging_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "mode-acquisition"
+    root.mkdir()
+    _write_acquisition(root)
+    asset_set = load_external_asset_set(root)
+    insecure = tmp_path / "insecure-tmp"
+    insecure.mkdir(mode=0o700)
+    insecure.chmod(0o777)
+    monkeypatch.setenv("TMPDIR", str(insecure.resolve()))
+    with pytest.raises(RuntimeError, match="private to and accessible by the current process"):
+        with staged_external_asset_set(asset_set):
+            pytest.fail("insecure staging parent must fail closed")
+
+
+@pytest.mark.parametrize("mutation", ("changed_content", "symlink"))
+def test_private_snapshot_rejects_unverified_source_mutation_and_removes_partial_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    root = tmp_path / mutation / "acquisition"
+    root.mkdir(parents=True)
+    _write_acquisition(root)
+    asset_set = load_external_asset_set(root)
+    private_tmp = _private_tmpdir(tmp_path / mutation, monkeypatch)
+    source = root / "assets/fixture_model/fixture_model_2k.blend"
+    if mutation == "changed_content":
+        source.write_bytes(b"Y" * len(source.read_bytes()))
+        expected = "SHA-256 differs from receipt"
+    else:
+        backing = source.with_name("backing.blend")
+        source.rename(backing)
+        source.symlink_to(backing)
+        expected = "symbolic link"
+    with pytest.raises((RuntimeError, ForgeInputError), match=expected):
+        with staged_external_asset_set(asset_set):
+            pytest.fail("unverified source must not enter the staging context")
+    assert list(private_tmp.glob("vista-external-assets-*")) == []
+
+
+class _FakeLibraryContext:
+    def __init__(self, callback=None):
+        self.callback = callback
+        self.source = SimpleNamespace(objects=["LoadedMesh"])
+        self.target = SimpleNamespace(objects=[])
+
+    def __enter__(self):
+        return self.source, self.target
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self.callback is not None:
+            self.callback()
+        return False
+
+
+class _FakeLibraries:
+    def __init__(self, callback=None):
+        self.callback = callback
+        self.calls: list[tuple[str, bool]] = []
+
+    def load(self, path: str, *, link: bool):
+        self.calls.append((path, link))
+        return _FakeLibraryContext(self.callback)
+
+
+def _verified_blend_fixture(tmp_path: Path, callback=None):
+    root = tmp_path / "acquisition"
+    root.mkdir(parents=True)
+    _write_acquisition(root)
+    asset_set = load_external_asset_set(root)
+    asset = asset_set.asset("visual.dressing.fixture_model")
+    libraries = _FakeLibraries(callback)
+    bpy = SimpleNamespace(data=SimpleNamespace(libraries=libraries))
+    return bpy, libraries, asset_set, asset, asset_set.source_path(asset.logical_asset_id)
+
+
+def test_primary_blend_is_bound_to_exact_receipt_before_and_after_library_load(tmp_path: Path) -> None:
+    bpy, libraries, asset_set, asset, path = _verified_blend_fixture(tmp_path)
+    assert _load_verified_blend_objects(bpy, asset_set, asset) == ["LoadedMesh"]
+    assert libraries.calls == [(str(path), False)]
+
+
+@pytest.mark.parametrize("mutation", ("changed_sha", "replaced_inode"))
+def test_primary_blend_rejects_changed_bytes_or_path_replacement_across_library_load(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    holder: dict[str, Path] = {}
+
+    def mutate() -> None:
+        path = holder["path"]
+        original = path.read_bytes()
+        if mutation == "changed_sha":
+            path.write_bytes(b"Z" * len(original))
+        else:
+            replacement = path.with_name("replacement.blend")
+            replacement.write_bytes(original)
+            os.replace(replacement, path)
+
+    bpy, _libraries, asset_set, asset, path = _verified_blend_fixture(tmp_path, mutate)
+    holder["path"] = path
+    expected = "SHA-256 differs from receipt" if mutation == "changed_sha" else "changed across"
+    with pytest.raises(RuntimeError, match=expected):
+        _load_verified_blend_objects(bpy, asset_set, asset)
+
+
+class _FakeSockets(dict):
+    def __iter__(self):
+        return iter(self.values())
+
+
+class _FakeSocket:
+    def __init__(self, name: str):
+        self.name = name
+        self.links: list[object] = []
+
+
+class _FakeNode:
+    def __init__(
+        self,
+        node_type: str,
+        name: str,
+        *,
+        inputs: tuple[str, ...] = (),
+        outputs: tuple[str, ...] = (),
+        image=None,
+        active_output: bool = False,
+        node_tree=None,
+    ):
+        self.type = node_type
+        self.name = name
+        self.inputs = _FakeSockets((name, _FakeSocket(name)) for name in inputs)
+        self.outputs = _FakeSockets((name, _FakeSocket(name)) for name in outputs)
+        self.image = image
+        self.is_active_output = active_output
+        self.node_tree = node_tree
+
+
+class _FakeLink:
+    def __init__(self, source: _FakeNode, source_socket: str, target: _FakeNode, target_socket: str):
+        self.from_node = source
+        self.from_socket = source.outputs[source_socket]
+        self.to_node = target
+        self.to_socket = target.inputs[target_socket]
+        self.from_socket.links.append(self)
+        self.to_socket.links.append(self)
+
+
 class _FakeMaterial:
     def __init__(self, name: str, nodes=(), *, source: str | None = None):
         self.name = name
         self.use_nodes = True
         self.animation_data = None
-        self.node_tree = SimpleNamespace(nodes=list(nodes), animation_data=None)
+        self.library = None
+        self.node_tree = SimpleNamespace(nodes=list(nodes), animation_data=None, library=None)
         self._properties = {}
         if source is not None:
             self._properties["vista_external_material_source"] = source
@@ -478,7 +705,16 @@ class _FakeMaterial:
 
 
 class _FakeImage:
-    def __init__(self, path: Path, dimensions: tuple[int, int], library: object):
+    def __init__(
+        self,
+        path: Path,
+        dimensions: tuple[int, int],
+        library=None,
+        *,
+        colorspace: str = "Non-Color",
+        reload_callback=None,
+        pointer: int | None = None,
+    ):
         self.source = "FILE"
         self.filepath_raw = str(path)
         self.filepath = "//shared.png"
@@ -486,9 +722,18 @@ class _FakeImage:
         self.packed_file = None
         self.packed_files = ()
         self.size = dimensions
+        self.colorspace_settings = SimpleNamespace(name=colorspace)
+        self.reload_count = 0
+        self._reload_callback = reload_callback
+        self._pointer = pointer
 
     def reload(self) -> None:
-        return None
+        self.reload_count += 1
+        if self._reload_callback is not None:
+            self._reload_callback(self)
+
+    def as_pointer(self) -> int:
+        return self._pointer or id(self)
 
 
 class _FakeBpyPath:
@@ -504,14 +749,16 @@ def _runtime_material_fixture(tmp_path: Path):
     root = tmp_path / "runtime-acquisition"
     source_root = root / "assets" / "fixture_model"
     specs = (
-        ("textures/base/shared.png", b"base-color", (17, 19), ("base_color",)),
-        ("textures/normal/shared.png", b"normal-map", (23, 29), ("normal",)),
-        ("textures/rough/shared.png", b"roughness-map", (31, 37), ("roughness",)),
+        ("textures/base/shared.png", b"base-color", (17, 19), ("base_color",), "sRGB"),
+        ("textures/normal/shared.png", b"normal-map", (23, 29), ("normal",), "Non-Color"),
+        ("textures/rough/shared.png", b"roughness-map", (31, 37), ("roughness",), "Non-Color"),
+        ("textures/metal/shared.png", b"metalness-map", (41, 43), ("metalness",), "Non-Color"),
+        ("textures/opacity/shared.png", b"opacity-map", (47, 53), ("opacity",), "Non-Color"),
     )
     files = []
     images = []
-    library = object()
-    for relative, payload, dimensions, semantics in specs:
+    library = None
+    for relative, payload, dimensions, semantics, colorspace in specs:
         path = source_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
@@ -524,7 +771,7 @@ def _runtime_material_fixture(tmp_path: Path):
                 dimensions_px=dimensions,
             )
         )
-        images.append(_FakeImage(path.resolve(), dimensions, library))
+        images.append(_FakeImage(path.resolve(), dimensions, library, colorspace=colorspace))
     asset = AcquiredAsset(
         asset_id="fixture_model",
         logical_asset_id="visual.dressing.fixture_model",
@@ -546,9 +793,39 @@ def _runtime_material_fixture(tmp_path: Path):
         acquisition_manifest_sha256="3" * 64,
         assets=(asset,),
     )
+    output = _FakeNode(
+        "OUTPUT_MATERIAL",
+        "Active Material Output",
+        inputs=("Surface", "Volume", "Displacement"),
+        active_output=True,
+    )
+    shader = _FakeNode(
+        "BSDF_PRINCIPLED",
+        "Principled BSDF",
+        inputs=("Base Color", "Roughness", "Normal", "Metallic", "Alpha"),
+        outputs=("BSDF",),
+    )
+    base = _FakeNode("TEX_IMAGE", "Base Color Texture", outputs=("Color", "Alpha"), image=images[0])
+    normal = _FakeNode("TEX_IMAGE", "Normal Texture", outputs=("Color", "Alpha"), image=images[1])
+    rough = _FakeNode("TEX_IMAGE", "Roughness Texture", outputs=("Color", "Alpha"), image=images[2])
+    metal = _FakeNode("TEX_IMAGE", "Metalness Texture", outputs=("Color", "Alpha"), image=images[3])
+    opacity = _FakeNode("TEX_IMAGE", "Opacity Texture", outputs=("Color", "Alpha"), image=images[4])
+    normal_map = _FakeNode(
+        "NORMAL_MAP",
+        "Normal Map",
+        inputs=("Color",),
+        outputs=("Normal",),
+    )
+    _FakeLink(shader, "BSDF", output, "Surface")
+    _FakeLink(base, "Color", shader, "Base Color")
+    _FakeLink(rough, "Color", shader, "Roughness")
+    _FakeLink(normal, "Color", normal_map, "Color")
+    _FakeLink(normal_map, "Normal", shader, "Normal")
+    _FakeLink(metal, "Color", shader, "Metallic")
+    _FakeLink(opacity, "Alpha", shader, "Alpha")
     material = _FakeMaterial(
         "FixtureMaterial",
-        nodes=[SimpleNamespace(image=image) for image in images],
+        nodes=[output, shader, base, normal, rough, metal, opacity, normal_map],
     )
     mesh = SimpleNamespace(material_slots=[SimpleNamespace(material=material)])
     path_api = _FakeBpyPath()
@@ -556,16 +833,235 @@ def _runtime_material_fixture(tmp_path: Path):
     return bpy, path_api, mesh, asset_set, asset, images, library
 
 
-def test_runtime_material_images_bind_full_paths_and_library_context(tmp_path: Path) -> None:
+class _FakeImages(list):
+    def __init__(
+        self,
+        dimensions: tuple[int, int],
+        *,
+        existing=None,
+        returned_existing=None,
+        reload_callback=None,
+    ):
+        super().__init__([existing] if existing is not None else [])
+        self.dimensions = dimensions
+        self.existing = existing
+        self.returned_existing = returned_existing
+        self.reload_callback = reload_callback
+        self.load_calls: list[tuple[str, bool]] = []
+
+    def load(self, path: str, *, check_existing: bool):
+        self.load_calls.append((path, check_existing))
+        if self.existing is not None:
+            return self.returned_existing or self.existing
+        image = _FakeImage(
+            Path(path),
+            self.dimensions,
+            reload_callback=self.reload_callback,
+        )
+        self.append(image)
+        return image
+
+    def remove(self, image) -> None:
+        super().remove(image)
+
+
+def _fresh_image_bpy(
+    asset_set: ExternalAssetSet,
+    asset: AcquiredAsset,
+    *,
+    stale=False,
+    stale_proxy=False,
+    callback=None,
+):
+    receipt_file = next(item for item in asset.files if "base_color" in item.semantic)
+    path = (
+        asset_set.root
+        / asset.source_relative_root
+        / Path(receipt_file.relative_path)
+    ).resolve()
+    existing = _FakeImage(path, receipt_file.dimensions_px, pointer=8675309) if stale else None
+    returned_existing = (
+        _FakeImage(path, receipt_file.dimensions_px, pointer=8675309)
+        if stale and stale_proxy
+        else None
+    )
+    images = _FakeImages(
+        receipt_file.dimensions_px,
+        existing=existing,
+        returned_existing=returned_existing,
+        reload_callback=callback,
+    )
+    path_api = _FakeBpyPath()
+    bpy = SimpleNamespace(path=path_api, data=SimpleNamespace(images=images))
+    return bpy, images, path_api, path, existing
+
+
+def test_authored_pbr_loads_a_fresh_receipt_bound_datablock_with_check_existing_false(
+    tmp_path: Path,
+) -> None:
+    _fixture_bpy, _path_api, _mesh, asset_set, asset, _runtime_images, _library = (
+        _runtime_material_fixture(tmp_path)
+    )
+    bpy, images, path_api, path, _existing = _fresh_image_bpy(asset_set, asset)
+    image = _load_fresh_receipt_image(bpy, asset_set, asset, "base_color")
+    assert image in images
+    assert images.load_calls == [(str(path), False)]
+    assert image.reload_count == 1
+    assert path_api.calls == [(str(path), None), (str(path), None)]
+
+
+def test_authored_pbr_rejects_stale_reuse_and_removes_fresh_image_on_byte_change(
+    tmp_path: Path,
+) -> None:
+    _fixture_bpy, _path_api, _mesh, asset_set, asset, _runtime_images, _library = (
+        _runtime_material_fixture(tmp_path / "stale")
+    )
+    bpy, images, _path_api, path, existing = _fresh_image_bpy(
+        asset_set,
+        asset,
+        stale=True,
+        stale_proxy=True,
+    )
+    with pytest.raises(RuntimeError, match="reused a stale datablock"):
+        _load_fresh_receipt_image(bpy, asset_set, asset, "base_color")
+    assert images.load_calls == [(str(path), False)]
+    assert list(images) == [existing]
+
+    _fixture_bpy, _path_api, _mesh, asset_set, asset, _runtime_images, _library = (
+        _runtime_material_fixture(tmp_path / "changed")
+    )
+
+    def mutate_reloaded_bytes(_image) -> None:
+        path.write_bytes(b"Q" * len(path.read_bytes()))
+
+    bpy, images, _path_api, path, _existing = _fresh_image_bpy(
+        asset_set,
+        asset,
+        callback=mutate_reloaded_bytes,
+    )
+    with pytest.raises(RuntimeError, match="SHA-256 differs from receipt"):
+        _load_fresh_receipt_image(bpy, asset_set, asset, "base_color")
+    assert images == []
+
+
+def test_authored_pbr_rejects_duplicate_receipt_semantics(tmp_path: Path) -> None:
+    _fixture_bpy, _path_api, _mesh, asset_set, asset, _runtime_images, _library = (
+        _runtime_material_fixture(tmp_path)
+    )
+    base = next(item for item in asset.files if "base_color" in item.semantic)
+    ambiguous = replace(asset, files=asset.files + (base,))
+    bpy, _images, _path_api, _path, _existing = _fresh_image_bpy(asset_set, asset)
+    with pytest.raises(RuntimeError, match="base_color texture is absent or ambiguous"):
+        _load_fresh_receipt_image(bpy, asset_set, ambiguous, "base_color")
+
+
+def test_runtime_material_images_bind_active_surface_semantics_to_exact_full_paths(tmp_path: Path) -> None:
     bpy, path_api, mesh, asset_set, asset, images, library = _runtime_material_fixture(tmp_path)
-    # All three receipt textures intentionally share a basename. Their
+    # All receipt textures intentionally share a basename. Their
     # dimensions differ, so a basename-keyed implementation cannot pass.
     _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
-    assert path_api.calls == [
-        call
-        for image in images
-        for call in ((image.filepath_raw, library), (image.filepath_raw, library))
-    ]
+    assert Counter(path_api.calls) == Counter(
+        (image.filepath_raw, library) for image in images for _ in range(3)
+    )
+    assert [image.reload_count for image in images] == [1] * len(images)
+
+
+def _runtime_material(tmp_path: Path):
+    fixture = _runtime_material_fixture(tmp_path)
+    return fixture, fixture[2].material_slots[0].material
+
+
+def test_active_surface_rejects_disconnected_impostor_swapped_semantics_and_ambiguous_link(
+    tmp_path: Path,
+) -> None:
+    (bpy, _path_api, mesh, asset_set, asset, images, _library), material = _runtime_material(
+        tmp_path / "disconnected"
+    )
+    material.node_tree.nodes.append(
+        _FakeNode("TEX_IMAGE", "Disconnected Impostor", outputs=("Color",), image=images[0])
+    )
+    with pytest.raises(RuntimeError, match="disconnected image impostors"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+    (bpy, _path_api, mesh, asset_set, asset, _images, _library), material = _runtime_material(
+        tmp_path / "swapped"
+    )
+    base = next(node for node in material.node_tree.nodes if node.name == "Base Color Texture")
+    rough = next(node for node in material.node_tree.nodes if node.name == "Roughness Texture")
+    base.image, rough.image = rough.image, base.image
+    with pytest.raises(RuntimeError, match="base_color socket uses receipt semantics"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+    (bpy, _path_api, mesh, asset_set, asset, images, _library), material = _runtime_material(
+        tmp_path / "ambiguous"
+    )
+    shader = next(node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED")
+    extra = _FakeNode("TEX_IMAGE", "Second Base", outputs=("Color",), image=images[0])
+    material.node_tree.nodes.append(extra)
+    _FakeLink(extra, "Color", shader, "Base Color")
+    with pytest.raises(RuntimeError, match="exactly one input link"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+
+def test_active_surface_rejects_nested_groups_and_linked_library_images(tmp_path: Path) -> None:
+    (bpy, _path_api, mesh, asset_set, asset, _images, _library), material = _runtime_material(
+        tmp_path / "group"
+    )
+    material.node_tree.nodes.append(
+        _FakeNode("GROUP", "Nested Group", node_tree=SimpleNamespace(nodes=[]))
+    )
+    with pytest.raises(RuntimeError, match="nested node groups"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+    (bpy, path_api, mesh, asset_set, asset, images, _library), _material = _runtime_material(
+        tmp_path / "linked-image"
+    )
+    linked_library = object()
+    images[0].library = linked_library
+    with pytest.raises(RuntimeError, match="nested linked-library ID: material image"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+    assert path_api.calls == [(images[0].filepath_raw, linked_library)]
+
+    (bpy, _path_api, mesh, asset_set, asset, images, _library), _material = _runtime_material(
+        tmp_path / "override-image"
+    )
+    images[0].override_library = object()
+    with pytest.raises(RuntimeError, match="library override ID: material image"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+
+def test_active_surface_rejects_volume_unsupported_shader_inputs_and_node_linked_ids(
+    tmp_path: Path,
+) -> None:
+    (bpy, _path_api, mesh, asset_set, asset, _images, _library), material = _runtime_material(
+        tmp_path / "volume"
+    )
+    output = next(node for node in material.node_tree.nodes if node.type == "OUTPUT_MATERIAL")
+    volume = _FakeNode("VOLUME_ABSORPTION", "Hidden Volume", outputs=("Volume",))
+    material.node_tree.nodes.append(volume)
+    _FakeLink(volume, "Volume", output, "Volume")
+    with pytest.raises(RuntimeError, match="Material Output Volume is unsupported"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+    (bpy, _path_api, mesh, asset_set, asset, _images, _library), material = _runtime_material(
+        tmp_path / "emission"
+    )
+    shader = next(node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED")
+    shader.inputs["Emission Color"] = _FakeSocket("Emission Color")
+    emission = _FakeNode("RGB", "Hidden Emission", outputs=("Color",))
+    material.node_tree.nodes.append(emission)
+    _FakeLink(emission, "Color", shader, "Emission Color")
+    with pytest.raises(RuntimeError, match="unsupported linked inputs.*Emission Color"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+    (bpy, _path_api, mesh, asset_set, asset, _images, _library), material = _runtime_material(
+        tmp_path / "node-id"
+    )
+    coordinate = _FakeNode("TEX_COORD", "Hidden Coordinate", outputs=("UV",))
+    coordinate.object = SimpleNamespace(library=object(), override_library=None)
+    material.node_tree.nodes.append(coordinate)
+    with pytest.raises(RuntimeError, match="nested linked-library ID: material node"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
 
 
 @pytest.mark.parametrize(
@@ -617,19 +1113,31 @@ def test_runtime_material_images_reject_symlink_outside_path_and_changed_bytes(t
 
 
 def _static_mesh_fixture():
-    tree = SimpleNamespace(nodes=[], animation_data=None)
-    material = SimpleNamespace(name="StaticMaterial", animation_data=None, node_tree=tree)
+    tree = SimpleNamespace(nodes=[], animation_data=None, library=None)
+    material = SimpleNamespace(
+        name="StaticMaterial",
+        animation_data=None,
+        node_tree=tree,
+        library=None,
+    )
     data = SimpleNamespace(
         name="StaticMeshData",
         animation_data=None,
         shape_keys=None,
+        library=None,
         polygons=[SimpleNamespace(material_index=0)],
     )
     obj = SimpleNamespace(
         name="StaticMesh",
         type="MESH",
+        library=None,
         modifiers=[],
         constraints=[],
+        rigid_body=None,
+        rigid_body_constraint=None,
+        soft_body=None,
+        particle_systems=[],
+        field=SimpleNamespace(type="NONE"),
         instance_type="NONE",
         instance_collection=None,
         rotation_mode="XYZ",
@@ -657,10 +1165,23 @@ def _static_mesh_fixture():
         ("delta", "non-identity delta transforms"),
         ("drawable", "unsupported drawable object types"),
         ("instancing", "unsupported instancing"),
+        ("shape_keys", "contains shape keys"),
+        ("rigid_body", "rigid-body state"),
+        ("rigid_constraint", "rigid-body constraint"),
+        ("soft_body", "soft-body state"),
+        ("particles", "particle-system state"),
+        ("force_field", "non-NONE force field"),
+        ("object_library", "nested linked-library ID: object"),
+        ("data_library", "nested linked-library ID: object data"),
+        ("material_library", "nested linked-library ID: material"),
+        ("tree_library", "nested linked-library ID: material node tree"),
+        ("object_override", "library override ID: object"),
+        ("new_action", "contains animations"),
     ),
 )
 def test_static_external_source_rejects_nondeterministic_blender_state(case: str, error: str) -> None:
     obj, material, tree = _static_mesh_fixture()
+    new_actions = []
     if case == "modifier":
         obj.modifiers.append(object())
     elif case == "constraint":
@@ -681,8 +1202,32 @@ def test_static_external_source_rejects_nondeterministic_blender_state(case: str
         obj.type = "CURVE"
     elif case == "instancing":
         obj.instance_type = "COLLECTION"
+    elif case == "shape_keys":
+        obj.data.shape_keys = object()
+    elif case == "rigid_body":
+        obj.rigid_body = object()
+    elif case == "rigid_constraint":
+        obj.rigid_body_constraint = object()
+    elif case == "soft_body":
+        obj.soft_body = object()
+    elif case == "particles":
+        obj.particle_systems.append(object())
+    elif case == "force_field":
+        obj.field.type = "FORCE"
+    elif case == "object_library":
+        obj.library = object()
+    elif case == "data_library":
+        obj.data.library = object()
+    elif case == "material_library":
+        material.library = object()
+    elif case == "tree_library":
+        tree.library = object()
+    elif case == "object_override":
+        obj.override_library = object()
+    elif case == "new_action":
+        new_actions.append(object())
     with pytest.raises(RuntimeError, match=error):
-        _validate_static_source(SimpleNamespace(), [obj], [])
+        _validate_static_source(SimpleNamespace(), [obj], new_actions)
 
 
 def test_static_external_source_accepts_only_plain_static_mesh_and_local_helper_parent() -> None:
@@ -690,8 +1235,14 @@ def test_static_external_source_accepts_only_plain_static_mesh_and_local_helper_
     helper = SimpleNamespace(
         name="Helper",
         type="EMPTY",
+        library=None,
         modifiers=[],
         constraints=[],
+        rigid_body=None,
+        rigid_body_constraint=None,
+        soft_body=None,
+        particle_systems=[],
+        field=SimpleNamespace(type="NONE"),
         instance_type="NONE",
         instance_collection=None,
         rotation_mode="XYZ",

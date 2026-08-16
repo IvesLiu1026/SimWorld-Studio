@@ -3,7 +3,7 @@
 
 Run with the pinned Blender binary::
 
-    blender --background --factory-startup --python build.py -- \
+    blender --background --factory-startup --disable-autoexec --python build.py -- \
       --house /absolute/house.json \
       --visual-profile /absolute/realistic_interior_r2.json \
       --output-root /absolute/fresh-output
@@ -37,7 +37,6 @@ if __package__ in {None, ""}:
     from blender.vista_playable_home_realism.config import (  # type: ignore[import-not-found]
         DEFAULT_TEXTURE_SIZE_PX,
         EXPECTED_BLENDER_VERSION,
-        ForgeInputError,
         canonical_json_bytes,
         content_digest,
         load_json_object,
@@ -57,6 +56,7 @@ if __package__ in {None, ""}:
         ExternalAssetSet,
         load_external_asset_set,
         realize_external_placements,
+        staged_external_asset_set,
     )
     from blender.vista_playable_home_realism.placement import (  # type: ignore[import-not-found]
         PlacementManifestDocument,
@@ -67,7 +67,6 @@ else:
     from .config import (
         DEFAULT_TEXTURE_SIZE_PX,
         EXPECTED_BLENDER_VERSION,
-        ForgeInputError,
         canonical_json_bytes,
         content_digest,
         load_json_object,
@@ -83,7 +82,12 @@ else:
     )
     from .inspect import inspect_output
     from .materials import realize_blender_materials
-    from .external_assets import ExternalAssetSet, load_external_asset_set, realize_external_placements
+    from .external_assets import (
+        ExternalAssetSet,
+        load_external_asset_set,
+        realize_external_placements,
+        staged_external_asset_set,
+    )
     from .placement import PlacementManifestDocument, load_placement_manifest
 
 
@@ -390,7 +394,7 @@ def _artifact(path: pathlib.Path, output_root: pathlib.Path, artifact_id: str, m
     }
 
 
-def build_with_blender(
+def _build_with_blender_runtime(
     bpy: Any,
     mathutils: Any,
     house: Mapping[str, Any],
@@ -513,6 +517,44 @@ def build_with_blender(
     build_path = output_root / "build-receipt.json"
     write_json(build_path, build_receipt)
     return build_receipt
+
+
+def build_with_blender(
+    bpy: Any,
+    mathutils: Any,
+    house: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    output_root: pathlib.Path,
+    *,
+    texture_size_px: int,
+    external_asset_set: ExternalAssetSet | None = None,
+    external_placement_manifest: PlacementManifestDocument | None = None,
+) -> dict[str, Any]:
+    if (external_asset_set is None) != (external_placement_manifest is None):
+        raise RuntimeError("external asset set and placement manifest must be supplied together")
+    if external_asset_set is None:
+        return _build_with_blender_runtime(
+            bpy,
+            mathutils,
+            house,
+            profile,
+            output_root,
+            texture_size_px=texture_size_px,
+        )
+    # Keep the verified private snapshot alive through GLB export, preview
+    # rendering, source-scene packing, and all receipt inspection. Runtime
+    # absolute paths never enter the normalized/public manifests.
+    with staged_external_asset_set(external_asset_set) as runtime_asset_set:
+        return _build_with_blender_runtime(
+            bpy,
+            mathutils,
+            house,
+            profile,
+            output_root,
+            texture_size_px=texture_size_px,
+            external_asset_set=runtime_asset_set,
+            external_placement_manifest=external_placement_manifest,
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> None:

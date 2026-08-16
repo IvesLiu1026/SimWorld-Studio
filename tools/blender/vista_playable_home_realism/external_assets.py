@@ -7,16 +7,19 @@ Blender process.  Absolute acquisition paths never enter persistent receipts.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
 import os
 import pathlib
 import re
+import shutil
 import stat
 import struct
+import tempfile
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from .config import ForgeInputError, sha256_file
 
@@ -527,7 +530,7 @@ def _verify_receipt_file_bytes(
     receipt_file: AcquiredFile,
     *,
     label: str,
-) -> None:
+) -> tuple[int, int, int, int, int, int]:
     """Recheck one already-resolved receipt file immediately before use."""
 
     try:
@@ -545,13 +548,200 @@ def _verify_receipt_file_bytes(
         raise RuntimeError(f"{label} changed while hashing: {receipt_file.relative_path}")
     if digest != receipt_file.sha256:
         raise RuntimeError(f"{label} SHA-256 differs from receipt: {receipt_file.relative_path}")
+    return _receipt_file_fingerprint(after)
+
+
+def _sha256_descriptor(file_descriptor: int) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while True:
+        chunk = os.pread(file_descriptor, 1024 * 1024, offset)
+        if not chunk:
+            return digest.hexdigest()
+        digest.update(chunk)
+        offset += len(chunk)
+
+
+def _verify_receipt_descriptor(
+    file_descriptor: int,
+    receipt_file: AcquiredFile,
+    *,
+    label: str,
+) -> tuple[int, int, int, int, int, int]:
+    try:
+        before = os.fstat(file_descriptor)
+    except OSError as error:
+        raise RuntimeError(f"{label} descriptor is unavailable") from error
+    if not stat.S_ISREG(before.st_mode) or before.st_size != receipt_file.size_bytes:
+        raise RuntimeError(f"{label} descriptor size differs from receipt")
+    digest = _sha256_descriptor(file_descriptor)
+    try:
+        after = os.fstat(file_descriptor)
+    except OSError as error:
+        raise RuntimeError(f"{label} descriptor changed while hashing") from error
+    if _receipt_file_fingerprint(before) != _receipt_file_fingerprint(after):
+        raise RuntimeError(f"{label} descriptor changed while hashing")
+    if digest != receipt_file.sha256:
+        raise RuntimeError(f"{label} descriptor SHA-256 differs from receipt")
+    return _receipt_file_fingerprint(after)
+
+
+def _write_all(file_descriptor: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        written = os.write(file_descriptor, payload[offset:])
+        if written <= 0:
+            raise RuntimeError("runtime snapshot write made no progress")
+        offset += written
+
+
+def _copy_verified_file_to_snapshot(
+    source: pathlib.Path,
+    destination: pathlib.Path,
+    *,
+    expected_size: int | None,
+    expected_sha256: str,
+    label: str,
+) -> None:
+    source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    destination_flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        source_fd = os.open(source, source_flags)
+    except OSError as error:
+        raise RuntimeError(f"cannot open {label} for runtime snapshot") from error
+    destination_fd: int | None = None
+    try:
+        source_before = os.fstat(source_fd)
+        if not stat.S_ISREG(source_before.st_mode) or (
+            expected_size is not None and source_before.st_size != expected_size
+        ):
+            raise RuntimeError(f"{label} size differs from receipt during snapshot")
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        destination_fd = os.open(destination, destination_flags, 0o600)
+        digest = hashlib.sha256()
+        offset = 0
+        while True:
+            chunk = os.pread(source_fd, 1024 * 1024, offset)
+            if not chunk:
+                break
+            digest.update(chunk)
+            _write_all(destination_fd, chunk)
+            offset += len(chunk)
+        os.fsync(destination_fd)
+        source_after = os.fstat(source_fd)
+        destination_state = os.fstat(destination_fd)
+        if _receipt_file_fingerprint(source_before) != _receipt_file_fingerprint(source_after):
+            raise RuntimeError(f"{label} changed while creating runtime snapshot")
+        if expected_size is not None and offset != expected_size:
+            raise RuntimeError(f"{label} copied byte count differs from receipt")
+        if digest.hexdigest() != expected_sha256:
+            raise RuntimeError(f"{label} SHA-256 differs from receipt during snapshot")
+        if not stat.S_ISREG(destination_state.st_mode) or destination_state.st_size != offset:
+            raise RuntimeError(f"{label} runtime snapshot is not a complete regular file")
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        os.close(source_fd)
+    destination.chmod(0o400)
+    if sha256_file(destination) != expected_sha256:
+        raise RuntimeError(f"{label} runtime snapshot SHA-256 verification failed")
+
+
+def _private_staging_parent() -> pathlib.Path:
+    raw = os.environ.get("TMPDIR")
+    if not raw:
+        raise RuntimeError("TMPDIR must name an absolute private filesystem for external asset staging")
+    parent = pathlib.Path(raw)
+    if not parent.is_absolute() or parent.is_symlink() or not parent.is_dir():
+        raise RuntimeError("TMPDIR must be an absolute non-symlink directory for external asset staging")
+    resolved = parent.resolve(strict=True)
+    if _lexical_absolute(parent) != resolved:
+        raise RuntimeError("TMPDIR may not traverse symbolic links for external asset staging")
+    state = resolved.stat(follow_symlinks=False)
+    # NAS mounts may map the authenticated user's numeric UID to a server-side
+    # owner, so st_uid equality is not portable here.  Require the stronger
+    # observable property instead: the effective process can use the parent,
+    # while POSIX group/other bits grant no access at all.
+    if state.st_mode & (stat.S_IRWXG | stat.S_IRWXO) or not os.access(
+        resolved,
+        os.R_OK | os.W_OK | os.X_OK,
+    ):
+        raise RuntimeError(
+            "TMPDIR must be private to and accessible by the current process"
+        )
+    return resolved
+
+
+@contextlib.contextmanager
+def staged_external_asset_set(asset_set: ExternalAssetSet) -> Iterator[ExternalAssetSet]:
+    """Yield a private content-verified snapshot for the full Blender build.
+
+    Every receipt file is copied from an ``O_NOFOLLOW`` descriptor while its
+    bytes and inode fingerprint remain stable. Blender then consumes only the
+    private snapshot, so concurrent replacement of the acquisition pathname
+    cannot change bytes after verification. The random runtime path is never
+    serialized; public provenance remains bound to the original receipt.
+    """
+
+    parent = _private_staging_parent()
+    stage = pathlib.Path(tempfile.mkdtemp(prefix="vista-external-assets-", dir=parent))
+    stage.chmod(0o700)
+    try:
+        receipt_source = _safe_existing_path(
+            asset_set.root,
+            ACQUISITION_RECEIPT_FILENAME,
+            file_required=True,
+        )
+        _copy_verified_file_to_snapshot(
+            receipt_source,
+            stage / ACQUISITION_RECEIPT_FILENAME,
+            expected_size=None,
+            expected_sha256=asset_set.receipt_file_sha256,
+            label="external acquisition receipt",
+        )
+        copied: set[str] = set()
+        for asset in asset_set.assets:
+            for receipt_file in asset.files:
+                relative = f"{asset.source_relative_root}/{receipt_file.relative_path}"
+                if relative in copied:
+                    raise RuntimeError(f"external receipt repeats a runtime snapshot path: {relative}")
+                copied.add(relative)
+                source = _safe_existing_path(asset_set.root, relative, file_required=True)
+                _copy_verified_file_to_snapshot(
+                    source,
+                    stage / pathlib.PurePosixPath(relative),
+                    expected_size=receipt_file.size_bytes,
+                    expected_sha256=receipt_file.sha256,
+                    label=f"external receipt file {relative}",
+                )
+        yield ExternalAssetSet(
+            root=stage.resolve(strict=True),
+            receipt_digest=asset_set.receipt_digest,
+            receipt_file_sha256=asset_set.receipt_file_sha256,
+            acquisition_manifest_sha256=asset_set.acquisition_manifest_sha256,
+            assets=asset_set.assets,
+        )
+    finally:
+        shutil.rmtree(stage)
+
+
+def _texture_receipt_file(asset: AcquiredAsset, semantic: str) -> AcquiredFile:
+    matches = [item for item in asset.files if semantic in item.semantic]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"verified asset {semantic} texture is absent or ambiguous: {asset.logical_asset_id}"
+        )
+    return matches[0]
 
 
 def _texture_file(asset_set: ExternalAssetSet, asset: AcquiredAsset, semantic: str) -> pathlib.Path:
-    matches = [item for item in asset.files if semantic in item.semantic]
-    if not matches:
-        raise RuntimeError(f"verified asset lost {semantic} texture: {asset.logical_asset_id}")
-    receipt_file = matches[0]
+    receipt_file = _texture_receipt_file(asset, semantic)
     path = _safe_existing_path(
         asset_set.root,
         f"{asset.source_relative_root}/{receipt_file.relative_path}",
@@ -566,34 +756,47 @@ def _realize_pbr_material(bpy: Any, asset_set: ExternalAssetSet, logical_id: str
     if asset.asset_type != "texture":
         raise RuntimeError(f"project-authored material source is not a texture: {logical_id}")
     material = bpy.data.materials.new(name=f"r2.external.{_slug(logical_id)}")
-    material.use_nodes = True
-    nodes = material.node_tree.nodes
-    nodes.clear()
-    output = nodes.new("ShaderNodeOutputMaterial")
-    shader = nodes.new("ShaderNodeBsdfPrincipled")
-    material.node_tree.links.new(shader.outputs["BSDF"], output.inputs["Surface"])
-    for semantic, input_name, colorspace in (
-        ("base_color", "Base Color", "sRGB"),
-        ("roughness", "Roughness", "Non-Color"),
-    ):
-        path = _texture_file(asset_set, asset, semantic)
-        image = bpy.data.images.load(str(path), check_existing=True)
-        image.colorspace_settings.name = colorspace
+    created_images: list[Any] = []
+    try:
+        material.use_nodes = True
+        nodes = material.node_tree.nodes
+        nodes.clear()
+        output = nodes.new("ShaderNodeOutputMaterial")
+        shader = nodes.new("ShaderNodeBsdfPrincipled")
+        material.node_tree.links.new(shader.outputs["BSDF"], output.inputs["Surface"])
+        for semantic, input_name, colorspace in (
+            ("base_color", "Base Color", "sRGB"),
+            ("roughness", "Roughness", "Non-Color"),
+        ):
+            image = _load_fresh_receipt_image(bpy, asset_set, asset, semantic)
+            created_images.append(image)
+            image.colorspace_settings.name = colorspace
+            texture = nodes.new("ShaderNodeTexImage")
+            texture.image = image
+            material.node_tree.links.new(texture.outputs["Color"], shader.inputs[input_name])
+        image = _load_fresh_receipt_image(bpy, asset_set, asset, "normal")
+        created_images.append(image)
+        image.colorspace_settings.name = "Non-Color"
         texture = nodes.new("ShaderNodeTexImage")
         texture.image = image
-        material.node_tree.links.new(texture.outputs["Color"], shader.inputs[input_name])
-    normal_path = _texture_file(asset_set, asset, "normal")
-    image = bpy.data.images.load(str(normal_path), check_existing=True)
-    image.colorspace_settings.name = "Non-Color"
-    texture = nodes.new("ShaderNodeTexImage")
-    texture.image = image
-    normal = nodes.new("ShaderNodeNormalMap")
-    normal.inputs["Strength"].default_value = 0.65
-    material.node_tree.links.new(texture.outputs["Color"], normal.inputs["Color"])
-    material.node_tree.links.new(normal.outputs["Normal"], shader.inputs["Normal"])
-    material["vista_external_material_source"] = logical_id
-    material["vista_source_tree_sha256"] = asset.source_tree_sha256
-    return material
+        normal = nodes.new("ShaderNodeNormalMap")
+        normal.inputs["Strength"].default_value = 0.65
+        material.node_tree.links.new(texture.outputs["Color"], normal.inputs["Color"])
+        material.node_tree.links.new(normal.outputs["Normal"], shader.inputs["Normal"])
+        material["vista_external_material_source"] = logical_id
+        material["vista_source_tree_sha256"] = asset.source_tree_sha256
+        return material
+    except BaseException:
+        for image in reversed(created_images):
+            try:
+                bpy.data.images.remove(image)
+            except (ReferenceError, RuntimeError, TypeError):
+                pass
+        try:
+            bpy.data.materials.remove(material)
+        except (ReferenceError, RuntimeError, TypeError):
+            pass
+        raise
 
 
 def _relink(obj: Any, collection: Any) -> None:
@@ -701,9 +904,19 @@ def _authored_recipe(
     wool = materials_by_logical_id.get("visual.material.poly_wool_herringbone")
     x, y, z = (float(value) for value in dimensions)
     parts: list[Any] = []
-    add = lambda suffix, center, dims, mat: parts.append(
-        _cube_part(bpy, collection, f"VISTA_External_{recipe}_{suffix}", center, dims, mat)
-    )
+
+    def add(suffix: str, center: Sequence[float], dims: Sequence[float], material: Any) -> None:
+        parts.append(
+            _cube_part(
+                bpy,
+                collection,
+                f"VISTA_External_{recipe}_{suffix}",
+                center,
+                dims,
+                material,
+            )
+        )
+
     if recipe == "contemporary_shoe_bench_v1":
         add("seat", (0, 0, z - 0.055), (x, y, 0.11), wool)
         add("shelf", (0, 0, 0.16), (x * 0.88, y * 0.82, 0.055), oak)
@@ -850,6 +1063,13 @@ def _block_has_animation_or_drivers(block: Any) -> bool:
     return block is not None and getattr(block, "animation_data", None) is not None
 
 
+def _require_local_id(block: Any, *, label: str) -> None:
+    if block is not None and getattr(block, "library", None) is not None:
+        raise RuntimeError(f"external source contains a nested linked-library ID: {label}")
+    if block is not None and getattr(block, "override_library", None) is not None:
+        raise RuntimeError(f"external source contains a library override ID: {label}")
+
+
 def _identity_vector(value: Any, expected: Sequence[float], tolerance: float = 1e-9) -> bool:
     try:
         actual = tuple(float(item) for item in value)
@@ -873,10 +1093,23 @@ def _validate_static_source(bpy: Any, objects: Sequence[Any], new_actions: Seque
     loaded_identities = {id(obj) for obj in objects}
     materials: list[Any] = []
     for obj in objects:
+        _require_local_id(obj, label=f"object {obj.name}")
+        _require_local_id(getattr(obj, "data", None), label=f"object data {obj.name}")
         if _has_collection_items(getattr(obj, "modifiers", ())):
             raise RuntimeError(f"external object contains modifiers: {obj.name}")
         if _has_collection_items(getattr(obj, "constraints", ())):
             raise RuntimeError(f"external object contains constraints: {obj.name}")
+        if getattr(obj, "rigid_body", None) is not None:
+            raise RuntimeError(f"external object contains rigid-body state: {obj.name}")
+        if getattr(obj, "rigid_body_constraint", None) is not None:
+            raise RuntimeError(f"external object contains a rigid-body constraint: {obj.name}")
+        if getattr(obj, "soft_body", None) is not None:
+            raise RuntimeError(f"external object contains soft-body state: {obj.name}")
+        if _has_collection_items(getattr(obj, "particle_systems", ())):
+            raise RuntimeError(f"external object contains particle-system state: {obj.name}")
+        force_field = getattr(obj, "field", None)
+        if force_field is not None and getattr(force_field, "type", "NONE") != "NONE":
+            raise RuntimeError(f"external object contains a non-NONE force field: {obj.name}")
         if getattr(obj, "instance_type", "NONE") != "NONE" or getattr(obj, "instance_collection", None) is not None:
             raise RuntimeError(f"external object uses unsupported instancing: {obj.name}")
         if getattr(obj, "rotation_mode", None) != "XYZ":
@@ -897,10 +1130,12 @@ def _validate_static_source(bpy: Any, objects: Sequence[Any], new_actions: Seque
             if material is not None and material not in materials:
                 materials.append(material)
     for material in materials:
+        _require_local_id(material, label=f"material {material.name}")
         if _block_has_animation_or_drivers(material):
             raise RuntimeError(f"external material contains animations or drivers: {material.name}")
         if getattr(material, "node_tree", None) is not None:
             for tree in _node_trees(material):
+                _require_local_id(tree, label=f"material node tree {material.name}")
                 if _block_has_animation_or_drivers(tree):
                     raise RuntimeError(f"external material nodes contain animations or drivers: {material.name}")
     meshes = [obj for obj in objects if obj.type == "MESH"]
@@ -949,10 +1184,12 @@ def _resolved_runtime_image_path(bpy: Any, image: Any) -> pathlib.Path:
     raw = getattr(image, "filepath_raw", None)
     if type(raw) is not str or not raw:
         raise RuntimeError("external material FILE image lacks filepath_raw")
+    library = getattr(image, "library", None)
     try:
-        expanded = bpy.path.abspath(raw, library=getattr(image, "library", None))
+        expanded = bpy.path.abspath(raw, library=library)
     except Exception as error:
         raise RuntimeError("external material image filepath_raw cannot be resolved") from error
+    _require_local_id(image, label="material image")
     try:
         candidate = pathlib.Path(os.fspath(expanded))
     except TypeError as error:
@@ -971,13 +1208,297 @@ def _resolved_runtime_image_path(bpy: Any, image: Any) -> pathlib.Path:
     return resolved
 
 
-def _material_image_nodes(material: Any) -> tuple[Any, ...]:
+def _named_socket(sockets: Any, name: str, *, label: str) -> Any:
+    socket = sockets.get(name) if hasattr(sockets, "get") else None
+    if socket is None:
+        for candidate in sockets:
+            if getattr(candidate, "name", None) == name:
+                socket = candidate
+                break
+    if socket is None:
+        raise RuntimeError(f"external material lacks required {label} socket {name!r}")
+    return socket
+
+
+def _socket_links(socket: Any) -> tuple[Any, ...]:
+    return tuple(getattr(socket, "links", ()))
+
+
+def _single_input_link(node: Any, socket_name: str, *, label: str) -> tuple[Any, Any]:
+    socket = _named_socket(node.inputs, socket_name, label=label)
+    links = _socket_links(socket)
+    if len(links) != 1:
+        raise RuntimeError(f"external material {label} must have exactly one input link")
+    link = links[0]
+    if getattr(link, "to_socket", None) != socket or getattr(link, "from_node", None) is None:
+        raise RuntimeError(f"external material {label} contains an ambiguous input link")
+    return link, socket
+
+
+def _all_output_links(node: Any) -> tuple[Any, ...]:
     return tuple(
-        node
-        for tree in _node_trees(material)
-        for node in tree.nodes
-        if getattr(node, "image", None) is not None
+        link
+        for socket in getattr(node, "outputs", ())
+        for link in _socket_links(socket)
     )
+
+
+def _require_exclusive_output_link(
+    node: Any,
+    expected_link: Any,
+    expected_target: Any,
+    *,
+    output_names: frozenset[str],
+    label: str,
+) -> None:
+    links = _all_output_links(node)
+    if (
+        len(links) != 1
+        or getattr(links[0], "from_node", None) != node
+        or getattr(links[0], "to_socket", None) != expected_target
+        or getattr(expected_link, "to_socket", None) != expected_target
+        or getattr(getattr(links[0], "from_socket", None), "name", None) not in output_names
+    ):
+        raise RuntimeError(f"external material {label} output link is ambiguous or misrouted")
+
+
+def _direct_semantic_image_node(
+    shader: Any,
+    input_name: str,
+    semantic: str,
+    *,
+    output_names: frozenset[str] = frozenset({"Color"}),
+) -> Any:
+    link, target = _single_input_link(shader, input_name, label=semantic)
+    node = link.from_node
+    if getattr(node, "type", None) != "TEX_IMAGE" or getattr(node, "image", None) is None:
+        raise RuntimeError(f"external material {semantic} must link directly from one image texture")
+    _require_exclusive_output_link(
+        node,
+        link,
+        target,
+        output_names=output_names,
+        label=semantic,
+    )
+    return node
+
+
+def _normal_semantic_image_node(shader: Any) -> Any:
+    shader_link, shader_target = _single_input_link(shader, "Normal", label="normal")
+    normal_node = shader_link.from_node
+    if getattr(normal_node, "type", None) != "NORMAL_MAP":
+        raise RuntimeError("external material normal must link through one Normal Map node")
+    _require_exclusive_output_link(
+        normal_node,
+        shader_link,
+        shader_target,
+        output_names=frozenset({"Normal"}),
+        label="normal-map",
+    )
+    image_link, image_target = _single_input_link(normal_node, "Color", label="normal-map color")
+    image_node = image_link.from_node
+    if getattr(image_node, "type", None) != "TEX_IMAGE" or getattr(image_node, "image", None) is None:
+        raise RuntimeError("external material normal map must link directly from one image texture")
+    _require_exclusive_output_link(
+        image_node,
+        image_link,
+        image_target,
+        output_names=frozenset({"Color"}),
+        label="normal",
+    )
+    return image_node
+
+
+def _reachable_upstream_nodes(start: Any) -> tuple[Any, ...]:
+    pending = [start]
+    result: list[Any] = []
+    seen: set[int] = set()
+    while pending:
+        node = pending.pop()
+        identity = id(node)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(node)
+        for socket in getattr(node, "inputs", ()):
+            for link in _socket_links(socket):
+                source = getattr(link, "from_node", None)
+                if source is not None:
+                    pending.append(source)
+    return tuple(result)
+
+
+def _active_surface_semantic_images(material: Any) -> dict[str, Any]:
+    tree = material.node_tree
+    nodes = tuple(tree.nodes)
+    if any(
+        getattr(node, "type", None) == "GROUP" or getattr(node, "node_tree", None) is not None
+        for node in nodes
+    ):
+        raise RuntimeError(
+            f"external material nested node groups require a separately verified sanitization: {material.name}"
+        )
+    for node in nodes:
+        for attribute in ("object", "texture", "collection"):
+            reference = getattr(node, attribute, None)
+            if reference is not None:
+                _require_local_id(
+                    reference,
+                    label=f"material node {getattr(node, 'name', '<unnamed>')}.{attribute}",
+                )
+    active_outputs = [
+        node
+        for node in nodes
+        if getattr(node, "type", None) == "OUTPUT_MATERIAL"
+        and getattr(node, "is_active_output", False) is True
+    ]
+    if len(active_outputs) != 1:
+        raise RuntimeError(f"external material must have exactly one active Material Output: {material.name}")
+    for socket_name in ("Volume", "Displacement"):
+        socket = _named_socket(
+            active_outputs[0].inputs,
+            socket_name,
+            label="active Material Output",
+        )
+        if _socket_links(socket):
+            raise RuntimeError(
+                f"external material active Material Output {socket_name} is unsupported"
+            )
+    surface_link, surface_target = _single_input_link(
+        active_outputs[0],
+        "Surface",
+        label="active Material Output Surface",
+    )
+    shader = surface_link.from_node
+    if getattr(shader, "type", None) != "BSDF_PRINCIPLED":
+        raise RuntimeError("external material active Surface must link directly from Principled BSDF")
+    allowed_shader_links = {"Base Color", "Roughness", "Normal", "Metallic", "Alpha"}
+    unsupported_shader_links = sorted(
+        getattr(socket, "name", "<unnamed>")
+        for socket in shader.inputs
+        if _socket_links(socket) and getattr(socket, "name", None) not in allowed_shader_links
+    )
+    if unsupported_shader_links:
+        raise RuntimeError(
+            f"external material Principled BSDF has unsupported linked inputs: "
+            f"{unsupported_shader_links}"
+        )
+    _require_exclusive_output_link(
+        shader,
+        surface_link,
+        surface_target,
+        output_names=frozenset({"BSDF"}),
+        label="Principled Surface",
+    )
+    semantic_nodes = {
+        "base_color": _direct_semantic_image_node(shader, "Base Color", "base_color"),
+        "roughness": _direct_semantic_image_node(shader, "Roughness", "roughness"),
+        "normal": _normal_semantic_image_node(shader),
+    }
+    for semantic, input_name, output_names in (
+        ("metalness", "Metallic", frozenset({"Color"})),
+        ("opacity", "Alpha", frozenset({"Color", "Alpha"})),
+    ):
+        socket = _named_socket(shader.inputs, input_name, label=semantic)
+        if _socket_links(socket):
+            semantic_nodes[semantic] = _direct_semantic_image_node(
+                shader,
+                input_name,
+                semantic,
+                output_names=output_names,
+            )
+    if len({id(node) for node in semantic_nodes.values()}) != len(semantic_nodes):
+        raise RuntimeError("external material reuses one image node for ambiguous PBR semantics")
+    reachable = _reachable_upstream_nodes(shader)
+    reachable_images = {
+        id(node): node for node in reachable if getattr(node, "image", None) is not None
+    }
+    all_images = {id(node): node for node in nodes if getattr(node, "image", None) is not None}
+    disconnected = sorted(
+        getattr(node, "name", "<unnamed>")
+        for identity, node in all_images.items()
+        if identity not in reachable_images
+    )
+    if disconnected:
+        raise RuntimeError(f"external material contains disconnected image impostors: {disconnected}")
+    mapped = {id(node) for node in semantic_nodes.values()}
+    unexpected = sorted(
+        getattr(node, "name", "<unnamed>")
+        for identity, node in reachable_images.items()
+        if identity not in mapped
+    )
+    if unexpected:
+        raise RuntimeError(f"external material routes images through unsupported sockets: {unexpected}")
+    return semantic_nodes
+
+
+def _validate_receipt_image(
+    bpy: Any,
+    image: Any,
+    expected_path: pathlib.Path,
+    receipt_file: AcquiredFile,
+    *,
+    label: str,
+    reload_image: bool,
+) -> None:
+    resolved = _resolved_runtime_image_path(bpy, image)
+    if resolved != expected_path:
+        raise RuntimeError(f"{label} references a texture outside its verified receipt: {resolved}")
+    _verify_receipt_file_bytes(resolved, receipt_file, label=label)
+    dimensions = tuple(int(value) for value in image.size)
+    if reload_image or dimensions != receipt_file.dimensions_px:
+        try:
+            image.reload()
+        except RuntimeError as error:
+            raise RuntimeError(f"{label} could not reload its receipt-bound bytes") from error
+    if tuple(int(value) for value in image.size) != receipt_file.dimensions_px:
+        raise RuntimeError(f"{label} resolution differs from receipt: {receipt_file.relative_path}")
+    reloaded_path = _resolved_runtime_image_path(bpy, image)
+    if reloaded_path != resolved:
+        raise RuntimeError(f"{label} path changed during reload: {receipt_file.relative_path}")
+    _verify_receipt_file_bytes(reloaded_path, receipt_file, label=label)
+
+
+def _load_fresh_receipt_image(
+    bpy: Any,
+    asset_set: ExternalAssetSet,
+    asset: AcquiredAsset,
+    semantic: str,
+) -> Any:
+    receipt_file = _texture_receipt_file(asset, semantic)
+    path = _texture_file(asset_set, asset, semantic)
+    def datablock_identity(value: Any) -> tuple[str, int]:
+        as_pointer = getattr(value, "as_pointer", None)
+        if callable(as_pointer):
+            try:
+                pointer = int(as_pointer())
+            except (ReferenceError, RuntimeError, TypeError, ValueError, OverflowError):
+                pointer = 0
+            if pointer > 0:
+                return "bpy", pointer
+        return "python", id(value)
+
+    existing = {datablock_identity(image) for image in bpy.data.images}
+    image = bpy.data.images.load(str(path), check_existing=False)
+    fresh = datablock_identity(image) not in existing
+    if not fresh:
+        raise RuntimeError(f"project-authored {semantic} image loader reused a stale datablock")
+    try:
+        _validate_receipt_image(
+            bpy,
+            image,
+            path,
+            receipt_file,
+            label=f"project-authored {semantic} material texture",
+            reload_image=True,
+        )
+        return image
+    except BaseException:
+        try:
+            bpy.data.images.remove(image)
+        except (ReferenceError, RuntimeError, TypeError):
+            pass
+        raise
 
 
 def _validate_runtime_material_images(
@@ -993,13 +1514,12 @@ def _validate_runtime_material_images(
             if slot.material not in materials:
                 materials.append(slot.material)
     used_semantics: set[str] = set()
+    available_semantics = {semantic for receipt_file in expected.values() for semantic in receipt_file.semantic}
     for material in materials:
         if not material.use_nodes or material.node_tree is None:
             raise RuntimeError(f"external material is not node-based PBR: {material.name}")
-        image_nodes = _material_image_nodes(material)
-        if not image_nodes:
-            raise RuntimeError(f"external material has no image-backed surface input: {material.name}")
-        for node in image_nodes:
+        semantic_nodes = _active_surface_semantic_images(material)
+        for semantic, node in semantic_nodes.items():
             image = node.image
             resolved = _resolved_runtime_image_path(bpy, image)
             receipt_file = expected.get(resolved)
@@ -1007,27 +1527,32 @@ def _validate_runtime_material_images(
                 raise RuntimeError(
                     f"external material references a texture outside its verified receipt: {resolved}"
                 )
-            _verify_receipt_file_bytes(resolved, receipt_file, label="external material texture")
-            if tuple(int(value) for value in image.size) != receipt_file.dimensions_px:
-                try:
-                    image.reload()
-                except RuntimeError:
-                    pass
-            if tuple(int(value) for value in image.size) != receipt_file.dimensions_px:
+            if semantic not in receipt_file.semantic:
                 raise RuntimeError(
-                    f"external material texture resolution differs from receipt: {receipt_file.relative_path}"
+                    f"external material {semantic} socket uses receipt semantics "
+                    f"{list(receipt_file.semantic)}: {receipt_file.relative_path}"
                 )
-            reloaded_path = _resolved_runtime_image_path(bpy, image)
-            if reloaded_path != resolved:
+            expected_colorspace = "sRGB" if semantic == "base_color" else "Non-Color"
+            colorspace = getattr(getattr(image, "colorspace_settings", None), "name", None)
+            if colorspace != expected_colorspace:
                 raise RuntimeError(
-                    f"external material image path changed during reload: {receipt_file.relative_path}"
+                    f"external material {semantic} colorspace must be {expected_colorspace}: "
+                    f"{receipt_file.relative_path}"
                 )
-            _verify_receipt_file_bytes(reloaded_path, receipt_file, label="external material texture")
-            used_semantics.update(receipt_file.semantic)
-    if not _REQUIRED_PBR.issubset(used_semantics):
+            _validate_receipt_image(
+                bpy,
+                image,
+                resolved,
+                receipt_file,
+                label=f"external material {semantic} texture",
+                reload_image=True,
+            )
+            used_semantics.add(semantic)
+    required_semantics = set(_REQUIRED_PBR) | (available_semantics & {"metalness", "opacity"})
+    if not required_semantics.issubset(used_semantics):
         raise RuntimeError(
-            f"external runtime materials do not use verified base/normal/roughness maps: "
-            f"{asset.logical_asset_id}"
+            f"external runtime materials do not use all receipt-bound PBR semantics: "
+            f"{asset.logical_asset_id}: missing={sorted(required_semantics - used_semantics)}"
         )
 
 
@@ -1098,6 +1623,75 @@ def _validate_normalized_mesh_state(obj: Any) -> None:
             )
 
 
+def _primary_receipt_file(asset: AcquiredAsset) -> AcquiredFile:
+    source_root = pathlib.PurePosixPath(asset.source_relative_root)
+    primary = pathlib.PurePosixPath(asset.primary_relative_path)
+    try:
+        relative = primary.relative_to(source_root).as_posix()
+    except ValueError as error:
+        raise RuntimeError(f"external primary file escapes its asset source root: {asset.logical_asset_id}") from error
+    matches = [item for item in asset.files if item.relative_path == relative]
+    if len(matches) != 1 or pathlib.PurePosixPath(relative).suffix.lower() != ".blend":
+        raise RuntimeError(f"external primary .blend is absent or ambiguous: {asset.logical_asset_id}")
+    return matches[0]
+
+
+def _load_verified_blend_objects(
+    bpy: Any,
+    asset_set: ExternalAssetSet,
+    asset: AcquiredAsset,
+) -> list[Any]:
+    """Load one staged .blend while pinning and rechecking its exact inode.
+
+    The enclosing build consumes a private, content-verified source-tree
+    snapshot. This descriptor/path seal is defense in depth against accidental
+    mutation inside that private directory; the same OS user remains trusted
+    because Unix permissions cannot stop that user from changing its own files.
+    """
+
+    receipt_file = _primary_receipt_file(asset)
+    path = asset_set.source_path(asset.logical_asset_id)
+    before_path = _verify_receipt_file_bytes(path, receipt_file, label="external primary .blend")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        file_descriptor = os.open(path, flags)
+    except OSError as error:
+        raise RuntimeError("cannot open external primary .blend descriptor") from error
+    try:
+        before_descriptor = _verify_receipt_descriptor(
+            file_descriptor,
+            receipt_file,
+            label="external primary .blend",
+        )
+        if before_path != before_descriptor:
+            raise RuntimeError("external primary .blend path and descriptor identify different files")
+        try:
+            with bpy.data.libraries.load(str(path), link=False) as (source, target):
+                target.objects = list(source.objects)
+        finally:
+            after_path_value = asset_set.source_path(asset.logical_asset_id)
+            after_path = _verify_receipt_file_bytes(
+                after_path_value,
+                receipt_file,
+                label="external primary .blend",
+            )
+            after_descriptor = _verify_receipt_descriptor(
+                file_descriptor,
+                receipt_file,
+                label="external primary .blend",
+            )
+            if (
+                after_path_value != path
+                or after_path != before_path
+                or after_descriptor != before_descriptor
+                or after_path != after_descriptor
+            ):
+                raise RuntimeError("external primary .blend changed across Blender library load")
+    finally:
+        os.close(file_descriptor)
+    return [obj for obj in target.objects if obj is not None]
+
+
 def _append_static_blend(
     bpy: Any,
     mathutils: Any,
@@ -1105,15 +1699,12 @@ def _append_static_blend(
     asset: AcquiredAsset,
     collection: Any,
 ) -> tuple[list[Any], tuple[float, float, float]]:
-    path = asset_set.source_path(asset.logical_asset_id)
     logical_id = asset.logical_asset_id
     expected_dimensions_m = asset.catalog_dimensions_m
     if expected_dimensions_m is None:
         raise RuntimeError(f"external model lacks a pinned measurement: {logical_id}")
     before_actions = set(bpy.data.actions)
-    with bpy.data.libraries.load(str(path), link=False) as (source, target):
-        target.objects = list(source.objects)
-    loaded = [obj for obj in target.objects if obj is not None]
+    loaded = _load_verified_blend_objects(bpy, asset_set, asset)
     meshes = _validate_static_source(bpy, loaded, [item for item in bpy.data.actions if item not in before_actions])
     _validate_runtime_material_images(bpy, meshes, asset_set, asset)
     bpy.context.view_layer.update()
