@@ -15,6 +15,27 @@ def safe_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
 
 
+def build_quality_claims(texture_size_px: int) -> dict[str, Any]:
+    """Describe forge quality without claiming downstream r2 acceptance.
+
+    Texture resolution can make this architecture eligible as source evidence,
+    but hero assets, Unreal renderer observation, gameplay regression, and a
+    retained human review are outside Blender's authority.  Consequently this
+    function intentionally has no code path that accepts final r2 visuals.
+    """
+
+    production_candidate = texture_size_px >= 512
+    return {
+        "quality_class": "production_candidate" if production_candidate else "smoke_only",
+        "texture_size_px": texture_size_px,
+        "production_minimum_texture_size_px": 512,
+        "eligible_as_architecture_source_evidence": production_candidate,
+        "requires_downstream_asset_and_ue_review": True,
+        "accepted_as_r2_visual_evidence": False,
+        "r2_visual_acceptance_authority": "downstream_seal_and_human_review",
+    }
+
+
 def normalized_manifest(
     plan: ForgePlan,
     *,
@@ -26,7 +47,6 @@ def normalized_manifest(
     for component in plan.components:
         role_counts[component.export_role] = role_counts.get(component.export_role, 0) + 1
         room_counts[component.room_id] = room_counts.get(component.room_id, 0) + 1
-    quality_class = "production_candidate" if texture_size_px >= 512 else "smoke_only"
     payload: dict[str, Any] = {
         "schema_version": plan.schema_version,
         "forge_id": plan.forge_id,
@@ -36,12 +56,7 @@ def normalized_manifest(
         "source_house_digest": plan.source_house_digest,
         "source_profile_digest": plan.source_profile_digest,
         "forge_plan_digest": plan.content_digest,
-        "build_quality": {
-            "quality_class": quality_class,
-            "texture_size_px": texture_size_px,
-            "production_minimum_texture_size_px": 512,
-            "accepted_as_r2_visual_evidence": quality_class == "production_candidate",
-        },
+        "build_quality": build_quality_claims(texture_size_px),
         "rooms": [asdict(item) for item in plan.rooms],
         "openings": [asdict(item) for item in plan.openings],
         "components": [asdict(item) for item in plan.components],

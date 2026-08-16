@@ -24,7 +24,7 @@ from tools.blender.vista_playable_home_realism.config import (
     prepare_output_root,
 )
 from tools.blender.vista_playable_home_realism.dressing import anchors_clear_exclusions
-from tools.blender.vista_playable_home_realism.export import normalized_manifest
+from tools.blender.vista_playable_home_realism.export import build_quality_claims, normalized_manifest
 from tools.blender.vista_playable_home_realism.inspect import (
     GLB_JSON_CHUNK,
     GLB_MAGIC,
@@ -154,13 +154,24 @@ def test_smoke_texture_override_cannot_be_mislabeled(house: dict, profile: dict)
     production = normalized_manifest(plan, texture_size_px=512)
     smoke = normalized_manifest(plan, texture_size_px=64)
     assert production["build_quality"] == {
-        "accepted_as_r2_visual_evidence": True,
+        "accepted_as_r2_visual_evidence": False,
+        "eligible_as_architecture_source_evidence": True,
         "production_minimum_texture_size_px": 512,
         "quality_class": "production_candidate",
+        "r2_visual_acceptance_authority": "downstream_seal_and_human_review",
+        "requires_downstream_asset_and_ue_review": True,
         "texture_size_px": 512,
     }
     assert smoke["build_quality"]["quality_class"] == "smoke_only"
     assert smoke["build_quality"]["accepted_as_r2_visual_evidence"] is False
+    assert smoke["build_quality"]["eligible_as_architecture_source_evidence"] is False
+    assert smoke["build_quality"]["requires_downstream_asset_and_ue_review"] is True
+    for texture_size_px in (512, 1024, 2048):
+        claims = build_quality_claims(texture_size_px)
+        assert claims["quality_class"] == "production_candidate"
+        assert claims["eligible_as_architecture_source_evidence"] is True
+        assert claims["accepted_as_r2_visual_evidence"] is False
+        assert claims["r2_visual_acceptance_authority"] == "downstream_seal_and_human_review"
     args = blender_build.parse_blender_args(
         [
             "--house",

@@ -8,8 +8,11 @@ Run with the pinned Blender binary::
       --visual-profile /absolute/realistic_interior_r2.json \
       --output-root /absolute/fresh-output
 
-Production manifests default to 512 px procedural PBR textures.  Fast smoke
-tests must explicitly pass ``--texture-size-px 64`` and are labeled smoke-only.
+Production manifests default to 512 px procedural PBR textures.  That output
+is only an architecture-source candidate: this forge cannot accept final r2
+visual evidence without downstream assets, Unreal observation, and human
+review.  Fast smoke tests must explicitly pass ``--texture-size-px 64`` and
+are labeled smoke-only.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ if __package__ in {None, ""}:
     )
     from blender.vista_playable_home_realism.export import (  # type: ignore[import-not-found]
         artifact_receipt,
+        build_quality_claims,
         export_role_aware_glbs,
         normalized_manifest,
         write_json,
@@ -57,7 +61,13 @@ else:
         prepare_output_root,
         sha256_file,
     )
-    from .export import artifact_receipt, export_role_aware_glbs, normalized_manifest, write_json
+    from .export import (
+        artifact_receipt,
+        build_quality_claims,
+        export_role_aware_glbs,
+        normalized_manifest,
+        write_json,
+    )
     from .inspect import inspect_output
     from .materials import realize_blender_materials
 
@@ -426,9 +436,7 @@ def build_with_blender(
         "normalized_manifest_sha256": sha256_file(manifest_path),
         "blender_version": list(bpy.app.version),
         "blender_version_string": bpy.app.version_string,
-        "texture_size_px": texture_size_px,
-        "quality_class": "production_candidate" if texture_size_px >= 512 else "smoke_only",
-        "accepted_as_r2_visual_evidence": texture_size_px >= 512,
+        **build_quality_claims(texture_size_px),
         "component_count": len(plan.components),
         "opening_count": len(plan.openings),
         "dressing_anchor_count": len(plan.dressing.anchors),
