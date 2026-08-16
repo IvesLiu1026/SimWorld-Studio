@@ -102,9 +102,12 @@ def transform_matches(actual, expected):
 
 
 def actor_hidden(actor):
-    getter = getattr(actor, "is_hidden", None)
-    require(callable(getter), "Actor.is_hidden is unavailable")
-    return bool(getter())
+    try:
+        hidden = actor.get_editor_property("hidden")
+    except Exception as exc:
+        require(False, "Actor.hidden is unavailable: " + str(exc))
+    require(isinstance(hidden, bool), "Actor.hidden is not boolean")
+    return hidden
 
 
 def attach_keep_world(child, parent):

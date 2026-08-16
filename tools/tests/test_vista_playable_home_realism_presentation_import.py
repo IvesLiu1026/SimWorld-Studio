@@ -1340,6 +1340,13 @@ def test_presentation_sources_compile_without_launching_unreal() -> None:
         assert 'property_or_none(mesh, "nanite_settings")' in source
         assert "get_nanite_settings" not in source
 
+    composer = (
+        ROOT / "tools/ue/vista_playable_home/compose_presentation_commandlet.py"
+    ).read_text(encoding="utf-8")
+    assert 'actor.get_editor_property("hidden")' in composer
+    assert "Actor.hidden is unavailable" in composer
+    assert 'getattr(actor, "is_hidden"' not in composer
+
 
 def test_presentation_collision_clear_is_commandlet_safe_and_reloaded() -> None:
     common = (
