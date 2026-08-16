@@ -2460,7 +2460,13 @@ def project_descriptor() -> dict[str, Any]:
         "EngineAssociation": "5.7",
         "Category": "Simulation",
         "Description": "Disposable VISTA Playable Home runtime project",
-        "Plugins": [{"Name": name, "Enabled": True} for name in PROJECT_PLUGINS],
+        "Plugins": [
+            *[{"Name": name, "Enabled": True} for name in PROJECT_PLUGINS],
+            # Some UE installations enable this plugin by default. Its editor
+            # settings append a random SecurityToken to DefaultEngine.ini on
+            # first commandlet startup, invalidating the renderer config pin.
+            {"Name": "AndroidFileServer", "Enabled": False},
+        ],
     }
 
 
@@ -2853,6 +2859,13 @@ def default_engine_ini(
             "",
             "[ConsoleVariables]",
             *compiled.console_lines,
+            "",
+            "[/Script/AndroidFileServerEditor.AndroidFileServerRuntimeSettings]",
+            "bEnablePlugin=False",
+            "bAllowNetworkConnection=False",
+            "bIncludeInShipping=False",
+            "bAllowExternalStartInShipping=False",
+            "bCompileAFSProject=False",
         ])
     lines.append("")
     return "\n".join(lines).encode("utf-8")
@@ -3784,6 +3797,7 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
         "all_assets_bound": True,
         "material_and_collision_inspected": True,
         "core_textures_imported_and_used": True,
+        "nanite_material_policy_verified": True,
         "quarantined": False,
     }:
         _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", "import receipt gates did not pass")
@@ -3828,6 +3842,9 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
         "declared_core_texture_count",
         "returned_texture2d_paths",
         "material_texture2d_paths",
+        "material_blend_modes",
+        "nanite_policy",
+        "nanite_enabled",
     }
     for item in assets:
         asset_id = item["asset_id"]
@@ -3860,6 +3877,17 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
                        for path in inspection.get("material_texture2d_paths"))
             or inspection.get("material_texture2d_paths")
             != sorted(set(inspection.get("material_texture2d_paths")))
+            or not isinstance(inspection.get("material_blend_modes"), list)
+            or not isinstance(inspection.get("nanite_policy"), str)
+            or inspection.get("nanite_policy") not in {
+                "not_applicable",
+                "eligible_static_opaque",
+                "disabled_nonopaque_material",
+            }
+            or not (
+                inspection.get("nanite_enabled") is None
+                or isinstance(inspection.get("nanite_enabled"), bool)
+            )
         ):
             _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", f"import receipt asset {asset_id} fields differ")
         returned_textures = set(inspection["returned_texture2d_paths"])
@@ -3868,6 +3896,9 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
             inspection["declared_core_texture_count"] != 0
             or returned_textures
             or material_textures
+            or inspection["material_blend_modes"]
+            or inspection["nanite_policy"] != "not_applicable"
+            or inspection["nanite_enabled"] is not None
         ):
             _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", f"builtin receipt asset {asset_id} carries texture evidence")
         if source["source_kind"] != "builtin" and (
@@ -3885,6 +3916,42 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
             _fail(
                 "VISTA_HOME_BUILD_RECEIPT_INVALID",
                 f"import receipt asset {asset_id} has no imported Texture2D used by its material",
+            )
+        if source["source_kind"] != "builtin" and (
+            not inspection["material_paths"]
+            or not all(
+                isinstance(path, str) and path
+                for path in inspection["material_paths"]
+            )
+            or len(inspection["material_blend_modes"])
+            != len(inspection["material_paths"])
+            or not all(
+                isinstance(mode, str) and
+                re.fullmatch(r"BLEND_[A-Z0-9_]+", mode) is not None
+                for mode in inspection["material_blend_modes"]
+            )
+            or not isinstance(inspection["nanite_enabled"], bool)
+            or (
+                inspection["nanite_policy"] == "eligible_static_opaque"
+                and any(
+                    mode not in {"BLEND_OPAQUE", "BLEND_MASKED"}
+                    for mode in inspection["material_blend_modes"]
+                )
+            )
+            or (
+                inspection["nanite_policy"] == "disabled_nonopaque_material"
+                and (
+                    inspection["nanite_enabled"] is not False
+                    or all(
+                        mode in {"BLEND_OPAQUE", "BLEND_MASKED"}
+                        for mode in inspection["material_blend_modes"]
+                    )
+                )
+            )
+        ):
+            _fail(
+                "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                f"import receipt asset {asset_id} Nanite/material policy differs",
             )
 
 

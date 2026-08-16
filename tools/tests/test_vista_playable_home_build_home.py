@@ -540,9 +540,21 @@ def _successful_import_receipt(planned: build_home.PlannedBuild) -> dict:
                 "declared_core_texture_count": 0,
                 "returned_texture2d_paths": [],
                 "material_texture2d_paths": [],
+                "material_blend_modes": [],
+                "nanite_policy": (
+                    "not_applicable" if asset["source_kind"] == "builtin"
+                    else "eligible_static_opaque"
+                ),
+                "nanite_enabled": (
+                    None if asset["source_kind"] == "builtin" else True
+                ),
             },
         }
         if asset["source_kind"] != "builtin":
+            item["inspection"]["material_paths"] = [
+                object_path.rsplit(".", 1)[0] + "/Materials/M_Opaque.M_Opaque"
+            ]
+            item["inspection"]["material_blend_modes"] = ["BLEND_OPAQUE"]
             item.update(
                 {
                     "source_file_sha256": bindings[asset["asset_id"]]["source_file_sha256"],
@@ -570,6 +582,7 @@ def _successful_import_receipt(planned: build_home.PlannedBuild) -> dict:
             "all_assets_bound": True,
             "material_and_collision_inspected": True,
             "core_textures_imported_and_used": True,
+            "nanite_material_policy_verified": True,
             "quarantined": False,
         },
     }
@@ -604,6 +617,27 @@ def test_import_receipt_requires_returned_texture_used_by_material(fixture: Fixt
     imported["returned_object_paths"].append(texture_path)
     imported["inspection"]["returned_texture2d_paths"] = [{}]
     with pytest.raises(build_home.BuildHomeError, match="fields differ"):
+        build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
+
+
+def test_import_receipt_enforces_nonopaque_nanite_exclusion(fixture: Fixture) -> None:
+    planned = build_home.plan_build(fixture.config())
+    receipt = _successful_import_receipt(planned)
+    imported = next(item for item in receipt["assets"] if item["source_kind"] != "builtin")
+    inspection = imported["inspection"]
+    inspection["material_blend_modes"] = ["BLEND_TRANSLUCENT"]
+    inspection["nanite_policy"] = "disabled_nonopaque_material"
+    inspection["nanite_enabled"] = False
+
+    build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
+
+    inspection["nanite_enabled"] = True
+    with pytest.raises(build_home.BuildHomeError, match="Nanite/material policy differs"):
+        build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
+
+    inspection["nanite_enabled"] = False
+    inspection["nanite_policy"] = "eligible_static_opaque"
+    with pytest.raises(build_home.BuildHomeError, match="Nanite/material policy differs"):
         build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
 
 

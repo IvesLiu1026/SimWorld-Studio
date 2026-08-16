@@ -7,6 +7,7 @@ is accepted.
 
 import json
 import os
+import re
 import struct
 import sys
 
@@ -218,6 +219,67 @@ def simple_collision_count(mesh):
     return total
 
 
+def nanite_enabled(mesh):
+    settings = property_or_none(mesh, "nanite_settings")
+    require(settings is not None, "StaticMesh Nanite settings are unavailable")
+    enabled = property_or_none(settings, "enabled")
+    require(isinstance(enabled, bool), "StaticMesh Nanite enabled state is unavailable")
+    return enabled
+
+
+def effective_material_blend_mode(material):
+    """Return the reflected blend mode used by the effective base material."""
+
+    base = material
+    getter = getattr(material, "get_base_material", None)
+    if callable(getter):
+        try:
+            base = getter() or material
+        except Exception:
+            base = material
+    blend_mode = property_or_none(base, "blend_mode")
+    if blend_mode is None:
+        blend_mode = property_or_none(material, "blend_mode")
+    require(blend_mode is not None, "material blend mode is unavailable")
+    return blend_mode
+
+
+def blend_mode_name(blend_mode):
+    text = str(blend_mode)
+    match = re.search(r"\b(BLEND_[A-Z0-9_]+)\b", text)
+    require(match is not None, "material blend mode name is unavailable")
+    return match.group(1)
+
+
+def enforce_nanite_material_policy(mesh, materials):
+    """Exclude a whole mesh from Nanite when any slot is non-opaque.
+
+    Interchange maps glTF transmission materials to translucent UE materials,
+    including source records whose transmission factor is zero. The source GLB
+    remains byte-pinned; this UE-side policy also preserves genuinely
+    transmissive slots such as appliance glass.
+    """
+
+    modes = [effective_material_blend_mode(material) for material in materials]
+    allowed = {unreal.BlendMode.BLEND_OPAQUE, unreal.BlendMode.BLEND_MASKED}
+    nonopaque = any(mode not in allowed for mode in modes)
+    if nonopaque and nanite_enabled(mesh):
+        settings = property_or_none(mesh, "nanite_settings")
+        settings.set_editor_property("enabled", False)
+        mesh.set_editor_property("nanite_settings", settings)
+        require(nanite_enabled(mesh) is False,
+                "non-opaque StaticMesh retained Nanite")
+        unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
+    return {
+        "material_blend_modes": [blend_mode_name(mode) for mode in modes],
+        "nanite_policy": (
+            "disabled_nonopaque_material" if nonopaque
+            else "eligible_static_opaque"
+        ),
+        "nanite_enabled": nanite_enabled(mesh),
+    }
+
+
 def verify_runtime(execution):
     engine = str(unreal.SystemLibrary.get_engine_version())
     require(engine.startswith("5."), "Unreal Engine major version mismatch")
@@ -256,15 +318,20 @@ def inspect_asset(asset, policies, imported, room_shell=False,
         "declared_core_texture_count": core_texture_count,
         "returned_texture2d_paths": returned_texture2d_paths,
         "material_texture2d_paths": [],
+        "material_blend_modes": [],
+        "nanite_policy": "not_applicable",
+        "nanite_enabled": None,
     }
     if not isinstance(asset, unreal.StaticMesh):
         return record
 
     slots = list(property_or_none(asset, "static_materials") or [])
+    materials = []
     for slot in slots:
         material = property_or_none(slot, "material_interface")
         record["material_paths"].append(str(material.get_path_name()) if material else None)
         if material is not None:
+            materials.append(material)
             record["material_texture2d_paths"].extend(_material_texture2d_paths(material))
     record["material_texture2d_paths"] = sorted(set(record["material_texture2d_paths"]))
     if imported:
@@ -280,6 +347,9 @@ def inspect_asset(asset, policies, imported, room_shell=False,
                     "source declares core PNG/JPEG textures but the mesh material uses no Texture2D")
             require(set(returned_texture2d_paths) & set(record["material_texture2d_paths"]),
                     "source core PNG/JPEG did not bind an imported Texture2D to the mesh material")
+    require(len(materials) == len(slots),
+            "StaticMesh has an unresolved material slot")
+    record.update(enforce_nanite_material_policy(asset, materials))
 
     blocking = bool(set(policies) - {"detail_no_collision", "trigger_only"})
     body_setup = property_or_none(asset, "body_setup")
@@ -341,6 +411,9 @@ def import_one(asset, binding, namespace, policies, room_shell=False):
                 "declared_core_texture_count": 0,
                 "returned_texture2d_paths": [],
                 "material_texture2d_paths": [],
+                "material_blend_modes": [],
+                "nanite_policy": "not_applicable",
+                "nanite_enabled": None,
             },
         }
 
@@ -466,6 +539,11 @@ def run():
                 item["inspection"]["declared_core_texture_count"] == 0 or
                 bool(set(item["inspection"]["returned_texture2d_paths"]) &
                      set(item["inspection"]["material_texture2d_paths"]))
+                for item in imported
+            ),
+            "nanite_material_policy_verified": status == "imported_candidate" and all(
+                item["inspection"]["nanite_policy"] != "disabled_nonopaque_material" or
+                item["inspection"]["nanite_enabled"] is False
                 for item in imported
             ),
             "quarantined": status != "imported_candidate",

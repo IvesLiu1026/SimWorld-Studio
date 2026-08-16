@@ -168,11 +168,19 @@ def spawn_r2_lighting(actor_subsystem, operation):
     sky = actor_subsystem.spawn_actor_from_class(
         unreal.SkyLight, unreal.Vector(0.0, 0.0, 400.0),
         unreal.Rotator(), transient=False)
-    require(sun is not None and sky is not None, "failed to spawn r2 sun/sky")
+    atmosphere = actor_subsystem.spawn_actor_from_class(
+        unreal.SkyAtmosphere, unreal.Vector(0.0, 0.0, 0.0),
+        unreal.Rotator(), transient=False)
+    require(sun is not None and sky is not None and atmosphere is not None,
+            "failed to spawn r2 sun/sky/atmosphere")
     sun.set_actor_label("VISTA_R2_DirectionalSun")
     sky.set_actor_label("VISTA_R2_SkyLight")
+    atmosphere.set_actor_label("VISTA_R2_SkyAtmosphere")
     set_tags(sun, ["VistaRole=lighting", rig_tag, "VistaLightType=sun"])
     set_tags(sky, ["VistaRole=lighting", rig_tag, "VistaLightType=sky"])
+    # Do not use VistaRole=lighting: the reload gate deliberately counts only
+    # actors backed by LightComponents.
+    set_tags(atmosphere, ["VistaRole=sky_atmosphere", rig_tag])
     sun_component = light_component(sun)
     sky_component = light_component(sky)
     require(sun_component is not None and sky_component is not None,
@@ -183,6 +191,7 @@ def spawn_r2_lighting(actor_subsystem, operation):
     set_required(sun_component, "use_temperature", True)
     set_required(sun_component, "temperature", sun_spec["temperature_k"])
     set_required(sun_component, "cast_shadows", True)
+    set_required(sun_component, "atmosphere_sun_light", True)
     sky_spec = operation["sky"]
     require(sky_spec.get("source") == "real_time_capture",
             "unsupported r2 sky source")
@@ -190,7 +199,7 @@ def spawn_r2_lighting(actor_subsystem, operation):
                  unreal.SkyLightSourceType.SLS_CAPTURED_SCENE)
     set_required(sky_component, "real_time_capture", True)
     set_required(sky_component, "intensity", sky_spec["sky_intensity"])
-    created = [sun, sky]
+    created = [sun, sky, atmosphere]
     for light_spec in operation["practical_lights"]:
         actor_class = unreal.RectLight if light_spec["type"] == "rect" else unreal.SpotLight
         practical = actor_subsystem.spawn_actor_from_class(
@@ -704,6 +713,22 @@ def run():
                           actor.get_editor_property("tags")]
             require(len(sky_lights) == 1,
                     "reloaded r2 sky light set is not exact")
+            sky_atmospheres = [
+                actor for actor in reloaded
+                if unreal.Name("VistaRole=sky_atmosphere") in
+                actor.get_editor_property("tags")
+            ]
+            sun_lights = [actor for actor in vista_lights
+                          if unreal.Name("VistaLightType=sun") in
+                          actor.get_editor_property("tags")]
+            require(
+                len(sky_atmospheres) == 1 and
+                isinstance(sky_atmospheres[0], unreal.SkyAtmosphere) and
+                len(sun_lights) == 1 and
+                bool(light_component(sun_lights[0]).get_editor_property(
+                    "atmosphere_sun_light")),
+                "reloaded r2 sky atmosphere/sun binding is not exact",
+            )
             reloaded_sky_component = light_component(sky_lights[0])
             sky_spec = lighting_operation["sky"]
             require(reloaded_sky_component is not None and

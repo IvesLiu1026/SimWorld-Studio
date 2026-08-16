@@ -264,6 +264,10 @@ def test_r2_commandlet_uses_ue57_skylight_properties_and_reload_gate() -> None:
     assert 'set_required(sky_component, "intensity",' in commandlet
     assert 'set_required(sky_component, "real_time_capture", True)' in commandlet
     assert "unreal.SkyLightSourceType.SLS_CAPTURED_SCENE" in commandlet
+    assert "unreal.SkyAtmosphere" in commandlet
+    assert '"VistaRole=sky_atmosphere"' in commandlet
+    assert 'set_required(sun_component, "atmosphere_sun_light", True)' in commandlet
+    assert "reloaded r2 sky atmosphere/sun binding is not exact" in commandlet
     assert '"intensity_scale"' not in commandlet
     assert "reloaded r2 sky lost captured-scene real-time intensity" in commandlet
 
@@ -297,6 +301,12 @@ def test_renderer_config_and_observation_contract_are_explicit() -> None:
     ).decode()
     assert "[/Script/LinuxTargetPlatform.LinuxTargetSettings]" in generated_ini
     assert "+TargetedRHIs=SF_VULKAN_SM6" in generated_ini
+    assert "[/Script/AndroidFileServerEditor.AndroidFileServerRuntimeSettings]" in generated_ini
+    assert "bEnablePlugin=False" in generated_ini
+    assert "SecurityToken" not in generated_ini
+    assert {"Name": "AndroidFileServer", "Enabled": False} in (
+        build_home.project_descriptor()["Plugins"]
+    )
     assert "VulkanTargetedShaderFormats" not in generated_ini
     assert "DefaultGraphicsRHI" not in generated_ini
     assert "sg.GlobalIlluminationQuality=3" in generated_ini
