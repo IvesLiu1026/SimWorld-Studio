@@ -275,8 +275,12 @@ def test_renderer_config_and_observation_contract_are_explicit() -> None:
     assert first.content_digest == second.content_digest
     assert first.observation_contract["config_is_runtime_proof"] is False
     assert first.observation_contract["status"] == "runtime_observation_required"
-    assert "-VulkanTargetedShaderFormats=SF_VULKAN_SM5" in first.linux_target_lines
-    assert "+VulkanTargetedShaderFormats=SF_VULKAN_SM6" in first.linux_target_lines
+    assert "-TargetedRHIs=SF_VULKAN_SM5" in first.linux_target_lines
+    assert "+TargetedRHIs=SF_VULKAN_SM6" in first.linux_target_lines
+    assert not any(
+        "VulkanTargetedShaderFormats" in line or "DefaultGraphicsRHI" in line
+        for line in first.linux_target_lines
+    )
     for line in (
         "r.DynamicGlobalIlluminationMethod=1",
         "r.ReflectionMethod=1",
@@ -292,7 +296,9 @@ def test_renderer_config_and_observation_contract_are_explicit() -> None:
         build_plan(), {"renderer_profile": profile}
     ).decode()
     assert "[/Script/LinuxTargetPlatform.LinuxTargetSettings]" in generated_ini
-    assert "+VulkanTargetedShaderFormats=SF_VULKAN_SM6" in generated_ini
+    assert "+TargetedRHIs=SF_VULKAN_SM6" in generated_ini
+    assert "VulkanTargetedShaderFormats" not in generated_ini
+    assert "DefaultGraphicsRHI" not in generated_ini
     assert "sg.GlobalIlluminationQuality=3" in generated_ini
     assert "r.UsePreExposure" not in generated_ini
     assert first.observation_contract["pinned_unreal_engine"]["version"] == "5.7.3"
@@ -433,7 +439,8 @@ def test_build_wires_pinned_r2_profile_and_stages_truthful_renderer_receipt(
     assert planned.dry_run_report["project"]["renderer_profile_request"][
         "runtime_proof"
     ] is False
-    assert "+VulkanTargetedShaderFormats=SF_VULKAN_SM6" in planned.engine_ini_raw.decode()
+    assert "+TargetedRHIs=SF_VULKAN_SM6" in planned.engine_ini_raw.decode()
+    assert "VulkanTargetedShaderFormats" not in planned.engine_ini_raw.decode()
     operations = planned.execution["composition_spec"]["operations"]
     assert sum(operation["kind"] == "place_review_camera" for operation in operations) == 6
     assert sum(

@@ -2546,10 +2546,13 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
         "texture_pool_mb": texture_pool_mb,
         "scalability": normalized_scalability,
     }
+    # UE 5.7's Linux target platform and runtime RHI both read the
+    # ``TargetedRHIs`` array.  ``VulkanTargetedShaderFormats`` and
+    # ``DefaultGraphicsRHI`` are Windows target settings and are ignored by
+    # Linux, which otherwise leaves the engine default (SM5) active.
     linux_target_lines = (
-        "DefaultGraphicsRHI=DefaultGraphicsRHI_Vulkan",
-        "-VulkanTargetedShaderFormats=SF_VULKAN_SM5",
-        "+VulkanTargetedShaderFormats=SF_VULKAN_SM6",
+        "-TargetedRHIs=SF_VULKAN_SM5",
+        "+TargetedRHIs=SF_VULKAN_SM6",
     )
     renderer_lines = (
         "r.DynamicGlobalIlluminationMethod=1",
