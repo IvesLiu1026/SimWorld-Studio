@@ -412,6 +412,25 @@ class ReviewCaptureInputTests(unittest.TestCase):
             self.assertIn("-ResX=1920", command)
             self.assertIn("-ResY=1080", command)
             self.assertIn("-graphicsadapter=0", command)
+            worker_manifest = (
+                inputs.output_dir
+                / capture.WORKERS_DIR
+                / "01"
+                / capture.EXECUTION_FILE
+            )
+            environment = capture.build_editor_environment(
+                inputs,
+                worker_manifest,
+                "5" * 64,
+            )
+            self.assertEqual(environment["HOME"], str(inputs.output_dir / "ue-user"))
+            self.assertEqual(environment["TMPDIR"], str(inputs.output_dir / "tmp"))
+            self.assertEqual(environment["TMP"], str(inputs.output_dir / "tmp"))
+            self.assertEqual(environment["TEMP"], str(inputs.output_dir / "tmp"))
+            self.assertEqual(
+                environment["XDG_DATA_HOME"],
+                str(inputs.output_dir / "xdg-data"),
+            )
 
             args.graphics_adapter = 1
             with self.assertRaisesRegex(
@@ -427,6 +446,17 @@ class ReviewCaptureInputTests(unittest.TestCase):
                 "pinned to DISPLAY :119",
             ):
                 capture.validate_inputs(args)
+
+            execution_raw = capture.canonical_json(execution)
+            capture._prepare_output(inputs, execution_raw)
+            self.assertEqual(
+                stat.S_IMODE((inputs.output_dir / "tmp").stat().st_mode),
+                0o700,
+            )
+            self.assertEqual(
+                stat.S_IMODE((inputs.output_dir / "xdg-data").stat().st_mode),
+                0o700,
+            )
 
     def test_r2_profile_pair_location_order_and_build_binding_fail_closed(
         self,
@@ -589,6 +619,10 @@ class ReviewCaptureInputTests(unittest.TestCase):
         self.assertEqual(environment[capture.WORKER_ENV], "1")
         self.assertEqual(environment[capture.EXECUTION_SHA_ENV], "5" * 64)
         self.assertEqual(environment[capture.EXECUTION_ENV], str(manifest))
+        self.assertNotIn("TMPDIR", environment)
+        self.assertNotIn("TMP", environment)
+        self.assertNotIn("TEMP", environment)
+        self.assertNotIn("XDG_DATA_HOME", environment)
 
     def write_fake_worker_success(
         self,

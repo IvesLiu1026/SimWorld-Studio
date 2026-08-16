@@ -1330,6 +1330,9 @@ def _prepare_output(inputs: CaptureInputs, execution_raw: bytes) -> None:
         os.mkdir(inputs.output_dir / "ddc", 0o700)
         os.mkdir(inputs.output_dir / "xdg-cache", 0o700)
         os.mkdir(inputs.output_dir / "xdg-config", 0o700)
+        if _is_r2(inputs):
+            os.mkdir(inputs.output_dir / "tmp", 0o700)
+            os.mkdir(inputs.output_dir / "xdg-data", 0o700)
     except FileExistsError:
         _fail("VISTA_HOME_REVIEW_OUTPUT_EXISTS", "append-only output attempt already exists", pointer=str(inputs.output_dir))
     except OSError as exc:
@@ -1437,6 +1440,15 @@ def build_editor_environment(
             EXECUTION_SHA_ENV: worker_manifest_sha256,
         }
     )
+    if _is_r2(inputs):
+        env.update(
+            {
+                "TMPDIR": str(inputs.output_dir / "tmp"),
+                "TMP": str(inputs.output_dir / "tmp"),
+                "TEMP": str(inputs.output_dir / "tmp"),
+                "XDG_DATA_HOME": str(inputs.output_dir / "xdg-data"),
+            }
+        )
     return env
 
 
