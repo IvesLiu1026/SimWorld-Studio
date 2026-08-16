@@ -689,6 +689,187 @@ def _kitchen_cabinetry(room: RoomSpec) -> list[ComponentSpec]:
     return result
 
 
+def _entry_millwork(room: RoomSpec) -> list[ComponentSpec]:
+    """Author a dense, presentation-only arrival sequence along the hall walls.
+
+    The r1 entry is a three-metre-wide circulation spine with paired doorways at
+    y=-2 and y=2.  This millwork therefore stays inside the central, door-free
+    wall spans and outside the protected x=+/-0.62 m pawn/NPC corridor.  It is
+    deliberately expressed as deterministic box components so the same source
+    plan can be rebuilt headlessly and inspected before Blender is available.
+    """
+
+    result = [
+        # West feature wall: dark walnut field, oak battens, floating console,
+        # and a framed dark focal panel at standing eye height.
+        _component(
+            room,
+            "entry.west.feature_backer",
+            "entry_feature_panel",
+            "architectural_detail",
+            (-1.385, 0.0, 1.36),
+            (0.04, 2.68, 2.44),
+            "r2.cabinet_walnut",
+        ),
+        _component(
+            room,
+            "entry.west.console.carcass",
+            "entry_console_carcass",
+            "cabinetry",
+            (-1.19, 0.0, 0.67),
+            (0.38, 1.30, 0.28),
+            "r2.cabinet_walnut",
+        ),
+        _component(
+            room,
+            "entry.west.console.front.lower",
+            "entry_console_front",
+            "cabinetry",
+            (-0.987, 0.0, 0.605),
+            (0.026, 1.22, 0.105),
+            "r2.cabinet_sage",
+        ),
+        _component(
+            room,
+            "entry.west.console.front.upper",
+            "entry_console_front",
+            "cabinetry",
+            (-0.987, 0.0, 0.735),
+            (0.026, 1.22, 0.105),
+            "r2.cabinet_sage",
+        ),
+        _component(
+            room,
+            "entry.west.console.top",
+            "entry_console_top",
+            "cabinetry",
+            (-1.185, 0.0, 0.835),
+            (0.43, 1.36, 0.045),
+            "r2.counter_quartz",
+        ),
+        _component(
+            room,
+            "entry.west.console.handle.lower",
+            "entry_console_hardware",
+            "cabinetry",
+            (-0.980, 0.0, 0.605),
+            (0.018, 0.28, 0.024),
+            "r2.hardware_brass",
+        ),
+        _component(
+            room,
+            "entry.west.console.handle.upper",
+            "entry_console_hardware",
+            "cabinetry",
+            (-0.980, 0.0, 0.735),
+            (0.018, 0.28, 0.024),
+            "r2.hardware_brass",
+        ),
+        _component(
+            room,
+            "entry.west.console.shadow_line",
+            "entry_console_hardware",
+            "cabinetry",
+            (-0.985, 0.0, 0.515),
+            (0.022, 1.16, 0.022),
+            "r2.hardware_brass",
+        ),
+        _component(
+            room,
+            "entry.west.focal_panel",
+            "entry_focal_panel",
+            "architectural_detail",
+            (-1.320, 0.0, 1.72),
+            (0.025, 0.82, 1.04),
+            "r2.window_frame",
+        ),
+        # East utility wall: a continuous walnut datum gives the long corridor
+        # visual weight while the shelf, rail and hooks communicate daily use.
+        _component(
+            room,
+            "entry.east.coat_backer",
+            "entry_coat_panel",
+            "architectural_detail",
+            (1.385, 0.0, 1.37),
+            (0.04, 2.48, 2.42),
+            "r2.cabinet_walnut",
+        ),
+        _component(
+            room,
+            "entry.east.coat_shelf",
+            "entry_coat_shelf",
+            "cabinetry",
+            (1.22, 0.0, 2.18),
+            (0.36, 1.88, 0.065),
+            "r2.oak_natural",
+        ),
+        _component(
+            room,
+            "entry.east.coat_rail",
+            "entry_coat_rail",
+            "architectural_detail",
+            (1.29, 0.0, 1.78),
+            (0.075, 1.66, 0.065),
+            "r2.hardware_brass",
+        ),
+        _component(
+            room,
+            "entry.east.boot_ledge",
+            "entry_boot_ledge",
+            "cabinetry",
+            (1.25, 0.0, 0.44),
+            (0.31, 1.72, 0.065),
+            "r2.oak_natural",
+        ),
+    ]
+
+    for index, y in enumerate((-1.20, -0.80, -0.40, 0.0, 0.40, 0.80, 1.20)):
+        result.append(
+            _component(
+                room,
+                f"entry.west.feature_batten.{index:02d}",
+                "entry_feature_batten",
+                "architectural_detail",
+                (-1.350, y, 1.36),
+                (0.025, 0.035, 2.36),
+                "r2.oak_natural",
+            )
+        )
+
+    for label, location, dimensions in (
+        ("left", (-1.297, -0.455, 1.72), (0.018, 0.028, 1.13)),
+        ("right", (-1.297, 0.455, 1.72), (0.018, 0.028, 1.13)),
+        ("bottom", (-1.297, 0.0, 1.155), (0.018, 0.94, 0.028)),
+        ("top", (-1.297, 0.0, 2.285), (0.018, 0.94, 0.028)),
+    ):
+        result.append(
+            _component(
+                room,
+                f"entry.west.focal_frame.{label}",
+                "entry_focal_frame",
+                "architectural_detail",
+                location,
+                dimensions,
+                "r2.hardware_brass",
+            )
+        )
+
+    for index, y in enumerate((-0.66, -0.33, 0.0, 0.33, 0.66)):
+        result.append(
+            _component(
+                room,
+                f"entry.east.coat_hook.{index:02d}",
+                "entry_coat_hook",
+                "architectural_detail",
+                (1.205, y, 1.55),
+                (0.17, 0.035, 0.22),
+                "r2.hardware_brass",
+            )
+        )
+
+    return result
+
+
 def _plan_payload(
     house: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -746,6 +927,8 @@ def build_forge_plan(house: Mapping[str, Any], profile: Mapping[str, Any]) -> Fo
             )
         if room.kind == "kitchen_dining":
             components.extend(_kitchen_cabinetry(room))
+        elif room.kind == "entry_hall":
+            components.extend(_entry_millwork(room))
     components.extend(_threshold_components(rooms, openings))
     components.sort(key=lambda item: item.component_id)
     if len({item.component_id for item in components}) != len(components):

@@ -116,6 +116,78 @@ def test_three_room_architecture_has_required_construction_roles(house: dict, pr
     assert all(item.semantic_policy == "presentation_only" for item in plan.components)
 
 
+def test_entry_millwork_is_authored_dense_and_keeps_portals_and_navigation_clear(
+    house: dict, profile: dict
+) -> None:
+    first = build_forge_plan(copy.deepcopy(house), copy.deepcopy(profile))
+    second = build_forge_plan(copy.deepcopy(house), copy.deepcopy(profile))
+    entry = next(room for room in first.rooms if room.kind == "entry_hall")
+    millwork = tuple(
+        component
+        for component in first.components
+        if component.room_id == entry.room_id
+        and component.component_id.startswith(f"{entry.room_id}/visual.r2/entry_")
+    )
+    repeated = tuple(
+        component
+        for component in second.components
+        if component.room_id == entry.room_id
+        and component.component_id.startswith(f"{entry.room_id}/visual.r2/entry_")
+    )
+
+    assert millwork == repeated
+    assert len(millwork) == 29
+    assert Counter(component.role for component in millwork) == {
+        "entry_boot_ledge": 1,
+        "entry_coat_hook": 5,
+        "entry_coat_panel": 1,
+        "entry_coat_rail": 1,
+        "entry_coat_shelf": 1,
+        "entry_console_carcass": 1,
+        "entry_console_front": 2,
+        "entry_console_hardware": 3,
+        "entry_console_top": 1,
+        "entry_feature_batten": 7,
+        "entry_feature_panel": 1,
+        "entry_focal_frame": 4,
+        "entry_focal_panel": 1,
+    }
+    assert {component.export_role for component in millwork} == {
+        "architectural_detail",
+        "cabinetry",
+    }
+    assert {component.material_id for component in millwork} == {
+        "r2.cabinet_sage",
+        "r2.cabinet_walnut",
+        "r2.counter_quartz",
+        "r2.hardware_brass",
+        "r2.oak_natural",
+        "r2.window_frame",
+    }
+    assert all(
+        component.collision_policy == "presentation_no_collision" for component in millwork
+    )
+    assert all(component.semantic_policy == "presentation_only" for component in millwork)
+
+    # Every box remains inside the entry shell and leaves the protected
+    # x=+/-0.62 m corridor plus a 0.35 m visual/furniture buffer untouched.
+    for component in millwork:
+        half_extents = tuple(value / 2 for value in component.dimensions_m)
+        assert all(
+            entry.bounds_min_m[axis] <= component.location_m[axis] - half_extents[axis]
+            and component.location_m[axis] + half_extents[axis] <= entry.bounds_max_m[axis]
+            for axis in range(3)
+        )
+        x_min = component.location_m[0] - half_extents[0]
+        x_max = component.location_m[0] + half_extents[0]
+        assert x_max <= -0.97 or x_min >= 0.97
+        # Side-wall portals occupy y=[-2.5,-1.5] and [1.5,2.5].
+        y_min = component.location_m[1] - half_extents[1]
+        y_max = component.location_m[1] + half_extents[1]
+        assert y_min > -1.5
+        assert y_max < 1.5
+
+
 def test_portal_topology_and_exterior_openings_are_preserved(house: dict, profile: dict) -> None:
     plan = build_forge_plan(house, profile)
     portal_ids = {portal["portal_id"] for portal in house["portals"]}
