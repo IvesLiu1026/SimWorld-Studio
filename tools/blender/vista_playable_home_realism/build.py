@@ -391,13 +391,6 @@ def build_with_blender(
         bpy, output_root, texture_size_px=texture_size_px
     )
     room_roots, component_objects, metadata_objects = _build_geometry(bpy, plan, materials)
-    manifest = normalized_manifest(
-        plan,
-        material_receipts=material_receipts,
-        texture_size_px=texture_size_px,
-    )
-    manifest_path = output_root / "normalized-manifest.json"
-    write_json(manifest_path, manifest)
     artifacts = export_role_aware_glbs(
         bpy,
         output_root,
@@ -406,6 +399,20 @@ def build_with_blender(
         component_objects=component_objects,
         metadata_objects=metadata_objects,
     )
+    # The normalized manifest binds the exact import-ready GLB bytes.  Export
+    # precedes manifest emission deliberately; the GLBs do not embed the
+    # manifest hash, so this ordering is deterministic and non-circular.
+    ue_import_bundles = [
+        item for item in artifacts if item.get("artifact_kind") == "ue_import_bundle"
+    ]
+    manifest = normalized_manifest(
+        plan,
+        material_receipts=material_receipts,
+        texture_size_px=texture_size_px,
+        ue_import_bundles=ue_import_bundles,
+    )
+    manifest_path = output_root / "normalized-manifest.json"
+    write_json(manifest_path, manifest)
     _create_preview_camera_and_lights(bpy, mathutils)
     preview_path, preview_statistics = _render_preview(bpy, output_root)
     scene_root = output_root / "scene"
