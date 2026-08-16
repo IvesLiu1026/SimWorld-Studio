@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
+import json
 import pathlib
 import py_compile
 
 import pytest
 
 from tools.ue.vista_playable_home import build_home, capture_review_views, planning
+from tools.tests.test_vista_playable_home_build_home import Fixture as BuildFixture
 from tools.worlds import playable_home as world_contract
+from world_packs.vista_playable_home_r1.visual_profiles import (
+    contract as visual_profile_contract,
+)
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -318,3 +324,159 @@ def test_modified_unreal_sources_compile_without_launching_unreal() -> None:
         "tools/ue/vista_playable_home/compose_home_commandlet.py",
     ):
         py_compile.compile(str(ROOT / relative), doraise=True)
+
+
+def test_build_wires_pinned_r2_profile_and_stages_truthful_renderer_receipt(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    profile_path = (
+        PACK / "visual_profiles" / "realistic_interior_r2.json"
+    ).resolve(strict=True)
+    profile_sha = build_home.sha256_file(profile_path)
+    config = dataclasses.replace(
+        fixture.config(),
+        visual_profile=profile_path,
+        visual_profile_sha256=profile_sha,
+    )
+
+    planned = build_home.plan_build(config)
+
+    assert not fixture.attempt.exists()
+    assert planned.visual_profile["visual_profile_id"] == "realistic_interior_r2"
+    assert planned.visual_profile_raw == profile_path.read_bytes()
+    assert planned.execution["visual_profile_path"] == str(
+        fixture.attempt / "contracts" / build_home.VISUAL_PROFILE_ATTEMPT_FILE
+    )
+    assert planned.execution["visual_profile_sha256"] == profile_sha
+    assert planned.execution["visual_profile_content_digest"] == planned.visual_profile[
+        "content_digest"
+    ]
+    assert planned.execution["renderer_profile_request"] == {
+        "path": str(
+            fixture.attempt
+            / "contracts"
+            / build_home.RENDERER_REQUEST_ATTEMPT_FILE
+        ),
+        "sha256": build_home.sha256_bytes(planned.renderer_request_raw),
+        "content_digest": planned.renderer_request["content_digest"],
+        "status": "staged_runtime_observation_required",
+        "runtime_proof": False,
+    }
+    assert planned.renderer_request["runtime_proof"] is False
+    assert planned.renderer_request["observation_contract"]["status"] == (
+        "runtime_observation_required"
+    )
+    assert planned.dry_run_report["inputs"]["visual_profile"]["path"] == str(
+        profile_path
+    )
+    assert planned.dry_run_report["project"]["renderer_profile_request"][
+        "runtime_proof"
+    ] is False
+    assert "+VulkanTargetedShaderFormats=SF_VULKAN_SM6" in planned.engine_ini_raw.decode()
+    operations = planned.execution["composition_spec"]["operations"]
+    assert sum(operation["kind"] == "place_review_camera" for operation in operations) == 6
+    assert sum(
+        operation["kind"] == "place_realistic_lighting" for operation in operations
+    ) == 1
+    assert not any(operation["kind"] == "place_lighting" for operation in operations)
+
+    attempt, _copy_counts = build_home._materialize_inputs(planned)
+
+    assert (attempt / "contracts" / build_home.VISUAL_PROFILE_ATTEMPT_FILE).read_bytes() == (
+        profile_path.read_bytes()
+    )
+    assert (attempt / "contracts" / build_home.RENDERER_REQUEST_ATTEMPT_FILE).read_bytes() == (
+        planned.renderer_request_raw
+    )
+    materialized_execution = json.loads((attempt / "execution.json").read_text())
+    assert materialized_execution == planned.execution
+    preparation = json.loads((attempt / "preparation-receipt.json").read_text())
+    assert preparation["visual_profile_sha256"] == profile_sha
+    assert preparation["renderer_runtime_observation"] == "pending"
+
+
+def test_r1_build_path_remains_byte_stable_without_visual_profile(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+
+    planned = build_home.plan_build(fixture.config())
+
+    assert planning.build_composition_spec(fixture.plan).sha256 == (
+        "342d8262470fedbce4ce9be8125bf1d181b5291c0d18e50787d68015c394e72e"
+    )
+    assert build_home.sha256_bytes(planned.engine_ini_raw) == (
+        "0933e82b84dc3dfec5928f961e1bc3ffb704476163d0689c24defdabbf388811"
+    )
+    assert planned.visual_profile is None
+    assert planned.renderer_request is None
+    assert "visual_profile_path" not in planned.execution
+    assert "renderer_profile_request" not in planned.execution
+    assert "visual_profile" not in planned.dry_run_report["inputs"]
+    assert "renderer_profile_request" not in planned.dry_run_report["project"]
+
+
+def test_visual_profile_pin_and_contract_fail_closed(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    source = (PACK / "visual_profiles" / "realistic_interior_r2.json").resolve(
+        strict=True
+    )
+    source_sha = build_home.sha256_file(source)
+    base = fixture.config()
+
+    with pytest.raises(build_home.BuildHomeError, match="PIN_INVALID"):
+        build_home.plan_build(dataclasses.replace(base, visual_profile=source))
+    with pytest.raises(build_home.BuildHomeError, match="ARGUMENT_INVALID"):
+        build_home.plan_build(
+            dataclasses.replace(base, visual_profile_sha256=source_sha)
+        )
+    with pytest.raises(build_home.BuildHomeError, match="PATH_INVALID"):
+        build_home.plan_build(
+            dataclasses.replace(
+                base,
+                visual_profile=pathlib.Path(
+                    "world_packs/vista_playable_home_r1/visual_profiles/realistic_interior_r2.json"
+                ),
+                visual_profile_sha256=source_sha,
+            )
+        )
+    with pytest.raises(build_home.BuildHomeError, match="PIN_MISMATCH"):
+        build_home.plan_build(
+            dataclasses.replace(
+                base,
+                visual_profile=source,
+                visual_profile_sha256="0" * 64,
+            )
+        )
+
+    original = json.loads(source.read_text())
+    invalid_cases: list[tuple[str, dict, str]] = []
+    unknown_schema = copy.deepcopy(original)
+    unknown_schema["schema_version"] = "simworld.vista.playable-home-visual-profile/v999"
+    invalid_cases.append(("unknown-schema", unknown_schema, "SCHEMA_INVALID"))
+    digest_drift = copy.deepcopy(original)
+    digest_drift["content_digest"] = "0" * 64
+    invalid_cases.append(("digest-drift", digest_drift, "DIGEST_MISMATCH"))
+    stale_house = copy.deepcopy(original)
+    stale_house["provenance"]["source_house_content_digest"] = "0" * 64
+    stale_house = visual_profile_contract.seal_document(stale_house)
+    invalid_cases.append(("stale-house", stale_house, "STALE_HOUSE_DIGEST"))
+
+    for name, value, expected in invalid_cases:
+        candidate = tmp_path / "profiles" / f"{name}.json"
+        candidate.parent.mkdir(exist_ok=True)
+        candidate.write_bytes(build_home.canonical_json(value))
+        with pytest.raises(build_home.BuildHomeError, match=expected):
+            build_home.plan_build(
+                dataclasses.replace(
+                    base,
+                    visual_profile=candidate.resolve(strict=True),
+                    visual_profile_sha256=build_home.sha256_file(candidate),
+                )
+            )
+
+    parser_destinations = {action.dest for action in build_home._parser()._actions}
+    assert {"visual_profile", "visual_profile_sha256"}.issubset(parser_destinations)

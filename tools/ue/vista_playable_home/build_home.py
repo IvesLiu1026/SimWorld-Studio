@@ -54,6 +54,9 @@ from tools.ue.vista_playable_home.commandlet_common import (  # noqa: E402
     derived_asset_path,
 )
 from tools.worlds import playable_home as world_contract  # noqa: E402
+from world_packs.vista_playable_home_r1.visual_profiles import (  # noqa: E402
+    contract as visual_profile_contract,
+)
 
 
 ORCHESTRATOR_PLAN_SCHEMA = "simworld.vista.playable-home-ue-build-plan/v1"
@@ -104,6 +107,9 @@ HSSD_BASIS_TRANSCODER_WASM_SHA256 = (
     "6cf17dc889352c42e9acf8897107978d127005fe3386c36a0e3845e27967630a"
 )
 RENDERER_OBSERVATION_SCHEMA = "simworld.vista.playable-home-renderer-observation-contract/v1"
+RENDERER_REQUEST_SCHEMA = "simworld.vista.playable-home-renderer-request/v1"
+VISUAL_PROFILE_ATTEMPT_FILE = "visual-profile.json"
+RENDERER_REQUEST_ATTEMPT_FILE = "renderer-profile-request.json"
 RENDERER_PROFILE_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 RENDERER_SCALABILITY_KEYS = (
     "view_distance",
@@ -422,6 +428,66 @@ def validate_build_plan(path: Path, expected_sha256: str, expected_revision: str
     if plan["unreal"]["content_namespace"] != expected_namespace or plan["unreal"]["map_path"] != expected_namespace + "/Maps/VistaPlayableHome":
         _fail("VISTA_HOME_BUILD_REVISION_MISMATCH", "build plan namespace is not bound to the requested revision")
     return plan
+
+
+def _visual_profile_house_view(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a validated build plan into the pure VisualProfile house view.
+
+    The visual-profile contract needs only the immutable house identity,
+    world-space room bounds, and semantic entity IDs.  Reconstructing that
+    view from the already pinned build plan avoids a second, unbound HouseSpec
+    filesystem input while preserving the exact source-house digest.
+    """
+
+    rooms: list[dict[str, Any]] = []
+    for raw_room in plan["rooms"]:
+        bounds = raw_room["world_bounds_cm"]
+        rooms.append({
+            "room_id": raw_room["room_id"],
+            "transform": {
+                "location_m": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            },
+            "bounds_m": {
+                "min_m": [float(value) / 100.0 for value in bounds["min_cm"]],
+                "max_m": [float(value) / 100.0 for value in bounds["max_cm"]],
+            },
+        })
+    return {
+        "revision": plan["house"]["revision"],
+        "content_digest": plan["house"]["content_digest"],
+        "rooms": rooms,
+        "entities": [
+            {"entity_id": raw_entity["entity_id"]}
+            for raw_entity in plan["entities"]
+        ],
+    }
+
+
+def validate_visual_profile(
+    path: Path,
+    expected_sha256: str,
+    plan: Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes]:
+    """Load one absolute, byte-pinned r2 profile and validate it fail closed."""
+
+    profile, raw = _load_json(
+        path,
+        expected_sha256=expected_sha256,
+        label="visual profile",
+    )
+    try:
+        visual_profile_contract.validate_profile(
+            profile,
+            _visual_profile_house_view(plan),
+        )
+    except visual_profile_contract.VisualProfileContractError as exc:
+        _fail(
+            "VISTA_HOME_BUILD_VISUAL_PROFILE_INVALID",
+            str(exc),
+            pointer=str(path),
+        )
+    return profile, raw
 
 
 def validate_blender_manifest(
@@ -1150,6 +1216,28 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
     )
 
 
+def build_renderer_request(
+    visual_profile: Mapping[str, Any],
+    compilation: RendererProfileCompilation,
+    engine_ini_raw: bytes,
+) -> dict[str, Any]:
+    """Build a deterministic staging receipt without claiming runtime proof."""
+
+    request = {
+        "schema_version": RENDERER_REQUEST_SCHEMA,
+        "status": "staged_runtime_observation_required",
+        "runtime_proof": False,
+        "visual_profile_id": visual_profile["visual_profile_id"],
+        "visual_profile_content_digest": visual_profile["content_digest"],
+        "renderer_profile": compilation.profile,
+        "renderer_profile_digest": compilation.content_digest,
+        "engine_config_sha256": sha256_bytes(engine_ini_raw),
+        "observation_contract": compilation.observation_contract,
+    }
+    request["content_digest"] = _content_digest(request)
+    return request
+
+
 def evaluate_renderer_observations(
     compilation: RendererProfileCompilation,
     observations: Mapping[str, Any],
@@ -1276,6 +1364,8 @@ class BuildConfig:
     unreal_editor_cmd_sha256: str | None
     visual_binding_manifest: Path | None = None
     visual_binding_manifest_sha256: str | None = None
+    visual_profile: Path | None = None
+    visual_profile_sha256: str | None = None
     expected_revision: str = EXPECTED_REVISION
     command_timeout_s: int = 3600
 
@@ -1291,6 +1381,10 @@ class PlannedBuild:
     project_raw: bytes
     engine_ini_raw: bytes
     input_ini_raw: bytes
+    visual_profile: dict[str, Any] | None
+    visual_profile_raw: bytes | None
+    renderer_request: dict[str, Any] | None
+    renderer_request_raw: bytes | None
     execution: dict[str, Any]
     execution_raw: bytes
     execution_sha256: str
@@ -1340,8 +1434,18 @@ def _planned_execution(
     bindings: Sequence[Mapping[str, Any]],
     project_sha256: str,
     build_plan_sha256: str,
+    visual_profile: Mapping[str, Any] | None = None,
+    visual_profile_sha256: str | None = None,
+    renderer_request: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bytes, str]:
-    composition = planning.build_composition_spec(plan)
+    if (visual_profile is None) != (visual_profile_sha256 is None) or (
+        visual_profile is None
+    ) != (renderer_request is None):
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "visual profile, profile pin, and renderer request must be supplied together",
+        )
+    composition = planning.build_composition_spec(plan, visual_profile)
     scripts = {
         "import": Path(__file__).with_name("import_assets_commandlet.py").resolve(strict=True),
         "compose": Path(__file__).with_name("compose_home_commandlet.py").resolve(strict=True),
@@ -1372,6 +1476,39 @@ def _planned_execution(
             "studio_socket_fallback_allowed": False,
         },
     }
+    if visual_profile is not None:
+        profile_sha = _require_sha(visual_profile_sha256, "visual profile pin")
+        request = dict(renderer_request or {})
+        if (
+            request.get("schema_version") != RENDERER_REQUEST_SCHEMA
+            or request.get("status") != "staged_runtime_observation_required"
+            or request.get("runtime_proof") is not False
+            or request.get("visual_profile_id") != visual_profile["visual_profile_id"]
+            or request.get("visual_profile_content_digest")
+            != visual_profile["content_digest"]
+            or request.get("content_digest") != _content_digest(request)
+        ):
+            _fail(
+                "VISTA_HOME_RENDERER_PROFILE_INVALID",
+                "renderer request does not bind the selected visual profile",
+            )
+        request_raw = canonical_json(request)
+        value.update({
+            "visual_profile_path": str(
+                attempt / "contracts" / VISUAL_PROFILE_ATTEMPT_FILE
+            ),
+            "visual_profile_sha256": profile_sha,
+            "visual_profile_content_digest": visual_profile["content_digest"],
+            "renderer_profile_request": {
+                "path": str(
+                    attempt / "contracts" / RENDERER_REQUEST_ATTEMPT_FILE
+                ),
+                "sha256": sha256_bytes(request_raw),
+                "content_digest": request["content_digest"],
+                "status": "staged_runtime_observation_required",
+                "runtime_proof": False,
+            },
+        })
     raw = planning.canonical_json(value)
     return value, raw, sha256_bytes(raw)
 
@@ -1385,6 +1522,18 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
     ):
         _fail("VISTA_HOME_BUILD_ARGUMENT_INVALID", "command timeout must be an integer from 60 through 14400 seconds")
     plan = validate_build_plan(config.build_plan, config.build_plan_sha256, config.expected_revision)
+    selected_profile: dict[str, Any] | None = None
+    selected_profile_raw: bytes | None = None
+    if config.visual_profile is not None:
+        if config.visual_profile_sha256 is None:
+            _fail("VISTA_HOME_BUILD_PIN_INVALID", "visual profile pin is required")
+        selected_profile, selected_profile_raw = validate_visual_profile(
+            config.visual_profile,
+            config.visual_profile_sha256,
+            plan,
+        )
+    elif config.visual_profile_sha256 is not None:
+        _fail("VISTA_HOME_BUILD_ARGUMENT_INVALID", "visual profile pin requires a profile path")
     blender = validate_blender_manifest(config.blender_manifest, config.blender_manifest_sha256, plan)
     visual: dict[str, tuple[Path, str]] | None = None
     if config.visual_binding_manifest is not None:
@@ -1403,14 +1552,29 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
     characters_snapshot = _validate_characters_content(config.characters_content, config.characters_content_tree_sha256)
     editor, editor_sha = _validate_editor(config, require_existing=require_editor)
     descriptor_raw = canonical_json(project_descriptor())
-    engine_ini_raw = default_engine_ini(plan)
+    engine_ini_raw = default_engine_ini(plan, selected_profile)
     input_ini_raw = default_input_ini()
+    renderer_request: dict[str, Any] | None = None
+    renderer_request_raw: bytes | None = None
+    if selected_profile is not None:
+        renderer_compilation = compile_renderer_profile(
+            selected_profile["renderer_profile"]
+        )
+        renderer_request = build_renderer_request(
+            selected_profile,
+            renderer_compilation,
+            engine_ini_raw,
+        )
+        renderer_request_raw = canonical_json(renderer_request)
     execution, execution_raw, execution_sha = _planned_execution(
         plan=plan,
         attempt=attempt,
         bindings=bindings,
         project_sha256=sha256_bytes(descriptor_raw),
         build_plan_sha256=config.build_plan_sha256,
+        visual_profile=selected_profile,
+        visual_profile_sha256=config.visual_profile_sha256,
+        renderer_request=renderer_request,
     )
     execution_path = attempt / "execution.json"
     project_path = attempt / "project" / EXPECTED_PROJECT_NAME
@@ -1483,6 +1647,22 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
             "current_pointer": str(run_root / "ue" / "current.json"),
         },
     }
+    if selected_profile is not None:
+        report["inputs"]["visual_profile"] = {
+            "path": str(config.visual_profile),
+            "sha256": config.visual_profile_sha256,
+            "content_digest": selected_profile["content_digest"],
+            "visual_profile_id": selected_profile["visual_profile_id"],
+        }
+        report["project"]["renderer_profile_request"] = {
+            "path": str(
+                attempt / "contracts" / RENDERER_REQUEST_ATTEMPT_FILE
+            ),
+            "sha256": sha256_bytes(renderer_request_raw or b""),
+            "content_digest": renderer_request["content_digest"],
+            "status": "staged_runtime_observation_required",
+            "runtime_proof": False,
+        }
     report["content_digest"] = _content_digest(report)
     return PlannedBuild(
         config=config,
@@ -1494,6 +1674,10 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         project_raw=descriptor_raw,
         engine_ini_raw=engine_ini_raw,
         input_ini_raw=input_ini_raw,
+        visual_profile=selected_profile,
+        visual_profile_raw=selected_profile_raw,
+        renderer_request=renderer_request,
+        renderer_request_raw=renderer_request_raw,
         execution=execution,
         execution_raw=execution_raw,
         execution_sha256=execution_sha,
@@ -2079,6 +2263,18 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
         directory.mkdir(mode=0o700, exist_ok=False)
     build_plan_target = contracts_dir / "build-plan.json"
     _write_exclusive(build_plan_target, planning.canonical_json(planned.plan))
+    visual_profile_target: Path | None = None
+    renderer_request_target: Path | None = None
+    if planned.visual_profile is not None:
+        if planned.visual_profile_raw is None or planned.renderer_request_raw is None:
+            _fail(
+                "VISTA_HOME_BUILD_EXECUTION_DRIFT",
+                "r2 plan lost its pinned profile or renderer request bytes",
+            )
+        visual_profile_target = contracts_dir / VISUAL_PROFILE_ATTEMPT_FILE
+        renderer_request_target = contracts_dir / RENDERER_REQUEST_ATTEMPT_FILE
+        _write_exclusive(visual_profile_target, planned.visual_profile_raw)
+        _write_exclusive(renderer_request_target, planned.renderer_request_raw)
     project_file = project_root / EXPECTED_PROJECT_NAME
     _write_exclusive(project_file, planned.project_raw)
     _write_exclusive(config_dir / "DefaultEngine.ini", planned.engine_ini_raw)
@@ -2098,6 +2294,24 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
         artifact_bindings=planned.bindings,
         import_receipt=attempt / "import-receipt.json",
         scene_receipt=attempt / "scene-receipt.json",
+        visual_profile=planned.visual_profile,
+        visual_profile_path=visual_profile_target,
+        visual_profile_sha256=(
+            planned.config.visual_profile_sha256
+            if planned.visual_profile is not None
+            else None
+        ),
+        renderer_request_path=renderer_request_target,
+        renderer_request_sha256=(
+            sha256_bytes(planned.renderer_request_raw)
+            if planned.renderer_request_raw is not None
+            else None
+        ),
+        renderer_request_content_digest=(
+            planned.renderer_request["content_digest"]
+            if planned.renderer_request is not None
+            else None
+        ),
     )
     if generated.raw != planned.execution_raw or generated.sha256 != planned.execution_sha256:
         _fail("VISTA_HOME_BUILD_EXECUTION_DRIFT", "materialized execution manifest differs from the dry-run plan")
@@ -2116,6 +2330,18 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
         "characters_tree_sha256": installed_characters.sha256,
         "copy_methods": dict(sorted(copy_counts.items())),
     }
+    if planned.visual_profile is not None:
+        preparation.update({
+            "visual_profile_sha256": planned.config.visual_profile_sha256,
+            "visual_profile_content_digest": planned.visual_profile["content_digest"],
+            "renderer_profile_request_sha256": sha256_bytes(
+                planned.renderer_request_raw or b""
+            ),
+            "renderer_profile_request_content_digest": planned.renderer_request[
+                "content_digest"
+            ],
+            "renderer_runtime_observation": "pending",
+        })
     _write_exclusive(attempt / "preparation-receipt.json", canonical_json(preparation))
     return attempt, copy_counts
 
@@ -2207,6 +2433,19 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             "copy_methods": dict(sorted(copy_counts.items())),
             "runtime_play_proof": "pending",
         }
+        if planned.visual_profile is not None:
+            result.update({
+                "visual_profile_id": planned.visual_profile["visual_profile_id"],
+                "visual_profile_sha256": planned.config.visual_profile_sha256,
+                "visual_profile_content_digest": planned.visual_profile["content_digest"],
+                "renderer_profile_request_sha256": sha256_bytes(
+                    planned.renderer_request_raw or b""
+                ),
+                "renderer_profile_request_content_digest": planned.renderer_request[
+                    "content_digest"
+                ],
+                "renderer_runtime_observation": "pending",
+            })
         result["content_digest"] = _content_digest(result)
         result_path = attempt / "result-receipt.json"
         _write_exclusive(result_path, canonical_json(result))
@@ -2272,6 +2511,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--blender-manifest-sha256", required=True)
     parser.add_argument("--visual-binding-manifest", type=Path)
     parser.add_argument("--visual-binding-manifest-sha256")
+    parser.add_argument(
+        "--visual-profile",
+        type=Path,
+        help="absolute path to the closed realistic_interior_r2 visual profile",
+    )
+    parser.add_argument(
+        "--visual-profile-sha256",
+        help="expected lowercase SHA-256 for --visual-profile",
+    )
     parser.add_argument("--plugin-package", required=True, type=Path)
     parser.add_argument("--plugin-package-tree-sha256", required=True)
     parser.add_argument("--characters-content", required=True, type=Path)
@@ -2295,6 +2543,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         blender_manifest_sha256=args.blender_manifest_sha256,
         visual_binding_manifest=args.visual_binding_manifest,
         visual_binding_manifest_sha256=args.visual_binding_manifest_sha256,
+        visual_profile=args.visual_profile,
+        visual_profile_sha256=args.visual_profile_sha256,
         plugin_package=args.plugin_package,
         plugin_package_tree_sha256=args.plugin_package_tree_sha256,
         characters_content=args.characters_content,

@@ -72,10 +72,31 @@ def build_execution_manifest(
     artifact_bindings: Sequence[Mapping[str, Any]],
     import_receipt: os.PathLike[str] | str,
     scene_receipt: os.PathLike[str] | str,
+    visual_profile: Mapping[str, Any] | None = None,
+    visual_profile_path: os.PathLike[str] | str | None = None,
+    visual_profile_sha256: str | None = None,
+    renderer_request_path: os.PathLike[str] | str | None = None,
+    renderer_request_sha256: str | None = None,
+    renderer_request_content_digest: str | None = None,
 ) -> ExecutionManifest:
     """Pin host files without placing host paths in the world content digest."""
 
-    composition = build_composition_spec(build_plan)
+    r2_values = (
+        visual_profile,
+        visual_profile_path,
+        visual_profile_sha256,
+        renderer_request_path,
+        renderer_request_sha256,
+        renderer_request_content_digest,
+    )
+    if any(value is not None for value in r2_values) and not all(
+        value is not None for value in r2_values
+    ):
+        _error(
+            "VISTA_HOME_UE_VISUAL_PIN_INCOMPLETE",
+            "visual profile and renderer request pins must be supplied together",
+        )
+    composition = build_composition_spec(build_plan, visual_profile)
     root = _canonical_path(attempt_root)
     plan_path = _safe_attempt_child(_canonical_path(build_plan_path), root, "build plan")
     project = _safe_attempt_child(_canonical_path(project_file), root, "project")
@@ -152,5 +173,120 @@ def build_execution_manifest(
             "studio_socket_fallback_allowed": False,
         },
     }
+    if visual_profile is not None:
+        profile_path = _safe_attempt_child(
+            _canonical_path(visual_profile_path), root, "visual profile"
+        )
+        renderer_path = _safe_attempt_child(
+            _canonical_path(renderer_request_path), root, "renderer request"
+        )
+        if (
+            not isinstance(visual_profile_sha256, str)
+            or SHA256.fullmatch(visual_profile_sha256) is None
+            or not profile_path.is_file()
+            or sha256_file(profile_path) != visual_profile_sha256
+        ):
+            _error(
+                "VISTA_HOME_UE_VISUAL_PIN_MISMATCH",
+                "visual profile bytes differ from their pin",
+            )
+        try:
+            materialized_profile = json.loads(
+                profile_path.read_text(encoding="utf-8", errors="strict")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            _error(
+                "VISTA_HOME_UE_VISUAL_PIN_MISMATCH",
+                "visual profile is not strict JSON",
+            )
+            raise AssertionError from exc
+        if materialized_profile != dict(visual_profile):
+            _error(
+                "VISTA_HOME_UE_VISUAL_PIN_MISMATCH",
+                "visual profile bytes do not represent the compiled profile",
+            )
+        if (
+            not isinstance(renderer_request_sha256, str)
+            or SHA256.fullmatch(renderer_request_sha256) is None
+            or not isinstance(renderer_request_content_digest, str)
+            or SHA256.fullmatch(renderer_request_content_digest) is None
+            or not renderer_path.is_file()
+            or sha256_file(renderer_path) != renderer_request_sha256
+        ):
+            _error(
+                "VISTA_HOME_UE_RENDERER_PIN_MISMATCH",
+                "renderer request bytes differ from their pin",
+            )
+        try:
+            renderer_raw = renderer_path.read_bytes()
+            renderer_request = json.loads(renderer_raw.decode("utf-8", "strict"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            _error(
+                "VISTA_HOME_UE_RENDERER_PIN_MISMATCH",
+                "renderer request is not strict JSON",
+            )
+            raise AssertionError from exc
+        if not isinstance(renderer_request, dict):
+            _error(
+                "VISTA_HOME_UE_RENDERER_PIN_MISMATCH",
+                "renderer request root must be an object",
+            )
+        digest_body = dict(renderer_request)
+        digest_body.pop("content_digest", None)
+        expected_request_keys = {
+            "schema_version",
+            "status",
+            "runtime_proof",
+            "visual_profile_id",
+            "visual_profile_content_digest",
+            "renderer_profile",
+            "renderer_profile_digest",
+            "engine_config_sha256",
+            "observation_contract",
+            "content_digest",
+        }
+        engine_config = _safe_attempt_child(
+            project.parent / "Config" / "DefaultEngine.ini",
+            root,
+            "renderer engine config",
+        )
+        if (
+            set(renderer_request) != expected_request_keys
+            or renderer_request.get("schema_version")
+            != "simworld.vista.playable-home-renderer-request/v1"
+            or canonical_json(renderer_request) != renderer_raw
+            or renderer_request.get("status")
+            != "staged_runtime_observation_required"
+            or renderer_request.get("runtime_proof") is not False
+            or renderer_request.get("visual_profile_id")
+            != visual_profile.get("visual_profile_id")
+            or renderer_request.get("visual_profile_content_digest")
+            != visual_profile.get("content_digest")
+            or renderer_request.get("content_digest")
+            != renderer_request_content_digest
+            or not isinstance(renderer_request.get("engine_config_sha256"), str)
+            or SHA256.fullmatch(renderer_request["engine_config_sha256"]) is None
+            or not engine_config.is_file()
+            or sha256_file(engine_config)
+            != renderer_request["engine_config_sha256"]
+            or hashlib.sha256(canonical_json(digest_body)).hexdigest()
+            != renderer_request_content_digest
+        ):
+            _error(
+                "VISTA_HOME_UE_RENDERER_PIN_MISMATCH",
+                "renderer request contract or visual-profile binding differs",
+            )
+        manifest.update({
+            "visual_profile_path": str(profile_path),
+            "visual_profile_sha256": visual_profile_sha256,
+            "visual_profile_content_digest": visual_profile["content_digest"],
+            "renderer_profile_request": {
+                "path": str(renderer_path),
+                "sha256": renderer_request_sha256,
+                "content_digest": renderer_request_content_digest,
+                "status": "staged_runtime_observation_required",
+                "runtime_proof": False,
+            },
+        })
     raw = canonical_json(manifest)
     return ExecutionManifest(manifest, raw, hashlib.sha256(raw).hexdigest(), composition)
