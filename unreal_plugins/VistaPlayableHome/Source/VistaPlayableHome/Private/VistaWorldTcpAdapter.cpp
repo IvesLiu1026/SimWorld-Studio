@@ -259,6 +259,35 @@ FString ResultResponse(const FVistaLiveCommandResult& Result,
     return SerializeObject(Response);
 }
 
+FString RendererStatusResponse(const FVistaRendererStatusResult& Result)
+{
+    if (!Result.bSucceeded)
+    {
+        return ErrorResponse(Result.CommandId.ToString(), *Result.Code.ToString());
+    }
+    const TSharedRef<FJsonObject> Response = MakeShared<FJsonObject>();
+    Response->SetStringField(TEXT("command_id"), Result.CommandId.ToString());
+    Response->SetStringField(TEXT("status"), TEXT("success"));
+    Response->SetStringField(TEXT("code"), Result.Code.ToString());
+    Response->SetStringField(
+        TEXT("schema_version"),
+        TEXT("simworld.vista.playable-home-renderer-status/v1"));
+    Response->SetStringField(
+        TEXT("unreal_engine_version"),
+        Result.Observation.UnrealEngineVersion);
+    Response->SetStringField(TEXT("rhi"), Result.Observation.Rhi);
+    Response->SetStringField(TEXT("feature_level"), Result.Observation.FeatureLevel);
+    Response->SetStringField(TEXT("shader_platform"), Result.Observation.ShaderPlatform);
+    const TSharedRef<FJsonObject> CVars = MakeShared<FJsonObject>();
+    for (const TPair<FString, double>& Pair :
+         Result.Observation.ConsoleVariables)
+    {
+        CVars->SetNumberField(Pair.Key, Pair.Value);
+    }
+    Response->SetObjectField(TEXT("cvars"), CVars);
+    return SerializeObject(Response);
+}
+
 UVistaPlayableHomeRuntimeSubsystem* FindRuntimeSubsystem()
 {
     if (!GEngine)
@@ -353,6 +382,20 @@ FString DispatchTyped(const TSharedPtr<FJsonObject>& Params)
             return ErrorResponse(CommandId, TEXT("STATUS_SHAPE_INVALID"));
         }
         return ResultResponse(Runtime->GetStatus(FName(*CommandId)), true);
+    }
+
+    if (Operation == TEXT("renderer_status"))
+    {
+        if (!ExactKeys(Params,
+                       KeySet({TEXT("operation"), TEXT("command_id")}),
+                       TSet<FString>()) ||
+            !ReadString(Params, TEXT("command_id"), CommandId) ||
+            !IsCommandId(CommandId))
+        {
+            return ErrorResponse(CommandId, TEXT("RENDERER_STATUS_SHAPE_INVALID"));
+        }
+        return RendererStatusResponse(
+            Runtime->GetRendererStatus(FName(*CommandId)));
     }
 
     if (Operation == TEXT("interaction"))

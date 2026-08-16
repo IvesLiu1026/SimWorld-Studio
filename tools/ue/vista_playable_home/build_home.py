@@ -109,6 +109,7 @@ HSSD_BASIS_TRANSCODER_WASM_SHA256 = (
 )
 RENDERER_OBSERVATION_SCHEMA = "simworld.vista.playable-home-renderer-observation-contract/v1"
 RENDERER_REQUEST_SCHEMA = "simworld.vista.playable-home-renderer-request/v1"
+RENDERER_STATUS_SCHEMA = "simworld.vista.playable-home-renderer-status/v1"
 VISUAL_PROFILE_ATTEMPT_FILE = "visual-profile.json"
 RENDERER_REQUEST_ATTEMPT_FILE = "renderer-profile-request.json"
 PRESENTATION_MANIFEST_ATTEMPT_FILE = "presentation-manifest.json"
@@ -2462,6 +2463,123 @@ def evaluate_renderer_observations(
         "status": "accepted_observation" if not failures else "rejected_observation",
         "runtime_proof": not failures,
         "failures": failures,
+    }
+
+
+def evaluate_renderer_status_response(
+    compilation: RendererProfileCompilation,
+    response: Mapping[str, Any],
+    *,
+    command_id: str,
+) -> dict[str, Any]:
+    """Strictly evaluate one observation emitted by the typed UE runtime.
+
+    This is deliberately separate from :func:`evaluate_renderer_observations`,
+    whose small mapping API remains useful for pure configuration tests.  The
+    runtime gate accepts a closed response schema, requires the complete CVar
+    set described by the pinned observation contract, and never treats the
+    staged request itself as evidence.
+    """
+
+    top_level_keys = {
+        "command_id",
+        "status",
+        "code",
+        "schema_version",
+        "unreal_engine_version",
+        "rhi",
+        "feature_level",
+        "shader_platform",
+        "cvars",
+    }
+    if not isinstance(response, Mapping) or set(response) != top_level_keys:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer status response fields differ",
+        )
+    engine_version = response.get("unreal_engine_version")
+    if (
+        response.get("command_id") != command_id
+        or response.get("status") != "success"
+        or response.get("code") != "RENDERER_STATUS_OBSERVED"
+        or response.get("schema_version") != RENDERER_STATUS_SCHEMA
+        or not isinstance(engine_version, str)
+        or re.fullmatch(r"5\.7(?:\.[0-9]+)?(?:[-+].*)?", engine_version) is None
+    ):
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer status identity or UE 5.7 version differs",
+        )
+
+    contract = compilation.observation_contract
+    requirements = contract.get("required_runtime_observations")
+    if not isinstance(requirements, list) or not requirements:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer observation contract is empty",
+        )
+    runtime_names: set[str] = set()
+    cvar_names: set[str] = set()
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping) or set(requirement) != {
+            "source", "name", "comparison", "expected"
+        }:
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                "renderer observation requirement fields differ",
+            )
+        source = requirement.get("source")
+        name = requirement.get("name")
+        if not isinstance(name, str) or not name:
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                "renderer observation requirement name is invalid",
+            )
+        names = runtime_names if source == "runtime" else cvar_names if source == "cvar" else None
+        if names is None or name in names:
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                "renderer observation requirement source or uniqueness differs",
+            )
+        names.add(name)
+    if runtime_names != {"rhi", "feature_level", "shader_platform"}:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer runtime identity observations differ",
+        )
+    cvars = response.get("cvars")
+    if not isinstance(cvars, Mapping) or set(cvars) != cvar_names:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer CVar observation set differs",
+        )
+    for name, value in cvars.items():
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                f"renderer CVar {name} is not finite numeric evidence",
+            )
+    observations = {
+        "rhi": response["rhi"],
+        "feature_level": response["feature_level"],
+        "shader_platform": response["shader_platform"],
+        **dict(cvars),
+    }
+    evaluation = evaluate_renderer_observations(compilation, observations)
+    if not evaluation["runtime_proof"]:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_REJECTED",
+            "effective renderer observations do not satisfy the pinned contract",
+        )
+    return {
+        **evaluation,
+        "renderer_status_schema": RENDERER_STATUS_SCHEMA,
+        "unreal_engine_version": engine_version,
+        "observations": observations,
     }
 
 

@@ -68,6 +68,14 @@ R2_PRESENTATION_COLLISION_POLICY = (
     "presentation_no_collision_use_hidden_r1_proxies"
 )
 R2_PRESENTATION_BUNDLE_COUNT = 3
+R2_EXTERNAL_BUILD_FIELDS = frozenset({
+    "presentation_external_content_verified",
+    "presentation_external_nanite_policy",
+    "presentation_external_nanite_disabled_verified",
+})
+R2_EXTERNAL_NANITE_POLICY = (
+    "disabled_unproven_opaque_or_translucent_external_bundle_v1"
+)
 
 PLAYER_ID = "home.r1/player.01"
 DOOR_ID = "home.r1/room.entry_hall/entity.interior_door.01"
@@ -628,6 +636,8 @@ def _validate_build_result(
         "content_digest",
     }
     r2 = runtime_state.get("runtime_profile") == R2_RUNTIME_PROFILE
+    if not isinstance(result, dict):
+        _fail("BUILD_RESULT_INVALID", "accepted build-result must be an object")
     if r2:
         required.update(
             {
@@ -648,7 +658,14 @@ def _validate_build_result(
                 "presentation_runtime_play_proof",
             }
         )
-    if not isinstance(result, dict) or set(result) != required:
+        external_fields = set(result) & R2_EXTERNAL_BUILD_FIELDS
+        if external_fields and external_fields != R2_EXTERNAL_BUILD_FIELDS:
+            _fail(
+                "BUILD_RESULT_INVALID",
+                "accepted r2 external presentation fields are partial",
+            )
+        required.update(external_fields)
+    if set(result) != required:
         _fail("BUILD_RESULT_INVALID", "accepted build-result fields differ")
     digests = [
         result.get("execution_sha256"),
@@ -705,6 +722,16 @@ def _validate_build_result(
         _fail(
             "BUILD_RESULT_INVALID",
             "accepted r2 build/presentation profile binding differs",
+        )
+    if r2 and R2_EXTERNAL_BUILD_FIELDS <= set(result) and (
+        result.get("presentation_external_content_verified") is not True
+        or result.get("presentation_external_nanite_policy")
+        != R2_EXTERNAL_NANITE_POLICY
+        or result.get("presentation_external_nanite_disabled_verified") is not True
+    ):
+        _fail(
+            "BUILD_RESULT_INVALID",
+            "accepted r2 external presentation proof differs",
         )
     return result
 

@@ -318,6 +318,184 @@ def _content_digest(value: Mapping[str, Any]) -> str:
     return sha256_bytes(canonical_json(body))
 
 
+def renderer_observation_package_projection(
+    receipt: Mapping[str, Any],
+    *,
+    source_build_result: Path,
+    source_build_result_sha256: str,
+    source_commit: str,
+    visual_profile_id: str,
+    visual_profile_sha256: str,
+    visual_profile_content_digest: str,
+    renderer_profile_request_sha256: str,
+    renderer_profile_request_content_digest: str,
+) -> dict[str, Any]:
+    """Validate and project the immutable r2 package identity.
+
+    Package creation remains renderer-observation ``pending``.  This helper is
+    consumed later by the live renderer acceptance lane and does not mutate or
+    widen either v1 or v2 package receipt bytes.
+    """
+
+    expected_top = {
+        "schema",
+        "status",
+        "created_at",
+        "attempt_root",
+        "bindings",
+        "artifacts",
+        "uat",
+        "project_policy",
+        "tools",
+        "trusted_upstream",
+        "archive",
+        "output",
+    }
+    if (
+        set(receipt) != expected_top
+        or receipt.get("schema") != R2_RECEIPT_SCHEMA
+        or receipt.get("status") != "accepted"
+    ):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID",
+            "renderer observation requires one exact r2 package receipt",
+        )
+    bindings = receipt.get("bindings")
+    expected_binding_keys = {
+        "source_build_result",
+        "source_build_result_sha256",
+        "source_commit",
+        "source_runtime_acceptance",
+        "source_runtime_acceptance_sha256",
+        "map_path",
+        "world_revision",
+        *R2_PACKAGE_BINDING_FIELDS,
+    }
+    if not isinstance(bindings, dict) or set(bindings) != expected_binding_keys:
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID", "r2 package renderer binding fields differ"
+        )
+    expected = {
+        "source_build_result": str(source_build_result),
+        "source_build_result_sha256": source_build_result_sha256,
+        "source_commit": source_commit,
+        "map_path": EXPECTED_MAP_PATH,
+        "world_revision": EXPECTED_REVISION,
+        "runtime_profile": R2_RUNTIME_PROFILE,
+        "camera_profile": R2_CAMERA_PROFILE,
+        "visual_profile_id": visual_profile_id,
+        "visual_profile_sha256": visual_profile_sha256,
+        "visual_profile_content_digest": visual_profile_content_digest,
+        "renderer_profile_request_sha256": renderer_profile_request_sha256,
+        "renderer_profile_request_content_digest": (
+            renderer_profile_request_content_digest
+        ),
+    }
+    if any(bindings.get(key) != value for key, value in expected.items()):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID",
+            "r2 package does not bind the observed renderer inputs",
+        )
+    for name in (
+        "source_runtime_acceptance_sha256",
+        *R2_BUILD_DIGEST_FIELDS,
+    ):
+        value = bindings.get(name)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise PackageReceiptError(
+                "RENDERER_PACKAGE_INVALID", f"r2 package {name} digest is invalid"
+            )
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != {
+        "archive_root", "launcher", "executable", "pak"
+    }:
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID", "r2 package artifact fields differ"
+        )
+    projected_artifacts: dict[str, Any] = {}
+    for name in ("launcher", "executable", "pak"):
+        record = artifacts.get(name)
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"relative_path", "sha256", "bytes", "executable"}
+            or not isinstance(record.get("relative_path"), str)
+            or not isinstance(record.get("sha256"), str)
+            or SHA256_RE.fullmatch(record["sha256"]) is None
+            or isinstance(record.get("bytes"), bool)
+            or not isinstance(record.get("bytes"), int)
+            or record["bytes"] <= 0
+            or not isinstance(record.get("executable"), bool)
+        ):
+            raise PackageReceiptError(
+                "RENDERER_PACKAGE_INVALID", f"r2 package {name} artifact is invalid"
+            )
+        projected_artifacts[name] = dict(record)
+    project_policy = receipt.get("project_policy")
+    if (
+        not isinstance(project_policy, dict)
+        or set(project_policy)
+        != {
+            "project_descriptor",
+            "project_descriptor_sha256",
+            "project_config",
+            "project_config_sha256",
+            "enabled_plugins",
+            "disabled_plugins",
+            "host_module",
+            "android_file_server_enabled",
+        }
+        or project_policy.get("enabled_plugins") != ["VistaPlayableHome"]
+        or project_policy.get("disabled_plugins")
+        != [
+            "AndroidFileServer",
+            "EditorScriptingUtilities",
+            "Interchange",
+            "PythonScriptPlugin",
+        ]
+        or project_policy.get("host_module") != "VistaPlayableHomeHost"
+        or project_policy.get("android_file_server_enabled") is not False
+        or not isinstance(project_policy.get("project_descriptor"), str)
+        or not isinstance(project_policy.get("project_config"), str)
+        or any(
+            not isinstance(project_policy.get(name), str)
+            or SHA256_RE.fullmatch(project_policy[name]) is None
+            for name in (
+                "project_descriptor_sha256",
+                "project_config_sha256",
+            )
+        )
+    ):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID",
+            "r2 package project/plugin policy differs",
+        )
+    archive = receipt.get("archive")
+    if (
+        not isinstance(archive, dict)
+        or archive.get("algorithm") != "framed-canonical-file-record-sha256/v1"
+        or not isinstance(archive.get("tree_sha256"), str)
+        or SHA256_RE.fullmatch(archive["tree_sha256"]) is None
+        or isinstance(archive.get("file_count"), bool)
+        or not isinstance(archive.get("file_count"), int)
+        or archive["file_count"] <= 0
+        or isinstance(archive.get("total_bytes"), bool)
+        or not isinstance(archive.get("total_bytes"), int)
+        or archive["total_bytes"] <= 0
+    ):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID", "r2 package archive identity is invalid"
+        )
+    return {
+        "schema": R2_RECEIPT_SCHEMA,
+        "attempt_root": receipt["attempt_root"],
+        "archive_tree_sha256": archive["tree_sha256"],
+        "archive_file_count": archive["file_count"],
+        "archive_total_bytes": archive["total_bytes"],
+        "artifacts": projected_artifacts,
+        "project_policy": dict(project_policy),
+    }
+
+
 def _validate_r2_source_chain(
     *,
     source_result: Mapping[str, Any],

@@ -1,10 +1,44 @@
 #include "VistaPlayableHomeRuntimeSubsystem.h"
 
 #include "EngineUtils.h"
+#include "DynamicRHI.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/EngineVersion.h"
+#include "RHI.h"
+#include "RHIShaderPlatform.h"
+#include "RHIStrings.h"
 #include "VistaEventSubsystem.h"
 #include "VistaHomeNpcCharacter.h"
 #include "VistaHomeNpcController.h"
 #include "VistaInteractable.h"
+
+namespace
+{
+constexpr const TCHAR* RendererCVarNames[] = {
+    TEXT("r.DynamicGlobalIlluminationMethod"),
+    TEXT("r.ReflectionMethod"),
+    TEXT("r.Shadow.Virtual.Enable"),
+    TEXT("r.AntiAliasingMethod"),
+    TEXT("r.Nanite"),
+    TEXT("r.GenerateMeshDistanceFields"),
+    TEXT("r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange"),
+    TEXT("r.UsePreExposure"),
+    TEXT("r.RayTracing"),
+    TEXT("r.Lumen.HardwareRayTracing"),
+    TEXT("r.ScreenPercentage"),
+    TEXT("r.Streaming.PoolSize"),
+    TEXT("sg.ViewDistanceQuality"),
+    TEXT("sg.AntiAliasingQuality"),
+    TEXT("sg.ShadowQuality"),
+    TEXT("sg.GlobalIlluminationQuality"),
+    TEXT("sg.ReflectionQuality"),
+    TEXT("sg.PostProcessQuality"),
+    TEXT("sg.TextureQuality"),
+    TEXT("sg.EffectsQuality"),
+    TEXT("sg.FoliageQuality"),
+    TEXT("sg.ShadingQuality"),
+};
+} // namespace
 
 FVistaLiveCommandResult UVistaPlayableHomeRuntimeSubsystem::GetStatus(
     FName CommandId) const
@@ -24,6 +58,57 @@ FVistaLiveCommandResult UVistaPlayableHomeRuntimeSubsystem::GetStatus(
     Output.bSucceeded = !Output.WorldRevision.IsNone();
     Output.Code = Output.bSucceeded ? FName(TEXT("READY"))
                                    : FName(TEXT("WORLD_NOT_INITIALIZED"));
+    return Output;
+}
+
+FVistaRendererStatusResult
+UVistaPlayableHomeRuntimeSubsystem::GetRendererStatus(FName CommandId) const
+{
+    FVistaRendererStatusResult Output;
+    Output.CommandId = CommandId;
+    if (CommandId.IsNone())
+    {
+        Output.Code = TEXT("COMMAND_ID_REQUIRED");
+        return Output;
+    }
+
+    Output.Observation.UnrealEngineVersion = FEngineVersion::Current().ToString();
+    Output.Observation.Rhi = GDynamicRHI ? FString(GDynamicRHI->GetName()) : FString();
+    GetFeatureLevelName(
+        GMaxRHIFeatureLevel, Output.Observation.FeatureLevel);
+    Output.Observation.ShaderPlatform =
+        LegacyShaderPlatformToShaderFormat(GMaxRHIShaderPlatform).ToString();
+    if (Output.Observation.UnrealEngineVersion.IsEmpty() ||
+        Output.Observation.Rhi.IsEmpty() ||
+        Output.Observation.FeatureLevel.IsEmpty() ||
+        Output.Observation.ShaderPlatform.IsEmpty())
+    {
+        Output.Code = TEXT("RENDERER_IDENTITY_UNAVAILABLE");
+        return Output;
+    }
+
+    for (const TCHAR* Name : RendererCVarNames)
+    {
+        const IConsoleVariable* Variable =
+            IConsoleManager::Get().FindConsoleVariable(Name);
+        if (Variable == nullptr)
+        {
+            Output.Code = TEXT("RENDERER_CVAR_UNAVAILABLE");
+            Output.Observation.ConsoleVariables.Reset();
+            return Output;
+        }
+        const double Value = static_cast<double>(Variable->GetFloat());
+        if (!FMath::IsFinite(Value))
+        {
+            Output.Code = TEXT("RENDERER_CVAR_NONFINITE");
+            Output.Observation.ConsoleVariables.Reset();
+            return Output;
+        }
+        Output.Observation.ConsoleVariables.Add(Name, Value);
+    }
+
+    Output.bSucceeded = true;
+    Output.Code = TEXT("RENDERER_STATUS_OBSERVED");
     return Output;
 }
 
