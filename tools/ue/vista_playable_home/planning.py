@@ -84,6 +84,39 @@ VISUAL_PROFILE_SCHEMA = "simworld.vista.playable-home-visual-profile/v1"
 R2_REVIEW_CAMERA_TAG = "VistaVisualRevision=realistic_interior_r2"
 MIN_REVIEW_CLEARANCE_CM = 25.0
 MAX_REVIEW_CLEARANCE_CM = 500.0
+PRESENTATION_ROOM_KINDS = ("entry_hall", "living_room", "kitchen_dining")
+PRESENTATION_ARTIFACT_KIND = "ue_import_bundle"
+PRESENTATION_ROOT_TRANSFORM_POLICY = "room_local_geometry_identity_root"
+PRESENTATION_SEMANTIC_POLICY = "presentation_only_preserve_r1_authority"
+PRESENTATION_COLLISION_POLICY = "presentation_no_collision_use_hidden_r1_proxies"
+PRESENTATION_UNREAL_COLLISION_PROFILE = "NoCollision"
+PRESENTATION_EXECUTION_BINDING_KEYS = frozenset({
+    "artifact_id",
+    "artifact_kind",
+    "target_asset_id",
+    "room_id",
+    "room_kind",
+    "relative_path",
+    "source_file",
+    "source_file_sha256",
+    "media_type",
+    "sha256",
+    "size_bytes",
+    "mesh_count",
+    "material_count",
+    "pbr_complete_material_count",
+    "texture_count",
+    "material_ids",
+    "expected_world_transform_cm",
+    "bundle_root_transform",
+    "root_transform_policy",
+    "semantic_policy",
+    "collision_policy",
+    "unreal_collision_profile",
+    "cameras_exported",
+    "lights_exported",
+    "source_hashes",
+})
 
 
 class VistaPlayableHomePlanError(ValueError):
@@ -559,9 +592,212 @@ def _validate_graph(room_ids: set[str], portals: Sequence[Mapping[str, Any]]) ->
     _require(visited == room_ids, "VISTA_HOME_PLAN_GRAPH_DISCONNECTED", "navigable room graph is disconnected")
 
 
+def compile_presentation_bundle_operations(
+    visual_profile: Mapping[str, Any],
+    *,
+    rooms_by_id: Mapping[str, Mapping[str, Any]],
+    presentation_bindings: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compile the three validated room-local GLBs into presentation actors.
+
+    Host-private source paths stay in the execution binding.  The composition
+    operation carries only the pinned artifact identity, source digest,
+    presentation policy, and world transform needed by the fixed commandlet.
+    It intentionally has no ``semantic_id``: r1 room actors remain the sole
+    semantic and collision authorities.
+    """
+
+    profile = _mapping(visual_profile, "visual profile")
+    finished_room_ids = list(_array(
+        profile.get("finished_room_ids"), "visual profile finished_room_ids"
+    ))
+    _require(
+        len(finished_room_ids) == len(PRESENTATION_ROOM_KINDS)
+        and len(finished_room_ids) == len(set(finished_room_ids)),
+        "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+        "presentation bundles require the exact three-room finished slice",
+    )
+    _require(
+        isinstance(presentation_bindings, Sequence)
+        and not isinstance(presentation_bindings, (str, bytes))
+        and len(presentation_bindings) == len(PRESENTATION_ROOM_KINDS),
+        "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+        "presentation binding inventory must contain exactly three bundles",
+    )
+    room_kind_by_id = {
+        room_id: room.get("kind")
+        for room_id, room in rooms_by_id.items()
+    }
+    expected_room_ids = {
+        room_id
+        for room_id, kind in room_kind_by_id.items()
+        if kind in set(PRESENTATION_ROOM_KINDS)
+    }
+    _require(
+        set(finished_room_ids) == expected_room_ids,
+        "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+        "visual profile finished rooms differ from the presentation slice",
+    )
+
+    operations: list[dict[str, Any]] = []
+    seen_rooms: set[str] = set()
+    seen_artifacts: set[str] = set()
+    for index, raw_binding in enumerate(presentation_bindings):
+        binding = dict(_mapping(raw_binding, f"presentation bindings[{index}]"))
+        _require(
+            set(binding) == PRESENTATION_EXECUTION_BINDING_KEYS,
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} fields differ",
+        )
+        room_id = _safe_id(binding.get("room_id"), f"presentation binding {index}.room_id")
+        room_kind = binding.get("room_kind")
+        artifact_id = _safe_id(
+            binding.get("artifact_id"), f"presentation binding {index}.artifact_id"
+        )
+        target_asset_id = _safe_id(
+            binding.get("target_asset_id"),
+            f"presentation binding {index}.target_asset_id",
+        )
+        _require(
+            room_id in expected_room_ids
+            and room_id not in seen_rooms
+            and room_kind == room_kind_by_id[room_id]
+            and room_kind in PRESENTATION_ROOM_KINDS,
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} room identity differs",
+        )
+        room = rooms_by_id[room_id]
+        expected_asset_id = _mapping(room.get("bundle"), f"room {room_id}.bundle").get("asset_id")
+        _require(
+            artifact_id == f"ue_bundle.room.{room_kind}"
+            and artifact_id not in seen_artifacts
+            and binding.get("artifact_kind") == PRESENTATION_ARTIFACT_KIND
+            and target_asset_id == expected_asset_id == f"asset.bundle.{room_kind}",
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} artifact identity differs",
+        )
+        expected_path = f"ue_import_bundles/{room_kind}_presentation_bundle.glb"
+        _require(
+            binding.get("relative_path") == expected_path
+            and isinstance(binding.get("source_file"), str)
+            and binding["source_file"].startswith("/")
+            and binding.get("media_type") == "model/gltf-binary",
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} source identity differs",
+        )
+        source_sha = _sha(
+            binding.get("source_file_sha256"),
+            f"presentation binding {index}.source_file_sha256",
+        )
+        _require(
+            source_sha == _sha(binding.get("sha256"), f"presentation binding {index}.sha256"),
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} source digests differ",
+        )
+        integers = {
+            "size_bytes": 1,
+            "mesh_count": 1,
+            "material_count": 2,
+            "pbr_complete_material_count": 2,
+            "texture_count": 6,
+        }
+        for key, minimum in integers.items():
+            number = binding.get(key)
+            _require(
+                isinstance(number, int) and not isinstance(number, bool) and number >= minimum,
+                "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+                f"presentation binding {index}.{key} is invalid",
+            )
+        material_ids = binding.get("material_ids")
+        _require(
+            isinstance(material_ids, list)
+            and len(material_ids) >= 2
+            and material_ids == sorted(set(material_ids))
+            and all(isinstance(item, str) and SAFE_ID.fullmatch(item) is not None
+                    for item in material_ids)
+            and binding["mesh_count"] == 1
+            and binding["material_count"] == len(material_ids)
+            and binding["pbr_complete_material_count"] == binding["material_count"]
+            and binding["texture_count"] >= binding["material_count"] * 3,
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} material inventory differs",
+        )
+        expected_transform = _transform(
+            binding.get("expected_world_transform_cm"),
+            f"presentation binding {index}.expected_world_transform_cm",
+        )
+        room_transform = _transform(
+            room.get("world_transform_cm"), f"room {room_id}.world_transform_cm"
+        )
+        _require(
+            expected_transform == room_transform
+            and binding.get("bundle_root_transform") == {
+                "location_m": [0, 0, 0],
+                "rotation_deg": [0, 0, 0],
+                "scale": [1, 1, 1],
+            }
+            and binding.get("root_transform_policy") == PRESENTATION_ROOT_TRANSFORM_POLICY
+            and binding.get("semantic_policy") == PRESENTATION_SEMANTIC_POLICY
+            and binding.get("collision_policy") == PRESENTATION_COLLISION_POLICY
+            and binding.get("unreal_collision_profile") == PRESENTATION_UNREAL_COLLISION_PROFILE
+            and binding.get("cameras_exported") is False
+            and binding.get("lights_exported") is False,
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} transform or policy differs",
+        )
+        source_hashes = _mapping(
+            binding.get("source_hashes"), f"presentation binding {index}.source_hashes"
+        )
+        _require(
+            set(source_hashes) == {
+                "house_sha256", "visual_profile_sha256", "forge_plan_sha256"
+            },
+            "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+            f"presentation binding {index} source hash fields differ",
+        )
+        for key, value in source_hashes.items():
+            _sha(value, f"presentation binding {index}.source_hashes.{key}")
+
+        presentation_id = f"{room_id}/presentation.{profile['visual_profile_id']}"
+        operations.append(_operation("place_rooms", "place_room_presentation_bundle", {
+            "presentation_id": presentation_id,
+            "room_id": room_id,
+            "room_kind": room_kind,
+            "artifact_id": artifact_id,
+            "target_asset_id": target_asset_id,
+            "source_file_sha256": source_sha,
+            "transform": expected_transform,
+            "material_count": binding["material_count"],
+            "material_ids": list(material_ids),
+            "texture_count": binding["texture_count"],
+            "root_transform_policy": PRESENTATION_ROOT_TRANSFORM_POLICY,
+            "semantic_policy": PRESENTATION_SEMANTIC_POLICY,
+            "collision_policy": PRESENTATION_COLLISION_POLICY,
+            "unreal_collision_profile": PRESENTATION_UNREAL_COLLISION_PROFILE,
+            "source_hashes": dict(source_hashes),
+            "tags": [
+                "VistaPresentationId=" + presentation_id,
+                "VistaPresentationFor=" + room_id,
+                "VistaRole=room_presentation",
+                "VistaVisualRevision=" + str(profile["visual_profile_id"]),
+                "VistaCollisionPolicy=" + PRESENTATION_COLLISION_POLICY,
+            ],
+        }))
+        seen_rooms.add(room_id)
+        seen_artifacts.add(artifact_id)
+
+    _require(
+        seen_rooms == expected_room_ids and len(seen_artifacts) == len(PRESENTATION_ROOM_KINDS),
+        "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+        "presentation bindings do not cover the exact finished room set",
+    )
+    return sorted(operations, key=lambda item: item["room_id"])
+
+
 def build_composition_spec(
     plan: Mapping[str, Any],
     visual_profile: Mapping[str, Any] | None = None,
+    presentation_bindings: Sequence[Mapping[str, Any]] | None = None,
 ) -> CompositionSpec:
     """Validate critical invariants and compile stable Editor operations.
 
@@ -587,6 +823,11 @@ def build_composition_spec(
                  "visual profile house revision differs")
         _safe_id(visual.get("visual_profile_id"), "visual profile visual_profile_id")
         _sha(visual.get("content_digest"), "visual profile content_digest")
+    _require(
+        not presentation_bindings or visual is not None,
+        "VISTA_HOME_PRESENTATION_BINDING_INVALID",
+        "presentation bundles require a selected visual profile",
+    )
 
     declared_assets: dict[str, Mapping[str, Any]] = {}
     for index, raw_asset in enumerate(_array(value["assets"], "assets")):
@@ -659,6 +900,12 @@ def build_composition_spec(
                  len(compatibility_rooms) == len(set(compatibility_rooms)) and
                  not set(finished_rooms) & set(compatibility_rooms),
                  "VISTA_HOME_VISUAL_PROFILE_INVALID", "compatibility room IDs are invalid")
+        if presentation_bindings:
+            operations.extend(compile_presentation_bundle_operations(
+                visual,
+                rooms_by_id=rooms_by_id,
+                presentation_bindings=presentation_bindings,
+            ))
         shot_operations = compile_realistic_review_operations(
             visual,
             room_bounds_by_id={

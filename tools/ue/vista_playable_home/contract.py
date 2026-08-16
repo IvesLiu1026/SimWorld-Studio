@@ -11,6 +11,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from . import planning
 from .planning import CompositionSpec, build_composition_spec, canonical_json
 
 
@@ -43,6 +44,26 @@ def sha256_file(path: pathlib.Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def presentation_script_pins() -> dict[str, dict[str, str]]:
+    """Return fixed extension commandlets without changing legacy script pins."""
+
+    paths = {
+        "import": pathlib.Path(__file__).with_name(
+            "import_presentation_commandlet.py"
+        ).resolve(),
+        "compose": pathlib.Path(__file__).with_name(
+            "compose_presentation_commandlet.py"
+        ).resolve(),
+        "common": pathlib.Path(__file__).with_name(
+            "presentation_commandlet_common.py"
+        ).resolve(),
+    }
+    return {
+        name: {"path": str(path), "sha256": sha256_file(path)}
+        for name, path in paths.items()
+    }
 
 
 def _error(code: str, detail: str) -> None:
@@ -78,6 +99,11 @@ def build_execution_manifest(
     renderer_request_path: os.PathLike[str] | str | None = None,
     renderer_request_sha256: str | None = None,
     renderer_request_content_digest: str | None = None,
+    presentation_manifest_path: os.PathLike[str] | str | None = None,
+    presentation_manifest_sha256: str | None = None,
+    presentation_artifact_receipt_path: os.PathLike[str] | str | None = None,
+    presentation_artifact_receipt_sha256: str | None = None,
+    presentation_bindings: Sequence[Mapping[str, Any]] | None = None,
 ) -> ExecutionManifest:
     """Pin host files without placing host paths in the world content digest."""
 
@@ -96,7 +122,29 @@ def build_execution_manifest(
             "VISTA_HOME_UE_VISUAL_PIN_INCOMPLETE",
             "visual profile and renderer request pins must be supplied together",
         )
-    composition = build_composition_spec(build_plan, visual_profile)
+    presentation_values = (
+        presentation_manifest_path,
+        presentation_manifest_sha256,
+        presentation_artifact_receipt_path,
+        presentation_artifact_receipt_sha256,
+        presentation_bindings,
+    )
+    has_presentation = any(value is not None for value in presentation_values)
+    if has_presentation and not all(value is not None for value in presentation_values):
+        _error(
+            "VISTA_HOME_UE_PRESENTATION_PIN_INCOMPLETE",
+            "presentation manifest, receipt, and bindings must be supplied together",
+        )
+    if has_presentation and visual_profile is None:
+        _error(
+            "VISTA_HOME_UE_PRESENTATION_WITHOUT_PROFILE",
+            "presentation bundles require a selected visual profile",
+        )
+    composition = build_composition_spec(
+        build_plan,
+        visual_profile,
+        presentation_bindings,
+    )
     root = _canonical_path(attempt_root)
     plan_path = _safe_attempt_child(_canonical_path(build_plan_path), root, "build plan")
     project = _safe_attempt_child(_canonical_path(project_file), root, "project")
@@ -287,6 +335,102 @@ def build_execution_manifest(
                 "status": "staged_runtime_observation_required",
                 "runtime_proof": False,
             },
+        })
+    if has_presentation:
+        presentation_manifest = _safe_attempt_child(
+            _canonical_path(presentation_manifest_path),
+            root,
+            "presentation manifest",
+        )
+        presentation_receipt = _safe_attempt_child(
+            _canonical_path(presentation_artifact_receipt_path),
+            root,
+            "presentation artifact receipt",
+        )
+        for path, expected, label in (
+            (presentation_manifest, presentation_manifest_sha256, "presentation manifest"),
+            (
+                presentation_receipt,
+                presentation_artifact_receipt_sha256,
+                "presentation artifact receipt",
+            ),
+        ):
+            if (
+                not isinstance(expected, str)
+                or SHA256.fullmatch(expected) is None
+                or not path.is_file()
+                or sha256_file(path) != expected
+            ):
+                _error(
+                    "VISTA_HOME_UE_PRESENTATION_PIN_MISMATCH",
+                    f"{label} bytes differ from their pin",
+                )
+        normalized_bindings: list[dict[str, Any]] = []
+        room_ids: set[str] = set()
+        artifact_ids: set[str] = set()
+        for index, raw_binding in enumerate(presentation_bindings or ()):
+            binding = dict(raw_binding)
+            if set(binding) != planning.PRESENTATION_EXECUTION_BINDING_KEYS:
+                _error(
+                    "VISTA_HOME_UE_PRESENTATION_BINDING_INVALID",
+                    f"presentation binding {index} fields differ",
+                )
+            source = _canonical_path(binding.get("source_file"))
+            expected = binding.get("source_file_sha256")
+            if (
+                not isinstance(expected, str)
+                or SHA256.fullmatch(expected) is None
+                or expected != binding.get("sha256")
+                or not source.is_file()
+                or sha256_file(source) != expected
+            ):
+                _error(
+                    "VISTA_HOME_UE_PRESENTATION_PIN_MISMATCH",
+                    f"presentation binding {index} source bytes differ",
+                )
+            room_id = binding.get("room_id")
+            artifact_id = binding.get("artifact_id")
+            if (
+                not isinstance(room_id, str)
+                or room_id in room_ids
+                or not isinstance(artifact_id, str)
+                or artifact_id in artifact_ids
+            ):
+                _error(
+                    "VISTA_HOME_UE_PRESENTATION_BINDING_INVALID",
+                    "presentation room or artifact identity is duplicated",
+                )
+            binding["source_file"] = str(source)
+            normalized_bindings.append(binding)
+            room_ids.add(room_id)
+            artifact_ids.add(artifact_id)
+        if len(normalized_bindings) != len(planning.PRESENTATION_ROOM_KINDS):
+            _error(
+                "VISTA_HOME_UE_PRESENTATION_BINDING_INVALID",
+                "presentation binding inventory must contain exactly three bundles",
+            )
+        manifest.update({
+            "presentation_sources": {
+                "manifest": {
+                    "path": str(presentation_manifest),
+                    "sha256": presentation_manifest_sha256,
+                },
+                "artifact_receipt": {
+                    "path": str(presentation_receipt),
+                    "sha256": presentation_artifact_receipt_sha256,
+                },
+            },
+            "presentation_bindings": sorted(
+                normalized_bindings, key=lambda item: item["room_id"]
+            ),
+            "presentation_scripts": presentation_script_pins(),
+            "presentation_import_receipt": str(
+                root / "presentation-import-receipt.json"
+            ),
+            "presentation_scene_receipt": str(
+                root / "presentation-scene-receipt.json"
+            ),
+            "presentation_runtime_proof": "pending",
         })
     raw = canonical_json(manifest)
     return ExecutionManifest(manifest, raw, hashlib.sha256(raw).hexdigest(), composition)

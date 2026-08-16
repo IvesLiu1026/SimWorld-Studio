@@ -27,6 +27,7 @@ import secrets
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import sys
 from collections import Counter
@@ -110,6 +111,45 @@ RENDERER_OBSERVATION_SCHEMA = "simworld.vista.playable-home-renderer-observation
 RENDERER_REQUEST_SCHEMA = "simworld.vista.playable-home-renderer-request/v1"
 VISUAL_PROFILE_ATTEMPT_FILE = "visual-profile.json"
 RENDERER_REQUEST_ATTEMPT_FILE = "renderer-profile-request.json"
+PRESENTATION_MANIFEST_ATTEMPT_FILE = "presentation-manifest.json"
+PRESENTATION_ARTIFACT_RECEIPT_ATTEMPT_FILE = "presentation-artifact-receipt.json"
+PRESENTATION_FORGE_SCHEMA = "simworld.vista.playable-home-realism-forge/v1"
+PRESENTATION_ARTIFACT_RECEIPT_SCHEMA = "simworld.vista.playable-home-realism-artifacts/v1"
+PRESENTATION_IMPORT_RECEIPT_SCHEMA = (
+    "simworld.vista.playable-home-ue-presentation-import-receipt/v1"
+)
+PRESENTATION_SCENE_RECEIPT_SCHEMA = (
+    "simworld.vista.playable-home-ue-presentation-scene-receipt/v1"
+)
+PRESENTATION_IMPORT_RESULT_FILE = "presentation-import-result.json"
+PRESENTATION_SCENE_RESULT_FILE = "presentation-scene-result.json"
+PRESENTATION_IMPORT_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RESULT:"
+PRESENTATION_SCENE_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_SCENE_RESULT:"
+PRESENTATION_BUNDLE_RECORD_KEYS = frozenset({
+    "artifact_id",
+    "artifact_kind",
+    "target_asset_id",
+    "room_id",
+    "room_kind",
+    "relative_path",
+    "media_type",
+    "sha256",
+    "size_bytes",
+    "mesh_count",
+    "material_count",
+    "pbr_complete_material_count",
+    "texture_count",
+    "material_ids",
+    "expected_world_transform_cm",
+    "bundle_root_transform",
+    "root_transform_policy",
+    "semantic_policy",
+    "collision_policy",
+    "unreal_collision_profile",
+    "cameras_exported",
+    "lights_exported",
+    "source_hashes",
+})
 RENDERER_PROFILE_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 RENDERER_SCALABILITY_KEYS = (
     "view_distance",
@@ -410,6 +450,411 @@ class BlenderInputs:
     manifest: dict[str, Any]
     normalized: dict[str, Any]
     artifacts: dict[str, tuple[Path, str]]
+
+
+@dataclass(frozen=True)
+class PresentationInputs:
+    """Pinned Blender r2 room bundles ready for the fixed UE extension."""
+
+    manifest: dict[str, Any]
+    manifest_raw: bytes
+    artifact_receipt: dict[str, Any]
+    artifact_receipt_raw: bytes
+    bindings: tuple[dict[str, Any], ...]
+
+
+def _presentation_transform(value: Any, label: str, *, location_key: str) -> dict[str, Any]:
+    expected_keys = {location_key, "rotation_deg", "scale"}
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        _fail("VISTA_HOME_PRESENTATION_INVALID", f"{label} fields differ")
+    result = {key: list(value[key]) for key in expected_keys}
+    for key in expected_keys:
+        vector = result[key]
+        if (
+            len(vector) != 3
+            or any(
+                isinstance(number, bool)
+                or not isinstance(number, (int, float))
+                or not math.isfinite(float(number))
+                for number in vector
+            )
+        ):
+            _fail("VISTA_HOME_PRESENTATION_INVALID", f"{label}.{key} is invalid")
+    if any(float(number) <= 0.0 for number in result["scale"]):
+        _fail("VISTA_HOME_PRESENTATION_INVALID", f"{label}.scale must be positive")
+    return result
+
+
+def _identity_gltf_node(node: Mapping[str, Any]) -> bool:
+    identity_matrix = (
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+    matrix = node.get("matrix")
+    if matrix is not None and (
+        not isinstance(matrix, list)
+        or len(matrix) != 16
+        or any(
+            isinstance(number, bool)
+            or not isinstance(number, (int, float))
+            or not math.isfinite(float(number))
+            or abs(float(number) - identity_matrix[index]) > 1e-6
+            for index, number in enumerate(matrix)
+        )
+    ):
+        return False
+    identity_vectors = {
+        "translation": (0.0, 0.0, 0.0),
+        "rotation": (0.0, 0.0, 0.0, 1.0),
+        "scale": (1.0, 1.0, 1.0),
+    }
+    for key, expected in identity_vectors.items():
+        vector = node.get(key)
+        if vector is None:
+            continue
+        if (
+            not isinstance(vector, list)
+            or len(vector) != len(expected)
+            or any(
+                isinstance(number, bool)
+                or not isinstance(number, (int, float))
+                or not math.isfinite(float(number))
+                or abs(float(number) - expected[index]) > 1e-6
+                for index, number in enumerate(vector)
+            )
+        ):
+            return False
+    return True
+
+
+def _load_presentation_glb(path: Path) -> dict[str, Any]:
+    """Read only the bounded GLB JSON graph used by the host-side gate."""
+
+    size = path.stat().st_size
+    if size < 20:
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB is truncated", pointer=str(path))
+    with path.open("rb") as source:
+        header = source.read(12)
+        if len(header) != 12:
+            _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB header is truncated", pointer=str(path))
+        magic, version, declared_size = struct.unpack("<III", header)
+        if magic != 0x46546C67 or version != 2 or declared_size != size:
+            _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation source is not an exact GLB 2.0 container", pointer=str(path))
+        offset = 12
+        json_payload: bytes | None = None
+        while offset < declared_size:
+            chunk_header = source.read(8)
+            if len(chunk_header) != 8:
+                _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB chunk header is truncated", pointer=str(path))
+            chunk_length, chunk_type = struct.unpack("<II", chunk_header)
+            offset += 8
+            if chunk_length % 4 != 0 or offset + chunk_length > declared_size:
+                _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB chunk bounds differ", pointer=str(path))
+            if chunk_type == 0x4E4F534A:
+                if json_payload is not None or chunk_length <= 0 or chunk_length > 16 * 1024 * 1024:
+                    _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB JSON chunk differs", pointer=str(path))
+                json_payload = source.read(chunk_length)
+                if len(json_payload) != chunk_length:
+                    _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB JSON chunk is truncated", pointer=str(path))
+            else:
+                source.seek(chunk_length, os.SEEK_CUR)
+            offset += chunk_length
+        if offset != declared_size or json_payload is None:
+            _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB lacks one complete JSON chunk", pointer=str(path))
+    try:
+        document = json.loads(
+            json_payload.rstrip(b" \t\r\n\x00").decode("utf-8", "strict"),
+            object_pairs_hook=_duplicate_object,
+            parse_constant=_reject_constant,
+        )
+    except BuildHomeError:
+        raise
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB JSON is invalid", pointer=str(path))
+        raise AssertionError from exc
+    if not isinstance(document, dict):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB JSON root is not an object", pointer=str(path))
+    _assert_finite(document)
+    return document
+
+
+def _validate_presentation_glb(
+    path: Path,
+    record: Mapping[str, Any],
+) -> None:
+    document = _load_presentation_glb(path)
+    meshes = document.get("meshes")
+    nodes = document.get("nodes")
+    materials = document.get("materials")
+    textures = document.get("textures")
+    if not all(isinstance(value, list) for value in (meshes, nodes, materials, textures)):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB inventories are not arrays", pointer=str(path))
+    assert isinstance(meshes, list) and isinstance(nodes, list)
+    assert isinstance(materials, list) and isinstance(textures, list)
+    mesh_nodes = [node for node in nodes if isinstance(node, Mapping) and isinstance(node.get("mesh"), int)]
+    bundle_nodes = [
+        node for node in nodes
+        if isinstance(node, Mapping)
+        and isinstance(node.get("extras"), Mapping)
+        and node["extras"].get("vista_bundle_contract") == "one_room_one_mesh_v1"
+    ]
+    if len(meshes) != 1 or len(mesh_nodes) != 1 or len(bundle_nodes) != 1 or not _identity_gltf_node(bundle_nodes[0]):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB is not one identity-root mesh", pointer=str(path))
+    if document.get("cameras") not in (None, []):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB contains a camera", pointer=str(path))
+    extensions = document.get("extensions", {})
+    punctual = extensions.get("KHR_lights_punctual", {}) if isinstance(extensions, Mapping) else {}
+    if isinstance(punctual, Mapping) and punctual.get("lights") not in (None, []):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB contains a light", pointer=str(path))
+
+    if len(materials) != record["material_count"] or len(textures) != record["texture_count"]:
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB material or texture count differs", pointer=str(path))
+    used_material_indices: set[int] = set()
+    primitives = meshes[0].get("primitives") if isinstance(meshes[0], Mapping) else None
+    if not isinstance(primitives, list) or not primitives:
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB has no mesh primitives", pointer=str(path))
+    for primitive in primitives:
+        material_index = primitive.get("material") if isinstance(primitive, Mapping) else None
+        if (
+            not isinstance(material_index, int)
+            or isinstance(material_index, bool)
+            or not 0 <= material_index < len(materials)
+        ):
+            _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB primitive material is invalid", pointer=str(path))
+        used_material_indices.add(material_index)
+    if used_material_indices != set(range(len(materials))):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB has unused or missing material slots", pointer=str(path))
+
+    for index, material in enumerate(materials):
+        if not isinstance(material, Mapping):
+            _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", f"presentation material {index} is invalid", pointer=str(path))
+        name = material.get("name")
+        folded_name = str(name or "").replace("_", "").replace("-", "").casefold()
+        if not isinstance(name, str) or not name or "defaultmaterial" in folded_name or "basicshapematerial" in folded_name:
+            _fail("VISTA_HOME_PRESENTATION_DEFAULT_MATERIAL", f"presentation material {index} is default/basic", pointer=str(path))
+        pbr = material.get("pbrMetallicRoughness")
+        bindings = (
+            pbr.get("baseColorTexture") if isinstance(pbr, Mapping) else None,
+            pbr.get("metallicRoughnessTexture") if isinstance(pbr, Mapping) else None,
+            material.get("normalTexture"),
+        )
+        for binding in bindings:
+            texture_index = binding.get("index") if isinstance(binding, Mapping) else None
+            if (
+                not isinstance(texture_index, int)
+                or isinstance(texture_index, bool)
+                or not 0 <= texture_index < len(textures)
+            ):
+                _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", f"presentation material {index} lacks complete PBR texture bindings", pointer=str(path))
+
+    metadata = bundle_nodes[0]["extras"]
+    try:
+        embedded_transform = json.loads(str(metadata.get("vista_expected_world_transform_cm_json")))
+        embedded_material_ids = json.loads(str(metadata.get("vista_material_ids_json")))
+    except json.JSONDecodeError as exc:
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB extras contain invalid JSON", pointer=str(path))
+        raise AssertionError from exc
+    expected_metadata = {
+        "vista_artifact_id": record["artifact_id"],
+        "vista_target_asset_id": record["target_asset_id"],
+        "vista_room_id": record["room_id"],
+        "vista_room_kind": record["room_kind"],
+        "vista_root_transform_policy": record["root_transform_policy"],
+        "vista_semantic_policy": record["semantic_policy"],
+        "vista_collision_policy": record["collision_policy"],
+        "vista_unreal_collision_profile": record["unreal_collision_profile"],
+        "vista_source_house_sha256": record["source_hashes"]["house_sha256"],
+        "vista_source_visual_profile_sha256": record["source_hashes"]["visual_profile_sha256"],
+        "vista_source_forge_plan_sha256": record["source_hashes"]["forge_plan_sha256"],
+    }
+    if (
+        any(metadata.get(key) != value for key, value in expected_metadata.items())
+        or embedded_transform != record["expected_world_transform_cm"]
+        or embedded_material_ids != record["material_ids"]
+    ):
+        _fail("VISTA_HOME_PRESENTATION_GLB_INVALID", "presentation GLB extras differ from their receipt", pointer=str(path))
+
+
+def validate_presentation_inputs(
+    manifest_path: Path,
+    manifest_sha256: str,
+    artifact_receipt_path: Path,
+    artifact_receipt_sha256: str,
+    plan: Mapping[str, Any],
+    visual_profile: Mapping[str, Any],
+) -> PresentationInputs:
+    """Bind manifest, receipt, exact three-room inventory, and GLB bytes."""
+
+    manifest, manifest_raw = _load_json(
+        manifest_path,
+        expected_sha256=manifest_sha256,
+        label="presentation manifest",
+    )
+    receipt, receipt_raw = _load_json(
+        artifact_receipt_path,
+        expected_sha256=artifact_receipt_sha256,
+        label="presentation artifact receipt",
+    )
+    if manifest_raw != canonical_json(manifest) or receipt_raw != canonical_json(receipt):
+        _fail("VISTA_HOME_PRESENTATION_INVALID", "presentation contracts must be canonical JSON")
+    manifest_root = _existing_directory(manifest_path.parent, "presentation output root")
+    receipt_root = _existing_directory(artifact_receipt_path.parent, "presentation receipt root")
+    if manifest_root != receipt_root:
+        _fail("VISTA_HOME_PRESENTATION_INVALID", "presentation manifest and receipt must share one output root")
+    if (
+        manifest.get("schema_version") != PRESENTATION_FORGE_SCHEMA
+        or manifest.get("house_revision") != plan["house"]["revision"]
+        or manifest.get("visual_profile_id") != visual_profile["visual_profile_id"]
+        or manifest.get("source_house_digest") != plan["house"]["content_digest"]
+        or manifest.get("source_profile_digest") != visual_profile["content_digest"]
+        or SHA256_RE.fullmatch(str(manifest.get("forge_plan_digest", ""))) is None
+    ):
+        _fail("VISTA_HOME_PRESENTATION_SOURCE_MISMATCH", "presentation manifest source identity differs")
+    if set(receipt) != {"schema_version", "artifacts", "ue_import_bundles"} or receipt.get("schema_version") != PRESENTATION_ARTIFACT_RECEIPT_SCHEMA:
+        _fail("VISTA_HOME_PRESENTATION_INVALID", "presentation artifact receipt fields or schema differ")
+    manifest_bundles = manifest.get("ue_import_bundles")
+    receipt_bundles = receipt.get("ue_import_bundles")
+    artifacts = receipt.get("artifacts")
+    if not isinstance(manifest_bundles, list) or not isinstance(receipt_bundles, list) or not isinstance(artifacts, list):
+        _fail("VISTA_HOME_PRESENTATION_INVALID", "presentation bundle inventories must be arrays")
+    artifact_bundles = [
+        item for item in artifacts
+        if isinstance(item, Mapping) and item.get("artifact_kind") == planning.PRESENTATION_ARTIFACT_KIND
+    ]
+    if (
+        manifest_bundles != receipt_bundles
+        or receipt_bundles != artifact_bundles
+        or len(receipt_bundles) != len(planning.PRESENTATION_ROOM_KINDS)
+    ):
+        _fail("VISTA_HOME_PRESENTATION_INVENTORY_MISMATCH", "manifest, receipt, and artifact bundle inventories differ")
+
+    rooms_by_id = {room["room_id"]: room for room in plan["rooms"]}
+    expected_room_ids = {
+        room_id for room_id, room in rooms_by_id.items()
+        if room.get("kind") in set(planning.PRESENTATION_ROOM_KINDS)
+    }
+    if set(visual_profile.get("finished_room_ids", [])) != expected_room_ids:
+        _fail("VISTA_HOME_PRESENTATION_INVENTORY_MISMATCH", "visual profile finished rooms differ from the presentation contract")
+    source_hashes = {
+        "house_sha256": plan["house"]["content_digest"],
+        "visual_profile_sha256": visual_profile["content_digest"],
+        "forge_plan_sha256": manifest["forge_plan_digest"],
+    }
+    seen_rooms: set[str] = set()
+    seen_artifacts: set[str] = set()
+    seen_targets: set[str] = set()
+    seen_paths: set[str] = set()
+    bindings: list[dict[str, Any]] = []
+    for index, raw_record in enumerate(receipt_bundles):
+        if not isinstance(raw_record, Mapping) or set(raw_record) != PRESENTATION_BUNDLE_RECORD_KEYS:
+            _fail("VISTA_HOME_PRESENTATION_INVALID", f"presentation bundle {index} fields differ")
+        record = copy.deepcopy(dict(raw_record))
+        room_id = record.get("room_id")
+        room_kind = record.get("room_kind")
+        _safe_relative_path(
+            record.get("relative_path"),
+            f"presentation bundle {index}",
+        )
+        room = rooms_by_id.get(room_id)
+        expected_relative = f"ue_import_bundles/{room_kind}_presentation_bundle.glb"
+        if (
+            room is None
+            or room_id not in expected_room_ids
+            or room_id in seen_rooms
+            or room_kind != room.get("kind")
+            or room_kind not in planning.PRESENTATION_ROOM_KINDS
+            or record.get("artifact_id") != f"ue_bundle.room.{room_kind}"
+            or record.get("artifact_id") in seen_artifacts
+            or record.get("artifact_kind") != planning.PRESENTATION_ARTIFACT_KIND
+            or record.get("target_asset_id") != room["bundle"]["asset_id"]
+            or record.get("target_asset_id") != f"asset.bundle.{room_kind}"
+            or record.get("target_asset_id") in seen_targets
+            or record.get("relative_path") != expected_relative
+            or record.get("relative_path") in seen_paths
+            or record.get("media_type") != "model/gltf-binary"
+        ):
+            _fail("VISTA_HOME_PRESENTATION_INVALID", f"presentation bundle {index} identity differs")
+        source = _contained_artifact(manifest_root, record["relative_path"], f"presentation bundle {index}")
+        expected_sha = _require_sha(record.get("sha256"), f"presentation bundle {index} SHA-256")
+        size = record.get("size_bytes")
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size <= 0
+            or source.stat().st_size != size
+            or sha256_file(source) != expected_sha
+        ):
+            _fail("VISTA_HOME_BUILD_PIN_MISMATCH", f"presentation bundle {index} bytes or SHA-256 differ", pointer=str(source))
+        material_ids = record.get("material_ids")
+        integer_contract = {
+            "mesh_count": 1,
+            "material_count": 2,
+            "pbr_complete_material_count": 2,
+            "texture_count": 6,
+        }
+        if any(
+            isinstance(record.get(key), bool)
+            or not isinstance(record.get(key), int)
+            or record[key] < minimum
+            for key, minimum in integer_contract.items()
+        ) or (
+            record["mesh_count"] != 1
+            or not isinstance(material_ids, list)
+            or len(material_ids) < 2
+            or material_ids != sorted(set(material_ids))
+            or any(not isinstance(item, str) or not item.startswith("r2.") for item in material_ids)
+            or record["material_count"] != len(material_ids)
+            or record["pbr_complete_material_count"] != record["material_count"]
+            or record["texture_count"] < record["material_count"] * 3
+        ):
+            _fail("VISTA_HOME_PRESENTATION_INVALID", f"presentation bundle {index} mesh/material inventory differs")
+        expected_world = _presentation_transform(
+            record.get("expected_world_transform_cm"),
+            f"presentation bundle {index} world transform",
+            location_key="location_cm",
+        )
+        _presentation_transform(
+            record.get("bundle_root_transform"),
+            f"presentation bundle {index} root transform",
+            location_key="location_m",
+        )
+        if (
+            expected_world != room["world_transform_cm"]
+            or record["bundle_root_transform"] != {
+                "location_m": [0, 0, 0],
+                "rotation_deg": [0, 0, 0],
+                "scale": [1, 1, 1],
+            }
+            or record.get("root_transform_policy") != planning.PRESENTATION_ROOT_TRANSFORM_POLICY
+            or record.get("semantic_policy") != planning.PRESENTATION_SEMANTIC_POLICY
+            or record.get("collision_policy") != planning.PRESENTATION_COLLISION_POLICY
+            or record.get("unreal_collision_profile") != planning.PRESENTATION_UNREAL_COLLISION_PROFILE
+            or record.get("cameras_exported") is not False
+            or record.get("lights_exported") is not False
+            or record.get("source_hashes") != source_hashes
+        ):
+            _fail("VISTA_HOME_PRESENTATION_SOURCE_MISMATCH", f"presentation bundle {index} transform, policy, or source hashes differ")
+        _validate_presentation_glb(source, record)
+        bindings.append({
+            **record,
+            "source_file": str(source),
+            "source_file_sha256": expected_sha,
+        })
+        seen_rooms.add(room_id)
+        seen_artifacts.add(record["artifact_id"])
+        seen_targets.add(record["target_asset_id"])
+        seen_paths.add(record["relative_path"])
+    if seen_rooms != expected_room_ids:
+        _fail("VISTA_HOME_PRESENTATION_INVENTORY_MISMATCH", "presentation bundles do not cover the exact three-room slice")
+    return PresentationInputs(
+        manifest=manifest,
+        manifest_raw=manifest_raw,
+        artifact_receipt=receipt,
+        artifact_receipt_raw=receipt_raw,
+        bindings=tuple(sorted(bindings, key=lambda item: item["room_id"])),
+    )
 
 
 def validate_build_plan(path: Path, expected_sha256: str, expected_revision: str) -> dict[str, Any]:
@@ -1366,6 +1811,10 @@ class BuildConfig:
     visual_binding_manifest_sha256: str | None = None
     visual_profile: Path | None = None
     visual_profile_sha256: str | None = None
+    presentation_manifest: Path | None = None
+    presentation_manifest_sha256: str | None = None
+    presentation_artifact_receipt: Path | None = None
+    presentation_artifact_receipt_sha256: str | None = None
     expected_revision: str = EXPECTED_REVISION
     command_timeout_s: int = 3600
 
@@ -1383,6 +1832,7 @@ class PlannedBuild:
     input_ini_raw: bytes
     visual_profile: dict[str, Any] | None
     visual_profile_raw: bytes | None
+    presentation: PresentationInputs | None
     renderer_request: dict[str, Any] | None
     renderer_request_raw: bytes | None
     execution: dict[str, Any]
@@ -1437,6 +1887,9 @@ def _planned_execution(
     visual_profile: Mapping[str, Any] | None = None,
     visual_profile_sha256: str | None = None,
     renderer_request: Mapping[str, Any] | None = None,
+    presentation: PresentationInputs | None = None,
+    presentation_manifest_sha256: str | None = None,
+    presentation_artifact_receipt_sha256: str | None = None,
 ) -> tuple[dict[str, Any], bytes, str]:
     if (visual_profile is None) != (visual_profile_sha256 is None) or (
         visual_profile is None
@@ -1445,7 +1898,22 @@ def _planned_execution(
             "VISTA_HOME_BUILD_ARGUMENT_INVALID",
             "visual profile, profile pin, and renderer request must be supplied together",
         )
-    composition = planning.build_composition_spec(plan, visual_profile)
+    if presentation is not None and visual_profile is None:
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "presentation bundles require a selected visual profile",
+        )
+    if presentation is not None:
+        _require_sha(presentation_manifest_sha256, "presentation manifest pin")
+        _require_sha(
+            presentation_artifact_receipt_sha256,
+            "presentation artifact receipt pin",
+        )
+    composition = planning.build_composition_spec(
+        plan,
+        visual_profile,
+        presentation.bindings if presentation is not None else None,
+    )
     scripts = {
         "import": Path(__file__).with_name("import_assets_commandlet.py").resolve(strict=True),
         "compose": Path(__file__).with_name("compose_home_commandlet.py").resolve(strict=True),
@@ -1509,6 +1977,36 @@ def _planned_execution(
                 "runtime_proof": False,
             },
         })
+    if presentation is not None:
+        value.update({
+            "presentation_sources": {
+                "manifest": {
+                    "path": str(
+                        attempt / "contracts" / PRESENTATION_MANIFEST_ATTEMPT_FILE
+                    ),
+                    "sha256": presentation_manifest_sha256,
+                },
+                "artifact_receipt": {
+                    "path": str(
+                        attempt
+                        / "contracts"
+                        / PRESENTATION_ARTIFACT_RECEIPT_ATTEMPT_FILE
+                    ),
+                    "sha256": presentation_artifact_receipt_sha256,
+                },
+            },
+            "presentation_bindings": [
+                dict(binding) for binding in presentation.bindings
+            ],
+            "presentation_scripts": contract.presentation_script_pins(),
+            "presentation_import_receipt": str(
+                attempt / "presentation-import-receipt.json"
+            ),
+            "presentation_scene_receipt": str(
+                attempt / "presentation-scene-receipt.json"
+            ),
+            "presentation_runtime_proof": "pending",
+        })
     raw = planning.canonical_json(value)
     return value, raw, sha256_bytes(raw)
 
@@ -1534,6 +2032,33 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         )
     elif config.visual_profile_sha256 is not None:
         _fail("VISTA_HOME_BUILD_ARGUMENT_INVALID", "visual profile pin requires a profile path")
+    presentation_values = (
+        config.presentation_manifest,
+        config.presentation_manifest_sha256,
+        config.presentation_artifact_receipt,
+        config.presentation_artifact_receipt_sha256,
+    )
+    has_presentation = any(value is not None for value in presentation_values)
+    if has_presentation and not all(value is not None for value in presentation_values):
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "presentation manifest and artifact receipt require paired paths and SHA-256 pins",
+        )
+    if has_presentation and selected_profile is None:
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "presentation bundles require --visual-profile and its pin",
+        )
+    presentation: PresentationInputs | None = None
+    if has_presentation:
+        presentation = validate_presentation_inputs(
+            config.presentation_manifest,
+            config.presentation_manifest_sha256,
+            config.presentation_artifact_receipt,
+            config.presentation_artifact_receipt_sha256,
+            plan,
+            selected_profile,
+        )
     blender = validate_blender_manifest(config.blender_manifest, config.blender_manifest_sha256, plan)
     visual: dict[str, tuple[Path, str]] | None = None
     if config.visual_binding_manifest is not None:
@@ -1575,6 +2100,11 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         visual_profile=selected_profile,
         visual_profile_sha256=config.visual_profile_sha256,
         renderer_request=renderer_request,
+        presentation=presentation,
+        presentation_manifest_sha256=config.presentation_manifest_sha256,
+        presentation_artifact_receipt_sha256=(
+            config.presentation_artifact_receipt_sha256
+        ),
     )
     execution_path = attempt / "execution.json"
     project_path = attempt / "project" / EXPECTED_PROJECT_NAME
@@ -1663,6 +2193,71 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
             "status": "staged_runtime_observation_required",
             "runtime_proof": False,
         }
+    if presentation is not None:
+        report["inputs"]["presentation_manifest"] = {
+            "path": str(config.presentation_manifest),
+            "sha256": config.presentation_manifest_sha256,
+            "forge_plan_sha256": presentation.manifest["forge_plan_digest"],
+        }
+        report["inputs"]["presentation_artifact_receipt"] = {
+            "path": str(config.presentation_artifact_receipt),
+            "sha256": config.presentation_artifact_receipt_sha256,
+        }
+        report["project"]["presentation"] = {
+            "bundle_count": len(presentation.bindings),
+            "content_destination": (
+                plan["unreal"]["content_namespace"] + "/Presentation"
+            ),
+            "collision_profile": planning.PRESENTATION_UNREAL_COLLISION_PROFILE,
+            "semantic_policy": planning.PRESENTATION_SEMANTIC_POLICY,
+            "runtime_proof": "pending",
+        }
+        base_compose = report["commands"].pop()
+        presentation_env = {
+            **common_env,
+            "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": (
+                "<sha256-from-verified-import-receipt>"
+            ),
+        }
+        report["commands"].extend([
+            {
+                "phase": "presentation_import",
+                "argv": _fixed_command(
+                    editor,
+                    project_path,
+                    Path(execution["presentation_scripts"]["import"]["path"]),
+                ),
+                "env": presentation_env,
+                "log": str(attempt / "presentation-import.log"),
+                "result": str(attempt / PRESENTATION_IMPORT_RESULT_FILE),
+                "timeout_s": config.command_timeout_s,
+            },
+            base_compose,
+            {
+                "phase": "presentation_compose",
+                "argv": _fixed_command(
+                    editor,
+                    project_path,
+                    Path(execution["presentation_scripts"]["compose"]["path"]),
+                ),
+                "env": {
+                    **presentation_env,
+                    "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RECEIPT_SHA256": (
+                        "<sha256-from-verified-presentation-import-receipt>"
+                    ),
+                    "VISTA_PLAYABLE_HOME_SCENE_RECEIPT_SHA256": (
+                        "<sha256-from-verified-scene-receipt>"
+                    ),
+                },
+                "log": str(attempt / "presentation-compose.log"),
+                "result": str(attempt / PRESENTATION_SCENE_RESULT_FILE),
+                "timeout_s": config.command_timeout_s,
+            },
+        ])
+        report["publication"]["condition"] = (
+            "base import/compose and presentation import/compose succeeded "
+            "and all receipts were verified"
+        )
     report["content_digest"] = _content_digest(report)
     return PlannedBuild(
         config=config,
@@ -1676,6 +2271,7 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         input_ini_raw=input_ini_raw,
         visual_profile=selected_profile,
         visual_profile_raw=selected_profile_raw,
+        presentation=presentation,
         renderer_request=renderer_request,
         renderer_request_raw=renderer_request_raw,
         execution=execution,
@@ -2060,6 +2656,211 @@ def _verify_scene_receipt(
         _fail("VISTA_HOME_BUILD_RECEIPT_INVALID", "scene actor inventory is invalid")
 
 
+def _presentation_object_path(namespace: str, target_asset_id: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_]", "_", target_asset_id)
+    if not name or len(name) > 128:
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation target cannot form a deterministic UE object path",
+        )
+    return namespace + "/Presentation/" + name + "." + name
+
+
+def _verify_presentation_import_receipt(
+    receipt: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    base_import_sha256: str,
+) -> None:
+    expected_keys = {
+        "schema_version", "status", "error", "bindings", "content_namespace",
+        "presentation_content_root", "assets", "gates",
+    }
+    namespace = execution["composition_spec"]["content_namespace"]
+    if (
+        set(receipt) != expected_keys
+        or receipt.get("content_namespace") != namespace
+        or receipt.get("presentation_content_root") != namespace + "/Presentation"
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation import receipt fields or namespace differ",
+        )
+    if receipt.get("gates") != {
+        "base_import_verified": True,
+        "exact_three_room_bundles": True,
+        "one_mesh_per_bundle": True,
+        "materials_and_textures_inspected": True,
+        "no_collision_source_policy": True,
+        "quarantined": False,
+        "runtime_play_proof": "pending",
+    }:
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation import receipt gates did not pass",
+        )
+    bindings = receipt.get("bindings")
+    expected_binding_keys = {
+        "engine", "project", "execution_manifest",
+        "execution_manifest_sha256", "base_import_receipt",
+        "base_import_receipt_sha256", "composition_spec_sha256",
+    }
+    if (
+        not isinstance(bindings, Mapping)
+        or set(bindings) != expected_binding_keys
+        or not isinstance(bindings.get("engine"), str)
+        or not bindings["engine"].startswith("5.")
+        or bindings.get("project") != execution["project_file"]
+        or bindings.get("execution_manifest")
+        != str(Path(execution["attempt_root"]) / "execution.json")
+        or bindings.get("execution_manifest_sha256")
+        != sha256_bytes(planning.canonical_json(execution))
+        or bindings.get("base_import_receipt") != execution["import_receipt"]
+        or bindings.get("base_import_receipt_sha256") != base_import_sha256
+        or bindings.get("composition_spec_sha256")
+        != execution["composition_spec_sha256"]
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation import receipt pins differ",
+        )
+    assets = receipt.get("assets")
+    execution_bindings = {
+        item["artifact_id"]: item for item in execution["presentation_bindings"]
+    }
+    if (
+        not isinstance(assets, list)
+        or len(assets) != 3
+        or len(execution_bindings) != 3
+        or {item.get("artifact_id") for item in assets if isinstance(item, Mapping)}
+        != set(execution_bindings)
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation import asset inventory differs",
+        )
+    asset_keys = {
+        "artifact_id", "target_asset_id", "room_id", "room_kind",
+        "source_file_sha256", "object_path", "expected_world_transform_cm",
+        "root_transform_policy", "semantic_policy", "collision_policy",
+        "unreal_collision_profile", "material_ids", "source_hashes",
+        "raw_returned_object_paths", "returned_object_paths", "inspection",
+    }
+    inspection_keys = {
+        "class_path", "material_paths", "returned_texture2d_paths",
+        "material_texture2d_paths", "simple_collision_shapes",
+        "collision_profile_for_components", "can_ever_affect_navigation",
+    }
+    for asset in assets:
+        source = execution_bindings[asset["artifact_id"]]
+        inspection = asset.get("inspection")
+        if (
+            set(asset) != asset_keys
+            or asset.get("target_asset_id") != source["target_asset_id"]
+            or asset.get("room_id") != source["room_id"]
+            or asset.get("room_kind") != source["room_kind"]
+            or asset.get("source_file_sha256") != source["source_file_sha256"]
+            or asset.get("object_path")
+            != _presentation_object_path(namespace, source["target_asset_id"])
+            or asset.get("expected_world_transform_cm")
+            != source["expected_world_transform_cm"]
+            or asset.get("root_transform_policy") != source["root_transform_policy"]
+            or asset.get("semantic_policy") != source["semantic_policy"]
+            or asset.get("collision_policy") != source["collision_policy"]
+            or asset.get("unreal_collision_profile") != "NoCollision"
+            or asset.get("material_ids") != source["material_ids"]
+            or asset.get("source_hashes") != source["source_hashes"]
+            or not isinstance(asset.get("raw_returned_object_paths"), list)
+            or not isinstance(asset.get("returned_object_paths"), list)
+            or not isinstance(inspection, Mapping)
+            or set(inspection) != inspection_keys
+            or inspection.get("simple_collision_shapes") != 0
+            or inspection.get("collision_profile_for_components") != "NoCollision"
+            or inspection.get("can_ever_affect_navigation") is not False
+            or not isinstance(inspection.get("material_paths"), list)
+            or len(inspection["material_paths"]) != source["material_count"]
+            or any(
+                not isinstance(path, str)
+                or not path
+                or "DefaultMaterial" in path
+                or "BasicShapeMaterial" in path
+                for path in inspection["material_paths"]
+            )
+            or not set(inspection.get("returned_texture2d_paths", []))
+            & set(inspection.get("material_texture2d_paths", []))
+        ):
+            _fail(
+                "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                f"presentation import asset {asset.get('artifact_id')} differs",
+            )
+
+
+def _verify_presentation_scene_receipt(
+    receipt: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    base_scene_sha256: str,
+    presentation_import_sha256: str,
+) -> None:
+    expected_keys = {
+        "schema_version", "status", "error", "bindings", "content_namespace",
+        "map_path", "presentation_actor_inventory", "gates",
+    }
+    spec = execution["composition_spec"]
+    if (
+        set(receipt) != expected_keys
+        or receipt.get("content_namespace") != spec["content_namespace"]
+        or receipt.get("map_path") != spec["map_path"]
+        or not isinstance(receipt.get("presentation_actor_inventory"), list)
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation scene receipt fields or revision paths differ",
+        )
+    if receipt.get("gates") != {
+        "map_saved": True,
+        "map_reloaded": True,
+        "exact_three_presentation_actors": True,
+        "presentation_no_collision_verified": True,
+        "hidden_r1_collision_authority_verified": True,
+        "semantic_authority_preserved": True,
+        "quarantined": False,
+        "runtime_play_proof": "pending",
+    }:
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation scene receipt gates did not pass",
+        )
+    bindings = receipt.get("bindings")
+    expected_binding_keys = {
+        "engine", "project", "execution_manifest",
+        "execution_manifest_sha256", "base_scene_receipt",
+        "base_scene_receipt_sha256", "presentation_import_receipt",
+        "presentation_import_receipt_sha256", "composition_spec_sha256",
+    }
+    if (
+        not isinstance(bindings, Mapping)
+        or set(bindings) != expected_binding_keys
+        or not isinstance(bindings.get("engine"), str)
+        or not bindings["engine"].startswith("5.")
+        or bindings.get("project") != execution["project_file"]
+        or bindings.get("execution_manifest")
+        != str(Path(execution["attempt_root"]) / "execution.json")
+        or bindings.get("execution_manifest_sha256")
+        != sha256_bytes(planning.canonical_json(execution))
+        or bindings.get("base_scene_receipt") != execution["scene_receipt"]
+        or bindings.get("base_scene_receipt_sha256") != base_scene_sha256
+        or bindings.get("presentation_import_receipt")
+        != execution["presentation_import_receipt"]
+        or bindings.get("presentation_import_receipt_sha256")
+        != presentation_import_sha256
+        or bindings.get("composition_spec_sha256")
+        != execution["composition_spec_sha256"]
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_RECEIPT_INVALID",
+            "presentation scene receipt pins differ",
+        )
+
+
 def _terminate_owned_process_group(process: subprocess.Popen[bytes]) -> None:
     """Best-effort bounded reap for the process group started by this tool."""
 
@@ -2265,6 +3066,8 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
     _write_exclusive(build_plan_target, planning.canonical_json(planned.plan))
     visual_profile_target: Path | None = None
     renderer_request_target: Path | None = None
+    presentation_manifest_target: Path | None = None
+    presentation_artifact_receipt_target: Path | None = None
     if planned.visual_profile is not None:
         if planned.visual_profile_raw is None or planned.renderer_request_raw is None:
             _fail(
@@ -2275,6 +3078,21 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
         renderer_request_target = contracts_dir / RENDERER_REQUEST_ATTEMPT_FILE
         _write_exclusive(visual_profile_target, planned.visual_profile_raw)
         _write_exclusive(renderer_request_target, planned.renderer_request_raw)
+    if planned.presentation is not None:
+        presentation_manifest_target = (
+            contracts_dir / PRESENTATION_MANIFEST_ATTEMPT_FILE
+        )
+        presentation_artifact_receipt_target = (
+            contracts_dir / PRESENTATION_ARTIFACT_RECEIPT_ATTEMPT_FILE
+        )
+        _write_exclusive(
+            presentation_manifest_target,
+            planned.presentation.manifest_raw,
+        )
+        _write_exclusive(
+            presentation_artifact_receipt_target,
+            planned.presentation.artifact_receipt_raw,
+        )
     project_file = project_root / EXPECTED_PROJECT_NAME
     _write_exclusive(project_file, planned.project_raw)
     _write_exclusive(config_dir / "DefaultEngine.ini", planned.engine_ini_raw)
@@ -2312,6 +3130,25 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
             if planned.renderer_request is not None
             else None
         ),
+        presentation_manifest_path=presentation_manifest_target,
+        presentation_manifest_sha256=(
+            planned.config.presentation_manifest_sha256
+            if planned.presentation is not None
+            else None
+        ),
+        presentation_artifact_receipt_path=(
+            presentation_artifact_receipt_target
+        ),
+        presentation_artifact_receipt_sha256=(
+            planned.config.presentation_artifact_receipt_sha256
+            if planned.presentation is not None
+            else None
+        ),
+        presentation_bindings=(
+            planned.presentation.bindings
+            if planned.presentation is not None
+            else None
+        ),
     )
     if generated.raw != planned.execution_raw or generated.sha256 != planned.execution_sha256:
         _fail("VISTA_HOME_BUILD_EXECUTION_DRIFT", "materialized execution manifest differs from the dry-run plan")
@@ -2341,6 +3178,18 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
                 "content_digest"
             ],
             "renderer_runtime_observation": "pending",
+        })
+    if planned.presentation is not None:
+        preparation.update({
+            "presentation_manifest_sha256": (
+                planned.config.presentation_manifest_sha256
+            ),
+            "presentation_artifact_receipt_sha256": (
+                planned.config.presentation_artifact_receipt_sha256
+            ),
+            "presentation_bundle_count": len(planned.presentation.bindings),
+            "presentation_ue_import_observation": "pending",
+            "presentation_runtime_play_proof": "pending",
         })
     _write_exclusive(attempt / "preparation-receipt.json", canonical_json(preparation))
     return attempt, copy_counts
@@ -2392,6 +3241,48 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             phase="import",
         )
 
+        presentation_import_sha: str | None = None
+        if planned.presentation is not None:
+            presentation_import_receipt_path = (
+                attempt / "presentation-import-receipt.json"
+            )
+            presentation_import_marker = _run_command(
+                phase="presentation_import",
+                argv=_fixed_command(
+                    planned.config.unreal_editor_cmd,
+                    project_path,
+                    Path(
+                        planned.execution["presentation_scripts"]["import"]["path"]
+                    ),
+                ),
+                environment={
+                    **common_env,
+                    "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
+                },
+                log_path=attempt / "presentation-import.log",
+                marker_prefix=PRESENTATION_IMPORT_MARKER,
+                timeout_s=planned.config.command_timeout_s,
+                marker_path=attempt / PRESENTATION_IMPORT_RESULT_FILE,
+            )
+            presentation_import_receipt, presentation_import_sha = _load_receipt(
+                presentation_import_receipt_path,
+                PRESENTATION_IMPORT_RECEIPT_SCHEMA,
+                "imported_candidate",
+                "presentation import receipt",
+            )
+            _verify_presentation_import_receipt(
+                presentation_import_receipt,
+                planned.execution,
+                import_sha,
+            )
+            _verify_marker(
+                presentation_import_marker,
+                status="imported_candidate",
+                receipt=presentation_import_receipt_path,
+                sha256=presentation_import_sha,
+                phase="presentation_import",
+            )
+
         scene_receipt_path = attempt / "scene-receipt.json"
         scene_marker = _run_command(
             phase="compose",
@@ -2420,6 +3311,58 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             sha256=scene_sha,
             phase="compose",
         )
+        presentation_scene_sha: str | None = None
+        if planned.presentation is not None:
+            if presentation_import_sha is None:
+                _fail(
+                    "VISTA_HOME_BUILD_RECEIPT_INVALID",
+                    "presentation compose lost its verified import receipt",
+                )
+            presentation_scene_receipt_path = (
+                attempt / "presentation-scene-receipt.json"
+            )
+            presentation_scene_marker = _run_command(
+                phase="presentation_compose",
+                argv=_fixed_command(
+                    planned.config.unreal_editor_cmd,
+                    project_path,
+                    Path(
+                        planned.execution["presentation_scripts"]["compose"]["path"]
+                    ),
+                ),
+                environment={
+                    **common_env,
+                    "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
+                    "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RECEIPT_SHA256": (
+                        presentation_import_sha
+                    ),
+                    "VISTA_PLAYABLE_HOME_SCENE_RECEIPT_SHA256": scene_sha,
+                },
+                log_path=attempt / "presentation-compose.log",
+                marker_prefix=PRESENTATION_SCENE_MARKER,
+                timeout_s=planned.config.command_timeout_s,
+                marker_path=attempt / PRESENTATION_SCENE_RESULT_FILE,
+            )
+            presentation_scene_receipt, presentation_scene_sha = _load_receipt(
+                presentation_scene_receipt_path,
+                PRESENTATION_SCENE_RECEIPT_SCHEMA,
+                "saved_reloaded_candidate",
+                "presentation scene receipt",
+            )
+            _verify_presentation_scene_receipt(
+                presentation_scene_receipt,
+                planned.execution,
+                scene_sha,
+                presentation_import_sha,
+            )
+            _verify_marker(
+                presentation_scene_marker,
+                status="saved_reloaded_candidate",
+                receipt=presentation_scene_receipt_path,
+                sha256=presentation_scene_sha,
+                phase="presentation_compose",
+            )
+        final_scene_sha = presentation_scene_sha or scene_sha
         result = {
             "schema_version": RESULT_RECEIPT_SCHEMA,
             "status": "accepted_candidate",
@@ -2429,7 +3372,7 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
             "map_path": planned.plan["unreal"]["map_path"],
             "execution_sha256": planned.execution_sha256,
             "import_receipt_sha256": import_sha,
-            "scene_receipt_sha256": scene_sha,
+            "scene_receipt_sha256": final_scene_sha,
             "copy_methods": dict(sorted(copy_counts.items())),
             "runtime_play_proof": "pending",
         }
@@ -2445,6 +3388,24 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
                     "content_digest"
                 ],
                 "renderer_runtime_observation": "pending",
+            })
+        if planned.presentation is not None:
+            result.update({
+                "base_scene_receipt_sha256": scene_sha,
+                "presentation_import_receipt_sha256": presentation_import_sha,
+                "presentation_scene_receipt_sha256": presentation_scene_sha,
+                "presentation_manifest_sha256": (
+                    planned.config.presentation_manifest_sha256
+                ),
+                "presentation_artifact_receipt_sha256": (
+                    planned.config.presentation_artifact_receipt_sha256
+                ),
+                "presentation_bundle_count": len(planned.presentation.bindings),
+                "presentation_collision_policy": (
+                    planning.PRESENTATION_COLLISION_POLICY
+                ),
+                "presentation_ue_import_observation": "verified_by_commandlet",
+                "presentation_runtime_play_proof": "pending",
             })
         result["content_digest"] = _content_digest(result)
         result_path = attempt / "result-receipt.json"
@@ -2520,6 +3481,24 @@ def _parser() -> argparse.ArgumentParser:
         "--visual-profile-sha256",
         help="expected lowercase SHA-256 for --visual-profile",
     )
+    parser.add_argument(
+        "--presentation-manifest",
+        type=Path,
+        help="absolute normalized r2 forge manifest containing ue_import_bundles",
+    )
+    parser.add_argument(
+        "--presentation-manifest-sha256",
+        help="expected lowercase SHA-256 for --presentation-manifest",
+    )
+    parser.add_argument(
+        "--presentation-artifact-receipt",
+        type=Path,
+        help="absolute r2 artifact receipt paired with the presentation manifest",
+    )
+    parser.add_argument(
+        "--presentation-artifact-receipt-sha256",
+        help="expected lowercase SHA-256 for --presentation-artifact-receipt",
+    )
     parser.add_argument("--plugin-package", required=True, type=Path)
     parser.add_argument("--plugin-package-tree-sha256", required=True)
     parser.add_argument("--characters-content", required=True, type=Path)
@@ -2545,6 +3524,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         visual_binding_manifest_sha256=args.visual_binding_manifest_sha256,
         visual_profile=args.visual_profile,
         visual_profile_sha256=args.visual_profile_sha256,
+        presentation_manifest=args.presentation_manifest,
+        presentation_manifest_sha256=args.presentation_manifest_sha256,
+        presentation_artifact_receipt=args.presentation_artifact_receipt,
+        presentation_artifact_receipt_sha256=(
+            args.presentation_artifact_receipt_sha256
+        ),
         plugin_package=args.plugin_package,
         plugin_package_tree_sha256=args.plugin_package_tree_sha256,
         characters_content=args.characters_content,
