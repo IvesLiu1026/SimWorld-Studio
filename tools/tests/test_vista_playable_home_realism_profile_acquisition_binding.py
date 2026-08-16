@@ -3,10 +3,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from tools.blender.vista_playable_home_realism import architecture as architecture_module
 from tools.blender.vista_playable_home_realism.architecture import (
     build_external_forge_plan,
     build_forge_plan,
@@ -55,21 +57,132 @@ def _house() -> dict:
     return json.loads(HOUSE_PATH.read_text(encoding="utf-8"))
 
 
-def _acquired_files(
-    logical_id: str,
+def _tree_digest(files: tuple[AcquiredFile, ...]) -> str:
+    rows = [
+        {
+            "relative_path": file.relative_path,
+            "size_bytes": file.size_bytes,
+            "sha256": file.sha256,
+        }
+        for file in files
+    ]
+    return hashlib.sha256(
+        json.dumps(
+            rows,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _fixture_files(
+    asset_id: str,
+    asset_type: str,
     resolution: str,
     semantics: tuple[str, ...],
 ) -> tuple[AcquiredFile, ...]:
     size = 4096 if resolution == "4k" else 2048
-    return tuple(
+    textures = tuple(
         AcquiredFile(
-            relative_path=f"textures/{logical_id.rsplit('.', 1)[-1]}_{semantic}.png",
+            relative_path=f"textures/{asset_id}_{semantic}_{resolution}.png",
             size_bytes=24,
-            sha256=hashlib.sha256(f"{logical_id}:{semantic}".encode()).hexdigest(),
+            sha256=hashlib.sha256(f"{asset_id}:{semantic}".encode()).hexdigest(),
             semantic=(semantic,),
             dimensions_px=(size, size),
         )
         for semantic in semantics
+    )
+    if asset_type == "texture":
+        return textures
+    primary = AcquiredFile(
+        relative_path=f"{asset_id}_{resolution}.blend",
+        size_bytes=128,
+        sha256=hashlib.sha256(f"{asset_id}:blend".encode()).hexdigest(),
+        semantic=(),
+        dimensions_px=None,
+    )
+    return (primary, *textures)
+
+
+def _coffee_files() -> tuple[AcquiredFile, ...]:
+    return (
+        AcquiredFile(
+            "modern_coffee_table_01_4k.blend",
+            235731,
+            "119594affca76664a182fedf0acf6b62c5d9d700681a004d442e7f3488956b6f",
+            (),
+            None,
+        ),
+        AcquiredFile(
+            "textures/modern_coffee_table_01_diff_4k.jpg",
+            6200991,
+            "37cbe0f2aa7f00c7792ff34280e7905c263e359958144aa8e2de8429f5837b11",
+            ("base_color",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/modern_coffee_table_01_nor_gl_4k.exr",
+            14235190,
+            "5dd497f102a11695d3840cd1e486d12698c1f1dd32d6ccb0d583c4984d4b0bf8",
+            ("normal",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/modern_coffee_table_01_rough_4k.exr",
+            10164849,
+            "239df397bae3e792fab67f866a4e05cdeda44c3d19d76d6e6dc23534b985d419",
+            ("roughness",),
+            (4096, 4096),
+        ),
+    )
+
+
+def _stove_files() -> tuple[AcquiredFile, ...]:
+    return (
+        AcquiredFile(
+            "electric_stove_4k.blend",
+            517140,
+            "f485d6ec71cfb27a78ff71717c2ac4a8dd0aab6aaa594c228b3bb4a27f4c195b",
+            (),
+            None,
+        ),
+        AcquiredFile(
+            "textures/electric_stove_diff_4k.jpg",
+            6200676,
+            "20af305630d5f4e0ee042ce0010615b0d1072194cdf9eb31e4aef493b36ea032",
+            ("base_color",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_metal_4k.exr",
+            7193171,
+            "fb2236f76c78b23e36e9d7faeb077a0024c8989eef8ed68bd4c8e98af1312ed9",
+            ("metalness",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_nor_gl_4k.exr",
+            13682521,
+            "8d017983d440ec3cbd31ec877713cc4450ff4f5b4a86d51561f75908609e903f",
+            ("normal",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_opacity_4k.png",
+            252946,
+            "304c294d75e1d6b916d1bba8018e31c798f12e33f43ff7407b5a7915e961dba9",
+            ("opacity",),
+            (4096, 4096),
+        ),
+        AcquiredFile(
+            "textures/electric_stove_rough_4k.exr",
+            12301920,
+            "ac431bc9486799ea0cf7d46e9df7101147aafcbc6cb0d30a0a735e635d482e87",
+            ("roughness",),
+            (4096, 4096),
+        ),
     )
 
 
@@ -80,10 +193,13 @@ def _asset(
     asset_type: str,
     resolution: str,
     provider_hash: str,
-    source_tree: str,
     dimensions: tuple[float, float, float] | None,
     semantics: tuple[str, ...] = ("base_color", "normal", "roughness"),
+    files: tuple[AcquiredFile, ...] | None = None,
 ) -> AcquiredAsset:
+    acquired_files = files or _fixture_files(
+        asset_id, asset_type, resolution, semantics
+    )
     return AcquiredAsset(
         asset_id=asset_id,
         logical_asset_id=logical_id,
@@ -93,10 +209,10 @@ def _asset(
         file_variant="blend" if asset_type == "model" else "pbr_jpg",
         provider_files_hash=provider_hash,
         source_relative_root=f"assets/{asset_id}",
-        primary_relative_path=f"assets/{asset_id}/{asset_id}.blend",
-        source_tree_sha256=source_tree,
+        primary_relative_path=f"assets/{asset_id}/{acquired_files[0].relative_path}",
+        source_tree_sha256=_tree_digest(acquired_files),
         catalog_dimensions_m=dimensions,
-        files=_acquired_files(logical_id, resolution, semantics),
+        files=acquired_files,
     )
 
 
@@ -108,7 +224,6 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
             asset_type="texture",
             resolution="4k",
             provider_hash="1" * 40,
-            source_tree="1" * 64,
             dimensions=None,
         ),
         _asset(
@@ -117,7 +232,6 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
             asset_type="texture",
             resolution="4k",
             provider_hash="2" * 40,
-            source_tree="2" * 64,
             dimensions=None,
         ),
         _asset(
@@ -126,8 +240,8 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
             asset_type="model",
             resolution="4k",
             provider_hash="31772c0aab6f930a18de82606146c0a97f08b7d0",
-            source_tree="cf5fac22ac00b8725f91ad4565ddaa32dc5f10b213a0938a92de9e2432c1ddfe",
             dimensions=(1.2018300294876099, 0.6000000834465027, 0.38999998569488525),
+            files=_coffee_files(),
         ),
         _asset(
             asset_id="electric_stove",
@@ -135,9 +249,9 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
             asset_type="model",
             resolution="4k",
             provider_hash="750ee10bdfe78eb6b0b620ef7b5a898e436fb696",
-            source_tree="c55acbd188af4674ce5c1c8605f2447c5fb830a05b1650b0d03296b419b38795",
             dimensions=(0.5025948286056519, 0.6476211845874786, 0.8586971759796143),
             semantics=("base_color", "metalness", "normal", "opacity", "roughness"),
+            files=_stove_files(),
         ),
         _asset(
             asset_id="rubber_boots",
@@ -145,7 +259,6 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
             asset_type="model",
             resolution="2k",
             provider_hash="3" * 40,
-            source_tree="3" * 64,
             dimensions=(0.4, 0.2, 0.4),
         ),
     )
@@ -155,6 +268,18 @@ def _asset_set(tmp_path: Path) -> ExternalAssetSet:
         receipt_file_sha256="5" * 64,
         acquisition_manifest_sha256="6" * 64,
         assets=tuple(sorted(assets, key=lambda item: item.logical_asset_id)),
+    )
+
+
+def _replace_acquired_asset(
+    asset_set: ExternalAssetSet, updated: AcquiredAsset
+) -> ExternalAssetSet:
+    return replace(
+        asset_set,
+        assets=tuple(
+            updated if item.logical_asset_id == updated.logical_asset_id else item
+            for item in asset_set.assets
+        ),
     )
 
 
@@ -326,6 +451,12 @@ def test_exact_profile_acquisition_binding_builds_and_v1_plan_is_unchanged(
     v1_after = build_forge_plan(house, profile)
 
     assert v1_after == v1_before
+    assert _tree_digest(_coffee_files()) == (
+        "cf5fac22ac00b8725f91ad4565ddaa32dc5f10b213a0938a92de9e2432c1ddfe"
+    )
+    assert _tree_digest(_stove_files()) == (
+        "c55acbd188af4674ce5c1c8605f2447c5fb830a05b1650b0d03296b419b38795"
+    )
     assert external.external_placement.semantic_target_ids == (
         "home.r1/room.entry_hall/entity.shoe_bench.01",
         "home.r1/room.kitchen_dining/entity.dining_table.01",
@@ -333,6 +464,59 @@ def test_exact_profile_acquisition_binding_builds_and_v1_plan_is_unchanged(
         COFFEE_TARGET_ID,
         "home.r1/room.living_room/entity.sofa.01",
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("location_cm", [25, 0, 0]),
+        ("rotation_deg", [0, 0, 5]),
+        ("scale", [1.1, 1.1, 1.1]),
+    ),
+)
+def test_rejects_profile_transform_offset_drift(
+    tmp_path: Path, field: str, value: list[float]
+) -> None:
+    profile = _profile()
+    _binding(profile, COFFEE_TARGET_ID)["transform_offset"][field] = value
+    profile = seal_document(profile)
+
+    with pytest.raises(ForgeInputError, match="pinned identity transform"):
+        _build(tmp_path, profile=profile)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("location_offset_m", [0.25, 0, 0]),
+        ("rotation_offset_deg", [0, 0, 5]),
+        ("uniform_scale", 1.1),
+    ),
+)
+def test_rejects_placement_transform_or_scale_drift_from_house_target(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    assets = _asset_set(tmp_path)
+    placement = _placement_payload(assets)
+    coffee = next(
+        item
+        for item in placement["placements"]
+        if item["placement_id"] == "hero.living.coffee_table"
+    )
+    coffee[field] = value
+    placement = _redigest_placement(placement)
+
+    with pytest.raises(ForgeInputError, match="pinned HouseSpec target"):
+        _build(tmp_path, placement_payload=placement, asset_set=assets)
+
+
+def test_rejects_pinned_external_hero_presentation_role_drift(tmp_path: Path) -> None:
+    profile = _profile()
+    _binding(profile, COFFEE_TARGET_ID)["presentation_role"] = "event_critical"
+    profile = seal_document(profile)
+
+    with pytest.raises(ForgeInputError, match="presentation role drifted"):
+        _build(tmp_path, profile=profile)
 
 
 @pytest.mark.parametrize(
@@ -365,39 +549,36 @@ def test_rejects_stale_source_receipt_digest(tmp_path: Path) -> None:
         _build(tmp_path, profile=profile)
 
 
-def test_rejects_unscaled_or_off_center_metric_bounds(tmp_path: Path) -> None:
-    assets = _asset_set(tmp_path)
-    placement = _placement_payload(assets)
-    coffee = next(
-        item
-        for item in placement["placements"]
-        if item["placement_id"] == "hero.living.coffee_table"
-    )
-    coffee["uniform_scale"] = 0.5
-    placement = _redigest_placement(placement)
-
-    with pytest.raises(ForgeInputError, match="measured scaled bounds"):
-        _build(tmp_path, placement_payload=placement, asset_set=assets)
-
+def test_rejects_raw_catalog_derived_bound_drift(tmp_path: Path) -> None:
     profile = _profile()
     receipt = _receipt(profile, COFFEE_RECEIPT_ID)
-    receipt["metric_bounds_m"] = {
-        "min_m": [-0.30045750737190247, -0.15000002086162567, 0],
-        "max_m": [0.30045750737190247, 0.15000002086162567, 0.19499999284744263],
-    }
+    receipt["metric_bounds_m"]["max_m"][0] += 0.000001
     profile = seal_document(profile)
-    plan = _build(
-        tmp_path,
-        profile=profile,
-        placement_payload=placement,
-        asset_set=assets,
+
+    with pytest.raises(ForgeInputError, match="raw catalog-derived scaled bounds"):
+        _build(tmp_path, profile=profile)
+
+
+def test_rejects_placement_dimensions_that_are_not_six_decimal_catalog_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = architecture_module.build_external_placement_plan
+
+    def tampered_plan(*args, **kwargs):
+        plan = original(*args, **kwargs)
+        placements = tuple(
+            replace(item, source_dimensions_m=(1.2, 0.6, 0.39))
+            if item.source_logical_asset_id == COFFEE_LOGICAL_ID
+            else item
+            for item in plan.placements
+        )
+        return replace(plan, placements=placements)
+
+    monkeypatch.setattr(
+        architecture_module, "build_external_placement_plan", tampered_plan
     )
-    coffee_plan = next(
-        item
-        for item in plan.external_placement.placements
-        if item.placement_id == "hero.living.coffee_table"
-    )
-    assert coffee_plan.uniform_scale == 0.5
+    with pytest.raises(ForgeInputError, match="rounded catalog-derived dimensions"):
+        _build(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -406,6 +587,9 @@ def test_rejects_unscaled_or_off_center_metric_bounds(tmp_path: Path) -> None:
         ("license_id", "LicenseRef-unknown"),
         ("license_url", "https://example.invalid/license"),
         ("entitlement_status", "unverified"),
+        ("entitlement_record", "local-audit://poly-haven-cc0-20260816/wrong"),
+        ("attribution", "Unknown provider"),
+        ("modification_notice", "Unverified transformation"),
         ("commercial_use", "unknown"),
         ("redistribution_restriction", "unknown"),
     ),
@@ -429,6 +613,8 @@ def test_rejects_non_verified_cc0_license(
         "minimum_texture_size_px",
         "all_primitives_material_bound",
         "blend_mode",
+        "slot_id",
+        "shader_class",
     ),
 )
 def test_rejects_material_inventory_drift_from_acquired_images(
@@ -445,8 +631,12 @@ def test_rejects_material_inventory_drift_from_acquired_images(
         slot["minimum_texture_size_px"] = 2048
     elif drift == "all_primitives_material_bound":
         inventory["all_primitives_material_bound"] = False
-    else:
+    elif drift == "blend_mode":
         slot["blend_mode"] = "masked"
+    elif drift == "slot_id":
+        slot["slot_id"] = "wrong_surface"
+    else:
+        slot["shader_class"] = "unlit"
     profile = seal_document(profile)
 
     with pytest.raises(ForgeInputError, match="material (slot|inventory)"):
@@ -461,6 +651,91 @@ def test_opacity_requires_masked_material_inventory(tmp_path: Path) -> None:
 
     with pytest.raises(ForgeInputError, match="material slot differs"):
         _build(tmp_path, profile=profile)
+
+
+def test_rejects_duplicate_material_slot_id_and_cross_slot_semantic(
+    tmp_path: Path,
+) -> None:
+    profile = _profile()
+    inventory = _receipt(profile, COFFEE_RECEIPT_ID)["material_inventory"]
+    duplicate = copy.deepcopy(inventory["slots"][0])
+    duplicate["texture_semantics"] = ["base_color"]
+    inventory["slots"].append(duplicate)
+    profile = seal_document(profile)
+    with pytest.raises(ForgeInputError, match="material slot differs"):
+        _build(tmp_path, profile=profile)
+
+    profile = _profile()
+    inventory = _receipt(profile, COFFEE_RECEIPT_ID)["material_inventory"]
+    duplicate_semantic = copy.deepcopy(inventory["slots"][0])
+    duplicate_semantic["slot_id"] = "secondary_surface"
+    duplicate_semantic["texture_semantics"] = ["roughness"]
+    inventory["slots"].append(duplicate_semantic)
+    profile = seal_document(profile)
+    with pytest.raises(ForgeInputError, match="material slot differs"):
+        _build(tmp_path, profile=profile)
+
+
+@pytest.mark.parametrize("semantic", ("metalness", "opacity"))
+def test_rejects_low_resolution_optional_stove_semantic(
+    tmp_path: Path, semantic: str
+) -> None:
+    assets = _asset_set(tmp_path)
+    stove = assets.asset(STOVE_LOGICAL_ID)
+    files = tuple(
+        replace(file, dimensions_px=(2048, 2048))
+        if semantic in file.semantic
+        else file
+        for file in stove.files
+    )
+    assets = _replace_acquired_asset(assets, replace(stove, files=files))
+
+    with pytest.raises(ForgeInputError, match="below requested 4K"):
+        _build(tmp_path, asset_set=assets)
+
+
+def test_rejects_missing_or_reordered_primary_blender_file(tmp_path: Path) -> None:
+    assets = _asset_set(tmp_path)
+    coffee = assets.asset(COFFEE_LOGICAL_ID)
+    missing = replace(
+        coffee,
+        primary_relative_path=(
+            "assets/modern_coffee_table_01/missing_primary_4k.blend"
+        ),
+    )
+    with pytest.raises(ForgeInputError, match="absent or not first"):
+        _build(tmp_path, asset_set=_replace_acquired_asset(assets, missing))
+
+    reordered = replace(
+        coffee,
+        files=(coffee.files[1], coffee.files[0], *coffee.files[2:]),
+    )
+    with pytest.raises(ForgeInputError, match="absent or not first"):
+        _build(tmp_path, asset_set=_replace_acquired_asset(assets, reordered))
+
+
+def test_rejects_source_tree_file_row_and_semantic_mapping_drift(tmp_path: Path) -> None:
+    assets = _asset_set(tmp_path)
+    coffee = assets.asset(COFFEE_LOGICAL_ID)
+    bad_tree = replace(coffee, source_tree_sha256="0" * 64)
+    with pytest.raises(ForgeInputError, match="source tree digest mismatch"):
+        _build(tmp_path, asset_set=_replace_acquired_asset(assets, bad_tree))
+
+    duplicate_row = replace(coffee, files=(*coffee.files, coffee.files[-1]))
+    with pytest.raises(ForgeInputError, match="repeats a file row"):
+        _build(tmp_path, asset_set=_replace_acquired_asset(assets, duplicate_row))
+
+    normal = next(file for file in coffee.files if "normal" in file.semantic)
+    roughness_index = next(
+        index for index, file in enumerate(coffee.files) if "roughness" in file.semantic
+    )
+    duplicate_semantic_files = list(coffee.files)
+    duplicate_semantic_files[roughness_index] = replace(
+        duplicate_semantic_files[roughness_index], semantic=normal.semantic
+    )
+    duplicate_semantic = replace(coffee, files=tuple(duplicate_semantic_files))
+    with pytest.raises(ForgeInputError, match="repeats a texture semantic"):
+        _build(tmp_path, asset_set=_replace_acquired_asset(assets, duplicate_semantic))
 
 
 @pytest.mark.parametrize(
@@ -540,6 +815,21 @@ def test_rejects_orphan_and_duplicate_profile_identities(tmp_path: Path) -> None
     )
     profile = seal_document(profile)
     with pytest.raises(ForgeInputError, match="receipt_id identities are duplicated"):
+        _build(tmp_path, profile=profile)
+
+
+def test_rejects_unreferenced_source_receipt_in_closed_world_profile(
+    tmp_path: Path,
+) -> None:
+    profile = _profile()
+    orphan = copy.deepcopy(profile["asset_source_receipts"][0])
+    orphan["receipt_id"] = "source.orphan.injected"
+    orphan["logical_asset_id"] = "visual.orphan.injected"
+    orphan["source_uri"] = "project://vista-playable-home-realism/orphan"
+    profile["asset_source_receipts"].append(orphan)
+    profile = seal_document(profile)
+
+    with pytest.raises(ForgeInputError, match="closed-world references differ"):
         _build(tmp_path, profile=profile)
 
 
