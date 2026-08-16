@@ -18,13 +18,24 @@ from .external_assets import (
     EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY,
     EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY,
     EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    EXTERNAL_MATERIAL_IDENTITY_PROPERTY,
     EXTERNAL_MATERIAL_SEMANTICS_PROPERTY,
     EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY,
     EXTERNAL_MATERIAL_SOURCE_PROPERTY,
+    EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS,
     EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
     external_material_alpha_policy,
-    external_material_name,
     external_material_name_prefix,
+    external_source_material_registry_sha256,
+)
+from .materials import (
+    PROJECT_MATERIAL_CONTRACT_PROPERTIES,
+    PROJECT_MATERIAL_ID_PROPERTY,
+    PROJECT_MATERIAL_PBR_SEMANTICS,
+    PROJECT_MATERIAL_RECEIPT_PROPERTY,
+    PROJECT_MATERIAL_SEMANTICS_PROPERTY,
+    material_plan_manifest,
+    project_material_export_name,
 )
 
 
@@ -150,9 +161,17 @@ def _external_material_alpha_record(material: Any, material_index: int) -> dict[
         "declared_alpha_mode": extras.get(EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY),
         "declared_alpha_cutoff": extras.get(EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY),
         "sanitization_policy": extras.get(EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY),
+        "material_identity_sha256": extras.get(EXTERNAL_MATERIAL_IDENTITY_PROPERTY),
         "external_contract_extra_keys": sorted(
             set(extras) & EXTERNAL_MATERIAL_CONTRACT_PROPERTIES
         ),
+        "project_material_id": extras.get(PROJECT_MATERIAL_ID_PROPERTY),
+        "project_pbr_semantics": extras.get(PROJECT_MATERIAL_SEMANTICS_PROPERTY),
+        "project_material_receipt": extras.get(PROJECT_MATERIAL_RECEIPT_PROPERTY),
+        "project_contract_extra_keys": sorted(
+            set(extras) & PROJECT_MATERIAL_CONTRACT_PROPERTIES
+        ),
+        "material_extra_keys": sorted(extras),
         "gltf_alpha_mode": raw_mode,
         "gltf_alpha_cutoff": effective_cutoff,
         "gltf_alpha_cutoff_explicit": explicit_cutoff,
@@ -628,21 +647,7 @@ def _validate_external_manifest_binding(
 _SUPPORTED_EXTERNAL_MATERIAL_SEMANTICS = frozenset(
     {"base_color", "normal", "roughness", "metalness", "opacity"}
 )
-_EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS = frozenset(
-    {
-        "schema_version",
-        "material_id",
-        "source_logical_asset_id",
-        "source_tree_sha256",
-        "source_material_name",
-        "material_ordinal",
-        "active_texture_semantics",
-        "alpha_mode",
-        "alpha_cutoff",
-        "sanitization_policy",
-    }
-)
-_EXTERNAL_MODEL_MATERIAL_MARKER_KEYS = _EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS - {
+_EXTERNAL_MODEL_MATERIAL_MARKER_KEYS = EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS - {
     "material_id"
 }
 _V2_MANIFEST_KEYS = frozenset(
@@ -682,8 +687,6 @@ _V2_EXPORT_CONTRACT_KEYS = frozenset(
 _ARTIFACT_RECEIPT_KEYS = frozenset(
     {"schema_version", "artifacts", "ue_import_bundles"}
 )
-
-
 def _validated_v2_evidence_envelope(
     manifest: Mapping[str, Any], receipt: Mapping[str, Any]
 ) -> Mapping[str, Any]:
@@ -738,6 +741,82 @@ def _supported_source_semantics(source: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(semantics)
 
 
+def _validated_project_material_inventory(
+    manifest: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    """Bind project-authored GLB materials to the canonical hash receipts."""
+
+    materials = manifest.get("materials")
+    if not isinstance(materials, list):
+        raise ForgeInputError("project material receipt inventory is absent")
+    blueprint = material_plan_manifest(texture_size_px=64)
+    canonical_ids = {item["material_id"] for item in blueprint}
+    receipt_keys = set(blueprint[0])
+    channel_keys = set(blueprint[0]["channels"]["base_color"]) | {"sha256"}
+    rows: dict[str, Mapping[str, Any]] = {}
+    dimensions: set[int] = set()
+    for item in materials:
+        if not isinstance(item, Mapping):
+            raise ForgeInputError("normalized manifest material inventory contains a non-object")
+        material_id = item.get("material_id")
+        if type(material_id) is not str or material_id not in canonical_ids:
+            continue
+        if material_id in rows or set(item) != receipt_keys:
+            raise ForgeInputError("project material receipt fields or identities are not closed")
+        channels = item.get("channels")
+        if not isinstance(channels, Mapping) or set(channels) != {
+            "base_color", "normal", "roughness"
+        }:
+            raise ForgeInputError("project material receipt channels are not closed")
+        for semantic, channel in channels.items():
+            if (
+                not isinstance(channel, Mapping)
+                or set(channel) != channel_keys
+                or channel.get("semantic") != semantic
+                or not isinstance(channel.get("sha256"), str)
+                or SHA256.fullmatch(channel["sha256"]) is None
+                or not isinstance(channel.get("dimensions_px"), list)
+                or len(channel["dimensions_px"]) != 2
+                or channel["dimensions_px"][0] != channel["dimensions_px"][1]
+                or type(channel["dimensions_px"][0]) is not int
+            ):
+                raise ForgeInputError("project material texture receipt is invalid")
+            dimensions.add(channel["dimensions_px"][0])
+        rows[material_id] = item
+    if set(rows) != canonical_ids or len(dimensions) != 1:
+        raise ForgeInputError("project material receipt inventory differs from the canonical plan")
+    texture_size_px = next(iter(dimensions))
+    if (
+        texture_size_px < 64
+        or texture_size_px > 2048
+        or texture_size_px & (texture_size_px - 1)
+    ):
+        raise ForgeInputError("project material texture resolution is invalid")
+    expected_by_id = {
+        item["material_id"]: item
+        for item in material_plan_manifest(texture_size_px=texture_size_px)
+    }
+    result: dict[str, Mapping[str, Any]] = {}
+    for material_id, row in rows.items():
+        observed = dict(row)
+        observed_channels = {
+            semantic: {
+                key: value
+                for key, value in dict(channel).items()
+                if key != "sha256"
+            }
+            for semantic, channel in row["channels"].items()
+        }
+        observed["channels"] = observed_channels
+        if observed != expected_by_id[material_id]:
+            raise ForgeInputError("project material receipt differs from the canonical plan")
+        export_name = project_material_export_name(material_id)
+        if export_name in result:
+            raise ForgeInputError("project material export identities are duplicated")
+        result[export_name] = row
+    return result
+
+
 def _validated_external_model_material_inventory(
     manifest: Mapping[str, Any],
     placements: Sequence[Mapping[str, Any]],
@@ -776,7 +855,7 @@ def _validated_external_model_material_inventory(
         if not is_candidate:
             continue
         if (
-            set(item) != _EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS
+            set(item) != EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS
             or item.get("schema_version") != EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA
         ):
             raise ForgeInputError("external model material contract fields or schema differ")
@@ -784,56 +863,75 @@ def _validated_external_model_material_inventory(
     by_source: dict[str, list[Mapping[str, Any]]] = {
         source_id: [] for source_id in expected_source_ids
     }
-    seen_material_ids: set[str] = set()
     for item in candidates:
         source_id = item.get("source_logical_asset_id")
         if source_id not in by_source:
             raise ForgeInputError("external model material contract claims an unbound source")
-        source = source_by_id[source_id]
-        ordinal = item.get("material_ordinal")
-        source_name = item.get("source_material_name")
-        material_id = item.get("material_id")
-        semantics = item.get("active_texture_semantics")
-        if (
-            type(ordinal) is not int
-            or not 0 <= ordinal <= 99
-            or type(source_name) is not str
-            or not source_name
-            or "\x00" in source_name
-            or type(material_id) is not str
-            or material_id in seen_material_ids
-            or material_id != external_material_name(source_id, ordinal, source_name)
-            or item.get("source_tree_sha256") != source.get("source_tree_sha256")
-            or not isinstance(semantics, list)
-            or semantics != sorted(set(semantics))
-            or any(
-                not isinstance(semantic, str)
-                or semantic not in _supported_source_semantics(source)
-                for semantic in semantics
-            )
-            or not semantics
-            or item.get("sanitization_policy") != EXTERNAL_MATERIAL_ALPHA_SANITIZATION
-        ):
-            raise ForgeInputError("external model material contract identity or semantics differ")
-        expected_mode = "MASK" if "opacity" in semantics else "OPAQUE"
-        expected_cutoff = EXTERNAL_MATERIAL_ALPHA_CUTOFF if expected_mode == "MASK" else None
-        if item.get("alpha_mode") != expected_mode or item.get("alpha_cutoff") != expected_cutoff:
-            raise ForgeInputError("external model material contract alpha policy differs")
-        seen_material_ids.add(material_id)
         by_source[source_id].append(item)
+    seen_material_ids: set[str] = set()
     for source_id, items in by_source.items():
         if not items:
             raise ForgeInputError("external model source lacks a per-material contract")
+        try:
+            external_source_material_registry_sha256(
+                source_id,
+                source_by_id[source_id]["source_tree_sha256"],
+                items,
+            )
+        except RuntimeError as error:
+            raise ForgeInputError("external model material registry differs") from error
         items.sort(key=lambda item: item["material_ordinal"])
-        ordinals = [item["material_ordinal"] for item in items]
-        if ordinals != list(range(len(items))):
-            raise ForgeInputError("external model material ordinals are not unique and contiguous")
         observed_semantics = {
             semantic for item in items for semantic in item["active_texture_semantics"]
         }
         if observed_semantics != set(_supported_source_semantics(source_by_id[source_id])):
             raise ForgeInputError("external model per-material semantics differ from source receipt")
+        material_ids = {str(item["material_id"]) for item in items}
+        if seen_material_ids & material_ids:
+            raise ForgeInputError("external model material identities collide across sources")
+        seen_material_ids.update(material_ids)
     return {source_id: tuple(items) for source_id, items in by_source.items()}
+
+
+def _validate_project_material_alpha_record(
+    material: Mapping[str, Any],
+    project_inventory: Mapping[str, Mapping[str, Any]],
+    material_ids: Sequence[str],
+) -> None:
+    """Validate one exact project-authored material, including legal glass."""
+
+    name = material.get("name")
+    project_id = material.get("project_material_id")
+    if type(name) is not str or type(project_id) is not str:
+        raise ForgeInputError("project material GLB identity is invalid")
+    project_keys = material.get("project_contract_extra_keys")
+    extra_keys = material.get("material_extra_keys")
+    external_keys = material.get("external_contract_extra_keys")
+    if not all(isinstance(value, list) for value in (project_keys, extra_keys, external_keys)):
+        raise ForgeInputError("project material GLB extras inventory is invalid")
+    receipt = project_inventory.get(name)
+    if (
+        receipt is None
+        or name not in material_ids
+        or receipt.get("material_id") != project_id
+        or material.get("project_pbr_semantics") != PROJECT_MATERIAL_PBR_SEMANTICS
+        or material.get("project_material_receipt") != f"materials/{project_id}"
+        or set(project_keys) != PROJECT_MATERIAL_CONTRACT_PROPERTIES
+        or set(extra_keys) != PROJECT_MATERIAL_CONTRACT_PROPERTIES
+        or external_keys
+        or material.get("source_logical_asset_id") is not None
+        or material.get("declared_alpha_mode") is not None
+        or material.get("material_identity_sha256") is not None
+    ):
+        raise ForgeInputError("project material GLB extras differ from its exact receipt identity")
+    expected_mode = receipt.get("blend_mode")
+    if (
+        expected_mode not in {"OPAQUE", "BLEND"}
+        or material.get("gltf_alpha_mode") != expected_mode
+        or material.get("gltf_alpha_cutoff") is not None
+        or material.get("gltf_alpha_cutoff_explicit") is not False
+    ):
+        raise ForgeInputError("project material GLB alpha policy differs from its receipt")
 
 
 def _validate_external_material_alpha_contract(
@@ -874,6 +972,7 @@ def _validate_external_material_alpha_contract(
         placements,
         sources,
     )
+    project_inventory = _validated_project_material_inventory(manifest)
     stove_target = "home.r1/room.kitchen_dining/entity.stove.01"
     stove_rows = [
         item
@@ -941,8 +1040,22 @@ def _validate_external_material_alpha_contract(
     if not isinstance(material_records, list) or len(material_records) != record.get("material_count"):
         raise ForgeInputError("external material alpha GLB inspection inventory is absent")
     material_ids = record.get("material_ids")
-    if not isinstance(material_ids, list):
+    if (
+        not isinstance(material_ids, list)
+        or any(type(item) is not str for item in material_ids)
+        or material_ids != sorted(set(material_ids))
+        or len(material_ids) != record.get("material_count")
+    ):
         raise ForgeInputError("external material alpha bundle material inventory is invalid")
+    inspected_names = [
+        item.get("name") if isinstance(item, Mapping) else None
+        for item in material_records
+    ]
+    if (
+        any(type(item) is not str for item in inspected_names)
+        or sorted(inspected_names) != material_ids
+    ):
+        raise ForgeInputError("external material alpha GLB names differ from bundle receipt")
     contracts_by_id = {
         item["material_id"]: item
         for source_id in room_source_ids
@@ -957,9 +1070,7 @@ def _validate_external_material_alpha_contract(
             raise ForgeInputError("external material alpha GLB material name is invalid")
         gltf_mode = material.get("gltf_alpha_mode")
         declared_mode = material.get("declared_alpha_mode")
-        if gltf_mode == "BLEND" or declared_mode == "BLEND":
-            raise ForgeInputError("external material alpha BLEND is forbidden in every v2 bundle material")
-        if gltf_mode not in {"OPAQUE", "MASK"}:
+        if gltf_mode not in {"OPAQUE", "MASK", "BLEND"}:
             raise ForgeInputError("external material alpha GLB mode is invalid")
         if material.get("gltf_alpha_cutoff_explicit") is True or gltf_mode == "MASK":
             cutoff = material.get("gltf_alpha_cutoff")
@@ -982,12 +1093,32 @@ def _validate_external_material_alpha_contract(
         if not matching_sources:
             if contract_extra_keys or declared_source is not None:
                 raise ForgeInputError("unmapped v2 bundle material spoofs external alpha extras")
+            project_keys = material.get("project_contract_extra_keys")
+            is_project_candidate = name in project_inventory or bool(project_keys)
+            if is_project_candidate:
+                _validate_project_material_alpha_record(
+                    material,
+                    project_inventory,
+                    material_ids,
+                )
+                continue
+            if gltf_mode == "BLEND" or declared_mode == "BLEND":
+                raise ForgeInputError("unbound v2 bundle BLEND material is forbidden")
+            if (
+                gltf_mode != "OPAQUE"
+                or declared_mode is not None
+                or material.get("gltf_alpha_cutoff") is not None
+                or material.get("gltf_alpha_cutoff_explicit") is not False
+            ):
+                raise ForgeInputError("unbound v2 bundle material alpha policy is invalid")
             continue
         if len(matching_sources) != 1:
             raise ForgeInputError("external material alpha material namespace is ambiguous")
+        if material.get("project_contract_extra_keys"):
+            raise ForgeInputError("external material alpha extras mix project and acquired identities")
         source_id = matching_sources[0]
         prefix = prefixes[source_id]
-        name_match = re.fullmatch(re.escape(prefix) + r"([0-9]{2})\.[a-z0-9_]+", name)
+        name_match = re.fullmatch(re.escape(prefix) + r"([0-9]{2})\.([0-9a-f]{16})", name)
         if name_match is None:
             raise ForgeInputError("external material alpha material name is not deterministic")
         manifest_contract = contracts_by_id.get(name)
@@ -996,8 +1127,14 @@ def _validate_external_material_alpha_contract(
             or declared_source != source_id
             or manifest_contract is None
             or int(name_match.group(1)) != manifest_contract.get("material_ordinal")
+            or name_match.group(2)
+            != str(manifest_contract.get("material_identity_sha256"))[:16]
+            or material.get("material_identity_sha256")
+            != manifest_contract.get("material_identity_sha256")
         ):
             raise ForgeInputError("external material alpha name and source extras differ")
+        if gltf_mode == "BLEND" or declared_mode == "BLEND":
+            raise ForgeInputError("external material alpha BLEND is forbidden")
         source = source_by_id[source_id]
         if (
             material.get("source_tree_sha256") != source.get("source_tree_sha256")

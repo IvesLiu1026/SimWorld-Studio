@@ -18,15 +18,19 @@ from tools.blender.vista_playable_home_realism.external_assets import (
     EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY,
     EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY,
     EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    EXTERNAL_MATERIAL_IDENTITY_PROPERTY,
     EXTERNAL_MATERIAL_SEMANTICS_PROPERTY,
     EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY,
     EXTERNAL_MATERIAL_SOURCE_PROPERTY,
     EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
+    _ExternalSourceMaterialRegistry,
     _configure_external_material_alpha_contract,
     _validate_masked_alpha_graph,
+    external_material_identity_sha256,
     external_material_alpha_policy,
     external_material_name,
     external_material_name_prefix,
+    external_source_material_registry_sha256,
 )
 from tools.blender.vista_playable_home_realism.export import normalized_manifest
 from tools.blender.vista_playable_home_realism.inspect import (
@@ -36,11 +40,74 @@ from tools.blender.vista_playable_home_realism.inspect import (
     inspect_glb,
     inspect_output,
 )
+from tools.blender.vista_playable_home_realism.materials import (
+    PROJECT_MATERIAL_ID_PROPERTY,
+    PROJECT_MATERIAL_PBR_SEMANTICS,
+    PROJECT_MATERIAL_RECEIPT_PROPERTY,
+    PROJECT_MATERIAL_SEMANTICS_PROPERTY,
+    material_plan_manifest,
+    project_material_export_name,
+)
 
 
 STOVE_SOURCE_ID = "visual.hero.kitchen_stove"
 STOVE_SOURCE_DIGEST = "c" * 64
 STOVE_SEMANTICS = ["base_color", "metalness", "normal", "opacity", "roughness"]
+
+
+def _material_identity(
+    *,
+    ordinal: int = 0,
+    source_material_name: str = "surface",
+    semantics: list[str] | None = None,
+) -> str:
+    return external_material_identity_sha256(
+        STOVE_SOURCE_ID,
+        STOVE_SOURCE_DIGEST,
+        ordinal,
+        source_material_name,
+        STOVE_SEMANTICS if semantics is None else semantics,
+    )
+
+
+def _material_name(
+    *,
+    ordinal: int = 0,
+    source_material_name: str = "surface",
+    semantics: list[str] | None = None,
+) -> str:
+    return external_material_name(
+        STOVE_SOURCE_ID,
+        ordinal,
+        _material_identity(
+            ordinal=ordinal,
+            source_material_name=source_material_name,
+            semantics=semantics,
+        ),
+    )
+
+
+def _project_receipts() -> list[dict]:
+    receipts = copy.deepcopy(material_plan_manifest())
+    for material_index, receipt in enumerate(receipts):
+        for channel_index, channel in enumerate(receipt["channels"].values()):
+            channel["sha256"] = f"{material_index * 3 + channel_index + 1:064x}"
+    return receipts
+
+
+def _project_material(material_id: str) -> dict:
+    receipt = next(item for item in _project_receipts() if item["material_id"] == material_id)
+    result = {
+        "name": project_material_export_name(material_id),
+        "extras": {
+            PROJECT_MATERIAL_ID_PROPERTY: material_id,
+            PROJECT_MATERIAL_SEMANTICS_PROPERTY: PROJECT_MATERIAL_PBR_SEMANTICS,
+            PROJECT_MATERIAL_RECEIPT_PROPERTY: f"materials/{material_id}",
+        },
+    }
+    if receipt["blend_mode"] == "BLEND":
+        result["alphaMode"] = "BLEND"
+    return result
 
 
 @dataclass(frozen=True)
@@ -172,6 +239,12 @@ def _material_contract(
 ) -> dict:
     active_semantics = list(STOVE_SEMANTICS if semantics is None else semantics)
     alpha_mode = "MASK" if "opacity" in active_semantics else "OPAQUE"
+    identity = _material_identity(
+        ordinal=ordinal,
+        source_material_name=source_material_name,
+        semantics=active_semantics,
+    )
+    assert material_name == external_material_name(STOVE_SOURCE_ID, ordinal, identity)
     return {
         "schema_version": EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
         "material_id": material_name,
@@ -179,6 +252,7 @@ def _material_contract(
         "source_tree_sha256": STOVE_SOURCE_DIGEST,
         "source_material_name": source_material_name,
         "material_ordinal": ordinal,
+        "material_identity_sha256": identity,
         "active_texture_semantics": active_semantics,
         "alpha_mode": alpha_mode,
         "alpha_cutoff": 0.5 if alpha_mode == "MASK" else None,
@@ -203,7 +277,7 @@ def _manifest_and_record(material_name: str) -> tuple[dict, dict]:
             "custom_properties_exported_as_extras": True,
             "external_material_alpha_policy": external_material_alpha_policy(),
         },
-        "materials": [_material_contract(material_name)],
+        "materials": [*_project_receipts(), _material_contract(material_name)],
         "external_placement": {
             "placements": [placement],
             "asset_sources": [source],
@@ -212,14 +286,28 @@ def _manifest_and_record(material_name: str) -> tuple[dict, dict]:
     record = {
         "room_id": "home.r1/room.kitchen_dining",
         "material_count": 2,
-        "material_ids": ["r2.architecture.wall", material_name],
+        "material_ids": sorted(
+            [project_material_export_name("r2.plaster_warm"), material_name]
+        ),
         "external_content": {"asset_sources": [copy.deepcopy(source)]},
     }
     return manifest, record
 
 
-def _external_material(material_name: str, semantics: list[str]) -> dict:
+def _external_material(
+    material_name: str,
+    semantics: list[str],
+    *,
+    ordinal: int = 0,
+    source_material_name: str = "surface",
+) -> dict:
     alpha_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+    identity = _material_identity(
+        ordinal=ordinal,
+        source_material_name=source_material_name,
+        semantics=semantics,
+    )
+    assert material_name == external_material_name(STOVE_SOURCE_ID, ordinal, identity)
     result = {
         "name": material_name,
         "extras": {
@@ -230,6 +318,7 @@ def _external_material(material_name: str, semantics: list[str]) -> dict:
             ),
             EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY: alpha_mode,
             EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY: EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+            EXTERNAL_MATERIAL_IDENTITY_PROPERTY: identity,
         },
     }
     if alpha_mode == "MASK":
@@ -254,7 +343,7 @@ def _write_synthetic_glb(
     document = {
         "asset": {"version": "2.0"},
         "materials": [
-            internal_material or {"name": "r2.architecture.wall"},
+            internal_material or _project_material("r2.plaster_warm"),
             stove_material,
             *(additional_materials or []),
         ],
@@ -295,7 +384,13 @@ def test_blender_mask_graph_is_constructed_then_revalidated() -> None:
         logical_asset_id=STOVE_SOURCE_ID,
         source_tree_sha256=STOVE_SOURCE_DIGEST,
     )
-    _configure_external_material_alpha_contract(material, asset, semantics)
+    identity = _material_identity(source_material_name=material.name)
+    _configure_external_material_alpha_contract(
+        material,
+        asset,
+        semantics,
+        material_identity_sha256=identity,
+    )
     _validate_masked_alpha_graph(material, opacity)
     assert material.surface_render_method == "DITHERED"
     assert material[EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY] == "MASK"
@@ -312,13 +407,69 @@ def test_blender_mask_graph_is_constructed_then_revalidated() -> None:
 
 def test_source_material_identity_is_unique_and_preserves_full_prefix() -> None:
     prefix = external_material_name_prefix(STOVE_SOURCE_ID)
-    first = external_material_name(STOVE_SOURCE_ID, 0, "Chrome Surface")
-    second = external_material_name(STOVE_SOURCE_ID, 1, "Chrome Surface")
-    assert first == f"{prefix}00.chrome_surface"
-    assert second == f"{prefix}01.chrome_surface"
+    first_identity = _material_identity(ordinal=0, source_material_name="Chrome Surface")
+    second_identity = _material_identity(ordinal=1, source_material_name="Chrome Surface")
+    first = external_material_name(STOVE_SOURCE_ID, 0, first_identity)
+    second = external_material_name(STOVE_SOURCE_ID, 1, second_identity)
+    assert first == f"{prefix}00.{first_identity[:16]}"
+    assert second == f"{prefix}01.{second_identity[:16]}"
     assert first != second
     with pytest.raises(RuntimeError, match="too many materials"):
-        external_material_name(STOVE_SOURCE_ID, 100, "overflow")
+        external_material_name(STOVE_SOURCE_ID, 100, "a" * 64)
+
+
+def test_source_material_identity_survives_long_name_truncation() -> None:
+    shared = "same prefix " * 16
+    first_identity = _material_identity(source_material_name=f"{shared}first")
+    second_identity = _material_identity(source_material_name=f"{shared}second")
+    first = external_material_name(STOVE_SOURCE_ID, 0, first_identity)
+    second = external_material_name(STOVE_SOURCE_ID, 0, second_identity)
+    assert len(first) <= 63
+    assert len(second) <= 63
+    assert first != second
+
+
+def test_source_namespaces_resist_slug_and_length_collisions() -> None:
+    first = "visual.hero.same-name"
+    second = "visual.hero.same_name"
+    long_source = "visual.hero." + "very_long_source_name_" * 6
+    assert len(long_source) <= 160
+    assert external_material_name_prefix(first) != external_material_name_prefix(second)
+    assert len(external_material_name_prefix("visual.a")) == 44
+    assert len(external_material_name_prefix(long_source)) == 44
+
+
+def test_repeated_source_registry_reuses_only_the_exact_pinned_inventory() -> None:
+    contract = _material_contract(_material_name())
+    asset = SimpleNamespace(
+        logical_asset_id=STOVE_SOURCE_ID,
+        source_tree_sha256=STOVE_SOURCE_DIGEST,
+    )
+    mesh = object()
+    registry = _ExternalSourceMaterialRegistry()
+    prototype = registry.add(asset, [mesh], (0.5, 0.6, 0.8), [contract])
+    assert registry.get(asset) is prototype
+    assert prototype.meshes == (mesh,)
+    assert prototype.material_registry_sha256 == external_source_material_registry_sha256(
+        STOVE_SOURCE_ID,
+        STOVE_SOURCE_DIGEST,
+        [contract],
+    )
+
+    changed_semantics = ["base_color", "normal", "roughness"]
+    changed_name = _material_name(semantics=changed_semantics)
+    changed_contract = _material_contract(changed_name, semantics=changed_semantics)
+    assert external_source_material_registry_sha256(
+        STOVE_SOURCE_ID,
+        STOVE_SOURCE_DIGEST,
+        [changed_contract],
+    ) != prototype.material_registry_sha256
+    changed_digest_asset = SimpleNamespace(
+        logical_asset_id=STOVE_SOURCE_ID,
+        source_tree_sha256="d" * 64,
+    )
+    with pytest.raises(RuntimeError, match="source digest or inventory changed"):
+        registry.get(changed_digest_asset)
 
 
 def test_v2_manifest_persists_policy_without_changing_v1_export_contract() -> None:
@@ -359,7 +510,7 @@ def test_v2_manifest_persists_policy_without_changing_v1_export_contract() -> No
 def test_synthetic_glb_binds_stove_receipt_semantics_to_mask_default_cutoff(
     tmp_path: Path,
 ) -> None:
-    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    name = _material_name()
     inspection = _inspect_and_validate(tmp_path, _stove_material(name))
     observed = inspection["external_material_alpha_contracts"][1]
     assert observed["source_logical_asset_id"] == STOVE_SOURCE_ID
@@ -380,7 +531,7 @@ def test_explicit_invalid_mask_cutoff_is_never_treated_as_default(
     tmp_path: Path,
     cutoff,
 ) -> None:
-    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    name = _material_name()
     material = _stove_material(name)
     material["alphaCutoff"] = cutoff
     with pytest.raises(ForgeInputError, match="cutoff must be a finite non-negative number"):
@@ -388,50 +539,133 @@ def test_explicit_invalid_mask_cutoff_is_never_treated_as_default(
 
 
 @pytest.mark.parametrize(
-    "internal_material",
+    ("internal_material", "error"),
     [
-        {"name": "r2.architecture.wall", "alphaMode": "BLEND"},
-        {
-            "name": "r2.architecture.wall",
-            "extras": {EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY: "BLEND"},
-        },
+        ({"name": "r2.architecture.wall", "alphaMode": "BLEND"}, "unbound.*BLEND"),
+        (
+            {
+                "name": "r2.architecture.wall",
+                "extras": {EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY: "BLEND"},
+            },
+            "spoofs external alpha extras",
+        ),
     ],
     ids=("gltf-blend", "declared-blend"),
 )
 def test_any_internal_v2_bundle_blend_material_is_rejected(
     tmp_path: Path,
     internal_material: dict,
+    error: str,
 ) -> None:
-    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
-    with pytest.raises(ForgeInputError, match="BLEND is forbidden in every v2 bundle material"):
+    name = _material_name()
+    manifest, record = _manifest_and_record(name)
+    record["material_ids"] = sorted([internal_material["name"], name])
+    with pytest.raises(ForgeInputError, match=error):
         _inspect_and_validate(
             tmp_path,
             _stove_material(name),
             internal_material=internal_material,
+            manifest_and_record=(manifest, record),
+        )
+
+
+def test_receipt_bound_project_window_glass_blend_is_accepted(tmp_path: Path) -> None:
+    name = _material_name()
+    manifest, record = _manifest_and_record(name)
+    glass = _project_material("r2.window_glass")
+    record["material_ids"] = sorted([glass["name"], name])
+    _inspect_and_validate(
+        tmp_path,
+        _stove_material(name),
+        internal_material=glass,
+        manifest_and_record=(manifest, record),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda glass: glass["extras"].pop(PROJECT_MATERIAL_RECEIPT_PROPERTY),
+        lambda glass: glass["extras"].__setitem__(
+            PROJECT_MATERIAL_ID_PROPERTY, "r2.plaster_warm"
+        ),
+        lambda glass: glass["extras"].__setitem__(
+            EXTERNAL_MATERIAL_SOURCE_PROPERTY, STOVE_SOURCE_ID
+        ),
+    ],
+    ids=("missing-receipt", "wrong-project-id", "mixed-external-spoof"),
+)
+def test_project_window_glass_requires_exact_receipt_extras(
+    tmp_path: Path,
+    mutation,
+) -> None:
+    name = _material_name()
+    manifest, record = _manifest_and_record(name)
+    glass = _project_material("r2.window_glass")
+    mutation(glass)
+    record["material_ids"] = sorted([glass["name"], name])
+    with pytest.raises(ForgeInputError):
+        _inspect_and_validate(
+            tmp_path,
+            _stove_material(name),
+            internal_material=glass,
+            manifest_and_record=(manifest, record),
+        )
+
+
+def test_project_wall_cannot_gain_blend_by_tampering_manifest_and_glb(
+    tmp_path: Path,
+) -> None:
+    name = _material_name()
+    manifest, record = _manifest_and_record(name)
+    wall = _project_material("r2.plaster_warm")
+    wall["alphaMode"] = "BLEND"
+    receipt = next(
+        item for item in manifest["materials"] if item.get("material_id") == "r2.plaster_warm"
+    )
+    receipt["blend_mode"] = "BLEND"
+    with pytest.raises(ForgeInputError, match="differs from the canonical plan"):
+        _inspect_and_validate(
+            tmp_path,
+            _stove_material(name),
+            internal_material=wall,
+            manifest_and_record=(manifest, record),
         )
 
 
 def test_unmapped_internal_material_cannot_spoof_external_extras(tmp_path: Path) -> None:
-    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    name = _material_name()
     internal = {
         "name": "r2.architecture.wall",
         "extras": {EXTERNAL_MATERIAL_SOURCE_PROPERTY: STOVE_SOURCE_ID},
     }
+    manifest, record = _manifest_and_record(name)
+    record["material_ids"] = sorted([internal["name"], name])
     with pytest.raises(ForgeInputError, match="spoofs external alpha extras"):
         _inspect_and_validate(
             tmp_path,
             _stove_material(name),
             internal_material=internal,
+            manifest_and_record=(manifest, record),
         )
 
 
 def _two_material_contract_fixture() -> tuple[dict, dict, dict, dict]:
     first_semantics = ["base_color", "metalness", "normal", "roughness"]
     second_semantics = ["base_color", "normal", "opacity", "roughness"]
-    first_name = external_material_name(STOVE_SOURCE_ID, 0, "body")
-    second_name = external_material_name(STOVE_SOURCE_ID, 1, "vent")
-    manifest, record = _manifest_and_record(first_name)
+    first_name = _material_name(
+        ordinal=0,
+        source_material_name="body",
+        semantics=first_semantics,
+    )
+    second_name = _material_name(
+        ordinal=1,
+        source_material_name="vent",
+        semantics=second_semantics,
+    )
+    manifest, record = _manifest_and_record(_material_name())
     manifest["materials"] = [
+        *_project_receipts(),
         _material_contract(
             first_name,
             ordinal=0,
@@ -446,12 +680,24 @@ def _two_material_contract_fixture() -> tuple[dict, dict, dict, dict]:
         ),
     ]
     record["material_count"] = 3
-    record["material_ids"] = ["r2.architecture.wall", first_name, second_name]
+    record["material_ids"] = sorted(
+        [project_material_export_name("r2.plaster_warm"), first_name, second_name]
+    )
     return (
         manifest,
         record,
-        _external_material(first_name, first_semantics),
-        _external_material(second_name, second_semantics),
+        _external_material(
+            first_name,
+            first_semantics,
+            ordinal=0,
+            source_material_name="body",
+        ),
+        _external_material(
+            second_name,
+            second_semantics,
+            ordinal=1,
+            source_material_name="vent",
+        ),
     )
 
 
@@ -474,12 +720,25 @@ def test_duplicate_material_ordinal_is_rejected_even_with_unique_names(
     tmp_path: Path,
 ) -> None:
     manifest, record, first, second = _two_material_contract_fixture()
-    duplicate_name = external_material_name(STOVE_SOURCE_ID, 0, "vent")
-    manifest["materials"][1]["material_id"] = duplicate_name
-    manifest["materials"][1]["material_ordinal"] = 0
-    record["material_ids"][2] = duplicate_name
+    duplicate_name = _material_name(
+        ordinal=0,
+        source_material_name="vent",
+        semantics=json.loads(second["extras"][EXTERNAL_MATERIAL_SEMANTICS_PROPERTY]),
+    )
+    duplicate_identity = _material_identity(
+        ordinal=0,
+        source_material_name="vent",
+        semantics=json.loads(second["extras"][EXTERNAL_MATERIAL_SEMANTICS_PROPERTY]),
+    )
+    manifest["materials"][-1]["material_id"] = duplicate_name
+    manifest["materials"][-1]["material_ordinal"] = 0
+    manifest["materials"][-1]["material_identity_sha256"] = duplicate_identity
+    record["material_ids"] = sorted(
+        [project_material_export_name("r2.plaster_warm"), first["name"], duplicate_name]
+    )
     second["name"] = duplicate_name
-    with pytest.raises(ForgeInputError, match="ordinals are not unique and contiguous"):
+    second["extras"][EXTERNAL_MATERIAL_IDENTITY_PROPERTY] = duplicate_identity
+    with pytest.raises(ForgeInputError, match="material registry differs"):
         _inspect_and_validate(
             tmp_path,
             first,
@@ -507,6 +766,114 @@ def test_equal_semantic_union_cannot_hide_per_material_reassignment(
             additional_materials=[second],
             manifest_and_record=(manifest, record),
         )
+
+
+def test_multiple_rooms_and_sources_close_each_bundle_material_inventory(
+    tmp_path: Path,
+) -> None:
+    coffee_id = "visual.hero.living_coffee_table"
+    coffee_digest = "d" * 64
+    coffee_semantics = ["base_color", "normal", "roughness"]
+    coffee_identity = external_material_identity_sha256(
+        coffee_id,
+        coffee_digest,
+        0,
+        "table surface",
+        coffee_semantics,
+    )
+    coffee_name = external_material_name(coffee_id, 0, coffee_identity)
+    coffee_source = {
+        "logical_asset_id": coffee_id,
+        "asset_id": "modern_coffee_table_01",
+        "asset_type": "model",
+        "resolution": "4k",
+        "provider_files_hash": "b" * 40,
+        "source_tree_sha256": coffee_digest,
+        "files": [
+            {
+                "relative_path": f"coffee_{semantic}.png",
+                "size_bytes": 1,
+                "sha256": f"{index + 20:064x}",
+                "texture_semantics": [semantic],
+                "dimensions_px": [4096, 4096],
+            }
+            for index, semantic in enumerate(coffee_semantics)
+        ],
+    }
+    coffee_contract = {
+        "schema_version": EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
+        "material_id": coffee_name,
+        "source_logical_asset_id": coffee_id,
+        "source_tree_sha256": coffee_digest,
+        "source_material_name": "table surface",
+        "material_ordinal": 0,
+        "material_identity_sha256": coffee_identity,
+        "active_texture_semantics": coffee_semantics,
+        "alpha_mode": "OPAQUE",
+        "alpha_cutoff": None,
+        "sanitization_policy": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    }
+    coffee_material = {
+        "name": coffee_name,
+        "extras": {
+            EXTERNAL_MATERIAL_SOURCE_PROPERTY: coffee_id,
+            EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY: coffee_digest,
+            EXTERNAL_MATERIAL_SEMANTICS_PROPERTY: json.dumps(
+                coffee_semantics, separators=(",", ":")
+            ),
+            EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY: "OPAQUE",
+            EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY: EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+            EXTERNAL_MATERIAL_IDENTITY_PROPERTY: coffee_identity,
+        },
+    }
+
+    stove_name = _material_name()
+    manifest, kitchen_record = _manifest_and_record(stove_name)
+    manifest["materials"].append(coffee_contract)
+    manifest["external_placement"]["asset_sources"].append(coffee_source)
+    manifest["external_placement"]["placements"].append(
+        {
+            "placement_id": "hero.living.coffee_table",
+            "placement_kind": "semantic_fixed",
+            "room_id": "home.r1/room.living_room",
+            "room_kind": "living_room",
+            "category": "coffee_table",
+            "realization_mode": "external_blend",
+            "semantic_target_id": "home.r1/room.living_room/entity.coffee_table.01",
+            "source_logical_asset_id": coffee_id,
+        }
+    )
+    kitchen_path = tmp_path / "kitchen.glb"
+    _write_synthetic_glb(kitchen_path, _stove_material(stove_name))
+    kitchen_inspection = inspect_glb(
+        kitchen_path,
+        include_external_material_alpha=True,
+    )
+    _validate_external_material_alpha_contract(
+        manifest,
+        kitchen_record,
+        kitchen_inspection,
+    )
+
+    living_record = {
+        "room_id": "home.r1/room.living_room",
+        "material_count": 2,
+        "material_ids": sorted(
+            [project_material_export_name("r2.plaster_warm"), coffee_name]
+        ),
+        "external_content": {"asset_sources": [copy.deepcopy(coffee_source)]},
+    }
+    living_path = tmp_path / "living.glb"
+    _write_synthetic_glb(living_path, coffee_material)
+    living_inspection = inspect_glb(
+        living_path,
+        include_external_material_alpha=True,
+    )
+    _validate_external_material_alpha_contract(
+        manifest,
+        living_record,
+        living_inspection,
+    )
 
 
 @pytest.mark.parametrize(
@@ -540,7 +907,7 @@ def test_synthetic_glb_rejects_blend_wrong_or_missing_alpha_proof(
     mutation,
     error: str,
 ) -> None:
-    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    name = _material_name()
     material = _stove_material(name)
     mutation(material)
     with pytest.raises(ForgeInputError, match=error):
@@ -548,7 +915,7 @@ def test_synthetic_glb_rejects_blend_wrong_or_missing_alpha_proof(
 
 
 def test_manifest_policy_and_export_extras_are_required(tmp_path: Path) -> None:
-    name = external_material_name(STOVE_SOURCE_ID, 0, "surface")
+    name = _material_name()
     path = tmp_path / "policy.glb"
     material = _stove_material(name)
     _write_synthetic_glb(path, material)

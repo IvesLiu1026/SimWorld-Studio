@@ -32,11 +32,20 @@ _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 _REQUIRED_PBR = frozenset({"base_color", "normal", "roughness"})
+_SUPPORTED_EXTERNAL_IDENTITY_SEMANTICS = frozenset(
+    {"base_color", "normal", "roughness", "metalness", "opacity"}
+)
 EXTERNAL_MATERIAL_ALPHA_POLICY_SCHEMA = (
     "simworld.vista.playable-home-external-material-alpha/v1"
 )
 EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA = (
-    "simworld.vista.playable-home-external-model-material/v1"
+    "simworld.vista.playable-home-external-model-material/v2"
+)
+EXTERNAL_MATERIAL_IDENTITY_SCHEMA = (
+    "simworld.vista.playable-home-external-material-identity/v1"
+)
+EXTERNAL_SOURCE_MATERIAL_REGISTRY_SCHEMA = (
+    "simworld.vista.playable-home-external-source-material-registry/v1"
 )
 EXTERNAL_MATERIAL_ALPHA_SANITIZATION = (
     "blender-4.5.8-principled-alpha-greater-than-v1"
@@ -48,6 +57,7 @@ EXTERNAL_MATERIAL_SEMANTICS_PROPERTY = "vista_receipt_texture_semantics_json"
 EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY = "vista_gltf_alpha_mode"
 EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY = "vista_gltf_alpha_cutoff"
 EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY = "vista_alpha_sanitization_policy"
+EXTERNAL_MATERIAL_IDENTITY_PROPERTY = "vista_external_material_identity_sha256"
 EXTERNAL_MATERIAL_CONTRACT_PROPERTIES = frozenset(
     {
         EXTERNAL_MATERIAL_SOURCE_PROPERTY,
@@ -56,6 +66,7 @@ EXTERNAL_MATERIAL_CONTRACT_PROPERTIES = frozenset(
         EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY,
         EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY,
         EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY,
+        EXTERNAL_MATERIAL_IDENTITY_PROPERTY,
     }
 )
 AUTHORED_UV_METERS_PER_TILE = 1.0
@@ -553,13 +564,16 @@ def external_material_alpha_policy() -> dict[str, Any]:
         "schema_version": EXTERNAL_MATERIAL_ALPHA_POLICY_SCHEMA,
         "blender_version": [4, 5, 8],
         "gltf_exporter_alpha_detection": "gather_alpha_info.detect_alpha_clip",
-        "source_mapping": "material_extras_source_digest_and_active_semantics_v1",
+        "source_mapping": "material_extras_source_material_identity_v2",
+        "material_contract_schema": EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA,
+        "material_identity_schema": EXTERNAL_MATERIAL_IDENTITY_SCHEMA,
+        "source_registry_schema": EXTERNAL_SOURCE_MATERIAL_REGISTRY_SCHEMA,
         "sanitization": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
         "opacity_semantic": "opacity",
         "masked_alpha_mode": "MASK",
         "masked_alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF,
         "non_opacity_alpha_mode": "OPAQUE",
-        "blend_alpha_mode_forbidden": True,
+        "external_model_blend_alpha_mode_forbidden": True,
         "export_extras_required": True,
         "surface_render_method_authoritative": False,
     }
@@ -568,22 +582,248 @@ def external_material_alpha_policy() -> dict[str, Any]:
 def external_material_name_prefix(logical_asset_id: str) -> str:
     """Return the deterministic material namespace for one acquired model."""
 
+    if type(logical_asset_id) is not str or _SAFE_ID.fullmatch(logical_asset_id) is None:
+        raise RuntimeError("external material source logical asset ID is invalid")
     slug = _slug(logical_asset_id)
     if not slug:
         raise RuntimeError("external material source logical asset ID has no safe slug")
-    prefix = f"r2.external.{slug}."
-    # Two ordinal digits plus a separator must remain visible even when Blender
-    # truncates the original source material name to its 63-character limit.
-    if len(prefix) + 3 > 63:
-        raise RuntimeError("external material source logical asset ID is too long to namespace safely")
+    source_digest = hashlib.sha256(logical_asset_id.encode("utf-8")).hexdigest()[:16]
+    # The full source ID is hash-bound so IDs that slugify alike, or IDs longer
+    # than Blender's 63-character datablock limit, never share a namespace.
+    prefix = f"r2.external.{slug[:14].ljust(14, '_')}.{source_digest}."
+    if len(prefix) != 44:
+        raise RuntimeError("external material source namespace length is not closed")
     return prefix
 
 
-def external_material_name(logical_asset_id: str, ordinal: int, original_name: str) -> str:
+def external_material_identity_sha256(
+    logical_asset_id: str,
+    source_tree_sha256: str,
+    ordinal: int,
+    source_material_name: str,
+    active_texture_semantics: Sequence[str],
+) -> str:
+    """Hash the exact receipt-pinned source material identity.
+
+    The source-tree digest pins the original Blender graph and its texture
+    bytes.  The remaining fields prevent graph slots or active semantics from
+    being silently reassigned while still producing the same exported name.
+    """
+
+    if type(logical_asset_id) is not str or _SAFE_ID.fullmatch(logical_asset_id) is None:
+        raise RuntimeError("external material source logical asset ID is invalid")
+    if type(source_tree_sha256) is not str or _SHA256.fullmatch(source_tree_sha256) is None:
+        raise RuntimeError("external material source tree SHA-256 is invalid")
     if type(ordinal) is not int or not 0 <= ordinal <= 99:
         raise RuntimeError("external source has too many materials for a stable two-digit identity")
-    original_slug = _slug(original_name) or "material"
-    return f"{external_material_name_prefix(logical_asset_id)}{ordinal:02d}.{original_slug}"[:63]
+    if (
+        type(source_material_name) is not str
+        or not source_material_name
+        or "\x00" in source_material_name
+    ):
+        raise RuntimeError("external source material name is invalid")
+    semantics = list(active_texture_semantics)
+    if (
+        any(type(item) is not str or item not in _SUPPORTED_EXTERNAL_IDENTITY_SEMANTICS for item in semantics)
+        or semantics != sorted(set(semantics))
+        or not _REQUIRED_PBR.issubset(semantics)
+    ):
+        raise RuntimeError("external source material identity semantics are invalid")
+    alpha_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+    payload = {
+        "schema_version": EXTERNAL_MATERIAL_IDENTITY_SCHEMA,
+        "source_logical_asset_id": logical_asset_id,
+        "source_tree_sha256": source_tree_sha256,
+        "material_ordinal": ordinal,
+        "source_material_name": source_material_name,
+        "active_texture_semantics": semantics,
+        "alpha_mode": alpha_mode,
+        "alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None,
+        "sanitization_policy": EXTERNAL_MATERIAL_ALPHA_SANITIZATION,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def external_material_name(
+    logical_asset_id: str,
+    ordinal: int,
+    material_identity_sha256: str,
+) -> str:
+    if type(ordinal) is not int or not 0 <= ordinal <= 99:
+        raise RuntimeError("external source has too many materials for a stable two-digit identity")
+    if (
+        type(material_identity_sha256) is not str
+        or _SHA256.fullmatch(material_identity_sha256) is None
+    ):
+        raise RuntimeError("external material identity SHA-256 is invalid")
+    name = (
+        f"{external_material_name_prefix(logical_asset_id)}"
+        f"{ordinal:02d}.{material_identity_sha256[:16]}"
+    )
+    if len(name) != 63:
+        raise RuntimeError("external material identity does not fit Blender's closed name limit")
+    return name
+
+
+EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS = frozenset(
+    {
+        "schema_version",
+        "material_id",
+        "source_logical_asset_id",
+        "source_tree_sha256",
+        "source_material_name",
+        "material_ordinal",
+        "material_identity_sha256",
+        "active_texture_semantics",
+        "alpha_mode",
+        "alpha_cutoff",
+        "sanitization_policy",
+    }
+)
+
+
+def external_source_material_registry_sha256(
+    logical_asset_id: str,
+    source_tree_sha256: str,
+    material_contracts: Sequence[Mapping[str, Any]],
+) -> str:
+    """Validate and digest one exact source-level material inventory."""
+
+    if type(logical_asset_id) is not str or _SAFE_ID.fullmatch(logical_asset_id) is None:
+        raise RuntimeError("external material registry source logical asset ID is invalid")
+    if type(source_tree_sha256) is not str or _SHA256.fullmatch(source_tree_sha256) is None:
+        raise RuntimeError("external material registry source tree SHA-256 is invalid")
+    if any(not isinstance(item, Mapping) for item in material_contracts):
+        raise RuntimeError("external material registry contains a non-object contract")
+    contracts = [dict(item) for item in material_contracts]
+    if not contracts:
+        raise RuntimeError("external material registry inventory is empty")
+    if any(type(item.get("material_ordinal")) is not int for item in contracts):
+        raise RuntimeError("external material registry ordinal is invalid")
+    contracts.sort(key=lambda item: item.get("material_ordinal", -1))
+    seen_ids: set[str] = set()
+    for expected_ordinal, item in enumerate(contracts):
+        if set(item) != EXTERNAL_MODEL_MATERIAL_CONTRACT_KEYS:
+            raise RuntimeError("external material registry contract fields are not closed")
+        semantics = item.get("active_texture_semantics")
+        source_name = item.get("source_material_name")
+        if (
+            item.get("schema_version") != EXTERNAL_MODEL_MATERIAL_CONTRACT_SCHEMA
+            or item.get("source_logical_asset_id") != logical_asset_id
+            or item.get("source_tree_sha256") != source_tree_sha256
+            or item.get("material_ordinal") != expected_ordinal
+            or type(source_name) is not str
+            or not source_name
+            or "\x00" in source_name
+            or not isinstance(semantics, list)
+            or semantics != sorted(set(semantics))
+        ):
+            raise RuntimeError("external material registry source identity differs")
+        identity = external_material_identity_sha256(
+            logical_asset_id,
+            source_tree_sha256,
+            expected_ordinal,
+            source_name,
+            semantics,
+        )
+        material_id = external_material_name(logical_asset_id, expected_ordinal, identity)
+        expected_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+        expected_cutoff = (
+            EXTERNAL_MATERIAL_ALPHA_CUTOFF if expected_mode == "MASK" else None
+        )
+        if (
+            item.get("material_identity_sha256") != identity
+            or item.get("material_id") != material_id
+            or material_id in seen_ids
+            or item.get("alpha_mode") != expected_mode
+            or item.get("alpha_cutoff") != expected_cutoff
+            or item.get("sanitization_policy") != EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        ):
+            raise RuntimeError("external material registry contract identity differs")
+        seen_ids.add(material_id)
+    payload = {
+        "schema_version": EXTERNAL_SOURCE_MATERIAL_REGISTRY_SCHEMA,
+        "source_logical_asset_id": logical_asset_id,
+        "source_tree_sha256": source_tree_sha256,
+        "materials": contracts,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class _ExternalSourcePrototype:
+    logical_asset_id: str
+    source_tree_sha256: str
+    material_registry_sha256: str
+    meshes: tuple[Any, ...]
+    normalized_dimensions_m: tuple[float, float, float]
+    material_contracts: tuple[Mapping[str, Any], ...]
+
+
+class _ExternalSourceMaterialRegistry:
+    """Closed source prototypes reused by every placement in one forge run."""
+
+    def __init__(self) -> None:
+        self._by_source: dict[str, _ExternalSourcePrototype] = {}
+        self._material_owner: dict[str, str] = {}
+
+    def get(self, asset: AcquiredAsset) -> _ExternalSourcePrototype | None:
+        prototype = self._by_source.get(asset.logical_asset_id)
+        if prototype is None:
+            return None
+        if (
+            prototype.source_tree_sha256 != asset.source_tree_sha256
+            or prototype.material_registry_sha256
+            != external_source_material_registry_sha256(
+                asset.logical_asset_id,
+                asset.source_tree_sha256,
+                prototype.material_contracts,
+            )
+        ):
+            raise RuntimeError("external material registry source digest or inventory changed")
+        return prototype
+
+    def add(
+        self,
+        asset: AcquiredAsset,
+        meshes: Sequence[Any],
+        normalized_dimensions_m: Sequence[float],
+        material_contracts: Sequence[Mapping[str, Any]],
+    ) -> _ExternalSourcePrototype:
+        if asset.logical_asset_id in self._by_source:
+            raise RuntimeError("external material registry source was registered twice")
+        registry_digest = external_source_material_registry_sha256(
+            asset.logical_asset_id,
+            asset.source_tree_sha256,
+            material_contracts,
+        )
+        for contract in material_contracts:
+            material_id = str(contract["material_id"])
+            owner = self._material_owner.get(material_id)
+            if owner is not None and owner != asset.logical_asset_id:
+                raise RuntimeError("external material registry identities collide across sources")
+        dimensions = tuple(float(value) for value in normalized_dimensions_m)
+        if len(dimensions) != 3 or any(not math.isfinite(value) or value <= 0 for value in dimensions):
+            raise RuntimeError("external material registry normalized dimensions are invalid")
+        prototype = _ExternalSourcePrototype(
+            logical_asset_id=asset.logical_asset_id,
+            source_tree_sha256=asset.source_tree_sha256,
+            material_registry_sha256=registry_digest,
+            meshes=tuple(meshes),
+            normalized_dimensions_m=dimensions,
+            material_contracts=tuple(dict(item) for item in material_contracts),
+        )
+        if not prototype.meshes:
+            raise RuntimeError("external material registry prototype has no meshes")
+        self._by_source[asset.logical_asset_id] = prototype
+        for contract in material_contracts:
+            self._material_owner[str(contract["material_id"])] = asset.logical_asset_id
+        return prototype
+
+    def values(self) -> tuple[_ExternalSourcePrototype, ...]:
+        return tuple(self._by_source[source_id] for source_id in sorted(self._by_source))
 
 
 def _receipt_file_fingerprint(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
@@ -1592,6 +1832,8 @@ def _configure_external_material_alpha_contract(
     material: Any,
     asset: AcquiredAsset,
     semantic_nodes: Mapping[str, Any],
+    *,
+    material_identity_sha256: str,
 ) -> None:
     """Sanitize one verified source material and persist its export mapping."""
 
@@ -1602,6 +1844,11 @@ def _configure_external_material_alpha_contract(
     semantics = tuple(sorted(semantic_nodes))
     if not _REQUIRED_PBR.issubset(semantics):
         raise RuntimeError("external source material lacks the required active PBR semantics")
+    if (
+        type(material_identity_sha256) is not str
+        or _SHA256.fullmatch(material_identity_sha256) is None
+    ):
+        raise RuntimeError("external material identity SHA-256 is invalid")
     opacity_node = semantic_nodes.get("opacity")
     if opacity_node is not None:
         direct_links = _all_output_links(opacity_node)
@@ -1644,6 +1891,7 @@ def _configure_external_material_alpha_contract(
         )
         material[EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY] = alpha_mode
         material[EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY] = EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        material[EXTERNAL_MATERIAL_IDENTITY_PROPERTY] = material_identity_sha256
         if alpha_mode == "MASK":
             material[EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY] = EXTERNAL_MATERIAL_ALPHA_CUTOFF
     except (AttributeError, KeyError, TypeError, ValueError) as error:
@@ -1662,18 +1910,27 @@ def _external_model_material_contract(
     ordinal: int,
     source_material_name: str,
     semantic_nodes: Mapping[str, Any],
+    material_identity_sha256: str,
 ) -> dict[str, Any]:
     """Seal the per-material inventory produced from receipt-validated nodes."""
 
     semantics = sorted(semantic_nodes)
     alpha_mode = "MASK" if "opacity" in semantics else "OPAQUE"
+    expected_identity = external_material_identity_sha256(
+        asset.logical_asset_id,
+        asset.source_tree_sha256,
+        ordinal,
+        source_material_name,
+        semantics,
+    )
     expected_name = external_material_name(
         asset.logical_asset_id,
         ordinal,
-        source_material_name,
+        expected_identity,
     )
     if (
-        material.name != expected_name
+        material_identity_sha256 != expected_identity
+        or material.name != expected_name
         or material.get(EXTERNAL_MATERIAL_SOURCE_PROPERTY) != asset.logical_asset_id
         or material.get(EXTERNAL_MATERIAL_SOURCE_DIGEST_PROPERTY) != asset.source_tree_sha256
         or material.get(EXTERNAL_MATERIAL_SEMANTICS_PROPERTY)
@@ -1681,6 +1938,7 @@ def _external_model_material_contract(
         or material.get(EXTERNAL_MATERIAL_ALPHA_MODE_PROPERTY) != alpha_mode
         or material.get(EXTERNAL_MATERIAL_ALPHA_POLICY_PROPERTY)
         != EXTERNAL_MATERIAL_ALPHA_SANITIZATION
+        or material.get(EXTERNAL_MATERIAL_IDENTITY_PROPERTY) != expected_identity
         or material.get(EXTERNAL_MATERIAL_ALPHA_CUTOFF_PROPERTY)
         != (EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None)
     ):
@@ -1692,6 +1950,7 @@ def _external_model_material_contract(
         "source_tree_sha256": asset.source_tree_sha256,
         "source_material_name": source_material_name,
         "material_ordinal": ordinal,
+        "material_identity_sha256": expected_identity,
         "active_texture_semantics": semantics,
         "alpha_mode": alpha_mode,
         "alpha_cutoff": EXTERNAL_MATERIAL_ALPHA_CUTOFF if alpha_mode == "MASK" else None,
@@ -1990,7 +2249,15 @@ def _append_static_blend(
     material_contracts: list[dict[str, Any]] = []
     for ordinal, material in enumerate(unique_materials):
         original = material.name
-        expected_name = external_material_name(logical_id, ordinal, original)
+        semantics = sorted(semantics_by_material[id(material)])
+        material_identity = external_material_identity_sha256(
+            logical_id,
+            asset.source_tree_sha256,
+            ordinal,
+            original,
+            semantics,
+        )
+        expected_name = external_material_name(logical_id, ordinal, material_identity)
         material.name = expected_name
         if material.name != expected_name or material.name in realized_names:
             raise RuntimeError("external material name is not a unique deterministic source identity")
@@ -1999,6 +2266,7 @@ def _append_static_blend(
             material,
             asset,
             semantics_by_material[id(material)],
+            material_identity_sha256=material_identity,
         )
         material_contracts.append(
             _external_model_material_contract(
@@ -2007,6 +2275,7 @@ def _append_static_blend(
                 ordinal=ordinal,
                 source_material_name=original,
                 semantic_nodes=semantics_by_material[id(material)],
+                material_identity_sha256=material_identity,
             )
         )
     minimum, maximum = _combined_bounds(mathutils, meshes)
@@ -2043,6 +2312,87 @@ def _append_static_blend(
     return meshes, normalized_dimensions, material_contracts
 
 
+def _detach_external_source_prototype(meshes: Sequence[Any]) -> None:
+    for obj in meshes:
+        for collection in tuple(obj.users_collection):
+            collection.objects.unlink(obj)
+        if tuple(obj.users_collection):
+            raise RuntimeError("external source prototype could not be detached")
+
+
+def _clone_external_source_prototype(
+    prototype: _ExternalSourcePrototype,
+    collection: Any,
+    placement_id: str,
+) -> list[Any]:
+    """Instantiate normalized geometry while reusing verified materials."""
+
+    placement_slug = _slug(placement_id)[:24] or "placement"
+    placement_digest = hashlib.sha256(placement_id.encode("utf-8")).hexdigest()[:12]
+    clones: list[Any] = []
+    try:
+        for index, source in enumerate(prototype.meshes):
+            _validate_normalized_mesh_state(source)
+            duplicate = source.copy()
+            duplicate.data = source.data.copy()
+            duplicate.parent = None
+            if hasattr(duplicate, "parent_type"):
+                duplicate.parent_type = "OBJECT"
+            if hasattr(duplicate, "parent_bone"):
+                duplicate.parent_bone = ""
+            duplicate.rotation_mode = "XYZ"
+            duplicate.location = (0.0, 0.0, 0.0)
+            duplicate.rotation_euler = (0.0, 0.0, 0.0)
+            duplicate.scale = (1.0, 1.0, 1.0)
+            duplicate.delta_location = (0.0, 0.0, 0.0)
+            duplicate.delta_rotation_euler = (0.0, 0.0, 0.0)
+            duplicate.delta_scale = (1.0, 1.0, 1.0)
+            if hasattr(duplicate, "rotation_quaternion"):
+                duplicate.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            if hasattr(duplicate, "delta_rotation_quaternion"):
+                duplicate.delta_rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+            if hasattr(duplicate, "rotation_axis_angle"):
+                duplicate.rotation_axis_angle = (0.0, 0.0, 1.0, 0.0)
+            duplicate.matrix_parent_inverse.identity()
+            duplicate.matrix_basis.identity()
+            duplicate.matrix_world.identity()
+            for key in tuple(duplicate.keys()):
+                del duplicate[key]
+            duplicate.name = (
+                f"VISTA_External_{placement_slug}_{placement_digest}_{index:02d}"
+            )[:63]
+            collection.objects.link(duplicate)
+            _validate_normalized_mesh_state(duplicate)
+            clones.append(duplicate)
+    except BaseException:
+        for duplicate in reversed(clones):
+            try:
+                for current in tuple(duplicate.users_collection):
+                    current.objects.unlink(duplicate)
+            except (ReferenceError, RuntimeError, TypeError):
+                pass
+        raise
+    return clones
+
+
+def _dispose_external_source_prototypes(
+    bpy: Any,
+    registry: _ExternalSourceMaterialRegistry,
+) -> None:
+    for prototype in registry.values():
+        for obj in prototype.meshes:
+            mesh = getattr(obj, "data", None)
+            try:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            except (ReferenceError, RuntimeError, TypeError):
+                continue
+            if mesh is not None and getattr(mesh, "users", 1) == 0:
+                try:
+                    bpy.data.meshes.remove(mesh)
+                except (ReferenceError, RuntimeError, TypeError):
+                    pass
+
+
 def realize_external_placements(
     bpy: Any,
     mathutils: Any,
@@ -2072,6 +2422,7 @@ def realize_external_placements(
     objects: dict[str, list[Any]] = {}
     used_authored_materials: set[str] = set()
     external_model_material_contracts: list[dict[str, Any]] = []
+    source_registry = _ExternalSourceMaterialRegistry()
     for placement in external_plan.placements:
         collection = room_collections[placement.room_id]
         actual_recipe_materials: tuple[str, ...] = ()
@@ -2095,14 +2446,31 @@ def realize_external_placements(
             asset = asset_set.asset(placement.source_logical_asset_id)
             if asset.catalog_dimensions_m is None:
                 raise RuntimeError(f"external model lacks a pinned measurement: {asset.logical_asset_id}")
-            meshes, measured_dimensions, placement_material_contracts = _append_static_blend(
-                bpy,
-                mathutils,
-                asset_set,
-                asset,
+            prototype = source_registry.get(asset)
+            if prototype is None:
+                prototype_meshes, measured_dimensions, source_material_contracts = (
+                    _append_static_blend(
+                        bpy,
+                        mathutils,
+                        asset_set,
+                        asset,
+                        collection,
+                    )
+                )
+                _detach_external_source_prototype(prototype_meshes)
+                prototype = source_registry.add(
+                    asset,
+                    prototype_meshes,
+                    measured_dimensions,
+                    source_material_contracts,
+                )
+                external_model_material_contracts.extend(source_material_contracts)
+            measured_dimensions = prototype.normalized_dimensions_m
+            meshes = _clone_external_source_prototype(
+                prototype,
                 collection,
+                placement.placement_id,
             )
-            external_model_material_contracts.extend(placement_material_contracts)
         scaled_dimensions = tuple(value * placement.uniform_scale for value in measured_dimensions)
         planned = placement.source_dimensions_m
         if any(abs(scaled_dimensions[index] - planned[index]) > max(0.03, planned[index] * 0.08) for index in range(3)):
@@ -2129,6 +2497,7 @@ def realize_external_placements(
             obj["vista_collision_policy"] = "presentation_no_collision"
             obj["vista_unreal_collision_profile"] = "NoCollision"
         objects[placement.placement_id] = meshes
+    _dispose_external_source_prototypes(bpy, source_registry)
     if used_authored_materials != required_authored_materials:
         raise RuntimeError(
             "project-authored material provenance differs from realized recipe use: "
