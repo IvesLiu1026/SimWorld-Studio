@@ -46,6 +46,7 @@ UE_BUNDLE_REQUIRED_KEYS = {
     "lights_exported",
     "source_hashes",
 }
+UE_BUNDLE_V2_REQUIRED_KEYS = UE_BUNDLE_REQUIRED_KEYS | {"external_content"}
 
 
 def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -142,7 +143,8 @@ def inspect_glb(path: pathlib.Path) -> dict[str, Any]:
         for node in nodes
         if isinstance(node, dict)
         and isinstance(node.get("extras"), dict)
-        and node["extras"].get("vista_bundle_contract") == "one_room_one_mesh_v1"
+        and node["extras"].get("vista_bundle_contract")
+        in {"one_room_one_mesh_v1", "one_room_one_mesh_v2"}
     ]
     mesh_nodes = [node for node in nodes if isinstance(node, dict) and isinstance(node.get("mesh"), int)]
     materials = document.get("materials", [])
@@ -240,8 +242,12 @@ def _validate_transform(transform: Any, *, units: str) -> None:
 
 
 def _validate_bundle_record(record: Any) -> Mapping[str, Any]:
-    if not isinstance(record, Mapping) or set(record) != UE_BUNDLE_REQUIRED_KEYS:
-        raise ForgeInputError("UE bundle record fields are not the closed v1 contract")
+    if not isinstance(record, Mapping) or frozenset(record) not in {
+        frozenset(UE_BUNDLE_REQUIRED_KEYS),
+        frozenset(UE_BUNDLE_V2_REQUIRED_KEYS),
+    }:
+        raise ForgeInputError("UE bundle record fields are not a closed v1/v2 contract")
+    is_external = "external_content" in record
     kind = record.get("room_kind")
     room_id = record.get("room_id")
     if kind not in {"entry_hall", "living_room", "kitchen_dining"}:
@@ -286,7 +292,14 @@ def _validate_bundle_record(record: Any) -> Mapping[str, Any]:
         not isinstance(material_ids, list)
         or len(material_ids) < 2
         or material_ids != sorted(set(material_ids))
-        or any(not isinstance(item, str) or not item.startswith("r2.") for item in material_ids)
+        or any(
+            not isinstance(item, str)
+            or not item
+            or len(item) > 96
+            or (not is_external and not item.startswith("r2."))
+            or (is_external and re.fullmatch(r"[A-Za-z0-9_.-]+", item) is None)
+            for item in material_ids
+        )
     ):
         raise ForgeInputError("UE bundle material IDs are invalid")
     integers = {
@@ -294,7 +307,7 @@ def _validate_bundle_record(record: Any) -> Mapping[str, Any]:
         "mesh_count": 1,
         "material_count": 2,
         "pbr_complete_material_count": 2,
-        "texture_count": 6,
+        "texture_count": 3 if is_external else 6,
     }
     for key, minimum in integers.items():
         value = record.get(key)
@@ -304,12 +317,116 @@ def _validate_bundle_record(record: Any) -> Mapping[str, Any]:
         record["mesh_count"] != 1
         or record["material_count"] != len(material_ids)
         or record["pbr_complete_material_count"] != record["material_count"]
-        or record["texture_count"] < record["material_count"] * 3
+        or (
+            record["texture_count"] < (3 if is_external else record["material_count"] * 3)
+        )
         or not isinstance(record.get("sha256"), str)
         or SHA256.fullmatch(record["sha256"]) is None
     ):
         raise ForgeInputError("UE bundle mesh/material/hash contract is invalid")
+    if is_external:
+        _validate_external_content(record["external_content"])
     return record
+
+
+def _validate_external_content(value: Any) -> None:
+    keys = {
+        "schema_version", "normalization_policy", "acquisition_receipt",
+        "placement_manifest_sha256", "placement_plan_sha256",
+        "semantic_target_ids", "dressing_ids", "asset_sources",
+    }
+    if not isinstance(value, Mapping) or set(value) != keys:
+        raise ForgeInputError("UE bundle external content fields are not closed")
+    if (
+        value.get("schema_version") != "simworld.vista.playable-home-external-placement/v1"
+        or value.get("normalization_policy")
+        != "measured_combined_bounds_floor_center_uniform_scale_v1"
+    ):
+        raise ForgeInputError("UE bundle external placement policy is invalid")
+    for key in ("placement_manifest_sha256", "placement_plan_sha256"):
+        if not isinstance(value.get(key), str) or SHA256.fullmatch(value[key]) is None:
+            raise ForgeInputError("UE bundle external placement digest is invalid")
+    receipt = value.get("acquisition_receipt")
+    if not isinstance(receipt, Mapping) or set(receipt) != {
+        "provider", "receipt_schema_version", "receipt_digest",
+        "receipt_file_sha256", "acquisition_manifest_sha256",
+    }:
+        raise ForgeInputError("UE bundle acquisition receipt reference is invalid")
+    if (
+        receipt.get("provider") != "poly_haven"
+        or receipt.get("receipt_schema_version")
+        != "simworld.vista.playable-home-poly-haven-receipt/v1"
+        or any(
+            not isinstance(receipt.get(key), str) or SHA256.fullmatch(receipt[key]) is None
+            for key in ("receipt_digest", "receipt_file_sha256", "acquisition_manifest_sha256")
+        )
+    ):
+        raise ForgeInputError("UE bundle acquisition receipt digests are invalid")
+    semantic_ids = value.get("semantic_target_ids")
+    dressing_ids = value.get("dressing_ids")
+    if (
+        not isinstance(semantic_ids, list)
+        or semantic_ids != sorted(set(semantic_ids))
+        or any(not isinstance(item, str) or "/entity." not in item for item in semantic_ids)
+        or any(any(token in item for token in ("entity.keys", "entity.coffee_cup", "entity.resident", "door")) for item in semantic_ids)
+        or not isinstance(dressing_ids, list)
+        or dressing_ids != sorted(set(dressing_ids))
+        or any(not isinstance(item, str) or not item.startswith("dress.") for item in dressing_ids)
+    ):
+        raise ForgeInputError("UE bundle external semantic/dressing identities are invalid")
+    sources = value.get("asset_sources")
+    if not isinstance(sources, list) or not sources:
+        raise ForgeInputError("UE bundle external source digest inventory is empty")
+    seen: set[str] = set()
+    for source in sources:
+        if not isinstance(source, Mapping) or set(source) != {
+            "logical_asset_id", "asset_id", "asset_type", "resolution",
+            "provider_files_hash", "source_tree_sha256", "files",
+        }:
+            raise ForgeInputError("UE bundle external source record is invalid")
+        logical_id = source.get("logical_asset_id")
+        files = source.get("files")
+        if (
+            not isinstance(logical_id, str)
+            or logical_id in seen
+            or not isinstance(source.get("source_tree_sha256"), str)
+            or SHA256.fullmatch(source["source_tree_sha256"]) is None
+            or source.get("asset_type") not in {"model", "texture"}
+            or source.get("resolution") not in {"2k", "4k"}
+            or not isinstance(source.get("provider_files_hash"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", source["provider_files_hash"]) is None
+            or not isinstance(files, list)
+            or not files
+        ):
+            raise ForgeInputError("UE bundle external source identity/digest is invalid")
+        seen.add(logical_id)
+        for file in files:
+            if (
+                not isinstance(file, Mapping)
+                or set(file) != {
+                    "relative_path", "size_bytes", "sha256",
+                    "texture_semantics", "dimensions_px",
+                }
+                or not isinstance(file.get("relative_path"), str)
+                or pathlib.PurePosixPath(file["relative_path"]).is_absolute()
+                or ".." in pathlib.PurePosixPath(file["relative_path"]).parts
+                or not isinstance(file.get("size_bytes"), int)
+                or isinstance(file.get("size_bytes"), bool)
+                or file["size_bytes"] <= 0
+                or not isinstance(file.get("sha256"), str)
+                or SHA256.fullmatch(file["sha256"]) is None
+                or not isinstance(file.get("texture_semantics"), list)
+                or file["texture_semantics"] != sorted(set(file["texture_semantics"]))
+                or not (
+                    file.get("dimensions_px") is None
+                    or (
+                        isinstance(file["dimensions_px"], list)
+                        and len(file["dimensions_px"]) == 2
+                        and all(isinstance(item, int) and item > 0 for item in file["dimensions_px"])
+                    )
+                )
+            ):
+                raise ForgeInputError("UE bundle external per-file SHA-256 is invalid")
 
 
 def _validate_bundle_glb(record: Mapping[str, Any], inspection: Mapping[str, Any]) -> None:
@@ -321,6 +438,17 @@ def _validate_bundle_glb(record: Mapping[str, Any], inspection: Mapping[str, Any
         embedded_material_ids = json.loads(str(metadata.get("vista_material_ids_json")))
     except json.JSONDecodeError as exc:
         raise ForgeInputError("UE bundle GLB JSON extras are invalid") from exc
+    if "external_content" in record:
+        try:
+            embedded_external = json.loads(str(metadata.get("vista_external_content_json")))
+        except json.JSONDecodeError as exc:
+            raise ForgeInputError("UE bundle GLB external JSON extras are invalid") from exc
+        if embedded_external != record["external_content"]:
+            raise ForgeInputError("UE bundle embedded external receipt differs from receipt")
+        if metadata.get("vista_bundle_contract") != "one_room_one_mesh_v2":
+            raise ForgeInputError("UE bundle external contract version is invalid")
+    elif metadata.get("vista_bundle_contract") != "one_room_one_mesh_v1":
+        raise ForgeInputError("UE bundle v1 contract version is invalid")
     expected_metadata = {
         "vista_artifact_id": record["artifact_id"],
         "vista_target_asset_id": record["target_asset_id"],
@@ -348,12 +476,96 @@ def _validate_bundle_glb(record: Mapping[str, Any], inspection: Mapping[str, Any
         or inspection.get("bundle_node_count") != 1
         or inspection.get("bundle_root_is_identity") is not True
         or inspection.get("material_count") != record["material_count"]
+        or (
+            "external_content" in record
+            and sorted(inspection.get("material_names", [])) != record["material_ids"]
+        )
         or inspection.get("pbr_complete_material_count") != record["material_count"]
         or inspection.get("texture_count") != record["texture_count"]
         or inspection.get("camera_count") != 0
         or inspection.get("light_count") != 0
     ):
         raise ForgeInputError("UE bundle GLB structure differs from its closed receipt")
+
+
+def _validate_external_manifest_binding(
+    manifest: Mapping[str, Any], bundles: Sequence[Mapping[str, Any]]
+) -> None:
+    external_bundles = [item for item in bundles if "external_content" in item]
+    if not external_bundles:
+        if manifest.get("external_placement") is not None:
+            raise ForgeInputError("v1 UE bundles cannot accompany an external placement plan")
+        return
+    if len(external_bundles) != len(bundles):
+        raise ForgeInputError("v1 and v2 UE bundle contracts may not be mixed")
+    if manifest.get("schema_version") != "simworld.vista.playable-home-realism-forge/v2":
+        raise ForgeInputError("external UE bundles require forge schema v2")
+    external = manifest.get("external_placement")
+    required = {
+        "schema_version", "placement_id", "normalization_policy",
+        "acquisition_receipt", "placement_manifest_sha256",
+        "semantic_target_ids", "dressing_ids", "asset_sources",
+        "placements", "content_digest",
+    }
+    if not isinstance(external, Mapping) or set(external) != required:
+        raise ForgeInputError("normalized manifest external placement fields are not closed")
+    placements = external.get("placements")
+    sources = external.get("asset_sources")
+    if (
+        not isinstance(placements, list)
+        or not all(isinstance(item, Mapping) for item in placements)
+        or not isinstance(sources, list)
+        or not all(isinstance(item, Mapping) for item in sources)
+    ):
+        raise ForgeInputError("normalized manifest external placements/sources are invalid")
+    union_semantic: set[str] = set()
+    union_dressing: set[str] = set()
+    for bundle in external_bundles:
+        room_id = bundle["room_id"]
+        room_placements = [
+            item for item in placements if isinstance(item, Mapping) and item.get("room_id") == room_id
+        ]
+        source_ids = {
+            logical_id
+            for item in room_placements
+            for logical_id in (
+                ([item.get("source_logical_asset_id")] if item.get("source_logical_asset_id") else [])
+                + (
+                    item.get("material_logical_asset_ids", [])
+                    if isinstance(item.get("material_logical_asset_ids", []), list)
+                    else []
+                )
+            )
+        }
+        expected = {
+            "schema_version": external["schema_version"],
+            "normalization_policy": external["normalization_policy"],
+            "acquisition_receipt": external["acquisition_receipt"],
+            "placement_manifest_sha256": external["placement_manifest_sha256"],
+            "placement_plan_sha256": external["content_digest"],
+            "semantic_target_ids": sorted(
+                item["semantic_target_id"]
+                for item in room_placements
+                if item.get("semantic_target_id")
+            ),
+            "dressing_ids": sorted(
+                item["placement_id"]
+                for item in room_placements
+                if item.get("placement_kind") == "dressing"
+            ),
+            "asset_sources": [
+                item for item in sources if item.get("logical_asset_id") in source_ids
+            ],
+        }
+        if bundle["external_content"] != expected:
+            raise ForgeInputError("UE bundle external content differs from normalized manifest")
+        union_semantic.update(expected["semantic_target_ids"])
+        union_dressing.update(expected["dressing_ids"])
+    if (
+        sorted(union_semantic) != external.get("semantic_target_ids")
+        or sorted(union_dressing) != external.get("dressing_ids")
+    ):
+        raise ForgeInputError("UE bundle external identity coverage differs from normalized manifest")
 
 
 def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
@@ -385,7 +597,12 @@ def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
     if not isinstance(receipt_bundles, list):
         raise ForgeInputError("artifact receipt ue_import_bundles must be an array")
     if manifest_bundles or receipt_bundles or receipt_artifact_bundles:
-        if receipt.get("schema_version") != "simworld.vista.playable-home-realism-artifacts/v1":
+        expected_artifact_schema = (
+            "simworld.vista.playable-home-realism-artifacts/v2"
+            if any(isinstance(item, Mapping) and "external_content" in item for item in receipt_bundles)
+            else "simworld.vista.playable-home-realism-artifacts/v1"
+        )
+        if receipt.get("schema_version") != expected_artifact_schema:
             raise ForgeInputError("artifact receipt schema does not support UE bundles")
         if (
             manifest_bundles != receipt_bundles
@@ -396,6 +613,7 @@ def inspect_output(output_root: pathlib.Path) -> dict[str, Any]:
                 "normalized manifest and artifact receipt UE bundle arrays differ"
             )
         validated = [_validate_bundle_record(item) for item in receipt_bundles]
+        _validate_external_manifest_binding(manifest, validated)
         if {item["room_kind"] for item in validated} != {
             "entry_hall", "living_room", "kitchen_dining"
         }:

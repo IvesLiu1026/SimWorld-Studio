@@ -22,7 +22,14 @@ from .config import (
     vector3,
 )
 from .dressing import DressingPlan, build_dressing_plan
+from .external_assets import ExternalAssetSet
 from .materials import material_by_id, material_plan_manifest
+from .placement import (
+    EXTERNAL_FORGE_SCHEMA_VERSION,
+    ExternalPlacementPlan,
+    PlacementManifestDocument,
+    build_external_placement_plan,
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +89,13 @@ class ForgePlan:
     source_house_digest: str
     source_profile_digest: str
     content_digest: str
+
+
+@dataclass(frozen=True)
+class ExternalForgePlan(ForgePlan):
+    """Forge v2 plan; v1 remains a distinct byte-stable dataclass."""
+
+    external_placement: ExternalPlacementPlan
 
 
 FLOOR_MATERIAL_BY_KIND = {
@@ -711,4 +725,53 @@ def build_forge_plan(house: Mapping[str, Any], profile: Mapping[str, Any]) -> Fo
         source_house_digest=str(house.get("content_digest") or content_digest(house)),
         source_profile_digest=str(profile.get("content_digest") or content_digest(profile)),
         content_digest=digest,
+    )
+
+
+def build_external_forge_plan(
+    house: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    asset_set: ExternalAssetSet,
+    placement_manifest: PlacementManifestDocument,
+) -> ExternalForgePlan:
+    """Layer verified external presentation on the unchanged v1 architecture."""
+
+    base = build_forge_plan(house, profile)
+    external = build_external_placement_plan(
+        house,
+        base.rooms,
+        base.dressing,
+        asset_set,
+        placement_manifest,
+    )
+    payload = {
+        "schema_version": EXTERNAL_FORGE_SCHEMA_VERSION,
+        "forge_id": base.forge_id,
+        "house_revision": base.house_revision,
+        "visual_profile_id": base.visual_profile_id,
+        "seed": base.seed,
+        "rooms": base.rooms,
+        "openings": base.openings,
+        "components": base.components,
+        "dressing": base.dressing,
+        "material_plan": base.material_plan,
+        "source_house_digest": base.source_house_digest,
+        "source_profile_digest": base.source_profile_digest,
+        "external_placement": external,
+    }
+    return ExternalForgePlan(
+        schema_version=EXTERNAL_FORGE_SCHEMA_VERSION,
+        forge_id=base.forge_id,
+        house_revision=base.house_revision,
+        visual_profile_id=base.visual_profile_id,
+        seed=base.seed,
+        rooms=base.rooms,
+        openings=base.openings,
+        components=base.components,
+        dressing=base.dressing,
+        material_plan=base.material_plan,
+        source_house_digest=base.source_house_digest,
+        source_profile_digest=base.source_profile_digest,
+        content_digest=content_digest(payload),
+        external_placement=external,
     )

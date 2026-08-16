@@ -29,7 +29,11 @@ if __package__ in {None, ""}:
     package_root = pathlib.Path(__file__).resolve().parents[2]
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
-    from blender.vista_playable_home_realism.architecture import ForgePlan, build_forge_plan  # type: ignore[import-not-found]
+    from blender.vista_playable_home_realism.architecture import (  # type: ignore[import-not-found]
+        ForgePlan,
+        build_external_forge_plan,
+        build_forge_plan,
+    )
     from blender.vista_playable_home_realism.config import (  # type: ignore[import-not-found]
         DEFAULT_TEXTURE_SIZE_PX,
         EXPECTED_BLENDER_VERSION,
@@ -49,8 +53,17 @@ if __package__ in {None, ""}:
     )
     from blender.vista_playable_home_realism.inspect import inspect_output  # type: ignore[import-not-found]
     from blender.vista_playable_home_realism.materials import realize_blender_materials  # type: ignore[import-not-found]
+    from blender.vista_playable_home_realism.external_assets import (  # type: ignore[import-not-found]
+        ExternalAssetSet,
+        load_external_asset_set,
+        realize_external_placements,
+    )
+    from blender.vista_playable_home_realism.placement import (  # type: ignore[import-not-found]
+        PlacementManifestDocument,
+        load_placement_manifest,
+    )
 else:
-    from .architecture import ForgePlan, build_forge_plan
+    from .architecture import ForgePlan, build_external_forge_plan, build_forge_plan
     from .config import (
         DEFAULT_TEXTURE_SIZE_PX,
         EXPECTED_BLENDER_VERSION,
@@ -70,6 +83,8 @@ else:
     )
     from .inspect import inspect_output
     from .materials import realize_blender_materials
+    from .external_assets import ExternalAssetSet, load_external_asset_set, realize_external_placements
+    from .placement import PlacementManifestDocument, load_placement_manifest
 
 
 PREVIEW_WIDTH = 1280
@@ -84,9 +99,13 @@ def parse_blender_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--visual-profile", type=pathlib.Path, required=True)
     parser.add_argument("--output-root", type=pathlib.Path, required=True)
     parser.add_argument("--texture-size-px", type=int, default=DEFAULT_TEXTURE_SIZE_PX)
+    parser.add_argument("--external-acquisition-root", type=pathlib.Path)
+    parser.add_argument("--external-placement-manifest", type=pathlib.Path)
     args = parser.parse_args(forwarded)
     if args.texture_size_px < 64 or args.texture_size_px > 2048 or args.texture_size_px & (args.texture_size_px - 1):
         parser.error("--texture-size-px must be a power of two from 64 through 2048")
+    if (args.external_acquisition_root is None) != (args.external_placement_manifest is None):
+        parser.error("external mode requires both --external-acquisition-root and --external-placement-manifest")
     return args
 
 
@@ -217,7 +236,7 @@ def _metadata_empty(
     return obj
 
 
-def _build_geometry(bpy: Any, plan: ForgePlan, materials: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, list[Any]]]:
+def _build_geometry(bpy: Any, plan: ForgePlan, materials: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, list[Any]], dict[str, Any]]:
     room_roots: dict[str, Any] = {}
     room_collections: dict[str, Any] = {}
     for room in plan.rooms:
@@ -292,7 +311,7 @@ def _build_geometry(bpy: Any, plan: ForgePlan, materials: Mapping[str, Any]) -> 
                 scale=half,
             )
         )
-    return room_roots, component_objects, metadata_objects
+    return room_roots, component_objects, metadata_objects, room_collections
 
 
 def _point_at(mathutils: Any, obj: Any, target: Sequence[float]) -> None:
@@ -379,18 +398,39 @@ def build_with_blender(
     output_root: pathlib.Path,
     *,
     texture_size_px: int,
+    external_asset_set: ExternalAssetSet | None = None,
+    external_placement_manifest: PlacementManifestDocument | None = None,
 ) -> dict[str, Any]:
     if tuple(bpy.app.version) != EXPECTED_BLENDER_VERSION:
         raise RuntimeError(
             f"requires Blender {'.'.join(map(str, EXPECTED_BLENDER_VERSION))}, got {bpy.app.version_string}"
         )
-    plan = build_forge_plan(house, profile)
+    if (external_asset_set is None) != (external_placement_manifest is None):
+        raise RuntimeError("external asset set and placement manifest must be supplied together")
+    plan = (
+        build_external_forge_plan(house, profile, external_asset_set, external_placement_manifest)
+        if external_asset_set is not None and external_placement_manifest is not None
+        else build_forge_plan(house, profile)
+    )
     _reset_scene(bpy)
     _configure_scene(bpy)
     materials, material_receipts = realize_blender_materials(
         bpy, output_root, texture_size_px=texture_size_px
     )
-    room_roots, component_objects, metadata_objects = _build_geometry(bpy, plan, materials)
+    room_roots, component_objects, metadata_objects, room_collections = _build_geometry(
+        bpy, plan, materials
+    )
+    external_objects: dict[str, list[Any]] = {}
+    if external_asset_set is not None:
+        external_objects, external_material_receipts = realize_external_placements(
+            bpy,
+            mathutils,
+            external_asset_set,
+            plan.external_placement,
+            room_roots=room_roots,
+            room_collections=room_collections,
+        )
+        material_receipts.extend(external_material_receipts)
     artifacts = export_role_aware_glbs(
         bpy,
         output_root,
@@ -398,6 +438,7 @@ def build_with_blender(
         room_roots=room_roots,
         component_objects=component_objects,
         metadata_objects=metadata_objects,
+        external_objects=external_objects,
     )
     # The normalized manifest binds the exact import-ready GLB bytes.  Export
     # precedes manifest emission deliberately; the GLBs do not embed the
@@ -418,6 +459,8 @@ def build_with_blender(
     scene_root = output_root / "scene"
     scene_root.mkdir(mode=0o700)
     blend_path = scene_root / "vista_playable_home_realistic_interior_r2.blend"
+    if external_asset_set is not None:
+        bpy.ops.file.pack_all()
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path), check_existing=False, compress=True)
     if not blend_path.is_file() or blend_path.stat().st_size == 0:
         raise RuntimeError("Blender did not save the source scene")
@@ -433,12 +476,19 @@ def build_with_blender(
     for path in sorted((output_root / "textures").glob("*.png")):
         artifacts.append(_artifact(path, output_root, f"texture.{path.stem}", "image/png"))
     artifact_path = output_root / "artifact-receipt.json"
-    write_json(artifact_path, artifact_receipt(artifacts))
+    write_json(
+        artifact_path,
+        artifact_receipt(artifacts, external=external_asset_set is not None),
+    )
     inspection = inspect_output(output_root)
     inspection_path = output_root / "inspection-receipt.json"
     write_json(inspection_path, inspection)
     build_receipt = {
-        "schema_version": "simworld.vista.playable-home-realism-blender-build/v1",
+        "schema_version": (
+            "simworld.vista.playable-home-realism-blender-build/v2"
+            if external_asset_set is not None
+            else "simworld.vista.playable-home-realism-blender-build/v1"
+        ),
         "forge_plan_digest": plan.content_digest,
         "normalized_manifest_sha256": sha256_file(manifest_path),
         "blender_version": list(bpy.app.version),
@@ -452,6 +502,14 @@ def build_with_blender(
         "preview_statistics": preview_statistics,
         "inspection_digest": content_digest(inspection),
     }
+    if external_asset_set is not None:
+        build_receipt["external_placement_plan_sha256"] = plan.external_placement.content_digest
+        build_receipt["acquisition_receipt"] = external_asset_set.receipt_reference()
+        build_receipt["external_placement_count"] = len(plan.external_placement.placements)
+        build_receipt["external_semantic_target_count"] = len(
+            plan.external_placement.semantic_target_ids
+        )
+        build_receipt["external_dressing_count"] = len(plan.external_placement.dressing_ids)
     build_path = output_root / "build-receipt.json"
     write_json(build_path, build_receipt)
     return build_receipt
@@ -462,6 +520,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     output_root = prepare_output_root(args.output_root)
     house = load_json_object(args.house, label="HouseSpec")
     profile = load_json_object(args.visual_profile, label="VisualProfile")
+    external_asset_set = (
+        load_external_asset_set(args.external_acquisition_root)
+        if args.external_acquisition_root is not None
+        else None
+    )
+    external_placement_manifest = (
+        load_placement_manifest(args.external_placement_manifest)
+        if args.external_placement_manifest is not None
+        else None
+    )
     try:
         import bpy  # type: ignore[import-not-found]
         import mathutils  # type: ignore[import-not-found]
@@ -474,6 +542,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         profile,
         output_root,
         texture_size_px=args.texture_size_px,
+        external_asset_set=external_asset_set,
+        external_placement_manifest=external_placement_manifest,
     )
     print(canonical_json_bytes(receipt).decode("utf-8"), end="")
 

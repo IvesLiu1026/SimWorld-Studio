@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 
 from .architecture import ForgePlan
 from .config import canonical_json_bytes, normalized, sha256_file
+from .placement import bundle_external_content
 
 
 UE_BUNDLE_ARTIFACT_KIND = "ue_import_bundle"
@@ -90,6 +91,9 @@ def normalized_manifest(
         },
         "ue_import_bundles": list(ue_import_bundles or ()),
     }
+    external = getattr(plan, "external_placement", None)
+    if external is not None:
+        payload["external_placement"] = asdict(external)
     return normalized(payload)
 
 
@@ -107,6 +111,18 @@ def _select(bpy: Any, objects: Sequence[Any]) -> None:
         obj.select_set(True)
     if selectable:
         bpy.context.view_layer.objects.active = selectable[0]
+
+
+def _used_material_names(objects: Sequence[Any]) -> list[str]:
+    result: set[str] = set()
+    for obj in objects:
+        if obj.type != "MESH":
+            continue
+        used_indices = {polygon.material_index for polygon in obj.data.polygons}
+        for index in used_indices:
+            if index < len(obj.material_slots) and obj.material_slots[index].material is not None:
+                result.add(obj.material_slots[index].material.name)
+    return sorted(result)
 
 
 def _export_one(bpy: Any, path: pathlib.Path, objects: Sequence[Any]) -> None:
@@ -134,15 +150,24 @@ def ue_bundle_relative_path(room_kind: str) -> str:
     return f"ue_import_bundles/{safe_slug(room_kind)}_presentation_bundle.glb"
 
 
-def ue_bundle_contract(plan: ForgePlan, room: Any) -> dict[str, Any]:
+def ue_bundle_contract(
+    plan: ForgePlan,
+    room: Any,
+    *,
+    exported_material_names: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Return the deterministic, pre-export portion of a UE bundle receipt."""
 
     components = [item for item in plan.components if item.room_id == room.room_id]
     material_ids = sorted({item.material_id for item in components})
+    external = getattr(plan, "external_placement", None)
+    if external is not None:
+        if exported_material_names is None:
+            raise RuntimeError("external bundle contract requires the realized material-name inventory")
+        material_ids = sorted(set(exported_material_names))
     if not components or len(material_ids) < 2:
         raise RuntimeError(f"room {room.room_id} cannot form a multi-material UE bundle")
-    return normalized(
-        {
+    payload = {
             "artifact_id": f"ue_bundle.room.{room.kind}",
             "artifact_kind": UE_BUNDLE_ARTIFACT_KIND,
             "target_asset_id": f"asset.bundle.{room.kind}",
@@ -173,7 +198,9 @@ def ue_bundle_contract(plan: ForgePlan, room: Any) -> dict[str, Any]:
                 "forge_plan_sha256": plan.content_digest,
             },
         }
-    )
+    if external is not None:
+        payload["external_content"] = bundle_external_content(external, room.room_id)
+    return normalized(payload)
 
 
 def _ue_bundle_object(
@@ -181,7 +208,9 @@ def _ue_bundle_object(
     plan: ForgePlan,
     room: Any,
     component_objects: Mapping[str, Any],
+    external_objects: Mapping[str, Sequence[Any]],
     collection: Any,
+    contract: Mapping[str, Any],
 ) -> Any:
     """Create one identity-root mesh with room-local component geometry."""
 
@@ -204,6 +233,24 @@ def _ue_bundle_object(
         duplicate.name = f"VISTA_UEBundlePart_{safe_slug(component.component_id)}"[:63]
         collection.objects.link(duplicate)
         duplicates.append(duplicate)
+    external = getattr(plan, "external_placement", None)
+    if external is not None:
+        for placement in external.placements:
+            if placement.room_id != room.room_id:
+                continue
+            for source in external_objects.get(placement.placement_id, ()):
+                if source.type != "MESH":
+                    raise RuntimeError(f"external UE bundle part is not a mesh: {placement.placement_id}")
+                duplicate = source.copy()
+                duplicate.data = source.data.copy()
+                duplicate.parent = None
+                duplicate.data.transform(source.matrix_local)
+                duplicate.location = (0.0, 0.0, 0.0)
+                duplicate.rotation_euler = (0.0, 0.0, 0.0)
+                duplicate.scale = (1.0, 1.0, 1.0)
+                duplicate.name = f"VISTA_UEBundleExternal_{safe_slug(placement.placement_id)}"[:63]
+                collection.objects.link(duplicate)
+                duplicates.append(duplicate)
     if not duplicates:
         raise RuntimeError(f"room {room.room_id} has no mesh components")
     _select(bpy, duplicates)
@@ -219,8 +266,9 @@ def _ue_bundle_object(
     for key in tuple(bundle.keys()):
         if str(key).startswith("vista_"):
             del bundle[key]
-    contract = ue_bundle_contract(plan, room)
-    bundle["vista_bundle_contract"] = "one_room_one_mesh_v1"
+    bundle["vista_bundle_contract"] = (
+        "one_room_one_mesh_v2" if external is not None else "one_room_one_mesh_v1"
+    )
     bundle["vista_artifact_id"] = contract["artifact_id"]
     bundle["vista_target_asset_id"] = contract["target_asset_id"]
     bundle["vista_room_id"] = room.room_id
@@ -236,6 +284,10 @@ def _ue_bundle_object(
     bundle["vista_source_house_sha256"] = plan.source_house_digest
     bundle["vista_source_visual_profile_sha256"] = plan.source_profile_digest
     bundle["vista_source_forge_plan_sha256"] = plan.content_digest
+    if external is not None:
+        bundle["vista_external_content_json"] = json.dumps(
+            contract["external_content"], sort_keys=True, separators=(",", ":")
+        )
     return bundle
 
 
@@ -245,6 +297,7 @@ def _export_ue_import_bundles(
     plan: ForgePlan,
     *,
     component_objects: Mapping[str, Any],
+    external_objects: Mapping[str, Sequence[Any]],
 ) -> list[dict[str, Any]]:
     """Export and independently inspect three one-mesh Unreal bundles."""
 
@@ -257,14 +310,32 @@ def _export_ue_import_bundles(
     artifacts: list[dict[str, Any]] = []
     try:
         for room in plan.rooms:
-            contract = ue_bundle_contract(plan, room)
+            external = getattr(plan, "external_placement", None)
+            exported_material_names: list[str] | None = None
+            if external is not None:
+                source_objects = [
+                    component_objects[item.component_id]
+                    for item in plan.components
+                    if item.room_id == room.room_id
+                ]
+                for placement in external.placements:
+                    if placement.room_id == room.room_id:
+                        source_objects.extend(external_objects.get(placement.placement_id, ()))
+                exported_material_names = _used_material_names(source_objects)
+            contract = ue_bundle_contract(
+                plan,
+                room,
+                exported_material_names=exported_material_names,
+            )
             path = output_root / contract["relative_path"]
             bundle = _ue_bundle_object(
                 bpy,
                 plan,
                 room,
                 component_objects,
+                external_objects,
                 temp_collection,
+                contract,
             )
             _export_one(bpy, path, [bundle])
             inspection = inspect_glb(path)
@@ -274,13 +345,18 @@ def _export_ue_import_bundles(
                 raise RuntimeError(f"UE bundle unexpectedly contains a camera or light: {path}")
             if inspection["bundle_root_is_identity"] is not True:
                 raise RuntimeError(f"UE bundle root transform is not identity: {path}")
+            is_external = "external_content" in contract
             if inspection["material_count"] != len(contract["material_ids"]):
                 raise RuntimeError(f"UE bundle material set differs from its source contract: {path}")
+            if is_external and sorted(inspection["material_names"]) != contract["material_ids"]:
+                raise RuntimeError(f"UE bundle material names differ from realized inventory: {path}")
             if inspection["material_count"] < 2:
                 raise RuntimeError(f"UE bundle is not multi-material: {path}")
             if inspection["pbr_complete_material_count"] != inspection["material_count"]:
                 raise RuntimeError(f"UE bundle has an incomplete PBR material: {path}")
-            if inspection["texture_count"] < inspection["material_count"] * 3:
+            if (not is_external and inspection["texture_count"] < inspection["material_count"] * 3) or (
+                is_external and inspection["texture_count"] < 3
+            ):
                 raise RuntimeError(f"UE bundle lost required PBR textures: {path}")
             if inspection["bundle_metadata"].get("vista_room_id") != room.room_id:
                 raise RuntimeError(f"UE bundle lost room identity: {path}")
@@ -309,6 +385,7 @@ def export_role_aware_glbs(
     room_roots: Mapping[str, Any],
     component_objects: Mapping[str, Any],
     metadata_objects: Mapping[str, Sequence[Any]],
+    external_objects: Mapping[str, Sequence[Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Export review GLBs and one import-ready bundle per finished room."""
 
@@ -316,6 +393,8 @@ def export_role_aware_glbs(
     glb_root.mkdir(mode=0o700)
     artifacts: list[dict[str, Any]] = []
     room_by_id = {room.room_id: room for room in plan.rooms}
+    external_objects = external_objects or {}
+    external = getattr(plan, "external_placement", None)
     for room_id in sorted(room_by_id):
         room = room_by_id[room_id]
         selected = [room_roots[room_id]]
@@ -325,6 +404,10 @@ def export_role_aware_glbs(
             if item.room_id == room_id
         )
         selected.extend(metadata_objects.get(room_id, ()))
+        if external is not None:
+            for placement in external.placements:
+                if placement.room_id == room_id:
+                    selected.extend(external_objects.get(placement.placement_id, ()))
         path = glb_root / f"{safe_slug(room.kind)}_presentation.glb"
         _export_one(bpy, path, selected)
         artifacts.append(
@@ -340,6 +423,8 @@ def export_role_aware_glbs(
             }
         )
     all_objects = list(room_roots.values()) + list(component_objects.values())
+    for values in external_objects.values():
+        all_objects.extend(values)
     for values in metadata_objects.values():
         all_objects.extend(values)
     full_path = glb_root / "vertical_slice_presentation.glb"
@@ -362,18 +447,25 @@ def export_role_aware_glbs(
             output_root,
             plan,
             component_objects=component_objects,
+            external_objects=external_objects,
         )
     )
     return artifacts
 
 
-def artifact_receipt(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def artifact_receipt(
+    artifacts: Sequence[Mapping[str, Any]], *, external: bool = False
+) -> dict[str, Any]:
     ue_import_bundles = [
         item for item in artifacts if item.get("artifact_kind") == UE_BUNDLE_ARTIFACT_KIND
     ]
     return normalized(
         {
-            "schema_version": "simworld.vista.playable-home-realism-artifacts/v1",
+            "schema_version": (
+                "simworld.vista.playable-home-realism-artifacts/v2"
+                if external
+                else "simworld.vista.playable-home-realism-artifacts/v1"
+            ),
             "artifacts": list(artifacts),
             "ue_import_bundles": ue_import_bundles,
         }
