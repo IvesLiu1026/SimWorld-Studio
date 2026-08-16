@@ -1,0 +1,669 @@
+{
+  "schema_version": "simworld.vista.playable-home-visual-profile/v1",
+  "visual_profile_id": "realistic_interior_r2",
+  "house_revision": "vista_playable_home_r1",
+  "seed": 20260816,
+  "finished_room_ids": [
+    "home.r1/room.entry_hall",
+    "home.r1/room.living_room",
+    "home.r1/room.kitchen_dining"
+  ],
+  "compatibility_room_ids": [
+    "home.r1/room.bedroom",
+    "home.r1/room.office",
+    "home.r1/room.bathroom_laundry"
+  ],
+  "architecture_profile": {
+    "profile_id": "three_room_vertical_slice_v1",
+    "units": "meters",
+    "source_receipt_id": "source.architecture.realistic_interior_r2",
+    "finished_room_ids": [
+      "home.r1/room.entry_hall",
+      "home.r1/room.living_room",
+      "home.r1/room.kitchen_dining"
+    ],
+    "features": [
+      "wall_thickness",
+      "door_reveals",
+      "window_reveals",
+      "baseboards",
+      "trim",
+      "floor_transitions",
+      "ceiling_treatment",
+      "window_frames",
+      "window_glass",
+      "exterior_treatment",
+      "kitchen_cabinetry"
+    ],
+    "wall_thickness_m": 0.16,
+    "baseboard_height_m": 0.1,
+    "portal_topology_policy": "preserve_r1",
+    "collision_policy": "hidden_r1_proxies"
+  },
+  "material_quality_tier": {
+    "tier_id": "capture_high",
+    "architecture_texels_per_meter": 1024,
+    "hero_texture_min_size_px": 2048,
+    "required_opaque_channels": ["base_color", "normal", "roughness"],
+    "default_material_policy": "reject",
+    "missing_texture_policy": "reject",
+    "uv_overlap_policy": "reject_for_unique_hero_uvs"
+  },
+  "asset_source_receipts": [
+    {
+      "receipt_id": "source.architecture.realistic_interior_r2",
+      "logical_asset_id": "visual.architecture.realistic_interior_r2",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/architecture-kit",
+      "source_digest": "ec0214bd35cdd579d5eabbfb4f3dd7e0a1e8e0cb08a194b62de738a7cbf17584",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-12, -8, 0], "max_m": [12, 8, 3.2]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/architecture-kit",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored deterministic architecture recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "architecture_surfaces",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 15,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "eligible_static_opaque",
+        "mobility": "static",
+        "lod_policy": "nanite",
+        "collision_policy": "hidden_r1_proxy"
+      },
+      "receipt_digest": "99824066e3fd516b5d336e5f3cdd15ef70473fb11e9d19634c411839a9e60e10"
+    },
+    {
+      "receipt_id": "source.hero.entry_shoe_bench",
+      "logical_asset_id": "visual.hero.entry_shoe_bench",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/entry-shoe-bench",
+      "source_digest": "5796a7adffce0c91e5dca3f44865785fb6da9be1b20ff845bacf4397aeb6e32f",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-0.65, -0.25, 0], "max_m": [0.65, 0.25, 0.52]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/entry-shoe-bench",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored presentation recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "bench_surface",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 3,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "eligible_static_opaque",
+        "mobility": "static",
+        "lod_policy": "nanite",
+        "collision_policy": "hidden_r1_proxy"
+      },
+      "receipt_digest": "1911cf7343a3cd6ea239a20200a0060a1f98832120a1ea7337555c1069e991ae"
+    },
+    {
+      "receipt_id": "source.hero.living_sofa",
+      "logical_asset_id": "visual.hero.living_sofa",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/living-sofa",
+      "source_digest": "fa0c30cf6ab0e487333381e8e6d5361a297c3a333ae9ee474d7df46070c60281",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-1.1, -0.5, 0], "max_m": [1.1, 0.5, 1.05]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/living-sofa",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored presentation recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "upholstery",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 3,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "eligible_static_opaque",
+        "mobility": "static",
+        "lod_policy": "nanite",
+        "collision_policy": "hidden_r1_proxy"
+      },
+      "receipt_digest": "6b7bbabeecfa3f1a05db4441e04415ca3077757ebdc0c8d328ba5f16c6ab10e2"
+    },
+    {
+      "receipt_id": "source.hero.living_coffee_table",
+      "logical_asset_id": "visual.hero.living_coffee_table",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/living-coffee-table",
+      "source_digest": "21fcfe4cdf82056d1b38aec6c766334030d8648c8cb8f1450b35422adbefed1c",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-0.62, -0.36, 0], "max_m": [0.62, 0.36, 0.5]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/living-coffee-table",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored presentation recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "table_surface",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 3,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "eligible_static_opaque",
+        "mobility": "static",
+        "lod_policy": "nanite",
+        "collision_policy": "hidden_r1_proxy"
+      },
+      "receipt_digest": "69a7e0973a1323cd6491568370c69ec1571fef6d15d9235961a438d75cde6e93"
+    },
+    {
+      "receipt_id": "source.hero.kitchen_stove",
+      "logical_asset_id": "visual.hero.kitchen_stove",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/kitchen-stove",
+      "source_digest": "787959f6a529bde99a5d4024de95abb73fe507fdc1b889c90a08551440f4f5ba",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-0.36, -0.34, 0], "max_m": [0.36, 0.34, 0.95]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/kitchen-stove",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored presentation recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "stove_surface",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness", "metalness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 4,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "eligible_static_opaque",
+        "mobility": "static",
+        "lod_policy": "nanite",
+        "collision_policy": "hidden_r1_proxy"
+      },
+      "receipt_digest": "a6ea810e70d4ba3380c1e7e85ba47c7bc19a82d9366055aa0ccea12a2b85ad2f"
+    },
+    {
+      "receipt_id": "source.hero.kitchen_dining_table",
+      "logical_asset_id": "visual.hero.kitchen_dining_table",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/kitchen-dining-table",
+      "source_digest": "9614945166cc8b14f21c39a0b7a2a767cf7c5f7795c97e107fcf29026d85a984",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-0.85, -0.5, 0], "max_m": [0.85, 0.5, 0.82]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/kitchen-dining-table",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored presentation recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "dining_surface",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 3,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "eligible_static_opaque",
+        "mobility": "static",
+        "lod_policy": "nanite",
+        "collision_policy": "hidden_r1_proxy"
+      },
+      "receipt_digest": "9f87be4c9cd8e6a88a85c09328fffd37990b65b249d52fed6fbf9fd5420f620f"
+    },
+    {
+      "receipt_id": "source.event.keys",
+      "logical_asset_id": "visual.event.keys",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/keys",
+      "source_digest": "140aa7e391b3b937a6e5f674710e76c3223845aceb79238372a68fc6d8b032e3",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-0.08, -0.04, 0], "max_m": [0.08, 0.04, 0.02]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/keys",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored event-readable presentation recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "keys_surface",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness", "metalness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 4,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "disabled_ineligible",
+        "mobility": "movable",
+        "lod_policy": "authored_lods",
+        "collision_policy": "hidden_r1_proxy"
+      },
+      "receipt_digest": "31319638ea33043dca0c508c8f3fc695521058e667ae1b58e003486342620ed2"
+    },
+    {
+      "receipt_id": "source.dressing.residential_clutter",
+      "logical_asset_id": "visual.dressing.residential_clutter",
+      "source_kind": "project_authored",
+      "source_uri": "project://vista-playable-home-realism/residential-clutter",
+      "source_digest": "a9610c63a5e405ee1eced9ac7284ac84a8ab966918e671b2b73e55ad3c9f30d1",
+      "source_version": "recipe_v1",
+      "metric_bounds_m": {"min_m": [-0.2, -0.2, 0], "max_m": [0.2, 0.2, 0.5]},
+      "license": {
+        "license_id": "Apache-2.0",
+        "license_url": "https://spdx.org/licenses/Apache-2.0.html",
+        "entitlement_status": "project_owned",
+        "entitlement_record": "project-owned://simworld/vista-playable-home-realism/residential-clutter",
+        "attribution": "SimWorld Studio and VISTA World project authors",
+        "modification_notice": "Original project-authored deterministic dressing recipe.",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy"
+      },
+      "material_inventory": {
+        "slots": [
+          {
+            "slot_id": "clutter_surface",
+            "shader_class": "pbr_metallic_roughness",
+            "blend_mode": "opaque",
+            "texture_semantics": ["base_color", "normal", "roughness"],
+            "minimum_texture_size_px": 2048
+          }
+        ],
+        "texture_count": 3,
+        "all_primitives_material_bound": true
+      },
+      "import_policy": {
+        "nanite": "eligible_static_opaque",
+        "mobility": "static",
+        "lod_policy": "nanite",
+        "collision_policy": "no_collision"
+      },
+      "receipt_digest": "2bb4652daeb14517f0c0f82b9afca025481d972e0b8c80bafba1aa65d9c4862c"
+    }
+  ],
+  "semantic_visual_bindings": [
+    {
+      "binding_id": "binding.entry_shoe_bench.01",
+      "target_entity_id": "home.r1/room.entry_hall/entity.shoe_bench.01",
+      "logical_asset_id": "visual.hero.entry_shoe_bench",
+      "source_receipt_id": "source.hero.entry_shoe_bench",
+      "presentation_role": "hero",
+      "transform_offset": {"location_cm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "collision_policy": "disabled_use_r1_proxy",
+      "semantic_authority": "preserve_parent"
+    },
+    {
+      "binding_id": "binding.living_sofa.01",
+      "target_entity_id": "home.r1/room.living_room/entity.sofa.01",
+      "logical_asset_id": "visual.hero.living_sofa",
+      "source_receipt_id": "source.hero.living_sofa",
+      "presentation_role": "hero",
+      "transform_offset": {"location_cm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "collision_policy": "disabled_use_r1_proxy",
+      "semantic_authority": "preserve_parent"
+    },
+    {
+      "binding_id": "binding.living_coffee_table.01",
+      "target_entity_id": "home.r1/room.living_room/entity.coffee_table.01",
+      "logical_asset_id": "visual.hero.living_coffee_table",
+      "source_receipt_id": "source.hero.living_coffee_table",
+      "presentation_role": "hero",
+      "transform_offset": {"location_cm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "collision_policy": "disabled_use_r1_proxy",
+      "semantic_authority": "preserve_parent"
+    },
+    {
+      "binding_id": "binding.kitchen_stove.01",
+      "target_entity_id": "home.r1/room.kitchen_dining/entity.stove.01",
+      "logical_asset_id": "visual.hero.kitchen_stove",
+      "source_receipt_id": "source.hero.kitchen_stove",
+      "presentation_role": "event_critical",
+      "transform_offset": {"location_cm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "collision_policy": "disabled_use_r1_proxy",
+      "semantic_authority": "preserve_parent"
+    },
+    {
+      "binding_id": "binding.kitchen_dining_table.01",
+      "target_entity_id": "home.r1/room.kitchen_dining/entity.dining_table.01",
+      "logical_asset_id": "visual.hero.kitchen_dining_table",
+      "source_receipt_id": "source.hero.kitchen_dining_table",
+      "presentation_role": "hero",
+      "transform_offset": {"location_cm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "collision_policy": "disabled_use_r1_proxy",
+      "semantic_authority": "preserve_parent"
+    },
+    {
+      "binding_id": "binding.living_keys.01",
+      "target_entity_id": "home.r1/room.living_room/entity.keys.01",
+      "logical_asset_id": "visual.event.keys",
+      "source_receipt_id": "source.event.keys",
+      "presentation_role": "event_critical",
+      "transform_offset": {"location_cm": [0, 0, 0], "rotation_deg": [0, 0, 0], "scale": [1, 1, 1]},
+      "collision_policy": "disabled_use_r1_proxy",
+      "semantic_authority": "preserve_parent"
+    }
+  ],
+  "dressing_instances": [
+    {
+      "instance_id": "visual.r2/dressing.entry_clutter.01",
+      "room_id": "home.r1/room.entry_hall",
+      "logical_asset_id": "visual.dressing.residential_clutter",
+      "source_receipt_id": "source.dressing.residential_clutter",
+      "transform": {"location_cm": [-420, -125, 0], "rotation_deg": [0, 0, 12], "scale": [0.8, 0.8, 0.8]},
+      "collision_policy": "no_collision",
+      "semantic_behavior": "non_interactive_presentation"
+    },
+    {
+      "instance_id": "visual.r2/dressing.entry_clutter.02",
+      "room_id": "home.r1/room.entry_hall",
+      "logical_asset_id": "visual.dressing.residential_clutter",
+      "source_receipt_id": "source.dressing.residential_clutter",
+      "transform": {"location_cm": [-360, 140, 0], "rotation_deg": [0, 0, -8], "scale": [1, 1, 1]},
+      "collision_policy": "no_collision",
+      "semantic_behavior": "non_interactive_presentation"
+    },
+    {
+      "instance_id": "visual.r2/dressing.living_clutter.01",
+      "room_id": "home.r1/room.living_room",
+      "logical_asset_id": "visual.dressing.residential_clutter",
+      "source_receipt_id": "source.dressing.residential_clutter",
+      "transform": {"location_cm": [-80, 40, 52], "rotation_deg": [0, 0, 24], "scale": [0.7, 0.7, 0.7]},
+      "collision_policy": "no_collision",
+      "semantic_behavior": "non_interactive_presentation"
+    },
+    {
+      "instance_id": "visual.r2/dressing.living_clutter.02",
+      "room_id": "home.r1/room.living_room",
+      "logical_asset_id": "visual.dressing.residential_clutter",
+      "source_receipt_id": "source.dressing.residential_clutter",
+      "transform": {"location_cm": [310, -170, 0], "rotation_deg": [0, 0, 5], "scale": [1.2, 1.2, 1.2]},
+      "collision_policy": "no_collision",
+      "semantic_behavior": "non_interactive_presentation"
+    },
+    {
+      "instance_id": "visual.r2/dressing.kitchen_clutter.01",
+      "room_id": "home.r1/room.kitchen_dining",
+      "logical_asset_id": "visual.dressing.residential_clutter",
+      "source_receipt_id": "source.dressing.residential_clutter",
+      "transform": {"location_cm": [120, -210, 92], "rotation_deg": [0, 0, 18], "scale": [0.65, 0.65, 0.65]},
+      "collision_policy": "no_collision",
+      "semantic_behavior": "non_interactive_presentation"
+    },
+    {
+      "instance_id": "visual.r2/dressing.kitchen_clutter.02",
+      "room_id": "home.r1/room.kitchen_dining",
+      "logical_asset_id": "visual.dressing.residential_clutter",
+      "source_receipt_id": "source.dressing.residential_clutter",
+      "transform": {"location_cm": [-140, 80, 84], "rotation_deg": [0, 0, -15], "scale": [0.9, 0.9, 0.9]},
+      "collision_policy": "no_collision",
+      "semantic_behavior": "non_interactive_presentation"
+    }
+  ],
+  "renderer_profile": {
+    "profile_id": "desktop_high_sm6",
+    "platform": "linux",
+    "rhi": "vulkan",
+    "feature_level": "sm6",
+    "shading_path": "deferred",
+    "dynamic_gi": "lumen",
+    "reflections": "lumen",
+    "shadow_method": "virtual_shadow_maps",
+    "anti_aliasing": "tsr",
+    "nanite_policy": "eligible_static_opaque_only",
+    "hardware_ray_tracing": false,
+    "extended_luminance_range": true,
+    "pre_exposure": true,
+    "screen_percentage": 100,
+    "texture_pool_mb": 8192,
+    "scalability": {
+      "view_distance": 3,
+      "anti_aliasing": 3,
+      "shadow": 3,
+      "global_illumination": 3,
+      "reflection": 3,
+      "post_process": 3,
+      "texture": 3,
+      "effects": 3,
+      "foliage": 3,
+      "shading": 3
+    }
+  },
+  "lighting_rig": {
+    "rig_id": "neutral_day_practicals_v1",
+    "profile": "neutral_day",
+    "sun": {"direction": [-0.48, 0.34, -0.81], "illuminance_lux": 45000, "temperature_k": 5600},
+    "sky": {"source": "real_time_capture", "sky_intensity": 1.0},
+    "apertures": [
+      {"aperture_id": "aperture.entry_hall.01", "room_id": "home.r1/room.entry_hall", "visible_geometry_required": true},
+      {"aperture_id": "aperture.living_room.01", "room_id": "home.r1/room.living_room", "visible_geometry_required": true},
+      {"aperture_id": "aperture.kitchen_dining.01", "room_id": "home.r1/room.kitchen_dining", "visible_geometry_required": true}
+    ],
+    "practical_lights": [
+      {
+        "light_id": "light.entry_hall.01",
+        "room_id": "home.r1/room.entry_hall",
+        "type": "spot",
+        "location_cm": [-420, 0, 245],
+        "direction": [0, 0, -1],
+        "intensity": 850,
+        "unit": "lumens",
+        "temperature_k": 3000,
+        "visible_fixture_id": "visual.fixture.entry_pendant"
+      },
+      {
+        "light_id": "light.living_room.01",
+        "room_id": "home.r1/room.living_room",
+        "type": "rect",
+        "location_cm": [120, -180, 165],
+        "direction": [-0.2, 0.25, -0.95],
+        "intensity": 1100,
+        "unit": "lumens",
+        "temperature_k": 2900,
+        "visible_fixture_id": "visual.fixture.living_floor_lamp"
+      },
+      {
+        "light_id": "light.kitchen_dining.01",
+        "room_id": "home.r1/room.kitchen_dining",
+        "type": "rect",
+        "location_cm": [0, 20, 250],
+        "direction": [0, 0, -1],
+        "intensity": 1600,
+        "unit": "lumens",
+        "temperature_k": 3500,
+        "visible_fixture_id": "visual.fixture.kitchen_pendant"
+      }
+    ],
+    "gameplay_exposure": {
+      "metering_mode": "histogram",
+      "min_ev100": 2,
+      "max_ev100": 12,
+      "speed_up": 3,
+      "speed_down": 1
+    }
+  },
+  "review_shots": [
+    {
+      "shot_id": "shot.entry_hall.overview",
+      "room_id": "home.r1/room.entry_hall",
+      "purpose": "overview",
+      "eye_location_cm": [-100, 300, 165],
+      "look_at_target_cm": [50, -300, 120],
+      "horizontal_fov_deg": 78,
+      "near_field_clearance_cm": 35,
+      "allowed_visibility_layers": ["architecture", "semantic_visuals", "dressing", "lighting", "exterior_treatment"],
+      "exposure": {"mode": "pinned_physical_camera", "aperture_fstop": 4, "shutter_speed_s": 0.008333, "iso": 400, "exposure_compensation_ev": 0},
+      "expected_hero_ids": ["home.r1/room.entry_hall/entity.shoe_bench.01", "home.r1/room.entry_hall/entity.exit_door.01", "home.r1/room.entry_hall/entity.interior_door.01"],
+      "forbidden_foreground_ids": []
+    },
+    {
+      "shot_id": "shot.entry_hall.hero",
+      "room_id": "home.r1/room.entry_hall",
+      "purpose": "hero",
+      "eye_location_cm": [-100, -120, 145],
+      "look_at_target_cm": [100, -310, 95],
+      "horizontal_fov_deg": 62,
+      "near_field_clearance_cm": 30,
+      "allowed_visibility_layers": ["architecture", "semantic_visuals", "dressing", "lighting", "exterior_treatment"],
+      "exposure": {"mode": "pinned_physical_camera", "aperture_fstop": 3.5, "shutter_speed_s": 0.008333, "iso": 500, "exposure_compensation_ev": 0},
+      "expected_hero_ids": ["home.r1/room.entry_hall/entity.shoe_bench.01"],
+      "forbidden_foreground_ids": []
+    },
+    {
+      "shot_id": "shot.living_room.overview",
+      "room_id": "home.r1/room.living_room",
+      "purpose": "overview",
+      "eye_location_cm": [-180, -350, 170],
+      "look_at_target_cm": [-470, -120, 105],
+      "horizontal_fov_deg": 80,
+      "near_field_clearance_cm": 40,
+      "allowed_visibility_layers": ["architecture", "semantic_visuals", "dressing", "lighting", "exterior_treatment"],
+      "exposure": {"mode": "pinned_physical_camera", "aperture_fstop": 4, "shutter_speed_s": 0.008333, "iso": 400, "exposure_compensation_ev": 0},
+      "expected_hero_ids": ["home.r1/room.living_room/entity.sofa.01", "home.r1/room.living_room/entity.coffee_table.01", "home.r1/room.living_room/entity.keys.01"],
+      "forbidden_foreground_ids": []
+    },
+    {
+      "shot_id": "shot.living_room.hero",
+      "room_id": "home.r1/room.living_room",
+      "purpose": "hero",
+      "eye_location_cm": [-260, -310, 145],
+      "look_at_target_cm": [-500, -120, 80],
+      "horizontal_fov_deg": 58,
+      "near_field_clearance_cm": 30,
+      "allowed_visibility_layers": ["architecture", "semantic_visuals", "dressing", "lighting", "exterior_treatment"],
+      "exposure": {"mode": "pinned_physical_camera", "aperture_fstop": 2.8, "shutter_speed_s": 0.008333, "iso": 500, "exposure_compensation_ev": 0},
+      "expected_hero_ids": ["home.r1/room.living_room/entity.sofa.01", "home.r1/room.living_room/entity.coffee_table.01"],
+      "forbidden_foreground_ids": []
+    },
+    {
+      "shot_id": "shot.kitchen_dining.overview",
+      "room_id": "home.r1/room.kitchen_dining",
+      "purpose": "overview",
+      "eye_location_cm": [180, -350, 170],
+      "look_at_target_cm": [440, -130, 105],
+      "horizontal_fov_deg": 80,
+      "near_field_clearance_cm": 40,
+      "allowed_visibility_layers": ["architecture", "semantic_visuals", "dressing", "lighting", "exterior_treatment"],
+      "exposure": {"mode": "pinned_physical_camera", "aperture_fstop": 4, "shutter_speed_s": 0.008333, "iso": 400, "exposure_compensation_ev": 0},
+      "expected_hero_ids": ["home.r1/room.kitchen_dining/entity.stove.01", "home.r1/room.kitchen_dining/entity.dining_table.01", "home.r1/room.kitchen_dining/entity.fridge.01"],
+      "forbidden_foreground_ids": []
+    },
+    {
+      "shot_id": "shot.kitchen_dining.hero",
+      "room_id": "home.r1/room.kitchen_dining",
+      "purpose": "hero",
+      "eye_location_cm": [250, -330, 150],
+      "look_at_target_cm": [510, -100, 90],
+      "horizontal_fov_deg": 60,
+      "near_field_clearance_cm": 30,
+      "allowed_visibility_layers": ["architecture", "semantic_visuals", "dressing", "lighting", "exterior_treatment"],
+      "exposure": {"mode": "pinned_physical_camera", "aperture_fstop": 3.2, "shutter_speed_s": 0.008333, "iso": 450, "exposure_compensation_ev": 0},
+      "expected_hero_ids": ["home.r1/room.kitchen_dining/entity.stove.01", "home.r1/room.kitchen_dining/entity.dining_table.01"],
+      "forbidden_foreground_ids": []
+    }
+  ],
+  "performance_budget": {
+    "resolution_px": [1920, 1080],
+    "duration_s": 60,
+    "warmup_s": 30,
+    "target_median_fps": 55,
+    "minimum_one_percent_low_fps": 30,
+    "maximum_peak_vram_gib": 24,
+    "maximum_post_warmup_freeze_s": 1
+  },
+  "provenance": {
+    "source_house_content_digest": "51208e0ecc1ad1450ca6d9b14a4fb46989bff90fd8dc15422a0a47df6827c8c3",
+    "source_spec": "docs/specs/vista-playable-home-realism",
+    "authoring_policy": "headless_reproducible",
+    "asset_policy": "local_first_fail_closed",
+    "generated_artifact_policy": "append_only_outside_git",
+    "commercial_release_status": "blocked_pending_license_audit",
+    "preserved_event_entity_ids": [
+      "home.r1/room.kitchen_dining/entity.stove.01",
+      "home.r1/room.living_room/entity.keys.01",
+      "home.r1/room.bedroom/entity.phone.01"
+    ]
+  },
+  "content_digest": "69492b9c9df22f80a9de235865a36126b692c84d91209537ddb4b27bc3bd6a2a"
+}

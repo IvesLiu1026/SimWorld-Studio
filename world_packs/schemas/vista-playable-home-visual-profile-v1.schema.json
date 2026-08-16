@@ -1,0 +1,737 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simworld.org/schemas/vista-playable-home-visual-profile-v1.schema.json",
+  "title": "VISTA Playable Home Visual Profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "visual_profile_id",
+    "house_revision",
+    "seed",
+    "finished_room_ids",
+    "compatibility_room_ids",
+    "architecture_profile",
+    "material_quality_tier",
+    "asset_source_receipts",
+    "semantic_visual_bindings",
+    "dressing_instances",
+    "renderer_profile",
+    "lighting_rig",
+    "review_shots",
+    "performance_budget",
+    "provenance",
+    "content_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "simworld.vista.playable-home-visual-profile/v1"},
+    "visual_profile_id": {"const": "realistic_interior_r2"},
+    "house_revision": {"const": "vista_playable_home_r1"},
+    "seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+    "finished_room_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/roomId"}
+    },
+    "compatibility_room_ids": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/roomId"}
+    },
+    "architecture_profile": {"$ref": "#/$defs/architectureProfile"},
+    "material_quality_tier": {"$ref": "#/$defs/materialQualityTier"},
+    "asset_source_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {"$ref": "#/$defs/assetSourceReceipt"}
+    },
+    "semantic_visual_bindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {"$ref": "#/$defs/semanticVisualBinding"}
+    },
+    "dressing_instances": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/dressingInstance"}
+    },
+    "renderer_profile": {"$ref": "#/$defs/rendererProfile"},
+    "lighting_rig": {"$ref": "#/$defs/lightingRig"},
+    "review_shots": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 96,
+      "items": {"$ref": "#/$defs/reviewShot"}
+    },
+    "performance_budget": {"$ref": "#/$defs/performanceBudget"},
+    "provenance": {"$ref": "#/$defs/provenance"},
+    "content_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 96},
+    "roomId": {
+      "enum": [
+        "home.r1/room.entry_hall",
+        "home.r1/room.living_room",
+        "home.r1/room.kitchen_dining",
+        "home.r1/room.bedroom",
+        "home.r1/room.office",
+        "home.r1/room.bathroom_laundry"
+      ]
+    },
+    "entityId": {
+      "type": "string",
+      "pattern": "^home\\.r1/room\\.[a-z][a-z0-9_]*/entity\\.[a-z][a-z0-9_]*\\.[0-9]{2}$",
+      "maxLength": 192
+    },
+    "logicalAssetId": {
+      "type": "string",
+      "pattern": "^visual\\.[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "maxLength": 160
+    },
+    "receiptId": {
+      "type": "string",
+      "pattern": "^source\\.[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+      "maxLength": 160
+    },
+    "vector3cm": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": -100000000, "maximum": 100000000},
+        {"type": "number", "minimum": -100000000, "maximum": 100000000},
+        {"type": "number", "minimum": -100000000, "maximum": 100000000}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "vector3m": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": -1000000, "maximum": 1000000},
+        {"type": "number", "minimum": -1000000, "maximum": 1000000},
+        {"type": "number", "minimum": -1000000, "maximum": 1000000}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "direction3": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": -1, "maximum": 1},
+        {"type": "number", "minimum": -1, "maximum": 1},
+        {"type": "number", "minimum": -1, "maximum": 1}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "rotation3": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": -360, "maximum": 360},
+        {"type": "number", "minimum": -360, "maximum": 360},
+        {"type": "number", "minimum": -360, "maximum": 360}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "scale3": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+        {"type": "number", "exclusiveMinimum": 0, "maximum": 1000}
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "transformCm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["location_cm", "rotation_deg", "scale"],
+      "properties": {
+        "location_cm": {"$ref": "#/$defs/vector3cm"},
+        "rotation_deg": {"$ref": "#/$defs/rotation3"},
+        "scale": {"$ref": "#/$defs/scale3"}
+      }
+    },
+    "boundsM": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_m", "max_m"],
+      "properties": {
+        "min_m": {"$ref": "#/$defs/vector3m"},
+        "max_m": {"$ref": "#/$defs/vector3m"}
+      }
+    },
+    "architectureProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "units",
+        "source_receipt_id",
+        "finished_room_ids",
+        "features",
+        "wall_thickness_m",
+        "baseboard_height_m",
+        "portal_topology_policy",
+        "collision_policy"
+      ],
+      "properties": {
+        "profile_id": {"$ref": "#/$defs/slug"},
+        "units": {"const": "meters"},
+        "source_receipt_id": {"$ref": "#/$defs/receiptId"},
+        "finished_room_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/roomId"}
+        },
+        "features": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "wall_thickness",
+              "door_reveals",
+              "window_reveals",
+              "baseboards",
+              "trim",
+              "floor_transitions",
+              "ceiling_treatment",
+              "window_frames",
+              "window_glass",
+              "exterior_treatment",
+              "kitchen_cabinetry"
+            ]
+          }
+        },
+        "wall_thickness_m": {"type": "number", "minimum": 0.08, "maximum": 0.5},
+        "baseboard_height_m": {"type": "number", "minimum": 0.04, "maximum": 0.3},
+        "portal_topology_policy": {"const": "preserve_r1"},
+        "collision_policy": {"const": "hidden_r1_proxies"}
+      }
+    },
+    "materialQualityTier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tier_id",
+        "architecture_texels_per_meter",
+        "hero_texture_min_size_px",
+        "required_opaque_channels",
+        "default_material_policy",
+        "missing_texture_policy",
+        "uv_overlap_policy"
+      ],
+      "properties": {
+        "tier_id": {"const": "capture_high"},
+        "architecture_texels_per_meter": {"type": "integer", "minimum": 512, "maximum": 1024},
+        "hero_texture_min_size_px": {"type": "integer", "minimum": 2048, "maximum": 8192},
+        "required_opaque_channels": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "allOf": [
+            {"contains": {"const": "base_color"}},
+            {"contains": {"const": "normal"}},
+            {"contains": {"const": "roughness"}}
+          ],
+          "items": {"enum": ["base_color", "normal", "roughness", "metalness", "ao", "emissive", "opacity", "transmission"]}
+        },
+        "default_material_policy": {"const": "reject"},
+        "missing_texture_policy": {"const": "reject"},
+        "uv_overlap_policy": {"const": "reject_for_unique_hero_uvs"}
+      }
+    },
+    "licenseReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "license_id",
+        "license_url",
+        "entitlement_status",
+        "entitlement_record",
+        "attribution",
+        "modification_notice",
+        "commercial_use",
+        "redistribution_restriction"
+      ],
+      "properties": {
+        "license_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "license_url": {"type": "string", "pattern": "^https://[^\\s]{1,500}$", "maxLength": 512},
+        "entitlement_status": {"enum": ["project_owned", "verified"]},
+        "entitlement_record": {
+          "type": "string",
+          "pattern": "^(?:registry|project-owned|local-audit|account-entitlement)://[a-z0-9][a-z0-9._/-]{0,255}$",
+          "maxLength": 288
+        },
+        "attribution": {"type": "string", "minLength": 1, "maxLength": 500},
+        "modification_notice": {"type": "string", "minLength": 1, "maxLength": 500},
+        "commercial_use": {"enum": ["allowed", "prohibited", "requires_separate_permission"]},
+        "redistribution_restriction": {
+          "enum": [
+            "project_policy",
+            "attribution_required",
+            "noncommercial_attribution_required",
+            "no_standalone_asset_redistribution"
+          ]
+        }
+      }
+    },
+    "materialSlotInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot_id", "shader_class", "blend_mode", "texture_semantics", "minimum_texture_size_px"],
+      "properties": {
+        "slot_id": {"$ref": "#/$defs/slug"},
+        "shader_class": {"enum": ["pbr_metallic_roughness", "glass", "emissive"]},
+        "blend_mode": {"enum": ["opaque", "masked", "translucent"]},
+        "texture_semantics": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"enum": ["base_color", "normal", "roughness", "metalness", "ao", "emissive", "opacity", "transmission"]}
+        },
+        "minimum_texture_size_px": {"type": "integer", "minimum": 256, "maximum": 8192}
+      }
+    },
+    "materialInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slots", "texture_count", "all_primitives_material_bound"],
+      "properties": {
+        "slots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {"$ref": "#/$defs/materialSlotInventory"}
+        },
+        "texture_count": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "all_primitives_material_bound": {"const": true}
+      }
+    },
+    "assetImportPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nanite", "mobility", "lod_policy", "collision_policy"],
+      "properties": {
+        "nanite": {"enum": ["eligible_static_opaque", "disabled_ineligible"]},
+        "mobility": {"enum": ["static", "movable"]},
+        "lod_policy": {"enum": ["nanite", "authored_lods", "single_mesh_measured"]},
+        "collision_policy": {"enum": ["no_collision", "hidden_r1_proxy", "coarse_static_proxy"]}
+      }
+    },
+    "assetSourceReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "logical_asset_id",
+        "source_kind",
+        "source_uri",
+        "source_digest",
+        "source_version",
+        "metric_bounds_m",
+        "license",
+        "material_inventory",
+        "import_policy",
+        "receipt_digest"
+      ],
+      "properties": {
+        "receipt_id": {"$ref": "#/$defs/receiptId"},
+        "logical_asset_id": {"$ref": "#/$defs/logicalAssetId"},
+        "source_kind": {"enum": ["project_authored", "existing_local", "hssd", "fab"]},
+        "source_uri": {
+          "type": "string",
+          "pattern": "^(?:project|catalog|hssd|ycb|polyhaven|fab)://[a-z0-9][a-z0-9._/-]{0,255}$",
+          "maxLength": 288
+        },
+        "source_digest": {"$ref": "#/$defs/digest"},
+        "source_version": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$", "maxLength": 128},
+        "metric_bounds_m": {"$ref": "#/$defs/boundsM"},
+        "license": {"$ref": "#/$defs/licenseReceipt"},
+        "material_inventory": {"$ref": "#/$defs/materialInventory"},
+        "import_policy": {"$ref": "#/$defs/assetImportPolicy"},
+        "receipt_digest": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source_kind": {"const": "project_authored"}}, "required": ["source_kind"]},
+          "then": {"properties": {"license": {"properties": {"entitlement_status": {"const": "project_owned"}}, "required": ["entitlement_status"]}}}
+        },
+        {
+          "if": {"properties": {"source_kind": {"const": "hssd"}}, "required": ["source_kind"]},
+          "then": {
+            "properties": {
+              "license": {
+                "properties": {
+                  "license_id": {"const": "CC-BY-NC-4.0"},
+                  "commercial_use": {"enum": ["prohibited", "requires_separate_permission"]},
+                  "redistribution_restriction": {"const": "noncommercial_attribution_required"}
+                },
+                "required": ["license_id", "commercial_use", "redistribution_restriction"]
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"source_kind": {"const": "fab"}}, "required": ["source_kind"]},
+          "then": {
+            "properties": {
+              "license": {
+                "properties": {
+                  "entitlement_status": {"const": "verified"},
+                  "redistribution_restriction": {"const": "no_standalone_asset_redistribution"}
+                },
+                "required": ["entitlement_status", "redistribution_restriction"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "semanticVisualBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_id",
+        "target_entity_id",
+        "logical_asset_id",
+        "source_receipt_id",
+        "presentation_role",
+        "transform_offset",
+        "collision_policy",
+        "semantic_authority"
+      ],
+      "properties": {
+        "binding_id": {"type": "string", "pattern": "^binding\\.[a-z][a-z0-9_]*\\.[0-9]{2}$", "maxLength": 128},
+        "target_entity_id": {"$ref": "#/$defs/entityId"},
+        "logical_asset_id": {"$ref": "#/$defs/logicalAssetId"},
+        "source_receipt_id": {"$ref": "#/$defs/receiptId"},
+        "presentation_role": {"enum": ["hero", "secondary", "event_critical"]},
+        "transform_offset": {"$ref": "#/$defs/transformCm"},
+        "collision_policy": {"const": "disabled_use_r1_proxy"},
+        "semantic_authority": {"const": "preserve_parent"}
+      }
+    },
+    "dressingInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "room_id",
+        "logical_asset_id",
+        "source_receipt_id",
+        "transform",
+        "collision_policy",
+        "semantic_behavior"
+      ],
+      "properties": {
+        "instance_id": {
+          "type": "string",
+          "pattern": "^visual\\.r2/dressing\\.[a-z][a-z0-9_]*\\.[0-9]{2}$",
+          "maxLength": 160
+        },
+        "room_id": {"$ref": "#/$defs/roomId"},
+        "logical_asset_id": {"$ref": "#/$defs/logicalAssetId"},
+        "source_receipt_id": {"$ref": "#/$defs/receiptId"},
+        "transform": {"$ref": "#/$defs/transformCm"},
+        "collision_policy": {"enum": ["no_collision", "coarse_static_proxy"]},
+        "semantic_behavior": {"const": "non_interactive_presentation"}
+      }
+    },
+    "scalability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "view_distance",
+        "anti_aliasing",
+        "shadow",
+        "global_illumination",
+        "reflection",
+        "post_process",
+        "texture",
+        "effects",
+        "foliage",
+        "shading"
+      ],
+      "properties": {
+        "view_distance": {"type": "integer", "minimum": 0, "maximum": 4},
+        "anti_aliasing": {"type": "integer", "minimum": 0, "maximum": 4},
+        "shadow": {"type": "integer", "minimum": 0, "maximum": 4},
+        "global_illumination": {"type": "integer", "minimum": 0, "maximum": 4},
+        "reflection": {"type": "integer", "minimum": 0, "maximum": 4},
+        "post_process": {"type": "integer", "minimum": 0, "maximum": 4},
+        "texture": {"type": "integer", "minimum": 0, "maximum": 4},
+        "effects": {"type": "integer", "minimum": 0, "maximum": 4},
+        "foliage": {"type": "integer", "minimum": 0, "maximum": 4},
+        "shading": {"type": "integer", "minimum": 0, "maximum": 4}
+      }
+    },
+    "rendererProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "platform",
+        "rhi",
+        "feature_level",
+        "shading_path",
+        "dynamic_gi",
+        "reflections",
+        "shadow_method",
+        "anti_aliasing",
+        "nanite_policy",
+        "hardware_ray_tracing",
+        "extended_luminance_range",
+        "pre_exposure",
+        "screen_percentage",
+        "texture_pool_mb",
+        "scalability"
+      ],
+      "properties": {
+        "profile_id": {"const": "desktop_high_sm6"},
+        "platform": {"const": "linux"},
+        "rhi": {"const": "vulkan"},
+        "feature_level": {"const": "sm6"},
+        "shading_path": {"const": "deferred"},
+        "dynamic_gi": {"const": "lumen"},
+        "reflections": {"const": "lumen"},
+        "shadow_method": {"const": "virtual_shadow_maps"},
+        "anti_aliasing": {"const": "tsr"},
+        "nanite_policy": {"const": "eligible_static_opaque_only"},
+        "hardware_ray_tracing": {"type": "boolean"},
+        "extended_luminance_range": {"const": true},
+        "pre_exposure": {"const": true},
+        "screen_percentage": {"type": "integer", "minimum": 50, "maximum": 200},
+        "texture_pool_mb": {"type": "integer", "minimum": 1024, "maximum": 24576},
+        "scalability": {"$ref": "#/$defs/scalability"}
+      }
+    },
+    "sunLight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction", "illuminance_lux", "temperature_k"],
+      "properties": {
+        "direction": {"$ref": "#/$defs/direction3"},
+        "illuminance_lux": {"type": "number", "minimum": 1000, "maximum": 120000},
+        "temperature_k": {"type": "integer", "minimum": 2500, "maximum": 10000}
+      }
+    },
+    "skyLight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "sky_intensity"],
+      "properties": {
+        "source": {"enum": ["real_time_capture", "pinned_hdr_source"]},
+        "sky_intensity": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      }
+    },
+    "daylightAperture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aperture_id", "room_id", "visible_geometry_required"],
+      "properties": {
+        "aperture_id": {"type": "string", "pattern": "^aperture\\.[a-z][a-z0-9_]*\\.[0-9]{2}$"},
+        "room_id": {"$ref": "#/$defs/roomId"},
+        "visible_geometry_required": {"const": true}
+      }
+    },
+    "practicalLight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "light_id",
+        "room_id",
+        "type",
+        "location_cm",
+        "direction",
+        "intensity",
+        "unit",
+        "temperature_k",
+        "visible_fixture_id"
+      ],
+      "properties": {
+        "light_id": {"type": "string", "pattern": "^light\\.[a-z][a-z0-9_]*\\.[0-9]{2}$"},
+        "room_id": {"$ref": "#/$defs/roomId"},
+        "type": {"enum": ["point", "spot", "rect"]},
+        "location_cm": {"$ref": "#/$defs/vector3cm"},
+        "direction": {"$ref": "#/$defs/direction3"},
+        "intensity": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000},
+        "unit": {"enum": ["lumens", "candelas"]},
+        "temperature_k": {"type": "integer", "minimum": 1700, "maximum": 10000},
+        "visible_fixture_id": {"type": "string", "pattern": "^visual\\.fixture\\.[a-z][a-z0-9_]*$", "maxLength": 128}
+      }
+    },
+    "gameplayExposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metering_mode", "min_ev100", "max_ev100", "speed_up", "speed_down"],
+      "properties": {
+        "metering_mode": {"const": "histogram"},
+        "min_ev100": {"type": "number", "minimum": -10, "maximum": 20},
+        "max_ev100": {"type": "number", "minimum": -10, "maximum": 20},
+        "speed_up": {"type": "number", "exclusiveMinimum": 0, "maximum": 20},
+        "speed_down": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      }
+    },
+    "lightingRig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rig_id", "profile", "sun", "sky", "apertures", "practical_lights", "gameplay_exposure"],
+      "properties": {
+        "rig_id": {"const": "neutral_day_practicals_v1"},
+        "profile": {"const": "neutral_day"},
+        "sun": {"$ref": "#/$defs/sunLight"},
+        "sky": {"$ref": "#/$defs/skyLight"},
+        "apertures": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/daylightAperture"}
+        },
+        "practical_lights": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 128,
+          "items": {"$ref": "#/$defs/practicalLight"}
+        },
+        "gameplay_exposure": {"$ref": "#/$defs/gameplayExposure"}
+      }
+    },
+    "shotExposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "aperture_fstop", "shutter_speed_s", "iso", "exposure_compensation_ev"],
+      "properties": {
+        "mode": {"const": "pinned_physical_camera"},
+        "aperture_fstop": {"type": "number", "minimum": 1, "maximum": 32},
+        "shutter_speed_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "iso": {"type": "integer", "minimum": 25, "maximum": 12800},
+        "exposure_compensation_ev": {"type": "number", "minimum": -10, "maximum": 10}
+      }
+    },
+    "reviewShot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shot_id",
+        "room_id",
+        "purpose",
+        "eye_location_cm",
+        "look_at_target_cm",
+        "horizontal_fov_deg",
+        "near_field_clearance_cm",
+        "allowed_visibility_layers",
+        "exposure",
+        "expected_hero_ids",
+        "forbidden_foreground_ids"
+      ],
+      "properties": {
+        "shot_id": {"type": "string", "pattern": "^shot\\.[a-z][a-z0-9_]*\\.(?:overview|hero)$", "maxLength": 128},
+        "room_id": {"$ref": "#/$defs/roomId"},
+        "purpose": {"enum": ["overview", "hero"]},
+        "eye_location_cm": {"$ref": "#/$defs/vector3cm"},
+        "look_at_target_cm": {"$ref": "#/$defs/vector3cm"},
+        "horizontal_fov_deg": {"type": "number", "minimum": 35, "maximum": 100},
+        "near_field_clearance_cm": {"type": "number", "minimum": 25, "maximum": 500},
+        "allowed_visibility_layers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"enum": ["architecture", "semantic_visuals", "dressing", "lighting", "exterior_treatment"]}
+        },
+        "exposure": {"$ref": "#/$defs/shotExposure"},
+        "expected_hero_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 192}
+        },
+        "forbidden_foreground_ids": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 192}
+        }
+      }
+    },
+    "performanceBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resolution_px",
+        "duration_s",
+        "warmup_s",
+        "target_median_fps",
+        "minimum_one_percent_low_fps",
+        "maximum_peak_vram_gib",
+        "maximum_post_warmup_freeze_s"
+      ],
+      "properties": {
+        "resolution_px": {
+          "type": "array",
+          "prefixItems": [{"const": 1920}, {"const": 1080}],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "duration_s": {"const": 60},
+        "warmup_s": {"type": "integer", "minimum": 1, "maximum": 300},
+        "target_median_fps": {"type": "number", "minimum": 55, "maximum": 1000},
+        "minimum_one_percent_low_fps": {"type": "number", "minimum": 30, "maximum": 1000},
+        "maximum_peak_vram_gib": {"type": "number", "exclusiveMinimum": 0, "maximum": 24},
+        "maximum_post_warmup_freeze_s": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_house_content_digest",
+        "source_spec",
+        "authoring_policy",
+        "asset_policy",
+        "generated_artifact_policy",
+        "commercial_release_status",
+        "preserved_event_entity_ids"
+      ],
+      "properties": {
+        "source_house_content_digest": {"$ref": "#/$defs/digest"},
+        "source_spec": {
+          "const": "docs/specs/vista-playable-home-realism"
+        },
+        "authoring_policy": {"const": "headless_reproducible"},
+        "asset_policy": {"const": "local_first_fail_closed"},
+        "generated_artifact_policy": {"const": "append_only_outside_git"},
+        "commercial_release_status": {"const": "blocked_pending_license_audit"},
+        "preserved_event_entity_ids": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/entityId"}
+        }
+      }
+    }
+  }
+}
