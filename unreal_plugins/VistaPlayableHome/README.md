@@ -10,7 +10,10 @@ Runtime-only Unreal plugin for the VISTA Playable Home contract.
 - visible Manny NPC with a bounded typed action queue, room-anchor patrol,
   navigation timeouts, and dynamically gated doorway links;
 - atomic data-only event apply/reset and command-generation checks;
-- minimal game HUD;
+- restrained game HUD with friendly context actions, carried-item feedback,
+  and public scenario objectives; player-facing text never exposes semantic or
+  event identifiers, while the underlying typed IDs, APIs, and receipts remain
+  unchanged;
 - fixed `vista_world_action` TCP adapter enabled only by
   `-VistaWorldPort=<port>`. The socket binds `127.0.0.1`, accepts one
   newline-delimited request per connection, caps request/response payloads at

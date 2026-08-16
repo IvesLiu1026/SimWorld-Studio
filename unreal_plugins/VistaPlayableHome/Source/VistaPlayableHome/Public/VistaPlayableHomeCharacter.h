@@ -128,6 +128,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "VISTA|Interaction")
     FVistaInteractionResult PerformDefaultInteraction();
 
+    /** Read-only resolver shared by input handling and player-facing prompts. */
+    EVistaAffordance GetDefaultInteractionAffordance(AActor* Target) const;
+
     UFUNCTION(BlueprintCallable, Category = "VISTA|Carry")
     FVistaInteractionResult DropHeldItem();
 
@@ -168,7 +171,6 @@ private:
     void LookYawLegacy(float Value);
     void LookPitchLegacy(float Value);
     void ApplyRequestedCameraProfile();
-    EVistaAffordance ChooseDefaultAffordance(AActor* Target) const;
 
     UFUNCTION(Server, Reliable)
     void ServerPerformDefaultInteraction();

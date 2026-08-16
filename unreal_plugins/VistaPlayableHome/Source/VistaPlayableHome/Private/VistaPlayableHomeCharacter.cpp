@@ -457,10 +457,11 @@ FVistaInteractionResult AVistaPlayableHomeCharacter::PerformDefaultInteraction()
         PlaceRequest.PlacementAnchor = Target->GetRootComponent();
         return IVistaInteractable::Execute_VistaInteract(HeldItem, PlaceRequest);
     }
-    return InteractionComponent->TryInteract(ChooseDefaultAffordance(Target));
+    return InteractionComponent->TryInteract(GetDefaultInteractionAffordance(Target));
 }
 
-EVistaAffordance AVistaPlayableHomeCharacter::ChooseDefaultAffordance(AActor* Target) const
+EVistaAffordance AVistaPlayableHomeCharacter::GetDefaultInteractionAffordance(
+    AActor* Target) const
 {
     if (!IsValid(Target) || !Target->GetClass()->ImplementsInterface(UVistaInteractable::StaticClass()))
     {
