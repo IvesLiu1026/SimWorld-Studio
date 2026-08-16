@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import json
 import py_compile
 import struct
@@ -40,18 +41,27 @@ def _write_glb(path: Path, document: dict) -> Path:
 
 
 def _glb_document(record: dict, *, default_material: bool = False) -> dict:
+    is_external = "external_content" in record
     materials = []
-    for index in range(2):
+    for index in range(record["material_count"]):
+        material_name = (
+            record["material_ids"][index]
+            if is_external
+            else f"r2.synthetic.{index}"
+        )
+        base_index = 0 if is_external else index * 3
         materials.append({
-            "name": "DefaultMaterial" if default_material and index == 0 else f"r2.synthetic.{index}",
+            "name": "DefaultMaterial" if default_material and index == 0 else material_name,
             "pbrMetallicRoughness": {
-                "baseColorTexture": {"index": index * 3},
-                "metallicRoughnessTexture": {"index": index * 3 + 1},
+                "baseColorTexture": {"index": base_index},
+                "metallicRoughnessTexture": {"index": base_index + 1},
             },
-            "normalTexture": {"index": index * 3 + 2},
+            "normalTexture": {"index": base_index + 2},
         })
     extras = {
-        "vista_bundle_contract": "one_room_one_mesh_v1",
+        "vista_bundle_contract": (
+            "one_room_one_mesh_v2" if is_external else "one_room_one_mesh_v1"
+        ),
         "vista_artifact_id": record["artifact_id"],
         "vista_target_asset_id": record["target_asset_id"],
         "vista_room_id": record["room_id"],
@@ -72,6 +82,10 @@ def _glb_document(record: dict, *, default_material: bool = False) -> dict:
         "vista_source_visual_profile_sha256": record["source_hashes"]["visual_profile_sha256"],
         "vista_source_forge_plan_sha256": record["source_hashes"]["forge_plan_sha256"],
     }
+    if is_external:
+        extras["vista_external_content_json"] = json.dumps(
+            record["external_content"], sort_keys=True, separators=(",", ":")
+        )
     return {
         "asset": {"version": "2.0", "generator": "focused-test"},
         "scene": 0,
@@ -85,8 +99,13 @@ def _glb_document(record: dict, *, default_material: bool = False) -> dict:
             ],
         }],
         "materials": materials,
-        "textures": [{"source": index} for index in range(6)],
-        "images": [{"name": f"texture-{index}"} for index in range(6)],
+        "textures": [
+            {"source": index} for index in range(record["texture_count"])
+        ],
+        "images": [
+            {"name": f"texture-{index}"}
+            for index in range(record["texture_count"])
+        ],
     }
 
 
@@ -168,6 +187,276 @@ def _presentation_contracts(
     return manifest_path, receipt_path, manifest, receipt
 
 
+def _external_source_record(logical_id: str, asset_type: str) -> dict:
+    paths = (
+        ["source.blend"] if asset_type == "model" else []
+    ) + ["base_color.jpg", "normal.jpg", "roughness.jpg"]
+    semantics_by_path = {
+        "base_color.jpg": ["base_color"],
+        "normal.jpg": ["normal"],
+        "roughness.jpg": ["roughness"],
+    }
+    files = []
+    tree_rows = []
+    for index, relative_path in enumerate(paths):
+        digest = hashlib.sha256(
+            f"{logical_id}:{relative_path}".encode("utf-8")
+        ).hexdigest()
+        semantics = semantics_by_path.get(relative_path, [])
+        row = {
+            "relative_path": relative_path,
+            "size_bytes": 128 + index,
+            "sha256": digest,
+            "texture_semantics": semantics,
+            "dimensions_px": [4096, 4096] if semantics else None,
+        }
+        files.append(row)
+        tree_rows.append({
+            "relative_path": relative_path,
+            "size_bytes": row["size_bytes"],
+            "sha256": digest,
+        })
+    tree_raw = json.dumps(
+        tree_rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "logical_asset_id": logical_id,
+        "asset_id": "polyhaven." + logical_id.replace(".", "_"),
+        "asset_type": asset_type,
+        "resolution": "4k" if logical_id.startswith(("visual.hero.", "visual.material.")) else "2k",
+        "provider_files_hash": hashlib.sha1(logical_id.encode("utf-8")).hexdigest(),
+        "source_tree_sha256": hashlib.sha256(tree_raw).hexdigest(),
+        "files": files,
+    }
+
+
+def _external_presentation_contracts(
+    root: Path,
+    fixture: BuildFixture,
+) -> tuple[Path, Path, dict, dict]:
+    profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+    acquisition = {
+        "provider": "poly_haven",
+        "receipt_schema_version": build_home.PRESENTATION_EXTERNAL_ACQUISITION_SCHEMA,
+        "receipt_digest": "a" * 64,
+        "receipt_file_sha256": "b" * 64,
+        "acquisition_manifest_sha256": "c" * 64,
+    }
+    source_ids = {
+        source_id
+        for source_id in build_home.PRESENTATION_EXTERNAL_DRESSING_SOURCES.values()
+    }
+    for hero in build_home.PRESENTATION_EXTERNAL_HERO_PLACEMENTS.values():
+        if hero["source_logical_asset_id"] is not None:
+            source_ids.add(hero["source_logical_asset_id"])
+        source_ids.update(hero["material_logical_asset_ids"])
+    sources = [
+        _external_source_record(
+            logical_id,
+            "texture" if logical_id.startswith("visual.material.") else "model",
+        )
+        for logical_id in sorted(source_ids)
+    ]
+    source_by_id = {item["logical_asset_id"]: item for item in sources}
+    semantic_room = {
+        semantic_id: room_id
+        for room_id, semantic_ids in
+        build_home.PRESENTATION_EXTERNAL_SEMANTIC_TARGETS_BY_ROOM.items()
+        for semantic_id in semantic_ids
+    }
+    placements = []
+    for index, semantic_id in enumerate(sorted(semantic_room)):
+        room_id = semantic_room[semantic_id]
+        hero = build_home.PRESENTATION_EXTERNAL_HERO_PLACEMENTS[semantic_id]
+        source_id = hero["source_logical_asset_id"]
+        placements.append({
+            "placement_id": hero["placement_id"],
+            "placement_kind": "semantic_fixed",
+            "room_id": room_id,
+            "room_kind": room_id.rsplit(".", 1)[-1],
+            "category": build_home.PRESENTATION_EXTERNAL_SEMANTIC_TARGET_CATEGORIES[semantic_id],
+            "realization_mode": hero["realization_mode"],
+            "semantic_target_id": semantic_id,
+            "anchor_id": None,
+            "support_placement_id": None,
+            "source_logical_asset_id": source_id,
+            "geometry_recipe": hero["geometry_recipe"],
+            "material_logical_asset_ids": list(hero["material_logical_asset_ids"]),
+            "location_m": [index * 0.25, 0, 0],
+            "rotation_deg": [0, 0, 0],
+            "uniform_scale": 1,
+            "source_dimensions_m": [0.2, 0.2, 0.2],
+            "room_local_aabb": {
+                "min_m": [index * 0.25, 0, 0],
+                "max_m": [index * 0.25 + 0.2, 0.2, 0.2],
+            },
+            "source_tree_sha256": (
+                source_by_id[source_id]["source_tree_sha256"]
+                if source_id is not None else None
+            ),
+        })
+    dressing_room = {
+        dressing_id: room_id
+        for room_id, dressing_ids in
+        build_home.PRESENTATION_EXTERNAL_DRESSING_IDS_BY_ROOM.items()
+        for dressing_id in dressing_ids
+    }
+    for index, dressing_id in enumerate(sorted(dressing_room), start=5):
+        room_id = dressing_room[dressing_id]
+        source_id = build_home.PRESENTATION_EXTERNAL_DRESSING_SOURCES[dressing_id]
+        placements.append({
+            "placement_id": dressing_id,
+            "placement_kind": "dressing",
+            "room_id": room_id,
+            "room_kind": room_id.rsplit(".", 1)[-1],
+            "category": "decorative_object",
+            "realization_mode": "external_blend",
+            "semantic_target_id": None,
+            "anchor_id": room_id + "/dressing_anchor.synthetic",
+            "support_placement_id": None,
+            "source_logical_asset_id": source_id,
+            "geometry_recipe": None,
+            "material_logical_asset_ids": [],
+            "location_m": [index * 0.25, 0, 0],
+            "rotation_deg": [0, 0, 0],
+            "uniform_scale": 1,
+            "source_dimensions_m": [0.2, 0.2, 0.2],
+            "room_local_aabb": {
+                "min_m": [index * 0.25, 0, 0],
+                "max_m": [index * 0.25 + 0.2, 0.2, 0.2],
+            },
+            "source_tree_sha256": source_by_id[source_id]["source_tree_sha256"],
+        })
+    placements.sort(key=lambda item: item["placement_id"])
+    external_placement = {
+        "schema_version": build_home.PRESENTATION_EXTERNAL_PLACEMENT_SCHEMA,
+        "placement_id": "vista_playable_home.realistic_interior_r2.external_v1",
+        "normalization_policy": build_home.PRESENTATION_EXTERNAL_NORMALIZATION_POLICY,
+        "acquisition_receipt": copy.deepcopy(acquisition),
+        "placement_manifest_sha256": "d" * 64,
+        "semantic_target_ids": sorted(semantic_room),
+        "dressing_ids": sorted(dressing_room),
+        "asset_sources": sources,
+        "placements": placements,
+    }
+    external_placement["content_digest"] = build_home._content_digest(
+        external_placement
+    )
+    forge_sha = "f" * 64
+    bundles = []
+    for room in fixture.plan["rooms"]:
+        kind = room["kind"]
+        if kind not in planning.PRESENTATION_ROOM_KINDS:
+            continue
+        room_id = room["room_id"]
+        room_placements = [
+            item for item in placements if item["room_id"] == room_id
+        ]
+        room_source_ids = {
+            logical_id
+            for placement in room_placements
+            for logical_id in (
+                ([placement["source_logical_asset_id"]]
+                 if placement["source_logical_asset_id"] is not None else [])
+                + placement["material_logical_asset_ids"]
+            )
+        }
+        external_content = {
+            "schema_version": build_home.PRESENTATION_EXTERNAL_PLACEMENT_SCHEMA,
+            "normalization_policy": build_home.PRESENTATION_EXTERNAL_NORMALIZATION_POLICY,
+            "acquisition_receipt": copy.deepcopy(acquisition),
+            "placement_manifest_sha256": external_placement["placement_manifest_sha256"],
+            "placement_plan_sha256": external_placement["content_digest"],
+            "semantic_target_ids": sorted(
+                build_home.PRESENTATION_EXTERNAL_SEMANTIC_TARGETS_BY_ROOM[room_id]
+            ),
+            "dressing_ids": sorted(
+                build_home.PRESENTATION_EXTERNAL_DRESSING_IDS_BY_ROOM[room_id]
+            ),
+            "asset_sources": [
+                copy.deepcopy(source_by_id[logical_id])
+                for logical_id in sorted(room_source_ids)
+            ],
+        }
+        record = {
+            "artifact_id": f"ue_bundle.room.{kind}",
+            "artifact_kind": planning.PRESENTATION_ARTIFACT_KIND,
+            "target_asset_id": f"asset.bundle.{kind}",
+            "room_id": room_id,
+            "room_kind": kind,
+            "relative_path": f"ue_import_bundles/{kind}_presentation_bundle.glb",
+            "media_type": "model/gltf-binary",
+            "sha256": "0" * 64,
+            "size_bytes": 1,
+            "mesh_count": 1,
+            "material_count": 2,
+            "pbr_complete_material_count": 2,
+            "texture_count": 3,
+            "material_ids": [
+                f"VISTA_M_r2_{kind}_architecture",
+                f"VISTA_M_visual_{kind}_dressing",
+            ],
+            "expected_world_transform_cm": copy.deepcopy(room["world_transform_cm"]),
+            "bundle_root_transform": {
+                "location_m": [0, 0, 0],
+                "rotation_deg": [0, 0, 0],
+                "scale": [1, 1, 1],
+            },
+            "root_transform_policy": planning.PRESENTATION_ROOT_TRANSFORM_POLICY,
+            "semantic_policy": planning.PRESENTATION_SEMANTIC_POLICY,
+            "collision_policy": planning.PRESENTATION_COLLISION_POLICY,
+            "unreal_collision_profile": planning.PRESENTATION_UNREAL_COLLISION_PROFILE,
+            "cameras_exported": False,
+            "lights_exported": False,
+            "source_hashes": {
+                "house_sha256": fixture.plan["house"]["content_digest"],
+                "visual_profile_sha256": profile["content_digest"],
+                "forge_plan_sha256": forge_sha,
+            },
+            "external_content": external_content,
+        }
+        path = root / record["relative_path"]
+        _write_glb(path, _glb_document(record))
+        record["sha256"] = build_home.sha256_file(path)
+        record["size_bytes"] = path.stat().st_size
+        bundles.append(record)
+    manifest = {
+        "schema_version": build_home.PRESENTATION_FORGE_SCHEMA_V2,
+        "forge_id": "vista_playable_home.realistic_interior_r2",
+        "house_revision": fixture.plan["house"]["revision"],
+        "visual_profile_id": profile["visual_profile_id"],
+        "seed": 43117,
+        "source_house_digest": fixture.plan["house"]["content_digest"],
+        "source_profile_digest": profile["content_digest"],
+        "forge_plan_digest": forge_sha,
+        "build_quality": {},
+        "rooms": [],
+        "openings": [],
+        "components": [],
+        "dressing": {},
+        "materials": [],
+        "role_counts": {},
+        "room_component_counts": {},
+        "export_contract": {},
+        "ue_import_bundles": bundles,
+        "external_placement": external_placement,
+    }
+    receipt = {
+        "schema_version": build_home.PRESENTATION_ARTIFACT_RECEIPT_SCHEMA_V2,
+        "artifacts": copy.deepcopy(bundles),
+        "ue_import_bundles": copy.deepcopy(bundles),
+    }
+    manifest_path = root / "normalized-manifest.json"
+    receipt_path = root / "artifact-receipt.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_bytes(build_home.canonical_json(manifest))
+    receipt_path.write_bytes(build_home.canonical_json(receipt))
+    return manifest_path, receipt_path, manifest, receipt
+
+
 def _rewrite_first_bundle(
     root: Path,
     manifest_path: Path,
@@ -227,6 +516,20 @@ def test_presentation_contracts_compile_three_source_pinned_operations(
 
     assert planned.presentation is not None
     assert len(planned.presentation.bindings) == 3
+    assert build_home._presentation_is_external(planned.execution) is False
+    assert build_home._presentation_import_schema(planned.execution) == (
+        build_home.PRESENTATION_IMPORT_RECEIPT_SCHEMA
+    )
+    assert build_home._presentation_scene_schema(planned.execution) == (
+        build_home.PRESENTATION_SCENE_RECEIPT_SCHEMA
+    )
+    assert all(
+        "external_content" not in binding
+        for binding in planned.execution["presentation_bindings"]
+    )
+    assert "external_nanite_policy" not in (
+        planned.dry_run_report["project"]["presentation"]
+    )
     assert planned.execution["presentation_runtime_proof"] == "pending"
     assert planned.execution["presentation_sources"] == {
         "manifest": {
@@ -421,6 +724,355 @@ def test_presentation_glb_requires_the_active_identity_mesh_root(
         )
 
 
+def test_external_v2_contract_compiles_exact_content_and_nanite_policy(
+    tmp_path: Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, manifest, _receipt = (
+        _external_presentation_contracts(
+            tmp_path / "inputs" / "presentation-external", fixture
+        )
+    )
+
+    planned = build_home.plan_build(
+        _presentation_config(fixture, manifest_path, receipt_path)
+    )
+
+    assert planned.presentation is not None
+    assert planned.presentation.manifest["schema_version"] == (
+        build_home.PRESENTATION_FORGE_SCHEMA_V2
+    )
+    assert planned.presentation.artifact_receipt["schema_version"] == (
+        build_home.PRESENTATION_ARTIFACT_RECEIPT_SCHEMA_V2
+    )
+    assert build_home._presentation_is_external(planned.execution) is True
+    assert build_home._presentation_import_schema(planned.execution) == (
+        build_home.PRESENTATION_IMPORT_RECEIPT_SCHEMA_V2
+    )
+    assert build_home._presentation_scene_schema(planned.execution) == (
+        build_home.PRESENTATION_SCENE_RECEIPT_SCHEMA_V2
+    )
+    assert all(
+        set(binding)
+        == build_home.PRESENTATION_BUNDLE_RECORD_KEYS_V2
+        | {"source_file", "source_file_sha256"}
+        for binding in planned.execution["presentation_bindings"]
+    )
+    assert all(
+        binding["external_content"]["placement_plan_sha256"]
+        == manifest["external_placement"]["content_digest"]
+        for binding in planned.execution["presentation_bindings"]
+    )
+    assert all(
+        binding["texture_count"] == 3
+        and binding["pbr_complete_material_count"] == binding["material_count"]
+        for binding in planned.execution["presentation_bindings"]
+    )
+    presentation_report = planned.dry_run_report["project"]["presentation"]
+    assert presentation_report["external_nanite_policy"] == (
+        build_home.PRESENTATION_EXTERNAL_NANITE_POLICY
+    )
+    assert presentation_report["external_nanite_runtime_observation"] == "required"
+
+    attempt, _counts = build_home._materialize_inputs(planned)
+    assert json.loads((attempt / "execution.json").read_text()) == planned.execution
+    assert all(
+        operation["material_ids"] == binding["material_ids"]
+        and operation["texture_count"] == binding["texture_count"]
+        for operation, binding in zip(
+            sorted(
+                (
+                    item
+                    for item in planned.execution["composition_spec"]["operations"]
+                    if item["kind"] == "place_room_presentation_bundle"
+                ),
+                key=lambda item: item["artifact_id"],
+            ),
+            sorted(
+                planned.execution["presentation_bindings"],
+                key=lambda item: item["artifact_id"],
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "manifest_schema,receipt_schema",
+    [
+        (
+            build_home.PRESENTATION_FORGE_SCHEMA_V2,
+            build_home.PRESENTATION_ARTIFACT_RECEIPT_SCHEMA,
+        ),
+        (
+            build_home.PRESENTATION_FORGE_SCHEMA,
+            build_home.PRESENTATION_ARTIFACT_RECEIPT_SCHEMA_V2,
+        ),
+    ],
+)
+def test_external_v2_requires_a_matched_manifest_receipt_schema_pair(
+    tmp_path: Path,
+    manifest_schema: str,
+    receipt_schema: str,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, manifest, receipt = (
+        _external_presentation_contracts(
+            tmp_path / "inputs" / "schema-pair", fixture
+        )
+    )
+    manifest["schema_version"] = manifest_schema
+    receipt["schema_version"] = receipt_schema
+    manifest_path.write_bytes(build_home.canonical_json(manifest))
+    receipt_path.write_bytes(build_home.canonical_json(receipt))
+
+    with pytest.raises(build_home.BuildHomeError, match="matched v1/v2 pair"):
+        build_home.plan_build(
+            _presentation_config(fixture, manifest_path, receipt_path)
+        )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "manifest_extra_field",
+        "acquisition_provider",
+        "semantic_target",
+        "dressing_id",
+        "per_file_sha256",
+        "source_tree_sha256",
+    ],
+)
+def test_external_v2_manifest_provenance_and_identity_fail_closed(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, manifest, _receipt = (
+        _external_presentation_contracts(
+            tmp_path / "inputs" / case, fixture
+        )
+    )
+    external = manifest["external_placement"]
+    if case == "manifest_extra_field":
+        manifest["unexpected"] = True
+    elif case == "acquisition_provider":
+        external["acquisition_receipt"]["provider"] = "untrusted"
+    elif case == "semantic_target":
+        external["semantic_target_ids"].pop()
+    elif case == "dressing_id":
+        external["dressing_ids"][0] = "dress.entry.unapproved"
+        external["dressing_ids"].sort()
+    elif case == "per_file_sha256":
+        external["asset_sources"][0]["files"][0]["sha256"] = "z" * 64
+    else:
+        external["asset_sources"][0]["source_tree_sha256"] = "e" * 64
+    if case != "manifest_extra_field":
+        external["content_digest"] = build_home._content_digest(external)
+    manifest_path.write_bytes(build_home.canonical_json(manifest))
+
+    with pytest.raises(
+        build_home.BuildHomeError,
+        match=r"PRESENTATION(?:_EXTERNAL)?_INVALID",
+    ):
+        build_home.plan_build(
+            _presentation_config(fixture, manifest_path, receipt_path)
+        )
+
+
+def test_external_v2_bundle_room_coverage_and_closed_field_fail_closed(
+    tmp_path: Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, manifest, receipt = (
+        _external_presentation_contracts(
+            tmp_path / "inputs" / "bundle-coverage", fixture
+        )
+    )
+    first_artifact = manifest["ue_import_bundles"][0]["artifact_id"]
+    for inventory in (
+        manifest["ue_import_bundles"],
+        receipt["ue_import_bundles"],
+        receipt["artifacts"],
+    ):
+        record = next(item for item in inventory if item["artifact_id"] == first_artifact)
+        record["external_content"]["unexpected"] = True
+    manifest_path.write_bytes(build_home.canonical_json(manifest))
+    receipt_path.write_bytes(build_home.canonical_json(receipt))
+    with pytest.raises(build_home.BuildHomeError, match="external_content fields"):
+        build_home.plan_build(
+            _presentation_config(fixture, manifest_path, receipt_path)
+        )
+
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    second_fixture = BuildFixture(second_root)
+    manifest_path, receipt_path, manifest, receipt = (
+        _external_presentation_contracts(
+            tmp_path / "second" / "inputs" / "bundle-room", second_fixture
+        )
+    )
+    first_artifact = manifest["ue_import_bundles"][0]["artifact_id"]
+    for inventory in (
+        manifest["ue_import_bundles"],
+        receipt["ue_import_bundles"],
+        receipt["artifacts"],
+    ):
+        record = next(item for item in inventory if item["artifact_id"] == first_artifact)
+        record["external_content"]["dressing_ids"] = []
+    manifest_path.write_bytes(build_home.canonical_json(manifest))
+    receipt_path.write_bytes(build_home.canonical_json(receipt))
+    with pytest.raises(build_home.BuildHomeError, match="dressing IDs"):
+        build_home.plan_build(
+            _presentation_config(second_fixture, manifest_path, receipt_path)
+        )
+
+
+def test_external_v2_glb_material_names_must_match_exact_inventory(
+    tmp_path: Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    root = tmp_path / "inputs" / "material-inventory"
+    manifest_path, receipt_path, manifest, receipt = (
+        _external_presentation_contracts(root, fixture)
+    )
+
+    def mutate(document: dict) -> None:
+        document["materials"][0]["name"] = "r2.external.unreported"
+
+    _rewrite_first_bundle(
+        root, manifest_path, receipt_path, manifest, receipt, mutate
+    )
+    with pytest.raises(build_home.BuildHomeError, match="material names differ"):
+        build_home.plan_build(
+            _presentation_config(fixture, manifest_path, receipt_path)
+        )
+
+
+def _external_presentation_import_receipt(
+    planned: build_home.PlannedBuild,
+    base_import_sha: str,
+) -> dict:
+    execution = planned.execution
+    namespace = execution["composition_spec"]["content_namespace"]
+    assets = []
+    for binding in execution["presentation_bindings"]:
+        texture_path = namespace + "/Presentation/Imports/T_Test.T_Test"
+        assets.append({
+            "artifact_id": binding["artifact_id"],
+            "target_asset_id": binding["target_asset_id"],
+            "room_id": binding["room_id"],
+            "room_kind": binding["room_kind"],
+            "source_file_sha256": binding["source_file_sha256"],
+            "object_path": build_home._presentation_object_path(
+                namespace, binding["target_asset_id"]
+            ),
+            "expected_world_transform_cm": copy.deepcopy(
+                binding["expected_world_transform_cm"]
+            ),
+            "root_transform_policy": binding["root_transform_policy"],
+            "semantic_policy": binding["semantic_policy"],
+            "collision_policy": binding["collision_policy"],
+            "unreal_collision_profile": "NoCollision",
+            "material_ids": copy.deepcopy(binding["material_ids"]),
+            "source_hashes": copy.deepcopy(binding["source_hashes"]),
+            "raw_returned_object_paths": [texture_path],
+            "returned_object_paths": [texture_path],
+            "inspection": {
+                "class_path": "/Script/Engine.StaticMesh",
+                "material_paths": [
+                    namespace + f"/Presentation/Materials/M_{index}.M_{index}"
+                    for index in range(binding["material_count"])
+                ],
+                "returned_texture2d_paths": [texture_path],
+                "material_texture2d_paths": [texture_path],
+                "simple_collision_shapes": 0,
+                "collision_profile_for_components": "NoCollision",
+                "can_ever_affect_navigation": False,
+                "nanite_enabled": False,
+            },
+            "external_content": copy.deepcopy(binding["external_content"]),
+            "nanite_policy": build_home.PRESENTATION_EXTERNAL_NANITE_POLICY,
+        })
+    return {
+        "schema_version": build_home.PRESENTATION_IMPORT_RECEIPT_SCHEMA_V2,
+        "status": "imported_candidate",
+        "error": None,
+        "bindings": {
+            "engine": "5.7.0-test",
+            "project": execution["project_file"],
+            "execution_manifest": str(Path(execution["attempt_root"]) / "execution.json"),
+            "execution_manifest_sha256": build_home.sha256_bytes(
+                planning.canonical_json(execution)
+            ),
+            "base_import_receipt": execution["import_receipt"],
+            "base_import_receipt_sha256": base_import_sha,
+            "composition_spec_sha256": execution["composition_spec_sha256"],
+        },
+        "content_namespace": namespace,
+        "presentation_content_root": namespace + "/Presentation",
+        "assets": sorted(assets, key=lambda item: item["room_id"]),
+        "gates": {
+            "base_import_verified": True,
+            "exact_three_room_bundles": True,
+            "one_mesh_per_bundle": True,
+            "materials_and_textures_inspected": True,
+            "no_collision_source_policy": True,
+            "external_content_preserved": True,
+            "external_nanite_disabled": True,
+            "quarantined": False,
+            "runtime_play_proof": "pending",
+        },
+    }
+
+
+def test_external_v2_receipts_retain_content_and_verify_nanite_disabled(
+    tmp_path: Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, _manifest, _receipt = (
+        _external_presentation_contracts(
+            tmp_path / "inputs" / "external-receipts", fixture
+        )
+    )
+    planned = build_home.plan_build(
+        _presentation_config(fixture, manifest_path, receipt_path)
+    )
+    base_import_sha = "a" * 64
+    import_receipt = _external_presentation_import_receipt(
+        planned, base_import_sha
+    )
+    build_home._verify_presentation_import_receipt(
+        import_receipt, planned.execution, base_import_sha
+    )
+
+    nanite_enabled = copy.deepcopy(import_receipt)
+    nanite_enabled["assets"][0]["inspection"]["nanite_enabled"] = True
+    with pytest.raises(build_home.BuildHomeError, match="import asset"):
+        build_home._verify_presentation_import_receipt(
+            nanite_enabled, planned.execution, base_import_sha
+        )
+
+    base_scene_sha = "b" * 64
+    presentation_import_sha = "c" * 64
+    scene_receipt = _presentation_scene_receipt(
+        planned, base_scene_sha, presentation_import_sha
+    )
+    build_home._verify_presentation_scene_receipt(
+        scene_receipt,
+        planned.execution,
+        base_scene_sha,
+        presentation_import_sha,
+    )
+    scene_receipt["room_observations"][0]["nanite_enabled"] = True
+    with pytest.raises(build_home.BuildHomeError, match="room observation"):
+        build_home._verify_presentation_scene_receipt(
+            scene_receipt,
+            planned.execution,
+            base_scene_sha,
+            presentation_import_sha,
+        )
+
+
 def _presentation_scene_receipt(
     planned: build_home.PlannedBuild,
     base_scene_sha: str,
@@ -439,7 +1091,7 @@ def _presentation_scene_receipt(
     for index, operation in enumerate(operations):
         source = bindings[operation["artifact_id"]]
         authority_path = f"{execution['composition_spec']['map_path']}:PersistentLevel.R1_{index}"
-        observations.append({
+        observation = {
             "artifact_id": operation["artifact_id"],
             "presentation_id": operation["presentation_id"],
             "room_id": operation["room_id"],
@@ -458,9 +1110,28 @@ def _presentation_scene_receipt(
             "r1_authority_collision_profile": "BlockAll",
             "r1_authority_hidden_in_game": True,
             "r1_authority_component_visible": False,
-        })
+        }
+        if "external_content" in source:
+            observation.update({
+                "external_content": copy.deepcopy(source["external_content"]),
+                "nanite_policy": build_home.PRESENTATION_EXTERNAL_NANITE_POLICY,
+                "nanite_enabled": False,
+            })
+        observations.append(observation)
+    gates = {
+        "map_saved": True,
+        "map_reloaded": True,
+        "exact_three_presentation_actors": True,
+        "presentation_no_collision_verified": True,
+        "hidden_r1_collision_authority_verified": True,
+        "semantic_authority_preserved": True,
+        "quarantined": False,
+        "runtime_play_proof": "pending",
+    }
+    if build_home._presentation_is_external(execution):
+        gates["external_nanite_disabled_verified"] = True
     return {
-        "schema_version": build_home.PRESENTATION_SCENE_RECEIPT_SCHEMA,
+        "schema_version": build_home._presentation_scene_schema(execution),
         "status": "saved_reloaded_candidate",
         "error": None,
         "bindings": {
@@ -481,16 +1152,7 @@ def _presentation_scene_receipt(
         "room_observations": sorted(
             observations, key=lambda item: item["room_id"]
         ),
-        "gates": {
-            "map_saved": True,
-            "map_reloaded": True,
-            "exact_three_presentation_actors": True,
-            "presentation_no_collision_verified": True,
-            "hidden_r1_collision_authority_verified": True,
-            "semantic_authority_preserved": True,
-            "quarantined": False,
-            "runtime_play_proof": "pending",
-        },
+        "gates": gates,
     }
 
 
@@ -585,3 +1247,11 @@ def test_presentation_sources_compile_without_launching_unreal() -> None:
         "tools/ue/vista_playable_home/compose_presentation_commandlet.py",
     ):
         py_compile.compile(str(ROOT / relative), doraise=True)
+
+    for relative in (
+        "tools/ue/vista_playable_home/import_presentation_commandlet.py",
+        "tools/ue/vista_playable_home/compose_presentation_commandlet.py",
+    ):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert 'property_or_none(mesh, "nanite_settings")' in source
+        assert "get_nanite_settings" not in source

@@ -11,16 +11,34 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import commandlet_common as base  # noqa: E402
 from presentation_commandlet_common import (  # noqa: E402
     BASE_SCENE_SHA_ENV,
-    PRESENTATION_IMPORT_RECEIPT_SCHEMA,
+    PRESENTATION_EXTERNAL_NANITE_POLICY,
     PRESENTATION_IMPORT_SHA_ENV,
     PRESENTATION_SCENE_MARKER,
-    PRESENTATION_SCENE_RECEIPT_SCHEMA,
     PRESENTATION_SCENE_RESULT_FILE,
     load_presentation_execution,
     load_verified_receipt,
+    presentation_import_receipt_schema,
+    presentation_is_external,
+    presentation_scene_receipt_schema,
     require,
     write_exclusive_receipt,
 )
+
+
+def property_or_none(value, name):
+    try:
+        return value.get_editor_property(name)
+    except Exception:
+        return None
+
+
+def nanite_enabled(mesh):
+    settings = property_or_none(mesh, "nanite_settings")
+    require(settings is not None, "presentation Nanite settings are unavailable")
+    enabled = property_or_none(settings, "enabled")
+    require(isinstance(enabled, bool),
+            "presentation Nanite enabled observation is unavailable")
+    return enabled
 
 
 def vector(values):
@@ -112,6 +130,7 @@ def run():
     execution, manifest_path, manifest_sha = load_presentation_execution(
         "compose", __file__
     )
+    is_external = presentation_is_external(execution)
     presentation_import_sha = base.require_sha(
         os.environ.get(PRESENTATION_IMPORT_SHA_ENV, ""),
         "presentation import receipt",
@@ -119,7 +138,7 @@ def run():
     presentation_import, presentation_import_path = load_verified_receipt(
         execution["presentation_import_receipt"],
         presentation_import_sha,
-        PRESENTATION_IMPORT_RECEIPT_SCHEMA,
+        presentation_import_receipt_schema(execution),
         "imported_candidate",
         "presentation import receipt",
     )
@@ -220,6 +239,15 @@ def run():
             mesh = unreal.load_asset(imported["object_path"])
             require(isinstance(mesh, unreal.StaticMesh),
                     "presentation receipt object is not a StaticMesh")
+            if is_external:
+                require(
+                    imported.get("external_content")
+                    == bindings_by_artifact[operation["artifact_id"]]["external_content"]
+                    and imported.get("nanite_policy")
+                    == PRESENTATION_EXTERNAL_NANITE_POLICY
+                    and nanite_enabled(mesh) is False,
+                    "external presentation import lost content or disabled Nanite policy",
+                )
             transform = operation["transform"]
             actor = actor_subsystem.spawn_actor_from_class(
                 unreal.StaticMeshActor,
@@ -281,6 +309,9 @@ def run():
                     material_slot_count == binding["material_count"] and
                     not bool(component.get_editor_property("generate_overlap_events")),
                     "reloaded presentation actor lost NoCollision policy")
+            if is_external:
+                require(nanite_enabled(mesh) is False,
+                        "reloaded external presentation mesh enabled Nanite")
             semantic_tag = unreal.Name("VistaSemanticId=" + operation["room_id"])
             authority_matches = [
                 actor for actor in reloaded
@@ -306,7 +337,7 @@ def run():
                     "reloaded r1 collision authority lost blocking collision")
             require(parent_path == authority_path,
                     "reloaded presentation actor lost its r1 authority attachment")
-            room_observations.append({
+            observation = {
                 "artifact_id": operation["artifact_id"],
                 "presentation_id": operation["presentation_id"],
                 "room_id": operation["room_id"],
@@ -323,7 +354,14 @@ def run():
                 ),
                 "r1_authority_hidden_in_game": authority_hidden,
                 "r1_authority_component_visible": authority_visible,
-            })
+            }
+            if is_external:
+                observation.update({
+                    "external_content": binding["external_content"],
+                    "nanite_policy": PRESENTATION_EXTERNAL_NANITE_POLICY,
+                    "nanite_enabled": nanite_enabled(mesh),
+                })
+            room_observations.append(observation)
         reload_verified = True
         status = "saved_reloaded_candidate"
     except Exception as exc:
@@ -338,8 +376,26 @@ def run():
             else "failed_unsaved_quarantined"
         )
 
+    gates = {
+        "map_saved": status == "saved_reloaded_candidate",
+        "map_reloaded": reload_verified,
+        "exact_three_presentation_actors": reload_verified,
+        "presentation_no_collision_verified": reload_verified,
+        "hidden_r1_collision_authority_verified": reload_verified,
+        "semantic_authority_preserved": reload_verified,
+        "quarantined": status != "saved_reloaded_candidate",
+        "runtime_play_proof": "pending",
+    }
+    if is_external:
+        gates["external_nanite_disabled_verified"] = (
+            reload_verified and all(
+                item.get("nanite_policy") == PRESENTATION_EXTERNAL_NANITE_POLICY
+                and item.get("nanite_enabled") is False
+                for item in room_observations
+            )
+        )
     receipt = {
-        "schema_version": PRESENTATION_SCENE_RECEIPT_SCHEMA,
+        "schema_version": presentation_scene_receipt_schema(execution),
         "status": status,
         "error": error,
         "bindings": {
@@ -358,16 +414,7 @@ def run():
         "room_observations": sorted(
             room_observations, key=lambda item: item["room_id"]
         ),
-        "gates": {
-            "map_saved": status == "saved_reloaded_candidate",
-            "map_reloaded": reload_verified,
-            "exact_three_presentation_actors": reload_verified,
-            "presentation_no_collision_verified": reload_verified,
-            "hidden_r1_collision_authority_verified": reload_verified,
-            "semantic_authority_preserved": reload_verified,
-            "quarantined": status != "saved_reloaded_candidate",
-            "runtime_play_proof": "pending",
-        },
+        "gates": gates,
     }
     receipt_sha = write_exclusive_receipt(
         execution["presentation_scene_receipt"], execution["attempt_root"], receipt

@@ -14,12 +14,14 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import commandlet_common as base  # noqa: E402
 from presentation_commandlet_common import (  # noqa: E402
+    PRESENTATION_EXTERNAL_NANITE_POLICY,
     PRESENTATION_IMPORT_MARKER,
-    PRESENTATION_IMPORT_RECEIPT_SCHEMA,
     PRESENTATION_IMPORT_RESULT_FILE,
     derived_presentation_asset_path,
     load_presentation_execution,
     load_verified_receipt,
+    presentation_import_receipt_schema,
+    presentation_is_external,
     presentation_asset_name,
     require,
     sha256_file,
@@ -42,6 +44,26 @@ def simple_collision_count(mesh):
         values = property_or_none(aggregate, name) if aggregate else None
         total += len(values) if values is not None else 0
     return total
+
+
+def nanite_enabled(mesh):
+    settings = property_or_none(mesh, "nanite_settings")
+    require(settings is not None, "presentation Nanite settings are unavailable")
+    enabled = property_or_none(settings, "enabled")
+    require(isinstance(enabled, bool),
+            "presentation Nanite enabled observation is unavailable")
+    return enabled
+
+
+def disable_external_nanite(mesh):
+    # UE 5.7 exposes NaniteSettings as an editor property on StaticMesh;
+    # EditorStaticMeshLibrary has no Nanite accessor in this engine build.
+    settings = property_or_none(mesh, "nanite_settings")
+    require(settings is not None, "presentation Nanite settings are unavailable")
+    settings.set_editor_property("enabled", False)
+    mesh.set_editor_property("nanite_settings", settings)
+    require(nanite_enabled(mesh) is False,
+            "external presentation mesh retained Nanite")
 
 
 def texture2d_path(value):
@@ -91,6 +113,7 @@ def material_texture_paths(material):
 
 
 def import_bundle(binding, namespace):
+    is_external = "external_content" in binding
     source = base.canonical_path(binding["source_file"])
     require(os.path.isfile(source) and sha256_file(source) == binding["source_file_sha256"],
             "presentation source pin mismatch")
@@ -155,15 +178,23 @@ def import_bundle(binding, namespace):
     require(callable(remove_collisions),
             "EditorStaticMeshLibrary.remove_collisions is unavailable")
     remove_collisions(loaded)
+    if is_external:
+        # External room bundles can include glass/translucency.  No opaque-only
+        # eligibility proof exists yet, so this import path always disables
+        # Nanite and records the post-save observation instead of inferring it.
+        disable_external_nanite(loaded)
     unreal.EditorAssetLibrary.save_loaded_asset(loaded, only_if_is_dirty=False)
     require(simple_collision_count(loaded) == 0,
             "presentation mesh retained simple collision")
+    if is_external:
+        require(nanite_enabled(loaded) is False,
+                "saved external presentation mesh enabled Nanite")
     returned_paths = sorted(
         str(item.get_path_name()) for item in imported_objects if item is not None
     )
     require(expected_path in returned_paths or unreal.load_asset(expected_path) is loaded,
             "presentation mesh path was not retained after import")
-    return {
+    result = {
         "artifact_id": binding["artifact_id"],
         "target_asset_id": binding["target_asset_id"],
         "room_id": binding["room_id"],
@@ -189,6 +220,13 @@ def import_bundle(binding, namespace):
             "can_ever_affect_navigation": False,
         },
     }
+    if is_external:
+        result.update({
+            "external_content": binding["external_content"],
+            "nanite_policy": PRESENTATION_EXTERNAL_NANITE_POLICY,
+        })
+        result["inspection"]["nanite_enabled"] = nanite_enabled(loaded)
+    return result
 
 
 def run():
@@ -212,6 +250,7 @@ def run():
             unreal.EditorAssetLibrary.does_directory_exist(namespace),
             "base candidate namespace is missing")
     presentation_root = namespace + "/Presentation"
+    is_external = presentation_is_external(execution)
     require(not unreal.EditorAssetLibrary.does_directory_exist(presentation_root),
             "presentation namespace already exists")
 
@@ -231,8 +270,41 @@ def run():
         error = {"type": type(exc).__name__, "message": str(exc)[:512]}
         status = "partial_import_quarantined" if imported else "failed_clean_quarantined"
 
+    gates = {
+        "base_import_verified": status == "imported_candidate",
+        "exact_three_room_bundles": status == "imported_candidate" and len(imported) == 3,
+        "one_mesh_per_bundle": status == "imported_candidate",
+        "materials_and_textures_inspected": status == "imported_candidate",
+        "no_collision_source_policy": status == "imported_candidate" and all(
+            item["inspection"]["simple_collision_shapes"] == 0 and
+            item["unreal_collision_profile"] == "NoCollision"
+            for item in imported
+        ),
+        "quarantined": status != "imported_candidate",
+        "runtime_play_proof": "pending",
+    }
+    if is_external:
+        bindings_by_artifact = {
+            item["artifact_id"]: item for item in execution["presentation_bindings"]
+        }
+        gates.update({
+            "external_content_preserved": (
+                status == "imported_candidate" and all(
+                    item.get("external_content")
+                    == bindings_by_artifact[item["artifact_id"]]["external_content"]
+                    for item in imported
+                )
+            ),
+            "external_nanite_disabled": (
+                status == "imported_candidate" and all(
+                    item.get("nanite_policy") == PRESENTATION_EXTERNAL_NANITE_POLICY
+                    and item["inspection"].get("nanite_enabled") is False
+                    for item in imported
+                )
+            ),
+        })
     receipt = {
-        "schema_version": PRESENTATION_IMPORT_RECEIPT_SCHEMA,
+        "schema_version": presentation_import_receipt_schema(execution),
         "status": status,
         "error": error,
         "bindings": {
@@ -247,19 +319,7 @@ def run():
         "content_namespace": namespace,
         "presentation_content_root": presentation_root,
         "assets": imported,
-        "gates": {
-            "base_import_verified": status == "imported_candidate",
-            "exact_three_room_bundles": status == "imported_candidate" and len(imported) == 3,
-            "one_mesh_per_bundle": status == "imported_candidate",
-            "materials_and_textures_inspected": status == "imported_candidate",
-            "no_collision_source_policy": status == "imported_candidate" and all(
-                item["inspection"]["simple_collision_shapes"] == 0 and
-                item["unreal_collision_profile"] == "NoCollision"
-                for item in imported
-            ),
-            "quarantined": status != "imported_candidate",
-            "runtime_play_proof": "pending",
-        },
+        "gates": gates,
     }
     receipt_sha = write_exclusive_receipt(
         execution["presentation_import_receipt"], execution["attempt_root"], receipt

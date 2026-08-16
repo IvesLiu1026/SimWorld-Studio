@@ -19,8 +19,23 @@ import commandlet_common as base
 PRESENTATION_IMPORT_RECEIPT_SCHEMA = (
     "simworld.vista.playable-home-ue-presentation-import-receipt/v1"
 )
+PRESENTATION_IMPORT_RECEIPT_SCHEMA_V2 = (
+    "simworld.vista.playable-home-ue-presentation-import-receipt/v2"
+)
 PRESENTATION_SCENE_RECEIPT_SCHEMA = (
     "simworld.vista.playable-home-ue-presentation-scene-receipt/v1"
+)
+PRESENTATION_SCENE_RECEIPT_SCHEMA_V2 = (
+    "simworld.vista.playable-home-ue-presentation-scene-receipt/v2"
+)
+PRESENTATION_EXTERNAL_PLACEMENT_SCHEMA = (
+    "simworld.vista.playable-home-external-placement/v1"
+)
+PRESENTATION_EXTERNAL_NORMALIZATION_POLICY = (
+    "measured_combined_bounds_floor_center_uniform_scale_v1"
+)
+PRESENTATION_EXTERNAL_NANITE_POLICY = (
+    "disabled_unproven_opaque_or_translucent_external_bundle_v1"
 )
 PRESENTATION_IMPORT_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RESULT:"
 PRESENTATION_SCENE_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_SCENE_RESULT:"
@@ -57,7 +72,80 @@ PRESENTATION_BINDING_KEYS = {
     "lights_exported",
     "source_hashes",
 }
+PRESENTATION_BINDING_KEYS_V2 = PRESENTATION_BINDING_KEYS | {"external_content"}
+PRESENTATION_EXTERNAL_CONTENT_KEYS = {
+    "schema_version", "normalization_policy", "acquisition_receipt",
+    "placement_manifest_sha256", "placement_plan_sha256",
+    "semantic_target_ids", "dressing_ids", "asset_sources",
+}
 SAFE_UE_NAME = re.compile(r"^[A-Za-z0-9_]{1,128}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _external_content_is_closed(value):
+    if not isinstance(value, dict) or set(value) != PRESENTATION_EXTERNAL_CONTENT_KEYS:
+        return False
+    acquisition = value.get("acquisition_receipt")
+    if not isinstance(acquisition, dict) or set(acquisition) != {
+        "provider", "receipt_schema_version", "receipt_digest",
+        "receipt_file_sha256", "acquisition_manifest_sha256",
+    }:
+        return False
+    if (
+        value.get("schema_version") != PRESENTATION_EXTERNAL_PLACEMENT_SCHEMA
+        or value.get("normalization_policy")
+        != PRESENTATION_EXTERNAL_NORMALIZATION_POLICY
+        or acquisition.get("provider") != "poly_haven"
+        or acquisition.get("receipt_schema_version")
+        != "simworld.vista.playable-home-poly-haven-receipt/v1"
+    ):
+        return False
+    hashes = (
+        value.get("placement_manifest_sha256"),
+        value.get("placement_plan_sha256"),
+        acquisition.get("receipt_digest"),
+        acquisition.get("receipt_file_sha256"),
+        acquisition.get("acquisition_manifest_sha256"),
+    )
+    if any(not isinstance(item, str) or SHA256.fullmatch(item) is None for item in hashes):
+        return False
+    for key in ("semantic_target_ids", "dressing_ids"):
+        identities = value.get(key)
+        if (
+            not isinstance(identities, list)
+            or any(not isinstance(item, str) or not item for item in identities)
+            or identities != sorted(set(identities))
+        ):
+            return False
+    sources = value.get("asset_sources")
+    return isinstance(sources, list) and bool(sources)
+
+
+def presentation_is_external(execution):
+    bindings = execution.get("presentation_bindings")
+    base.require(isinstance(bindings, list) and len(bindings) == 3,
+                 "presentation execution needs exactly three bindings")
+    flags = [isinstance(binding, dict) and "external_content" in binding
+             for binding in bindings]
+    base.require(not any(flags) or all(flags),
+                 "presentation execution mixes v1 and external v2 bindings")
+    return all(flags)
+
+
+def presentation_import_receipt_schema(execution):
+    return (
+        PRESENTATION_IMPORT_RECEIPT_SCHEMA_V2
+        if presentation_is_external(execution)
+        else PRESENTATION_IMPORT_RECEIPT_SCHEMA
+    )
+
+
+def presentation_scene_receipt_schema(execution):
+    return (
+        PRESENTATION_SCENE_RECEIPT_SCHEMA_V2
+        if presentation_is_external(execution)
+        else PRESENTATION_SCENE_RECEIPT_SCHEMA
+    )
 
 
 def presentation_asset_name(target_asset_id):
@@ -132,8 +220,16 @@ def load_presentation_execution(script_kind, script_file):
     room_ids = set()
     artifact_ids = set()
     for binding in bindings:
-        base.require(isinstance(binding, dict) and set(binding) == PRESENTATION_BINDING_KEYS,
+        expected_keys = (
+            PRESENTATION_BINDING_KEYS_V2
+            if isinstance(binding, dict) and "external_content" in binding
+            else PRESENTATION_BINDING_KEYS
+        )
+        base.require(isinstance(binding, dict) and set(binding) == expected_keys,
                      "presentation execution binding fields differ")
+        if "external_content" in binding:
+            base.require(_external_content_is_closed(binding["external_content"]),
+                         "presentation external content fields or policy differ")
         source = base.canonical_path(binding["source_file"])
         expected = base.require_sha(binding["source_file_sha256"], "presentation GLB")
         base.require(expected == binding["sha256"] and os.path.isfile(source) and
@@ -147,6 +243,7 @@ def load_presentation_execution(script_kind, script_file):
                      "presentation binding identity or policy differs")
         room_ids.add(binding["room_id"])
         artifact_ids.add(binding["artifact_id"])
+    presentation_is_external(execution)
     return execution, manifest_path, manifest_sha
 
 
