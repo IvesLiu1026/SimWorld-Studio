@@ -7,6 +7,7 @@ import json
 import os
 import pathlib
 import py_compile
+import re
 import struct
 import sys
 import tempfile
@@ -138,7 +139,7 @@ def build_plan() -> dict:
             "game_mode": game_mode,
             "controls": {"move": True, "look": True, "jump": True, "sprint": True, "crouch": True, "interact": True},
             "interaction_distance_cm": 250.0,
-            "navigation_agent": {"radius_cm": 42.0, "height_cm": 192.0, "max_step_height_cm": 45.0, "max_slope_deg": 44.0},
+            "navigation_agent": {"radius_cm": 34.0, "height_cm": 192.0, "max_step_height_cm": 45.0, "max_slope_deg": 44.0},
             "npc_profiles": [{
                 "npc_id": "npc.resident",
                 "entity_id": npc_id,
@@ -275,6 +276,56 @@ class PlayableHomePlanningTests(unittest.TestCase):
 
 
 class PlayableHomeSourceContractTests(unittest.TestCase):
+    def test_character_capsules_match_navigation_and_doorway_contract(self) -> None:
+        house = json.loads(
+            (ROOT / "world_packs/vista_playable_home_r1/house.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        navigation_radius_cm = (
+            house["runtime_profile"]["navigation_agent"]["radius_m"] * 100.0
+        )
+        doorway_widths_cm = [
+            portal["clearance"]["width_m"] * 100.0
+            for portal in house["portals"]
+        ]
+        narrowest_doorway_cm = min(doorway_widths_cm)
+        total_lateral_margin_cm = narrowest_doorway_cm - 2.0 * navigation_radius_cm
+
+        self.assertEqual(navigation_radius_cm, 34.0)
+        self.assertEqual(narrowest_doorway_cm, 100.0)
+        self.assertEqual(total_lateral_margin_cm, 32.0)
+
+        source_root = (
+            ROOT
+            / "unreal_plugins/VistaPlayableHome/Source/VistaPlayableHome/Private"
+        )
+        sources = {
+            "player": (
+                source_root / "VistaPlayableHomeCharacter.cpp"
+            ).read_text(encoding="utf-8"),
+            "npc": (
+                source_root / "VistaHomeNpcCharacter.cpp"
+            ).read_text(encoding="utf-8"),
+        }
+        capsule_pattern = re.compile(
+            r"InitCapsuleSize\(\s*([0-9.]+)f,\s*([0-9.]+)f\s*\)"
+        )
+        for role, source in sources.items():
+            with self.subTest(role=role):
+                match = capsule_pattern.search(source)
+                self.assertIsNotNone(match)
+                radius_cm, half_height_cm = (
+                    float(value) for value in match.groups()
+                )
+                self.assertEqual(radius_cm, navigation_radius_cm)
+                self.assertEqual(half_height_cm, 96.0)
+                self.assertIn("retains 32 cm of total lateral clearance", source)
+                self.assertIn(
+                    "GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -96.0f))",
+                    source,
+                )
+
     def test_glb_core_texture_counter_requires_embedded_png_or_jpeg(self) -> None:
         counter = commandlet_glb_texture_counter()
         png_payload = b"synthetic-png"

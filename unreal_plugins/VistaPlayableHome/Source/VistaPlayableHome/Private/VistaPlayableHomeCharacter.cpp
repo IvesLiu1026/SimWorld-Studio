@@ -109,7 +109,9 @@ bool FVistaIndoorCameraProfile::IsValid(FString& OutReason) const
 AVistaPlayableHomeCharacter::AVistaPlayableHomeCharacter()
 {
     bReplicates = true;
-    GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
+    // Match the authored 34 cm navigation-agent radius. A 100 cm doorway then
+    // retains 32 cm of total lateral clearance while the 96 cm half-height stays fixed.
+    GetCapsuleComponent()->InitCapsuleSize(34.0f, 96.0f);
     bUseControllerRotationPitch = false;
     bUseControllerRotationYaw = false;
     bUseControllerRotationRoll = false;
