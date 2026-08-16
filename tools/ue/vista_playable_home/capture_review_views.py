@@ -120,6 +120,11 @@ EDITOR_STDOUT_FILE = "unreal-editor-stdout.log"
 IMAGES_DIR = "images"
 WORKERS_DIR = "workers"
 LOCAL_SCRATCH_PARENT = Path("/tmp")
+R2_ALLOWED_NAS_RUN_ROOT = Path(
+    "/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home-realism/runs"
+)
+R1_SCRATCH_PREFIX = "vista-home-review-"
+R2_SCRATCH_PREFIX = "vista-home-review-r2-"
 NVIDIA_VULKAN_ICD = Path("/usr/share/vulkan/icd.d/nvidia_icd.json")
 PASSTHROUGH_ENV_KEYS = (
     "LANG",
@@ -355,6 +360,117 @@ def _require_child(path: Path, root: Path, label: str, *, strict: bool = True) -
     if strict and not relative.parts:
         _fail("VISTA_HOME_REVIEW_PATH_ESCAPE", f"{label} must be below attempt root", pointer=str(path))
     return path
+
+
+def _validate_r2_scratch_parent(path: Path, attempt_root: Path) -> Path:
+    """Validate the one caller-selected r2 scratch parent.
+
+    The closed NAS run root is policy, not an ambient ``TMPDIR`` fallback.
+    The parent itself must already exist and be private; the host creates one
+    unique child below it for each capture invocation.
+    """
+
+    candidate = _existing_directory(path, "r2 scratch parent")
+    allowed_root = _existing_directory(
+        R2_ALLOWED_NAS_RUN_ROOT,
+        "allowed r2 NAS run root",
+    )
+    _require_child(candidate, allowed_root, "r2 scratch parent")
+    if candidate in {Path("/tmp"), Path("/var/tmp"), Path("/dev/shm")}:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 scratch parent cannot use a system temporary directory",
+            pointer=str(candidate),
+        )
+    home_text = os.environ.get("HOME")
+    if home_text:
+        home = _absolute_lexical(Path(home_text), "HOME")
+        if candidate == home:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch parent cannot be HOME",
+                pointer=str(candidate),
+            )
+    try:
+        candidate.relative_to(attempt_root)
+    except ValueError:
+        pass
+    else:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 scratch parent must remain outside the UE attempt",
+            pointer=str(candidate),
+        )
+    metadata = os.lstat(candidate)
+    if (
+        stat.S_IMODE(metadata.st_mode) != 0o700
+        or not os.access(candidate, os.R_OK | os.W_OK | os.X_OK)
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 scratch parent must be accessible to the caller with mode 0700",
+            pointer=str(candidate),
+        )
+    if SAFE_LOCAL_PATH_RE.fullmatch(str(candidate)) is None or not str(candidate).isascii():
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 scratch parent is not safe ASCII",
+            pointer=str(candidate),
+        )
+    return candidate
+
+
+def _r2_scratch_parent_binding(parent: Path, attempt_root: Path) -> dict[str, Any]:
+    candidate = _validate_r2_scratch_parent(parent, attempt_root)
+    metadata = os.lstat(candidate)
+    return {
+        "storage_class": "private_nas_run_scratch",
+        "parent_path_sha256": sha256_bytes(str(candidate).encode("ascii")),
+        "parent_device": metadata.st_dev,
+        "parent_inode": metadata.st_ino,
+        "parent_mode": "0700",
+        "child_creation": "unique_mkdtemp",
+        "cleanup_policy": "owned_child_device_inode_only",
+        "receipt_discloses_absolute_path": False,
+    }
+
+
+def _validate_r2_scratch_parent_binding(value: Any) -> dict[str, Any]:
+    expected_keys = {
+        "storage_class",
+        "parent_path_sha256",
+        "parent_device",
+        "parent_inode",
+        "parent_mode",
+        "child_creation",
+        "cleanup_policy",
+        "receipt_discloses_absolute_path",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        _fail(
+            "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+            "r2 scratch-parent binding fields differ",
+        )
+    if (
+        value.get("storage_class") != "private_nas_run_scratch"
+        or not isinstance(value.get("parent_path_sha256"), str)
+        or SHA256_RE.fullmatch(value["parent_path_sha256"]) is None
+        or isinstance(value.get("parent_device"), bool)
+        or not isinstance(value.get("parent_device"), int)
+        or value["parent_device"] < 0
+        or isinstance(value.get("parent_inode"), bool)
+        or not isinstance(value.get("parent_inode"), int)
+        or value["parent_inode"] <= 0
+        or value.get("parent_mode") != "0700"
+        or value.get("child_creation") != "unique_mkdtemp"
+        or value.get("cleanup_policy") != "owned_child_device_inode_only"
+        or value.get("receipt_discloses_absolute_path") is not False
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_EXECUTION_INVALID",
+            "r2 scratch-parent binding policy differs",
+        )
+    return dict(value)
 
 
 def _write_exclusive(path: Path, raw: bytes) -> None:
@@ -761,6 +877,7 @@ class CaptureInputs:
     visual_profile_path: Path | None = None
     visual_profile_sha256: str | None = None
     visual_profile_content_digest: str | None = None
+    scratch_parent: Path | None = None
 
 
 def _tree_snapshot(root: Path) -> tuple[str, int, int]:
@@ -933,6 +1050,24 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
             "VISTA_HOME_REVIEW_CAPTURE_PROFILE_INVALID",
             "capture profile is not one of the closed profiles",
         )
+    scratch_parent_arg = getattr(args, "scratch_parent", None)
+    scratch_parent: Path | None = None
+    if capture_profile == R1_CAPTURE_PROFILE:
+        if scratch_parent_arg is not None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "the fixed r1 capture does not accept --scratch-parent",
+            )
+    else:
+        if scratch_parent_arg is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "realistic_interior_r2 requires --scratch-parent",
+            )
+        scratch_parent = _validate_r2_scratch_parent(
+            Path(scratch_parent_arg),
+            attempt_root,
+        )
     visual_profile_arg = getattr(args, "visual_profile", None)
     visual_profile_sha_arg = getattr(args, "visual_profile_sha256", None)
     if bool(visual_profile_arg) != bool(visual_profile_sha_arg):
@@ -1068,6 +1203,7 @@ def validate_inputs(args: argparse.Namespace) -> CaptureInputs:
         visual_profile_path=visual_profile_path,
         visual_profile_sha256=visual_profile_sha256,
         visual_profile_content_digest=visual_profile_content_digest,
+        scratch_parent=scratch_parent,
     )
 
 
@@ -1170,6 +1306,15 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
             "sha256": inputs.visual_profile_sha256,
             "content_digest": inputs.visual_profile_content_digest,
         }
+        if inputs.scratch_parent is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 capture inputs lost their scratch-parent binding",
+            )
+        execution["scratch"] = _r2_scratch_parent_binding(
+            inputs.scratch_parent,
+            inputs.attempt_root,
+        )
         execution["engine"]["graphics_adapter"] = 0
         execution["engine"]["display"] = R2_DISPLAY
         capture.update(
@@ -1184,8 +1329,11 @@ def build_execution(inputs: CaptureInputs) -> dict[str, Any]:
                 "visual_profile_sha256_required": True,
                 "graphics_adapter_zero_required": True,
                 "runtime_camera_observations_required": True,
+                "scratch_parent_required": True,
+                "native_png_uses_private_nas_scratch": True,
             }
         )
+        del policy["native_png_uses_private_local_scratch"]
     return execution
 
 
@@ -1225,6 +1373,8 @@ def _validate_scratch_png(
     ordinal: int,
     attempt_root: Path,
     require_parent: bool,
+    r2_scratch_binding: Mapping[str, Any] | None = None,
+    expected_scratch_parent: Path | None = None,
 ) -> Path:
     candidate = _absolute_lexical(path, "worker scratch PNG")
     if SAFE_LOCAL_PATH_RE.fullmatch(str(candidate)) is None or not str(candidate).isascii():
@@ -1232,8 +1382,45 @@ def _validate_scratch_png(
     if candidate.name != "capture.png" or candidate.parent.name != f"worker-{ordinal:02d}":
         _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG path does not bind the immutable ordinal")
     scratch_root = candidate.parent.parent
-    if scratch_root.parent != LOCAL_SCRATCH_PARENT or not scratch_root.name.startswith("vista-home-review-"):
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "scratch PNG must use a direct host-owned local scratch root")
+    scratch_parent = scratch_root.parent
+    if r2_scratch_binding is None:
+        if (
+            scratch_parent != LOCAL_SCRATCH_PARENT
+            or not scratch_root.name.startswith(R1_SCRATCH_PREFIX)
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "scratch PNG must use a direct host-owned local scratch root",
+            )
+    else:
+        expected_binding = _validate_r2_scratch_parent_binding(
+            r2_scratch_binding
+        )
+        actual_binding = _r2_scratch_parent_binding(
+            scratch_parent,
+            attempt_root,
+        )
+        if actual_binding != expected_binding:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch parent identity or policy differs",
+                pointer=str(scratch_parent),
+            )
+        if (
+            expected_scratch_parent is not None
+            and scratch_parent != expected_scratch_parent
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch PNG parent differs from validated inputs",
+                pointer=str(scratch_parent),
+            )
+        if not scratch_root.name.startswith(R2_SCRATCH_PREFIX):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 scratch root prefix differs",
+                pointer=str(scratch_root),
+            )
     try:
         candidate.relative_to(attempt_root)
     except ValueError:
@@ -1258,12 +1445,28 @@ def build_worker_execution(
 ) -> dict[str, Any]:
     if SHA256_RE.fullmatch(aggregate_execution_sha256) is None:
         _fail("VISTA_HOME_REVIEW_PIN_INVALID", "aggregate execution pin is invalid")
+    if _is_r2(inputs) and inputs.scratch_parent is None:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 capture inputs lost their scratch-parent binding",
+        )
     camera = _camera_for_ordinal(inputs, ordinal)
     scratch = _validate_scratch_png(
         scratch_png,
         ordinal=ordinal,
         attempt_root=inputs.attempt_root,
         require_parent=True,
+        r2_scratch_binding=(
+            _r2_scratch_parent_binding(
+                inputs.scratch_parent,
+                inputs.attempt_root,
+            )
+            if _is_r2(inputs) and inputs.scratch_parent is not None
+            else None
+        ),
+        expected_scratch_parent=(
+            inputs.scratch_parent if _is_r2(inputs) else None
+        ),
     )
     worker_dir = inputs.output_dir / WORKERS_DIR / f"{ordinal:02d}"
     return {
@@ -1918,12 +2121,28 @@ def _accept_worker_png(
     worker: WorkerRun,
     ue_result: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if _is_r2(inputs) and inputs.scratch_parent is None:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "r2 capture inputs lost their scratch-parent binding",
+        )
     capture = ue_result["captures"][0]
     _validate_scratch_png(
         worker.scratch_png,
         ordinal=worker.ordinal,
         attempt_root=inputs.attempt_root,
         require_parent=True,
+        r2_scratch_binding=(
+            _r2_scratch_parent_binding(
+                inputs.scratch_parent,
+                inputs.attempt_root,
+            )
+            if _is_r2(inputs) and inputs.scratch_parent is not None
+            else None
+        ),
+        expected_scratch_parent=(
+            inputs.scratch_parent if _is_r2(inputs) else None
+        ),
     )
     raw = _read_exact_regular(worker.scratch_png, "native worker PNG")
     source_sha = sha256_bytes(raw)
@@ -1995,10 +2214,98 @@ class WorkerOutcome:
     image: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ScratchOwnership:
+    """Unforgeable-by-path cleanup authority for one host-created child."""
+
+    path: Path
+    parent: Path
+    attempt_root: Path
+    capture_profile: str
+    parent_device: int
+    parent_inode: int
+    device: int
+    inode: int
+
+
+def _validate_owned_scratch(
+    ownership: ScratchOwnership,
+    *,
+    require_exists: bool = True,
+) -> os.stat_result | None:
+    if not isinstance(ownership, ScratchOwnership):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "scratch cleanup requires an ownership record",
+        )
+    parent = _existing_directory(ownership.parent, "owned scratch parent")
+    parent_metadata = os.lstat(parent)
+    if (
+        parent_metadata.st_dev != ownership.parent_device
+        or parent_metadata.st_ino != ownership.parent_inode
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch parent device/inode changed",
+            pointer=str(parent),
+        )
+    if ownership.capture_profile == R2_CAPTURE_PROFILE:
+        _validate_r2_scratch_parent(parent, ownership.attempt_root)
+        expected_prefix = R2_SCRATCH_PREFIX
+    elif ownership.capture_profile == R1_CAPTURE_PROFILE:
+        if parent != LOCAL_SCRATCH_PARENT:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r1 scratch ownership parent differs",
+                pointer=str(parent),
+            )
+        expected_prefix = R1_SCRATCH_PREFIX
+    else:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch ownership capture profile differs",
+        )
+    if (
+        ownership.path.parent != parent
+        or not ownership.path.name.startswith(expected_prefix)
+        or SAFE_LOCAL_PATH_RE.fullmatch(str(ownership.path)) is None
+        or not str(ownership.path).isascii()
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch ownership path differs",
+            pointer=str(ownership.path),
+        )
+    try:
+        metadata = os.lstat(ownership.path)
+    except FileNotFoundError:
+        if not require_exists:
+            return None
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "owned scratch child is missing",
+            pointer=str(ownership.path),
+        )
+        raise AssertionError("unreachable")
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_dev != ownership.device
+        or metadata.st_ino != ownership.inode
+    ):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+            "scratch child device/inode changed",
+            pointer=str(ownership.path),
+        )
+    return metadata
+
+
 def build_receipt(
     inputs: CaptureInputs,
     execution_sha256: str,
     outcomes: Sequence[WorkerOutcome],
+    *,
+    scratch_ownership: ScratchOwnership | None = None,
 ) -> dict[str, Any]:
     _verify_input_pins(inputs)
     _load_json(
@@ -2164,6 +2471,36 @@ def build_receipt(
                 "runtime_observation_status": "pending",
             }
         )
+        if scratch_ownership is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 receipt requires its live scratch ownership record",
+            )
+        _validate_owned_scratch(scratch_ownership)
+        if (
+            scratch_ownership.capture_profile != R2_CAPTURE_PROFILE
+            or scratch_ownership.attempt_root != inputs.attempt_root
+            or scratch_ownership.parent != inputs.scratch_parent
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "r2 receipt scratch ownership binding differs",
+            )
+        receipt["scratch"] = {
+            "storage_class": "private_nas_run_scratch",
+            "parent_path_sha256": sha256_bytes(
+                str(scratch_ownership.parent).encode("ascii")
+            ),
+            "parent_device": scratch_ownership.parent_device,
+            "parent_inode": scratch_ownership.parent_inode,
+            "owned_child_device": scratch_ownership.device,
+            "owned_child_inode": scratch_ownership.inode,
+            "mode": "0700",
+            "child_creation": "unique_mkdtemp",
+            "cleanup_policy": "owned_child_device_inode_only",
+            "cleanup_status_at_receipt": "pending",
+            "absolute_path_disclosed": False,
+        }
         receipt["verification"] = {
             "exact_review_shot_set": True,
             "exact_materialized_r2_camera_actor_set": True,
@@ -2178,7 +2515,7 @@ def build_receipt(
             "caller_python_allowed": False,
             "six_sequential_owned_editor_children": True,
             "one_native_highres_shot_per_child": True,
-            "native_png_private_local_scratch": True,
+            "native_png_private_nas_scratch": True,
             "native_and_final_bytes_equal": True,
             "near_field_clearance_observation": "pending",
             "foreground_occlusion_observation": "pending",
@@ -2189,22 +2526,87 @@ def build_receipt(
     return receipt
 
 
-def _create_scratch_root(inputs: CaptureInputs) -> Path:
-    parent = _existing_directory(LOCAL_SCRATCH_PARENT, "local scratch parent")
-    scratch = Path(tempfile.mkdtemp(prefix="vista-home-review-", dir=str(parent)))
-    if SAFE_LOCAL_PATH_RE.fullmatch(str(scratch)) is None or not str(scratch).isascii():
-        shutil.rmtree(scratch, ignore_errors=True)
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is not safe ASCII")
-    if scratch.parent != parent or stat.S_IMODE(os.lstat(scratch).st_mode) != 0o700:
-        shutil.rmtree(scratch, ignore_errors=True)
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is not private local storage")
+def _create_scratch_root(inputs: CaptureInputs) -> ScratchOwnership:
+    if _is_r2(inputs):
+        if inputs.scratch_parent is None:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "r2 capture inputs lost their scratch-parent binding",
+            )
+        parent = _validate_r2_scratch_parent(
+            inputs.scratch_parent,
+            inputs.attempt_root,
+        )
+        prefix = R2_SCRATCH_PREFIX
+    else:
+        parent = _existing_directory(
+            LOCAL_SCRATCH_PARENT,
+            "local scratch parent",
+        )
+        prefix = R1_SCRATCH_PREFIX
+    parent_metadata = os.lstat(parent)
     try:
-        scratch.relative_to(inputs.attempt_root)
-    except ValueError:
-        return scratch
-    shutil.rmtree(scratch, ignore_errors=True)
-    _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "host-created scratch root is inside the UE attempt")
-    raise AssertionError("unreachable")
+        scratch = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            f"cannot create unique scratch child: {exc}",
+            pointer=str(parent),
+        )
+        raise AssertionError("unreachable") from exc
+    metadata = os.lstat(scratch)
+    ownership = ScratchOwnership(
+        path=scratch,
+        parent=parent,
+        attempt_root=inputs.attempt_root,
+        capture_profile=inputs.capture_profile,
+        parent_device=parent_metadata.st_dev,
+        parent_inode=parent_metadata.st_ino,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+    )
+    try:
+        if (
+            scratch.parent != parent
+            or not scratch.name.startswith(prefix)
+            or SAFE_LOCAL_PATH_RE.fullmatch(str(scratch)) is None
+            or not str(scratch).isascii()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or scratch.resolve(strict=True) != scratch
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "host-created scratch child is not canonical private storage",
+                pointer=str(scratch),
+            )
+        if (
+            os.lstat(parent).st_dev != ownership.parent_device
+            or os.lstat(parent).st_ino != ownership.parent_inode
+        ):
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_OWNERSHIP_MISMATCH",
+                "scratch parent changed during child creation",
+                pointer=str(parent),
+            )
+        try:
+            scratch.relative_to(inputs.attempt_root)
+        except ValueError:
+            pass
+        else:
+            _fail(
+                "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+                "host-created scratch child is inside the UE attempt",
+                pointer=str(scratch),
+            )
+        _validate_owned_scratch(ownership)
+        return ownership
+    except ReviewCaptureError:
+        try:
+            _remove_scratch_root(ownership)
+        except ReviewCaptureError:
+            pass
+        raise
 
 
 def _prepare_worker_runs(
@@ -2240,24 +2642,41 @@ def _prepare_worker_runs(
     return tuple(workers)
 
 
-def _remove_scratch_root(path: Path) -> None:
-    if (
-        path.parent != LOCAL_SCRATCH_PARENT
-        or not path.name.startswith("vista-home-review-")
-        or SAFE_LOCAL_PATH_RE.fullmatch(str(path)) is None
-    ):
-        _fail("VISTA_HOME_REVIEW_SCRATCH_INVALID", "refusing to remove an unowned scratch root")
-    shutil.rmtree(path)
+def _remove_scratch_root(ownership: ScratchOwnership) -> None:
+    _validate_owned_scratch(ownership)
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "platform cannot safely remove the owned scratch child",
+        )
+    try:
+        shutil.rmtree(ownership.path)
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            f"cannot remove owned scratch child: {exc}",
+            pointer=str(ownership.path),
+        )
+    if os.path.lexists(ownership.path):
+        _fail(
+            "VISTA_HOME_REVIEW_SCRATCH_INVALID",
+            "owned scratch child remains after cleanup",
+            pointer=str(ownership.path),
+        )
 
 
 def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha256: str) -> dict[str, Any]:
     """Run six owned Unreal children sequentially and accept their exact PNG bytes."""
 
     _prepare_output(inputs, execution_raw)
-    scratch_root: Path | None = None
+    scratch_ownership: ScratchOwnership | None = None
     try:
-        scratch_root = _create_scratch_root(inputs)
-        workers = _prepare_worker_runs(inputs, execution_sha256, scratch_root)
+        scratch_ownership = _create_scratch_root(inputs)
+        workers = _prepare_worker_runs(
+            inputs,
+            execution_sha256,
+            scratch_ownership.path,
+        )
         outcomes: list[WorkerOutcome] = []
         for worker in workers:
             _verify_input_pins(inputs)
@@ -2277,7 +2696,12 @@ def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha25
                     image=image,
                 )
             )
-        receipt = build_receipt(inputs, execution_sha256, outcomes)
+        receipt = build_receipt(
+            inputs,
+            execution_sha256,
+            outcomes,
+            scratch_ownership=scratch_ownership,
+        )
         receipt_raw = canonical_json(receipt)
         receipt_path = inputs.output_dir / RECEIPT_FILE
         _write_exclusive(receipt_path, receipt_raw)
@@ -2288,8 +2712,8 @@ def execute_capture(inputs: CaptureInputs, execution_raw: bytes, execution_sha25
             "image_count": len(receipt["capture"]["images"]),
         }
     finally:
-        if scratch_root is not None and scratch_root.exists():
-            _remove_scratch_root(scratch_root)
+        if scratch_ownership is not None:
+            _remove_scratch_root(scratch_ownership)
 
 
 def _host_main(args: argparse.Namespace) -> int:
@@ -2393,7 +2817,7 @@ def _validate_aggregate_worker_inputs(
         "policy",
     }
     if is_r2:
-        expected_fields.add("visual_profile")
+        expected_fields.update({"visual_profile", "scratch"})
     expected_policy = {
         "append_only_output": True,
         "caller_python_allowed": False,
@@ -2405,11 +2829,14 @@ def _validate_aggregate_worker_inputs(
         "native_png_uses_private_local_scratch": True,
     }
     if is_r2:
+        del expected_policy["native_png_uses_private_local_scratch"]
         expected_policy.update(
             {
                 "visual_profile_sha256_required": True,
                 "graphics_adapter_zero_required": True,
                 "runtime_camera_observations_required": True,
+                "scratch_parent_required": True,
+                "native_png_uses_private_nas_scratch": True,
             }
         )
     if (
@@ -2484,6 +2911,8 @@ def _validate_aggregate_worker_inputs(
     if plan.get("content_digest") != build_plan["content_digest"]:
         _fail("VISTA_HOME_REVIEW_PIN_MISMATCH", "worker build plan content digest differs")
     attempt_root = _existing_directory(Path(execution.get("attempt_root", "")), "attempt root")
+    if is_r2:
+        _validate_r2_scratch_parent_binding(execution.get("scratch"))
     visual_profile_sha256: str | None = None
     visual_profile_content_digest: str | None = None
     if is_r2:
@@ -2661,6 +3090,11 @@ def _load_worker_execution() -> tuple[dict[str, Any], dict[str, Any], str]:
         ordinal=ordinal,
         attempt_root=Path(execution["attempt_root"]),
         require_parent=True,
+        r2_scratch_binding=(
+            execution.get("scratch")
+            if execution.get("schema_version") == R2_EXECUTION_SCHEMA
+            else None
+        ),
     )
     artifacts = worker.get("artifacts")
     if not isinstance(artifacts, Mapping) or set(artifacts) != {
@@ -3010,6 +3444,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--visual-profile-sha256",
         help="lowercase SHA-256 pin paired with --visual-profile",
+    )
+    parser.add_argument(
+        "--scratch-parent",
+        help=(
+            "existing private 0700 directory below the closed NAS run root; "
+            "required only for realistic_interior_r2 and rejected by fixed_r1"
+        ),
     )
     parser.add_argument("--display", required=True, help="local X11 display, for example :117")
     parser.add_argument("--graphics-adapter", type=int, default=0, help="bounded Unreal graphics adapter index")
