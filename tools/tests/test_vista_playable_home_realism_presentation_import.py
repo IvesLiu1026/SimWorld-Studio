@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import copy
 import dataclasses
 import hashlib
@@ -1338,3 +1339,49 @@ def test_presentation_sources_compile_without_launching_unreal() -> None:
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert 'property_or_none(mesh, "nanite_settings")' in source
         assert "get_nanite_settings" not in source
+
+
+def test_presentation_collision_clear_is_commandlet_safe_and_reloaded() -> None:
+    common = (
+        ROOT
+        / "tools/ue/vista_playable_home/presentation_commandlet_common.py"
+    ).read_text(encoding="utf-8")
+    importer = (
+        ROOT
+        / "tools/ue/vista_playable_home/import_presentation_commandlet.py"
+    ).read_text(encoding="utf-8")
+    composer = (
+        ROOT
+        / "tools/ue/vista_playable_home/compose_presentation_commandlet.py"
+    ).read_text(encoding="utf-8")
+
+    expected_properties = (
+        "box_elems",
+        "sphere_elems",
+        "sphyl_elems",
+        "convex_elems",
+        "tapered_capsule_elems",
+        "level_set_elems",
+        "ml_level_set_elems",
+        "skinned_level_set_elems",
+        "skinned_triangle_mesh_elems",
+    )
+    tree = ast.parse(common)
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "SIMPLE_COLLISION_ELEMENT_PROPERTIES"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1
+    assert ast.literal_eval(assignments[0].value) == expected_properties
+    assert 'body_setup.set_editor_property("agg_geom", aggregate)' in common
+    assert "clear_simple_collision(loaded)" in importer
+    assert ".remove_collisions" not in importer
+    assert "remove_collisions(" not in importer
+    assert 'simple_collision_count(mesh) == 0' in composer
+    assert "reloaded presentation mesh retained simple collision" in composer

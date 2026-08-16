@@ -17,33 +17,19 @@ from presentation_commandlet_common import (  # noqa: E402
     PRESENTATION_EXTERNAL_NANITE_POLICY,
     PRESENTATION_IMPORT_MARKER,
     PRESENTATION_IMPORT_RESULT_FILE,
+    clear_simple_collision,
     derived_presentation_asset_path,
     load_presentation_execution,
     load_verified_receipt,
+    property_or_none,
     presentation_import_receipt_schema,
     presentation_is_external,
     presentation_asset_name,
     require,
     sha256_file,
+    simple_collision_count,
     write_exclusive_receipt,
 )
-
-
-def property_or_none(value, name):
-    try:
-        return value.get_editor_property(name)
-    except Exception:
-        return None
-
-
-def simple_collision_count(mesh):
-    body_setup = property_or_none(mesh, "body_setup")
-    aggregate = property_or_none(body_setup, "agg_geom") if body_setup else None
-    total = 0
-    for name in ("box_elems", "sphere_elems", "sphyl_elems", "convex_elems"):
-        values = property_or_none(aggregate, name) if aggregate else None
-        total += len(values) if values is not None else 0
-    return total
 
 
 def nanite_enabled(mesh):
@@ -174,16 +160,18 @@ def import_bundle(binding, namespace):
             set(returned_texture_paths) & set(effective_texture_paths),
             "presentation PBR textures were not imported and used")
 
-    remove_collisions = getattr(unreal.EditorStaticMeshLibrary, "remove_collisions", None)
-    require(callable(remove_collisions),
-            "EditorStaticMeshLibrary.remove_collisions is unavailable")
-    remove_collisions(loaded)
+    clear_simple_collision(loaded)
     if is_external:
         # External room bundles can include glass/translucency.  No opaque-only
         # eligibility proof exists yet, so this import path always disables
         # Nanite and records the post-save observation instead of inferring it.
         disable_external_nanite(loaded)
-    unreal.EditorAssetLibrary.save_loaded_asset(loaded, only_if_is_dirty=False)
+    require(
+        unreal.EditorAssetLibrary.save_loaded_asset(
+            loaded, only_if_is_dirty=False
+        ),
+        "failed to save presentation StaticMesh",
+    )
     require(simple_collision_count(loaded) == 0,
             "presentation mesh retained simple collision")
     if is_external:

@@ -17,19 +17,14 @@ from presentation_commandlet_common import (  # noqa: E402
     PRESENTATION_SCENE_RESULT_FILE,
     load_presentation_execution,
     load_verified_receipt,
+    property_or_none,
     presentation_import_receipt_schema,
     presentation_is_external,
     presentation_scene_receipt_schema,
     require,
+    simple_collision_count,
     write_exclusive_receipt,
 )
-
-
-def property_or_none(value, name):
-    try:
-        return value.get_editor_property(name)
-    except Exception:
-        return None
 
 
 def nanite_enabled(mesh):
@@ -239,6 +234,8 @@ def run():
             mesh = unreal.load_asset(imported["object_path"])
             require(isinstance(mesh, unreal.StaticMesh),
                     "presentation receipt object is not a StaticMesh")
+            require(simple_collision_count(mesh) == 0,
+                    "reloaded presentation mesh retained simple collision")
             if is_external:
                 require(
                     imported.get("external_content")
@@ -303,6 +300,7 @@ def run():
             )
             require(component is not None and
                     isinstance(mesh, unreal.StaticMesh) and
+                    simple_collision_count(mesh) == 0 and
                     str(mesh.get_path_name()) == imported["object_path"] and
                     transform_matches(transform, operation["transform"]) and
                     str(component.get_collision_profile_name()) == "NoCollision" and

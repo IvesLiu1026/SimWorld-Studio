@@ -80,6 +80,65 @@ PRESENTATION_EXTERNAL_CONTENT_KEYS = {
 }
 SAFE_UE_NAME = re.compile(r"^[A-Za-z0-9_]{1,128}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+SIMPLE_COLLISION_ELEMENT_PROPERTIES = (
+    "box_elems",
+    "sphere_elems",
+    "sphyl_elems",
+    "convex_elems",
+    "tapered_capsule_elems",
+    "level_set_elems",
+    "ml_level_set_elems",
+    "skinned_level_set_elems",
+    "skinned_triangle_mesh_elems",
+)
+
+
+def property_or_none(value, name):
+    try:
+        return value.get_editor_property(name)
+    except Exception:
+        return None
+
+
+def simple_collision_count(mesh):
+    body_setup = property_or_none(mesh, "body_setup")
+    require(body_setup is not None,
+            "presentation StaticMesh BodySetup is unavailable")
+    aggregate = property_or_none(body_setup, "agg_geom")
+    require(aggregate is not None,
+            "presentation StaticMesh aggregate collision is unavailable")
+    total = 0
+    for name in SIMPLE_COLLISION_ELEMENT_PROPERTIES:
+        values = property_or_none(aggregate, name)
+        require(values is not None,
+                "presentation collision element array is unavailable: " + name)
+        total += len(values)
+    return total
+
+
+def clear_simple_collision(mesh):
+    """Clear every UE 5.7 aggregate collision array without editor subsystems.
+
+    EditorStaticMeshLibrary.remove_collisions delegates to
+    StaticMeshEditorSubsystem, which is unavailable in commandlets.  Mutating
+    the BodySetup aggregate directly is the commandlet-safe path and keeps the
+    no-collision policy fail closed when UE adds non-legacy shape families.
+    """
+
+    body_setup = property_or_none(mesh, "body_setup")
+    require(body_setup is not None,
+            "presentation StaticMesh BodySetup is unavailable")
+    aggregate = property_or_none(body_setup, "agg_geom")
+    require(aggregate is not None,
+            "presentation StaticMesh aggregate collision is unavailable")
+    for name in SIMPLE_COLLISION_ELEMENT_PROPERTIES:
+        values = property_or_none(aggregate, name)
+        require(values is not None,
+                "presentation collision element array is unavailable: " + name)
+        aggregate.set_editor_property(name, [])
+    body_setup.set_editor_property("agg_geom", aggregate)
+    require(simple_collision_count(mesh) == 0,
+            "presentation mesh retained simple collision in memory")
 
 
 def _external_content_is_closed(value):
