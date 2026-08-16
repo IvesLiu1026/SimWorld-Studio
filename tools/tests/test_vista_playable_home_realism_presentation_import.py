@@ -265,6 +265,16 @@ def test_presentation_contracts_compile_three_source_pinned_operations(
     assert [item["phase"] for item in planned.dry_run_report["commands"]] == [
         "import", "presentation_import", "compose", "presentation_compose"
     ]
+    for command in planned.dry_run_report["commands"]:
+        assert "-nullrhi" in command["argv"]
+        assert not any("graphicsadapter" in item.lower() for item in command["argv"])
+        phase_root = (
+            fixture.attempt
+            / build_home.COMMANDLET_RUNTIME_DIRECTORY
+            / command["phase"]
+        )
+        assert command["env"]["HOME"] == str(phase_root / "home")
+        assert command["env"]["TMPDIR"] == str(phase_root / "tmp")
 
     attempt, _counts = build_home._materialize_inputs(planned)
     assert (
@@ -280,6 +290,40 @@ def test_presentation_contracts_compile_three_source_pinned_operations(
     assert preparation["presentation_bundle_count"] == 3
     assert preparation["presentation_ue_import_observation"] == "pending"
     assert preparation["presentation_runtime_play_proof"] == "pending"
+
+
+def test_presentation_import_gpu0_retry_is_explicit_and_phase_scoped(
+    tmp_path: Path,
+) -> None:
+    fixture = BuildFixture(tmp_path)
+    manifest_path, receipt_path, _manifest, _receipt = _presentation_contracts(
+        tmp_path / "inputs" / "presentation", fixture
+    )
+    config = dataclasses.replace(
+        _presentation_config(fixture, manifest_path, receipt_path),
+        presentation_import_gpu0_rendering=True,
+    )
+    planned = build_home.plan_build(config)
+    commands = {
+        command["phase"]: command["argv"]
+        for command in planned.dry_run_report["commands"]
+    }
+
+    assert "-AllowCommandletRendering" in commands["presentation_import"]
+    assert "-RenderOffScreen" in commands["presentation_import"]
+    assert "-graphicsadapter=0" in commands["presentation_import"]
+    assert "-nullrhi" not in commands["presentation_import"]
+    for phase in ("import", "compose", "presentation_compose"):
+        assert "-nullrhi" in commands[phase]
+        assert not any("graphicsadapter" in item.lower() for item in commands[phase])
+
+    with pytest.raises(build_home.BuildHomeError, match="requires presentation inputs"):
+        build_home.plan_build(
+            dataclasses.replace(
+                fixture.config(),
+                presentation_import_gpu0_rendering=True,
+            )
+        )
 
 
 def test_presentation_inputs_require_profile_and_complete_pair(tmp_path: Path) -> None:

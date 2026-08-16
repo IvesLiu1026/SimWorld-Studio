@@ -125,6 +125,13 @@ PRESENTATION_IMPORT_RESULT_FILE = "presentation-import-result.json"
 PRESENTATION_SCENE_RESULT_FILE = "presentation-scene-result.json"
 PRESENTATION_IMPORT_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RESULT:"
 PRESENTATION_SCENE_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_SCENE_RESULT:"
+COMMANDLET_RUNTIME_DIRECTORY = "commandlet-runtime"
+COMMANDLET_PHASES = (
+    "import",
+    "presentation_import",
+    "compose",
+    "presentation_compose",
+)
 PRESENTATION_BUNDLE_RECORD_KEYS = frozenset({
     "artifact_id",
     "artifact_kind",
@@ -1818,8 +1825,31 @@ def default_input_ini() -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
-def _fixed_command(editor: Path, project_file: Path, script: Path) -> list[str]:
-    return [
+def _commandlet_phase_root(attempt_root: Path, phase: str) -> Path:
+    if phase not in COMMANDLET_PHASES:
+        _fail(
+            "VISTA_HOME_BUILD_PHASE_INVALID",
+            f"unknown commandlet phase {phase!r}",
+        )
+    return attempt_root / COMMANDLET_RUNTIME_DIRECTORY / phase
+
+
+def _fixed_command(
+    editor: Path,
+    project_file: Path,
+    script: Path,
+    *,
+    attempt_root: Path,
+    phase: str,
+    presentation_import_gpu0_rendering: bool = False,
+) -> list[str]:
+    if presentation_import_gpu0_rendering and phase != "presentation_import":
+        _fail(
+            "VISTA_HOME_BUILD_GPU_MODE_INVALID",
+            "GPU rendering is allowed only for the explicit presentation import retry",
+        )
+    phase_root = _commandlet_phase_root(attempt_root, phase)
+    command = [
         str(editor),
         str(project_file),
         "-run=pythonscript",
@@ -1828,7 +1858,64 @@ def _fixed_command(editor: Path, project_file: Path, script: Path) -> list[str]:
         "-unattended",
         "-nop4",
         "-nosplash",
+        "-NOSOUND",
+        "-NoAnalytics",
+        "-UDPMESSAGING_TRANSPORT_ENABLE=0",
+        "-ini:Engine:[/Script/TcpMessaging.TcpMessagingSettings]:EnableTransport=False",
+        "-ddc=InstalledNoZenLocalFallback",
+        "-SaveToUserDir",
+        f"-UserDir={phase_root / 'user'}",
+        f"-LocalDataCachePath={attempt_root / COMMANDLET_RUNTIME_DIRECTORY / 'ddc'}",
+        f"-abslog={phase_root / 'unreal.log'}",
+        "-stdout",
+        "-FullStdOutLogOutput",
     ]
+    if presentation_import_gpu0_rendering:
+        command.extend([
+            "-AllowCommandletRendering",
+            "-RenderOffScreen",
+            "-graphicsadapter=0",
+        ])
+    else:
+        command.append("-nullrhi")
+    return command
+
+
+def _commandlet_environment(
+    attempt_root: Path,
+    phase: str,
+    bindings: Mapping[str, str],
+) -> dict[str, str]:
+    phase_root = _commandlet_phase_root(attempt_root, phase)
+    return {
+        **bindings,
+        "HOME": str(phase_root / "home"),
+        "TMPDIR": str(phase_root / "tmp"),
+        "TMP": str(phase_root / "tmp"),
+        "TEMP": str(phase_root / "tmp"),
+        "XDG_CACHE_HOME": str(phase_root / "xdg-cache"),
+        "XDG_CONFIG_HOME": str(phase_root / "xdg-config"),
+        "XDG_DATA_HOME": str(phase_root / "xdg-data"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
+def _prepare_commandlet_runtime(attempt_root: Path, phases: Sequence[str]) -> None:
+    runtime_root = attempt_root / COMMANDLET_RUNTIME_DIRECTORY
+    runtime_root.mkdir(mode=0o700, exist_ok=False)
+    (runtime_root / "ddc").mkdir(mode=0o700, exist_ok=False)
+    for phase in phases:
+        phase_root = _commandlet_phase_root(attempt_root, phase)
+        phase_root.mkdir(mode=0o700, exist_ok=False)
+        for relative in (
+            "home",
+            "tmp",
+            "xdg-cache",
+            "xdg-config",
+            "xdg-data",
+            "user",
+        ):
+            (phase_root / relative).mkdir(mode=0o700, exist_ok=False)
 
 
 @dataclass(frozen=True)
@@ -1855,6 +1942,7 @@ class BuildConfig:
     presentation_artifact_receipt_sha256: str | None = None
     expected_revision: str = EXPECTED_REVISION
     command_timeout_s: int = 3600
+    presentation_import_gpu0_rendering: bool = False
 
 
 @dataclass(frozen=True)
@@ -2051,6 +2139,11 @@ def _planned_execution(
 
 def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedBuild:
     run_root, attempt = _validate_destination(config)
+    if not isinstance(config.presentation_import_gpu0_rendering, bool):
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "presentation import GPU rendering selection must be boolean",
+        )
     if (
         isinstance(config.command_timeout_s, bool)
         or not isinstance(config.command_timeout_s, int)
@@ -2077,6 +2170,11 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         config.presentation_artifact_receipt_sha256,
     )
     has_presentation = any(value is not None for value in presentation_values)
+    if config.presentation_import_gpu0_rendering and not has_presentation:
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "presentation import GPU rendering requires presentation inputs",
+        )
     if has_presentation and not all(value is not None for value in presentation_values):
         _fail(
             "VISTA_HOME_BUILD_ARGUMENT_INVALID",
@@ -2191,19 +2289,35 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         "commands": [
             {
                 "phase": "import",
-                "argv": _fixed_command(editor, project_path, Path(execution["scripts"]["import"]["path"])),
-                "env": common_env,
+                "argv": _fixed_command(
+                    editor,
+                    project_path,
+                    Path(execution["scripts"]["import"]["path"]),
+                    attempt_root=attempt,
+                    phase="import",
+                ),
+                "env": _commandlet_environment(attempt, "import", common_env),
                 "log": str(attempt / "import.log"),
                 "result": str(attempt / IMPORT_RESULT_FILE),
                 "timeout_s": config.command_timeout_s,
             },
             {
                 "phase": "compose",
-                "argv": _fixed_command(editor, project_path, Path(execution["scripts"]["compose"]["path"])),
-                "env": {
-                    **common_env,
-                    "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": "<sha256-from-verified-import-receipt>",
-                },
+                "argv": _fixed_command(
+                    editor,
+                    project_path,
+                    Path(execution["scripts"]["compose"]["path"]),
+                    attempt_root=attempt,
+                    phase="compose",
+                ),
+                "env": _commandlet_environment(
+                    attempt,
+                    "compose",
+                    {
+                        **common_env,
+                        "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": "<sha256-from-verified-import-receipt>",
+                    },
+                ),
                 "log": str(attempt / "compose.log"),
                 "result": str(attempt / SCENE_RESULT_FILE),
                 "timeout_s": config.command_timeout_s,
@@ -2264,8 +2378,17 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
                     editor,
                     project_path,
                     Path(execution["presentation_scripts"]["import"]["path"]),
+                    attempt_root=attempt,
+                    phase="presentation_import",
+                    presentation_import_gpu0_rendering=(
+                        config.presentation_import_gpu0_rendering
+                    ),
                 ),
-                "env": presentation_env,
+                "env": _commandlet_environment(
+                    attempt,
+                    "presentation_import",
+                    presentation_env,
+                ),
                 "log": str(attempt / "presentation-import.log"),
                 "result": str(attempt / PRESENTATION_IMPORT_RESULT_FILE),
                 "timeout_s": config.command_timeout_s,
@@ -2277,16 +2400,22 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
                     editor,
                     project_path,
                     Path(execution["presentation_scripts"]["compose"]["path"]),
+                    attempt_root=attempt,
+                    phase="presentation_compose",
                 ),
-                "env": {
-                    **presentation_env,
-                    "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RECEIPT_SHA256": (
-                        "<sha256-from-verified-presentation-import-receipt>"
-                    ),
-                    "VISTA_PLAYABLE_HOME_SCENE_RECEIPT_SHA256": (
-                        "<sha256-from-verified-scene-receipt>"
-                    ),
-                },
+                "env": _commandlet_environment(
+                    attempt,
+                    "presentation_compose",
+                    {
+                        **presentation_env,
+                        "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RECEIPT_SHA256": (
+                            "<sha256-from-verified-presentation-import-receipt>"
+                        ),
+                        "VISTA_PLAYABLE_HOME_SCENE_RECEIPT_SHA256": (
+                            "<sha256-from-verified-scene-receipt>"
+                        ),
+                    },
+                ),
                 "log": str(attempt / "presentation-compose.log"),
                 "result": str(attempt / PRESENTATION_SCENE_RESULT_FILE),
                 "timeout_s": config.command_timeout_s,
@@ -3385,6 +3514,10 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
     owner_token = secrets.token_hex(32)
     try:
         attempt, copy_counts = _materialize_inputs(planned, owner_token=owner_token)
+        commandlet_phases = ["import", "compose"]
+        if planned.presentation is not None:
+            commandlet_phases = list(COMMANDLET_PHASES)
+        _prepare_commandlet_runtime(attempt, commandlet_phases)
         execution_path = attempt / "execution.json"
         project_path = attempt / "project" / EXPECTED_PROJECT_NAME
         common_env = {
@@ -3399,8 +3532,10 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
                 planned.config.unreal_editor_cmd,
                 project_path,
                 Path(planned.execution["scripts"]["import"]["path"]),
+                attempt_root=attempt,
+                phase="import",
             ),
-            environment=common_env,
+            environment=_commandlet_environment(attempt, "import", common_env),
             log_path=attempt / "import.log",
             marker_prefix=IMPORT_MARKER,
             timeout_s=planned.config.command_timeout_s,
@@ -3434,11 +3569,20 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
                     Path(
                         planned.execution["presentation_scripts"]["import"]["path"]
                     ),
+                    attempt_root=attempt,
+                    phase="presentation_import",
+                    presentation_import_gpu0_rendering=(
+                        planned.config.presentation_import_gpu0_rendering
+                    ),
                 ),
-                environment={
-                    **common_env,
-                    "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
-                },
+                environment=_commandlet_environment(
+                    attempt,
+                    "presentation_import",
+                    {
+                        **common_env,
+                        "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
+                    },
+                ),
                 log_path=attempt / "presentation-import.log",
                 marker_prefix=PRESENTATION_IMPORT_MARKER,
                 timeout_s=planned.config.command_timeout_s,
@@ -3470,8 +3614,17 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
                 planned.config.unreal_editor_cmd,
                 project_path,
                 Path(planned.execution["scripts"]["compose"]["path"]),
+                attempt_root=attempt,
+                phase="compose",
             ),
-            environment={**common_env, "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha},
+            environment=_commandlet_environment(
+                attempt,
+                "compose",
+                {
+                    **common_env,
+                    "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
+                },
+            ),
             log_path=attempt / "compose.log",
             marker_prefix=SCENE_MARKER,
             timeout_s=planned.config.command_timeout_s,
@@ -3509,15 +3662,21 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
                     Path(
                         planned.execution["presentation_scripts"]["compose"]["path"]
                     ),
+                    attempt_root=attempt,
+                    phase="presentation_compose",
                 ),
-                environment={
-                    **common_env,
-                    "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
-                    "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RECEIPT_SHA256": (
-                        presentation_import_sha
-                    ),
-                    "VISTA_PLAYABLE_HOME_SCENE_RECEIPT_SHA256": scene_sha,
-                },
+                environment=_commandlet_environment(
+                    attempt,
+                    "presentation_compose",
+                    {
+                        **common_env,
+                        "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
+                        "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RECEIPT_SHA256": (
+                            presentation_import_sha
+                        ),
+                        "VISTA_PLAYABLE_HOME_SCENE_RECEIPT_SHA256": scene_sha,
+                    },
+                ),
                 log_path=attempt / "presentation-compose.log",
                 marker_prefix=PRESENTATION_SCENE_MARKER,
                 timeout_s=planned.config.command_timeout_s,
@@ -3685,6 +3844,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--unreal-editor-cmd-sha256")
     parser.add_argument("--expected-revision", default=EXPECTED_REVISION, choices=[EXPECTED_REVISION])
     parser.add_argument("--command-timeout-s", type=int, default=3600)
+    parser.add_argument(
+        "--presentation-import-gpu0-rendering",
+        action="store_true",
+        help=(
+            "explicit fresh-attempt retry mode for presentation import; enables "
+            "commandlet rendering offscreen on graphics adapter 0"
+        ),
+    )
     parser.add_argument("--apply", action="store_true", help="materialize and run the two fixed UE commandlets")
     return parser
 
@@ -3716,6 +3883,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         unreal_editor_cmd_sha256=args.unreal_editor_cmd_sha256,
         expected_revision=args.expected_revision,
         command_timeout_s=args.command_timeout_s,
+        presentation_import_gpu0_rendering=(
+            args.presentation_import_gpu0_rendering
+        ),
     )
     try:
         planned = plan_build(config, require_editor=args.apply)

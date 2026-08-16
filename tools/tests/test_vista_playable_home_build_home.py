@@ -376,7 +376,8 @@ def test_dry_run_validates_full_execution_and_writes_nothing(fixture: Fixture) -
     assert len(planned.execution["artifact_bindings"]) == 38
     assert len([item for item in planned.bindings if item["source_file"] is not None]) == 35
     assert len(planned.execution["composition_spec"]["operations"]) > 100
-    assert planned.dry_run_report["commands"][0]["argv"][2:] == [
+    import_command = planned.dry_run_report["commands"][0]
+    assert import_command["argv"][2:8] == [
         "-run=pythonscript",
         "-script=" + str(ROOT / "tools/ue/vista_playable_home/import_assets_commandlet.py"),
         "-nocrashreports",
@@ -384,6 +385,17 @@ def test_dry_run_validates_full_execution_and_writes_nothing(fixture: Fixture) -
         "-nop4",
         "-nosplash",
     ]
+    assert "-nullrhi" in import_command["argv"]
+    assert not any("graphicsadapter" in item.lower() for item in import_command["argv"])
+    runtime_root = fixture.attempt / build_home.COMMANDLET_RUNTIME_DIRECTORY
+    assert f"-UserDir={runtime_root / 'import/user'}" in import_command["argv"]
+    assert f"-LocalDataCachePath={runtime_root / 'ddc'}" in import_command["argv"]
+    assert import_command["env"]["HOME"] == str(runtime_root / "import/home")
+    assert import_command["env"]["TMPDIR"] == str(runtime_root / "import/tmp")
+    assert import_command["env"]["XDG_CACHE_HOME"] == str(
+        runtime_root / "import/xdg-cache"
+    )
+    assert import_command["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert planned.dry_run_report["commands"][1]["env"][
         "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256"
     ] == "<sha256-from-verified-import-receipt>"
@@ -705,6 +717,12 @@ def test_apply_sequences_receipts_then_publishes_pointers(
     assert [item[0] for item in observed] == ["import", "compose"]
     assert "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256" not in observed[0][1]
     assert observed[1][1]["VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256"] == result["import_receipt_sha256"]
+    runtime_root = fixture.attempt / build_home.COMMANDLET_RUNTIME_DIRECTORY
+    assert observed[0][1]["HOME"] == str(runtime_root / "import/home")
+    assert observed[1][1]["HOME"] == str(runtime_root / "compose/home")
+    assert (runtime_root / "ddc").is_dir()
+    assert (runtime_root / "import/tmp").is_dir()
+    assert (runtime_root / "compose/xdg-config").is_dir()
     accepted = (fixture.run_root / "ue/accepted.json").read_bytes()
     current = (fixture.run_root / "ue/current.json").read_bytes()
     assert accepted == current
