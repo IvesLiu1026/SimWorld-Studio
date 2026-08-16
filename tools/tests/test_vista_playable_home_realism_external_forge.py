@@ -1565,9 +1565,9 @@ def test_no_external_v1_path_is_byte_stable_and_runtime_source_is_fail_closed() 
     manifest_bytes = canonical_json_bytes(normalized_manifest(plan, texture_size_px=512))
     # The byte lock advances only when an input profile receipt is truthfully
     # resealed.  The v1 serialization shape and length remain unchanged.
-    assert plan.content_digest == "d4c85631aedae5244f32661ebbf13b4b1a281571371c5d2bef6e80af0fc0dedf"
-    assert hashlib.sha256(canonical_json_bytes(plan)).hexdigest() == "58ed83fa34a51d289db319e0ad850a3c813758f547066929f42fe2dbe71ae61b"
-    assert hashlib.sha256(manifest_bytes).hexdigest() == "ede9831a42e7e5fa52d4730b8750f6ded2262471a90b0dad5fd557b8978ba340"
+    assert plan.content_digest == "39c7125955b40c5386b222e4544df5738c7103187affe3e4fef06791a9569aa7"
+    assert hashlib.sha256(canonical_json_bytes(plan)).hexdigest() == "390e48a334b0d96973a5133bab11abc503c45d29e124eda443a78cb5ef884114"
+    assert hashlib.sha256(manifest_bytes).hexdigest() == "c13d8cd2bdd03fb7128dbd704e97736626725234cd63b84aeb1b9729105955d3"
     assert len(manifest_bytes) == 116578
 
     import tools.blender.vista_playable_home_realism.external_assets as runtime

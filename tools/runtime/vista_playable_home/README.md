@@ -75,6 +75,45 @@ spawn and again after typed `READY`, proves that the listener belongs to its
 owned process group, and records an immutable launch attempt beneath the
 package's `game-runtime/` directory.
 
+## Observed renderer acceptance (realistic r2)
+
+The VisualProfile, generated `DefaultEngine.ini`, UE build result, and Linux
+package receipt deliberately remain `renderer_runtime_observation: pending`.
+They describe requested settings and cannot prove that the active RHI applied
+them. After the exact r2 runtime and its loopback adapter are live, seal one
+read-only observation into the current runtime attempt:
+
+```bash
+WORKSPACE=/absolute/r2/ue/attempt-01
+PACKAGE=/absolute/package-linux-development/attempt-01/package-receipt.json
+PACKAGE_ATTEMPT="${PACKAGE%/package-receipt.json}"
+STATE="$PACKAGE_ATTEMPT/game-runtime/attempt-<utc>-<pid>/runtime-state.json"
+OUTPUT="${STATE%/*}/renderer-acceptance-final.json"
+
+uv run --offline --project tools python \
+  tools/runtime/vista_playable_home/renderer_acceptance.py \
+  --workspace "$WORKSPACE" \
+  --repo-root "$PWD" \
+  --package-receipt "$PACKAGE" \
+  --output "$OUTPUT" \
+  --runtime-state-sha256 "$(sha256sum "$STATE" | awk '{print $1}')" \
+  --build-result-sha256 "$(sha256sum "$WORKSPACE/result-receipt.json" | awk '{print $1}')" \
+  --package-receipt-sha256 "$(sha256sum "$PACKAGE" | awk '{print $1}')" \
+  --source-commit "$(git rev-parse HEAD)"
+```
+
+`renderer_status` accepts only an operation and fresh command ID. The UE game
+thread reads the active UE version, RHI, feature level, shader platform, and a
+closed allowlist of Lumen, reflection, VSM, TSR, Nanite, exposure, streaming,
+screen-percentage, and scalability CVars. Missing or non-finite values fail
+closed. The host rejects duplicate keys, unknown fields/schemas, replayed
+command IDs, multiple JSON responses, stale evidence, and any mismatch with
+the pinned `observation_contract`. It also proves immediately before and after
+the exchange that the loopback listener is still the exact packaged-game
+process-group listener recorded at readiness. Only the exclusive mode-0600
+renderer receipt says `observed_accepted`; no earlier request/build/package
+receipt is rewritten or promoted.
+
 Install the package-bound Sunshine entry with a dry run first, followed by the
 same command plus `--apply`:
 

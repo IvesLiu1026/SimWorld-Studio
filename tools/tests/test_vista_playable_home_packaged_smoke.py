@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import array
 import json
 import os
 import pathlib
 import socket
+import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +16,8 @@ from unittest import mock
 
 from tools.runtime.vista_playable_home import packaged_smoke as smoke
 from tools.ue.vista_playable_home import package_receipt as package
+
+
 class PackagedSmokeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -35,6 +41,25 @@ class PackagedSmokeTests(unittest.TestCase):
         )
         self.pak.parent.mkdir(parents=True)
         self.pak.write_bytes(b"PAK-fixture\n")
+        self.pak.chmod(0o600)
+        self.mode_0644 = (
+            self.attempt
+            / "archive/Linux/VistaPlayableHome/Content/Fixtures/mode-0644.bin"
+        )
+        self.mode_0600 = self.mode_0644.with_name("mode-0600.bin")
+        self.mode_0644.parent.mkdir(parents=True)
+        self.mode_0644.write_bytes(b"mode fixture 0644\n")
+        self.mode_0644.chmod(0o644)
+        self.mode_0600.write_bytes(b"mode fixture 0600\n")
+        self.mode_0600.chmod(0o600)
+        self.project_descriptor = self.attempt / package.PROJECT_RELATIVE
+        self.project_descriptor.parent.mkdir(parents=True)
+        self.project_descriptor.write_text("{}\n", encoding="utf-8")
+        self.project_descriptor.chmod(0o644)
+        self.project_config = self.attempt / package.PROJECT_CONFIG_RELATIVE
+        self.project_config.parent.mkdir(parents=True)
+        self.project_config.write_text("[fixture]\n", encoding="utf-8")
+        self.project_config.chmod(0o640)
         self.engine_root = base / "UE"
         self.unreal_pak = self.engine_root / "Engine/Binaries/Linux/UnrealPak"
         self.unreal_pak.parent.mkdir(parents=True)
@@ -72,7 +97,9 @@ class PackagedSmokeTests(unittest.TestCase):
                     "executable": True,
                 },
                 "executable": {
-                    "relative_path": self.executable.relative_to(self.attempt).as_posix(),
+                    "relative_path": self.executable.relative_to(
+                        self.attempt
+                    ).as_posix(),
                     "sha256": smoke.sha256_file(self.executable),
                     "bytes": self.executable.stat().st_size,
                     "executable": True,
@@ -95,6 +122,89 @@ class PackagedSmokeTests(unittest.TestCase):
             },
         }
         self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
+        self.receipt_path.chmod(0o600)
+
+    def enable_r2_receipt(self, *, exact_modes: bool) -> None:
+        self.package_receipt["schema"] = (
+            smoke.R2_EXACT_MODE_PACKAGE_RECEIPT_SCHEMA
+            if exact_modes
+            else smoke.R2_PACKAGE_RECEIPT_SCHEMA
+        )
+        self.package_receipt["bindings"].update(
+            {
+                "runtime_profile": package.R2_RUNTIME_PROFILE,
+                "camera_profile": package.R2_CAMERA_PROFILE,
+                "accepted_display": package.R2_DISPLAY,
+                "accepted_gpu": package.R2_GPU,
+                "accepted_vista_world_port": package.R2_VISTA_WORLD_PORT,
+                "accepted_width": package.R2_WIDTH,
+                "accepted_height": package.R2_HEIGHT,
+                "accepted_fps": package.R2_FPS,
+            }
+        )
+        if exact_modes:
+            self.package_receipt["archive"] = package.inspect_archive(
+                self.attempt / "archive" / "Linux",
+                trusted_engine_root=self.engine_root,
+                exact_modes=True,
+            )
+            for name, path in (
+                ("launcher", self.launcher),
+                ("executable", self.executable),
+                ("pak", self.pak),
+            ):
+                self.package_receipt["artifacts"][name]["mode"] = stat.S_IMODE(
+                    path.stat().st_mode
+                )
+            self.package_receipt["trusted_upstream"].update(
+                {
+                    "mode_policy": "sealed-exact-stat-imode/v1",
+                    "unreal_pak_mode": stat.S_IMODE(self.unreal_pak.stat().st_mode),
+                }
+            )
+            self.package_receipt["project_policy"] = {
+                "project_descriptor": str(self.project_descriptor),
+                "project_descriptor_sha256": smoke.sha256_file(self.project_descriptor),
+                "project_config": str(self.project_config),
+                "project_config_sha256": smoke.sha256_file(self.project_config),
+                "enabled_plugins": ["VistaPlayableHome"],
+                "disabled_plugins": [
+                    "AndroidFileServer",
+                    "EditorScriptingUtilities",
+                    "Interchange",
+                    "PythonScriptPlugin",
+                ],
+                "host_module": "VistaPlayableHomeHost",
+                "android_file_server_enabled": False,
+                "mode_policy": "sealed-exact-stat-imode/v1",
+                "project_descriptor_mode": stat.S_IMODE(
+                    self.project_descriptor.stat().st_mode
+                ),
+                "project_config_mode": stat.S_IMODE(self.project_config.stat().st_mode),
+            }
+        self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
+        self.receipt_path.chmod(0o600)
+
+    def proc_snapshot(self, inode: int, process_groups: dict[int, int]) -> pathlib.Path:
+        root = (
+            pathlib.Path(self.temporary.name)
+            / f"proc-{len(list(pathlib.Path(self.temporary.name).glob('proc-*')))}"
+        )
+        uid = os.geteuid()
+        for pid, process_group in process_groups.items():
+            process = root / str(pid)
+            descriptors = process / "fd"
+            descriptors.mkdir(parents=True)
+            (process / "status").write_text(
+                f"Name:\tfixture\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n",
+                encoding="utf-8",
+            )
+            (process / "stat").write_text(
+                f"{pid} (fixture) S 1 {process_group} {process_group} 0\n",
+                encoding="utf-8",
+            )
+            (descriptors / "3").symlink_to(f"socket:[{inode}]")
+        return root
 
     def args(self, attempt: str = "attempt-01") -> argparse.Namespace:
         return argparse.Namespace(
@@ -140,27 +250,127 @@ class PackagedSmokeTests(unittest.TestCase):
         self.assertNotIn("OPENAI_API_KEY", environment)
         self.assertNotIn("STUDIO_ACCESS_TOKEN", environment)
 
-    def test_realistic_r2_package_receipt_is_admitted_only_with_fixed_binding(self) -> None:
-        self.package_receipt["schema"] = smoke.R2_PACKAGE_RECEIPT_SCHEMA
-        self.package_receipt["bindings"].update(
-            {
-                "runtime_profile": package.R2_RUNTIME_PROFILE,
-                "camera_profile": package.R2_CAMERA_PROFILE,
-                "accepted_display": package.R2_DISPLAY,
-                "accepted_gpu": package.R2_GPU,
-                "accepted_vista_world_port": package.R2_VISTA_WORLD_PORT,
-                "accepted_width": package.R2_WIDTH,
-                "accepted_height": package.R2_HEIGHT,
-                "accepted_fps": package.R2_FPS,
-            }
-        )
-        self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
-        self.assertEqual(self.inputs().receipt["schema"], smoke.R2_PACKAGE_RECEIPT_SCHEMA)
+    def test_realistic_r2_package_receipt_is_admitted_only_with_fixed_binding(
+        self,
+    ) -> None:
+        self.enable_r2_receipt(exact_modes=False)
+        inputs = self.inputs()
+        self.assertEqual(inputs.receipt["schema"], smoke.R2_PACKAGE_RECEIPT_SCHEMA)
+        self.assertFalse(inputs.exact_mode_attestation)
 
         self.package_receipt["bindings"]["accepted_gpu"] = 1
         self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
-        with self.assertRaisesRegex(smoke.PackagedSmokeError, "PACKAGE_PROFILE_INVALID"):
+        with self.assertRaisesRegex(
+            smoke.PackagedSmokeError, "PACKAGE_PROFILE_INVALID"
+        ):
             self.inputs()
+
+    def test_receipt_mode_is_deterministic_under_restrictive_umask(self) -> None:
+        output = self.attempt / "smoke-receipt-umask.json"
+        receipt = {"schema": "fixture/v1", "status": "accepted"}
+
+        previous_umask = os.umask(0o777)
+        try:
+            receipt_sha = smoke._write_receipt(output, receipt)
+        finally:
+            os.umask(previous_umask)
+
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        self.assertEqual(output.read_bytes(), smoke.canonical_json(receipt))
+        self.assertEqual(receipt_sha, smoke.sha256_file(output))
+
+    def test_receipt_mode_failure_removes_reserved_output(self) -> None:
+        output = self.attempt / "smoke-receipt-fchmod-failure.json"
+        receipt = {"schema": "fixture/v1", "status": "accepted"}
+
+        with mock.patch.object(
+            smoke.os, "fchmod", side_effect=OSError("fixture fchmod failure")
+        ):
+            with self.assertRaises(OSError):
+                smoke._write_receipt(output, receipt)
+
+        self.assertFalse(output.exists())
+
+    def test_fdopen_close_then_raise_preserves_error_and_removes_output(self) -> None:
+        output = self.attempt / "smoke-receipt-fdopen-failure.json"
+        receipt = {"schema": "fixture/v1", "status": "accepted"}
+
+        def close_then_raise(descriptor, *_args, **_kwargs):
+            os.close(descriptor)
+            raise RuntimeError("fixture fdopen failure")
+
+        with mock.patch.object(smoke.os, "fdopen", side_effect=close_then_raise):
+            with self.assertRaisesRegex(RuntimeError, "fixture fdopen failure"):
+                smoke._write_receipt(output, receipt)
+
+        self.assertFalse(output.exists())
+
+    def test_exact_r2_v3_smoke_reverifies_non_named_and_project_modes(self) -> None:
+        self.enable_r2_receipt(exact_modes=True)
+        inputs = self.inputs()
+        self.assertTrue(inputs.exact_mode_attestation)
+        self.assertEqual(
+            inputs.receipt_schema,
+            smoke.R2_EXACT_MODE_PACKAGE_RECEIPT_SCHEMA,
+        )
+        self.assertEqual(
+            inputs.archive_schema,
+            package.ARCHIVE_SCHEMA_EXACT_MODE_V2,
+        )
+        smoke.verify_sealed_archive(inputs)
+
+        for path, changed_mode in (
+            (self.mode_0644, 0o600),
+            (self.mode_0600, 0o640),
+            (self.project_config, 0o600),
+        ):
+            original_mode = stat.S_IMODE(path.stat().st_mode)
+            with self.subTest(path=path.name, changed_mode=oct(changed_mode)):
+                path.chmod(changed_mode)
+                with self.assertRaisesRegex(
+                    smoke.PackagedSmokeError,
+                    "PACKAGE_ARCHIVE_DRIFT",
+                ):
+                    smoke.verify_sealed_archive(inputs)
+                path.chmod(original_mode)
+
+        smoke.verify_sealed_archive(inputs)
+
+    def test_exact_r2_v3_smoke_rejects_mode_exchange_during_runtime_phase(self) -> None:
+        self.enable_r2_receipt(exact_modes=True)
+        inputs = self.inputs("attempt-06")
+        probe_calls = 0
+
+        def ready(port: int, *, expected_revision: str, timeout: float):
+            nonlocal probe_calls
+            probe_calls += 1
+            if probe_calls == 1:
+                self.project_config.chmod(0o600)
+            return {
+                "command_id": "vwc-" + "d" * 24,
+                "status": "success",
+                "code": "READY",
+                "world_revision": expected_revision,
+                "session_generation": 0,
+                "event_status": "inactive",
+                "active_event": None,
+            }
+
+        receipt, _receipt_sha = smoke.run_smoke(
+            inputs,
+            probe=ready,
+            listener_prover=lambda port, process_group: {
+                "host": "127.0.0.1",
+                "port": port,
+                "process_group": process_group,
+                "socket_inode": 321,
+                "owner_pids": [process_group],
+            },
+        )
+
+        self.assertEqual(probe_calls, 2)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["error"]["code"], "PACKAGE_ARCHIVE_DRIFT")
 
     def test_real_owned_process_group_is_probed_terminated_and_sealed(self) -> None:
         inputs = self.inputs()
@@ -264,9 +474,38 @@ class PackagedSmokeTests(unittest.TestCase):
         with (
             mock.patch.object(smoke, "_listening_loopback_inodes", return_value={111}),
             mock.patch.object(
-                smoke, "_process_group_socket_owners", return_value={111: []}
+                smoke, "process_effective_uid", return_value=os.geteuid()
             ),
-            self.assertRaisesRegex(smoke.PackagedSmokeError, "LISTENER_OWNERSHIP_INVALID"),
+            mock.patch.object(smoke, "_global_socket_owners", return_value={111: []}),
+            self.assertRaisesRegex(
+                smoke.PackagedSmokeError, "LISTENER_OWNERSHIP_INVALID"
+            ),
+        ):
+            smoke.prove_loopback_listener_ownership(55777, 424242)
+
+    def test_unreadable_same_uid_descriptor_table_fails_closed(self) -> None:
+        proc_root = pathlib.Path(self.temporary.name) / "fake-proc"
+        process = proc_root / "424242"
+        process.mkdir(parents=True)
+        uid = os.geteuid()
+        (process / "status").write_text(
+            f"Name:\tfixture\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n",
+            encoding="utf-8",
+        )
+        (process / "stat").write_text(
+            "424242 (fixture) S 1 424242 424242 0\n",
+            encoding="utf-8",
+        )
+        # A regular file in place of fd deterministically exercises the same
+        # fail-closed path as an unreadable same-UID /proc/<pid>/fd directory.
+        (process / "fd").write_text("unreadable fixture\n", encoding="utf-8")
+        with (
+            mock.patch.object(smoke, "PROC_ROOT", proc_root),
+            mock.patch.object(smoke, "_listening_loopback_inodes", return_value={111}),
+            self.assertRaisesRegex(
+                smoke.PackagedSmokeError,
+                "LISTENER_VISIBILITY_INCOMPLETE",
+            ),
         ):
             smoke.prove_loopback_listener_ownership(55777, 424242)
 
@@ -274,11 +513,132 @@ class PackagedSmokeTests(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen(1)
-            proof = smoke.prove_loopback_listener_ownership(
-                listener.getsockname()[1], os.getpgrp()
-            )
-        self.assertEqual(proof["process_group"], os.getpgrp())
+            inode = os.fstat(listener.fileno()).st_ino
+            proc_root = self.proc_snapshot(inode, {os.getpid(): os.getpid()})
+            with (
+                mock.patch.object(smoke, "PROC_ROOT", proc_root),
+                mock.patch.object(
+                    smoke, "_listening_loopback_inodes", return_value={inode}
+                ),
+            ):
+                proof = smoke.prove_loopback_listener_ownership(
+                    listener.getsockname()[1], os.getpid()
+                )
+        self.assertEqual(proof["process_group"], os.getpid())
         self.assertIn(os.getpid(), proof["owner_pids"])
+
+    def test_inherited_listener_fd_outside_sealed_group_is_rejected(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os,sys,time;"
+                        "os.fstat(int(sys.argv[1]));"
+                        "print('ready', flush=True);"
+                        "time.sleep(30)"
+                    ),
+                    str(listener.fileno()),
+                ],
+                pass_fds=(listener.fileno(),),
+                start_new_session=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                self.assertIsNotNone(child.stdout)
+                self.assertEqual(child.stdout.readline().strip(), "ready")
+                inode = os.fstat(listener.fileno()).st_ino
+                proc_root = self.proc_snapshot(
+                    inode,
+                    {os.getpid(): os.getpid(), child.pid: child.pid},
+                )
+                with (
+                    mock.patch.object(smoke, "PROC_ROOT", proc_root),
+                    mock.patch.object(
+                        smoke, "_listening_loopback_inodes", return_value={inode}
+                    ),
+                    self.assertRaisesRegex(
+                        smoke.PackagedSmokeError,
+                        "LISTENER_OWNERSHIP_INVALID",
+                    ),
+                ):
+                    smoke.prove_loopback_listener_ownership(
+                        listener.getsockname()[1], os.getpid()
+                    )
+            finally:
+                child.terminate()
+                child.communicate(timeout=5)
+
+    @unittest.skipUnless(
+        hasattr(socket, "SCM_RIGHTS"),
+        "SCM_RIGHTS is required for descriptor-handoff proof",
+    )
+    def test_scm_rights_listener_handoff_outside_group_is_rejected(self) -> None:
+        sender, receiver = socket.socketpair()
+        with (
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener,
+            sender,
+            receiver,
+        ):
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import array,socket,sys,time;"
+                        "channel=socket.socket(fileno=int(sys.argv[1]));"
+                        "_,ancillary,_,_=channel.recvmsg(1,socket.CMSG_SPACE(4));"
+                        "fds=array.array('i');"
+                        "fds.frombytes(ancillary[0][2][:fds.itemsize]);"
+                        "held=socket.socket(fileno=fds[0]);"
+                        "print('ready', flush=True);"
+                        "time.sleep(30)"
+                    ),
+                    str(receiver.fileno()),
+                ],
+                pass_fds=(receiver.fileno(),),
+                start_new_session=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            receiver.close()
+            rights = array.array("i", [listener.fileno()])
+            sender.sendmsg(
+                [b"x"],
+                [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights.tobytes())],
+            )
+            try:
+                self.assertIsNotNone(child.stdout)
+                self.assertEqual(child.stdout.readline().strip(), "ready")
+                inode = os.fstat(listener.fileno()).st_ino
+                proc_root = self.proc_snapshot(
+                    inode,
+                    {os.getpid(): os.getpid(), child.pid: child.pid},
+                )
+                with (
+                    mock.patch.object(smoke, "PROC_ROOT", proc_root),
+                    mock.patch.object(
+                        smoke, "_listening_loopback_inodes", return_value={inode}
+                    ),
+                    self.assertRaisesRegex(
+                        smoke.PackagedSmokeError,
+                        "LISTENER_OWNERSHIP_INVALID",
+                    ),
+                ):
+                    smoke.prove_loopback_listener_ownership(
+                        listener.getsockname()[1], os.getpid()
+                    )
+            finally:
+                child.terminate()
+                child.communicate(timeout=5)
 
     def test_receipt_pin_launcher_pin_and_output_scope_fail_closed(self) -> None:
         args = self.args()
@@ -299,7 +659,9 @@ class PackagedSmokeTests(unittest.TestCase):
 
         self.launcher.write_text("#!/bin/sh\nsleep 60\n", encoding="utf-8")
         self.launcher.chmod(0o700)
-        self.package_receipt["artifacts"]["launcher"]["sha256"] = smoke.sha256_file(self.launcher)
+        self.package_receipt["artifacts"]["launcher"]["sha256"] = smoke.sha256_file(
+            self.launcher
+        )
         self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
         args = self.args()
         args.output_dir = self.attempt.parent / "outside" / "attempt-01"

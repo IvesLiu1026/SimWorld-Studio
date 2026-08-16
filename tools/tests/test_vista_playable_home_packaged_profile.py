@@ -23,11 +23,7 @@ from tools.ue.vista_playable_home import package_receipt as package_verifier
 class PackagedProfileFixture:
     def __init__(self, root: Path) -> None:
         self.root = root
-        self.attempt = (
-            root
-            / "package-linux-development"
-            / "attempt-04-no-afs-clean"
-        )
+        self.attempt = root / "package-linux-development" / "attempt-04-no-afs-clean"
         self.archive = self.attempt / "archive" / "Linux"
         self.launcher = self.archive / "VistaPlayableHome.sh"
         self.launcher.parent.mkdir(parents=True)
@@ -56,8 +52,30 @@ class PackagedProfileFixture:
         self.pak.parent.mkdir(parents=True)
         self.pak.write_bytes(b"fixture-pak\n")
         self.pak.chmod(0o600)
+        self.mode_0644 = (
+            self.archive
+            / "VistaPlayableHome"
+            / "Content"
+            / "Fixtures"
+            / "mode-0644.bin"
+        )
+        self.mode_0600 = self.mode_0644.with_name("mode-0600.bin")
+        self.mode_0644.parent.mkdir(parents=True)
+        self.mode_0644.write_bytes(b"mode fixture 0644\n")
+        self.mode_0644.chmod(0o644)
+        self.mode_0600.write_bytes(b"mode fixture 0600\n")
+        self.mode_0600.chmod(0o600)
+        self.project_descriptor = self.attempt / package_verifier.PROJECT_RELATIVE
+        self.project_descriptor.parent.mkdir(parents=True)
+        self.project_descriptor.write_text("{}\n", encoding="utf-8")
+        self.project_descriptor.chmod(0o644)
+        self.project_config = self.attempt / package_verifier.PROJECT_CONFIG_RELATIVE
+        self.project_config.parent.mkdir(parents=True)
+        self.project_config.write_text("[fixture]\n", encoding="utf-8")
+        self.project_config.chmod(0o640)
         self.icd = root / "nvidia_icd.json"
         self.icd.write_text('{"file_format_version":"1.0.0"}\n', encoding="utf-8")
+        self.icd.chmod(0o644)
         self.engine_root = root / "UE"
         self.unreal_pak = (
             self.engine_root / "Engine" / "Binaries" / "Linux" / "UnrealPak"
@@ -70,14 +88,17 @@ class PackagedProfileFixture:
         self.receipt = self._receipt()
         self.write_receipt()
 
-    def _artifact(self, path: Path) -> dict[str, object]:
+    def _artifact(self, path: Path, *, exact_modes: bool = False) -> dict[str, object]:
         metadata = path.stat()
-        return {
+        record: dict[str, object] = {
             "relative_path": path.relative_to(self.attempt).as_posix(),
             "sha256": packaged_profile.sha256_file(path),
             "bytes": metadata.st_size,
             "executable": bool(metadata.st_mode & 0o111),
         }
+        if exact_modes:
+            record["mode"] = stat.S_IMODE(metadata.st_mode)
+        return record
 
     def _receipt(self) -> dict[str, object]:
         archive = package_verifier.inspect_archive(
@@ -123,6 +144,83 @@ class PackagedProfileFixture:
         self.receipt_path.chmod(0o600)
         return hashlib.sha256(raw).hexdigest()
 
+    def enable_r2_receipt(self, *, exact_modes: bool) -> None:
+        self.receipt["schema"] = (
+            package_verifier.R2_EXACT_MODE_RECEIPT_SCHEMA
+            if exact_modes
+            else package_verifier.R2_RECEIPT_SCHEMA
+        )
+        self.receipt["bindings"].update(
+            {
+                "runtime_profile": runtime.R2_RUNTIME_PROFILE,
+                "camera_profile": runtime.R2_CAMERA_PROFILE,
+                "visual_profile_id": runtime.R2_RUNTIME_PROFILE,
+                "visual_profile_sha256": "4" * 64,
+                "visual_profile_content_digest": "5" * 64,
+                "renderer_profile_request_sha256": "6" * 64,
+                "renderer_profile_request_content_digest": "7" * 64,
+                "presentation_import_receipt_sha256": "8" * 64,
+                "presentation_scene_receipt_sha256": "9" * 64,
+                "presentation_manifest_sha256": "a" * 64,
+                "presentation_artifact_receipt_sha256": "b" * 64,
+                "accepted_display": runtime.R2_DISPLAY,
+                "accepted_gpu": runtime.R2_GPU,
+                "accepted_vista_world_port": runtime.R2_VISTA_WORLD_PORT,
+                "accepted_width": runtime.R2_WIDTH,
+                "accepted_height": runtime.R2_HEIGHT,
+                "accepted_fps": runtime.R2_FPS,
+                "presentation_bundle_count": (
+                    package_verifier.R2_PRESENTATION_BUNDLE_COUNT
+                ),
+                "presentation_collision_policy": (
+                    package_verifier.R2_PRESENTATION_COLLISION_POLICY
+                ),
+            }
+        )
+        if exact_modes:
+            self.receipt["archive"] = package_verifier.inspect_archive(
+                self.archive,
+                trusted_engine_root=self.engine_root,
+                exact_modes=True,
+            )
+            self.receipt["artifacts"] = {
+                "archive_root": str(self.archive),
+                "launcher": self._artifact(self.launcher, exact_modes=True),
+                "executable": self._artifact(self.executable, exact_modes=True),
+                "pak": self._artifact(self.pak, exact_modes=True),
+            }
+            self.receipt["trusted_upstream"].update(
+                {
+                    "mode_policy": packaged_profile.EXACT_MODE_POLICY,
+                    "unreal_pak_mode": stat.S_IMODE(self.unreal_pak.stat().st_mode),
+                }
+            )
+            self.receipt["project_policy"] = {
+                "project_descriptor": str(self.project_descriptor),
+                "project_descriptor_sha256": packaged_profile.sha256_file(
+                    self.project_descriptor
+                ),
+                "project_config": str(self.project_config),
+                "project_config_sha256": packaged_profile.sha256_file(
+                    self.project_config
+                ),
+                "enabled_plugins": ["VistaPlayableHome"],
+                "disabled_plugins": [
+                    "AndroidFileServer",
+                    "EditorScriptingUtilities",
+                    "Interchange",
+                    "PythonScriptPlugin",
+                ],
+                "host_module": "VistaPlayableHomeHost",
+                "android_file_server_enabled": False,
+                "mode_policy": packaged_profile.EXACT_MODE_POLICY,
+                "project_descriptor_mode": stat.S_IMODE(
+                    self.project_descriptor.stat().st_mode
+                ),
+                "project_config_mode": stat.S_IMODE(self.project_config.stat().st_mode),
+            }
+        self.write_receipt()
+
     @property
     def receipt_sha256(self) -> str:
         return packaged_profile.sha256_file(self.receipt_path)
@@ -130,37 +228,11 @@ class PackagedProfileFixture:
     def write_profile(
         self,
         runtime_profile: str | None = None,
+        *,
+        exact_modes: bool = False,
     ) -> packaged_profile.ProfileWriteResult:
         if runtime_profile == runtime.R2_RUNTIME_PROFILE:
-            self.receipt["schema"] = package_verifier.R2_RECEIPT_SCHEMA
-            self.receipt["bindings"].update(
-                {
-                    "runtime_profile": runtime.R2_RUNTIME_PROFILE,
-                    "camera_profile": runtime.R2_CAMERA_PROFILE,
-                    "visual_profile_id": runtime.R2_RUNTIME_PROFILE,
-                    "visual_profile_sha256": "4" * 64,
-                    "visual_profile_content_digest": "5" * 64,
-                    "renderer_profile_request_sha256": "6" * 64,
-                    "renderer_profile_request_content_digest": "7" * 64,
-                    "presentation_import_receipt_sha256": "8" * 64,
-                    "presentation_scene_receipt_sha256": "9" * 64,
-                    "presentation_manifest_sha256": "a" * 64,
-                    "presentation_artifact_receipt_sha256": "b" * 64,
-                    "accepted_display": runtime.R2_DISPLAY,
-                    "accepted_gpu": runtime.R2_GPU,
-                    "accepted_vista_world_port": runtime.R2_VISTA_WORLD_PORT,
-                    "accepted_width": runtime.R2_WIDTH,
-                    "accepted_height": runtime.R2_HEIGHT,
-                    "accepted_fps": runtime.R2_FPS,
-                    "presentation_bundle_count": (
-                        package_verifier.R2_PRESENTATION_BUNDLE_COUNT
-                    ),
-                    "presentation_collision_policy": (
-                        package_verifier.R2_PRESENTATION_COLLISION_POLICY
-                    ),
-                }
-            )
-            self.write_receipt()
+            self.enable_r2_receipt(exact_modes=exact_modes)
         return packaged_profile.write_profile(
             self.attempt,
             self.receipt_sha256,
@@ -211,7 +283,9 @@ class PackagedProfileTests(unittest.TestCase):
             packaged_profile.sha256_file(self.fixture.icd),
         )
 
-    def test_direct_command_has_no_editor_uproject_game_flag_or_shell_launcher(self) -> None:
+    def test_direct_command_has_no_editor_uproject_game_flag_or_shell_launcher(
+        self,
+    ) -> None:
         self.fixture.write_profile()
         inputs = self.fixture.load_profile()
         command = packaged_entrypoint.build_command(inputs)
@@ -228,7 +302,7 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertIn("-ResX=1280", command)
         self.assertIn("-ResY=720", command)
 
-    def test_realistic_r2_profile_command_environment_and_plan_are_closed(self) -> None:
+    def test_legacy_r2_v2_profile_remains_loadable_and_runtime_closed(self) -> None:
         result = self.fixture.write_profile(runtime.R2_RUNTIME_PROFILE)
         inputs = packaged_profile.load_profile(
             self.fixture.profile_path,
@@ -243,6 +317,12 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertEqual(payload["vista_world_port"], runtime.R2_VISTA_WORLD_PORT)
         self.assertEqual(payload["width"], runtime.R2_WIDTH)
         self.assertEqual(payload["height"], runtime.R2_HEIGHT)
+        self.assertEqual(
+            inputs.package.receipt_schema,
+            package_verifier.R2_RECEIPT_SCHEMA,
+        )
+        self.assertFalse(inputs.package.exact_mode_attestation)
+        self.assertFalse(inputs.exact_mode_attestation)
 
         command = packaged_entrypoint.build_command(inputs)
         self.assertIn(
@@ -257,14 +337,128 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertEqual(environment["DISPLAY"], runtime.R2_DISPLAY)
         self.assertEqual(environment["TMPDIR"], str(user_root / "tmp"))
         self.assertEqual(environment["XDG_DATA_HOME"], str(user_root / "xdg-data"))
-        self.assertEqual(environment["VISTA_RUNTIME_PROFILE"], runtime.R2_RUNTIME_PROFILE)
+        self.assertEqual(
+            environment["VISTA_RUNTIME_PROFILE"], runtime.R2_RUNTIME_PROFILE
+        )
         self.assertEqual(environment["VISTA_CAMERA_PROFILE"], runtime.R2_CAMERA_PROFILE)
         plan = packaged_entrypoint.launch_plan(inputs)
         self.assertEqual(plan["schema"], packaged_entrypoint.R2_PLAN_SCHEMA)
         self.assertEqual(plan["mode"], packaged_profile.R2_PROFILE_MODE)
         self.assertEqual(plan["runtime"]["runtime_profile"], runtime.R2_RUNTIME_PROFILE)
         self.assertEqual(plan["runtime"]["camera_profile"], runtime.R2_CAMERA_PROFILE)
-        self.assertEqual(plan["runtime"]["vista_world_port"], runtime.R2_VISTA_WORLD_PORT)
+        self.assertEqual(
+            plan["runtime"]["vista_world_port"], runtime.R2_VISTA_WORLD_PORT
+        )
+
+    def test_exact_mode_r2_v3_profile_seals_archive_and_named_file_modes(self) -> None:
+        result = self.fixture.write_profile(
+            runtime.R2_RUNTIME_PROFILE,
+            exact_modes=True,
+        )
+        payload = json.loads(self.fixture.profile_path.read_text(encoding="utf-8"))
+        inputs = packaged_profile.load_profile(
+            self.fixture.profile_path,
+            result.profile_sha256,
+        )
+
+        self.assertEqual(set(payload), packaged_profile.R2_EXACT_MODE_PROFILE_KEYS)
+        self.assertEqual(
+            payload["schema"], packaged_profile.R2_EXACT_MODE_PROFILE_SCHEMA
+        )
+        self.assertEqual(
+            payload["archive_schema"],
+            package_verifier.ARCHIVE_SCHEMA_EXACT_MODE_V2,
+        )
+        self.assertEqual(
+            payload["archive_algorithm"],
+            package_verifier.ARCHIVE_ALGORITHM_EXACT_MODE_V2,
+        )
+        self.assertEqual(payload["mode_policy"], packaged_profile.EXACT_MODE_POLICY)
+        self.assertEqual(payload["package_receipt_mode"], 0o600)
+        self.assertEqual(payload["profile_file_mode"], 0o600)
+        self.assertEqual(
+            payload["nvidia_icd_mode"],
+            stat.S_IMODE(self.fixture.icd.stat().st_mode),
+        )
+        self.assertTrue(inputs.exact_mode_attestation)
+        self.assertTrue(inputs.package.exact_mode_attestation)
+        self.assertEqual(
+            inputs.package.receipt_schema,
+            package_verifier.R2_EXACT_MODE_RECEIPT_SCHEMA,
+        )
+        self.assertEqual(
+            inputs.package.launcher_mode,
+            stat.S_IMODE(self.fixture.launcher.stat().st_mode),
+        )
+        self.assertEqual(
+            inputs.package.executable_mode,
+            stat.S_IMODE(self.fixture.executable.stat().st_mode),
+        )
+        self.assertEqual(
+            inputs.package.pak_mode,
+            stat.S_IMODE(self.fixture.pak.stat().st_mode),
+        )
+        self.assertEqual(
+            inputs.package.project_config_mode,
+            stat.S_IMODE(self.fixture.project_config.stat().st_mode),
+        )
+
+    def test_exact_mode_r2_v3_profile_rejects_mode_only_drift(self) -> None:
+        result = self.fixture.write_profile(
+            runtime.R2_RUNTIME_PROFILE,
+            exact_modes=True,
+        )
+
+        for path, changed_mode in (
+            (self.fixture.mode_0644, 0o600),
+            (self.fixture.mode_0600, 0o640),
+            (self.fixture.project_config, 0o600),
+            (self.fixture.icd, 0o600),
+        ):
+            original_mode = stat.S_IMODE(path.stat().st_mode)
+            with self.subTest(path=path.name, changed_mode=oct(changed_mode)):
+                path.chmod(changed_mode)
+                with self.assertRaises(packaged_profile.PackagedProfileError):
+                    packaged_profile.load_profile(
+                        self.fixture.profile_path,
+                        result.profile_sha256,
+                    )
+                path.chmod(original_mode)
+
+        loaded = packaged_profile.load_profile(
+            self.fixture.profile_path,
+            result.profile_sha256,
+        )
+        self.assertTrue(loaded.exact_mode_attestation)
+
+    def test_load_profile_rejects_profile_mode_exchange_between_phases(self) -> None:
+        result = self.fixture.write_profile(
+            runtime.R2_RUNTIME_PROFILE,
+            exact_modes=True,
+        )
+        original_validate = packaged_profile.validate_package_attempt
+
+        def exchanging_validate(*args, **kwargs):
+            binding = original_validate(*args, **kwargs)
+            self.fixture.profile_path.chmod(0o640)
+            return binding
+
+        with (
+            mock.patch.object(
+                packaged_profile,
+                "validate_package_attempt",
+                side_effect=exchanging_validate,
+            ),
+            self.assertRaisesRegex(
+                packaged_profile.PackagedProfileError,
+                "PROFILE_IDENTITY_CHANGED",
+            ),
+        ):
+            packaged_profile.load_profile(
+                self.fixture.profile_path,
+                result.profile_sha256,
+            )
+        self.fixture.profile_path.chmod(0o600)
 
     def test_package_and_requested_runtime_profiles_must_match(self) -> None:
         with self.assertRaisesRegex(
@@ -285,8 +479,7 @@ class PackagedProfileTests(unittest.TestCase):
                 "camera_profile": runtime.R2_CAMERA_PROFILE,
                 "visual_profile_id": runtime.R2_RUNTIME_PROFILE,
                 **{
-                    field: "e" * 64
-                    for field in package_verifier.R2_BUILD_DIGEST_FIELDS
+                    field: "e" * 64 for field in package_verifier.R2_BUILD_DIGEST_FIELDS
                 },
                 "accepted_display": runtime.R2_DISPLAY,
                 "accepted_gpu": runtime.R2_GPU,
@@ -369,7 +562,9 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertNotIn("CUDA_VISIBLE_DEVICES", environment)
 
     def test_receipt_profile_and_mode_pins_fail_closed(self) -> None:
-        with self.assertRaisesRegex(packaged_profile.PackagedProfileError, "PIN_MISMATCH"):
+        with self.assertRaisesRegex(
+            packaged_profile.PackagedProfileError, "PIN_MISMATCH"
+        ):
             packaged_profile.write_profile(
                 self.fixture.attempt,
                 "0" * 64,
@@ -379,20 +574,28 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertFalse(self.fixture.profile_path.exists())
 
         result = self.fixture.write_profile()
-        with self.assertRaisesRegex(packaged_profile.PackagedProfileError, "PIN_MISMATCH"):
+        with self.assertRaisesRegex(
+            packaged_profile.PackagedProfileError, "PIN_MISMATCH"
+        ):
             packaged_profile.load_profile(self.fixture.profile_path, "0" * 64)
 
         self.fixture.profile_path.chmod(0o644)
         with self.assertRaisesRegex(packaged_profile.PackagedProfileError, "0600"):
-            packaged_profile.load_profile(self.fixture.profile_path, result.profile_sha256)
+            packaged_profile.load_profile(
+                self.fixture.profile_path, result.profile_sha256
+            )
 
     def test_archive_drift_is_refused_when_loading_existing_profile(self) -> None:
         result = self.fixture.write_profile()
         self.fixture.pak.write_bytes(self.fixture.pak.read_bytes() + b"tamper")
         with self.assertRaises(packaged_profile.PackagedProfileError):
-            packaged_profile.load_profile(self.fixture.profile_path, result.profile_sha256)
+            packaged_profile.load_profile(
+                self.fixture.profile_path, result.profile_sha256
+            )
 
-    def test_fixed_value_or_unknown_field_tampering_is_refused_even_when_rehashed(self) -> None:
+    def test_fixed_value_or_unknown_field_tampering_is_refused_even_when_rehashed(
+        self,
+    ) -> None:
         self.fixture.write_profile()
         original = json.loads(self.fixture.profile_path.read_text(encoding="utf-8"))
         cases = []
@@ -418,7 +621,9 @@ class PackagedProfileTests(unittest.TestCase):
 
     def test_profile_output_is_scoped_and_never_replaced(self) -> None:
         outside = self.root / "sunshine-profile-packaged.json"
-        with self.assertRaisesRegex(packaged_profile.PackagedProfileError, "direct child"):
+        with self.assertRaisesRegex(
+            packaged_profile.PackagedProfileError, "direct child"
+        ):
             packaged_profile.write_profile(
                 self.fixture.attempt,
                 self.fixture.receipt_sha256,
@@ -427,11 +632,15 @@ class PackagedProfileTests(unittest.TestCase):
             )
         self.fixture.write_profile()
         before = self.fixture.profile_path.read_bytes()
-        with self.assertRaisesRegex(packaged_profile.PackagedProfileError, "already exists"):
+        with self.assertRaisesRegex(
+            packaged_profile.PackagedProfileError, "already exists"
+        ):
             self.fixture.write_profile()
         self.assertEqual(self.fixture.profile_path.read_bytes(), before)
 
-    def test_sunshine_entry_can_pin_packaged_profile_without_changing_preview(self) -> None:
+    def test_sunshine_entry_can_pin_packaged_profile_without_changing_preview(
+        self,
+    ) -> None:
         preview = sunshine_app.build_entry(
             python=Path("/usr/bin/python3"),
             launcher=Path("/repo/profile_entrypoint.py"),
@@ -450,9 +659,13 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertIn("--profile-sha256 " + "a" * 64, packaged["cmd"])
         self.assertEqual(preview["exit-timeout"], "20")
         self.assertEqual(packaged["exit-timeout"], "90")
-        payload = {"apps": [{"name": "Desktop"}, {"name": "VISTA World", "cmd": "preview"}]}
+        payload = {
+            "apps": [{"name": "Desktop"}, {"name": "VISTA World", "cmd": "preview"}]
+        }
         merged = sunshine_app.merge_entry(payload, packaged)
-        self.assertEqual([item["name"] for item in merged["apps"]], ["Desktop", "VISTA World"])
+        self.assertEqual(
+            [item["name"] for item in merged["apps"]], ["Desktop", "VISTA World"]
+        )
         self.assertEqual(merged["apps"][-1]["cmd"], packaged["cmd"])
         with self.assertRaisesRegex(sunshine_app.SunshineConfigError, "SHA-256"):
             sunshine_app.build_entry(
@@ -536,7 +749,9 @@ class PackagedProfileTests(unittest.TestCase):
             [(packaged_profile.EXPECTED_PORT, state["process"]["pid"])],
         )
         self.assertFalse(runtime.identity_is_live(state["process"]))
-        pointer_path, pointer_state = runtime.resolve_current_runtime_state(self.fixture.attempt)
+        pointer_path, pointer_state = runtime.resolve_current_runtime_state(
+            self.fixture.attempt
+        )
         self.assertEqual(pointer_path, state_path)
         self.assertEqual(pointer_state["status"], "stopped")
 
@@ -616,7 +831,9 @@ class PackagedProfileTests(unittest.TestCase):
         )
         self.assertFalse(runtime.identity_is_live(state["process"]))
 
-    def test_post_readiness_archive_drift_terminates_owned_process_and_marks_failed(self) -> None:
+    def test_post_readiness_archive_drift_terminates_owned_process_and_marks_failed(
+        self,
+    ) -> None:
         self.fixture.write_profile()
         inputs = self.fixture.load_profile()
 
@@ -659,7 +876,9 @@ class PackagedProfileTests(unittest.TestCase):
         self.assertFalse(runtime.identity_is_live(state["process"]))
         self.assertEqual(stat.S_IMODE(state_path.stat().st_mode), 0o600)
 
-    def test_entrypoint_has_no_runtime_override_or_arbitrary_command_arguments(self) -> None:
+    def test_entrypoint_has_no_runtime_override_or_arbitrary_command_arguments(
+        self,
+    ) -> None:
         destinations = {
             action.dest for action in packaged_entrypoint.build_parser()._actions
         }

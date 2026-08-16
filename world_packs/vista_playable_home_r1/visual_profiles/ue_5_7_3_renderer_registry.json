@@ -1,0 +1,179 @@
+{
+  "schema_version": "simworld.vista.playable-home-ue-renderer-registry/v1",
+  "registry_id": "ue_5_7_3_registered_cvars_v1",
+  "engine": {
+    "version": "5.7.3",
+    "runtime_version": "5.7.3-50162420+++UE5+Release-5.7",
+    "changelist": 50162420,
+    "branch_name": "++UE5+Release-5.7",
+    "build_version_relative_path": "Engine/Build/Build.version",
+    "build_version_sha256": "ffe01f6d1e96ef86cd06158cfb561150971823fc77e5c8df352910bcf4d365ef"
+  },
+  "registration_evidence_policy": "pinned-ue-source-file-and-declaration-symbol-sha256/v1",
+  "pre_exposure_policy": {
+    "semantic_enabled": true,
+    "runtime_policy": "ue5_always_on_engine_managed",
+    "policy_source_relative_path": "Engine/Source/Runtime/RenderCore/Private/Shader.cpp",
+    "policy_source_sha256": "a4ce752f788e5f9c4b73516175b0b8c39a0b21bb601382f51ae4dcca71a7904a",
+    "policy_evidence": "PreExposure is always used",
+    "override_cvar": "r.EyeAdaptation.PreExposureOverride",
+    "override_expected": 0
+  },
+  "registrations": [
+    {
+      "name": "r.DynamicGlobalIlluminationMethod",
+      "declaration_symbol": "CVarDynamicGlobalIlluminationMethod",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Renderer/Private/IndirectLightRendering.cpp",
+      "source_sha256": "5d0b086ca73c1b15bbee300285710ffc9bcee089bac58777a996dfd8a9239ea6"
+    },
+    {
+      "name": "r.ReflectionMethod",
+      "declaration_symbol": "CVarReflectionMethod",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Renderer/Private/IndirectLightRendering.cpp",
+      "source_sha256": "5d0b086ca73c1b15bbee300285710ffc9bcee089bac58777a996dfd8a9239ea6"
+    },
+    {
+      "name": "r.Shadow.Virtual.Enable",
+      "declaration_symbol": "CVarEnableVirtualShadowMaps",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Renderer/Private/VirtualShadowMaps/VirtualShadowMapArray.cpp",
+      "source_sha256": "feea65ef6f8b8834851afb48c4f4bf174513dcf26557a875f7740aa5e04ca5de"
+    },
+    {
+      "name": "r.AntiAliasingMethod",
+      "declaration_symbol": "CVarDefaultAntiAliasing",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/SceneView.cpp",
+      "source_sha256": "d2c8e1fe102ff058d382a3b21455a7a8f1ae3c053c2da04515b1ca7bd99586cc"
+    },
+    {
+      "name": "r.Nanite",
+      "declaration_symbol": "CVarRenderNaniteMeshes",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/StaticMeshSceneProxy.cpp",
+      "source_sha256": "6779629828cb3513cb0cc69656f5b39835ff7e8125fe5f602eb5d145c1de0790"
+    },
+    {
+      "name": "r.GenerateMeshDistanceFields",
+      "declaration_symbol": "CVarDistField",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/DistanceFieldAtlas.cpp",
+      "source_sha256": "0c6ed54716ffa1fea3c81b6a8b67722177aad8691def07a006a5d25d32901fe4"
+    },
+    {
+      "name": "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange",
+      "declaration_symbol": "CVarDefaultAutoExposureExtendDefaultLuminanceRange",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/SceneView.cpp",
+      "source_sha256": "d2c8e1fe102ff058d382a3b21455a7a8f1ae3c053c2da04515b1ca7bd99586cc"
+    },
+    {
+      "name": "r.EyeAdaptation.PreExposureOverride",
+      "declaration_symbol": "CVarEyeAdaptationPreExposureOverride",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Renderer/Private/PostProcess/PostProcessEyeAdaptation.cpp",
+      "source_sha256": "957ee35a2eda7693683a6d4f122f667c9666c73fc8316b4bdfa02687b64a7619"
+    },
+    {
+      "name": "r.RayTracing",
+      "declaration_symbol": "CVarRayTracing",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Renderer/Private/DeferredShadingRenderer.cpp",
+      "source_sha256": "775bd73427122055dce8fe17425460383c03b6fa14a09fca6c789fe8eb3baa2f"
+    },
+    {
+      "name": "r.Lumen.HardwareRayTracing",
+      "declaration_symbol": "CVarLumenUseHardwareRayTracing",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Renderer/Private/Lumen/LumenHardwareRayTracingCommon.cpp",
+      "source_sha256": "48fc6c3ce1f43b17a0fa20f72c3bd326dd4c07e9fc3633ac40900ce9b2c91f01"
+    },
+    {
+      "name": "r.ScreenPercentage",
+      "declaration_symbol": "CVarScreenPercentage",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/LegacyScreenPercentageDriver.cpp",
+      "source_sha256": "18b96931f694531717877a62bf8be50f017a3808272154cbf9a18e1110b73178"
+    },
+    {
+      "name": "r.Streaming.PoolSize",
+      "declaration_symbol": "CVarStreamingPoolSize",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Streaming/TextureStreamingHelpers.cpp",
+      "source_sha256": "ab5d6fde587d120dbe4a61e7e7240a849758a6401a7f47e5a9b93923efd9fcdd"
+    },
+    {
+      "name": "sg.ViewDistanceQuality",
+      "declaration_symbol": "CVarViewDistanceQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.AntiAliasingQuality",
+      "declaration_symbol": "CVarAntiAliasingQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.ShadowQuality",
+      "declaration_symbol": "CVarShadowQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.GlobalIlluminationQuality",
+      "declaration_symbol": "CVarGlobalIlluminationQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.ReflectionQuality",
+      "declaration_symbol": "CVarReflectionQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.PostProcessQuality",
+      "declaration_symbol": "CVarPostProcessQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.TextureQuality",
+      "declaration_symbol": "CVarTextureQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.EffectsQuality",
+      "declaration_symbol": "CVarEffectsQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.FoliageQuality",
+      "declaration_symbol": "CVarFoliageQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    },
+    {
+      "name": "sg.ShadingQuality",
+      "declaration_symbol": "CVarShadingQuality",
+      "registration_kind": "TAutoConsoleVariable",
+      "source_relative_path": "Engine/Source/Runtime/Engine/Private/Scalability.cpp",
+      "source_sha256": "de4cf89f883971fe869da13be00ca0c21d28c584a5bc5bcb1a566ff9c0161a70"
+    }
+  ],
+  "content_digest": "d3aa4ffdc4677f8e0bece80d86fdfd85e52480d323c54470e10240c58257a402"
+}

@@ -38,9 +38,16 @@ def renderer_profile() -> dict:
         "shadow_method": "virtual_shadow_maps",
         "anti_aliasing": "tsr",
         "nanite_policy": "eligible_static_opaque_only",
+        "engine_version": build_home.PINNED_UNREAL_ENGINE_VERSION,
+        "registered_cvar_manifest": build_home.RENDERER_REGISTRY_ID,
+        "registered_cvar_manifest_digest": (
+            build_home.load_renderer_cvar_registry()["content_digest"]
+        ),
         "hardware_ray_tracing": False,
         "extended_luminance_range": True,
         "pre_exposure": True,
+        "pre_exposure_runtime_policy": "ue5_always_on_engine_managed",
+        "pre_exposure_override": 0,
         "screen_percentage": 100,
         "texture_pool_mb": 8192,
         "scalability": {key: 3 for key in build_home.RENDERER_SCALABILITY_KEYS},
@@ -249,7 +256,7 @@ def test_renderer_config_and_observation_contract_are_explicit() -> None:
         "r.AntiAliasingMethod=4",
         "r.Nanite.ProjectEnabled=True",
         "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange=True",
-        "r.UsePreExposure=True",
+        "r.EyeAdaptation.PreExposureOverride=0",
         "r.Lumen.HardwareRayTracing=0",
     ):
         assert line in first.renderer_lines
@@ -259,6 +266,11 @@ def test_renderer_config_and_observation_contract_are_explicit() -> None:
     assert "[/Script/LinuxTargetPlatform.LinuxTargetSettings]" in generated_ini
     assert "+VulkanTargetedShaderFormats=SF_VULKAN_SM6" in generated_ini
     assert "sg.GlobalIlluminationQuality=3" in generated_ini
+    assert "r.UsePreExposure" not in generated_ini
+    assert first.observation_contract["pinned_unreal_engine"]["version"] == "5.7.3"
+    assert first.observation_contract["pre_exposure_policy"]["runtime_policy"] == (
+        "ue5_always_on_engine_managed"
+    )
     observations = {
         item["name"]: item["expected"]
         for item in first.observation_contract["required_runtime_observations"]
@@ -273,6 +285,26 @@ def test_renderer_config_and_observation_contract_are_explicit() -> None:
     invalid["feature_level"] = "sm5"
     with pytest.raises(build_home.BuildHomeError, match="feature_level must be sm6"):
         build_home.compile_renderer_profile(invalid)
+
+
+def test_renderer_registry_rejects_missing_or_unregistered_cvar() -> None:
+    compilation = build_home.compile_renderer_profile(renderer_profile())
+    required = [
+        item["name"]
+        for item in compilation.observation_contract["required_runtime_observations"]
+        if item["source"] == "cvar"
+    ]
+    registry = build_home.load_renderer_cvar_registry()
+    evidence = build_home.validate_renderer_cvar_registry(registry, required)
+    assert set(evidence) == set(required)
+    assert "r.UsePreExposure" not in evidence
+    with pytest.raises(
+        build_home.BuildHomeError,
+        match="VISTA_HOME_RENDERER_CVAR_UNREGISTERED",
+    ):
+        build_home.validate_renderer_cvar_registry(
+            registry, [*required, "r.DoesNotExist"]
+        )
 
 
 def test_capture_contract_is_1080p_zero_roll_and_observation_gated() -> None:

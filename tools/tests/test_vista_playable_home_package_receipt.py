@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import stat
 import tempfile
@@ -251,19 +252,62 @@ class PackageReceiptTests(unittest.TestCase):
             package.sha256_file(self.unreal_pak),
         )
         self.assertEqual(receipt["tools"]["ldd"]["missing"], 0)
-        self.assertTrue(receipt["tools"]["unreal_pak"]["map_entry"].endswith("VistaPlayableHome.umap"))
+        self.assertTrue(
+            receipt["tools"]["unreal_pak"]["map_entry"].endswith(
+                "VistaPlayableHome.umap"
+            )
+        )
         self.assertEqual(receipt_sha, package.sha256_file(inputs.output))
         self.assertEqual(stat.S_IMODE(inputs.output.stat().st_mode), 0o600)
         self.assertEqual(inputs.output.read_bytes(), package.canonical_json(receipt))
         with self.assertRaises(FileExistsError):
             package.write_exclusive_receipt(inputs.output, receipt)
 
+    def test_receipt_mode_is_deterministic_under_restrictive_umask(self) -> None:
+        inputs = package.validate_inputs(self.args())
+        receipt = package.verify_package(inputs, self.runner)
+
+        previous_umask = os.umask(0o777)
+        try:
+            package.write_exclusive_receipt(inputs.output, receipt)
+        finally:
+            os.umask(previous_umask)
+
+        self.assertEqual(stat.S_IMODE(inputs.output.stat().st_mode), 0o600)
+        self.assertEqual(inputs.output.read_bytes(), package.canonical_json(receipt))
+
+    def test_receipt_mode_failure_removes_reserved_output(self) -> None:
+        inputs = package.validate_inputs(self.args())
+        receipt = package.verify_package(inputs, self.runner)
+
+        with mock.patch.object(
+            package.os, "fchmod", side_effect=OSError("fixture fchmod failure")
+        ):
+            with self.assertRaises(OSError):
+                package.write_exclusive_receipt(inputs.output, receipt)
+
+        self.assertFalse(inputs.output.exists())
+
+    def test_fdopen_close_then_raise_preserves_error_and_removes_output(self) -> None:
+        inputs = package.validate_inputs(self.args())
+        receipt = package.verify_package(inputs, self.runner)
+
+        def close_then_raise(descriptor, *_args, **_kwargs):
+            os.close(descriptor)
+            raise RuntimeError("fixture fdopen failure")
+
+        with mock.patch.object(package.os, "fdopen", side_effect=close_then_raise):
+            with self.assertRaisesRegex(RuntimeError, "fixture fdopen failure"):
+                package.write_exclusive_receipt(inputs.output, receipt)
+
+        self.assertFalse(inputs.output.exists())
+
     def test_realistic_r2_package_retains_the_observed_source_chain(self) -> None:
         self.enable_r2_source_chain()
         inputs = package.validate_inputs(self.args())
         self.assertEqual(inputs.runtime_profile, package.R2_RUNTIME_PROFILE)
         receipt = package.verify_package(inputs, self.runner)
-        self.assertEqual(receipt["schema"], package.R2_RECEIPT_SCHEMA)
+        self.assertEqual(receipt["schema"], package.R2_EXACT_MODE_RECEIPT_SCHEMA)
         bindings = receipt["bindings"]
         self.assertEqual(bindings["runtime_profile"], package.R2_RUNTIME_PROFILE)
         self.assertEqual(bindings["camera_profile"], package.R2_CAMERA_PROFILE)
@@ -273,13 +317,99 @@ class PackageReceiptTests(unittest.TestCase):
         )
         self.assertEqual(bindings["visual_profile_sha256"], "4" * 64)
         self.assertEqual(bindings["presentation_manifest_sha256"], "a" * 64)
+        self.assertEqual(
+            receipt["archive"]["schema"], package.ARCHIVE_SCHEMA_EXACT_MODE_V2
+        )
+        self.assertEqual(
+            receipt["archive"]["algorithm"],
+            package.ARCHIVE_ALGORITHM_EXACT_MODE_V2,
+        )
+        for name, path in (
+            ("launcher", self.launcher),
+            ("executable", self.executable),
+            ("pak", self.pak),
+        ):
+            self.assertEqual(
+                receipt["artifacts"][name]["mode"],
+                stat.S_IMODE(path.stat().st_mode),
+            )
+        self.assertEqual(
+            receipt["trusted_upstream"]["unreal_pak_mode"],
+            stat.S_IMODE(self.unreal_pak.stat().st_mode),
+        )
+        self.assertEqual(
+            receipt["project_policy"]["project_descriptor_mode"],
+            stat.S_IMODE(inputs.project_descriptor.stat().st_mode),
+        )
+        self.assertEqual(
+            receipt["project_policy"]["project_config_mode"],
+            stat.S_IMODE(inputs.project_config.stat().st_mode),
+        )
+
+    def test_exact_archive_tree_attests_non_executable_mode_bits(self) -> None:
+        first = self.archive / "VistaPlayableHome" / "Content" / "mode-0644.bin"
+        second = self.archive / "VistaPlayableHome" / "Content" / "mode-0600.bin"
+        first.parent.mkdir(parents=True, exist_ok=True)
+        first.write_bytes(b"mode fixture one\n")
+        second.write_bytes(b"mode fixture two\n")
+        first.chmod(0o644)
+        second.chmod(0o600)
+
+        legacy_before = package.inspect_archive(self.archive)
+        exact_before = package.inspect_archive(self.archive, exact_modes=True)
+        self.assertNotIn("schema", legacy_before)
+        self.assertEqual(legacy_before["algorithm"], package.ARCHIVE_ALGORITHM_V1)
+        self.assertEqual(exact_before["schema"], package.ARCHIVE_SCHEMA_EXACT_MODE_V2)
+
+        first.chmod(0o600)
+        legacy_after_first = package.inspect_archive(self.archive)
+        exact_after_first = package.inspect_archive(self.archive, exact_modes=True)
+        self.assertEqual(
+            legacy_before["tree_sha256"], legacy_after_first["tree_sha256"]
+        )
+        self.assertNotEqual(
+            exact_before["tree_sha256"], exact_after_first["tree_sha256"]
+        )
+
+        second.chmod(0o640)
+        exact_after_second = package.inspect_archive(self.archive, exact_modes=True)
+        self.assertNotEqual(
+            exact_after_first["tree_sha256"], exact_after_second["tree_sha256"]
+        )
+
+    def test_exact_package_final_closure_rejects_phase_mode_exchange(self) -> None:
+        self.enable_r2_source_chain()
+        inputs = package.validate_inputs(self.args())
+        cases = (
+            (inputs.project_config, 0o600, "file", "PACKAGE_CHANGED"),
+            (inputs.pak, 0o600, "UnrealPak", "PACKAGE_CHANGED"),
+            (inputs.unreal_pak, 0o600, "UnrealPak", "UNREALPAK_CHANGED"),
+        )
+        for target, changed_mode, trigger, expected_code in cases:
+            original_mode = stat.S_IMODE(target.stat().st_mode)
+            with self.subTest(target=target.name):
+
+                def exchanging_runner(name, arguments, timeout):
+                    result = self.runner(name, arguments, timeout)
+                    if name == trigger:
+                        target.chmod(changed_mode)
+                    return result
+
+                with self.assertRaisesRegex(
+                    package.PackageReceiptError,
+                    expected_code,
+                ):
+                    package.verify_package(inputs, exchanging_runner)
+                target.chmod(original_mode)
 
     def test_realistic_r2_source_profile_or_digest_drift_is_rejected(self) -> None:
         self.enable_r2_source_chain()
         acceptance = json.loads(self.source_acceptance.read_text(encoding="utf-8"))
         acceptance["bindings"]["camera_profile"] = "default"
         self.source_acceptance.write_text(json.dumps(acceptance), encoding="utf-8")
-        with self.assertRaisesRegex(package.PackageReceiptError, "SOURCE_ACCEPTANCE_INVALID"):
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "SOURCE_ACCEPTANCE_INVALID"
+        ):
             package.validate_inputs(self.args())
 
         self.enable_r2_source_chain()
@@ -291,14 +421,18 @@ class PackageReceiptTests(unittest.TestCase):
             self.source_result
         )
         self.source_acceptance.write_text(json.dumps(acceptance), encoding="utf-8")
-        with self.assertRaisesRegex(package.PackageReceiptError, "SOURCE_RESULT_INVALID"):
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "SOURCE_RESULT_INVALID"
+        ):
             package.validate_inputs(self.args())
 
     def test_tool_calls_are_fixed_argv_without_shell_surface(self) -> None:
         inputs = package.validate_inputs(self.args())
         calls: list[tuple[str, list[str]]] = []
 
-        def recording_runner(name: str, arguments, timeout: float) -> package.ToolResult:
+        def recording_runner(
+            name: str, arguments, timeout: float
+        ) -> package.ToolResult:
             calls.append((name, list(arguments)))
             return self.runner(name, arguments, timeout)
 
@@ -329,7 +463,9 @@ class PackageReceiptTests(unittest.TestCase):
         args = self.args()
         args.attempt_root = self.attempt.parent / "unsafe_attempt"
         args.attempt_root.mkdir()
-        with self.assertRaisesRegex(package.PackageReceiptError, "ATTEMPT_IDENTITY_INVALID"):
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "ATTEMPT_IDENTITY_INVALID"
+        ):
             package.validate_inputs(args)
 
     def test_uat_phase_or_exact_map_entry_drift_is_rejected(self) -> None:
@@ -345,7 +481,9 @@ class PackageReceiptTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        with self.assertRaisesRegex(package.PackageReceiptError, "UAT_PHASES_INCOMPLETE"):
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "UAT_PHASES_INCOMPLETE"
+        ):
             package.verify_package(inputs, self.runner)
 
         (self.attempt / "runuat.log").write_text(
@@ -359,7 +497,9 @@ class PackageReceiptTests(unittest.TestCase):
         def wrong_map(name: str, arguments, timeout: float) -> package.ToolResult:
             result = self.runner(name, arguments, timeout)
             if name == "UnrealPak":
-                return package.ToolResult(name=name, returncode=0, stdout=b'"../../../Other.umap"\n')
+                return package.ToolResult(
+                    name=name, returncode=0, stdout=b'"../../../Other.umap"\n'
+                )
             return result
 
         with self.assertRaisesRegex(package.PackageReceiptError, "PAK_MAP_MISSING"):
@@ -394,7 +534,9 @@ class PackageReceiptTests(unittest.TestCase):
                 )
             return result
 
-        with self.assertRaisesRegex(package.PackageReceiptError, "LDD_DEPENDENCY_MISSING"):
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "LDD_DEPENDENCY_MISSING"
+        ):
             package.verify_package(inputs, missing_library)
 
         inputs.project_config.write_text(
@@ -402,21 +544,27 @@ class PackageReceiptTests(unittest.TestCase):
             + "SecurityToken=never-echo-this-value\n",
             encoding="utf-8",
         )
-        with self.assertRaisesRegex(package.PackageReceiptError, "PROJECT_SECRET_REFUSED") as caught:
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "PROJECT_SECRET_REFUSED"
+        ) as caught:
             package.inspect_project_policy(inputs)
         self.assertNotIn("never-echo-this-value", str(caught.exception))
 
     def test_archive_secret_and_symlink_are_rejected_without_secret_echo(self) -> None:
         leaked = self.archive / "leaked.ini"
         leaked.write_bytes(b"[/Script/AndroidFileServer]\nSecurityToken=do-not-print\n")
-        with self.assertRaisesRegex(package.PackageReceiptError, "SECRET_SCAN_FAILED") as caught:
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "SECRET_SCAN_FAILED"
+        ) as caught:
             package.inspect_archive(self.archive)
         self.assertNotIn("do-not-print", str(caught.exception))
 
         leaked.unlink()
         link = self.archive / "unsafe-link"
         link.symlink_to(self.launcher)
-        with self.assertRaisesRegex(package.PackageReceiptError, "ARCHIVE_(?:ENTRY|SYMLINK)_REFUSED"):
+        with self.assertRaisesRegex(
+            package.PackageReceiptError, "ARCHIVE_(?:ENTRY|SYMLINK)_REFUSED"
+        ):
             package.inspect_archive(self.archive)
 
     def test_byte_identical_engine_false_positive_has_bounded_exemption(self) -> None:
@@ -466,7 +614,9 @@ class PackageReceiptTests(unittest.TestCase):
 
         with (
             mock.patch.object(package.os, "walk", side_effect=broken_walk),
-            self.assertRaisesRegex(package.PackageReceiptError, "ARCHIVE_ENUMERATION_FAILED"),
+            self.assertRaisesRegex(
+                package.PackageReceiptError, "ARCHIVE_ENUMERATION_FAILED"
+            ),
         ):
             package.inspect_archive(self.archive)
 

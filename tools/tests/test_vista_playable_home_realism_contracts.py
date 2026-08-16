@@ -68,7 +68,7 @@ class RealisticInteriorContractTests(unittest.TestCase):
         self.assertEqual(self.profile["architecture_profile"]["collision_policy"], "hidden_r1_proxies")
 
     def test_profile_and_receipt_digests_are_canonical_and_repeatable(self) -> None:
-        expected = "a6b9ccb043c1f92778d28b9b6fe5033e80853cc2ec5675c9b5aad30612cb4179"
+        expected = "ba7283f04ebacc2e3dc157980af2a20e9be62bbc8232de60b6da6a206c2e9d32"
         self.assertEqual(self.profile["content_digest"], expected)
         self.assertEqual(contract.content_digest(self.profile), expected)
         first = self.reseal(self.profile)

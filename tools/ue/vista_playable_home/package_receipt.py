@@ -29,6 +29,12 @@ from typing import Any, Callable, Mapping, Sequence
 
 RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v1"
 R2_RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v2"
+R2_EXACT_MODE_RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/v3"
+ARCHIVE_ALGORITHM_V1 = "framed-canonical-file-record-sha256/v1"
+ARCHIVE_SCHEMA_EXACT_MODE_V2 = (
+    "simworld.vista.playable-home-package-archive-observation/v2"
+)
+ARCHIVE_ALGORITHM_EXACT_MODE_V2 = "framed-canonical-file-record-exact-mode-sha256/v2"
 SOURCE_BUILD_SCHEMA = "simworld.vista.playable-home-ue-build-result/v1"
 SOURCE_ACCEPTANCE_SCHEMA = "simworld.vista.playable-home-runtime-acceptance/v1"
 R2_SOURCE_ACCEPTANCE_SCHEMA = "simworld.vista.playable-home-runtime-acceptance/v2"
@@ -41,15 +47,13 @@ R2_WIDTH = 1920
 R2_HEIGHT = 1080
 R2_FPS = 60
 R2_PRESENTATION_BUNDLE_COUNT = 3
-R2_PRESENTATION_COLLISION_POLICY = (
-    "presentation_no_collision_use_hidden_r1_proxies"
+R2_PRESENTATION_COLLISION_POLICY = "presentation_no_collision_use_hidden_r1_proxies"
+EXPECTED_MAP_PATH = (
+    "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
 )
-EXPECTED_MAP_PATH = "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
 EXPECTED_REVISION = "vista_playable_home_r1"
 EXPECTED_ATTEMPT_PARENT = "package-linux-development"
-PACKAGE_ATTEMPT_RE = re.compile(
-    r"^attempt-[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
-)
+PACKAGE_ATTEMPT_RE = re.compile(r"^attempt-[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 LAUNCHER_RELATIVE = Path("archive/Linux/VistaPlayableHome.sh")
 EXECUTABLE_RELATIVE = Path(
     "archive/Linux/VistaPlayableHome/Binaries/Linux/VistaPlayableHome"
@@ -196,6 +200,15 @@ class ToolResult:
 ToolRunner = Callable[[str, Sequence[str], float], ToolResult]
 
 
+@dataclass(frozen=True)
+class FileSeal:
+    sha256: str
+    size: int
+    mode: int
+    identity: tuple[int, int, int, int, int, int]
+    raw: bytes | None = None
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -220,15 +233,65 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def sha256_file(path: Path) -> str:
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _sealed_file(
+    path: Path,
+    *,
+    capture_bytes: bool = False,
+    maximum_bytes: int | None = None,
+) -> FileSeal:
     digest = hashlib.sha256()
+    captured = bytearray() if capture_bytes else None
     try:
-        with path.open("rb") as handle:
+        before = os.lstat(path)
+        if maximum_bytes is not None and not 0 < before.st_size <= maximum_bytes:
+            raise PackageReceiptError(
+                "FILE_SIZE_INVALID", f"{path.name} size is invalid"
+            )
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if _file_identity(opened) != _file_identity(before):
+                raise PackageReceiptError(
+                    "FILE_CHANGED", f"{path.name} changed while opening"
+                )
             for block in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(block)
+                if captured is not None:
+                    captured.extend(block)
+        after = os.lstat(path)
+        if _file_identity(after) != _file_identity(before):
+            raise PackageReceiptError(
+                "FILE_CHANGED", f"{path.name} changed while hashing"
+            )
+    except PackageReceiptError:
+        raise
     except OSError as exc:
         raise PackageReceiptError("READ_FAILED", f"could not hash {path.name}") from exc
-    return digest.hexdigest()
+    return FileSeal(
+        sha256=digest.hexdigest(),
+        size=after.st_size,
+        mode=stat.S_IMODE(after.st_mode),
+        identity=_file_identity(after),
+        raw=bytes(captured) if captured is not None else None,
+    )
+
+
+def sha256_file(path: Path) -> str:
+    return _sealed_file(path).sha256
 
 
 def _unique_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
@@ -256,7 +319,9 @@ def load_strict_json(path: Path, *, label: str) -> Mapping[str, Any]:
     except PackageReceiptError:
         raise
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        raise PackageReceiptError("JSON_INVALID", f"{label} is not strict JSON") from exc
+        raise PackageReceiptError(
+            "JSON_INVALID", f"{label} is not strict JSON"
+        ) from exc
     if not isinstance(value, dict):
         raise PackageReceiptError("JSON_SHAPE_INVALID", f"{label} must be an object")
     return value
@@ -280,13 +345,17 @@ def _canonical_existing(path: Path, label: str, *, directory: bool = False) -> P
     return resolved
 
 
-def _exact_child(root: Path, relative: Path, label: str, *, directory: bool = False) -> Path:
+def _exact_child(
+    root: Path, relative: Path, label: str, *, directory: bool = False
+) -> Path:
     candidate = root / relative
     resolved = _canonical_existing(candidate, label, directory=directory)
     try:
         resolved.relative_to(root)
     except ValueError as exc:
-        raise PackageReceiptError("PATH_ESCAPE_REFUSED", f"{label} escaped the attempt") from exc
+        raise PackageReceiptError(
+            "PATH_ESCAPE_REFUSED", f"{label} escaped the attempt"
+        ) from exc
     return resolved
 
 
@@ -308,7 +377,9 @@ def _validate_map(value: str) -> str:
     if not MAP_RE.fullmatch(map_path) or ".." in map_path.split("/"):
         raise PackageReceiptError("MAP_INVALID", "map path is unsafe")
     if map_path != EXPECTED_MAP_PATH:
-        raise PackageReceiptError("MAP_MISMATCH", "map is not the fixed playable-home map")
+        raise PackageReceiptError(
+            "MAP_MISMATCH", "map is not the fixed playable-home map"
+        )
     return map_path
 
 
@@ -316,6 +387,242 @@ def _content_digest(value: Mapping[str, Any]) -> str:
     body = dict(value)
     body.pop("content_digest", None)
     return sha256_bytes(canonical_json(body))
+
+
+def renderer_observation_package_projection(
+    receipt: Mapping[str, Any],
+    *,
+    source_build_result: Path,
+    source_build_result_sha256: str,
+    source_commit: str,
+    visual_profile_id: str,
+    visual_profile_sha256: str,
+    visual_profile_content_digest: str,
+    renderer_profile_request_sha256: str,
+    renderer_profile_request_content_digest: str,
+) -> dict[str, Any]:
+    """Validate and project the immutable r2 package identity.
+
+    Package creation remains renderer-observation ``pending``.  This helper is
+    consumed later by the live renderer acceptance lane and does not mutate or
+    widen legacy v1 or v2 package receipt bytes.  Renderer acceptance requires
+    the versioned r2 exact-mode receipt and never promotes a legacy package.
+    """
+
+    expected_top = {
+        "schema",
+        "status",
+        "created_at",
+        "attempt_root",
+        "bindings",
+        "artifacts",
+        "uat",
+        "project_policy",
+        "tools",
+        "trusted_upstream",
+        "archive",
+        "output",
+    }
+    if (
+        set(receipt) != expected_top
+        or receipt.get("schema") != R2_EXACT_MODE_RECEIPT_SCHEMA
+        or receipt.get("status") != "accepted"
+    ):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID",
+            "renderer observation requires one exact-mode r2 package receipt",
+        )
+    bindings = receipt.get("bindings")
+    expected_binding_keys = {
+        "source_build_result",
+        "source_build_result_sha256",
+        "source_commit",
+        "source_runtime_acceptance",
+        "source_runtime_acceptance_sha256",
+        "map_path",
+        "world_revision",
+        *R2_PACKAGE_BINDING_FIELDS,
+    }
+    if not isinstance(bindings, dict) or set(bindings) != expected_binding_keys:
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID", "r2 package renderer binding fields differ"
+        )
+    expected = {
+        "source_build_result": str(source_build_result),
+        "source_build_result_sha256": source_build_result_sha256,
+        "source_commit": source_commit,
+        "map_path": EXPECTED_MAP_PATH,
+        "world_revision": EXPECTED_REVISION,
+        "runtime_profile": R2_RUNTIME_PROFILE,
+        "camera_profile": R2_CAMERA_PROFILE,
+        "visual_profile_id": visual_profile_id,
+        "visual_profile_sha256": visual_profile_sha256,
+        "visual_profile_content_digest": visual_profile_content_digest,
+        "renderer_profile_request_sha256": renderer_profile_request_sha256,
+        "renderer_profile_request_content_digest": (
+            renderer_profile_request_content_digest
+        ),
+    }
+    if any(bindings.get(key) != value for key, value in expected.items()):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID",
+            "r2 package does not bind the observed renderer inputs",
+        )
+    for name in (
+        "source_runtime_acceptance_sha256",
+        *R2_BUILD_DIGEST_FIELDS,
+    ):
+        value = bindings.get(name)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise PackageReceiptError(
+                "RENDERER_PACKAGE_INVALID", f"r2 package {name} digest is invalid"
+            )
+    artifacts = receipt.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != {
+        "archive_root",
+        "launcher",
+        "executable",
+        "pak",
+    }:
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID", "r2 package artifact fields differ"
+        )
+    projected_artifacts: dict[str, Any] = {}
+    for name in ("launcher", "executable", "pak"):
+        record = artifacts.get(name)
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"relative_path", "sha256", "bytes", "executable", "mode"}
+            or not isinstance(record.get("relative_path"), str)
+            or not isinstance(record.get("sha256"), str)
+            or SHA256_RE.fullmatch(record["sha256"]) is None
+            or isinstance(record.get("bytes"), bool)
+            or not isinstance(record.get("bytes"), int)
+            or record["bytes"] <= 0
+            or not isinstance(record.get("executable"), bool)
+            or isinstance(record.get("mode"), bool)
+            or not isinstance(record.get("mode"), int)
+            or not 0 <= record["mode"] <= 0o7777
+        ):
+            raise PackageReceiptError(
+                "RENDERER_PACKAGE_INVALID", f"r2 package {name} artifact is invalid"
+            )
+        projected_artifacts[name] = dict(record)
+    project_policy = receipt.get("project_policy")
+    if (
+        not isinstance(project_policy, dict)
+        or set(project_policy)
+        != {
+            "project_descriptor",
+            "project_descriptor_sha256",
+            "project_config",
+            "project_config_sha256",
+            "enabled_plugins",
+            "disabled_plugins",
+            "host_module",
+            "android_file_server_enabled",
+            "mode_policy",
+            "project_descriptor_mode",
+            "project_config_mode",
+        }
+        or project_policy.get("enabled_plugins") != ["VistaPlayableHome"]
+        or project_policy.get("disabled_plugins")
+        != [
+            "AndroidFileServer",
+            "EditorScriptingUtilities",
+            "Interchange",
+            "PythonScriptPlugin",
+        ]
+        or project_policy.get("host_module") != "VistaPlayableHomeHost"
+        or project_policy.get("android_file_server_enabled") is not False
+        or project_policy.get("mode_policy") != "sealed-exact-stat-imode/v1"
+        or not isinstance(project_policy.get("project_descriptor"), str)
+        or not isinstance(project_policy.get("project_config"), str)
+        or any(
+            not isinstance(project_policy.get(name), str)
+            or SHA256_RE.fullmatch(project_policy[name]) is None
+            for name in (
+                "project_descriptor_sha256",
+                "project_config_sha256",
+            )
+        )
+        or any(
+            isinstance(project_policy.get(name), bool)
+            or not isinstance(project_policy.get(name), int)
+            or not 0 <= project_policy[name] <= 0o7777
+            for name in (
+                "project_descriptor_mode",
+                "project_config_mode",
+            )
+        )
+    ):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID",
+            "r2 package project/plugin policy differs",
+        )
+    trusted = receipt.get("trusted_upstream")
+    if (
+        not isinstance(trusted, dict)
+        or set(trusted)
+        != {
+            "policy",
+            "engine_root",
+            "unreal_pak",
+            "unreal_pak_sha256",
+            "mode_policy",
+            "unreal_pak_mode",
+        }
+        or trusted.get("policy") != "engine-root-derived-from-pinned-unrealpak/v1"
+        or trusted.get("mode_policy") != "sealed-exact-stat-imode/v1"
+        or not isinstance(trusted.get("engine_root"), str)
+        or not isinstance(trusted.get("unreal_pak"), str)
+        or not isinstance(trusted.get("unreal_pak_sha256"), str)
+        or SHA256_RE.fullmatch(trusted["unreal_pak_sha256"]) is None
+        or isinstance(trusted.get("unreal_pak_mode"), bool)
+        or not isinstance(trusted.get("unreal_pak_mode"), int)
+        or not 0 <= trusted["unreal_pak_mode"] <= 0o7777
+    ):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID",
+            "r2 package trusted UnrealPak mode binding differs",
+        )
+    archive = receipt.get("archive")
+    if (
+        not isinstance(archive, dict)
+        or set(archive)
+        != {
+            "schema",
+            "algorithm",
+            "file_count",
+            "total_bytes",
+            "tree_sha256",
+            "secret_scan",
+        }
+        or archive.get("schema") != ARCHIVE_SCHEMA_EXACT_MODE_V2
+        or archive.get("algorithm") != ARCHIVE_ALGORITHM_EXACT_MODE_V2
+        or not isinstance(archive.get("tree_sha256"), str)
+        or SHA256_RE.fullmatch(archive["tree_sha256"]) is None
+        or isinstance(archive.get("file_count"), bool)
+        or not isinstance(archive.get("file_count"), int)
+        or archive["file_count"] <= 0
+        or isinstance(archive.get("total_bytes"), bool)
+        or not isinstance(archive.get("total_bytes"), int)
+        or archive["total_bytes"] <= 0
+    ):
+        raise PackageReceiptError(
+            "RENDERER_PACKAGE_INVALID", "r2 package archive identity is invalid"
+        )
+    return {
+        "schema": R2_EXACT_MODE_RECEIPT_SCHEMA,
+        "attempt_root": receipt["attempt_root"],
+        "archive_schema": archive["schema"],
+        "archive_algorithm": archive["algorithm"],
+        "archive_tree_sha256": archive["tree_sha256"],
+        "archive_file_count": archive["file_count"],
+        "archive_total_bytes": archive["total_bytes"],
+        "artifacts": projected_artifacts,
+        "project_policy": dict(project_policy),
+    }
 
 
 def _validate_r2_source_chain(
@@ -409,9 +716,13 @@ def _only_pak(directory: Path) -> Path:
             if candidate.suffix.lower() == ".pak":
                 entries.append(_canonical_existing(candidate, "package pak"))
     except OSError as exc:
-        raise PackageReceiptError("PAK_ENUMERATION_FAILED", "could not enumerate Paks") from exc
+        raise PackageReceiptError(
+            "PAK_ENUMERATION_FAILED", "could not enumerate Paks"
+        ) from exc
     if len(entries) != 1:
-        raise PackageReceiptError("PAK_SET_INVALID", "package must contain exactly one .pak")
+        raise PackageReceiptError(
+            "PAK_SET_INVALID", "package must contain exactly one .pak"
+        )
     return entries[0]
 
 
@@ -423,11 +734,17 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
             "SOURCE_RESULT_INVALID", "source build result must be result-receipt.json"
         )
     pin = str(args.source_build_result_sha256 or "")
-    if not SHA256_RE.fullmatch(pin) or not hmac.compare_digest(sha256_file(source), pin):
-        raise PackageReceiptError("SOURCE_PIN_MISMATCH", "source build-result SHA differs")
+    if not SHA256_RE.fullmatch(pin) or not hmac.compare_digest(
+        sha256_file(source), pin
+    ):
+        raise PackageReceiptError(
+            "SOURCE_PIN_MISMATCH", "source build-result SHA differs"
+        )
     commit = str(args.source_commit or "")
     if not COMMIT_RE.fullmatch(commit):
-        raise PackageReceiptError("SOURCE_COMMIT_INVALID", "source commit must be full lowercase SHA-1")
+        raise PackageReceiptError(
+            "SOURCE_COMMIT_INVALID", "source commit must be full lowercase SHA-1"
+        )
     map_path = _validate_map(args.map_path)
     source_result = load_strict_json(source, label="source build result")
     if (
@@ -437,7 +754,8 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
         or source_result.get("revision") != EXPECTED_REVISION
     ):
         raise PackageReceiptError(
-            "SOURCE_RESULT_INVALID", "source build result is not the accepted fixed scene"
+            "SOURCE_RESULT_INVALID",
+            "source build result is not the accepted fixed scene",
         )
     if source_result.get("attempt_root") != str(source.parent):
         raise PackageReceiptError(
@@ -448,9 +766,8 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
         Path(args.source_acceptance), "source runtime acceptance"
     )
     acceptance_pin = str(args.source_acceptance_sha256 or "")
-    if (
-        not SHA256_RE.fullmatch(acceptance_pin)
-        or not hmac.compare_digest(sha256_file(source_acceptance), acceptance_pin)
+    if not SHA256_RE.fullmatch(acceptance_pin) or not hmac.compare_digest(
+        sha256_file(source_acceptance), acceptance_pin
     ):
         raise PackageReceiptError(
             "SOURCE_ACCEPTANCE_PIN_MISMATCH", "source acceptance SHA differs"
@@ -461,7 +778,8 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
     acceptance_bindings = source_acceptance_result.get("bindings")
     acceptance_schema = source_acceptance_result.get("schema")
     if (
-        acceptance_schema not in {
+        acceptance_schema
+        not in {
             SOURCE_ACCEPTANCE_SCHEMA,
             R2_SOURCE_ACCEPTANCE_SCHEMA,
         }
@@ -512,20 +830,30 @@ def validate_inputs(args: argparse.Namespace) -> PackageInputs:
             "UnrealPak must be the pinned Engine/Binaries/Linux/UnrealPak",
         )
 
-    archive_root = _exact_child(root, Path("archive/Linux"), "archive root", directory=True)
+    archive_root = _exact_child(
+        root, Path("archive/Linux"), "archive root", directory=True
+    )
     launcher = _exact_child(root, LAUNCHER_RELATIVE, "package launcher")
     executable = _exact_child(root, EXECUTABLE_RELATIVE, "package executable")
     if not os.access(launcher, os.X_OK) or not os.access(executable, os.X_OK):
-        raise PackageReceiptError("EXECUTABLE_INVALID", "launcher and game binary must be executable")
-    pak_directory = _exact_child(root, PAK_DIRECTORY_RELATIVE, "Paks directory", directory=True)
+        raise PackageReceiptError(
+            "EXECUTABLE_INVALID", "launcher and game binary must be executable"
+        )
+    pak_directory = _exact_child(
+        root, PAK_DIRECTORY_RELATIVE, "Paks directory", directory=True
+    )
     pak = _only_pak(pak_directory)
     uat_log = _exact_child(root, UAT_LOG_RELATIVE, "RunUAT log")
     output = root / OUTPUT_RELATIVE
     if output.exists() or output.is_symlink():
         raise PackageReceiptError("OUTPUT_EXISTS", "package receipt already exists")
 
-    project_descriptor = _exact_child(root, PROJECT_RELATIVE, "package project descriptor")
-    project_config = _exact_child(root, PROJECT_CONFIG_RELATIVE, "package project config")
+    project_descriptor = _exact_child(
+        root, PROJECT_RELATIVE, "package project descriptor"
+    )
+    project_config = _exact_child(
+        root, PROJECT_CONFIG_RELATIVE, "package project config"
+    )
 
     return PackageInputs(
         attempt_root=root,
@@ -556,12 +884,16 @@ def inspect_uat_log(path: Path) -> dict[str, Any]:
     try:
         size = path.stat().st_size
         if not 0 < size <= MAX_UAT_LOG_BYTES:
-            raise PackageReceiptError("UAT_LOG_SIZE_INVALID", "RunUAT log size is invalid")
+            raise PackageReceiptError(
+                "UAT_LOG_SIZE_INVALID", "RunUAT log size is invalid"
+            )
         raw = path.read_bytes()
     except PackageReceiptError:
         raise
     except OSError as exc:
-        raise PackageReceiptError("UAT_LOG_READ_FAILED", "could not read RunUAT log") from exc
+        raise PackageReceiptError(
+            "UAT_LOG_READ_FAILED", "could not read RunUAT log"
+        ) from exc
     text = raw.decode("utf-8", errors="replace")
     command_requirements = (
         "BuildCookRun",
@@ -587,7 +919,8 @@ def inspect_uat_log(path: Path) -> dict[str, Any]:
     offsets = [text.find(marker) for marker in UAT_SUCCESS_PHASES]
     if any(offset < 0 for offset in offsets) or offsets != sorted(offsets):
         raise PackageReceiptError(
-            "UAT_PHASES_INCOMPLETE", "RunUAT did not complete every required phase in order"
+            "UAT_PHASES_INCOMPLETE",
+            "RunUAT did not complete every required phase in order",
         )
     return {
         "path": str(path),
@@ -605,11 +938,39 @@ def inspect_uat_log(path: Path) -> dict[str, Any]:
     }
 
 
-def inspect_project_policy(inputs: PackageInputs) -> dict[str, Any]:
-    descriptor = load_strict_json(inputs.project_descriptor, label="package project descriptor")
+def _inspect_project_policy_with_seals(
+    inputs: PackageInputs, *, exact_modes: bool = False
+) -> tuple[dict[str, Any], dict[str, FileSeal]]:
+    descriptor_seal = _sealed_file(
+        inputs.project_descriptor,
+        capture_bytes=True,
+        maximum_bytes=MAX_JSON_BYTES,
+    )
+    if descriptor_seal.raw is None:  # pragma: no cover - capture_bytes guarantees it.
+        raise PackageReceiptError(
+            "PROJECT_POLICY_INVALID", "project descriptor bytes are unavailable"
+        )
+    try:
+        descriptor = json.loads(
+            descriptor_seal.raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=_unique_object,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite constant: {value}")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise PackageReceiptError(
+            "PROJECT_POLICY_INVALID", "project descriptor is not strict JSON"
+        ) from exc
+    if not isinstance(descriptor, dict):
+        raise PackageReceiptError(
+            "PROJECT_POLICY_INVALID", "project descriptor must be an object"
+        )
     plugins = descriptor.get("Plugins")
     if not isinstance(plugins, list):
-        raise PackageReceiptError("PROJECT_POLICY_INVALID", "project Plugins must be a list")
+        raise PackageReceiptError(
+            "PROJECT_POLICY_INVALID", "project Plugins must be a list"
+        )
     observed: dict[str, bool] = {}
     for entry in plugins:
         if (
@@ -618,7 +979,9 @@ def inspect_project_policy(inputs: PackageInputs) -> dict[str, Any]:
             or not isinstance(entry.get("Enabled"), bool)
             or entry["Name"] in observed
         ):
-            raise PackageReceiptError("PROJECT_POLICY_INVALID", "project plugin entry is invalid")
+            raise PackageReceiptError(
+                "PROJECT_POLICY_INVALID", "project plugin entry is invalid"
+            )
         observed[entry["Name"]] = entry["Enabled"]
     required = {
         "VistaPlayableHome": True,
@@ -640,14 +1003,20 @@ def inspect_project_policy(inputs: PackageInputs) -> dict[str, Any]:
         "Type": "Runtime",
     }
     if modules != [expected_module]:
-        raise PackageReceiptError("PROJECT_POLICY_INVALID", "host module policy differs")
+        raise PackageReceiptError(
+            "PROJECT_POLICY_INVALID", "host module policy differs"
+        )
 
-    try:
-        config = inputs.project_config.read_bytes()
-    except OSError as exc:
-        raise PackageReceiptError("PROJECT_POLICY_INVALID", "could not read project config") from exc
-    if not 0 < len(config) <= MAX_JSON_BYTES:
-        raise PackageReceiptError("PROJECT_POLICY_INVALID", "project config size is invalid")
+    config_seal = _sealed_file(
+        inputs.project_config,
+        capture_bytes=True,
+        maximum_bytes=MAX_JSON_BYTES,
+    )
+    if config_seal.raw is None:  # pragma: no cover - capture_bytes guarantees it.
+        raise PackageReceiptError(
+            "PROJECT_POLICY_INVALID", "project config bytes are unavailable"
+        )
+    config = config_seal.raw
     for rule, pattern in SECRET_PATTERNS:
         if pattern.search(config):
             raise PackageReceiptError(
@@ -668,17 +1037,43 @@ def inspect_project_policy(inputs: PackageInputs) -> dict[str, Any]:
         "bCompileAFSProject=False",
     )
     if not all(value in config_text for value in required_config):
-        raise PackageReceiptError("PROJECT_POLICY_INVALID", "fixed project config differs")
-    return {
+        raise PackageReceiptError(
+            "PROJECT_POLICY_INVALID", "fixed project config differs"
+        )
+    policy = {
         "project_descriptor": str(inputs.project_descriptor),
-        "project_descriptor_sha256": sha256_file(inputs.project_descriptor),
+        "project_descriptor_sha256": descriptor_seal.sha256,
         "project_config": str(inputs.project_config),
-        "project_config_sha256": sha256_bytes(config),
+        "project_config_sha256": config_seal.sha256,
         "enabled_plugins": ["VistaPlayableHome"],
-        "disabled_plugins": sorted(name for name, enabled in required.items() if not enabled),
+        "disabled_plugins": sorted(
+            name for name, enabled in required.items() if not enabled
+        ),
         "host_module": "VistaPlayableHomeHost",
         "android_file_server_enabled": False,
     }
+    if exact_modes:
+        policy.update(
+            {
+                "mode_policy": "sealed-exact-stat-imode/v1",
+                "project_descriptor_mode": descriptor_seal.mode,
+                "project_config_mode": config_seal.mode,
+            }
+        )
+    return policy, {
+        "project_descriptor": descriptor_seal,
+        "project_config": config_seal,
+    }
+
+
+def inspect_project_policy(
+    inputs: PackageInputs, *, exact_modes: bool = False
+) -> dict[str, Any]:
+    policy, _seals = _inspect_project_policy_with_seals(
+        inputs,
+        exact_modes=exact_modes,
+    )
+    return policy
 
 
 def _safe_tool_environment() -> dict[str, str]:
@@ -688,10 +1083,14 @@ def _safe_tool_environment() -> dict[str, str]:
 def run_fixed_tool(name: str, arguments: Sequence[str], timeout: float) -> ToolResult:
     if name not in {"file", "readelf", "ldd", "UnrealPak"}:
         raise PackageReceiptError("TOOL_REFUSED", "inspection tool is not allowlisted")
-    executable: str | Path = TRUSTED_TOOLS[name] if name != "UnrealPak" else arguments[0]
+    executable: str | Path = (
+        TRUSTED_TOOLS[name] if name != "UnrealPak" else arguments[0]
+    )
     argv = list(arguments if name == "UnrealPak" else [str(executable), *arguments])
     if not Path(executable).is_file() or not os.access(executable, os.X_OK):
-        raise PackageReceiptError("TOOL_MISSING", f"required tool {name} is unavailable")
+        raise PackageReceiptError(
+            "TOOL_MISSING", f"required tool {name} is unavailable"
+        )
     process: subprocess.Popen[bytes] | None = None
     selector: selectors.BaseSelector | None = None
     try:
@@ -715,7 +1114,9 @@ def run_fixed_tool(name: str, arguments: Sequence[str], timeout: float) -> ToolR
         while pipe_open or process.poll() is None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise PackageReceiptError("TOOL_TIMEOUT", f"{name} exceeded its timeout")
+                raise PackageReceiptError(
+                    "TOOL_TIMEOUT", f"{name} exceeded its timeout"
+                )
             for key, _events in selector.select(min(remaining, 0.25)):
                 try:
                     block = os.read(key.fd, 64 * 1024)
@@ -778,7 +1179,9 @@ def inspect_executable(
     if file_result.returncode != 0 or not all(
         token in file_text for token in ("ELF 64-bit", "x86-64")
     ):
-        raise PackageReceiptError("FILE_IDENTITY_INVALID", "game binary is not Linux x86-64 ELF")
+        raise PackageReceiptError(
+            "FILE_IDENTITY_INVALID", "game binary is not Linux x86-64 ELF"
+        )
 
     readelf_result = runner("readelf", ["-h", str(executable)], TOOL_TIMEOUT_SECONDS)
     readelf_text = readelf_result.stdout.decode("utf-8", errors="replace")
@@ -788,11 +1191,15 @@ def inspect_executable(
         or re.search(r"Machine:\s+Advanced Micro Devices X86-64", readelf_text) is None
         or re.search(r"Type:\s+(?:DYN|EXEC)\b", readelf_text) is None
     ):
-        raise PackageReceiptError("READELF_IDENTITY_INVALID", "ELF header identity differs")
+        raise PackageReceiptError(
+            "READELF_IDENTITY_INVALID", "ELF header identity differs"
+        )
 
     program_headers = runner("readelf", ["-l", str(executable)], TOOL_TIMEOUT_SECONDS)
     program_text = program_headers.stdout.decode("utf-8", errors="replace")
-    interpreters = re.findall(r"Requesting program interpreter:\s*([^\]]+)\]", program_text)
+    interpreters = re.findall(
+        r"Requesting program interpreter:\s*([^\]]+)\]", program_text
+    )
     trusted_interpreters = {
         "/lib64/ld-linux-x86-64.so.2",
         "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -809,7 +1216,9 @@ def inspect_executable(
     ldd_result = runner("ldd", [str(executable)], TOOL_TIMEOUT_SECONDS)
     ldd_text = ldd_result.stdout.decode("utf-8", errors="replace")
     if ldd_result.returncode != 0 or "not found" in ldd_text.lower():
-        raise PackageReceiptError("LDD_DEPENDENCY_MISSING", "game binary has unresolved libraries")
+        raise PackageReceiptError(
+            "LDD_DEPENDENCY_MISSING", "game binary has unresolved libraries"
+        )
 
     return {
         "file": _tool_observation(file_result),
@@ -817,7 +1226,9 @@ def inspect_executable(
         "readelf_program_headers": _tool_observation(program_headers),
         "ldd": {
             **_tool_observation(ldd_result),
-            "dependency_lines": len([line for line in ldd_text.splitlines() if line.strip()]),
+            "dependency_lines": len(
+                [line for line in ldd_text.splitlines() if line.strip()]
+            ),
             "missing": 0,
         },
     }
@@ -843,7 +1254,8 @@ def inspect_pak(
     matches = [entry for entry in quoted if entry.lstrip("./").endswith(expected)]
     if len(matches) != 1:
         raise PackageReceiptError(
-            "PAK_MAP_MISSING", "pak does not contain exactly one fixed playable-home map"
+            "PAK_MAP_MISSING",
+            "pak does not contain exactly one fixed playable-home map",
         )
     return {
         **_tool_observation(result),
@@ -867,7 +1279,9 @@ def _archive_files(root: Path) -> list[Path]:
         for name in list(directory_names):
             candidate = current_path / name
             if candidate.is_symlink():
-                raise PackageReceiptError("ARCHIVE_SYMLINK_REFUSED", "archive contains a symlink")
+                raise PackageReceiptError(
+                    "ARCHIVE_SYMLINK_REFUSED", "archive contains a symlink"
+                )
         for name in file_names:
             candidate = current_path / name
             metadata = os.lstat(candidate)
@@ -875,16 +1289,26 @@ def _archive_files(root: Path) -> list[Path]:
                 raise PackageReceiptError(
                     "ARCHIVE_ENTRY_REFUSED", "archive contains a non-regular file"
                 )
-            if candidate.suffix.lower() in {".utoc", ".ucas", ".cpp", ".h", ".cs", ".py"}:
+            if candidate.suffix.lower() in {
+                ".utoc",
+                ".ucas",
+                ".cpp",
+                ".h",
+                ".cs",
+                ".py",
+            }:
                 raise PackageReceiptError(
-                    "ARCHIVE_POLICY_INVALID", "archive contains IoStore or source-code output"
+                    "ARCHIVE_POLICY_INVALID",
+                    "archive contains IoStore or source-code output",
                 )
             if "UnrealEditor" in candidate.name:
                 raise PackageReceiptError(
                     "ARCHIVE_POLICY_INVALID", "archive contains an editor executable"
                 )
             output.append(candidate)
-    return sorted(output, key=lambda path: path.relative_to(root).as_posix().encode("utf-8"))
+    return sorted(
+        output, key=lambda path: path.relative_to(root).as_posix().encode("utf-8")
+    )
 
 
 def _trusted_engine_exemption(
@@ -897,9 +1321,14 @@ def _trusted_engine_exemption(
     trusted_engine_root: Path | None,
 ) -> dict[str, Any]:
     relative_path = Path(relative)
-    if trusted_engine_root is None or not relative_path.parts or relative_path.parts[0] != "Engine":
+    if (
+        trusted_engine_root is None
+        or not relative_path.parts
+        or relative_path.parts[0] != "Engine"
+    ):
         raise PackageReceiptError(
-            "SECRET_SCAN_FAILED", "package-specific archive content matched a secret rule"
+            "SECRET_SCAN_FAILED",
+            "package-specific archive content matched a secret rule",
         )
     engine_root = _canonical_existing(
         trusted_engine_root, "trusted engine root", directory=True
@@ -929,7 +1358,11 @@ def _trusted_engine_exemption(
 
 
 def inspect_archive(
-    root: Path, *, trusted_engine_root: Path | None = None
+    root: Path,
+    *,
+    trusted_engine_root: Path | None = None,
+    exact_modes: bool = False,
+    _identity_sink: dict[str, tuple[int, int, int, int, int, int]] | None = None,
 ) -> dict[str, Any]:
     files_before = _archive_files(root)
     tree = hashlib.sha256()
@@ -937,6 +1370,7 @@ def inspect_archive(
     total_bytes = 0
     exemptions: list[dict[str, Any]] = []
     pattern_hit_count = 0
+    sealed_identities: dict[str, tuple[int, int, int, int, int, int]] = {}
     # Preserve enough preceding bytes for the largest bounded credential form,
     # including regex quantifiers whose source representation is shorter than
     # the byte string they match.
@@ -950,16 +1384,16 @@ def inspect_archive(
         try:
             descriptor = os.open(
                 path,
-                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
             )
             with os.fdopen(descriptor, "rb") as handle:
                 opened = os.fstat(handle.fileno())
-                if (opened.st_dev, opened.st_ino, opened.st_size) != (
-                    before.st_dev,
-                    before.st_ino,
-                    before.st_size,
-                ):
-                    raise PackageReceiptError("ARCHIVE_CHANGED", "archive changed while opening")
+                if _file_identity(opened) != _file_identity(before):
+                    raise PackageReceiptError(
+                        "ARCHIVE_CHANGED", "archive changed while opening"
+                    )
                 for block in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(block)
                     window = overlap + block
@@ -970,13 +1404,15 @@ def inspect_archive(
         except PackageReceiptError:
             raise
         except OSError as exc:
-            raise PackageReceiptError("ARCHIVE_READ_FAILED", "could not read archive") from exc
+            raise PackageReceiptError(
+                "ARCHIVE_READ_FAILED", "could not read archive"
+            ) from exc
         after = os.lstat(path)
-        if (
-            (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        ):
-            raise PackageReceiptError("ARCHIVE_CHANGED", "archive changed while hashing")
+        if _file_identity(before) != _file_identity(after):
+            raise PackageReceiptError(
+                "ARCHIVE_CHANGED", "archive changed while hashing"
+            )
+        sealed_identities[relative] = _file_identity(after)
         if matched_rules:
             archive_sha256 = digest.hexdigest()
             exemptions.append(
@@ -990,24 +1426,38 @@ def inspect_archive(
                 )
             )
             pattern_hit_count += len(matched_rules)
-        record = canonical_json(
-            {
-                "executable": bool(before.st_mode & 0o111),
-                "path": relative,
-                "sha256": digest.hexdigest(),
-                "size": before.st_size,
-            }
-        )
+        record_value = {
+            "path": relative,
+            "sha256": digest.hexdigest(),
+            "size": before.st_size,
+        }
+        if exact_modes:
+            record_value["mode"] = stat.S_IMODE(before.st_mode)
+        else:
+            record_value["executable"] = bool(before.st_mode & 0o111)
+        record = canonical_json(record_value)
         tree.update(len(record).to_bytes(8, "big"))
         tree.update(record)
         file_count += 1
         total_bytes += before.st_size
-    if [path.relative_to(root) for path in _archive_files(root)] != [
+    files_after = _archive_files(root)
+    if [path.relative_to(root) for path in files_after] != [
         path.relative_to(root) for path in files_before
     ]:
-        raise PackageReceiptError("ARCHIVE_CHANGED", "archive entry set changed while hashing")
-    return {
-        "algorithm": "framed-canonical-file-record-sha256/v1",
+        raise PackageReceiptError(
+            "ARCHIVE_CHANGED", "archive entry set changed while hashing"
+        )
+    for path in files_after:
+        relative = path.relative_to(root).as_posix()
+        metadata = os.lstat(path)
+        if sealed_identities.get(relative) != _file_identity(metadata):
+            raise PackageReceiptError(
+                "ARCHIVE_CHANGED", "archive identity changed after hashing"
+            )
+    observation = {
+        "algorithm": (
+            ARCHIVE_ALGORITHM_EXACT_MODE_V2 if exact_modes else ARCHIVE_ALGORITHM_V1
+        ),
         "file_count": file_count,
         "total_bytes": total_bytes,
         "tree_sha256": tree.hexdigest(),
@@ -1025,27 +1475,61 @@ def inspect_archive(
             "trusted_upstream_exemptions": exemptions,
         },
     }
+    if exact_modes:
+        observation["schema"] = ARCHIVE_SCHEMA_EXACT_MODE_V2
+    if _identity_sink is not None:
+        _identity_sink.update(sealed_identities)
+    return observation
 
 
-def _artifact(path: Path, root: Path) -> dict[str, Any]:
-    metadata = path.stat()
-    return {
+def _artifact(
+    path: Path,
+    root: Path,
+    *,
+    exact_mode: bool = False,
+    seal: FileSeal | None = None,
+) -> dict[str, Any]:
+    observed = seal if seal is not None else _sealed_file(path)
+    record = {
         "relative_path": path.relative_to(root).as_posix(),
-        "sha256": sha256_file(path),
-        "bytes": metadata.st_size,
-        "executable": bool(metadata.st_mode & 0o111),
+        "sha256": observed.sha256,
+        "bytes": observed.size,
+        "executable": bool(observed.mode & 0o111),
     }
+    if exact_mode:
+        record["mode"] = observed.mode
+    return record
 
 
 def verify_package(
     inputs: PackageInputs, runner: ToolRunner = run_fixed_tool
 ) -> dict[str, Any]:
-    project_policy = inspect_project_policy(inputs)
+    exact_modes = inputs.runtime_profile == R2_RUNTIME_PROFILE
+    project_policy, project_seals = _inspect_project_policy_with_seals(
+        inputs,
+        exact_modes=exact_modes,
+    )
     uat = inspect_uat_log(inputs.uat_log)
+    artifact_seals = {
+        "launcher": _sealed_file(inputs.launcher),
+        "executable": _sealed_file(inputs.executable),
+        "pak": _sealed_file(inputs.pak),
+    }
     executable_tools = inspect_executable(inputs.executable, runner)
+    unreal_pak_before_tool = _sealed_file(inputs.unreal_pak)
     pak_tool = inspect_pak(inputs, runner)
+    unreal_pak_after_tool = _sealed_file(inputs.unreal_pak)
+    if unreal_pak_after_tool != unreal_pak_before_tool:
+        raise PackageReceiptError(
+            "UNREALPAK_CHANGED",
+            "UnrealPak changed while executing the fixed inspection",
+        )
+    archive_identities: dict[str, tuple[int, int, int, int, int, int]] = {}
     archive = inspect_archive(
-        inputs.archive_root, trusted_engine_root=inputs.engine_root
+        inputs.archive_root,
+        trusted_engine_root=inputs.engine_root,
+        exact_modes=exact_modes,
+        _identity_sink=archive_identities,
     )
     bindings: dict[str, Any] = {
         "source_build_result": str(inputs.source_build_result),
@@ -1077,21 +1561,32 @@ def verify_package(
                 ],
             }
         )
-    return {
-        "schema": (
-            R2_RECEIPT_SCHEMA
-            if inputs.runtime_profile == R2_RUNTIME_PROFILE
-            else RECEIPT_SCHEMA
-        ),
+    receipt = {
+        "schema": (R2_EXACT_MODE_RECEIPT_SCHEMA if exact_modes else RECEIPT_SCHEMA),
         "status": "accepted",
         "created_at": utc_now(),
         "attempt_root": str(inputs.attempt_root),
         "bindings": bindings,
         "artifacts": {
             "archive_root": str(inputs.archive_root),
-            "launcher": _artifact(inputs.launcher, inputs.attempt_root),
-            "executable": _artifact(inputs.executable, inputs.attempt_root),
-            "pak": _artifact(inputs.pak, inputs.attempt_root),
+            "launcher": _artifact(
+                inputs.launcher,
+                inputs.attempt_root,
+                exact_mode=exact_modes,
+                seal=artifact_seals["launcher"],
+            ),
+            "executable": _artifact(
+                inputs.executable,
+                inputs.attempt_root,
+                exact_mode=exact_modes,
+                seal=artifact_seals["executable"],
+            ),
+            "pak": _artifact(
+                inputs.pak,
+                inputs.attempt_root,
+                exact_mode=exact_modes,
+                seal=artifact_seals["pak"],
+            ),
         },
         "uat": uat,
         "project_policy": project_policy,
@@ -1100,11 +1595,54 @@ def verify_package(
             "policy": "engine-root-derived-from-pinned-unrealpak/v1",
             "engine_root": str(inputs.engine_root),
             "unreal_pak": str(inputs.unreal_pak),
-            "unreal_pak_sha256": sha256_file(inputs.unreal_pak),
+            "unreal_pak_sha256": unreal_pak_after_tool.sha256,
+            **(
+                {
+                    "mode_policy": "sealed-exact-stat-imode/v1",
+                    "unreal_pak_mode": unreal_pak_after_tool.mode,
+                }
+                if exact_modes
+                else {}
+            ),
         },
         "archive": archive,
         "output": str(inputs.output),
     }
+
+    # Close the complete package identity immediately before returning the
+    # receipt.  Each individual sealed read rejects in-window replacement;
+    # comparing the complete second snapshot rejects phase exchanges between
+    # policy/tool/archive inspection and receipt construction.
+    final_project_policy, final_project_seals = _inspect_project_policy_with_seals(
+        inputs,
+        exact_modes=exact_modes,
+    )
+    final_artifact_seals = {
+        "launcher": _sealed_file(inputs.launcher),
+        "executable": _sealed_file(inputs.executable),
+        "pak": _sealed_file(inputs.pak),
+    }
+    final_unreal_pak = _sealed_file(inputs.unreal_pak)
+    final_archive_identities: dict[str, tuple[int, int, int, int, int, int]] = {}
+    final_archive = inspect_archive(
+        inputs.archive_root,
+        trusted_engine_root=inputs.engine_root,
+        exact_modes=exact_modes,
+        _identity_sink=final_archive_identities,
+    )
+    if (
+        final_project_policy != project_policy
+        or final_project_seals != project_seals
+        or final_artifact_seals != artifact_seals
+        or final_unreal_pak != unreal_pak_after_tool
+        or final_archive != archive
+        or final_archive_identities != archive_identities
+    ):
+        raise PackageReceiptError(
+            "PACKAGE_CHANGED",
+            "package identity changed between inspection phases",
+        )
+    return receipt
 
 
 def write_exclusive_receipt(path: Path, receipt: Mapping[str, Any]) -> str:
@@ -1119,11 +1657,32 @@ def write_exclusive_receipt(path: Path, receipt: Mapping[str, Any]) -> str:
         0o600,
     )
     try:
-        with os.fdopen(descriptor, "wb") as handle:
+        # Creation modes are filtered through the caller's umask.  The exact-mode
+        # receipt contract requires 0600 even under a maximally restrictive
+        # umask, so set the final mode on the already-open, O_EXCL descriptor.
+        os.fchmod(descriptor, 0o600)
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = -1
+        with handle:
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
     except BaseException:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                # fdopen may have closed the descriptor before raising.  Never
+                # let a best-effort EBADF mask the original failure.
+                pass
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # Preserve the original commit failure.  A later exclusive write
+            # will still fail closed if cleanup was not possible.
+            pass
         raise
     return sha256_bytes(raw)
 

@@ -107,8 +107,19 @@ HSSD_BASIS_TRANSCODER_JS_SHA256 = (
 HSSD_BASIS_TRANSCODER_WASM_SHA256 = (
     "6cf17dc889352c42e9acf8897107978d127005fe3386c36a0e3845e27967630a"
 )
-RENDERER_OBSERVATION_SCHEMA = "simworld.vista.playable-home-renderer-observation-contract/v1"
-RENDERER_REQUEST_SCHEMA = "simworld.vista.playable-home-renderer-request/v1"
+RENDERER_OBSERVATION_SCHEMA = "simworld.vista.playable-home-renderer-observation-contract/v2"
+RENDERER_REQUEST_SCHEMA = "simworld.vista.playable-home-renderer-request/v2"
+RENDERER_STATUS_SCHEMA = "simworld.vista.playable-home-renderer-status/v1"
+RENDERER_REGISTRY_SCHEMA = "simworld.vista.playable-home-ue-renderer-registry/v1"
+RENDERER_REGISTRY_ID = "ue_5_7_3_registered_cvars_v1"
+RENDERER_REGISTRY_PATH = (
+    REPO_ROOT
+    / "world_packs/vista_playable_home_r1/visual_profiles/ue_5_7_3_renderer_registry.json"
+)
+PINNED_UNREAL_ENGINE_VERSION = "5.7.3"
+PINNED_UNREAL_ENGINE_RUNTIME_VERSION = (
+    "5.7.3-50162420+++UE5+Release-5.7"
+)
 VISUAL_PROFILE_ATTEMPT_FILE = "visual-profile.json"
 RENDERER_REQUEST_ATTEMPT_FILE = "renderer-profile-request.json"
 PRESENTATION_MANIFEST_ATTEMPT_FILE = "presentation-manifest.json"
@@ -353,6 +364,115 @@ RENDERER_SCALABILITY_CVARS = {
     "foliage": "sg.FoliageQuality",
     "shading": "sg.ShadingQuality",
 }
+
+
+def load_renderer_cvar_registry() -> dict[str, Any]:
+    """Load the repository-pinned UE 5.7.3 registration evidence."""
+
+    try:
+        value = visual_profile_contract.load_json(RENDERER_REGISTRY_PATH)
+    except visual_profile_contract.VisualProfileContractError as exc:
+        _fail(
+            "VISTA_HOME_RENDERER_REGISTRY_INVALID",
+            "UE 5.7.3 renderer registration evidence is unavailable",
+        )
+        raise AssertionError from exc
+    return value
+
+
+def validate_renderer_cvar_registry(
+    registry: Mapping[str, Any], required_names: Sequence[str]
+) -> dict[str, Mapping[str, Any]]:
+    """Fail closed unless every observed CVar has pinned registration proof."""
+
+    expected_top = {
+        "schema_version",
+        "registry_id",
+        "engine",
+        "registration_evidence_policy",
+        "pre_exposure_policy",
+        "registrations",
+        "content_digest",
+    }
+    if not isinstance(registry, Mapping) or set(registry) != expected_top:
+        _fail("VISTA_HOME_RENDERER_REGISTRY_INVALID", "renderer registry fields differ")
+    if (
+        registry.get("schema_version") != RENDERER_REGISTRY_SCHEMA
+        or registry.get("registry_id") != RENDERER_REGISTRY_ID
+        or registry.get("registration_evidence_policy")
+        != "pinned-ue-source-file-and-declaration-symbol-sha256/v1"
+        or registry.get("content_digest") != _content_digest(registry)
+    ):
+        _fail("VISTA_HOME_RENDERER_REGISTRY_INVALID", "renderer registry identity differs")
+    engine = registry.get("engine")
+    if not isinstance(engine, Mapping) or dict(engine) != {
+        "version": PINNED_UNREAL_ENGINE_VERSION,
+        "runtime_version": PINNED_UNREAL_ENGINE_RUNTIME_VERSION,
+        "changelist": 50162420,
+        "branch_name": "++UE5+Release-5.7",
+        "build_version_relative_path": "Engine/Build/Build.version",
+        "build_version_sha256": (
+            "ffe01f6d1e96ef86cd06158cfb561150971823fc77e5c8df352910bcf4d365ef"
+        ),
+    }:
+        _fail("VISTA_HOME_RENDERER_REGISTRY_INVALID", "pinned UE engine evidence differs")
+    pre_exposure = registry.get("pre_exposure_policy")
+    if not isinstance(pre_exposure, Mapping) or dict(pre_exposure) != {
+        "semantic_enabled": True,
+        "runtime_policy": "ue5_always_on_engine_managed",
+        "policy_source_relative_path": (
+            "Engine/Source/Runtime/RenderCore/Private/Shader.cpp"
+        ),
+        "policy_source_sha256": (
+            "a4ce752f788e5f9c4b73516175b0b8c39a0b21bb601382f51ae4dcca71a7904a"
+        ),
+        "policy_evidence": "PreExposure is always used",
+        "override_cvar": "r.EyeAdaptation.PreExposureOverride",
+        "override_expected": 0,
+    }:
+        _fail("VISTA_HOME_RENDERER_REGISTRY_INVALID", "pre-exposure evidence differs")
+    registrations = registry.get("registrations")
+    if not isinstance(registrations, list) or not registrations:
+        _fail("VISTA_HOME_RENDERER_REGISTRY_INVALID", "renderer registrations are empty")
+    evidence: dict[str, Mapping[str, Any]] = {}
+    expected_fields = {
+        "name",
+        "declaration_symbol",
+        "registration_kind",
+        "source_relative_path",
+        "source_sha256",
+    }
+    for registration in registrations:
+        if not isinstance(registration, Mapping) or set(registration) != expected_fields:
+            _fail("VISTA_HOME_RENDERER_REGISTRY_INVALID", "registration fields differ")
+        name = registration.get("name")
+        source = registration.get("source_relative_path")
+        if (
+            not isinstance(name, str)
+            or not name
+            or name in evidence
+            or name == "r.UsePreExposure"
+            or registration.get("registration_kind") != "TAutoConsoleVariable"
+            or not isinstance(registration.get("declaration_symbol"), str)
+            or not registration["declaration_symbol"]
+            or not isinstance(source, str)
+            or not source.startswith("Engine/Source/")
+            or Path(source).is_absolute()
+            or ".." in Path(source).parts
+            or not isinstance(registration.get("source_sha256"), str)
+            or SHA256_RE.fullmatch(registration["source_sha256"]) is None
+        ):
+            _fail("VISTA_HOME_RENDERER_REGISTRY_INVALID", "registration evidence is invalid")
+        evidence[name] = registration
+    required = list(required_names)
+    if len(required) != len(set(required)) or set(required) != set(evidence):
+        missing = sorted(set(required) - set(evidence))
+        unexpected = sorted(set(evidence) - set(required))
+        _fail(
+            "VISTA_HOME_RENDERER_CVAR_UNREGISTERED",
+            f"required CVar evidence differs (missing={missing}, unexpected={unexpected})",
+        )
+    return evidence
 
 
 class BuildHomeError(RuntimeError):
@@ -2271,6 +2391,7 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
 
     if not isinstance(profile, Mapping):
         _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", "renderer profile must be an object")
+    registry = load_renderer_cvar_registry()
     profile_id = profile.get("profile_id")
     if not isinstance(profile_id, str) or RENDERER_PROFILE_SAFE_ID_RE.fullmatch(profile_id) is None:
         _fail("VISTA_HOME_RENDERER_PROFILE_INVALID", "renderer profile ID is invalid")
@@ -2284,6 +2405,10 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
         "shadow_method": "virtual_shadow_maps",
         "anti_aliasing": "tsr",
         "nanite_policy": "eligible_static_opaque_only",
+        "engine_version": PINNED_UNREAL_ENGINE_VERSION,
+        "registered_cvar_manifest": RENDERER_REGISTRY_ID,
+        "registered_cvar_manifest_digest": registry["content_digest"],
+        "pre_exposure_runtime_policy": "ue5_always_on_engine_managed",
     }
     for key, expected in exact_values.items():
         if profile.get(key) != expected:
@@ -2294,6 +2419,16 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
     if profile.get("hardware_ray_tracing") is not False:
         _fail("VISTA_HOME_RENDERER_PROFILE_INVALID",
               "the first Linux realism profile must use software Lumen")
+    pre_exposure_override = profile.get("pre_exposure_override")
+    if (
+        isinstance(pre_exposure_override, bool)
+        or not isinstance(pre_exposure_override, (int, float))
+        or float(pre_exposure_override) != 0.0
+    ):
+        _fail(
+            "VISTA_HOME_RENDERER_PROFILE_INVALID",
+            "UE 5.7.3 pre-exposure override must remain engine-managed at zero",
+        )
 
     screen_percentage = profile.get("screen_percentage")
     if (isinstance(screen_percentage, bool) or
@@ -2322,6 +2457,7 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
         "hardware_ray_tracing": False,
         "extended_luminance_range": True,
         "pre_exposure": True,
+        "pre_exposure_override": 0,
         "screen_percentage": float(screen_percentage),
         "texture_pool_mb": texture_pool_mb,
         "scalability": normalized_scalability,
@@ -2339,7 +2475,7 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
         "r.Nanite.ProjectEnabled=True",
         "r.GenerateMeshDistanceFields=True",
         "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange=True",
-        "r.UsePreExposure=True",
+        "r.EyeAdaptation.PreExposureOverride=0",
         "r.RayTracing=False",
         "r.Lumen.HardwareRayTracing=0",
     )
@@ -2364,7 +2500,7 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
         ("r.Nanite", 1),
         ("r.GenerateMeshDistanceFields", 1),
         ("r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange", 1),
-        ("r.UsePreExposure", 1),
+        ("r.EyeAdaptation.PreExposureOverride", 0),
         ("r.RayTracing", 0),
         ("r.Lumen.HardwareRayTracing", 0),
         ("r.ScreenPercentage", float(screen_percentage)),
@@ -2378,11 +2514,25 @@ def compile_renderer_profile(profile: Mapping[str, Any]) -> RendererProfileCompi
         {"source": "cvar", "name": name, "comparison": "numeric_exact", "expected": expected}
         for name, expected in required_cvars
     )
+    registration_evidence = validate_renderer_cvar_registry(
+        registry, [name for name, _expected in required_cvars]
+    )
     observation_contract = {
         "schema_version": RENDERER_OBSERVATION_SCHEMA,
         "profile_id": profile_id,
         "status": "runtime_observation_required",
         "config_is_runtime_proof": False,
+        "pinned_unreal_engine": dict(registry["engine"]),
+        "cvar_registration_evidence": {
+            "registry_id": registry["registry_id"],
+            "content_digest": registry["content_digest"],
+            "policy": registry["registration_evidence_policy"],
+            "registrations": [
+                dict(registration_evidence[name])
+                for name, _expected in required_cvars
+            ],
+        },
+        "pre_exposure_policy": dict(registry["pre_exposure_policy"]),
         "required_runtime_observations": required_runtime_observations,
         "nanite_policy": {
             "mode": "eligible_static_opaque_only",
@@ -2462,6 +2612,123 @@ def evaluate_renderer_observations(
         "status": "accepted_observation" if not failures else "rejected_observation",
         "runtime_proof": not failures,
         "failures": failures,
+    }
+
+
+def evaluate_renderer_status_response(
+    compilation: RendererProfileCompilation,
+    response: Mapping[str, Any],
+    *,
+    command_id: str,
+) -> dict[str, Any]:
+    """Strictly evaluate one observation emitted by the typed UE runtime.
+
+    This is deliberately separate from :func:`evaluate_renderer_observations`,
+    whose small mapping API remains useful for pure configuration tests.  The
+    runtime gate accepts a closed response schema, requires the complete CVar
+    set described by the pinned observation contract, and never treats the
+    staged request itself as evidence.
+    """
+
+    top_level_keys = {
+        "command_id",
+        "status",
+        "code",
+        "schema_version",
+        "unreal_engine_version",
+        "rhi",
+        "feature_level",
+        "shader_platform",
+        "cvars",
+    }
+    if not isinstance(response, Mapping) or set(response) != top_level_keys:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer status response fields differ",
+        )
+    engine_version = response.get("unreal_engine_version")
+    if (
+        response.get("command_id") != command_id
+        or response.get("status") != "success"
+        or response.get("code") != "RENDERER_STATUS_OBSERVED"
+        or response.get("schema_version") != RENDERER_STATUS_SCHEMA
+        or not isinstance(engine_version, str)
+        or engine_version != PINNED_UNREAL_ENGINE_RUNTIME_VERSION
+    ):
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer status identity or pinned UE 5.7.3 version differs",
+        )
+
+    contract = compilation.observation_contract
+    requirements = contract.get("required_runtime_observations")
+    if not isinstance(requirements, list) or not requirements:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer observation contract is empty",
+        )
+    runtime_names: set[str] = set()
+    cvar_names: set[str] = set()
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping) or set(requirement) != {
+            "source", "name", "comparison", "expected"
+        }:
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                "renderer observation requirement fields differ",
+            )
+        source = requirement.get("source")
+        name = requirement.get("name")
+        if not isinstance(name, str) or not name:
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                "renderer observation requirement name is invalid",
+            )
+        names = runtime_names if source == "runtime" else cvar_names if source == "cvar" else None
+        if names is None or name in names:
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                "renderer observation requirement source or uniqueness differs",
+            )
+        names.add(name)
+    if runtime_names != {"rhi", "feature_level", "shader_platform"}:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer runtime identity observations differ",
+        )
+    cvars = response.get("cvars")
+    if not isinstance(cvars, Mapping) or set(cvars) != cvar_names:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+            "renderer CVar observation set differs",
+        )
+    for name, value in cvars.items():
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            _fail(
+                "VISTA_HOME_RENDERER_OBSERVATION_INVALID",
+                f"renderer CVar {name} is not finite numeric evidence",
+            )
+    observations = {
+        "rhi": response["rhi"],
+        "feature_level": response["feature_level"],
+        "shader_platform": response["shader_platform"],
+        **dict(cvars),
+    }
+    evaluation = evaluate_renderer_observations(compilation, observations)
+    if not evaluation["runtime_proof"]:
+        _fail(
+            "VISTA_HOME_RENDERER_OBSERVATION_REJECTED",
+            "effective renderer observations do not satisfy the pinned contract",
+        )
+    return {
+        **evaluation,
+        "renderer_status_schema": RENDERER_STATUS_SCHEMA,
+        "unreal_engine_version": engine_version,
+        "observations": observations,
     }
 
 

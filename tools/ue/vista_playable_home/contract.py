@@ -301,7 +301,7 @@ def build_execution_manifest(
         if (
             set(renderer_request) != expected_request_keys
             or renderer_request.get("schema_version")
-            != "simworld.vista.playable-home-renderer-request/v1"
+            != "simworld.vista.playable-home-renderer-request/v2"
             or canonical_json(renderer_request) != renderer_raw
             or renderer_request.get("status")
             != "staged_runtime_observation_required"

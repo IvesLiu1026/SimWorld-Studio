@@ -115,6 +115,50 @@ struct VISTAPLAYABLEHOME_API FVistaLiveCommandResult
 };
 
 /**
+ * Values read from the active renderer on the game thread.  This is an
+ * observation-only structure: no requested or configured values are accepted
+ * from the TCP caller.
+ */
+USTRUCT(BlueprintType)
+struct VISTAPLAYABLEHOME_API FVistaRendererRuntimeObservation
+{
+    GENERATED_BODY()
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    FString UnrealEngineVersion;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    FString Rhi;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    FString FeatureLevel;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    FString ShaderPlatform;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    TMap<FString, double> ConsoleVariables;
+};
+
+USTRUCT(BlueprintType)
+struct VISTAPLAYABLEHOME_API FVistaRendererStatusResult
+{
+    GENERATED_BODY()
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    FName CommandId = NAME_None;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    bool bSucceeded = false;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    FName Code = TEXT("RENDERER_OBSERVATION_UNAVAILABLE");
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VISTA|Runtime")
+    FVistaRendererRuntimeObservation Observation;
+};
+
+/**
  * Fixed typed boundary for the private Studio/MCP adapter. It intentionally
  * accepts no class, object path, function name, console command, or script.
  */
@@ -127,6 +171,9 @@ class VISTAPLAYABLEHOME_API UVistaPlayableHomeRuntimeSubsystem final
 public:
     UFUNCTION(BlueprintPure, Category = "VISTA|Runtime")
     FVistaLiveCommandResult GetStatus(FName CommandId) const;
+
+    /** Read the active RHI and a closed allowlist of effective renderer CVars. */
+    FVistaRendererStatusResult GetRendererStatus(FName CommandId) const;
 
     UFUNCTION(BlueprintCallable, Category = "VISTA|Runtime")
     FVistaLiveCommandResult ExecuteInteraction(

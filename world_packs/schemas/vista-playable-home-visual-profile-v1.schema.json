@@ -499,9 +499,14 @@
         "shadow_method",
         "anti_aliasing",
         "nanite_policy",
+        "engine_version",
+        "registered_cvar_manifest",
+        "registered_cvar_manifest_digest",
         "hardware_ray_tracing",
         "extended_luminance_range",
         "pre_exposure",
+        "pre_exposure_runtime_policy",
+        "pre_exposure_override",
         "screen_percentage",
         "texture_pool_mb",
         "scalability"
@@ -517,9 +522,16 @@
         "shadow_method": {"const": "virtual_shadow_maps"},
         "anti_aliasing": {"const": "tsr"},
         "nanite_policy": {"const": "eligible_static_opaque_only"},
+        "engine_version": {"const": "5.7.3"},
+        "registered_cvar_manifest": {"const": "ue_5_7_3_registered_cvars_v1"},
+        "registered_cvar_manifest_digest": {
+          "const": "d3aa4ffdc4677f8e0bece80d86fdfd85e52480d323c54470e10240c58257a402"
+        },
         "hardware_ray_tracing": {"type": "boolean"},
         "extended_luminance_range": {"const": true},
         "pre_exposure": {"const": true},
+        "pre_exposure_runtime_policy": {"const": "ue5_always_on_engine_managed"},
+        "pre_exposure_override": {"const": 0},
         "screen_percentage": {"type": "integer", "minimum": 50, "maximum": 200},
         "texture_pool_mb": {"type": "integer", "minimum": 1024, "maximum": 24576},
         "scalability": {"$ref": "#/$defs/scalability"}

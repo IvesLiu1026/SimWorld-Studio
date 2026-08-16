@@ -498,9 +498,14 @@
     "shadow_method": "virtual_shadow_maps",
     "anti_aliasing": "tsr",
     "nanite_policy": "eligible_static_opaque_only",
+    "engine_version": "5.7.3",
+    "registered_cvar_manifest": "ue_5_7_3_registered_cvars_v1",
+    "registered_cvar_manifest_digest": "d3aa4ffdc4677f8e0bece80d86fdfd85e52480d323c54470e10240c58257a402",
     "hardware_ray_tracing": false,
     "extended_luminance_range": true,
     "pre_exposure": true,
+    "pre_exposure_runtime_policy": "ue5_always_on_engine_managed",
+    "pre_exposure_override": 0,
     "screen_percentage": 100,
     "texture_pool_mb": 8192,
     "scalability": {
@@ -671,5 +676,5 @@
       "home.r1/room.bedroom/entity.phone.01"
     ]
   },
-  "content_digest": "a6b9ccb043c1f92778d28b9b6fe5033e80853cc2ec5675c9b5aad30612cb4179"
+  "content_digest": "ba7283f04ebacc2e3dc157980af2a20e9be62bbc8232de60b6da6a206c2e9d32"
 }
