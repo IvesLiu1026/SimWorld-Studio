@@ -193,6 +193,47 @@ class VistaPlayableHomeProfileTests(unittest.TestCase):
             result.profile_sha256,
             hashlib.sha256(self.fixture.output.read_bytes()).hexdigest(),
         )
+        arguments = profile_entrypoint.load_profile(self.fixture.output)
+        self.assertIn("--runtime-profile", arguments)
+        profile_index = arguments.index("--runtime-profile")
+        self.assertEqual(
+            arguments[profile_index + 1], runtime.R2_RUNTIME_PROFILE
+        )
+        self.assertNotIn("--camera-profile", arguments)
+
+    def test_profile_entrypoint_rejects_partial_or_unknown_r2_binding(self) -> None:
+        base = {
+            "workspace": "/run/home",
+            "project": "/run/home/Home.uproject",
+            "ue_editor": "/ue/Engine/Binaries/Linux/UnrealEditor",
+            "map": "/Game/VISTA/Home",
+        }
+        profile_path = self.root / "entrypoint-profile.json"
+        for label, update in (
+            ("missing_camera", {"runtime_profile": runtime.R2_RUNTIME_PROFILE}),
+            ("missing_runtime", {"camera_profile": runtime.R2_CAMERA_PROFILE}),
+            (
+                "wrong_camera",
+                {
+                    "runtime_profile": runtime.R2_RUNTIME_PROFILE,
+                    "camera_profile": "default",
+                },
+            ),
+            (
+                "wrong_runtime",
+                {
+                    "runtime_profile": "realistic_interior_r3",
+                    "camera_profile": runtime.R2_CAMERA_PROFILE,
+                },
+            ),
+        ):
+            with self.subTest(label=label):
+                profile_path.write_text(
+                    json.dumps({**base, **update}), encoding="utf-8"
+                )
+                profile_path.chmod(0o600)
+                with self.assertRaisesRegex(ValueError, "r2 runtime/camera"):
+                    profile_entrypoint.load_profile(profile_path)
 
     def test_realistic_r2_plan_rejects_profile_port_and_camera_drift(self) -> None:
         r2_config = runtime.GameRuntimeConfig(

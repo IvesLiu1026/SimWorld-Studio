@@ -14,7 +14,6 @@ if __package__ in {None, ""}:
 else:
     from . import launch, profile as profile_contract
 
-ALLOWED_FIELDS = profile_contract.PROFILE_FIELDS
 REQUIRED_FIELDS = profile_contract.PROFILE_REQUIRED_FIELDS
 MAX_PROFILE_BYTES = profile_contract.MAX_JSON_BYTES
 
@@ -47,11 +46,26 @@ def _profile_path(path: Path) -> Path:
 def _validate_payload(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("profile must be a JSON object")
-    unknown = set(payload) - ALLOWED_FIELDS
+    has_runtime_profile = "runtime_profile" in payload
+    has_camera_profile = "camera_profile" in payload
+    r2 = has_runtime_profile or has_camera_profile
+    allowed_fields = (
+        profile_contract.R2_PROFILE_FIELDS
+        if r2
+        else profile_contract.PROFILE_FIELDS
+    )
+    unknown = set(payload) - allowed_fields
     if unknown:
         raise ValueError("profile contains unknown fields")
     if not REQUIRED_FIELDS.issubset(payload):
         raise ValueError("profile is missing required fields")
+    if r2 and (
+        not has_runtime_profile
+        or not has_camera_profile
+        or payload["runtime_profile"] != profile_contract.R2_RUNTIME_PROFILE
+        or payload["camera_profile"] != profile_contract.R2_CAMERA_PROFILE
+    ):
+        raise ValueError("profile r2 runtime/camera binding differs")
     for field in profile_contract.PROFILE_PATH_FIELDS:
         if field not in payload:
             continue
@@ -100,6 +114,7 @@ def load_profile(path: Path) -> list[str]:
         "project",
         "ue_editor",
         "map",
+        "runtime_profile",
         "display",
         "gpu",
         "vista_world_port",
