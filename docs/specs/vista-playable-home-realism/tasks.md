@@ -125,6 +125,11 @@ Depends on: requirements.md, design.md
     2K/4K assets stored on NAS.  Prefer account-free CC0 sources; Fab assets may
     proceed only when an existing entitlement can be verified without purchase
     or new credentials.
+  - Current evidence: 22 hash-pinned Poly Haven CC0 assets were acquired into a
+    fresh private NAS attempt.  All 103 files match provider size/MD5 and have
+    retained SHA-256 receipts; the payload is 359,529,243 bytes with no partial
+    files.  Resolver-native per-asset receipts, Blender contact sheets, and
+    human promotion decisions remain open, so T9 is not yet marked complete.
 
 - [ ] T10. Separate presentation from semantic collision/gameplay actors
   - Files: tools/ue/vista_playable_home/planning.py,

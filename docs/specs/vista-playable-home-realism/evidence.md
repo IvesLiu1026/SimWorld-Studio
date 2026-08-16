@@ -163,6 +163,40 @@ remain style-unreviewed; the sofa also failed the required local-axis dimension
 range.  The command deliberately exited 4 after retaining diagnostics,
 produced no promotion gate, and serialized no private absolute paths.
 
+## Licensed external acquisition evidence
+
+The approved account-free acquisition was executed into a fresh private NAS
+attempt:
+
+`/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home-realism/runs/20260816T073747Z/external-assets/attempt-01-poly-haven-cc0`
+
+The closed manifest pins 22 Poly Haven asset IDs and their upstream
+`files_hash` values.  The downloader accepts only the official API/CDN paths,
+uses no credential, verifies every provider size and MD5, adds SHA-256 for each
+file, and removes partial files on failure.  Poly Haven publishes these assets
+under CC0 1.0; the acquisition remains bound to the exact official URLs and
+receipt below.
+
+- Acquisition manifest SHA-256:
+  `317ca0f30409d04365ae8d7b5aa096e8454d8bc8fbe13a8b386935b19e719774`.
+- Approved download-plan digest:
+  `20d0ecf836034fb1061556578635b2483c48d82da9f5506a9e8ce08100a272bb`.
+- Acquisition receipt digest:
+  `a8a6b03c8fae71b299a2fcb36764e2dc1ec32c1e4dcd0b30ff0d3db3223fef70`.
+- Acquisition-receipt file SHA-256:
+  `6b894d75f61115a2d2d63769c091ae4da511e9ce9697cd0809fff1b3d1f910a3`.
+- Retained payload: 22 unique assets, 103 files, 359,529,243 exact
+  provider-declared bytes, and zero `.partial` files.
+
+The pack deliberately does not promote every downloaded model to a hero.  The
+modern coffee table is a direct contemporary candidate; the electric stove
+requires measured normalization and a non-Nanite translucent-glass policy.
+The contemporary shoe bench, sofa, and dining table remain project-authored
+geometry using the acquired 4K white-oak and wool PBR materials.  Vintage or
+rustic sofa/table candidates were not silently relabelled as contemporary.
+Resolver-compatible receipts, Blender realization, contact sheets, and human
+visual acceptance remain downstream gates.
+
 ## Validation retained in this milestone
 
 - All integrated realism contract, resolver, audit CLI, Blender forge/bundle,
@@ -187,5 +221,9 @@ produced no promotion gate, and serialized no private absolute paths.
 - UE import, presentation composition, save/reload, Lumen/CVar observation,
   six 1920x1080 captures, packaged gameplay, performance, and
   Sunshine/Moonlight input remain unrun.
+- The root filesystem has about 139 MiB free and both A6000 GPUs have existing
+  Unreal work.  UE/UAT launch remains blocked until the host has a safe root
+  margin and GPU 0 can be used without disturbing accepted r1; GPU 1 remains
+  forbidden.  All r2 build/cache/output paths are specified as NAS-only.
 - The accepted r1 package and live runtime remain the rollback target and were
   not restarted or modified during this milestone.
