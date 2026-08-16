@@ -1,6 +1,6 @@
 # Tasks: VISTA Playable Home Realistic Interior
 
-Status: Draft — implementation blocked on spec approval
+Status: Implementation in progress
 Updated: 2026-08-16
 Depends on: requirements.md, design.md
 
@@ -18,7 +18,7 @@ Depends on: requirements.md, design.md
 
 ## Task List
 
-- [ ] T1. Approve the r2 scope and asset policy
+- [x] T1. Approve the r2 scope and asset policy
   - Files: docs/specs/vista-playable-home-realism/**
   - Depends on: none
   - Requirements: R1-R12
@@ -214,3 +214,6 @@ Depends on: requirements.md, design.md
   AAA claim.
 - The current live r1 runtime and Sunshine process remain untouched during the
   spec phase.
+- The user approved requirements, design, and tasks on 2026-08-16 with
+  “批准”.  The zero-download/local-first asset policy is active; T9 remains a
+  separate external-acquisition gate.

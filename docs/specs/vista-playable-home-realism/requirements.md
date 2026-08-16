@@ -1,6 +1,6 @@
 # Requirements: VISTA Playable Home Realistic Interior
 
-Status: Draft — approval required before implementation
+Status: Approved for implementation
 Updated: 2026-08-16
 Parent: docs/specs/vista-playable-home
 
@@ -301,5 +301,5 @@ implementation uses project-authored and already-local licensed sources only.
 ## Approval
 
 - Requested by: user, “那我現在想要 GTA 等級的寫實室內”
-- Approved by:
-- Date:
+- Approved by: user, “批准”
+- Date: 2026-08-16

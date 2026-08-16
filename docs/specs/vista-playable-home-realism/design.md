@@ -1,6 +1,6 @@
 # Design: VISTA Playable Home Realistic Interior
 
-Status: Draft — approval required before implementation
+Status: Approved for implementation
 Updated: 2026-08-16
 Depends on: requirements.md
 
@@ -464,5 +464,5 @@ identity.  No “photorealistic” or “GTA-grade” label is emitted automatic
 ## Approval
 
 - Requested by: user
-- Approved by:
-- Date:
+- Approved by: user, “批准”
+- Date: 2026-08-16
