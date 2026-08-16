@@ -55,6 +55,10 @@ PINNED_ENGINE_BUILD_VERSION_SHA256 = (
 PINNED_ENGINE_VERSION = "5.7.3"
 PINNED_ENGINE_CHANGELIST = 50162420
 PINNED_RENDERER_CONTRACT_COMMIT = "3ce8ef48a2cb0aee881efeff94c3ea3a634fc56c"
+PACKAGE_ENGINE_CONFIG_POLICY = (
+    "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration+"
+    "vsm-non-nanite-coarse-page-exclusion/v2"
+)
 PROVEN_RUN_UAT_LOG = Path(
     "/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/"
     "20260815T110115Z-navfix/ue/package-linux-development/"
@@ -784,9 +788,12 @@ def _canonical_project_descriptor() -> bytes:
 
 def _canonical_engine_ini() -> bytes:
     # Exact closed projection of build_home.py at PINNED_RENDERER_CONTRACT_COMMIT
-    # for realistic_interior_r2 / desktop_high_sm6.  This is configuration,
-    # not runtime renderer proof; the packaged observation contract remains a
-    # separate post-package gate.
+    # for realistic_interior_r2 / desktop_high_sm6, plus one package-only UE
+    # 5.7.3 VSM hardening CVar.  UE's non-Nanite marking queue is fixed at 128
+    # jobs per workgroup; excluding non-Nanite meshes from coarse pages avoids
+    # that overflow while retaining directly requested visible shadow pages.
+    # This is configuration, not runtime renderer proof; the packaged
+    # observation contract remains a separate post-package gate.
     lines = [
         "[/Script/EngineSettings.GameMapsSettings]",
         f"GameDefaultMap={EXPECTED_MAP_PATH}",
@@ -816,6 +823,7 @@ def _canonical_engine_ini() -> bytes:
         "[ConsoleVariables]",
         "r.ScreenPercentage=100.000000",
         "r.Streaming.PoolSize=8192",
+        "r.Shadow.Virtual.NonNanite.IncludeInCoarsePages=0",
         "sg.ViewDistanceQuality=3",
         "sg.AntiAliasingQuality=3",
         "sg.ShadowQuality=3",
@@ -1406,9 +1414,7 @@ def _source_binding_record(source: SourceEvidence) -> dict[str, Any]:
             "renderer_contract_commit": PINNED_RENDERER_CONTRACT_COMMIT,
             "sanitized_policy": SOURCE_SANITIZATION_POLICY,
             "sha256": engine.sha256,
-            "transformation": (
-                "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration/v1"
-            ),
+            "transformation": PACKAGE_ENGINE_CONFIG_POLICY,
         },
         "verified_default_input": {
             "bytes": input_config.size_bytes,
@@ -1502,9 +1508,7 @@ def plan_materialization(
             "private_directory_mode": PRIVATE_DIRECTORY_MODE,
             "private_file_mode": PRIVATE_FILE_MODE,
             "project_descriptor": "canonical_runtime_only/v1",
-            "default_engine": (
-                "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration/v1"
-            ),
+            "default_engine": PACKAGE_ENGINE_CONFIG_POLICY,
             "default_input": "preserve_verified_bytes/v1",
             "copy_transport": "reflink_with_byte_fallback/v1",
             "secret_scan": "final_copy_eligible_and_output_zero_hits/v1",

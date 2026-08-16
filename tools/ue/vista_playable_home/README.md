@@ -169,7 +169,13 @@ and `DefaultEngine.ini` are regenerated deterministically. The generated
 engine config is the closed `realistic_interior_r2` / `desktop_high_sm6`
 renderer projection from commit
 `3ce8ef48a2cb0aee881efeff94c3ea3a634fc56c`, combined with a token-free,
-fully disabled Android File Server block. The source engine config is
+fully disabled Android File Server block. The package projection also sets
+`r.Shadow.Virtual.NonNanite.IncludeInCoarsePages=0`: UE 5.7.3 otherwise uses
+a fixed 128-job non-Nanite marking queue for VSM coarse pages, which can
+overflow in the multi-room shell even though it falls back to slower per-page
+marking. Directly requested visible shadow pages remain enabled, and the
+post-package renderer/log gate still has to prove that VSM did not degrade.
+The source engine config is
 SHA/size evidence only: its UE-generated Android File Server credential is
 never copied or emitted. This config is a renderer request, not packaged
 runtime renderer evidence.
