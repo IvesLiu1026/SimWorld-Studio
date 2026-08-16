@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -22,11 +24,12 @@ from .config import (
     vector3,
 )
 from .dressing import DressingPlan, build_dressing_plan
-from .external_assets import ExternalAssetSet
+from .external_assets import AcquiredAsset, ExternalAssetSet
 from .materials import material_by_id, material_plan_manifest
 from .placement import (
     EXTERNAL_FORGE_SCHEMA_VERSION,
     ExternalPlacementPlan,
+    ExternalPlacementSpec,
     PlacementManifestDocument,
     build_external_placement_plan,
 )
@@ -728,6 +731,298 @@ def build_forge_plan(house: Mapping[str, Any], profile: Mapping[str, Any]) -> Fo
     )
 
 
+def _profile_rows(
+    profile: Mapping[str, Any], field: str
+) -> list[dict[str, Any]]:
+    rows = profile.get(field)
+    if type(rows) is not list or any(type(row) is not dict for row in rows):
+        raise ForgeInputError(f"VisualProfile {field} must be a list of objects")
+    return rows
+
+
+def _unique_profile_index(
+    rows: Sequence[Mapping[str, Any]], field: str, label: str
+) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        identity = row.get(field)
+        if type(identity) is not str or not identity:
+            raise ForgeInputError(f"{label} has an invalid {field}")
+        if identity in result:
+            raise ForgeInputError(f"{label} {field} identities are duplicated: {identity}")
+        result[identity] = row
+    return result
+
+
+def _exact_metric_vector(value: Any, *, field: str) -> tuple[float, float, float]:
+    if (
+        type(value) is not list
+        or len(value) != 3
+        or any(type(component) not in {int, float} or isinstance(component, bool) for component in value)
+    ):
+        raise ForgeInputError(f"{field} must contain exactly three JSON numbers")
+    result = tuple(float(component) for component in value)
+    if not all(math.isfinite(component) for component in result):
+        raise ForgeInputError(f"{field} must be finite")
+    return result  # type: ignore[return-value]
+
+
+def _validate_external_source_receipt(
+    *,
+    binding: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+    placement: ExternalPlacementSpec,
+    asset: AcquiredAsset,
+) -> None:
+    logical_id = asset.logical_asset_id
+    declared_receipt_digest = receipt.get("receipt_digest")
+    receipt_body = {key: receipt[key] for key in receipt if key != "receipt_digest"}
+    try:
+        actual_receipt_digest = hashlib.sha256(
+            json.dumps(
+                receipt_body,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8", "strict")
+        ).hexdigest()
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ForgeInputError(
+            f"external semantic source receipt is not canonical JSON: {logical_id}"
+        ) from error
+    if declared_receipt_digest != actual_receipt_digest:
+        raise ForgeInputError(
+            f"external semantic source receipt digest is stale: {logical_id}"
+        )
+    expected_identity = {
+        "source_kind": "existing_local",
+        "source_uri": f"polyhaven://models/{asset.asset_id}",
+        "source_digest": asset.source_tree_sha256,
+        "source_version": f"files-{asset.provider_files_hash}",
+        "logical_asset_id": logical_id,
+    }
+    for field, expected in expected_identity.items():
+        if receipt.get(field) != expected:
+            raise ForgeInputError(
+                f"external semantic source receipt {field} differs from acquisition: {logical_id}"
+            )
+
+    dimensions = asset.catalog_dimensions_m
+    if (
+        not isinstance(dimensions, Sequence)
+        or isinstance(dimensions, (str, bytes))
+        or len(dimensions) != 3
+    ):
+        raise ForgeInputError(f"external semantic source lacks provider dimensions: {logical_id}")
+    scaled = tuple(float(component) * placement.uniform_scale for component in dimensions)
+    if not all(math.isfinite(component) and component > 0 for component in scaled):
+        raise ForgeInputError(f"external semantic source dimensions are invalid: {logical_id}")
+    # The profile receipt describes the realized hero, so its exact bounds are
+    # intentionally tied to the pinned placement manifest's uniform scale.
+    expected_min = (-scaled[0] / 2.0, -scaled[1] / 2.0, 0.0)
+    expected_max = (scaled[0] / 2.0, scaled[1] / 2.0, scaled[2])
+    bounds = receipt.get("metric_bounds_m")
+    if type(bounds) is not dict or set(bounds) != {"min_m", "max_m"}:
+        raise ForgeInputError(
+            f"external semantic source receipt metric bounds are invalid: {logical_id}"
+        )
+    actual_min = _exact_metric_vector(
+        bounds["min_m"], field=f"{logical_id} metric_bounds_m.min_m"
+    )
+    actual_max = _exact_metric_vector(
+        bounds["max_m"], field=f"{logical_id} metric_bounds_m.max_m"
+    )
+    if actual_min != expected_min or actual_max != expected_max:
+        raise ForgeInputError(
+            f"external semantic source receipt metric bounds differ from measured scaled bounds: {logical_id}"
+        )
+
+    license_record = receipt.get("license")
+    required_license = {
+        "license_id": "CC0-1.0",
+        "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+        "entitlement_status": "verified",
+        "commercial_use": "allowed",
+        "redistribution_restriction": "project_policy",
+    }
+    if type(license_record) is not dict or any(
+        license_record.get(field) != expected for field, expected in required_license.items()
+    ):
+        raise ForgeInputError(
+            f"external semantic source receipt lacks verified CC0 provenance: {logical_id}"
+        )
+
+    material_inventory = receipt.get("material_inventory")
+    slots = (
+        material_inventory.get("slots")
+        if type(material_inventory) is dict
+        else None
+    )
+    if type(slots) is not list or not slots or any(type(slot) is not dict for slot in slots):
+        raise ForgeInputError(
+            f"external semantic source receipt material inventory is invalid: {logical_id}"
+        )
+    expected_semantics = asset.pbr_semantics
+    actual_semantics: set[str] = set()
+    expected_minimum_size = 4096 if asset.resolution == "4k" else 2048
+    expected_blend_mode = "masked" if "opacity" in expected_semantics else "opaque"
+    for slot in slots:
+        semantics = slot.get("texture_semantics")
+        if (
+            type(semantics) is not list
+            or any(type(semantic) is not str for semantic in semantics)
+            or len(set(semantics)) != len(semantics)
+            or type(slot.get("minimum_texture_size_px")) is not int
+            or slot.get("minimum_texture_size_px") != expected_minimum_size
+            or slot.get("blend_mode") != expected_blend_mode
+        ):
+            raise ForgeInputError(
+                f"external semantic source receipt material slot differs from acquisition: {logical_id}"
+            )
+        actual_semantics.update(semantics)
+    semantic_texture_count = sum(1 for file in asset.files if file.semantic)
+    if (
+        actual_semantics != expected_semantics
+        or type(material_inventory.get("texture_count")) is not int
+        or material_inventory.get("texture_count") != semantic_texture_count
+        or material_inventory.get("all_primitives_material_bound") is not True
+    ):
+        raise ForgeInputError(
+            f"external semantic source receipt material inventory differs from acquisition: {logical_id}"
+        )
+
+    import_policy = receipt.get("import_policy")
+    required_import_policy = {
+        "nanite": "disabled_ineligible",
+        "mobility": "static",
+        "lod_policy": "single_mesh_measured",
+        "collision_policy": "hidden_r1_proxy",
+    }
+    if type(import_policy) is not dict or any(
+        import_policy.get(field) != expected
+        for field, expected in required_import_policy.items()
+    ):
+        raise ForgeInputError(
+            f"external semantic source receipt has a non-conservative import policy: {logical_id}"
+        )
+    if (
+        binding.get("collision_policy") != "disabled_use_r1_proxy"
+        or binding.get("semantic_authority") != "preserve_parent"
+    ):
+        raise ForgeInputError(
+            f"external semantic binding must preserve r1 semantics and collision: {logical_id}"
+        )
+
+
+def _validate_external_semantic_profile_bindings(
+    profile: Mapping[str, Any],
+    asset_set: ExternalAssetSet,
+    external: ExternalPlacementPlan,
+) -> None:
+    """Bind acquired semantic models to one exact VisualProfile source chain."""
+
+    bindings = _profile_rows(profile, "semantic_visual_bindings")
+    receipts = _profile_rows(profile, "asset_source_receipts")
+    _unique_profile_index(bindings, "binding_id", "VisualProfile semantic bindings")
+    bindings_by_target = _unique_profile_index(
+        bindings, "target_entity_id", "VisualProfile semantic bindings"
+    )
+    receipts_by_id = _unique_profile_index(
+        receipts, "receipt_id", "VisualProfile source receipts"
+    )
+    _unique_profile_index(
+        receipts, "logical_asset_id", "VisualProfile source receipts"
+    )
+
+    assets_by_logical: dict[str, AcquiredAsset] = {}
+    asset_ids: set[str] = set()
+    for asset in asset_set.assets:
+        if asset.logical_asset_id in assets_by_logical or asset.asset_id in asset_ids:
+            raise ForgeInputError("external acquisition asset identities are duplicated")
+        assets_by_logical[asset.logical_asset_id] = asset
+        asset_ids.add(asset.asset_id)
+
+    heroes = [
+        item
+        for item in external.placements
+        if item.placement_kind == "semantic_fixed"
+        and item.realization_mode == "external_blend"
+    ]
+    hero_targets: set[str] = set()
+    hero_logical_ids: set[str] = set()
+    hero_pairs: set[tuple[str, str]] = set()
+    used_receipt_ids: set[str] = set()
+    for placement in heroes:
+        target_id = placement.semantic_target_id
+        logical_id = placement.source_logical_asset_id
+        if type(target_id) is not str or type(logical_id) is not str:
+            raise ForgeInputError("external semantic placement identity is incomplete")
+        if target_id in hero_targets or logical_id in hero_logical_ids:
+            raise ForgeInputError(
+                "external semantic placements must have unique target and source identities"
+            )
+        hero_targets.add(target_id)
+        hero_logical_ids.add(logical_id)
+        hero_pairs.add((target_id, logical_id))
+
+    for placement in heroes:
+        target_id = placement.semantic_target_id
+        logical_id = placement.source_logical_asset_id
+        if type(target_id) is not str or type(logical_id) is not str:
+            raise ForgeInputError("external semantic placement identity is incomplete")
+        binding = bindings_by_target.get(target_id)
+        if binding is None:
+            raise ForgeInputError(
+                f"external semantic placement has no VisualProfile binding: {target_id}"
+            )
+        if binding.get("logical_asset_id") != logical_id:
+            raise ForgeInputError(
+                f"external semantic binding logical asset differs from placement: {target_id}"
+            )
+        receipt_id = binding.get("source_receipt_id")
+        if type(receipt_id) is not str or receipt_id in used_receipt_ids:
+            raise ForgeInputError(
+                f"external semantic binding source receipt is absent or reused: {target_id}"
+            )
+        used_receipt_ids.add(receipt_id)
+        receipt = receipts_by_id.get(receipt_id)
+        if receipt is None:
+            raise ForgeInputError(
+                f"external semantic binding source receipt is missing: {target_id}"
+            )
+        asset = assets_by_logical.get(logical_id)
+        if asset is None or asset.asset_type != "model":
+            raise ForgeInputError(
+                f"external semantic binding has no unique acquired model: {logical_id}"
+            )
+        _validate_external_source_receipt(
+            binding=binding,
+            receipt=receipt,
+            placement=placement,
+            asset=asset,
+        )
+
+    acquired_model_ids = {
+        logical_id
+        for logical_id, asset in assets_by_logical.items()
+        if asset.asset_type == "model"
+    }
+    profile_acquired_pairs: set[tuple[str, str]] = set()
+    for binding in bindings:
+        logical_id = binding.get("logical_asset_id")
+        if logical_id not in acquired_model_ids:
+            continue
+        target_id = binding.get("target_entity_id")
+        if type(target_id) is not str or type(logical_id) is not str:
+            raise ForgeInputError("acquired semantic binding identity is incomplete")
+        profile_acquired_pairs.add((target_id, logical_id))
+    if profile_acquired_pairs != hero_pairs:
+        raise ForgeInputError(
+            "external semantic profile bindings and realized acquired heroes differ"
+        )
+
+
 def build_external_forge_plan(
     house: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -744,6 +1039,7 @@ def build_external_forge_plan(
         asset_set,
         placement_manifest,
     )
+    _validate_external_semantic_profile_bindings(profile, asset_set, external)
     payload = {
         "schema_version": EXTERNAL_FORGE_SCHEMA_VERSION,
         "forge_id": base.forge_id,
