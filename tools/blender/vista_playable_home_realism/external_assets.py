@@ -13,6 +13,7 @@ import math
 import os
 import pathlib
 import re
+import stat
 import struct
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -28,6 +29,18 @@ _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 _REQUIRED_PBR = frozenset({"base_color", "normal", "roughness"})
+AUTHORED_UV_METERS_PER_TILE = 1.0
+AUTHORED_RECIPE_MATERIAL_IDS: Mapping[str, tuple[str, ...]] = {
+    "contemporary_shoe_bench_v1": (
+        "visual.material.white_oak_veneer",
+        "visual.material.poly_wool_herringbone",
+    ),
+    "contemporary_sofa_v1": (
+        "visual.material.white_oak_veneer",
+        "visual.material.poly_wool_herringbone",
+    ),
+    "contemporary_dining_table_v1": ("visual.material.white_oak_veneer",),
+}
 
 
 @dataclass(frozen=True)
@@ -498,15 +511,54 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
 
 
+def _receipt_file_fingerprint(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _verify_receipt_file_bytes(
+    path: pathlib.Path,
+    receipt_file: AcquiredFile,
+    *,
+    label: str,
+) -> None:
+    """Recheck one already-resolved receipt file immediately before use."""
+
+    try:
+        before = path.stat(follow_symlinks=False)
+    except OSError as error:
+        raise RuntimeError(f"{label} is unavailable: {receipt_file.relative_path}") from error
+    if not stat.S_ISREG(before.st_mode) or before.st_size != receipt_file.size_bytes:
+        raise RuntimeError(f"{label} size differs from receipt: {receipt_file.relative_path}")
+    digest = sha256_file(path)
+    try:
+        after = path.stat(follow_symlinks=False)
+    except OSError as error:
+        raise RuntimeError(f"{label} changed while hashing: {receipt_file.relative_path}") from error
+    if _receipt_file_fingerprint(before) != _receipt_file_fingerprint(after):
+        raise RuntimeError(f"{label} changed while hashing: {receipt_file.relative_path}")
+    if digest != receipt_file.sha256:
+        raise RuntimeError(f"{label} SHA-256 differs from receipt: {receipt_file.relative_path}")
+
+
 def _texture_file(asset_set: ExternalAssetSet, asset: AcquiredAsset, semantic: str) -> pathlib.Path:
     matches = [item for item in asset.files if semantic in item.semantic]
     if not matches:
         raise RuntimeError(f"verified asset lost {semantic} texture: {asset.logical_asset_id}")
-    return _safe_existing_path(
+    receipt_file = matches[0]
+    path = _safe_existing_path(
         asset_set.root,
-        f"{asset.source_relative_root}/{matches[0].relative_path}",
+        f"{asset.source_relative_root}/{receipt_file.relative_path}",
         file_required=True,
     )
+    _verify_receipt_file_bytes(path, receipt_file, label="project-authored material texture")
+    return path
 
 
 def _realize_pbr_material(bpy: Any, asset_set: ExternalAssetSet, logical_id: str) -> Any:
@@ -550,6 +602,61 @@ def _relink(obj: Any, collection: Any) -> None:
     collection.objects.link(obj)
 
 
+def _metric_box_uv(
+    coordinate_m: Sequence[float],
+    normal: Sequence[float],
+    *,
+    meters_per_tile: float = AUTHORED_UV_METERS_PER_TILE,
+) -> tuple[float, float]:
+    """Return a stable box projection whose UV distance is measured in metres."""
+
+    if len(coordinate_m) != 3 or len(normal) != 3:
+        raise RuntimeError("metric box UV input must contain three coordinates")
+    try:
+        point = tuple(float(value) for value in coordinate_m)
+        direction = tuple(float(value) for value in normal)
+        tile_size = float(meters_per_tile)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise RuntimeError("metric box UV input is invalid") from error
+    if (
+        not math.isfinite(tile_size)
+        or tile_size <= 0
+        or not all(math.isfinite(value) for value in (*point, *direction))
+        or max(abs(value) for value in direction) <= 1e-12
+    ):
+        raise RuntimeError("metric box UV input is invalid")
+    # Ties deliberately prefer X, then Y, then Z so bevel normals never make
+    # the mapping dependent on collection iteration order.
+    axis = max(range(3), key=lambda index: (abs(direction[index]), -index))
+    sign = 1.0 if direction[axis] >= 0 else -1.0
+    scale = 1.0 / tile_size
+    if axis == 0:
+        return -sign * point[1] * scale, point[2] * scale
+    if axis == 1:
+        return sign * point[0] * scale, point[2] * scale
+    return sign * point[0] * scale, point[1] * scale
+
+
+def _apply_metric_box_uv(obj: Any) -> None:
+    """Replace primitive UVs with deterministic metric box projection."""
+
+    mesh = obj.data
+    while len(mesh.uv_layers):
+        mesh.uv_layers.remove(mesh.uv_layers[0])
+    layer = mesh.uv_layers.new(name="VISTA_MetricUV")
+    for polygon in mesh.polygons:
+        normal = tuple(float(value) for value in polygon.normal)
+        for loop_index in polygon.loop_indices:
+            loop = mesh.loops[loop_index]
+            coordinate = tuple(float(value) for value in mesh.vertices[loop.vertex_index].co)
+            layer.data[loop_index].uv = _metric_box_uv(coordinate, normal)
+    mesh.uv_layers.active = layer
+    layer.active_render = True
+    mesh.update()
+    obj["vista_uv_mapping"] = "metric_box_v1"
+    obj["vista_uv_meters_per_tile"] = AUTHORED_UV_METERS_PER_TILE
+
+
 def _cube_part(
     bpy: Any,
     collection: Any,
@@ -572,6 +679,7 @@ def _cube_part(
     bpy.ops.object.modifier_apply(modifier=bevel.name)
     for polygon in obj.data.polygons:
         polygon.use_smooth = True
+    _apply_metric_box_uv(obj)
     obj.data.materials.append(material)
     return obj
 
@@ -581,9 +689,16 @@ def _authored_recipe(
     collection: Any,
     recipe: str,
     dimensions: Sequence[float],
-    oak: Any,
-    wool: Any,
+    materials_by_logical_id: Mapping[str, Any],
 ) -> list[Any]:
+    expected_materials = AUTHORED_RECIPE_MATERIAL_IDS.get(recipe)
+    if expected_materials is None:
+        raise RuntimeError(f"unsupported project-authored furniture recipe: {recipe}")
+    missing = [logical_id for logical_id in expected_materials if logical_id not in materials_by_logical_id]
+    if missing:
+        raise RuntimeError(f"project-authored recipe material is unavailable: {recipe}: {missing}")
+    oak = materials_by_logical_id["visual.material.white_oak_veneer"]
+    wool = materials_by_logical_id.get("visual.material.poly_wool_herringbone")
     x, y, z = (float(value) for value in dimensions)
     parts: list[Any] = []
     add = lambda suffix, center, dims, mat: parts.append(
@@ -642,6 +757,55 @@ def _authored_recipe(
     return parts
 
 
+def _authored_recipe_material_sources(meshes: Sequence[Any]) -> frozenset[str]:
+    sources: set[str] = set()
+    for obj in meshes:
+        used_indices = {int(polygon.material_index) for polygon in obj.data.polygons}
+        if not used_indices:
+            raise RuntimeError(f"project-authored recipe part has no material use: {obj.name}")
+        if any(index < 0 or index >= len(obj.material_slots) for index in used_indices):
+            raise RuntimeError(f"project-authored recipe part has an invalid material binding: {obj.name}")
+        if len(used_indices) != len(obj.material_slots):
+            raise RuntimeError(f"project-authored recipe part has an unused material slot: {obj.name}")
+        for index in used_indices:
+            material = obj.material_slots[index].material
+            if material is None:
+                raise RuntimeError(f"project-authored recipe part has an unbound material: {obj.name}")
+            logical_id = material.get("vista_external_material_source")
+            if type(logical_id) is not str:
+                raise RuntimeError(f"project-authored recipe material lacks provenance: {material.name}")
+            sources.add(logical_id)
+    return frozenset(sources)
+
+
+def _validate_authored_recipe_material_use(
+    recipe: str,
+    meshes: Sequence[Any],
+    materials_by_logical_id: Mapping[str, Any],
+) -> tuple[str, ...]:
+    expected = AUTHORED_RECIPE_MATERIAL_IDS.get(recipe)
+    if expected is None:
+        raise RuntimeError(f"unsupported project-authored furniture recipe: {recipe}")
+    actual = _authored_recipe_material_sources(meshes)
+    if actual != frozenset(expected):
+        raise RuntimeError(
+            f"project-authored recipe material use differs from contract: {recipe}: "
+            f"actual={sorted(actual)}, expected={list(expected)}"
+        )
+    for logical_id in actual:
+        expected_material = materials_by_logical_id.get(logical_id)
+        if expected_material is None:
+            raise RuntimeError(f"project-authored recipe used an unrealized material: {logical_id}")
+        for obj in meshes:
+            for slot in obj.material_slots:
+                if slot.material is not None and slot.material.get("vista_external_material_source") == logical_id:
+                    if slot.material is not expected_material:
+                        raise RuntimeError(
+                            f"project-authored material provenance points at the wrong datablock: {logical_id}"
+                        )
+    return tuple(sorted(actual))
+
+
 def _combined_bounds(mathutils: Any, objects: Sequence[Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     points = [obj.matrix_world @ mathutils.Vector(corner) for obj in objects for corner in obj.bound_box]
     if not points:
@@ -655,12 +819,90 @@ def _combined_bounds(mathutils: Any, objects: Sequence[Any]) -> tuple[tuple[floa
     return minimum, maximum
 
 
+def _has_collection_items(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        return len(value) > 0
+    except (TypeError, AttributeError):
+        return bool(tuple(value))
+
+
+def _node_trees(material: Any) -> tuple[Any, ...]:
+    pending = [material.node_tree]
+    result: list[Any] = []
+    seen: set[int] = set()
+    while pending:
+        tree = pending.pop()
+        identity = id(tree)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(tree)
+        for node in tree.nodes:
+            child = getattr(node, "node_tree", None)
+            if child is not None:
+                pending.append(child)
+    return tuple(result)
+
+
+def _block_has_animation_or_drivers(block: Any) -> bool:
+    return block is not None and getattr(block, "animation_data", None) is not None
+
+
+def _identity_vector(value: Any, expected: Sequence[float], tolerance: float = 1e-9) -> bool:
+    try:
+        actual = tuple(float(item) for item in value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return len(actual) == len(expected) and all(
+        math.isfinite(actual[index]) and abs(actual[index] - float(expected[index])) <= tolerance
+        for index in range(len(expected))
+    )
+
+
 def _validate_static_source(bpy: Any, objects: Sequence[Any], new_actions: Sequence[Any]) -> list[Any]:
     forbidden = [obj for obj in objects if obj.type in {"ARMATURE", "CAMERA", "LIGHT"}]
     if forbidden:
         raise RuntimeError(f"external source contains forbidden object types: {[obj.type for obj in forbidden]}")
-    if new_actions or any(getattr(obj, "animation_data", None) is not None for obj in objects):
+    unsupported = sorted({obj.type for obj in objects if obj.type not in {"MESH", "EMPTY"}})
+    if unsupported:
+        raise RuntimeError(f"external source contains unsupported drawable object types: {unsupported}")
+    if new_actions:
         raise RuntimeError("external source contains animations")
+    loaded_identities = {id(obj) for obj in objects}
+    materials: list[Any] = []
+    for obj in objects:
+        if _has_collection_items(getattr(obj, "modifiers", ())):
+            raise RuntimeError(f"external object contains modifiers: {obj.name}")
+        if _has_collection_items(getattr(obj, "constraints", ())):
+            raise RuntimeError(f"external object contains constraints: {obj.name}")
+        if getattr(obj, "instance_type", "NONE") != "NONE" or getattr(obj, "instance_collection", None) is not None:
+            raise RuntimeError(f"external object uses unsupported instancing: {obj.name}")
+        if getattr(obj, "rotation_mode", None) != "XYZ":
+            raise RuntimeError(f"external object rotation mode is not deterministic XYZ: {obj.name}")
+        if (
+            not _identity_vector(getattr(obj, "delta_location", (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0))
+            or not _identity_vector(getattr(obj, "delta_rotation_euler", (0.0, 0.0, 0.0)), (0.0, 0.0, 0.0))
+            or not _identity_vector(getattr(obj, "delta_scale", (1.0, 1.0, 1.0)), (1.0, 1.0, 1.0))
+        ):
+            raise RuntimeError(f"external object contains non-identity delta transforms: {obj.name}")
+        parent = getattr(obj, "parent", None)
+        if parent is not None and id(parent) not in loaded_identities:
+            raise RuntimeError(f"external object has a parent outside the appended source: {obj.name}")
+        if _block_has_animation_or_drivers(obj) or _block_has_animation_or_drivers(getattr(obj, "data", None)):
+            raise RuntimeError(f"external source contains animations or drivers: {obj.name}")
+        for slot in getattr(obj, "material_slots", ()):
+            material = getattr(slot, "material", None)
+            if material is not None and material not in materials:
+                materials.append(material)
+    for material in materials:
+        if _block_has_animation_or_drivers(material):
+            raise RuntimeError(f"external material contains animations or drivers: {material.name}")
+        if getattr(material, "node_tree", None) is not None:
+            for tree in _node_trees(material):
+                if _block_has_animation_or_drivers(tree):
+                    raise RuntimeError(f"external material nodes contain animations or drivers: {material.name}")
     meshes = [obj for obj in objects if obj.type == "MESH"]
     if not meshes:
         raise RuntimeError("external source contains no static meshes")
@@ -674,40 +916,98 @@ def _validate_static_source(bpy: Any, objects: Sequence[Any], new_actions: Seque
     return meshes
 
 
+def _runtime_receipt_texture_paths(
+    asset_set: ExternalAssetSet,
+    asset: AcquiredAsset,
+) -> dict[pathlib.Path, AcquiredFile]:
+    expected: dict[pathlib.Path, AcquiredFile] = {}
+    for receipt_file in asset.files:
+        if receipt_file.dimensions_px is None:
+            continue
+        path = _safe_existing_path(
+            asset_set.root,
+            f"{asset.source_relative_root}/{receipt_file.relative_path}",
+            file_required=True,
+        )
+        if path in expected:
+            raise RuntimeError(
+                f"external receipt maps multiple textures to one path: {receipt_file.relative_path}"
+            )
+        expected[path] = receipt_file
+    if not expected:
+        raise RuntimeError(f"external model receipt has no verified texture paths: {asset.logical_asset_id}")
+    return expected
+
+
+def _resolved_runtime_image_path(bpy: Any, image: Any) -> pathlib.Path:
+    source = getattr(image, "source", None)
+    if source != "FILE":
+        raise RuntimeError(f"external material image source must be FILE, not {source!r}")
+    packed_files = getattr(image, "packed_files", ())
+    if getattr(image, "packed_file", None) is not None or _has_collection_items(packed_files):
+        raise RuntimeError("external material image may not be packed")
+    raw = getattr(image, "filepath_raw", None)
+    if type(raw) is not str or not raw:
+        raise RuntimeError("external material FILE image lacks filepath_raw")
+    try:
+        expanded = bpy.path.abspath(raw, library=getattr(image, "library", None))
+    except Exception as error:
+        raise RuntimeError("external material image filepath_raw cannot be resolved") from error
+    try:
+        candidate = pathlib.Path(os.fspath(expanded))
+    except TypeError as error:
+        raise RuntimeError("external material image resolved path is invalid") from error
+    if not candidate.is_absolute():
+        raise RuntimeError("external material image did not resolve to an absolute path")
+    lexical = _lexical_absolute(candidate)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError("external material image path is unavailable") from error
+    if lexical != resolved:
+        raise RuntimeError("external material image path may not traverse symbolic links")
+    if not resolved.is_file():
+        raise RuntimeError("external material image path is not a regular file")
+    return resolved
+
+
+def _material_image_nodes(material: Any) -> tuple[Any, ...]:
+    return tuple(
+        node
+        for tree in _node_trees(material)
+        for node in tree.nodes
+        if getattr(node, "image", None) is not None
+    )
+
+
 def _validate_runtime_material_images(
     bpy: Any,
     meshes: Sequence[Any],
     asset_set: ExternalAssetSet,
     asset: AcquiredAsset,
 ) -> None:
-    expected = {
-        pathlib.PurePosixPath(item.relative_path).name: item
-        for item in asset.files
-        if item.dimensions_px is not None
-    }
+    expected = _runtime_receipt_texture_paths(asset_set, asset)
     materials: list[Any] = []
     for obj in meshes:
         for slot in obj.material_slots:
             if slot.material not in materials:
                 materials.append(slot.material)
+    used_semantics: set[str] = set()
     for material in materials:
         if not material.use_nodes or material.node_tree is None:
             raise RuntimeError(f"external material is not node-based PBR: {material.name}")
-        image_nodes = [
-            node
-            for node in material.node_tree.nodes
-            if node.type == "TEX_IMAGE" and node.image is not None
-        ]
+        image_nodes = _material_image_nodes(material)
         if not image_nodes:
             raise RuntimeError(f"external material has no image-backed surface input: {material.name}")
         for node in image_nodes:
             image = node.image
-            basename = pathlib.PurePosixPath(str(image.filepath).replace("\\", "/")).name
-            receipt_file = expected.get(basename)
+            resolved = _resolved_runtime_image_path(bpy, image)
+            receipt_file = expected.get(resolved)
             if receipt_file is None:
                 raise RuntimeError(
-                    f"external material references a texture outside its verified receipt: {basename}"
+                    f"external material references a texture outside its verified receipt: {resolved}"
                 )
+            _verify_receipt_file_bytes(resolved, receipt_file, label="external material texture")
             if tuple(int(value) for value in image.size) != receipt_file.dimensions_px:
                 try:
                     image.reload()
@@ -715,12 +1015,86 @@ def _validate_runtime_material_images(
                     pass
             if tuple(int(value) for value in image.size) != receipt_file.dimensions_px:
                 raise RuntimeError(
-                    f"external material texture resolution differs from receipt: {basename}"
+                    f"external material texture resolution differs from receipt: {receipt_file.relative_path}"
                 )
-            _safe_existing_path(
-                asset_set.root,
-                f"{asset.source_relative_root}/{receipt_file.relative_path}",
-                file_required=True,
+            reloaded_path = _resolved_runtime_image_path(bpy, image)
+            if reloaded_path != resolved:
+                raise RuntimeError(
+                    f"external material image path changed during reload: {receipt_file.relative_path}"
+                )
+            _verify_receipt_file_bytes(reloaded_path, receipt_file, label="external material texture")
+            used_semantics.update(receipt_file.semantic)
+    if not _REQUIRED_PBR.issubset(used_semantics):
+        raise RuntimeError(
+            f"external runtime materials do not use verified base/normal/roughness maps: "
+            f"{asset.logical_asset_id}"
+        )
+
+
+def _matrix_is_identity(value: Any, tolerance: float = 1e-9) -> bool:
+    try:
+        rows = tuple(tuple(float(item) for item in row) for row in value)
+    except (TypeError, ValueError):
+        return False
+    if len(rows) != 4 or any(len(row) != 4 for row in rows):
+        return False
+    return all(
+        math.isfinite(rows[row][column])
+        and abs(rows[row][column] - (1.0 if row == column else 0.0)) <= tolerance
+        for row in range(4)
+        for column in range(4)
+    )
+
+
+def _normalize_external_mesh(obj: Any, transform: Any) -> None:
+    obj.data = obj.data.copy()
+    obj.data.transform(transform)
+    obj.parent = None
+    if hasattr(obj, "parent_type"):
+        obj.parent_type = "OBJECT"
+    if hasattr(obj, "parent_bone"):
+        obj.parent_bone = ""
+    obj.matrix_parent_inverse.identity()
+    obj.rotation_mode = "XYZ"
+    obj.location = (0.0, 0.0, 0.0)
+    obj.rotation_euler = (0.0, 0.0, 0.0)
+    obj.scale = (1.0, 1.0, 1.0)
+    obj.delta_location = (0.0, 0.0, 0.0)
+    obj.delta_rotation_euler = (0.0, 0.0, 0.0)
+    obj.delta_scale = (1.0, 1.0, 1.0)
+    if hasattr(obj, "rotation_quaternion"):
+        obj.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+    if hasattr(obj, "delta_rotation_quaternion"):
+        obj.delta_rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+    if hasattr(obj, "rotation_axis_angle"):
+        obj.rotation_axis_angle = (0.0, 0.0, 1.0, 0.0)
+    obj.matrix_basis.identity()
+    obj.matrix_world.identity()
+
+
+def _validate_normalized_mesh_state(obj: Any) -> None:
+    if getattr(obj, "parent", None) is not None:
+        raise RuntimeError(f"external mesh retains a parent helper after normalization: {obj.name}")
+    if getattr(obj, "rotation_mode", None) != "XYZ":
+        raise RuntimeError(f"external mesh rotation mode changed after normalization: {obj.name}")
+    if (
+        not _identity_vector(obj.location, (0.0, 0.0, 0.0))
+        or not _identity_vector(obj.rotation_euler, (0.0, 0.0, 0.0))
+        or not _identity_vector(obj.scale, (1.0, 1.0, 1.0))
+        or not _identity_vector(obj.delta_location, (0.0, 0.0, 0.0))
+        or not _identity_vector(obj.delta_rotation_euler, (0.0, 0.0, 0.0))
+        or not _identity_vector(obj.delta_scale, (1.0, 1.0, 1.0))
+    ):
+        raise RuntimeError(f"external mesh retains transform influence after normalization: {obj.name}")
+    for label, matrix in (
+        ("matrix_basis", obj.matrix_basis),
+        ("matrix_local", obj.matrix_local),
+        ("matrix_parent_inverse", obj.matrix_parent_inverse),
+        ("matrix_world", obj.matrix_world),
+    ):
+        if not _matrix_is_identity(matrix):
+            raise RuntimeError(
+                f"external mesh retains {label} influence after normalization: {obj.name}"
             )
 
 
@@ -761,16 +1135,16 @@ def _append_static_blend(
             )
     origin = mathutils.Vector(((minimum[0] + maximum[0]) / 2, (minimum[1] + maximum[1]) / 2, minimum[2]))
     for index, obj in enumerate(meshes):
-        obj.data = obj.data.copy()
-        obj.data.transform(mathutils.Matrix.Translation(-origin) @ obj.matrix_world)
-        obj.parent = None
-        obj.matrix_world.identity()
+        transform = mathutils.Matrix.Translation(-origin) @ obj.matrix_world.copy()
+        _normalize_external_mesh(obj, transform)
         _relink(obj, collection)
         obj.name = f"VISTA_External_{_slug(logical_id)}_{index:02d}"[:63]
     for obj in loaded:
         if obj not in meshes:
             bpy.data.objects.remove(obj, do_unlink=True)
     bpy.context.view_layer.update()
+    for obj in meshes:
+        _validate_normalized_mesh_state(obj)
     normalized_minimum, normalized_maximum = _combined_bounds(mathutils, meshes)
     normalized_dimensions = tuple(
         normalized_maximum[index] - normalized_minimum[index] for index in range(3)
@@ -796,27 +1170,40 @@ def realize_external_placements(
 ) -> tuple[dict[str, list[Any]], list[dict[str, Any]]]:
     """Realize verified placements; return meshes and material provenance."""
 
-    oak = _realize_pbr_material(bpy, asset_set, "visual.material.white_oak_veneer")
-    wool = _realize_pbr_material(bpy, asset_set, "visual.material.poly_wool_herringbone")
+    required_authored_materials: set[str] = set()
+    for placement in external_plan.placements:
+        if placement.realization_mode != "project_authored":
+            continue
+        expected = AUTHORED_RECIPE_MATERIAL_IDS.get(placement.geometry_recipe)
+        if expected is None or tuple(placement.material_logical_asset_ids) != expected:
+            raise RuntimeError(
+                f"project-authored placement material contract differs from its recipe: "
+                f"{placement.placement_id}"
+            )
+        required_authored_materials.update(expected)
+    materials_by_logical_id = {
+        logical_id: _realize_pbr_material(bpy, asset_set, logical_id)
+        for logical_id in sorted(required_authored_materials)
+    }
     objects: dict[str, list[Any]] = {}
-    material_receipts = [
-        {"material_id": material.name, "source": logical_id, "pbr_source": asset_digest_record(asset_set.asset(logical_id))}
-        for logical_id, material in (
-            ("visual.material.white_oak_veneer", oak),
-            ("visual.material.poly_wool_herringbone", wool),
-        )
-    ]
+    used_authored_materials: set[str] = set()
     for placement in external_plan.placements:
         collection = room_collections[placement.room_id]
+        actual_recipe_materials: tuple[str, ...] = ()
         if placement.realization_mode == "project_authored":
             meshes = _authored_recipe(
                 bpy,
                 collection,
                 placement.geometry_recipe,
                 placement.source_dimensions_m,
-                oak,
-                wool,
+                materials_by_logical_id,
             )
+            actual_recipe_materials = _validate_authored_recipe_material_use(
+                placement.geometry_recipe,
+                meshes,
+                materials_by_logical_id,
+            )
+            used_authored_materials.update(actual_recipe_materials)
             measured = _combined_bounds(mathutils, meshes)
             measured_dimensions = tuple(measured[1][index] - measured[0][index] for index in range(3))
         else:
@@ -849,7 +1236,24 @@ def realize_external_placements(
             obj["vista_source_tree_sha256"] = placement.source_tree_sha256 or ""
             obj["vista_measured_normalized_dimensions_m"] = list(measured_dimensions)
             obj["vista_normalization_policy"] = "measured_combined_bounds_floor_center_uniform_scale_v1"
+            obj["vista_material_logical_asset_ids_json"] = json.dumps(
+                actual_recipe_materials,
+                separators=(",", ":"),
+            )
             obj["vista_collision_policy"] = "presentation_no_collision"
             obj["vista_unreal_collision_profile"] = "NoCollision"
         objects[placement.placement_id] = meshes
+    if used_authored_materials != required_authored_materials:
+        raise RuntimeError(
+            "project-authored material provenance differs from realized recipe use: "
+            f"actual={sorted(used_authored_materials)}, expected={sorted(required_authored_materials)}"
+        )
+    material_receipts = [
+        {
+            "material_id": materials_by_logical_id[logical_id].name,
+            "source": logical_id,
+            "pbr_source": asset_digest_record(asset_set.asset(logical_id)),
+        }
+        for logical_id in sorted(used_authored_materials)
+    ]
     return objects, material_receipts

@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .config import ForgeInputError, canonical_json_bytes, content_digest, normalized, vector3
-from .external_assets import AcquiredAsset, ExternalAssetSet, asset_digest_record
+from .external_assets import (
+    AUTHORED_RECIPE_MATERIAL_IDS,
+    AcquiredAsset,
+    ExternalAssetSet,
+    asset_digest_record,
+)
 
 
 PLACEMENT_SCHEMA_VERSION = "simworld.vista.playable-home-external-placement/v1"
@@ -28,11 +33,7 @@ _FORBIDDEN_TARGET_CATEGORIES = {
     "keys", "phone", "coffee_cup", "exit_door", "interior_door",
     "resident", "npc", "pot", "slipper", "spill_marker", "fire_marker",
 }
-_AUTHORED_RECIPES = {
-    "contemporary_shoe_bench_v1",
-    "contemporary_sofa_v1",
-    "contemporary_dining_table_v1",
-}
+_AUTHORED_RECIPES = frozenset(AUTHORED_RECIPE_MATERIAL_IDS)
 _EXTERNAL_ANCHOR_CATEGORIES = {
     "reading_corner": frozenset({"armchair", "side_table", "decorative_object"}),
     "media_console": frozenset({"media_cabinet"}),
@@ -299,7 +300,16 @@ def build_external_placement_plan(
         recipe = row["geometry_recipe"]
         source_tree: str | None
         if mode == "project_authored":
-            if source_id is not None or recipe not in _AUTHORED_RECIPES or len(materials) not in {1, 2}:
+            expected_materials = (
+                AUTHORED_RECIPE_MATERIAL_IDS.get(recipe) if type(recipe) is str else None
+            )
+            if (
+                source_id is not None
+                or type(recipe) is not str
+                or recipe not in _AUTHORED_RECIPES
+                or expected_materials is None
+                or tuple(materials) != expected_materials
+            ):
                 raise ForgeInputError(f"project-authored placement source is invalid: {placement_id}")
             dimensions = vector3(row["authored_dimensions_m"], field=f"{placement_id} authored_dimensions_m")
             if any(value <= 0 for value in dimensions) or abs(float(scale) - 1.0) > 1e-6:

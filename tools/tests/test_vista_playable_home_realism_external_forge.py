@@ -5,6 +5,7 @@ import hashlib
 import json
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,10 +25,17 @@ from tools.blender.vista_playable_home_realism.export import (
 )
 from tools.blender.vista_playable_home_realism.external_assets import (
     ACQUISITION_RECEIPT_SCHEMA,
+    AUTHORED_RECIPE_MATERIAL_IDS,
     AcquiredAsset,
     AcquiredFile,
     ExternalAssetSet,
+    _apply_metric_box_uv,
     _canonical_acquisition_json,
+    _metric_box_uv,
+    _validate_authored_recipe_material_use,
+    _validate_normalized_mesh_state,
+    _validate_runtime_material_images,
+    _validate_static_source,
     load_external_asset_set,
 )
 from tools.blender.vista_playable_home_realism.inspect import (
@@ -321,6 +329,56 @@ def test_external_plan_rejects_overlap_room_escape_and_movable_target(tmp_path: 
         _plan(tmp_path, _redigest(movable))
 
 
+@pytest.mark.parametrize(
+    "recipe,materials",
+    (
+        (
+            "contemporary_shoe_bench_v1",
+            ("visual.material.poly_wool_herringbone", "visual.material.white_oak_veneer"),
+        ),
+        ("contemporary_sofa_v1", ("visual.material.white_oak_veneer",)),
+        (
+            "contemporary_dining_table_v1",
+            ("visual.material.white_oak_veneer", "visual.material.poly_wool_herringbone"),
+        ),
+    ),
+)
+def test_project_authored_recipe_requires_exact_material_logical_ids(
+    tmp_path: Path,
+    recipe: str,
+    materials: tuple[str, ...],
+) -> None:
+    assets = _asset_set(tmp_path)
+    payload = _placement_payload(assets)
+    row = next(item for item in payload["placements"] if item["geometry_recipe"] == recipe)
+    row["material_logical_asset_ids"] = list(materials)
+    with pytest.raises(ForgeInputError, match="project-authored placement source is invalid"):
+        _plan(tmp_path, _redigest(payload))
+
+
+def test_project_authored_recipe_rejects_non_string_recipe_without_type_leak(tmp_path: Path) -> None:
+    assets = _asset_set(tmp_path)
+    payload = _placement_payload(assets)
+    row = next(item for item in payload["placements"] if item["geometry_recipe"] is not None)
+    row["geometry_recipe"] = ["contemporary_sofa_v1"]
+    with pytest.raises(ForgeInputError, match="project-authored placement source is invalid"):
+        _plan(tmp_path, _redigest(payload))
+
+
+def test_authored_recipe_contract_is_explicit_and_complete() -> None:
+    assert AUTHORED_RECIPE_MATERIAL_IDS == {
+        "contemporary_shoe_bench_v1": (
+            "visual.material.white_oak_veneer",
+            "visual.material.poly_wool_herringbone",
+        ),
+        "contemporary_sofa_v1": (
+            "visual.material.white_oak_veneer",
+            "visual.material.poly_wool_herringbone",
+        ),
+        "contemporary_dining_table_v1": ("visual.material.white_oak_veneer",),
+    }
+
+
 def _png_header(size: int) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", size, size)
 
@@ -403,6 +461,367 @@ def test_acquisition_root_verifies_sha_resolution_and_rejects_symlink(tmp_path: 
     link.symlink_to(root, target_is_directory=True)
     with pytest.raises(ForgeInputError, match="non-symlink"):
         load_external_asset_set(link)
+
+
+class _FakeMaterial:
+    def __init__(self, name: str, nodes=(), *, source: str | None = None):
+        self.name = name
+        self.use_nodes = True
+        self.animation_data = None
+        self.node_tree = SimpleNamespace(nodes=list(nodes), animation_data=None)
+        self._properties = {}
+        if source is not None:
+            self._properties["vista_external_material_source"] = source
+
+    def get(self, key: str, default=None):
+        return self._properties.get(key, default)
+
+
+class _FakeImage:
+    def __init__(self, path: Path, dimensions: tuple[int, int], library: object):
+        self.source = "FILE"
+        self.filepath_raw = str(path)
+        self.filepath = "//shared.png"
+        self.library = library
+        self.packed_file = None
+        self.packed_files = ()
+        self.size = dimensions
+
+    def reload(self) -> None:
+        return None
+
+
+class _FakeBpyPath:
+    def __init__(self):
+        self.calls: list[tuple[str, object]] = []
+
+    def abspath(self, raw: str, *, library=None) -> str:
+        self.calls.append((raw, library))
+        return raw
+
+
+def _runtime_material_fixture(tmp_path: Path):
+    root = tmp_path / "runtime-acquisition"
+    source_root = root / "assets" / "fixture_model"
+    specs = (
+        ("textures/base/shared.png", b"base-color", (17, 19), ("base_color",)),
+        ("textures/normal/shared.png", b"normal-map", (23, 29), ("normal",)),
+        ("textures/rough/shared.png", b"roughness-map", (31, 37), ("roughness",)),
+    )
+    files = []
+    images = []
+    library = object()
+    for relative, payload, dimensions, semantics in specs:
+        path = source_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        files.append(
+            AcquiredFile(
+                relative_path=relative,
+                size_bytes=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                semantic=semantics,
+                dimensions_px=dimensions,
+            )
+        )
+        images.append(_FakeImage(path.resolve(), dimensions, library))
+    asset = AcquiredAsset(
+        asset_id="fixture_model",
+        logical_asset_id="visual.dressing.fixture_model",
+        asset_type="model",
+        room_role="fixture",
+        resolution="2k",
+        file_variant="blend",
+        provider_files_hash="a" * 40,
+        source_relative_root="assets/fixture_model",
+        primary_relative_path="assets/fixture_model/fixture.blend",
+        source_tree_sha256="b" * 64,
+        catalog_dimensions_m=(1.0, 1.0, 1.0),
+        files=tuple(files),
+    )
+    asset_set = ExternalAssetSet(
+        root=root.resolve(),
+        receipt_digest="1" * 64,
+        receipt_file_sha256="2" * 64,
+        acquisition_manifest_sha256="3" * 64,
+        assets=(asset,),
+    )
+    material = _FakeMaterial(
+        "FixtureMaterial",
+        nodes=[SimpleNamespace(image=image) for image in images],
+    )
+    mesh = SimpleNamespace(material_slots=[SimpleNamespace(material=material)])
+    path_api = _FakeBpyPath()
+    bpy = SimpleNamespace(path=path_api)
+    return bpy, path_api, mesh, asset_set, asset, images, library
+
+
+def test_runtime_material_images_bind_full_paths_and_library_context(tmp_path: Path) -> None:
+    bpy, path_api, mesh, asset_set, asset, images, library = _runtime_material_fixture(tmp_path)
+    # All three receipt textures intentionally share a basename. Their
+    # dimensions differ, so a basename-keyed implementation cannot pass.
+    _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+    assert path_api.calls == [
+        call
+        for image in images
+        for call in ((image.filepath_raw, library), (image.filepath_raw, library))
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutation,error",
+    (
+        (lambda image, _tmp: setattr(image, "source", "TILED"), "must be FILE"),
+        (lambda image, _tmp: setattr(image, "source", "SEQUENCE"), "must be FILE"),
+        (lambda image, _tmp: setattr(image, "source", "GENERATED"), "must be FILE"),
+        (lambda image, _tmp: setattr(image, "packed_file", object()), "may not be packed"),
+        (lambda image, _tmp: setattr(image, "packed_files", (object(),)), "may not be packed"),
+    ),
+)
+def test_runtime_material_images_reject_non_file_and_packed_sources(
+    tmp_path: Path,
+    mutation,
+    error: str,
+) -> None:
+    bpy, _path_api, mesh, asset_set, asset, images, _library = _runtime_material_fixture(tmp_path)
+    mutation(images[0], tmp_path)
+    with pytest.raises(RuntimeError, match=error):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+
+def test_runtime_material_images_reject_symlink_outside_path_and_changed_bytes(tmp_path: Path) -> None:
+    bpy, _path_api, mesh, asset_set, asset, images, _library = _runtime_material_fixture(tmp_path)
+    original = Path(images[0].filepath_raw)
+    link = tmp_path / "linked-shared.png"
+    link.symlink_to(original)
+    images[0].filepath_raw = str(link)
+    with pytest.raises(RuntimeError, match="symbolic links"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+    bpy, _path_api, mesh, asset_set, asset, images, _library = _runtime_material_fixture(
+        tmp_path / "outside-case"
+    )
+    outside = tmp_path / "outside" / "shared.png"
+    outside.parent.mkdir()
+    outside.write_bytes(Path(images[0].filepath_raw).read_bytes())
+    images[0].filepath_raw = str(outside.resolve())
+    with pytest.raises(RuntimeError, match="outside its verified receipt"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+    bpy, _path_api, mesh, asset_set, asset, images, _library = _runtime_material_fixture(
+        tmp_path / "changed-case"
+    )
+    Path(images[0].filepath_raw).write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="size differs from receipt|SHA-256 differs from receipt"):
+        _validate_runtime_material_images(bpy, [mesh], asset_set, asset)
+
+
+def _static_mesh_fixture():
+    tree = SimpleNamespace(nodes=[], animation_data=None)
+    material = SimpleNamespace(name="StaticMaterial", animation_data=None, node_tree=tree)
+    data = SimpleNamespace(
+        name="StaticMeshData",
+        animation_data=None,
+        shape_keys=None,
+        polygons=[SimpleNamespace(material_index=0)],
+    )
+    obj = SimpleNamespace(
+        name="StaticMesh",
+        type="MESH",
+        modifiers=[],
+        constraints=[],
+        instance_type="NONE",
+        instance_collection=None,
+        rotation_mode="XYZ",
+        delta_location=(0.0, 0.0, 0.0),
+        delta_rotation_euler=(0.0, 0.0, 0.0),
+        delta_scale=(1.0, 1.0, 1.0),
+        parent=None,
+        animation_data=None,
+        data=data,
+        material_slots=[SimpleNamespace(material=material)],
+    )
+    return obj, material, tree
+
+
+@pytest.mark.parametrize(
+    "case,error",
+    (
+        ("modifier", "contains modifiers"),
+        ("constraint", "contains constraints"),
+        ("object_driver", "animations or drivers"),
+        ("data_driver", "animations or drivers"),
+        ("material_driver", "material contains animations or drivers"),
+        ("node_driver", "material nodes contain animations or drivers"),
+        ("rotation", "rotation mode is not deterministic XYZ"),
+        ("delta", "non-identity delta transforms"),
+        ("drawable", "unsupported drawable object types"),
+        ("instancing", "unsupported instancing"),
+    ),
+)
+def test_static_external_source_rejects_nondeterministic_blender_state(case: str, error: str) -> None:
+    obj, material, tree = _static_mesh_fixture()
+    if case == "modifier":
+        obj.modifiers.append(object())
+    elif case == "constraint":
+        obj.constraints.append(object())
+    elif case == "object_driver":
+        obj.animation_data = SimpleNamespace(drivers=[object()])
+    elif case == "data_driver":
+        obj.data.animation_data = SimpleNamespace(drivers=[object()])
+    elif case == "material_driver":
+        material.animation_data = SimpleNamespace(drivers=[object()])
+    elif case == "node_driver":
+        tree.animation_data = SimpleNamespace(drivers=[object()])
+    elif case == "rotation":
+        obj.rotation_mode = "QUATERNION"
+    elif case == "delta":
+        obj.delta_scale = (1.0, 2.0, 1.0)
+    elif case == "drawable":
+        obj.type = "CURVE"
+    elif case == "instancing":
+        obj.instance_type = "COLLECTION"
+    with pytest.raises(RuntimeError, match=error):
+        _validate_static_source(SimpleNamespace(), [obj], [])
+
+
+def test_static_external_source_accepts_only_plain_static_mesh_and_local_helper_parent() -> None:
+    obj, _material, _tree = _static_mesh_fixture()
+    helper = SimpleNamespace(
+        name="Helper",
+        type="EMPTY",
+        modifiers=[],
+        constraints=[],
+        instance_type="NONE",
+        instance_collection=None,
+        rotation_mode="XYZ",
+        delta_location=(0.0, 0.0, 0.0),
+        delta_rotation_euler=(0.0, 0.0, 0.0),
+        delta_scale=(1.0, 1.0, 1.0),
+        parent=None,
+        animation_data=None,
+        data=None,
+        material_slots=[],
+    )
+    obj.parent = helper
+    assert _validate_static_source(SimpleNamespace(), [obj, helper], []) == [obj]
+    obj.parent = SimpleNamespace()
+    with pytest.raises(RuntimeError, match="parent outside"):
+        _validate_static_source(SimpleNamespace(), [obj, helper], [])
+
+
+def test_normalized_external_mesh_state_rejects_parent_and_matrix_residue() -> None:
+    identity = (
+        (1.0, 0.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0, 0.0),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+    obj = SimpleNamespace(
+        name="NormalizedMesh",
+        parent=None,
+        rotation_mode="XYZ",
+        location=(0.0, 0.0, 0.0),
+        rotation_euler=(0.0, 0.0, 0.0),
+        scale=(1.0, 1.0, 1.0),
+        delta_location=(0.0, 0.0, 0.0),
+        delta_rotation_euler=(0.0, 0.0, 0.0),
+        delta_scale=(1.0, 1.0, 1.0),
+        matrix_basis=identity,
+        matrix_local=identity,
+        matrix_parent_inverse=identity,
+        matrix_world=identity,
+    )
+    _validate_normalized_mesh_state(obj)
+    obj.matrix_local = (
+        (1.0, 0.0, 0.0, 0.25),
+        *identity[1:],
+    )
+    with pytest.raises(RuntimeError, match="matrix_local influence"):
+        _validate_normalized_mesh_state(obj)
+    obj.matrix_local = identity
+    obj.parent = object()
+    with pytest.raises(RuntimeError, match="parent helper"):
+        _validate_normalized_mesh_state(obj)
+
+
+def test_metric_box_uv_scales_in_metres_and_uses_deterministic_axis_ties() -> None:
+    assert _metric_box_uv((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)) == (0.0, 0.0)
+    assert _metric_box_uv((2.0, 3.0, 0.5), (0.0, 0.0, 1.0)) == (2.0, 3.0)
+    assert _metric_box_uv((2.0, 3.0, 0.5), (0.0, 0.0, 1.0), meters_per_tile=0.5) == (
+        4.0,
+        6.0,
+    )
+    assert _metric_box_uv((2.0, 3.0, 0.5), (1.0, 1.0, 0.0)) == (-3.0, 0.5)
+
+
+def test_metric_box_uv_replaces_primitive_uv_layer_with_metric_coordinates() -> None:
+    class UVLayers(list):
+        active = None
+
+        def new(self, *, name: str):
+            layer = SimpleNamespace(
+                name=name,
+                data=[SimpleNamespace(uv=None) for _ in range(4)],
+                active_render=False,
+            )
+            self.append(layer)
+            return layer
+
+    uv_layers = UVLayers([SimpleNamespace(name="UVMap")])
+    mesh = SimpleNamespace(
+        uv_layers=uv_layers,
+        polygons=[SimpleNamespace(normal=(0.0, 0.0, 1.0), loop_indices=(0, 1, 2, 3))],
+        loops=[SimpleNamespace(vertex_index=index) for index in range(4)],
+        vertices=[
+            SimpleNamespace(co=(0.0, 0.0, 0.0)),
+            SimpleNamespace(co=(2.0, 0.0, 0.0)),
+            SimpleNamespace(co=(2.0, 3.0, 0.0)),
+            SimpleNamespace(co=(0.0, 3.0, 0.0)),
+        ],
+        update=lambda: None,
+    )
+
+    class FakeObject(dict):
+        data = mesh
+
+    obj = FakeObject()
+    _apply_metric_box_uv(obj)
+    assert [item.uv for item in uv_layers[0].data] == [
+        (0.0, 0.0),
+        (2.0, 0.0),
+        (2.0, 3.0),
+        (0.0, 3.0),
+    ]
+    assert uv_layers[0].name == "VISTA_MetricUV"
+    assert uv_layers[0].active_render is True
+    assert obj["vista_uv_mapping"] == "metric_box_v1"
+
+
+def test_authored_material_provenance_must_match_actual_mesh_use() -> None:
+    oak_id = "visual.material.white_oak_veneer"
+    wool_id = "visual.material.poly_wool_herringbone"
+    oak = _FakeMaterial("Oak", source=oak_id)
+    wool = _FakeMaterial("Wool", source=wool_id)
+    mesh = SimpleNamespace(
+        name="SofaPart",
+        data=SimpleNamespace(polygons=[SimpleNamespace(material_index=0), SimpleNamespace(material_index=1)]),
+        material_slots=[SimpleNamespace(material=oak), SimpleNamespace(material=wool)],
+    )
+    assert _validate_authored_recipe_material_use(
+        "contemporary_sofa_v1",
+        [mesh],
+        {oak_id: oak, wool_id: wool},
+    ) == tuple(sorted((oak_id, wool_id)))
+
+    impostor = _FakeMaterial("Impostor", source=oak_id)
+    mesh.material_slots[0].material = impostor
+    with pytest.raises(RuntimeError, match="wrong datablock"):
+        _validate_authored_recipe_material_use(
+            "contemporary_sofa_v1",
+            [mesh],
+            {oak_id: oak, wool_id: wool},
+        )
 
 
 def _external_content() -> dict:
