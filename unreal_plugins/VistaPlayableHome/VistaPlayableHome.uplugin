@@ -20,6 +20,11 @@
       "Name": "VistaPlayableHome",
       "Type": "Runtime",
       "LoadingPhase": "Default"
+    },
+    {
+      "Name": "VistaPlayableHomeEditor",
+      "Type": "Editor",
+      "LoadingPhase": "Default"
     }
   ]
 }

@@ -522,6 +522,23 @@ def _presentation_config(
     )
 
 
+def _presentation_vulkan_icd(root: Path) -> tuple[Path, Path, str]:
+    library = root / "driver" / "libEGL_nvidia.so.0"
+    library.parent.mkdir(parents=True, exist_ok=True)
+    library.write_bytes(b"synthetic NVIDIA EGL library")
+    library.chmod(0o600)
+    manifest = root / "nvidia-headless-icd.json"
+    manifest.write_bytes(build_home.canonical_json({
+        "file_format_version": "1.0.1",
+        "ICD": {
+            "library_path": str(library),
+            "api_version": "1.4.325",
+        },
+    }))
+    manifest.chmod(0o600)
+    return manifest, library, build_home.sha256_file(manifest)
+
+
 def test_presentation_contracts_compile_three_source_pinned_operations(
     tmp_path: Path,
 ) -> None:
@@ -622,23 +639,50 @@ def test_presentation_import_gpu0_retry_is_explicit_and_phase_scoped(
     manifest_path, receipt_path, _manifest, _receipt = _presentation_contracts(
         tmp_path / "inputs" / "presentation", fixture
     )
+    vulkan_icd, vulkan_library, vulkan_icd_sha = _presentation_vulkan_icd(
+        tmp_path / "inputs" / "vulkan"
+    )
     config = dataclasses.replace(
         _presentation_config(fixture, manifest_path, receipt_path),
         presentation_import_gpu0_rendering=True,
+        presentation_vulkan_icd=vulkan_icd,
+        presentation_vulkan_icd_sha256=vulkan_icd_sha,
     )
     planned = build_home.plan_build(config)
     commands = {
-        command["phase"]: command["argv"]
+        command["phase"]: command
         for command in planned.dry_run_report["commands"]
     }
 
-    assert "-AllowCommandletRendering" in commands["presentation_import"]
-    assert "-RenderOffScreen" in commands["presentation_import"]
-    assert "-graphicsadapter=0" in commands["presentation_import"]
-    assert "-nullrhi" not in commands["presentation_import"]
+    assert "-AllowCommandletRendering" in commands["presentation_import"]["argv"]
+    assert "-RenderOffScreen" in commands["presentation_import"]["argv"]
+    assert "-graphicsadapter=0" in commands["presentation_import"]["argv"]
+    assert "-nullrhi" not in commands["presentation_import"]["argv"]
+    staged_icd = (
+        fixture.attempt
+        / "contracts"
+        / build_home.PRESENTATION_VULKAN_ICD_ATTEMPT_FILE
+    )
+    assert commands["presentation_import"]["env"]["VK_ICD_FILENAMES"] == str(
+        staged_icd
+    )
     for phase in ("import", "compose", "presentation_compose"):
-        assert "-nullrhi" in commands[phase]
-        assert not any("graphicsadapter" in item.lower() for item in commands[phase])
+        assert "-nullrhi" in commands[phase]["argv"]
+        assert not any(
+            "graphicsadapter" in item.lower() for item in commands[phase]["argv"]
+        )
+        assert "VK_ICD_FILENAMES" not in commands[phase]["env"]
+
+    icd_report = planned.dry_run_report["inputs"]["presentation_vulkan_icd"]
+    assert icd_report == {
+        "path": str(vulkan_icd),
+        "sha256": vulkan_icd_sha,
+        "file_format_version": "1.0.1",
+        "library_path": str(vulkan_library),
+        "resolved_library_path": str(vulkan_library),
+        "api_version": "1.4.325",
+        "staged_path": str(staged_icd),
+    }
 
     with pytest.raises(build_home.BuildHomeError, match="requires presentation inputs"):
         build_home.plan_build(
@@ -647,6 +691,33 @@ def test_presentation_import_gpu0_retry_is_explicit_and_phase_scoped(
                 presentation_import_gpu0_rendering=True,
             )
         )
+
+    with pytest.raises(build_home.BuildHomeError, match="requires a Vulkan ICD"):
+        build_home.plan_build(
+            dataclasses.replace(
+                _presentation_config(fixture, manifest_path, receipt_path),
+                presentation_import_gpu0_rendering=True,
+            )
+        )
+    with pytest.raises(build_home.BuildHomeError, match="require GPU rendering"):
+        build_home.plan_build(
+            dataclasses.replace(
+                _presentation_config(fixture, manifest_path, receipt_path),
+                presentation_vulkan_icd=vulkan_icd,
+                presentation_vulkan_icd_sha256=vulkan_icd_sha,
+            )
+        )
+    with pytest.raises(build_home.BuildHomeError, match="SHA-256 differs"):
+        build_home.plan_build(
+            dataclasses.replace(config, presentation_vulkan_icd_sha256="0" * 64)
+        )
+
+    attempt, _counts = build_home._materialize_inputs(planned)
+    assert staged_icd.read_bytes() == vulkan_icd.read_bytes()
+    preparation = json.loads((attempt / "preparation-receipt.json").read_text())
+    assert preparation["presentation_vulkan_icd"] == str(staged_icd)
+    assert preparation["presentation_vulkan_icd_sha256"] == vulkan_icd_sha
+    assert preparation["presentation_vulkan_library_path"] == str(vulkan_library)
 
 
 def test_presentation_inputs_require_profile_and_complete_pair(tmp_path: Path) -> None:

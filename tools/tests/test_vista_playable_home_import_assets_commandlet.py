@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import sys
 import types
@@ -10,135 +11,46 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 COMMANDLET = ROOT / "tools/ue/vista_playable_home/import_assets_commandlet.py"
-
-
-class FakeNaniteSettings:
-    def __init__(self, enabled: bool) -> None:
-        self.enabled = enabled
-
-    def get_editor_property(self, name: str):
-        if name == "enabled":
-            return self.enabled
-        raise AttributeError(name)
-
-    def set_editor_property(self, name: str, value) -> None:
-        if name != "enabled":
-            raise AttributeError(name)
-        self.enabled = value
+NAMESPACE = "/Game/VISTA/PlayableHome/r2"
+SCHEMA = "simworld.vista.playable-home-native-nanite/v1"
+MESH_A = NAMESPACE + "/Assets/A/A.A"
+MESH_B = NAMESPACE + "/Assets/B/B.B"
 
 
 class FakeMaterial:
-    def __init__(
-        self,
-        *,
-        used_with_nanite: bool,
-        blend_mode: str = "BLEND_OPAQUE",
-        path: str = (
-            "/Game/VISTA/PlayableHome/r2/Assets/Fixture/"
-            "InterchangeAssets/M_Fixture.M_Fixture"
-        ),
-        refuse_usage_edit: bool = False,
-    ) -> None:
-        self.used_with_nanite = used_with_nanite
+    def __init__(self, blend_mode: str) -> None:
         self.blend_mode = blend_mode
-        self.path = path
-        self.refuse_usage_edit = refuse_usage_edit
-        self.modified = False
-        self.post_edit_changed = False
 
     def get_base_material(self):
         return self
 
-    def get_path_name(self) -> str:
-        return self.path
-
     def get_editor_property(self, name: str):
-        if name == "used_with_nanite":
-            return self.used_with_nanite
         if name == "blend_mode":
             return self.blend_mode
         raise AttributeError(name)
-
-    def set_editor_property(self, name: str, value) -> None:
-        if name != "used_with_nanite" or self.refuse_usage_edit:
-            raise RuntimeError("usage edit refused")
-        self.used_with_nanite = value
-
-    def modify(self) -> None:
-        self.modified = True
-
-    def post_edit_change(self) -> None:
-        self.post_edit_changed = True
-
-
-class FakeMaterialInstance:
-    def __init__(self, base: FakeMaterial) -> None:
-        self.base = base
-
-    def get_base_material(self) -> FakeMaterial:
-        return self.base
-
-    def get_editor_property(self, name: str):
-        if name == "blend_mode":
-            return self.base.blend_mode
-        raise AttributeError(name)
-
-
-class FakeStaticMesh:
-    def __init__(self, enabled: bool = True) -> None:
-        self.settings = FakeNaniteSettings(enabled)
-
-    def get_editor_property(self, name: str):
-        if name == "nanite_settings":
-            return self.settings
-        raise AttributeError(name)
-
-    def set_editor_property(self, name: str, value) -> None:
-        if name != "nanite_settings":
-            raise AttributeError(name)
-        self.settings = value
 
 
 @pytest.fixture
 def commandlet(monkeypatch: pytest.MonkeyPatch):
     unreal = types.ModuleType("unreal")
-    unreal.Material = FakeMaterial
-    unreal.MaterialInstanceConstant = FakeMaterialInstance
-    unreal.StaticMesh = FakeStaticMesh
+    unreal.StaticMesh = type("FakeStaticMesh", (), {})
     unreal.Texture2D = type("FakeTexture2D", (), {})
     unreal.BlendMode = types.SimpleNamespace(
         BLEND_OPAQUE="BLEND_OPAQUE",
         BLEND_MASKED="BLEND_MASKED",
         BLEND_TRANSLUCENT="BLEND_TRANSLUCENT",
     )
-    unreal.MaterialUsage = types.SimpleNamespace(MATUSAGE_NANITE="MATUSAGE_NANITE")
 
-    class MaterialEditingLibrary:
-        usage_calls = []
-
-        @classmethod
-        def set_material_usage(cls, material, usage):
-            assert usage == unreal.MaterialUsage.MATUSAGE_NANITE
-            cls.usage_calls.append((material, usage))
-            material.set_editor_property("used_with_nanite", True)
+    class VistaPlayableHomeNaniteLibrary:
+        calls = []
+        response = ""
 
         @classmethod
-        def has_material_usage(cls, material, usage):
-            assert usage == unreal.MaterialUsage.MATUSAGE_NANITE
-            return material.used_with_nanite
+        def finalize_nanite_policies(cls, namespace, mesh_paths):
+            cls.calls.append((namespace, list(mesh_paths)))
+            return cls.response
 
-    unreal.MaterialEditingLibrary = MaterialEditingLibrary
-
-    class EditorAssetLibrary:
-        saved = []
-
-        @classmethod
-        def save_loaded_asset(cls, asset, *, only_if_is_dirty: bool):
-            assert only_if_is_dirty is False
-            cls.saved.append(asset)
-            return True
-
-    unreal.EditorAssetLibrary = EditorAssetLibrary
+    unreal.VistaPlayableHomeNaniteLibrary = VistaPlayableHomeNaniteLibrary
     monkeypatch.setitem(sys.modules, "unreal", unreal)
     tree = ast.parse(COMMANDLET.read_text(encoding="utf-8"), filename=str(COMMANDLET))
     final = tree.body[-1]
@@ -155,77 +67,214 @@ def commandlet(monkeypatch: pytest.MonkeyPatch):
     return module, unreal
 
 
-def test_nanite_usage_is_persisted_on_effective_base_material(commandlet) -> None:
-    module, unreal = commandlet
-    base = FakeMaterial(used_with_nanite=False)
-    interface = FakeMaterialInstance(base)
-    mesh = FakeStaticMesh(enabled=True)
-
-    result = module.enforce_nanite_material_policy(mesh, [interface])
-
-    assert result == {
-        "material_blend_modes": ["BLEND_OPAQUE"],
-        "nanite_policy": "eligible_static_opaque",
-        "nanite_enabled": True,
+def imported_item(
+    object_path: str,
+    *,
+    source_kind: str = "generated",
+    policy: str = "eligible_static_opaque",
+    enabled: bool | None = False,
+) -> dict:
+    return {
+        "source_kind": source_kind,
+        "object_path": object_path,
+        "inspection": {
+            "object_path": object_path,
+            "material_blend_modes": ["BLEND_OPAQUE"],
+            "nanite_policy": policy,
+            "nanite_enabled": enabled,
+        },
     }
-    assert base.used_with_nanite is True
-    assert base.modified is True
-    assert base.post_edit_changed is True
-    assert unreal.MaterialEditingLibrary.usage_calls == [
-        (base, unreal.MaterialUsage.MATUSAGE_NANITE)
-    ]
-    assert unreal.EditorAssetLibrary.saved == [base, mesh]
 
 
-def test_initially_disabled_opaque_mesh_is_enabled_after_usage_proof(
+def native_result(
+    object_path: str,
+    *,
+    modes: list[str] | None = None,
+    policy: str = "eligible_static_opaque",
+    enabled: bool = True,
+) -> dict:
+    return {
+        "object_path": object_path,
+        "material_blend_modes": modes or ["BLEND_OPAQUE"],
+        "nanite_policy": policy,
+        "nanite_enabled": enabled,
+    }
+
+
+def response(results: list[dict]) -> str:
+    return json.dumps(
+        {"schema_version": SCHEMA, "status": "success", "results": results},
+        separators=(",", ":"),
+    )
+
+
+def test_initial_nanite_inspection_classifies_without_mutation(commandlet) -> None:
+    module, _ = commandlet
+    opaque = FakeMaterial("BLEND_OPAQUE")
+    translucent = FakeMaterial("BLEND_TRANSLUCENT")
+
+    modes, nonopaque = module.classify_nanite_material_policy(
+        [opaque, translucent]
+    )
+
+    assert modes == ["BLEND_OPAQUE", "BLEND_TRANSLUCENT"]
+    assert nonopaque is True
+    assert opaque.blend_mode == "BLEND_OPAQUE"
+    assert translucent.blend_mode == "BLEND_TRANSLUCENT"
+
+
+def test_native_bridge_called_once_and_results_joined_by_object_path(
     commandlet,
 ) -> None:
     module, unreal = commandlet
-    material = FakeMaterial(used_with_nanite=False)
-    mesh = FakeStaticMesh(enabled=False)
+    builtin = imported_item(
+        NAMESPACE + "/Assets/Pawn/Pawn.Pawn",
+        source_kind="builtin",
+        policy="not_applicable",
+        enabled=None,
+    )
+    item_b = imported_item(MESH_B)
+    item_a = imported_item(MESH_A)
+    unreal.VistaPlayableHomeNaniteLibrary.response = response([
+        native_result(MESH_A),
+        native_result(
+            MESH_B,
+            modes=["BLEND_TRANSLUCENT"],
+            policy="disabled_nonopaque_material",
+            enabled=False,
+        ),
+    ])
 
-    result = module.enforce_nanite_material_policy(mesh, [material])
+    module.finalize_nanite_policies(NAMESPACE, [builtin, item_b, item_a])
 
-    assert result == {
+    assert unreal.VistaPlayableHomeNaniteLibrary.calls == [
+        (NAMESPACE, [MESH_A, MESH_B])
+    ]
+    assert item_a["inspection"] == {
+        "object_path": MESH_A,
         "material_blend_modes": ["BLEND_OPAQUE"],
         "nanite_policy": "eligible_static_opaque",
         "nanite_enabled": True,
     }
-    assert mesh.settings.enabled is True
-    assert material.used_with_nanite is True
-    assert unreal.EditorAssetLibrary.saved == [material, mesh]
-
-
-def test_unproven_opaque_material_fails_safe_to_non_nanite(commandlet) -> None:
-    module, unreal = commandlet
-    base = FakeMaterial(used_with_nanite=False, refuse_usage_edit=True)
-    mesh = FakeStaticMesh(enabled=True)
-
-    result = module.enforce_nanite_material_policy(mesh, [base])
-
-    assert result == {
-        "material_blend_modes": ["BLEND_OPAQUE"],
-        "nanite_policy": "eligible_static_opaque",
-        "nanite_enabled": False,
-    }
-    assert base.used_with_nanite is False
-    assert unreal.EditorAssetLibrary.saved == [mesh]
-
-
-def test_nonopaque_material_keeps_existing_disabled_policy(commandlet) -> None:
-    module, unreal = commandlet
-    material = FakeMaterial(
-        used_with_nanite=False,
-        blend_mode="BLEND_TRANSLUCENT",
-    )
-    mesh = FakeStaticMesh(enabled=True)
-
-    result = module.enforce_nanite_material_policy(mesh, [material])
-
-    assert result == {
+    assert item_b["inspection"] == {
+        "object_path": MESH_B,
         "material_blend_modes": ["BLEND_TRANSLUCENT"],
         "nanite_policy": "disabled_nonopaque_material",
         "nanite_enabled": False,
     }
-    assert material.used_with_nanite is False
-    assert unreal.EditorAssetLibrary.saved == [mesh]
+    assert builtin["inspection"]["nanite_policy"] == "not_applicable"
+    assert builtin["inspection"]["nanite_enabled"] is None
+
+
+@pytest.mark.parametrize(
+    "native_response",
+    [
+        "not-json",
+        "[]",
+        json.dumps({"schema_version": "wrong", "status": "success", "results": []}),
+        json.dumps({"schema_version": SCHEMA, "status": "error", "error": "failed"}),
+        json.dumps({"schema_version": SCHEMA, "status": "success", "results": {}}),
+        json.dumps({
+            "schema_version": SCHEMA,
+            "status": "success",
+            "results": [{
+                "object_path": MESH_A,
+                "material_blend_modes": ["opaque"],
+                "nanite_policy": "eligible_static_opaque",
+                "nanite_enabled": True,
+            }],
+        }),
+        (
+            '{"schema_version":"' + SCHEMA + '","schema_version":"' + SCHEMA
+            + '","status":"success","results":[]}'
+        ),
+    ],
+)
+def test_native_bridge_malformed_payload_fails_closed(
+    commandlet, native_response: str
+) -> None:
+    module, unreal = commandlet
+    item = imported_item(MESH_A)
+    original = dict(item["inspection"])
+    unreal.VistaPlayableHomeNaniteLibrary.response = native_response
+
+    with pytest.raises(RuntimeError):
+        module.finalize_nanite_policies(NAMESPACE, [item])
+
+    assert unreal.VistaPlayableHomeNaniteLibrary.calls == [
+        (NAMESPACE, [MESH_A])
+    ]
+    assert item["inspection"] == original
+
+
+def test_native_bridge_missing_result_path_fails_before_receipt_update(
+    commandlet,
+) -> None:
+    module, unreal = commandlet
+    item_a = imported_item(MESH_A)
+    item_b = imported_item(MESH_B)
+    originals = [dict(item_a["inspection"]), dict(item_b["inspection"])]
+    unreal.VistaPlayableHomeNaniteLibrary.response = response([
+        native_result(MESH_A)
+    ])
+
+    with pytest.raises(RuntimeError, match="incomplete"):
+        module.finalize_nanite_policies(NAMESPACE, [item_a, item_b])
+
+    assert item_a["inspection"] == originals[0]
+    assert item_b["inspection"] == originals[1]
+
+
+def test_native_bridge_duplicate_result_path_fails_before_receipt_update(
+    commandlet,
+) -> None:
+    module, unreal = commandlet
+    item_a = imported_item(MESH_A)
+    item_b = imported_item(MESH_B)
+    originals = [dict(item_a["inspection"]), dict(item_b["inspection"])]
+    unreal.VistaPlayableHomeNaniteLibrary.response = response([
+        native_result(MESH_A),
+        native_result(MESH_A),
+    ])
+
+    with pytest.raises(RuntimeError, match="duplicated"):
+        module.finalize_nanite_policies(NAMESPACE, [item_a, item_b])
+
+    assert item_a["inspection"] == originals[0]
+    assert item_b["inspection"] == originals[1]
+
+
+def test_native_bridge_unsorted_results_fail_before_receipt_update(
+    commandlet,
+) -> None:
+    module, unreal = commandlet
+    item_a = imported_item(MESH_A)
+    item_b = imported_item(MESH_B)
+    originals = [dict(item_a["inspection"]), dict(item_b["inspection"])]
+    unreal.VistaPlayableHomeNaniteLibrary.response = response([
+        native_result(MESH_B),
+        native_result(MESH_A),
+    ])
+
+    with pytest.raises(RuntimeError, match="deterministically sorted"):
+        module.finalize_nanite_policies(NAMESPACE, [item_a, item_b])
+
+    assert item_a["inspection"] == originals[0]
+    assert item_b["inspection"] == originals[1]
+
+
+@pytest.mark.parametrize("object_path", [None, 7, MESH_B])
+def test_native_bridge_invalid_or_unexpected_result_path_fails_closed(
+    commandlet, object_path
+) -> None:
+    module, unreal = commandlet
+    item = imported_item(MESH_A)
+    original = dict(item["inspection"])
+    unreal.VistaPlayableHomeNaniteLibrary.response = response([
+        native_result(object_path)
+    ])
+
+    with pytest.raises(RuntimeError, match="object path"):
+        module.finalize_nanite_policies(NAMESPACE, [item])
+
+    assert item["inspection"] == original

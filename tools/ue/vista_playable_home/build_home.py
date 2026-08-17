@@ -90,6 +90,7 @@ PROJECT_PLUGINS = (
 PLUGIN_REQUIRED_FILES = (
     "VistaPlayableHome.uplugin",
     "Binaries/Linux/libUnrealEditor-VistaPlayableHome.so",
+    "Binaries/Linux/libUnrealEditor-VistaPlayableHomeEditor.so",
     "Binaries/Linux/UnrealEditor.modules",
     "Config/DefaultVistaPlayableHome.ini",
     "README.md",
@@ -127,6 +128,7 @@ VISUAL_PROFILE_ATTEMPT_FILE = "visual-profile.json"
 RENDERER_REQUEST_ATTEMPT_FILE = "renderer-profile-request.json"
 PRESENTATION_MANIFEST_ATTEMPT_FILE = "presentation-manifest.json"
 PRESENTATION_ARTIFACT_RECEIPT_ATTEMPT_FILE = "presentation-artifact-receipt.json"
+PRESENTATION_VULKAN_ICD_ATTEMPT_FILE = "presentation-vulkan-icd.json"
 PRESENTATION_FORGE_SCHEMA = "simworld.vista.playable-home-realism-forge/v1"
 PRESENTATION_ARTIFACT_RECEIPT_SCHEMA = "simworld.vista.playable-home-realism-artifacts/v1"
 PRESENTATION_FORGE_SCHEMA_V2 = "simworld.vista.playable-home-realism-forge/v2"
@@ -149,6 +151,14 @@ PRESENTATION_IMPORT_RESULT_FILE = "presentation-import-result.json"
 PRESENTATION_SCENE_RESULT_FILE = "presentation-scene-result.json"
 PRESENTATION_IMPORT_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_IMPORT_RESULT:"
 PRESENTATION_SCENE_MARKER = "VISTA_PLAYABLE_HOME_PRESENTATION_SCENE_RESULT:"
+PRESENTATION_VULKAN_ICD_ENV = "VK_ICD_FILENAMES"
+VULKAN_DRIVER_ENVIRONMENT_KEYS = (
+    "VK_ICD_FILENAMES",
+    "VK_DRIVER_FILES",
+    "VK_ADD_DRIVER_FILES",
+    "VK_LOADER_DRIVERS_SELECT",
+    "VK_LOADER_DRIVERS_DISABLE",
+)
 COMMANDLET_RUNTIME_DIRECTORY = "commandlet-runtime"
 COMMANDLET_PHASES = (
     "import",
@@ -583,7 +593,7 @@ def _load_json(path: Path, *, expected_sha256: str, label: str) -> tuple[dict[st
     expected = _require_sha(expected_sha256, f"{label} pin")
     try:
         size = source.stat().st_size
-    except OSError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         _fail("VISTA_HOME_BUILD_INPUT_UNREADABLE", f"{label} cannot be read", pointer=str(source))
         raise AssertionError from exc
     if size <= 0 or size > MAX_JSON_BYTES:
@@ -2436,14 +2446,45 @@ def _validate_plugin_package(path: Path, expected_tree_sha256: str) -> TreeSnaps
         expected_sha256=sha256_file(root / "VistaPlayableHome.uplugin"),
         label="compiled plugin descriptor",
     )
-    if descriptor.get("FriendlyName") != "VISTA Playable Home" or not any(
-        isinstance(module, Mapping) and module.get("Name") == EXPECTED_PLUGIN_NAME and module.get("Type") == "Runtime"
-        for module in descriptor.get("Modules", [])
+    declared_modules = descriptor.get("Modules", [])
+    required_modules = {
+        (EXPECTED_PLUGIN_NAME, "Runtime"),
+        ("VistaPlayableHomeEditor", "Editor"),
+    }
+    observed_modules = {
+        (module.get("Name"), module.get("Type"))
+        for module in declared_modules
+        if isinstance(module, Mapping)
+    }
+    if (
+        descriptor.get("FriendlyName") != "VISTA Playable Home"
+        or not required_modules.issubset(observed_modules)
     ):
-        _fail("VISTA_HOME_BUILD_PLUGIN_INVALID", "compiled plugin descriptor does not declare the runtime module")
-    binary = root / "Binaries/Linux/libUnrealEditor-VistaPlayableHome.so"
-    if binary.stat().st_size <= 0:
+        _fail(
+            "VISTA_HOME_BUILD_PLUGIN_INVALID",
+            "compiled plugin descriptor does not declare the runtime and editor modules",
+        )
+    binaries = {
+        EXPECTED_PLUGIN_NAME: root / "Binaries/Linux/libUnrealEditor-VistaPlayableHome.so",
+        "VistaPlayableHomeEditor": root / "Binaries/Linux/libUnrealEditor-VistaPlayableHomeEditor.so",
+    }
+    if any(binary.stat().st_size <= 0 for binary in binaries.values()):
         _fail("VISTA_HOME_BUILD_PLUGIN_INVALID", "compiled plugin binary is empty")
+    modules_manifest, _modules_raw = _load_json(
+        root / "Binaries/Linux/UnrealEditor.modules",
+        expected_sha256=sha256_file(root / "Binaries/Linux/UnrealEditor.modules"),
+        label="compiled plugin modules manifest",
+    )
+    module_files = modules_manifest.get("Modules")
+    if (
+        not isinstance(module_files, Mapping)
+        or module_files.get(EXPECTED_PLUGIN_NAME) != binaries[EXPECTED_PLUGIN_NAME].name
+        or module_files.get("VistaPlayableHomeEditor") != binaries["VistaPlayableHomeEditor"].name
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_PLUGIN_INVALID",
+            "compiled plugin modules manifest does not bind both editor binaries",
+        )
     return _validate_tree_pin(root, expected_tree_sha256, "compiled plugin package")
 
 
@@ -2970,6 +3011,88 @@ def _commandlet_environment(
     }
 
 
+def _validate_presentation_vulkan_icd(
+    path: Path,
+    expected_sha256: str,
+) -> tuple[dict[str, str], bytes]:
+    """Validate the explicitly pinned NVIDIA headless Vulkan ICD contract."""
+
+    value, raw = _load_json(
+        path,
+        expected_sha256=expected_sha256,
+        label="presentation Vulkan ICD",
+    )
+    if set(value) != {"file_format_version", "ICD"}:
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD root fields differ",
+            pointer=str(path),
+        )
+    if not isinstance(value["file_format_version"], str) or re.fullmatch(
+        r"[0-9]+\.[0-9]+\.[0-9]+", value["file_format_version"]
+    ) is None:
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD file_format_version is invalid",
+            pointer=str(path),
+        )
+    icd = value["ICD"]
+    if not isinstance(icd, Mapping) or set(icd) != {"library_path", "api_version"}:
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD fields differ",
+            pointer=str(path),
+        )
+    if not isinstance(icd["api_version"], str) or re.fullmatch(
+        r"[0-9]+\.[0-9]+\.[0-9]+", icd["api_version"]
+    ) is None:
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD api_version is invalid",
+            pointer=str(path),
+        )
+    if not isinstance(icd["library_path"], str):
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD library_path is invalid",
+            pointer=str(path),
+        )
+    library = _absolute_lexical(
+        Path(icd["library_path"]),
+        "presentation Vulkan ICD library",
+    )
+    if library.name != "libEGL_nvidia.so.0":
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD must select the NVIDIA EGL headless library",
+            pointer=str(library),
+        )
+    try:
+        resolved_library = library.resolve(strict=True)
+        metadata = resolved_library.stat()
+    except OSError as exc:
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD library is missing or unreadable",
+            pointer=str(library),
+        )
+        raise AssertionError from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        _fail(
+            "VISTA_HOME_BUILD_VULKAN_ICD_INVALID",
+            "presentation Vulkan ICD library must resolve to a regular file",
+            pointer=str(library),
+        )
+    return {
+        "path": str(_existing_file(path, "presentation Vulkan ICD")),
+        "sha256": _require_sha(expected_sha256, "presentation Vulkan ICD pin"),
+        "file_format_version": value["file_format_version"],
+        "library_path": str(library),
+        "resolved_library_path": str(resolved_library),
+        "api_version": icd["api_version"],
+    }, raw
+
+
 def _prepare_commandlet_runtime(attempt_root: Path, phases: Sequence[str]) -> None:
     runtime_root = attempt_root / COMMANDLET_RUNTIME_DIRECTORY
     runtime_root.mkdir(mode=0o700, exist_ok=False)
@@ -3013,6 +3136,8 @@ class BuildConfig:
     expected_revision: str = EXPECTED_REVISION
     command_timeout_s: int = 3600
     presentation_import_gpu0_rendering: bool = False
+    presentation_vulkan_icd: Path | None = None
+    presentation_vulkan_icd_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3029,6 +3154,8 @@ class PlannedBuild:
     visual_profile: dict[str, Any] | None
     visual_profile_raw: bytes | None
     presentation: PresentationInputs | None
+    presentation_vulkan_icd: dict[str, str] | None
+    presentation_vulkan_icd_raw: bytes | None
     renderer_request: dict[str, Any] | None
     renderer_request_raw: bytes | None
     execution: dict[str, Any]
@@ -3332,6 +3459,32 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
             "VISTA_HOME_BUILD_ARGUMENT_INVALID",
             "presentation bundles require --visual-profile and its pin",
         )
+    vulkan_icd_values = (
+        config.presentation_vulkan_icd,
+        config.presentation_vulkan_icd_sha256,
+    )
+    has_vulkan_icd = any(value is not None for value in vulkan_icd_values)
+    if config.presentation_import_gpu0_rendering and not all(
+        value is not None for value in vulkan_icd_values
+    ):
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "presentation import GPU rendering requires a Vulkan ICD path and SHA-256 pin",
+        )
+    if not config.presentation_import_gpu0_rendering and has_vulkan_icd:
+        _fail(
+            "VISTA_HOME_BUILD_ARGUMENT_INVALID",
+            "presentation Vulkan ICD inputs require GPU rendering mode",
+        )
+    presentation_vulkan_icd: dict[str, str] | None = None
+    presentation_vulkan_icd_raw: bytes | None = None
+    if config.presentation_import_gpu0_rendering:
+        presentation_vulkan_icd, presentation_vulkan_icd_raw = (
+            _validate_presentation_vulkan_icd(
+            config.presentation_vulkan_icd,
+            config.presentation_vulkan_icd_sha256,
+        )
+        )
     presentation: PresentationInputs | None = None
     if has_presentation:
         presentation = validate_presentation_inputs(
@@ -3502,6 +3655,15 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
             "path": str(config.presentation_artifact_receipt),
             "sha256": config.presentation_artifact_receipt_sha256,
         }
+        if presentation_vulkan_icd is not None:
+            report["inputs"]["presentation_vulkan_icd"] = {
+                **presentation_vulkan_icd,
+                "staged_path": str(
+                    attempt
+                    / "contracts"
+                    / PRESENTATION_VULKAN_ICD_ATTEMPT_FILE
+                ),
+            }
         report["project"]["presentation"] = {
             "bundle_count": len(presentation.bindings),
             "content_destination": (
@@ -3524,6 +3686,15 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
                 "<sha256-from-verified-import-receipt>"
             ),
         }
+        presentation_import_env = dict(presentation_env)
+        if presentation_vulkan_icd is not None:
+            presentation_import_env[PRESENTATION_VULKAN_ICD_ENV] = (
+                str(
+                    attempt
+                    / "contracts"
+                    / PRESENTATION_VULKAN_ICD_ATTEMPT_FILE
+                )
+            )
         report["commands"].extend([
             {
                 "phase": "presentation_import",
@@ -3540,7 +3711,7 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
                 "env": _commandlet_environment(
                     attempt,
                     "presentation_import",
-                    presentation_env,
+                    presentation_import_env,
                 ),
                 "log": str(attempt / "presentation-import.log"),
                 "result": str(attempt / PRESENTATION_IMPORT_RESULT_FILE),
@@ -3592,6 +3763,8 @@ def plan_build(config: BuildConfig, *, require_editor: bool = False) -> PlannedB
         visual_profile=selected_profile,
         visual_profile_raw=selected_profile_raw,
         presentation=presentation,
+        presentation_vulkan_icd=presentation_vulkan_icd,
+        presentation_vulkan_icd_raw=presentation_vulkan_icd_raw,
         renderer_request=renderer_request,
         renderer_request_raw=renderer_request_raw,
         execution=execution,
@@ -4648,6 +4821,11 @@ def _run_command(
     process: subprocess.Popen[bytes] | None = None
     timed_out = False
     return_code: int | None = None
+    inherited_environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in VULKAN_DRIVER_ENVIRONMENT_KEYS
+    }
     try:
         with os.fdopen(descriptor, "wb", closefd=False) as log:
             process = subprocess.Popen(
@@ -4655,7 +4833,7 @@ def _run_command(
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                env={**os.environ, **dict(environment)},
+                env={**inherited_environment, **dict(environment)},
                 start_new_session=True,
             )
             try:
@@ -4804,6 +4982,7 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
     renderer_request_target: Path | None = None
     presentation_manifest_target: Path | None = None
     presentation_artifact_receipt_target: Path | None = None
+    presentation_vulkan_icd_target: Path | None = None
     if planned.visual_profile is not None:
         if planned.visual_profile_raw is None or planned.renderer_request_raw is None:
             _fail(
@@ -4828,6 +5007,19 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
         _write_exclusive(
             presentation_artifact_receipt_target,
             planned.presentation.artifact_receipt_raw,
+        )
+    if planned.presentation_vulkan_icd is not None:
+        if planned.presentation_vulkan_icd_raw is None:
+            _fail(
+                "VISTA_HOME_BUILD_EXECUTION_DRIFT",
+                "GPU presentation plan lost its pinned Vulkan ICD bytes",
+            )
+        presentation_vulkan_icd_target = (
+            contracts_dir / PRESENTATION_VULKAN_ICD_ATTEMPT_FILE
+        )
+        _write_exclusive(
+            presentation_vulkan_icd_target,
+            planned.presentation_vulkan_icd_raw,
         )
     project_file = project_root / EXPECTED_PROJECT_NAME
     _write_exclusive(project_file, planned.project_raw)
@@ -4948,6 +5140,16 @@ def _materialize_inputs(planned: PlannedBuild, *, owner_token: str | None = None
             "presentation_ue_import_observation": "pending",
             "presentation_runtime_play_proof": "pending",
         })
+    if planned.presentation_vulkan_icd is not None:
+        preparation.update({
+            "presentation_vulkan_icd": str(presentation_vulkan_icd_target),
+            "presentation_vulkan_icd_sha256": (
+                planned.presentation_vulkan_icd["sha256"]
+            ),
+            "presentation_vulkan_library_path": (
+                planned.presentation_vulkan_icd["library_path"]
+            ),
+        })
     _write_exclusive(attempt / "preparation-receipt.json", canonical_json(preparation))
     return attempt, copy_counts
 
@@ -5006,6 +5208,16 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
 
         presentation_import_sha: str | None = None
         if planned.presentation is not None:
+            presentation_import_bindings = {
+                **common_env,
+                "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
+            }
+            if planned.presentation_vulkan_icd is not None:
+                presentation_import_bindings[PRESENTATION_VULKAN_ICD_ENV] = str(
+                    attempt
+                    / "contracts"
+                    / PRESENTATION_VULKAN_ICD_ATTEMPT_FILE
+                )
             presentation_import_receipt_path = (
                 attempt / "presentation-import-receipt.json"
             )
@@ -5026,10 +5238,7 @@ def apply_build(planned: PlannedBuild) -> dict[str, Any]:
                 environment=_commandlet_environment(
                     attempt,
                     "presentation_import",
-                    {
-                        **common_env,
-                        "VISTA_PLAYABLE_HOME_IMPORT_RECEIPT_SHA256": import_sha,
-                    },
+                    presentation_import_bindings,
                 ),
                 log_path=attempt / "presentation-import.log",
                 marker_prefix=PRESENTATION_IMPORT_MARKER,
@@ -5308,6 +5517,18 @@ def _parser() -> argparse.ArgumentParser:
             "commandlet rendering offscreen on graphics adapter 0"
         ),
     )
+    parser.add_argument(
+        "--presentation-vulkan-icd",
+        type=Path,
+        help=(
+            "absolute pinned NVIDIA EGL Vulkan ICD JSON; required with "
+            "--presentation-import-gpu0-rendering"
+        ),
+    )
+    parser.add_argument(
+        "--presentation-vulkan-icd-sha256",
+        help="expected lowercase SHA-256 for --presentation-vulkan-icd",
+    )
     parser.add_argument("--apply", action="store_true", help="materialize and run the two fixed UE commandlets")
     return parser
 
@@ -5341,6 +5562,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         command_timeout_s=args.command_timeout_s,
         presentation_import_gpu0_rendering=(
             args.presentation_import_gpu0_rendering
+        ),
+        presentation_vulkan_icd=args.presentation_vulkan_icd,
+        presentation_vulkan_icd_sha256=(
+            args.presentation_vulkan_icd_sha256
         ),
     )
     try:

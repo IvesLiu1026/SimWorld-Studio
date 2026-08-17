@@ -423,6 +423,10 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         plugin = ROOT / "unreal_plugins/VistaPlayableHome"
         descriptor = json.loads((plugin / "VistaPlayableHome.uplugin").read_text())
         self.assertEqual(descriptor["Modules"][0]["Type"], "Runtime")
+        self.assertIn(
+            {"Name": "VistaPlayableHomeEditor", "Type": "Editor", "LoadingPhase": "Default"},
+            descriptor["Modules"],
+        )
         build = (plugin / "Source/VistaPlayableHome/VistaPlayableHome.Build.cs").read_text()
         for dependency in ("EnhancedInput", "AIModule", "NavigationSystem", "Sockets", "Networking", "Json"):
             self.assertIn(f'"{dependency}"', build)
@@ -443,6 +447,26 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("CommitCommandGeneration", source)
         self.assertIn("SESSION_GENERATION_MISMATCH", source)
         self.assertIn("SKM_Manny.SKM_Manny", source)
+        editor_build = (
+            plugin / "Source/VistaPlayableHomeEditor/VistaPlayableHomeEditor.Build.cs"
+        ).read_text()
+        for dependency in ("AssetTools", "Json", "MaterialEditor"):
+            self.assertIn(f'"{dependency}"', editor_build)
+        for token in (
+            "UVistaPlayableHomeNaniteLibrary",
+            "FinalizeNanitePolicies",
+            "DuplicateAsset",
+            "SetParentEditorOnly",
+            "SetMaterialUsage",
+            "HasMaterialUsage",
+            "SetNaniteSettings",
+            "SavePackage",
+            "simworld.vista.playable-home-native-nanite/v1",
+        ):
+            self.assertIn(token, source)
+        self.assertNotIn("FPlatformMisc::GetSHA256Signature", source)
+        self.assertIn("0x428a2f98U", source)
+        self.assertIn('TEXT("%08x%08x")', source)
         self.assertIn("ABP_Manny", source)
         self.assertIn("ConfigureJambPivot", source)
         self.assertIn("GetBoundingBox().Min.X", source)
@@ -541,8 +565,12 @@ class PlayableHomeSourceContractTests(unittest.TestCase):
         self.assertIn("returned_texture2d_paths", import_source)
         self.assertIn("material_texture2d_paths", import_source)
         self.assertIn("core_textures_imported_and_used", import_source)
-        self.assertIn("enforce_nanite_material_policy", import_source)
-        self.assertIn('settings.set_editor_property("enabled", desired_enabled)', import_source)
+        self.assertIn("NANITE_POLICY_RESULT_SCHEMA", import_source)
+        self.assertIn("VistaPlayableHomeNaniteLibrary", import_source)
+        self.assertIn("finalize_nanite_policies", import_source)
+        self.assertIn("finalize_nanite_policies(namespace, imported)", import_source)
+        self.assertNotIn("private_nanite_base_material", import_source)
+        self.assertNotIn("set_material_usage", import_source)
         self.assertIn('and item["inspection"]["nanite_enabled"] is True', import_source)
         self.assertIn("nanite_material_policy_verified", import_source)
         self.assertNotIn("AssetImportTask", import_source)

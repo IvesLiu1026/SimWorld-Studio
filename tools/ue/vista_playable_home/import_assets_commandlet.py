@@ -5,6 +5,7 @@ execution manifest.  No caller object path, destination, class, or Python body
 is accepted.
 """
 
+import gc
 import json
 import os
 import re
@@ -29,6 +30,13 @@ from commandlet_common import (  # noqa: E402
     sha256_file,
     write_exclusive_receipt,
 )
+
+
+NANITE_POLICY_RESULT_SCHEMA = "simworld.vista.playable-home-native-nanite/v1"
+NANITE_POLICIES = {
+    "eligible_static_opaque",
+    "disabled_nonopaque_material",
+}
 
 
 def property_or_none(value, name):
@@ -244,19 +252,6 @@ def effective_material_blend_mode(material):
     return blend_mode
 
 
-def effective_base_material(material):
-    """Resolve the compiled material that owns usage flags for an interface."""
-
-    base = material
-    getter = getattr(material, "get_base_material", None)
-    if callable(getter):
-        try:
-            base = getter() or material
-        except Exception:
-            base = material
-    return base
-
-
 def blend_mode_name(blend_mode):
     text = str(blend_mode)
     match = re.search(r"\b(BLEND_[A-Z0-9_]+)\b", text)
@@ -264,123 +259,114 @@ def blend_mode_name(blend_mode):
     return match.group(1)
 
 
-def ensure_nanite_material_usage(material):
-    """Prove or persist explicit Nanite usage on a private imported material.
-
-    ``UMaterialInterface`` slots can be instances, while ``bUsedWithNanite``
-    belongs to the effective base ``UMaterial``.  Interchange has produced
-    opaque materials without that usage bit in packaged builds; UE then swaps
-    them for its default material at runtime.  Only revision-private imported
-    bases may be changed here.  Any absent/uneditable/unpersisted usage flag is
-    deliberately treated as unproven so the owning mesh can fall back to
-    non-Nanite rendering without losing its authored material.
-    """
-
-    base = effective_base_material(material)
-    material_class = getattr(unreal, "Material", None)
-    if material_class is None or not isinstance(base, material_class):
-        return False
-    path = str(base.get_path_name())
-    if not path.startswith("/Game/VISTA/PlayableHome/"):
-        return False
-    usage = property_or_none(base, "used_with_nanite")
-    if usage is True:
-        return True
-    if usage is not False:
-        return False
-    try:
-        modify = getattr(base, "modify", None)
-        if callable(modify):
-            modify()
-        library = getattr(unreal, "MaterialEditingLibrary", None)
-        usage_enum = getattr(
-            getattr(unreal, "MaterialUsage", None), "MATUSAGE_NANITE", None
-        )
-        setter = (
-            getattr(library, "set_material_usage", None)
-            if library is not None
-            else None
-        )
-        if callable(setter) and usage_enum is not None:
-            # UE 5.7's supported editor API updates the base usage and queues
-            # the required Nanite shader compilation.  Verify the reflected
-            # flag below; the return value only reports recompilation need.
-            setter(base, usage_enum)
-        else:
-            base.set_editor_property("used_with_nanite", True)
-        post_edit_change = getattr(base, "post_edit_change", None)
-        if callable(post_edit_change):
-            post_edit_change()
-        saved = unreal.EditorAssetLibrary.save_loaded_asset(
-            base, only_if_is_dirty=False
-        )
-    except Exception:
-        return False
-    checker = (
-        getattr(library, "has_material_usage", None)
-        if library is not None
-        else None
-    )
-    try:
-        api_proven = (
-            checker(base, usage_enum)
-            if callable(checker) and usage_enum is not None
-            else True
-        )
-    except Exception:
-        return False
-    return (
-        saved is True
-        and api_proven is True
-        and property_or_none(base, "used_with_nanite") is True
-    )
-
-
-def enforce_nanite_material_policy(mesh, materials):
-    """Exclude a whole mesh from Nanite when any slot is non-opaque.
-
-    Interchange maps glTF transmission materials to translucent UE materials,
-    including source records whose transmission factor is zero. The source GLB
-    remains byte-pinned; this UE-side policy also preserves genuinely
-    transmissive slots such as appliance glass.
-    """
+def classify_nanite_material_policy(materials):
+    """Describe Nanite eligibility without creating or editing UE assets."""
 
     modes = [effective_material_blend_mode(material) for material in materials]
     allowed = {unreal.BlendMode.BLEND_OPAQUE, unreal.BlendMode.BLEND_MASKED}
-    nonopaque = any(mode not in allowed for mode in modes)
-    usage_proven = (
-        not nonopaque
-        and bool(materials)
-        and all(ensure_nanite_material_usage(material) for material in materials)
-    )
-    desired_enabled = usage_proven
-    settings = property_or_none(mesh, "nanite_settings")
-    settings.set_editor_property("enabled", desired_enabled)
-    mesh.set_editor_property("nanite_settings", settings)
-    require(
-        nanite_enabled(mesh) is desired_enabled,
-        "StaticMesh Nanite state did not match the proven material policy",
-    )
-    saved = unreal.EditorAssetLibrary.save_loaded_asset(
-        mesh, only_if_is_dirty=False
-    )
-    require(saved is True, "StaticMesh Nanite state could not be persisted")
-    require(
-        nanite_enabled(mesh) is desired_enabled,
-        "persisted StaticMesh Nanite state did not match material policy",
-    )
-    return {
-        "material_blend_modes": [blend_mode_name(mode) for mode in modes],
-        # The receipt contract distinguishes opaque/masked eligibility from a
-        # non-opaque exclusion. The commandlet gate requires every eligible
-        # mesh to persist as enabled; failed usage proof therefore fails the
-        # fresh candidate instead of silently accepting an eligible+false pair.
-        "nanite_policy": (
-            "disabled_nonopaque_material" if nonopaque
-            else "eligible_static_opaque"
-        ),
-        "nanite_enabled": nanite_enabled(mesh),
-    }
+    return modes, any(mode not in allowed for mode in modes)
+
+
+def _strict_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def finalize_nanite_policies(namespace, imported):
+    """Apply and verify the Nanite policy once through the native UE bridge.
+
+    Python retains no material or mesh wrappers during the mutation.  The
+    native bridge owns all duplication, reparenting, usage edits, saves, and
+    post-save verification, then returns a compact value-only JSON report.
+    Validate the complete report before updating any receipt inspection so a
+    malformed or partial native result quarantines the whole fresh namespace.
+    """
+
+    items_by_path = {}
+    for item in imported:
+        if item["source_kind"] == "builtin":
+            continue
+        object_path = item.get("object_path")
+        inspection = item.get("inspection")
+        require(isinstance(object_path, str) and object_path,
+                "imported mesh object path is invalid")
+        require(object_path not in items_by_path,
+                "imported mesh object path is duplicated")
+        require(isinstance(inspection, dict) and
+                inspection.get("object_path") == object_path,
+                "imported mesh inspection path mismatch")
+        items_by_path[object_path] = item
+    mesh_paths = sorted(items_by_path)
+
+    bridge = getattr(unreal, "VistaPlayableHomeNaniteLibrary", None)
+    finalize = getattr(bridge, "finalize_nanite_policies", None)
+    require(callable(finalize), "native Nanite policy bridge is unavailable")
+    raw_result = finalize(namespace, mesh_paths)
+    require(isinstance(raw_result, str) and raw_result,
+            "native Nanite policy bridge returned no JSON")
+    try:
+        payload = json.loads(raw_result, object_pairs_hook=_strict_json_object)
+    except (TypeError, ValueError):
+        require(False, "native Nanite policy bridge returned malformed JSON")
+    require(isinstance(payload, dict),
+            "native Nanite policy result root is not an object")
+    require(payload.get("schema_version") == NANITE_POLICY_RESULT_SCHEMA,
+            "native Nanite policy result schema mismatch")
+    require(payload.get("status") == "success",
+            "native Nanite policy bridge did not complete successfully")
+    require(set(payload) == {"schema_version", "status", "results"},
+            "native Nanite policy result fields are invalid")
+    results = payload.get("results")
+    require(isinstance(results, list),
+            "native Nanite policy results are not an array")
+
+    results_by_path = {}
+    for result in results:
+        require(isinstance(result, dict) and set(result) == {
+            "object_path", "material_blend_modes", "nanite_policy",
+            "nanite_enabled",
+        }, "native Nanite policy result fields are invalid")
+        object_path = result.get("object_path")
+        modes = result.get("material_blend_modes")
+        policy = result.get("nanite_policy")
+        enabled = result.get("nanite_enabled")
+        require(isinstance(object_path, str) and object_path in items_by_path,
+                "native Nanite policy result object path is unexpected")
+        require(object_path not in results_by_path,
+                "native Nanite policy result object path is duplicated")
+        require(isinstance(modes, list) and bool(modes) and all(
+            isinstance(mode, str) and re.fullmatch(r"BLEND_[A-Z0-9_]+", mode)
+            for mode in modes
+        ), "native Nanite policy material blend modes are invalid")
+        require(policy in NANITE_POLICIES,
+                "native Nanite policy classification is invalid")
+        require(isinstance(enabled, bool),
+                "native Nanite policy enabled state is invalid")
+        nonopaque = any(
+            mode not in {"BLEND_OPAQUE", "BLEND_MASKED"} for mode in modes
+        )
+        require(
+            (policy == "disabled_nonopaque_material" and nonopaque and not enabled)
+            or (policy == "eligible_static_opaque" and not nonopaque and enabled),
+            "native Nanite policy result is internally inconsistent",
+        )
+        results_by_path[object_path] = result
+
+    require(set(results_by_path) == set(items_by_path),
+            "native Nanite policy results are incomplete")
+    require([result["object_path"] for result in results] == mesh_paths,
+            "native Nanite policy results are not deterministically sorted")
+    for object_path, item in items_by_path.items():
+        result = results_by_path[object_path]
+        item["inspection"].update({
+            "material_blend_modes": list(result["material_blend_modes"]),
+            "nanite_policy": result["nanite_policy"],
+            "nanite_enabled": result["nanite_enabled"],
+        })
 
 
 def verify_runtime(execution):
@@ -452,7 +438,17 @@ def inspect_asset(asset, policies, imported, room_shell=False,
                     "source core PNG/JPEG did not bind an imported Texture2D to the mesh material")
     require(len(materials) == len(slots),
             "StaticMesh has an unresolved material slot")
-    record.update(enforce_nanite_material_policy(asset, materials))
+    modes, nonopaque = classify_nanite_material_policy(materials)
+    record.update({
+        "material_blend_modes": [blend_mode_name(mode) for mode in modes],
+        "nanite_policy": (
+            "disabled_nonopaque_material" if nonopaque
+            else "eligible_static_opaque"
+        ),
+        # This pre-finalization observation is overwritten after every import
+        # and deterministic AssetTools rename has completed.
+        "nanite_enabled": nanite_enabled(asset),
+    })
 
     blocking = bool(set(policies) - {"detail_no_collision", "trigger_only"})
     body_setup = property_or_none(asset, "body_setup")
@@ -615,6 +611,11 @@ def run():
                                        room_shell=asset["asset_id"] in room_bundle_asset_ids))
         require(unreal.EditorAssetLibrary.save_directory(namespace, only_if_is_dirty=False, recursive=True),
                 "failed to save imported namespace")
+        # Drop stale Interchange/rename wrappers before the native bridge edits
+        # material chains and mesh settings.  Python receives only JSON back;
+        # no new UObject wrappers need an explicit purge or post-bridge GC.
+        gc.collect()
+        finalize_nanite_policies(namespace, imported)
         status = "imported_candidate"
     except Exception as exc:
         error = {"type": type(exc).__name__, "message": str(exc)[:512]}

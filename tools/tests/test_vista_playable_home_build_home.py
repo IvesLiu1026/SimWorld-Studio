@@ -115,11 +115,27 @@ class Fixture:
         plugin_descriptor = {
             "FileVersion": 3,
             "FriendlyName": "VISTA Playable Home",
-            "Modules": [{"Name": "VistaPlayableHome", "Type": "Runtime", "LoadingPhase": "Default"}],
+            "Modules": [
+                {"Name": "VistaPlayableHome", "Type": "Runtime", "LoadingPhase": "Default"},
+                {"Name": "VistaPlayableHomeEditor", "Type": "Editor", "LoadingPhase": "Default"},
+            ],
         }
         _write(self.plugin / "VistaPlayableHome.uplugin", build_home.canonical_json(plugin_descriptor))
         _write(self.plugin / "Binaries/Linux/libUnrealEditor-VistaPlayableHome.so", b"compiled plugin")
-        _write(self.plugin / "Binaries/Linux/UnrealEditor.modules", b"{}\n")
+        _write(
+            self.plugin / "Binaries/Linux/libUnrealEditor-VistaPlayableHomeEditor.so",
+            b"compiled editor plugin",
+        )
+        _write(
+            self.plugin / "Binaries/Linux/UnrealEditor.modules",
+            build_home.canonical_json({
+                "BuildId": "fixture",
+                "Modules": {
+                    "VistaPlayableHome": "libUnrealEditor-VistaPlayableHome.so",
+                    "VistaPlayableHomeEditor": "libUnrealEditor-VistaPlayableHomeEditor.so",
+                },
+            }),
+        )
         _write(self.plugin / "Config/DefaultVistaPlayableHome.ini", b"[Vista]\n")
         _write(self.plugin / "README.md", b"synthetic package\n")
 
@@ -418,6 +434,7 @@ def test_materialization_creates_content_only_project_and_matches_contract(fixtu
         "Interchange",
     }
     assert (attempt / "project/Plugins/VistaPlayableHome/Binaries/Linux/libUnrealEditor-VistaPlayableHome.so").is_file()
+    assert (attempt / "project/Plugins/VistaPlayableHome/Binaries/Linux/libUnrealEditor-VistaPlayableHomeEditor.so").is_file()
     assert (attempt / "project/Content/Characters/Mannequins/Meshes/SKM_Manny.uasset").is_file()
     assert (attempt / "project/Config/DefaultInput.ini").read_bytes() == planned.input_ini_raw
     assert (attempt / "contracts/build-plan.json").read_bytes() == planning.canonical_json(fixture.plan)
@@ -978,6 +995,48 @@ def test_run_command_accepts_marker_inside_unreal_log_prefix(tmp_path: pathlib.P
         timeout_s=60,
     )
     assert marker == payload
+
+
+def test_run_command_sanitizes_ambient_vulkan_driver_selectors(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker_prefix = "VISTA_TEST_VULKAN_ENV:"
+    for key in build_home.VULKAN_DRIVER_ENVIRONMENT_KEYS:
+        monkeypatch.setenv(key, f"ambient-{key}")
+    script = (
+        "import json,os; "
+        f"keys={build_home.VULKAN_DRIVER_ENVIRONMENT_KEYS!r}; "
+        f"print({marker_prefix!r}+json.dumps({{k:os.environ.get(k) for k in keys}}, "
+        "sort_keys=True), flush=True)"
+    )
+    sanitized = build_home._run_command(
+        phase="test",
+        argv=[sys.executable, "-c", script],
+        environment={},
+        log_path=tmp_path / "vulkan-sanitized.log",
+        marker_prefix=marker_prefix,
+        timeout_s=60,
+    )
+    assert sanitized == {
+        key: None for key in build_home.VULKAN_DRIVER_ENVIRONMENT_KEYS
+    }
+
+    explicit_icd = "/attempt/contracts/presentation-vulkan-icd.json"
+    selected = build_home._run_command(
+        phase="test",
+        argv=[sys.executable, "-c", script],
+        environment={build_home.PRESENTATION_VULKAN_ICD_ENV: explicit_icd},
+        log_path=tmp_path / "vulkan-selected.log",
+        marker_prefix=marker_prefix,
+        timeout_s=60,
+    )
+    assert selected[build_home.PRESENTATION_VULKAN_ICD_ENV] == explicit_icd
+    assert all(
+        selected[key] is None
+        for key in build_home.VULKAN_DRIVER_ENVIRONMENT_KEYS
+        if key != build_home.PRESENTATION_VULKAN_ICD_ENV
+    )
 
 
 def test_run_command_prefers_exclusive_result_file(tmp_path: pathlib.Path) -> None:
