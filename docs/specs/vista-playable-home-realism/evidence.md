@@ -208,6 +208,30 @@ rustic sofa/table candidates were not silently relabelled as contemporary.
 Resolver-compatible receipts, Blender realization, contact sheets, and human
 visual acceptance remain downstream gates.
 
+## Packaged VSM page-pressure diagnosis
+
+The accepted package attempt at
+`runs/20260816T211647Z-production-r3/ue/package-linux-development/attempt-03-vsm-path-sanitized`
+was inspected through UE 5.7.3's non-Nanite page-area diagnostics. This was a
+runtime-only A/B measurement; it did not mutate the sealed package or promote
+the already-warning-bearing process as renderer evidence.
+
+- At the original high-shadow settings, the player skeletal mesh covered
+  approximately 290--310 VSM pages and the NPC covered 18--33. The fixed
+  marking queue holds 128 jobs, so the player alone could overflow it.
+- `r.Shadow.Virtual.ResolutionLodBiasDirectional=0.5` reduced the observed
+  player footprint to 27 pages while retaining directional VSM shadows.
+- The combined room presentation meshes reached 220 local-light pages at bias
+  `0`; bias `0.5` bounds the equivalent half-resolution footprint near 110
+  pages. Moving-light variants are pinned to the same value for consistency.
+- The package-only coarse-page exclusion remains enabled. It does not disable
+  ordinary pixel-requested VSM shadows.
+
+The source importer now also requires every verified opaque/masked static mesh
+to persist with Nanite enabled instead of accepting an eligible-but-disabled
+receipt. A fresh source attempt and a fresh package process are still required
+before the renderer log gate can accept this mitigation.
+
 ## Validation retained in this milestone
 
 - All integrated realism contract, resolver, audit CLI, Blender forge/bundle,

@@ -3933,9 +3933,12 @@ def _verify_import_receipt(receipt: Mapping[str, Any], execution: Mapping[str, A
             or not isinstance(inspection["nanite_enabled"], bool)
             or (
                 inspection["nanite_policy"] == "eligible_static_opaque"
-                and any(
-                    mode not in {"BLEND_OPAQUE", "BLEND_MASKED"}
-                    for mode in inspection["material_blend_modes"]
+                and (
+                    inspection["nanite_enabled"] is not True
+                    or any(
+                        mode not in {"BLEND_OPAQUE", "BLEND_MASKED"}
+                        for mode in inspection["material_blend_modes"]
+                    )
                 )
             )
             or (

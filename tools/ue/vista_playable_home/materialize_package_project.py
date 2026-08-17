@@ -57,7 +57,7 @@ PINNED_ENGINE_CHANGELIST = 50162420
 PINNED_RENDERER_CONTRACT_COMMIT = "3ce8ef48a2cb0aee881efeff94c3ea3a634fc56c"
 PACKAGE_ENGINE_CONFIG_POLICY = (
     "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration+"
-    "vsm-non-nanite-coarse-page-exclusion/v2"
+    "vsm-non-nanite-page-pressure-hardening/v3"
 )
 PROVEN_RUN_UAT_LOG = Path(
     "/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home/runs/"
@@ -788,10 +788,11 @@ def _canonical_project_descriptor() -> bytes:
 
 def _canonical_engine_ini() -> bytes:
     # Exact closed projection of build_home.py at PINNED_RENDERER_CONTRACT_COMMIT
-    # for realistic_interior_r2 / desktop_high_sm6, plus one package-only UE
-    # 5.7.3 VSM hardening CVar.  UE's non-Nanite marking queue is fixed at 128
-    # jobs per workgroup; excluding non-Nanite meshes from coarse pages avoids
-    # that overflow while retaining directly requested visible shadow pages.
+    # for realistic_interior_r2 / desktop_high_sm6, plus package-only UE 5.7.3
+    # VSM hardening CVars. UE's non-Nanite marking queue is fixed at 128 jobs
+    # per workgroup. Coarse-page exclusion retains directly requested visible
+    # shadow pages, while the half-step LOD biases keep both skeletal characters
+    # and large translucent presentation bundles below that fixed queue capacity.
     # This is configuration, not runtime renderer proof; the packaged
     # observation contract remains a separate post-package gate.
     lines = [
@@ -824,6 +825,10 @@ def _canonical_engine_ini() -> bytes:
         "r.ScreenPercentage=100.000000",
         "r.Streaming.PoolSize=8192",
         "r.Shadow.Virtual.NonNanite.IncludeInCoarsePages=0",
+        "r.Shadow.Virtual.ResolutionLodBiasDirectional=0.500000",
+        "r.Shadow.Virtual.ResolutionLodBiasDirectionalMoving=0.500000",
+        "r.Shadow.Virtual.ResolutionLodBiasLocal=0.500000",
+        "r.Shadow.Virtual.ResolutionLodBiasLocalMoving=0.500000",
         "sg.ViewDistanceQuality=3",
         "sg.AntiAliasingQuality=3",
         "sg.ShadowQuality=3",

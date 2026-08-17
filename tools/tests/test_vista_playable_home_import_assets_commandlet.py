@@ -174,7 +174,26 @@ def test_nanite_usage_is_persisted_on_effective_base_material(commandlet) -> Non
     assert unreal.MaterialEditingLibrary.usage_calls == [
         (base, unreal.MaterialUsage.MATUSAGE_NANITE)
     ]
-    assert unreal.EditorAssetLibrary.saved == [base]
+    assert unreal.EditorAssetLibrary.saved == [base, mesh]
+
+
+def test_initially_disabled_opaque_mesh_is_enabled_after_usage_proof(
+    commandlet,
+) -> None:
+    module, unreal = commandlet
+    material = FakeMaterial(used_with_nanite=False)
+    mesh = FakeStaticMesh(enabled=False)
+
+    result = module.enforce_nanite_material_policy(mesh, [material])
+
+    assert result == {
+        "material_blend_modes": ["BLEND_OPAQUE"],
+        "nanite_policy": "eligible_static_opaque",
+        "nanite_enabled": True,
+    }
+    assert mesh.settings.enabled is True
+    assert material.used_with_nanite is True
+    assert unreal.EditorAssetLibrary.saved == [material, mesh]
 
 
 def test_unproven_opaque_material_fails_safe_to_non_nanite(commandlet) -> None:

@@ -348,30 +348,33 @@ def enforce_nanite_material_policy(mesh, materials):
     modes = [effective_material_blend_mode(material) for material in materials]
     allowed = {unreal.BlendMode.BLEND_OPAQUE, unreal.BlendMode.BLEND_MASKED}
     nonopaque = any(mode not in allowed for mode in modes)
-    initially_enabled = nanite_enabled(mesh)
     usage_proven = (
-        not initially_enabled
-        or nonopaque
-        or all(ensure_nanite_material_usage(material) for material in materials)
+        not nonopaque
+        and bool(materials)
+        and all(ensure_nanite_material_usage(material) for material in materials)
     )
-    should_disable = initially_enabled and (nonopaque or not usage_proven)
-    if should_disable:
-        settings = property_or_none(mesh, "nanite_settings")
-        settings.set_editor_property("enabled", False)
-        mesh.set_editor_property("nanite_settings", settings)
-        require(nanite_enabled(mesh) is False,
-                "StaticMesh retained Nanite without compatible material usage")
-        unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
+    desired_enabled = usage_proven
+    settings = property_or_none(mesh, "nanite_settings")
+    settings.set_editor_property("enabled", desired_enabled)
+    mesh.set_editor_property("nanite_settings", settings)
     require(
-        nanite_enabled(mesh) is False or usage_proven,
-        "Nanite StaticMesh material usage was not proven",
+        nanite_enabled(mesh) is desired_enabled,
+        "StaticMesh Nanite state did not match the proven material policy",
+    )
+    saved = unreal.EditorAssetLibrary.save_loaded_asset(
+        mesh, only_if_is_dirty=False
+    )
+    require(saved is True, "StaticMesh Nanite state could not be persisted")
+    require(
+        nanite_enabled(mesh) is desired_enabled,
+        "persisted StaticMesh Nanite state did not match material policy",
     )
     return {
         "material_blend_modes": [blend_mode_name(mode) for mode in modes],
-        # The receipt contract records opaque/masked eligibility separately
-        # from the effective enabled bit.  Therefore an opaque mesh whose base
-        # usage could not be proven remains deterministically represented by
-        # the already-accepted ``eligible_static_opaque`` + ``False`` pair.
+        # The receipt contract distinguishes opaque/masked eligibility from a
+        # non-opaque exclusion. The commandlet gate requires every eligible
+        # mesh to persist as enabled; failed usage proof therefore fails the
+        # fresh candidate instead of silently accepting an eligible+false pair.
         "nanite_policy": (
             "disabled_nonopaque_material" if nonopaque
             else "eligible_static_opaque"
@@ -642,8 +645,18 @@ def run():
                 for item in imported
             ),
             "nanite_material_policy_verified": status == "imported_candidate" and all(
-                item["inspection"]["nanite_policy"] != "disabled_nonopaque_material" or
-                item["inspection"]["nanite_enabled"] is False
+                (
+                    item["inspection"]["nanite_policy"] == "not_applicable"
+                    and item["inspection"]["nanite_enabled"] is None
+                )
+                or (
+                    item["inspection"]["nanite_policy"] == "eligible_static_opaque"
+                    and item["inspection"]["nanite_enabled"] is True
+                )
+                or (
+                    item["inspection"]["nanite_policy"] == "disabled_nonopaque_material"
+                    and item["inspection"]["nanite_enabled"] is False
+                )
                 for item in imported
             ),
             "quarantined": status != "imported_candidate",

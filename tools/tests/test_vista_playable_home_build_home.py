@@ -625,6 +625,12 @@ def test_import_receipt_enforces_nonopaque_nanite_exclusion(fixture: Fixture) ->
     receipt = _successful_import_receipt(planned)
     imported = next(item for item in receipt["assets"] if item["source_kind"] != "builtin")
     inspection = imported["inspection"]
+
+    inspection["nanite_enabled"] = False
+    with pytest.raises(build_home.BuildHomeError, match="Nanite/material policy differs"):
+        build_home._verify_import_receipt(receipt, planned.execution, planned.plan)
+
+    inspection["nanite_enabled"] = True
     inspection["material_blend_modes"] = ["BLEND_TRANSLUCENT"]
     inspection["nanite_policy"] = "disabled_nonopaque_material"
     inspection["nanite_enabled"] = False

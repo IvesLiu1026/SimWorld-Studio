@@ -110,6 +110,10 @@ r.Lumen.HardwareRayTracing=0
 r.ScreenPercentage=100.000000
 r.Streaming.PoolSize=8192
 r.Shadow.Virtual.NonNanite.IncludeInCoarsePages=0
+r.Shadow.Virtual.ResolutionLodBiasDirectional=0.500000
+r.Shadow.Virtual.ResolutionLodBiasDirectionalMoving=0.500000
+r.Shadow.Virtual.ResolutionLodBiasLocal=0.500000
+r.Shadow.Virtual.ResolutionLodBiasLocalMoving=0.500000
 sg.ViewDistanceQuality=3
 sg.AntiAliasingQuality=3
 sg.ShadowQuality=3
@@ -355,12 +359,12 @@ def test_dry_run_is_deterministic_zero_write_and_token_free(
         "sha256": _sha256(fixture.source_engine),
         "transformation": (
             "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration+"
-            "vsm-non-nanite-coarse-page-exclusion/v2"
+            "vsm-non-nanite-page-pressure-hardening/v3"
         ),
     }
     assert first.report["policy"]["default_engine"] == (
         "3ce8-linux-targeted-rhis-sm6-plus-token-free-afs-regeneration+"
-        "vsm-non-nanite-coarse-page-exclusion/v2"
+        "vsm-non-nanite-page-pressure-hardening/v3"
     )
     assert first.report["policy"]["destination_containment"] == (
         "plan-pinned-parent+exclusive-cooperative-lock+private-staging+"
@@ -377,6 +381,10 @@ def test_generated_engine_config_is_exact_linux_sm6_plus_token_free_afs() -> Non
         b"r.ReflectionMethod=1",
         b"r.Shadow.Virtual.Enable=1",
         b"r.Shadow.Virtual.NonNanite.IncludeInCoarsePages=0",
+        b"r.Shadow.Virtual.ResolutionLodBiasDirectional=0.500000",
+        b"r.Shadow.Virtual.ResolutionLodBiasDirectionalMoving=0.500000",
+        b"r.Shadow.Virtual.ResolutionLodBiasLocal=0.500000",
+        b"r.Shadow.Virtual.ResolutionLodBiasLocalMoving=0.500000",
         b"r.AntiAliasingMethod=4",
         b"r.Nanite.ProjectEnabled=True",
         b"+TargetedRHIs=SF_VULKAN_SM6",
