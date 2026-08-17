@@ -1,11 +1,106 @@
 # Evidence: VISTA Playable Home Realistic Interior
 
-Status: source implementation, Blender CPU smoke, local-only hero audit, and
-host-side Unreal presentation planning are complete; no r2 visual, Unreal
-runtime, gameplay, performance, package, or remote-stream acceptance is
-claimed.
+Status: the r2 Unreal source build, Linux Development package, NullRHI package
+smoke, live Vulkan renderer observation, local WASD/door interaction, and
+Sunshine application cutover are complete.  Remote video is ready; Moonlight
+keyboard, mouse, and gamepad input remains blocked by root-only device
+permissions.  Performance and final human room promotion are not claimed.
 
-Updated: 2026-08-16
+Updated: 2026-08-17
+
+## Accepted production package and live renderer
+
+The accepted append-only run root is:
+
+`/mnt/NAS2/yhliu/SimWorldStudio/vista-playable-home-realism/runs/20260816T211647Z-production-r3`
+
+The complete source-to-package chain is bound to pushed source commit
+`d80aa78f7681e378a051528ec55b7cfdbe39f64d`.
+
+- Accepted source Unreal attempt:
+  `ue/attempt-12-hidden-nanite-shadow-retry`.
+- Source build-result SHA-256:
+  `8a20d83b079cea766f97d31b2225b87c87a35df895fb53c7d66017f0c0b8db0a`.
+- Source runtime-acceptance SHA-256:
+  `12e37e0df21352c7317ecc7fbddb8746e7ed86ab8341ab138cc7f07d13062514`.
+- Accepted package attempt:
+  `ue/package-linux-development/attempt-08-absolute-preflight-v2`.
+- Package-receipt SHA-256:
+  `7e3482f3207c0b640afae539c5543c49498db8d9396abdbbde26b3534874e9ca`.
+- Bounded packaged-smoke SHA-256:
+  `0e5023786be206d7516fd8c0d17b99a6488656052dd96dcde9092cc982d0b596`.
+- Packaged profile SHA-256:
+  `8e083909aeb0b3c1e4f8aaa60caaece35d214ca9bd029e6fcdc6962a85db052c`.
+- Live renderer-acceptance SHA-256:
+  `7db0196999958619f425921fe79b4c5642cec8ac23c0f3d4523bb19072f3a1f2`.
+
+The package receipt verifies a 34-file, 1,641,738,131-byte archive with tree
+SHA-256
+`c915987baf50fe20540a38df4b766fc82398fd825b75e1d3eca8ff871d3983f6`.
+It contains the 263,998,640-byte packaged ELF and the 798,727,093-byte PAK,
+binds the exact r1 map and r2 visual profile, and records zero unexempted
+credential matches.  The bounded smoke launched the sealed ELF directly,
+proved the exact loopback listener owner, terminated only its owned process
+group, and released port 55633.
+
+The live packaged process ran on display `:119`, GPU 0, 1920x1080 at 60 FPS,
+and loopback port 55630.  Renderer acceptance observed the requested Vulkan
+SM6, Lumen, VSM, TSR, Nanite, exposure, screen-percentage, and scalability
+values through the closed `renderer_status` protocol.  It also proved the
+exact packaged PID/listener identity and found no `missing bUsedWithNanite`,
+`Default Material will be used`, or `Non-Nanite Marking Job Queue overflow`
+pattern in the sealed log prefix.  GPU 1 and its pre-existing Unreal process
+were not touched.
+
+Two retained 1920x1080 framebuffer observations are:
+
+- Entry-hall spawn view:
+  `game-runtime/attempt-20260817T044835.551629Z-402745/screenshots/renderer-final.png`,
+  SHA-256
+  `9108c35eff483fd38cbe1f57af573eeec2fb74b6c75249c23005b1a4c2ed0b66`.
+- Open-door/interactable-room view:
+  `game-runtime/attempt-20260817T044835.551629Z-402745/screenshots/renderer-restored.png`,
+  SHA-256
+  `51623693baf93795dc70ca56e2dd8c1c391ee528a204782298d43162585d9057`.
+
+Local X11 injection verified that legacy input mappings reach the packaged
+game: `W` moved the character, `E` opened the blue door, the character crossed
+the doorway, and the HUD exposed `Inspect Ladder` and `Inspect Desk` prompts.
+These images are retained operational observations, not substitutes for the
+typed source gameplay-acceptance receipt or final human visual promotion.
+
+Failed package attempts remain append-only and are not promoted:
+
+- attempt 05 cooked all 980 packages but stage selected the non-executable
+  `/home/yhliu/.local/bin/env` from the inherited PATH;
+- attempt 06 stopped before Unreal because the sanitized PATH could not find
+  the preflight `uv` command;
+- attempt 07 stopped before Unreal on an inline preflight syntax error;
+- attempt 08 used an absolute pinned Python interpreter and passed the same
+  preflight before executing RunUAT with `PATH=/usr/bin:/bin`.
+
+## Sunshine and Tailnet cutover
+
+`/home/yhliu/.config/sunshine/apps.json` now installs `VISTA World` against the
+accepted attempt-08 packaged profile and the current worktree launcher.  The
+previous file is retained at
+`apps.json.vista-backup-20260817T050919Z`.  `vista-sunshine.service` is active
+and enabled on display `:119`; Sunshine reports X11 capture, a 1920x1080
+screen, and working H.264/HEVC NVENC.  Tailscale is online at
+`100.114.80.121` (`server.tailaf81e.ts.net`), and Sunshine listens on the
+tailnet address at ports 47984, 47989, 47990, and 48010.
+
+The manual renderer-validation runtime was stopped cleanly after capture, so
+port 55630 and the package launch lock are free.  Selecting `VISTA World` in
+Moonlight is now the intended owner of the next packaged runtime.
+
+Remote control is not accepted: `/dev/uinput` and `/dev/uhid` are still
+`root:root` mode `0600`, no ACL grants `yhliu` access, and passwordless sudo is
+unavailable.  Fresh Sunshine startup logs therefore report permission denied
+for the virtual mouse, virtual keyboard, and all gamepads.  An administrator
+must grant persistent device access before the Moonlight control gate can be
+closed.  Xvfb `:119` and Openbox are also retained in tmux rather than user
+systemd units, so reboot persistence remains a separate operational task.
 
 ## Source milestone
 
@@ -229,8 +324,9 @@ the already-warning-bearing process as renderer evidence.
 
 The source importer now also requires every verified opaque/masked static mesh
 to persist with Nanite enabled instead of accepting an eligible-but-disabled
-receipt. A fresh source attempt and a fresh package process are still required
-before the renderer log gate can accept this mitigation.
+receipt.  Attempt 12 delegated room shadows to hidden Nanite r1 authority,
+attempt 08 packaged that exact source, and the accepted live renderer receipt
+closed the formerly pending log gate without the queue-overflow warning.
 
 ## Validation retained in this milestone
 
@@ -240,6 +336,12 @@ before the renderer log gate can accept this mitigation.
 - Unreal r2 profile/build wiring: 43 focused and r1 regression tests passed.
 - Blender forge plus legacy Blender contract: 19 tests passed.
 - Existing r1 Unreal/build/review/package regression: 60 tests passed.
+- Final VSM delegation, direct packaged-ELF smoke, and NAS filesystem-identity
+  hardening: 88 tests plus 3 subprocess subtests passed before commit
+  `d80aa78f` was pushed.
+- Fresh source runtime acceptance, package receipt, bounded packaged smoke,
+  and live renderer acceptance all returned `accepted` in the production-r3
+  run identified above.
 
 ## Open acceptance gates
 
@@ -253,12 +355,17 @@ before the renderer log gate can accept this mitigation.
   inspected mug GLB exposes base colour only, not complete hero PBR semantics.
   The retained Poly Haven stool/shelf/box sources are 1K.  Neither closes the
   2K hero-furniture gap.
-- UE import, presentation composition, save/reload, Lumen/CVar observation,
-  six 1920x1080 captures, packaged gameplay, performance, and
-  Sunshine/Moonlight input remain unrun.
-- The root filesystem has about 139 MiB free and both A6000 GPUs have existing
-  Unreal work.  UE/UAT launch remains blocked until the host has a safe root
-  margin and GPU 0 can be used without disturbing accepted r1; GPU 1 remains
-  forbidden.  All r2 build/cache/output paths are specified as NAS-only.
-- The accepted r1 package and live runtime remain the rollback target and were
-  not restarted or modified during this milestone.
+- UE import, presentation composition, save/reload, package construction, and
+  Lumen/CVar observation are now accepted.  A complete six-shot human review,
+  formal packaged gameplay regression, and the fixed 60-second performance
+  traversal remain open.
+- Local X11 movement and one door interaction passed, but Moonlight input is
+  still blocked by root-only `/dev/uinput` and `/dev/uhid`.  Remote video and
+  the package launch entry are ready; remote control must not be claimed.
+- The accepted r1 evidence remains a rollback reference.  The r2 package is
+  now the installed `VISTA World` entry, while GPU 1 and production port 8000
+  remain untouched.  All r2 build/cache/output paths stayed on NAS.
+- Transient camera retraction in tight corners and against desks was visible
+  during local traversal and recovered after moving away.  A formal doorway,
+  wall, and furniture-collision camera traversal is still required before
+  final GTA-like camera-quality promotion.

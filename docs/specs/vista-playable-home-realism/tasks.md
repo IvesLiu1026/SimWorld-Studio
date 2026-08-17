@@ -1,7 +1,7 @@
 # Tasks: VISTA Playable Home Realistic Interior
 
 Status: Implementation in progress
-Updated: 2026-08-16
+Updated: 2026-08-17
 Depends on: requirements.md, design.md
 
 ## Rules
@@ -131,7 +131,7 @@ Depends on: requirements.md, design.md
     files.  Resolver-native per-asset receipts, Blender contact sheets, and
     human promotion decisions remain open, so T9 is not yet marked complete.
 
-- [ ] T10. Separate presentation from semantic collision/gameplay actors
+- [x] T10. Separate presentation from semantic collision/gameplay actors
   - Files: tools/ue/vista_playable_home/planning.py,
     import_assets_commandlet.py, compose_home_commandlet.py, focused Unreal
     planning/composition tests
@@ -140,14 +140,14 @@ Depends on: requirements.md, design.md
   - Validation: visible r2 components have disabled or explicitly allowlisted
     collision; hidden r1 proxies retain collision/navigation; semantic parent,
     tags, affordances, and event targets are unchanged after save/reload.
-  - Current evidence: the source path now imports one exact presentation
-    bundle per room, composes it as `NoCollision`, hides but preserves the
-    blocking r1 authority, and requires closed post-reload observations for
-    object identity, transform, material slots, collision, attachment, and
-    authority state.  Exact attempt-05 inputs pass the host plan; actual UE 5.7
-    import/save/reload observation remains open, so this task is not promoted.
+  - Current evidence: accepted UE attempt 12 imported the exact presentation
+    bundles, composed visible `NoCollision` meshes, delegated shadows and
+    collision to hidden Nanite r1 authority, and passed closed save/reload
+    observations for identity, transform, materials, attachment, tags,
+    collision, shadow flags, and semantic authority.  Accepted package attempt
+    08 and its live renderer receipt bind the same source result.
 
-- [ ] T11. Add and observe the high-quality Unreal renderer profile
+- [x] T11. Add and observe the high-quality Unreal renderer profile
   - Files: tools/ue/vista_playable_home/build_home.py, planning.py,
     compose_home_commandlet.py, package/runtime receipt code, focused tests
   - Depends on: T2
@@ -155,9 +155,11 @@ Depends on: requirements.md, design.md
   - Validation: generated config and packaged-runtime evidence agree on Vulkan
     desktop deferred/SM6, Lumen GI/reflections, VSM, eligible Nanite, TSR,
     extended luminance range, pre-exposure, scalability, and screen percentage.
-  - Current evidence: the pinned profile compiles the requested Engine INI and
-    a renderer observation contract.  Receipts truthfully remain
-    `runtime_proof=false` and runtime observation is pending.
+  - Current evidence: renderer receipt
+    `7db0196999958619f425921fe79b4c5642cec8ac23c0f3d4523bb19072f3a1f2`
+    observed and accepted the live packaged Vulkan SM6/Lumen/VSM/TSR/Nanite
+    profile at 1920x1080@60.  It proved the exact packaged process/listener and
+    found no prohibited Nanite/default-material/VSM queue pattern.
 
 - [ ] T12. Replace validation point lights with the r2 physical lighting rig
   - Files: visual profile, planning.py, compose_home_commandlet.py, focused tests
@@ -181,8 +183,10 @@ Depends on: requirements.md, design.md
     default when the r2 profile is absent.
   - Current evidence: opt-in source wiring, closed-range validation, 220 cm
     boom, 80 degree FOV, immediate collision retraction, damped clear-line
-    recovery, and the unchanged r1 default are implemented.  UE compilation,
-    package flag propagation, and doorway/wall runtime traversal remain open.
+    recovery, and the unchanged r1 default are implemented.  UE compilation
+    and package flag propagation are now observed.  Local doorway traversal
+    recovered correctly, but tight corner/desk approaches produced transient
+    severe retraction; the fixed formal camera traversal remains open.
 
 - [ ] T14. Execute and seal the first living-room hero-shot attempt
   - Files: no generated Git content; one fresh append-only Blender/UE attempt
@@ -225,6 +229,13 @@ Depends on: requirements.md, design.md
   - Validation: immutable Development package re-verifies after readiness;
     Moonlight/browser shows advancing packaged-game frames; remote input is
     proven or the existing device-permission blocker remains explicit.
+  - Current evidence: package receipt, bounded package smoke, live renderer
+    acceptance, local framebuffer capture, WASD movement, and one `E` door
+    traversal passed.  Sunshine is active/enabled and `VISTA World` now points
+    at the accepted attempt-08 profile on Tailnet `100.114.80.121`.  T18 stays
+    open because no external Moonlight client session was captured and
+    `/dev/uinput` plus `/dev/uhid` remain root-only mode `0600`, so remote
+    keyboard/mouse/gamepad control is unavailable.
 
 - [ ] T19. Obtain final r2 room-promotion decision and plan scale-out
   - Files: requirements/design/tasks/evidence status updates
@@ -257,8 +268,9 @@ Depends on: requirements.md, design.md
 
 - This task list creates a reviewable vertical slice, not an automatic six-room
   AAA claim.
-- The current live r1 runtime and Sunshine process remain untouched during the
-  spec phase.
+- The accepted r2 package is now installed as Sunshine's `VISTA World` entry;
+  the manual validation process was stopped before cutover.  GPU 1 and
+  production port 8000 remain untouched.
 - The user approved requirements, design, and tasks on 2026-08-16 with
   “批准”, then opened the external 2K/4K and non-GPU-1 Unreal validation gate
   with “允許！”.  Purchase, credentials, paid APIs, public deployment, GPU 1,

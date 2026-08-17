@@ -1,12 +1,12 @@
 # Active Work: VISTA Playable Home Realistic Interior
 
-Updated: 2026-08-16
+Updated: 2026-08-17
 
 ## Ownership
 
 - Branch: codex/vista-playable-home-realism
 - Worktree: /home/yhliu/SimWorld-Studio-worktrees/vista-playable-home-realism
-- Base commit: 205ed1c59410621ec1037a528936e36a43b61a31
+- Accepted implementation commit: d80aa78f7681e378a051528ec55b7cfdbe39f64d
 - Current owner: /root (implementation integrator)
 - Integrator-owned paths:
   docs/specs/vista-playable-home-realism/**
@@ -37,13 +37,16 @@ Updated: 2026-08-16
 
 ## Runtime Ownership
 
-- `/root` owns the approved r2 validation lifecycle.  No GPU launch is active:
-  GPU 1 remains forbidden, and GPU 0 is shared by accepted r1/Sunshine rather
-  than idle.
-- Do not restart, replace, or stop the accepted r1 packaged runtime.
+- `/root` completed the approved r2 validation lifecycle.  The manual r2
+  renderer-validation process is stopped, port 55630 is free, and the next
+  launch is owned by the Sunshine `VISTA World` entry.
 - Do not touch GPU 1 or its existing Unreal processes.
-- Do not change Sunshine, Tailscale, production port 8000, or the r1 package
-  pointer during this phase.
+- `vista-sunshine.service` is active and enabled on display `:119`, GPU 0, and
+  tailnet address `100.114.80.121`.  Do not replace its accepted package
+  profile without a fresh package and renderer receipt.
+- Production port 8000 remains out of scope and unchanged.
+- Xvfb `:119` and Openbox currently remain tmux-owned; coordinate with the
+  runtime owner before changing either process.
 
 ## External-State Gates
 
@@ -75,7 +78,16 @@ Updated: 2026-08-16
   smoke-only and not visually accepted.  The retained local hero audit is
   `asset-audit/attempt-01-hssd-hero-gap` and correctly reports incomplete
   coverage without a promotion gate.
-- The accepted r1 live runtime remains untouched.  The r2 GPU run is now
-  authorized but has not started.  Root filesystem headroom (about 243 MiB)
-  and the absence of an idle legal GPU block safe UAT/capture execution; all
-  future HOME/TMP/XDG/DDC/output paths must be NAS-only.
+- The r2 source attempt, Linux Development package, bounded package smoke, and
+  live Vulkan renderer observation are accepted under
+  `runs/20260816T211647Z-production-r3`.  The accepted package attempt is
+  `ue/package-linux-development/attempt-08-absolute-preflight-v2`; package and
+  renderer receipt SHA-256 values are recorded in `evidence.md`.
+- Local packaged WASD and `E` door interaction were observed on `:119`.  The
+  validation runtime was then stopped cleanly before Sunshine cutover.
+- Sunshine now points `VISTA World` at the accepted packaged profile and has a
+  timestamped pre-cutover backup.  Remote video/NVENC is ready, but
+  `/dev/uinput` and `/dev/uhid` remain `root:root` mode `0600`; administrator
+  device access is the explicit Moonlight input blocker.
+- Root filesystem pressure was avoided by keeping HOME/TMP/XDG/DDC/build and
+  generated evidence on NAS.  GPU 1 and production port 8000 were not touched.
