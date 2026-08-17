@@ -53,7 +53,13 @@ MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_RUNTIME_LOG_PREFIX_BYTES = 64 * 1024 * 1024
 PACKAGED_GAME_LOG_NAME = "packaged-game.log"
-RUNTIME_LOG_GATE_POLICY = "simworld.vista.playable-home-renderer-log-gate/v1"
+RUNTIME_LOG_GATE_POLICY = "simworld.vista.playable-home-renderer-log-gate/v2"
+RUNTIME_ATTEMPT_IDENTITY_POLICY = (
+    "simworld.vista.playable-home-runtime-attempt-filesystem-identity/v1"
+)
+PRIVATE_RUNTIME_DIRECTORY_MODE = 0o700
+PRIVATE_RUNTIME_FILE_MODE = 0o600
+RUNTIME_ATTEMPT_DIRECTORY_NLINKS = frozenset({1, 2})
 PROHIBITED_RUNTIME_LOG_PATTERNS = (
     "missing bUsedWithNanite",
     "Default Material will be used",
@@ -99,6 +105,25 @@ class RendererAcceptanceConfig:
 
 
 @dataclass(frozen=True)
+class RuntimeFilesystemIdentity:
+    path: Path
+    owner_uid: int
+    owner_gid: int
+    mode: int
+    device: int
+    inode: int
+    nlink: int
+
+
+@dataclass(frozen=True)
+class RuntimeAttemptIdentity:
+    directory: RuntimeFilesystemIdentity
+    state: RuntimeFilesystemIdentity
+    launch_plan: RuntimeFilesystemIdentity
+    packaged_game_log: RuntimeFilesystemIdentity
+
+
+@dataclass(frozen=True)
 class PackagedRuntimeBinding:
     package_attempt: Path
     state_path: Path
@@ -106,6 +131,7 @@ class PackagedRuntimeBinding:
     launch_plan_path: Path
     launch_plan_sha256: str
     port: int
+    attempt_identity: RuntimeAttemptIdentity
 
 
 @dataclass(frozen=True)
@@ -161,8 +187,10 @@ class RuntimeLogObservation:
     prefix_bytes: int
     mode: int
     owner_uid: int
+    owner_gid: int
     device: int
     inode: int
+    nlink: int
 
 
 Exchange = Callable[[Mapping[str, Any], float, int], tuple[bytes, Any]]
@@ -266,19 +294,29 @@ def observe_packaged_runtime_log(inputs: RendererInputs) -> RuntimeLogObservatio
     any renderer degradation signature are rejected.
     """
 
-    path = inputs.runtime_binding.state_path.parent / PACKAGED_GAME_LOG_NAME
+    attempt_identity = _seal_runtime_attempt_identity(
+        inputs.runtime_binding.state_path,
+        inputs.runtime_binding.launch_plan_path,
+    )
+    if attempt_identity != inputs.runtime_binding.attempt_identity:
+        _fail(
+            "RUNTIME_ATTEMPT_IDENTITY_CHANGED",
+            "package runtime attempt filesystem identity changed before log sealing",
+        )
+    expected_log = attempt_identity.packaged_game_log
+    path = expected_log.path
     try:
         before = os.lstat(path)
         if (
             stat.S_ISLNK(before.st_mode)
             or not stat.S_ISREG(before.st_mode)
             or before.st_nlink != 1
-            or stat.S_IMODE(before.st_mode) != 0o600
-            or before.st_uid != inputs.runtime_effective_uid
+            or stat.S_IMODE(before.st_mode) != PRIVATE_RUNTIME_FILE_MODE
+            or _runtime_filesystem_identity(path, before) != expected_log
         ):
             _fail(
                 "RUNTIME_LOG_IDENTITY_INVALID",
-                "packaged game log ownership, type, or mode differs",
+                "packaged game log attempt-local identity differs",
             )
         prefix_bytes = before.st_size
         if not 0 < prefix_bytes <= MAX_RUNTIME_LOG_PREFIX_BYTES:
@@ -299,8 +337,9 @@ def observe_packaged_runtime_log(inputs: RendererInputs) -> RuntimeLogObservatio
                 or opened.st_ino != before.st_ino
                 or opened.st_size < prefix_bytes
                 or opened.st_uid != before.st_uid
+                or opened.st_gid != before.st_gid
                 or opened.st_nlink != 1
-                or stat.S_IMODE(opened.st_mode) != 0o600
+                or stat.S_IMODE(opened.st_mode) != PRIVATE_RUNTIME_FILE_MODE
             ):
                 _fail(
                     "RUNTIME_LOG_CHANGED",
@@ -331,9 +370,10 @@ def observe_packaged_runtime_log(inputs: RendererInputs) -> RuntimeLogObservatio
             or observed.st_ino != before.st_ino
             or observed.st_size < prefix_bytes
             or observed.st_uid != before.st_uid
+            or observed.st_gid != before.st_gid
             or observed.st_nlink != 1
             or not stat.S_ISREG(observed.st_mode)
-            or stat.S_IMODE(observed.st_mode) != 0o600
+            or stat.S_IMODE(observed.st_mode) != PRIVATE_RUNTIME_FILE_MODE
         ):
             _fail(
                 "RUNTIME_LOG_CHANGED",
@@ -353,14 +393,25 @@ def observe_packaged_runtime_log(inputs: RendererInputs) -> RuntimeLogObservatio
             "packaged game log contains prohibited renderer degradation: "
             + matches[0],
         )
+    final_attempt_identity = _seal_runtime_attempt_identity(
+        inputs.runtime_binding.state_path,
+        inputs.runtime_binding.launch_plan_path,
+    )
+    if final_attempt_identity != attempt_identity:
+        _fail(
+            "RUNTIME_ATTEMPT_IDENTITY_CHANGED",
+            "package runtime attempt filesystem identity changed while sealing log",
+        )
     return RuntimeLogObservation(
         path=path,
         prefix_sha256=sha256_bytes(raw),
         prefix_bytes=prefix_bytes,
         mode=stat.S_IMODE(before.st_mode),
         owner_uid=before.st_uid,
+        owner_gid=before.st_gid,
         device=before.st_dev,
         inode=before.st_ino,
+        nlink=before.st_nlink,
     )
 
 
@@ -431,6 +482,229 @@ def _contained(path: Path, root: Path, label: str) -> None:
         raise RendererAcceptanceError(
             "PATH_ESCAPE_REFUSED", f"{label} escaped the build attempt"
         ) from exc
+
+
+def _runtime_metadata_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return the immutable filesystem identity used for live runtime files.
+
+    Size and timestamps are intentionally absent because Unreal appends to the
+    packaged log while renderer acceptance is running.  Type, ownership,
+    permissions, link count, device, and inode must remain exact.
+    """
+
+    return (
+        stat.S_IFMT(metadata.st_mode),
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_uid,
+        metadata.st_gid,
+        stat.S_IMODE(metadata.st_mode),
+        metadata.st_nlink,
+    )
+
+
+def _runtime_filesystem_identity(
+    path: Path, metadata: os.stat_result
+) -> RuntimeFilesystemIdentity:
+    return RuntimeFilesystemIdentity(
+        path=path,
+        owner_uid=metadata.st_uid,
+        owner_gid=metadata.st_gid,
+        mode=stat.S_IMODE(metadata.st_mode),
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        nlink=metadata.st_nlink,
+    )
+
+
+def _runtime_identity_proof(
+    identity: RuntimeFilesystemIdentity,
+) -> dict[str, Any]:
+    return {
+        "path": str(identity.path),
+        "owner_uid": identity.owner_uid,
+        "owner_gid": identity.owner_gid,
+        "mode": identity.mode,
+        "device": identity.device,
+        "inode": identity.inode,
+        "nlink": identity.nlink,
+    }
+
+
+def _seal_runtime_attempt_child(
+    directory_descriptor: int,
+    directory: RuntimeFilesystemIdentity,
+    name: str,
+    label: str,
+) -> RuntimeFilesystemIdentity:
+    path = directory.path / name
+    invalid_code = (
+        "RUNTIME_LOG_IDENTITY_INVALID"
+        if name == PACKAGED_GAME_LOG_NAME
+        else "RUNTIME_ATTEMPT_IDENTITY_INVALID"
+    )
+    changed_code = (
+        "RUNTIME_LOG_CHANGED"
+        if name == PACKAGED_GAME_LOG_NAME
+        else "RUNTIME_ATTEMPT_IDENTITY_CHANGED"
+    )
+    try:
+        before = os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != PRIVATE_RUNTIME_FILE_MODE
+        ):
+            _fail(
+                invalid_code,
+                f"{label} must be one private regular file",
+            )
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptor,
+        )
+        try:
+            opened = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        after = os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+    except RendererAcceptanceError:
+        raise
+    except OSError as exc:
+        raise RendererAcceptanceError(
+            invalid_code,
+            f"could not seal {label}",
+        ) from exc
+    if (
+        _runtime_metadata_identity(before) != _runtime_metadata_identity(opened)
+        or _runtime_metadata_identity(before) != _runtime_metadata_identity(after)
+    ):
+        _fail(
+            changed_code,
+            f"{label} identity changed while opening",
+        )
+    canonical = _canonical_existing(path, label)
+    if canonical != path or canonical.parent != directory.path:
+        _fail(
+            invalid_code,
+            f"{label} is not an attempt-local direct child",
+        )
+    return _runtime_filesystem_identity(path, before)
+
+
+def _seal_runtime_attempt_identity(
+    state_path: Path,
+    launch_plan_path: Path,
+) -> RuntimeAttemptIdentity:
+    attempt_path = state_path.parent
+    if (
+        state_path.name != "runtime-state.json"
+        or launch_plan_path.name != "launch-plan.json"
+        or launch_plan_path.parent != attempt_path
+    ):
+        _fail(
+            "RUNTIME_ATTEMPT_IDENTITY_INVALID",
+            "runtime state and launch plan are not attempt-local direct children",
+        )
+    canonical_attempt = _canonical_existing(
+        attempt_path, "package runtime attempt", directory=True
+    )
+    if canonical_attempt != attempt_path:
+        _fail(
+            "RUNTIME_ATTEMPT_IDENTITY_INVALID",
+            "package runtime attempt path identity differs",
+        )
+    try:
+        before = os.lstat(attempt_path)
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or stat.S_IMODE(before.st_mode) != PRIVATE_RUNTIME_DIRECTORY_MODE
+            or before.st_nlink not in RUNTIME_ATTEMPT_DIRECTORY_NLINKS
+        ):
+            _fail(
+                "RUNTIME_ATTEMPT_IDENTITY_INVALID",
+                "package runtime attempt must be one private directory",
+            )
+        descriptor = os.open(
+            attempt_path,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened = os.fstat(descriptor)
+            directory = _runtime_filesystem_identity(attempt_path, opened)
+            state = _seal_runtime_attempt_child(
+                descriptor, directory, "runtime-state.json", "package runtime state"
+            )
+            launch_plan = _seal_runtime_attempt_child(
+                descriptor,
+                directory,
+                "launch-plan.json",
+                "packaged launch plan",
+            )
+            packaged_game_log = _seal_runtime_attempt_child(
+                descriptor,
+                directory,
+                PACKAGED_GAME_LOG_NAME,
+                "packaged game log",
+            )
+        finally:
+            os.close(descriptor)
+        after = os.lstat(attempt_path)
+    except RendererAcceptanceError:
+        raise
+    except OSError as exc:
+        raise RendererAcceptanceError(
+            "RUNTIME_ATTEMPT_IDENTITY_INVALID",
+            "could not seal package runtime attempt",
+        ) from exc
+    if (
+        _runtime_metadata_identity(before) != _runtime_metadata_identity(opened)
+        or _runtime_metadata_identity(before) != _runtime_metadata_identity(after)
+    ):
+        _fail(
+            "RUNTIME_ATTEMPT_IDENTITY_CHANGED",
+            "package runtime attempt identity changed while opening",
+        )
+    members = (state, launch_plan, packaged_game_log)
+    if any(
+        member.owner_uid != directory.owner_uid
+        or member.owner_gid != directory.owner_gid
+        or member.device != directory.device
+        for member in members
+    ):
+        _fail(
+            "RUNTIME_ATTEMPT_OWNER_INVALID",
+            "runtime state, launch plan, log, and parent owner must agree",
+        )
+    node_identities = {
+        (directory.device, directory.inode),
+        *((member.device, member.inode) for member in members),
+    }
+    if len(node_identities) != len(members) + 1:
+        _fail(
+            "RUNTIME_ATTEMPT_IDENTITY_INVALID",
+            "runtime parent, state, launch plan, and log must have distinct inodes",
+        )
+    return RuntimeAttemptIdentity(
+        directory=directory,
+        state=state,
+        launch_plan=launch_plan,
+        packaged_game_log=packaged_game_log,
+    )
 
 
 def _load_json_file(
@@ -803,6 +1077,10 @@ def _validate_packaged_runtime(
             "RUNTIME_LAUNCH_PLAN_INVALID",
             "packaged launch plan differs from the running sealed profile",
         )
+    attempt_identity = _seal_runtime_attempt_identity(
+        state_path,
+        launch_plan_path,
+    )
     return (
         PackagedRuntimeBinding(
             package_attempt=package_attempt,
@@ -811,6 +1089,7 @@ def _validate_packaged_runtime(
             launch_plan_path=launch_plan_path,
             launch_plan_sha256=launch_plan_sha,
             port=state["vista_world_port"],
+            attempt_identity=attempt_identity,
         ),
         state,
         profile_inputs,
@@ -1065,6 +1344,15 @@ def assert_inputs_stable(inputs: RendererInputs) -> None:
     )
     if current_state != inputs.runtime_binding.state_path:
         _fail("RUNTIME_POINTER_CHANGED", "current packaged runtime changed")
+    current_attempt_identity = _seal_runtime_attempt_identity(
+        current_state,
+        inputs.runtime_binding.launch_plan_path,
+    )
+    if current_attempt_identity != inputs.runtime_binding.attempt_identity:
+        _fail(
+            "RUNTIME_ATTEMPT_IDENTITY_CHANGED",
+            "package runtime attempt filesystem identity changed",
+        )
     if not hmac.compare_digest(
         sha256_file(current_state), inputs.runtime_binding.state_sha256
     ):
@@ -1560,14 +1848,33 @@ def build_receipt(
                     "start_ticks": state["process"]["start_ticks"],
                     "process_group": state["process"]["process_group"],
                 },
+                "attempt_filesystem_identity": {
+                    "policy": RUNTIME_ATTEMPT_IDENTITY_POLICY,
+                    "process_effective_uid_is_independent": True,
+                    "owner_uid_gid_consistent": True,
+                    "directory": _runtime_identity_proof(
+                        inputs.runtime_binding.attempt_identity.directory
+                    ),
+                    "state": _runtime_identity_proof(
+                        inputs.runtime_binding.attempt_identity.state
+                    ),
+                    "launch_plan": _runtime_identity_proof(
+                        inputs.runtime_binding.attempt_identity.launch_plan
+                    ),
+                    "packaged_game_log": _runtime_identity_proof(
+                        inputs.runtime_binding.attempt_identity.packaged_game_log
+                    ),
+                },
                 "packaged_game_log": {
                     "path": str(runtime_log.path),
                     "observed_prefix_sha256": runtime_log.prefix_sha256,
                     "observed_prefix_bytes": runtime_log.prefix_bytes,
                     "mode": runtime_log.mode,
                     "owner_uid": runtime_log.owner_uid,
+                    "owner_gid": runtime_log.owner_gid,
                     "device": runtime_log.device,
                     "inode": runtime_log.inode,
+                    "nlink": runtime_log.nlink,
                     "gate_policy": RUNTIME_LOG_GATE_POLICY,
                     "observed_after_renderer_status": True,
                     "prohibited_patterns": list(PROHIBITED_RUNTIME_LOG_PATTERNS),

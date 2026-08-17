@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import os
 import pathlib
@@ -274,9 +275,11 @@ class RendererFixture(RuntimeAcceptanceFixture):
             package_attempt / "game-runtime" / self.state_path.parent.name
         )
         package_runtime_attempt.mkdir(parents=True)
+        package_runtime_attempt.chmod(0o700)
         launch_plan = packaged_entrypoint.launch_plan(packaged_inputs)
         self.launch_plan_path = package_runtime_attempt / "launch-plan.json"
         self.launch_plan_path.write_bytes(renderer.canonical_json(launch_plan))
+        self.launch_plan_path.chmod(0o600)
         original_state = json.loads(self.state_path.read_text(encoding="utf-8"))
         process = {**original_state["process"], "role": "packaged-game"}
         supervisor = {
@@ -336,6 +339,7 @@ class RendererFixture(RuntimeAcceptanceFixture):
         }
         self.state_path = package_runtime_attempt / "runtime-state.json"
         self.state_path.write_bytes(renderer.canonical_json(packaged_state))
+        self.state_path.chmod(0o600)
         self.runtime_log = package_runtime_attempt / renderer.PACKAGED_GAME_LOG_NAME
         self.runtime_log.write_bytes(
             b"LogInit: Display: packaged renderer warmup complete\n"
@@ -449,14 +453,29 @@ def test_full_renderer_observation_is_only_observed_acceptance(
         "observed_prefix_sha256": renderer.sha256_file(fixture.runtime_log),
         "observed_prefix_bytes": fixture.runtime_log.stat().st_size,
         "mode": 0o600,
-        "owner_uid": os.geteuid(),
+        "owner_uid": fixture.runtime_log.stat().st_uid,
+        "owner_gid": fixture.runtime_log.stat().st_gid,
         "device": fixture.runtime_log.stat().st_dev,
         "inode": fixture.runtime_log.stat().st_ino,
+        "nlink": 1,
         "gate_policy": renderer.RUNTIME_LOG_GATE_POLICY,
         "observed_after_renderer_status": True,
         "prohibited_patterns": list(renderer.PROHIBITED_RUNTIME_LOG_PATTERNS),
         "prohibited_pattern_matches": [],
     }
+    filesystem_proof = receipt["bindings"]["runtime"][
+        "attempt_filesystem_identity"
+    ]
+    assert filesystem_proof["policy"] == renderer.RUNTIME_ATTEMPT_IDENTITY_POLICY
+    assert filesystem_proof["process_effective_uid_is_independent"] is True
+    assert filesystem_proof["owner_uid_gid_consistent"] is True
+    assert filesystem_proof["directory"]["mode"] == 0o700
+    for name in ("state", "launch_plan", "packaged_game_log"):
+        member = filesystem_proof[name]
+        assert member["mode"] == 0o600
+        assert member["nlink"] == 1
+        assert member["owner_uid"] == filesystem_proof["directory"]["owner_uid"]
+        assert member["owner_gid"] == filesystem_proof["directory"]["owner_gid"]
     byte_verification = receipt["bindings"]["package"]["byte_verification"]
     assert byte_verification["exact_match"] is True
     assert byte_verification["before_exchange"] == byte_verification["after_exchange"]
@@ -540,6 +559,87 @@ def test_renderer_requires_private_attempt_local_packaged_log(
         )
 
     assert caught.value.code == "RUNTIME_LOG_IDENTITY_INVALID"
+    assert not fixture.renderer_output.exists()
+
+
+def test_renderer_accepts_mapped_nas_owner_independent_of_process_euid(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = RendererFixture(tmp_path)
+    filesystem_uid = fixture.runtime_log.stat().st_uid
+    mapped_process_uid = filesystem_uid + 900_000_000
+    monkeypatch.setattr(
+        renderer.packaged_smoke,
+        "process_effective_uid",
+        lambda _pid: mapped_process_uid,
+    )
+
+    receipt, _receipt_sha = renderer.execute_acceptance(
+        fixture.renderer_config,
+        exchange=fixture.exchange,
+        listener_prover=fixture.listener_prover,
+    )
+
+    runtime_proof = receipt["bindings"]["runtime"]
+    assert runtime_proof["listener_expected_effective_uid"] == mapped_process_uid
+    assert runtime_proof["packaged_game_log"]["owner_uid"] == filesystem_uid
+    assert (
+        runtime_proof["attempt_filesystem_identity"]["directory"]["owner_uid"]
+        == filesystem_uid
+    )
+    assert mapped_process_uid != filesystem_uid
+
+
+def test_renderer_rejects_inconsistent_attempt_local_owner(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = RendererFixture(tmp_path)
+    original = renderer._seal_runtime_attempt_child
+
+    def inconsistent_owner(directory_descriptor, directory, name, label):
+        identity = original(directory_descriptor, directory, name, label)
+        if name == renderer.PACKAGED_GAME_LOG_NAME:
+            return dataclasses.replace(identity, owner_uid=identity.owner_uid + 1)
+        return identity
+
+    monkeypatch.setattr(
+        renderer,
+        "_seal_runtime_attempt_child",
+        inconsistent_owner,
+    )
+
+    with pytest.raises(renderer.RendererAcceptanceError) as caught:
+        renderer.validate_inputs(fixture.renderer_config)
+
+    assert caught.value.code == "RUNTIME_ATTEMPT_OWNER_INVALID"
+    assert not fixture.renderer_output.exists()
+
+
+def test_renderer_rejects_non_private_runtime_attempt_parent(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = RendererFixture(tmp_path)
+    fixture.runtime_log.parent.chmod(0o750)
+
+    with pytest.raises(renderer.RendererAcceptanceError) as caught:
+        renderer.validate_inputs(fixture.renderer_config)
+
+    assert caught.value.code == "RUNTIME_ATTEMPT_IDENTITY_INVALID"
+    assert not fixture.renderer_output.exists()
+
+
+def test_renderer_rejects_hard_linked_runtime_state(
+    tmp_path: pathlib.Path,
+) -> None:
+    fixture = RendererFixture(tmp_path)
+    fixture.state_path.with_name("runtime-state-alias.json").hardlink_to(
+        fixture.state_path
+    )
+
+    with pytest.raises(renderer.RendererAcceptanceError) as caught:
+        renderer.validate_inputs(fixture.renderer_config)
+
+    assert caught.value.code == "RUNTIME_ATTEMPT_IDENTITY_INVALID"
     assert not fixture.renderer_output.exists()
 
 

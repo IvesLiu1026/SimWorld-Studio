@@ -1553,6 +1553,52 @@ def test_presentation_sources_compile_without_launching_unreal() -> None:
     assert "r1_semantic_visual_observations" in composer
 
 
+def test_presentation_shadow_delegation_is_nanite_backed_and_reloaded() -> None:
+    composer = (
+        ROOT / "tools/ue/vista_playable_home/compose_presentation_commandlet.py"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        'PRESENTATION_SHADOW_POLICY_TAG = "VistaShadowPolicy=visible_no_shadow"'
+        in composer
+    )
+    assert (
+        'AUTHORITY_SHADOW_POLICY_TAG = "VistaShadowPolicy=hidden_nanite_authority"'
+        in composer
+    )
+    before_save, after_save = composer.split(
+        'stage = {"phase": "presentation_save", "operation_id": None}', 1
+    )
+    authority_nanite_check = (
+        'require(nanite_enabled(authority_mesh) is True,\n'
+        '                    "r1 room shadow authority is not Nanite-enabled")'
+    )
+    assert authority_nanite_check in before_save
+    assert before_save.index(authority_nanite_check) < before_save.index(
+        "authority_component.set_cast_shadow(True)"
+    )
+    assert "authority_component.set_cast_hidden_shadow(True)" in before_save
+    assert "component.set_cast_shadow(False)" in before_save
+    assert "component.set_cast_hidden_shadow(False)" in before_save
+    assert "AUTHORITY_SHADOW_POLICY_TAG" in before_save
+    assert "PRESENTATION_SHADOW_POLICY_TAG" in before_save
+
+    for evidence in (
+        'label="reloaded visible presentation component"',
+        'label="reloaded r1 room authority"',
+        '"reloaded r1 room shadow authority is not Nanite-enabled"',
+        '"reloaded presentation actor lost shadow policy tag"',
+        '"reloaded r1 authority lost shadow policy tag"',
+    ):
+        assert evidence in after_save
+    assert "shadow_delegation_verified = True" in after_save
+    assert (
+        '"hidden_r1_collision_authority_verified": (\n'
+        "            reload_verified and shadow_delegation_verified\n"
+        "        )"
+    ) in after_save
+
+
 def test_reflected_affordance_names_use_typed_enum_members(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -33,7 +33,10 @@ class PackagedSmokeTests(unittest.TestCase):
             / "archive/Linux/VistaPlayableHome/Binaries/Linux/VistaPlayableHome"
         )
         self.executable.parent.mkdir(parents=True)
-        self.executable.write_bytes(b"ELF-fixture\n")
+        self.executable.write_text(
+            "#!/usr/bin/python3\nimport time\ntime.sleep(60)\n",
+            encoding="utf-8",
+        )
         self.executable.chmod(0o700)
         self.pak = (
             self.attempt
@@ -237,8 +240,10 @@ class PackagedSmokeTests(unittest.TestCase):
         ):
             environment = smoke.sanitized_environment(inputs)
 
-        self.assertEqual(command[0], str(self.launcher))
-        self.assertEqual(command[1], smoke.EXPECTED_MAP_PATH)
+        self.assertEqual(command[0], str(self.executable))
+        self.assertEqual(command[1], smoke.PACKAGE_PROJECT_ARGUMENT)
+        self.assertEqual(command[2], smoke.EXPECTED_MAP_PATH)
+        self.assertNotIn(str(self.launcher), command)
         self.assertIn("-nullrhi", command)
         self.assertIn("-VistaWorldPort=55777", command)
         self.assertNotIn("-game", command)
@@ -409,6 +414,17 @@ class PackagedSmokeTests(unittest.TestCase):
         self.assertTrue(receipt["termination"]["process_exited"])
         self.assertEqual(receipt["bindings"]["host"], "127.0.0.1")
         self.assertEqual(receipt["bindings"]["port"], 55777)
+        self.assertEqual(
+            receipt["bindings"]["executable_sha256"],
+            smoke.sha256_file(self.executable),
+        )
+        self.assertEqual(receipt["launch"]["target"], str(self.executable))
+        self.assertEqual(receipt["launch"]["package_launcher"], str(self.launcher))
+        self.assertFalse(receipt["launch"]["package_launcher_executed"])
+        self.assertEqual(
+            receipt["launch"]["target_policy"],
+            "direct-sealed-executable-no-shell/v1",
+        )
         self.assertEqual(probe_calls, 2)
         self.assertEqual(receipt["readiness"]["probe_count"], 2)
         self.assertEqual(
@@ -428,6 +444,49 @@ class PackagedSmokeTests(unittest.TestCase):
         self.assertFalse((self.attempt / "game-runtime" / "current.json").exists())
         with self.assertRaises(FileExistsError):
             smoke._write_receipt(output, receipt)
+
+    def test_sealed_failing_package_launcher_is_not_executed(self) -> None:
+        self.launcher.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+        self.launcher.chmod(0o700)
+        launcher_record = self.package_receipt["artifacts"]["launcher"]
+        launcher_record["sha256"] = smoke.sha256_file(self.launcher)
+        launcher_record["bytes"] = self.launcher.stat().st_size
+        self.package_receipt["archive"] = package.inspect_archive(
+            self.attempt / "archive" / "Linux",
+            trusted_engine_root=self.engine_root,
+        )
+        self.receipt_path.write_bytes(smoke.canonical_json(self.package_receipt))
+        self.receipt_path.chmod(0o600)
+        inputs = self.inputs("attempt-07")
+
+        def ready(_port: int, *, expected_revision: str, timeout: float):
+            self.assertEqual(timeout, 1.0)
+            return {
+                "command_id": "vwc-" + "e" * 24,
+                "status": "success",
+                "code": "READY",
+                "world_revision": expected_revision,
+                "session_generation": 0,
+                "event_status": "inactive",
+                "active_event": None,
+            }
+
+        receipt, _receipt_sha = smoke.run_smoke(
+            inputs,
+            probe=ready,
+            listener_prover=lambda port, process_group: {
+                "host": "127.0.0.1",
+                "port": port,
+                "process_group": process_group,
+                "socket_inode": 456,
+                "owner_pids": [process_group],
+            },
+        )
+
+        self.assertEqual(receipt["status"], "accepted")
+        self.assertEqual(receipt["launch"]["target"], str(self.executable))
+        self.assertFalse(receipt["launch"]["package_launcher_executed"])
+        self.assertNotEqual(receipt["termination"]["exit_code"], 99)
 
     def test_probe_failure_still_terminates_and_seals_failed_receipt(self) -> None:
         inputs = self.inputs("attempt-03")
@@ -482,6 +541,27 @@ class PackagedSmokeTests(unittest.TestCase):
             ),
         ):
             smoke.prove_loopback_listener_ownership(55777, 424242)
+
+    def test_same_group_child_listener_is_rejected_by_exact_process_proof(self) -> None:
+        managed_pid = 424242
+        child_pid = 424243
+        with (
+            mock.patch.object(smoke, "_listening_loopback_inodes", return_value={111}),
+            mock.patch.object(
+                smoke, "process_effective_uid", return_value=os.geteuid()
+            ),
+            mock.patch.object(
+                smoke,
+                "_global_socket_owners",
+                return_value={
+                    111: [{"pid": child_pid, "process_group": managed_pid}]
+                },
+            ),
+            self.assertRaisesRegex(
+                smoke.PackagedSmokeError, "LISTENER_OWNERSHIP_INVALID"
+            ),
+        ):
+            smoke.prove_loopback_listener_ownership(55777, managed_pid)
 
     def test_unreadable_managed_descriptor_table_fails_closed(self) -> None:
         proc_root = pathlib.Path(self.temporary.name) / "fake-proc"
@@ -738,6 +818,8 @@ class PackagedSmokeTests(unittest.TestCase):
             str(inputs.output_dir / "home"),
         )
         self.assertNotIn("STUDIO_ACCESS_TOKEN", rendered)
+        self.assertEqual(smoke.plan(inputs)["target"], str(self.executable))
+        self.assertFalse(smoke.plan(inputs)["package_launcher_executed"])
 
 
 if __name__ == "__main__":

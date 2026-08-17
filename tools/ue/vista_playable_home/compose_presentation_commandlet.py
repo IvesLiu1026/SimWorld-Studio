@@ -28,6 +28,10 @@ from presentation_commandlet_common import (  # noqa: E402
 )
 
 
+PRESENTATION_SHADOW_POLICY_TAG = "VistaShadowPolicy=visible_no_shadow"
+AUTHORITY_SHADOW_POLICY_TAG = "VistaShadowPolicy=hidden_nanite_authority"
+
+
 def nanite_enabled(mesh):
     settings = property_or_none(mesh, "nanite_settings")
     require(settings is not None, "presentation Nanite settings are unavailable")
@@ -35,6 +39,23 @@ def nanite_enabled(mesh):
     require(isinstance(enabled, bool),
             "presentation Nanite enabled observation is unavailable")
     return enabled
+
+
+def require_shadow_policy(component, *, cast_shadow, cast_hidden_shadow, label):
+    observed_cast_shadow = property_or_none(component, "cast_shadow")
+    observed_cast_hidden_shadow = property_or_none(
+        component, "cast_hidden_shadow"
+    )
+    require(
+        isinstance(observed_cast_shadow, bool)
+        and isinstance(observed_cast_hidden_shadow, bool),
+        label + " shadow properties are unavailable",
+    )
+    require(
+        observed_cast_shadow is cast_shadow
+        and observed_cast_hidden_shadow is cast_hidden_shadow,
+        label + " shadow policy differs",
+    )
 
 
 def vector(values):
@@ -299,6 +320,7 @@ def run():
     error = None
     stage = {"phase": "presentation_compose", "operation_id": None}
     reload_verified = False
+    shadow_delegation_verified = False
     room_observations = []
     semantic_target_baselines = {}
     try:
@@ -360,11 +382,24 @@ def run():
             authority_component = static_mesh_component(authority)
             require(authority_component is not None,
                     "r1 room authority has no StaticMeshComponent")
+            authority_mesh = property_or_none(authority_component, "static_mesh")
+            require(isinstance(authority_mesh, unreal.StaticMesh),
+                    "r1 room authority has no StaticMesh")
+            require(nanite_enabled(authority_mesh) is True,
+                    "r1 room shadow authority is not Nanite-enabled")
             authority.set_actor_hidden_in_game(True)
             authority_component.set_visibility(False, True)
             authority_component.set_collision_profile_name(unreal.Name("BlockAll"))
             authority_component.set_simulate_physics(False)
             authority_component.set_editor_property("generate_overlap_events", False)
+            authority_component.set_cast_shadow(True)
+            authority_component.set_cast_hidden_shadow(True)
+            require_shadow_policy(
+                authority_component,
+                cast_shadow=True,
+                cast_hidden_shadow=True,
+                label="r1 room authority",
+            )
             try:
                 authority_component.set_editor_property(
                     "can_ever_affect_navigation", True
@@ -375,6 +410,7 @@ def run():
                 "VistaRole=room_collision_proxy",
                 "VistaPresentationVisibility=hidden",
                 "VistaCollisionAuthority=r1",
+                AUTHORITY_SHADOW_POLICY_TAG,
             ])
 
             imported = imports_by_artifact[operation["artifact_id"]]
@@ -402,7 +438,9 @@ def run():
             require(actor is not None, "failed to spawn presentation actor")
             actor.set_actor_scale3d(vector(transform["scale"]))
             actor.set_actor_label(safe_label(operation["presentation_id"]))
-            set_tags(actor, operation["tags"])
+            set_tags(actor, list(operation["tags"]) + [
+                PRESENTATION_SHADOW_POLICY_TAG,
+            ])
             component = static_mesh_component(actor)
             require(component is not None,
                     "presentation actor has no StaticMeshComponent")
@@ -411,6 +449,14 @@ def run():
             component.set_simulate_physics(False)
             component.set_editor_property("generate_overlap_events", False)
             component.set_mobility(unreal.ComponentMobility.STATIC)
+            component.set_cast_shadow(False)
+            component.set_cast_hidden_shadow(False)
+            require_shadow_policy(
+                component,
+                cast_shadow=False,
+                cast_hidden_shadow=False,
+                label="visible presentation component",
+            )
             try:
                 component.set_editor_property("can_ever_affect_navigation", False)
             except Exception:
@@ -454,6 +500,17 @@ def run():
                     material_slot_count == binding["material_count"] and
                     not bool(component.get_editor_property("generate_overlap_events")),
                     "reloaded presentation actor lost NoCollision policy")
+            require(
+                unreal.Name(PRESENTATION_SHADOW_POLICY_TAG)
+                in presentation_actor.get_editor_property("tags"),
+                "reloaded presentation actor lost shadow policy tag",
+            )
+            require_shadow_policy(
+                component,
+                cast_shadow=False,
+                cast_hidden_shadow=False,
+                label="reloaded visible presentation component",
+            )
             if is_external:
                 require(nanite_enabled(mesh) is False,
                         "reloaded external presentation mesh enabled Nanite")
@@ -468,6 +525,10 @@ def run():
                     "reloaded r1 collision authority is not exact")
             authority = authority_matches[0]
             authority_component = static_mesh_component(authority)
+            authority_mesh = (
+                property_or_none(authority_component, "static_mesh")
+                if authority_component else None
+            )
             authority_hidden = actor_hidden(authority)
             authority_visible = bool(
                 authority_component.get_editor_property("visible")
@@ -480,6 +541,20 @@ def run():
                     "reloaded r1 collision authority became visible")
             require(str(authority_component.get_collision_profile_name()) == "BlockAll",
                     "reloaded r1 collision authority lost blocking collision")
+            require(isinstance(authority_mesh, unreal.StaticMesh) and
+                    nanite_enabled(authority_mesh) is True,
+                    "reloaded r1 room shadow authority is not Nanite-enabled")
+            require(
+                unreal.Name(AUTHORITY_SHADOW_POLICY_TAG)
+                in authority.get_editor_property("tags"),
+                "reloaded r1 authority lost shadow policy tag",
+            )
+            require_shadow_policy(
+                authority_component,
+                cast_shadow=True,
+                cast_hidden_shadow=True,
+                label="reloaded r1 room authority",
+            )
             require(parent_path == authority_path,
                     "reloaded presentation actor lost its r1 authority attachment")
             observation = {
@@ -558,6 +633,7 @@ def run():
                     "r1_semantic_visual_observations": target_observations,
                 })
             room_observations.append(observation)
+        shadow_delegation_verified = True
         reload_verified = True
         status = "saved_reloaded_candidate"
     except Exception as exc:
@@ -577,7 +653,9 @@ def run():
         "map_reloaded": reload_verified,
         "exact_three_presentation_actors": reload_verified,
         "presentation_no_collision_verified": reload_verified,
-        "hidden_r1_collision_authority_verified": reload_verified,
+        "hidden_r1_collision_authority_verified": (
+            reload_verified and shadow_delegation_verified
+        ),
         "semantic_authority_preserved": reload_verified,
         "quarantined": status != "saved_reloaded_candidate",
         "runtime_play_proof": "pending",

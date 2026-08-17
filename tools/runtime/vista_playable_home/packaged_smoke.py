@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Run a bounded NullRHI smoke against the sealed VISTA Linux package.
 
-The command launches only the package's fixed top-level shell launcher, binds
-the adapter to a caller-selected available loopback port, proves the typed
-runtime identity, and then terminates the process group it created.  It never
-publishes or replaces the interactive ``game-runtime/current.json`` pointer.
+The command launches the package's sealed game executable directly, binds the
+adapter to a caller-selected available loopback port, proves the typed runtime
+identity, and then terminates the process group it created.  The packaged shell
+launcher remains part of the sealed archive evidence but is never executed, so
+the managed process is the exact listener owner.  The smoke never publishes or
+replaces the interactive ``game-runtime/current.json`` pointer.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ R2_PACKAGE_RECEIPT_SCHEMA = "simworld.vista.playable-home-linux-package-receipt/
 R2_EXACT_MODE_PACKAGE_RECEIPT_SCHEMA = (
     "simworld.vista.playable-home-linux-package-receipt/v3"
 )
-SMOKE_RECEIPT_SCHEMA = "simworld.vista.playable-home-packaged-smoke/v1"
+SMOKE_RECEIPT_SCHEMA = "simworld.vista.playable-home-packaged-smoke/v2"
 EXPECTED_MAP_PATH = (
     "/Game/VISTA/PlayableHome/vista_playable_home_r1/Maps/VistaPlayableHome"
 )
@@ -63,6 +65,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_JSON_BYTES = 4 * 1024 * 1024
 DEFAULT_READY_TIMEOUT_SECONDS = 180.0
 TRUSTED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+PACKAGE_PROJECT_ARGUMENT = "VistaPlayableHome"
 PROC_ROOT = Path("/proc")
 LISTENER_OWNER_CLOSURE_SCOPE = (
     "single-loopback-inode+exact-managed-pid+visible-foreign-rejection/v1"
@@ -732,7 +735,8 @@ def validate_inputs(args: argparse.Namespace) -> SmokeInputs:
 def build_command(inputs: SmokeInputs) -> list[str]:
     user_dir = inputs.output_dir / "ue-user"
     return [
-        str(inputs.launcher),
+        str(inputs.executable),
+        PACKAGE_PROJECT_ARGUMENT,
         inputs.map_path,
         "-nullrhi",
         "-unattended",
@@ -1285,7 +1289,7 @@ def run_smoke(
             archive_before = verify_sealed_archive(inputs)
             process = popen_factory(
                 command,
-                cwd=inputs.launcher.parent,
+                cwd=inputs.archive_root,
                 env=sanitized_environment(inputs),
                 stdin=subprocess.DEVNULL,
                 stdout=log_handle,
@@ -1351,6 +1355,7 @@ def run_smoke(
             "package_receipt": str(inputs.package_receipt),
             "package_receipt_sha256": inputs.package_receipt_sha256,
             "launcher_sha256": inputs.launcher_sha256,
+            "executable_sha256": inputs.executable_sha256,
             "archive_tree_sha256": _mapping(
                 inputs.receipt.get("archive"), "archive"
             ).get("tree_sha256"),
@@ -1360,9 +1365,14 @@ def run_smoke(
             "port": inputs.port,
         },
         "launch": {
-            "launcher": str(inputs.launcher),
+            "target": str(inputs.executable),
+            "target_sha256": inputs.executable_sha256,
+            "package_launcher": str(inputs.launcher),
+            "package_launcher_sha256": inputs.launcher_sha256,
+            "package_launcher_executed": False,
             "command": command,
-            "cwd": str(inputs.launcher.parent),
+            "cwd": str(inputs.archive_root),
+            "target_policy": "direct-sealed-executable-no-shell/v1",
             "environment_policy": "minimal-nullrhi-no-display-no-gpu-no-secrets/v1",
             "process": process_record,
         },
@@ -1391,8 +1401,12 @@ def plan(inputs: SmokeInputs) -> dict[str, Any]:
         "mode": "preflight",
         "package_receipt": str(inputs.package_receipt),
         "package_receipt_sha256": inputs.package_receipt_sha256,
-        "launcher": str(inputs.launcher),
-        "launcher_sha256": inputs.launcher_sha256,
+        "target": str(inputs.executable),
+        "target_sha256": inputs.executable_sha256,
+        "package_launcher": str(inputs.launcher),
+        "package_launcher_sha256": inputs.launcher_sha256,
+        "package_launcher_executed": False,
+        "target_policy": "direct-sealed-executable-no-shell/v1",
         "map_path": inputs.map_path,
         "host": "127.0.0.1",
         "port": inputs.port,
