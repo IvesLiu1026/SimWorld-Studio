@@ -110,8 +110,8 @@ Depends on: requirements.md, design.md
   - Validation: fake-GitHub integration proves digest binding, separate principal, draft PR body,
     no force-push/duplicate PR, author/committer/PR actor attribution and no model credential.
   - Progress: publisher orchestration contract, principal/policy checks and draft-only read-back
-    protocol are implemented. The typed finalizer/authority bridge is under acceptance review;
-    immutable spool plus concrete Git/GitHub/runtime adapters remain open.
+    protocol are implemented. The typed finalizer/authority bridge passed independent acceptance
+    review; immutable spool plus concrete Git/GitHub/runtime adapters remain open.
 
 - [ ] T11. Add repo-owned CI and merge policy
   - Files: `.github/workflows/daily-maintainer-ci.yml`, policy docs
