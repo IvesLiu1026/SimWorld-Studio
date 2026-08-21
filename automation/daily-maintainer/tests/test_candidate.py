@@ -307,6 +307,26 @@ class CandidateContractTests(unittest.TestCase):
                 b'allowed_paths: ["packages/*.toml", tests/**]',
                 1,
             ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/.python-versio?", tests/**]',
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/*-commit-config.yaml", tests/**]',
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/MANIFEST.?n", tests/**]',
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/p?xi.lock", tests/**]',
+                1,
+            ),
         )
         for payload in payloads:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
@@ -349,6 +369,26 @@ class CandidateContractTests(unittest.TestCase):
                 b"allowed_paths: [tests/test_sitecustomize.py]",
                 1,
             ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [packages/manifest_input.py, tests/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [packages/uv_helpers.py, tests/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [docs/environment-notes.md, tests/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [tests/test_pixi.py]",
+                1,
+            ),
         )
         for payload in payloads:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
@@ -358,14 +398,33 @@ class CandidateContractTests(unittest.TestCase):
     def test_v1_policy_rejects_dependency_build_and_validation_authority(self) -> None:
         basenames = (
             ".flake8",
+            ".node-version",
+            ".nvmrc",
+            ".pre-commit-config.yaml",
+            ".pre-commit-config.yml",
+            ".pre-commit-hooks.yaml",
+            ".python-version",
             ".ruff.toml",
+            ".ruby-version",
+            ".tool-versions",
+            "MANIFEST.in",
             "Pipfile",
             "Pipfile.lock",
+            "conda-lock.yml",
+            "constraints.txt",
+            "environment.yml",
+            "hatch.toml",
+            "mise.toml",
             "npm-shrinkwrap.json",
+            "pdm.toml",
+            "pixi.lock",
+            "pixi.toml",
+            "poetry.toml",
             "ruff.toml",
             "setup.cfg",
             "setup.py",
             "sitecustomize.py",
+            "uv.toml",
             "usercustomize.py",
         )
         for basename in basenames:
