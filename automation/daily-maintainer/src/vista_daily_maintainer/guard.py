@@ -7,8 +7,10 @@ import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Protocol
 
 from .candidate import Candidate, path_matches_pattern
+from .profiles import TrustedExecutables
 
 
 _OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
@@ -19,6 +21,16 @@ _TEST_SKIP = re.compile(
     r"\b(?:it|test|describe)\.(?:skip|todo)\s*\(",
     re.IGNORECASE,
 )
+_TEST_FOCUS = re.compile(
+    r"\b(?:context|describe|it|suite|test)\.only\s*\(|"
+    r"\b(?:fcontext|fdescribe|fit)\s*\(",
+    re.IGNORECASE,
+)
+_EVIDENCE_NAME = re.compile(
+    r"(?:^|[-_.])(?:accepted|artifact|evidence|journal|ledger|receipt|report)"
+    r"(?:[-_.]|$)",
+)
+_RUNTIME_NAME = re.compile(r"(?:^|[-_.])(?:runtime|unreal|ue)(?:[-_.]|$)")
 _SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -85,15 +97,28 @@ _DEPENDENCY_FILES = frozenset(
 _VALIDATION_CONFIG_FILES = frozenset(
     {
         ".coveragerc",
+        ".nycrc",
         "codecov.yml",
         "codecov.yaml",
+        "conftest.py",
         "jest.config.js",
         "jest.config.mjs",
+        "noxfile.py",
         "pytest.ini",
         "tox.ini",
         "vitest.config.js",
         "vitest.config.mjs",
     }
+)
+_VALIDATION_CONFIG_PREFIXES = (
+    ".coveragerc.",
+    ".nycrc.",
+    "coverage.",
+    "cypress.config.",
+    "jest.config.",
+    "karma.conf.",
+    "playwright.config.",
+    "vitest.config.",
 )
 _PROTECTED_TOP_LEVEL = frozenset(
     {
@@ -118,6 +143,10 @@ _PROTECTED_TOP_LEVEL = frozenset(
         "world_packs",
     }
 )
+
+
+class _Digest(Protocol):
+    def update(self, value: bytes) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -169,6 +198,13 @@ class GuardReport:
 
 class DiffGuard:
     """Deterministically reject a patch before any candidate test executes."""
+
+    def __init__(self, *, git_executable: Path | None = None) -> None:
+        if git_executable is None:
+            git_executable = TrustedExecutables.system_defaults().resolve("git")
+        self._git_executable = TrustedExecutables(
+            {"git": Path(git_executable)}
+        ).resolve("git")
 
     def inspect(
         self,
@@ -250,6 +286,7 @@ class DiffGuard:
             )
 
         self._check_diff_content(repo, base_sha, untracked, violations)
+        self._check_schema_changes(repo, base_sha, statuses, violations)
         production = [item for item in changed if not item.is_test]
         tests = [item for item in changed if item.is_test]
         production_lines = sum(item.additions + item.deletions for item in production)
@@ -307,16 +344,19 @@ class DiffGuard:
             test_lines=test_lines,
         )
 
-    @staticmethod
-    def _git(repo: Path, *args: str, check: bool = True) -> bytes:
+    def _git(self, repo: Path, *args: str, check: bool = True) -> bytes:
         result = subprocess.run(
-            ("git", "-c", "core.quotepath=false", *args),
+            (str(self._git_executable), "-c", "core.quotepath=false", *args),
             cwd=repo,
             env={
-                "PATH": os.environ.get("PATH", os.defpath),
+                "PATH": "/nonexistent/vista-daily-maintainer",
+                "HOME": "/nonexistent/vista-daily-maintainer",
                 "LANG": "C.UTF-8",
                 "LC_ALL": "C.UTF-8",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_SYSTEM": "/dev/null",
                 "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_PAGER": "",
                 "GIT_TERMINAL_PROMPT": "0",
             },
             check=False,
@@ -340,11 +380,20 @@ class DiffGuard:
         if not isinstance(base_sha, str) or not _OBJECT_ID.fullmatch(base_sha):
             raise ValueError("base SHA must be an exact 40- or 64-character object ID")
         result = subprocess.run(
-            ("git", "cat-file", "-e", f"{base_sha}^{{commit}}"),
+            (
+                str(self._git_executable),
+                "cat-file",
+                "-e",
+                f"{base_sha}^{{commit}}",
+            ),
             cwd=repo,
             env={
-                "PATH": os.environ.get("PATH", os.defpath),
+                "PATH": "/nonexistent/vista-daily-maintainer",
+                "HOME": "/nonexistent/vista-daily-maintainer",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_SYSTEM": "/dev/null",
                 "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_PAGER": "",
                 "GIT_TERMINAL_PROMPT": "0",
             },
             check=False,
@@ -360,6 +409,7 @@ class DiffGuard:
             "--name-status",
             "-z",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-renames",
             base_sha,
             "--",
@@ -391,6 +441,7 @@ class DiffGuard:
             "--numstat",
             "-z",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-renames",
             base_sha,
             "--",
@@ -449,7 +500,7 @@ class DiffGuard:
             return True
         if (
             basename in _DEPENDENCY_FILES
-            or basename in _VALIDATION_CONFIG_FILES
+            or DiffGuard._is_validation_config(basename)
             or basename.startswith("requirements")
             and basename.endswith(".txt")
         ):
@@ -465,13 +516,49 @@ class DiffGuard:
         if any(part in {"secrets", "credentials"} for part in lowered):
             return True
         if any(
-            part in {"assets", "prompts", "runtime", "world-packs", "world_packs"}
+            part
+            in {
+                "accepted",
+                "artifacts",
+                "evidence",
+                "journal",
+                "ledger",
+                "outputs",
+                "receipts",
+                "reports",
+                "runs",
+            }
+            for part in lowered
+        ):
+            return True
+        if _EVIDENCE_NAME.search(basename):
+            return True
+        if _RUNTIME_NAME.search(basename) and not DiffGuard._is_test_path(path):
+            return True
+        if any(
+            part
+            in {
+                "assets",
+                "prompts",
+                "runtime",
+                "ue",
+                "unreal",
+                "unreal_plugins",
+                "world-packs",
+                "world_packs",
+            }
             for part in lowered
         ):
             return True
         if pure.suffix.lower() in {".service", ".socket", ".timer"}:
             return True
         return pure.suffix.lower() in _BINARY_SUFFIXES
+
+    @staticmethod
+    def _is_validation_config(basename: str) -> bool:
+        return basename in _VALIDATION_CONFIG_FILES or basename.startswith(
+            _VALIDATION_CONFIG_PREFIXES
+        )
 
     @staticmethod
     def _is_test_path(path: str) -> bool:
@@ -483,8 +570,26 @@ class DiffGuard:
                 for part in lowered[:-1]
             )
             or pure.name.lower().startswith(("test_", "test-"))
+            or pure.name.lower().endswith("_test.py")
             or pure.name.lower().endswith(
-                (".test.js", ".test.mjs", ".spec.js", ".spec.mjs")
+                (
+                    ".test.cjs",
+                    ".test.cts",
+                    ".test.js",
+                    ".test.jsx",
+                    ".test.mjs",
+                    ".test.mts",
+                    ".test.ts",
+                    ".test.tsx",
+                    ".spec.cjs",
+                    ".spec.cts",
+                    ".spec.js",
+                    ".spec.jsx",
+                    ".spec.mjs",
+                    ".spec.mts",
+                    ".spec.ts",
+                    ".spec.tsx",
+                )
             )
         )
 
@@ -593,6 +698,7 @@ class DiffGuard:
             "--unified=0",
             "--no-color",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-renames",
             base_sha,
             "--",
@@ -609,14 +715,22 @@ class DiffGuard:
             if not current_path or line.startswith(("@@", "diff ", "index ")):
                 continue
             if line.startswith("-") and not line.startswith("---"):
-                if self._is_test_path(current_path) and _ASSERTION.search(line[1:]):
+                if self._is_test_path(current_path):
                     violations.append(
                         GuardViolation(
-                            "test_assertion_removed",
+                            "test_line_removed",
                             current_path,
-                            "test assertion deletion is forbidden",
+                            "test-line deletion requires human review",
                         )
                     )
+                    if _ASSERTION.search(line[1:]):
+                        violations.append(
+                            GuardViolation(
+                                "test_assertion_removed",
+                                current_path,
+                                "test assertion deletion is forbidden",
+                            )
+                        )
             elif line.startswith("+") and not line.startswith("+++"):
                 added = line[1:]
                 self._check_added_line(current_path, added, violations)
@@ -646,6 +760,32 @@ class DiffGuard:
                     "test_file_deleted", path, "test file deletion is forbidden"
                 )
             )
+
+    def _check_schema_changes(
+        self,
+        _repo: Path,
+        _base_sha: str,
+        statuses: dict[str, str],
+        violations: list[GuardViolation],
+    ) -> None:
+        for path, status_code in sorted(statuses.items()):
+            if not self._is_schema_path(path) or status_code in {"?", "A"}:
+                continue
+            violations.append(
+                GuardViolation(
+                    "schema_weakening",
+                    path,
+                    "existing schema modification requires human review",
+                )
+            )
+
+    @staticmethod
+    def _is_schema_path(path: str) -> bool:
+        lowered = path.lower()
+        return (
+            lowered.endswith((".schema.json", ".schema.yaml", ".schema.yml"))
+            or "schemas" in PurePosixPath(lowered).parts
+        )
 
     @staticmethod
     def _diff_header_path(raw: str) -> str | None:
@@ -685,37 +825,94 @@ class DiffGuard:
                     "test_skip_added", path, "new skip/xfail/todo is forbidden"
                 )
             )
+        if self._is_test_path(path) and _TEST_FOCUS.search(line):
+            violations.append(
+                GuardViolation(
+                    "test_focus_added",
+                    path,
+                    "focused test execution is forbidden",
+                )
+            )
 
     def _patch_digest(
         self, repo: Path, base_sha: str, untracked: tuple[str, ...]
     ) -> str:
         digest = hashlib.sha256()
-        digest.update(b"vista-world-daily-maintainer-patch-v1\0")
-        digest.update(
+        self._digest_frame(
+            digest,
+            b"domain",
+            b"vista-world-daily-maintainer-patch-v2",
+        )
+        self._digest_frame(digest, b"base-sha", base_sha.encode("ascii"))
+        self._digest_frame(
+            digest,
+            b"tracked-diff",
             self._git(
                 repo,
                 "diff",
                 "--binary",
                 "--no-color",
                 "--no-ext-diff",
+                "--no-textconv",
                 "--no-renames",
                 base_sha,
                 "--",
-            )
+            ),
         )
         for path in sorted(untracked):
-            digest.update(b"\0untracked\0")
-            digest.update(path.encode("utf-8"))
+            self._digest_frame(digest, b"untracked-path", path.encode("utf-8"))
             current = repo / path
-            if current.is_symlink():
-                digest.update(b"\0symlink\0")
-                digest.update(os.readlink(current).encode("utf-8", "surrogateescape"))
-            elif current.is_file():
-                digest.update(b"\0file\0")
-                digest.update(current.read_bytes())
+            try:
+                metadata = current.lstat()
+            except OSError:
+                self._digest_frame(digest, b"untracked-type", b"missing")
+                continue
+            normalized_mode = stat.S_IFMT(metadata.st_mode) | (
+                metadata.st_mode & 0o7777
+            )
+            self._digest_frame(
+                digest,
+                b"untracked-mode",
+                normalized_mode.to_bytes(4, "big"),
+            )
+            if stat.S_ISLNK(metadata.st_mode):
+                payload = os.readlink(current).encode("utf-8", "surrogateescape")
+                self._digest_frame(digest, b"untracked-type", b"symlink")
+                self._digest_frame(digest, b"untracked-content", payload)
+            elif stat.S_ISREG(metadata.st_mode):
+                self._digest_frame(digest, b"untracked-type", b"file")
+                self._digest_frame(
+                    digest,
+                    b"untracked-content-length",
+                    metadata.st_size.to_bytes(8, "big"),
+                )
+                self._digest_frame(
+                    digest,
+                    b"untracked-content-sha256",
+                    self._file_sha256(current),
+                )
             else:
-                digest.update(b"\0other\0")
+                self._digest_frame(digest, b"untracked-type", b"other")
         return digest.hexdigest()
+
+    @staticmethod
+    def _file_sha256(path: Path) -> bytes:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(64 * 1024), b""):
+                digest.update(chunk)
+        return digest.digest()
+
+    @staticmethod
+    def _digest_frame(
+        digest: _Digest,
+        label: bytes,
+        payload: bytes,
+    ) -> None:
+        digest.update(len(label).to_bytes(4, "big"))
+        digest.update(label)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
 
     @staticmethod
     def _deduplicate_violations(

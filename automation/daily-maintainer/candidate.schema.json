@@ -27,7 +27,7 @@
     "risk_tier": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 3
+      "maximum": 1
     },
     "allowed_paths": {
       "type": "array",
@@ -53,7 +53,13 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "pattern": "^[a-z][a-z0-9-]{2,63}$"
+        "enum": [
+          "daily-maintainer-core-tests",
+          "tools-python-offline",
+          "web-frontend-build",
+          "web-server-contracts",
+          "web-server-unit"
+        ]
       }
     },
     "expected_external_side_effects": {

@@ -5,6 +5,8 @@ import unittest
 
 from vista_daily_maintainer.receipt import (
     DiffSummary,
+    GitIdentity,
+    ReceiptActors,
     ReceiptContractError,
     RunReceipt,
     RunStatus,
@@ -23,9 +25,24 @@ HEX_B = "b" * 40
 HEX_C = "c" * 64
 
 
+def make_actors(*, promoted: bool = False) -> ReceiptActors:
+    return ReceiptActors(
+        commit_author=GitIdentity(
+            name="Ives Liu",
+            email="zhiy0517xiang@gmail.com",
+        ),
+        git_committer=GitIdentity(
+            name="VISTA World Publisher",
+            email="publisher@users.noreply.github.com",
+        ),
+        pr_actor="vista-world-publisher[bot]",
+        promotion_actor="github-actions[bot]" if promoted else None,
+    )
+
+
 def make_pr_receipt(status: RunStatus = RunStatus.PR_OPEN) -> RunReceipt:
     return RunReceipt(
-        run_id="2026-08-21/IvesLiu1026/VISTA-World",
+        run_id=f"2026-08-21/IvesLiu1026/VISTA-World@{HEX_A}",
         run_date="2026-08-21",
         repository="IvesLiu1026/VISTA-World",
         status=status,
@@ -51,6 +68,7 @@ def make_pr_receipt(status: RunStatus = RunStatus.PR_OPEN) -> RunReceipt:
         merge_sha=HEX_B if status is RunStatus.MERGED else None,
         duration_ms=1250,
         failure_category=None,
+        actors=make_actors(promoted=status is RunStatus.MERGED),
     )
 
 
@@ -73,7 +91,7 @@ class ReceiptContractTests(unittest.TestCase):
     def test_no_change_cannot_claim_patch_or_pr(self) -> None:
         with self.assertRaisesRegex(ReceiptContractError, "no_change"):
             RunReceipt(
-                run_id="2026-08-21/IvesLiu1026/VISTA-World",
+                run_id=f"2026-08-21/IvesLiu1026/VISTA-World@{HEX_A}",
                 run_date="2026-08-21",
                 repository="IvesLiu1026/VISTA-World",
                 status=RunStatus.NO_CHANGE,
@@ -87,12 +105,13 @@ class ReceiptContractTests(unittest.TestCase):
                 merge_sha=None,
                 duration_ms=10,
                 failure_category=None,
+                actors=ReceiptActors(),
             )
 
     def test_failed_receipt_requires_failure_category(self) -> None:
         with self.assertRaisesRegex(ReceiptContractError, "failure_category"):
             RunReceipt(
-                run_id="2026-08-21/IvesLiu1026/VISTA-World",
+                run_id=f"2026-08-21/IvesLiu1026/VISTA-World@{HEX_A}",
                 run_date="2026-08-21",
                 repository="IvesLiu1026/VISTA-World",
                 status=RunStatus.VALIDATION_FAILED,
@@ -106,12 +125,13 @@ class ReceiptContractTests(unittest.TestCase):
                 merge_sha=None,
                 duration_ms=10,
                 failure_category=None,
+                actors=ReceiptActors(),
             )
 
     def test_validation_failed_requires_a_failed_result(self) -> None:
         with self.assertRaisesRegex(ReceiptContractError, "failed result"):
             RunReceipt(
-                run_id="2026-08-21/IvesLiu1026/VISTA-World",
+                run_id=f"2026-08-21/IvesLiu1026/VISTA-World@{HEX_A}",
                 run_date="2026-08-21",
                 repository="IvesLiu1026/VISTA-World",
                 status=RunStatus.VALIDATION_FAILED,
@@ -137,7 +157,35 @@ class ReceiptContractTests(unittest.TestCase):
                 merge_sha=None,
                 duration_ms=10,
                 failure_category="test_failed",
+                actors=ReceiptActors(),
             )
+
+    def test_run_identity_must_bind_base_sha(self) -> None:
+        with self.assertRaisesRegex(ReceiptContractError, "base SHA"):
+            RunReceipt(
+                run_id="2026-08-21/IvesLiu1026/VISTA-World",
+                run_date="2026-08-21",
+                repository="IvesLiu1026/VISTA-World",
+                status=RunStatus.NO_CHANGE,
+                base_sha=HEX_A,
+                head_sha=None,
+                candidate_id=None,
+                validation=(),
+                diff_summary=None,
+                protected_paths_touched=(),
+                pr_url=None,
+                merge_sha=None,
+                duration_ms=1,
+                failure_category=None,
+                actors=ReceiptActors(),
+            )
+
+    def test_pr_receipt_requires_recorded_author_committer_and_actor(self) -> None:
+        receipt = make_pr_receipt()
+        values = dict(receipt.__dict__)
+        values["actors"] = ReceiptActors()
+        with self.assertRaisesRegex(ReceiptContractError, "actors"):
+            RunReceipt(**values)
 
     def test_status_transition_contract_rejects_regression(self) -> None:
         validate_status_transition(RunStatus.PR_OPEN, RunStatus.MERGED)
@@ -152,8 +200,16 @@ class ReceiptContractTests(unittest.TestCase):
             marker,
             "<!-- vista-daily-receipt:2026-08-21:IvesLiu1026/VISTA-World -->",
         )
+        tick = chr(96)
         self.assertIn(marker, entry)
-        self.assertIn(f"receipt_sha256: `{receipt_digest(receipt)}`", entry)
+        self.assertIn(
+            f"receipt_sha256: {tick}{receipt_digest(receipt)}{tick}",
+            entry,
+        )
+        self.assertIn(
+            f"pr_actor: {tick}vista-world-publisher[bot]{tick}",
+            entry,
+        )
         self.assertNotIn("stdout", entry)
 
     def test_invalid_repository_cannot_break_comment_marker(self) -> None:

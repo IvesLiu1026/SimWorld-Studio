@@ -32,6 +32,9 @@ class PublishedSchemaTests(unittest.TestCase):
             schema["properties"]["expected_external_side_effects"],
             {"const": "none"},
         )
+        self.assertEqual(schema["properties"]["risk_tier"]["maximum"], 1)
+        profiles = set(schema["properties"]["validation_profiles"]["items"]["enum"])
+        self.assertNotIn("unreal-content-contract", profiles)
 
     def test_receipt_schema_statuses_match_v1(self) -> None:
         schema = json.loads((ROOT / "receipt.schema.json").read_text(encoding="utf-8"))
@@ -46,6 +49,16 @@ class PublishedSchemaTests(unittest.TestCase):
                 "merged",
                 "infrastructure_failed",
                 "halted",
+            },
+        )
+        self.assertIn("actors", schema["required"])
+        self.assertEqual(
+            set(schema["$defs"]["actors"]["required"]),
+            {
+                "commit_author",
+                "git_committer",
+                "pr_actor",
+                "promotion_actor",
             },
         )
 
