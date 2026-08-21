@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
+import json
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -16,11 +19,162 @@ from .candidate import (
     enforce_v1_candidate_policy,
 )
 from .guard import DiffGuard, GuardLimits, GuardReport
+from .naming import is_v1_candidate_slug, v1_daily_branch_name
 from .profiles import (
     BUILTIN_VALIDATION_PROFILES,
     TrustedExecutables,
     ValidationProfile,
 )
+
+
+_CANONICAL_REPOSITORY = "IvesLiu1026/VISTA-World"
+_GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_CANDIDATE_ID = re.compile(r"^VW-DM-[0-9]{4,}$")
+_COMMAND_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
+
+
+@dataclass(frozen=True)
+class VerificationSubject:
+    """Exact run authority that every verifier artifact must describe."""
+
+    run_id: str
+    run_date: str
+    repository: str
+    base_sha: str
+    branch_name: str
+    worktree_path: str
+    candidate_id: str
+    candidate_slug: str
+    backlog_sha256: str
+    backlog_authorization_sha256: str
+    candidate_sha256: str
+    run_state_sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.run_date, str):
+            raise ValueError("verification subject run date is invalid")
+        try:
+            parsed_date = dt.date.fromisoformat(self.run_date)
+        except ValueError as exc:
+            raise ValueError("verification subject run date is invalid") from exc
+        if parsed_date.isoformat() != self.run_date:
+            raise ValueError("verification subject run date is not canonical")
+        if self.repository != _CANONICAL_REPOSITORY:
+            raise ValueError("verification subject repository is not canonical")
+        if not isinstance(self.base_sha, str) or not _GIT_OBJECT_ID.fullmatch(
+            self.base_sha
+        ):
+            raise ValueError("verification subject base SHA is invalid")
+        expected_run_id = f"{self.run_date}/{self.repository}@{self.base_sha}"
+        if self.run_id != expected_run_id:
+            raise ValueError("verification subject run ID is invalid")
+        if not isinstance(self.candidate_id, str) or not _CANDIDATE_ID.fullmatch(
+            self.candidate_id
+        ):
+            raise ValueError("verification subject candidate ID is invalid")
+        if not is_v1_candidate_slug(self.candidate_slug):
+            raise ValueError("verification subject candidate slug is invalid")
+        expected_branch = v1_daily_branch_name(
+            self.run_date,
+            self.candidate_slug,
+            self.base_sha,
+        )
+        if self.branch_name != expected_branch:
+            raise ValueError("verification subject branch is invalid")
+        if (
+            not isinstance(self.worktree_path, str)
+            or not self.worktree_path
+            or any(character in self.worktree_path for character in "\r\n\0")
+            or not Path(self.worktree_path).is_absolute()
+            or self.worktree_path.startswith("//")
+            or os.path.normpath(self.worktree_path) != self.worktree_path
+        ):
+            raise ValueError("verification subject worktree path is invalid")
+        for value, label in (
+            (self.backlog_sha256, "backlog digest"),
+            (self.backlog_authorization_sha256, "backlog authority digest"),
+            (self.candidate_sha256, "candidate digest"),
+            (self.run_state_sha256, "run state digest"),
+        ):
+            _require_sha256(value, f"verification subject {label}")
+
+    @property
+    def canonical_bytes(self) -> bytes:
+        return _canonical_json_bytes(
+            {
+                "schema_version": "vista.world.daily-maintainer.verification-subject.v1",
+                "run_id": self.run_id,
+                "run_date": self.run_date,
+                "repository": self.repository,
+                "base_sha": self.base_sha,
+                "branch_name": self.branch_name,
+                "worktree_path": self.worktree_path,
+                "candidate_id": self.candidate_id,
+                "candidate_slug": self.candidate_slug,
+                "backlog_sha256": self.backlog_sha256,
+                "backlog_authorization_sha256": (self.backlog_authorization_sha256),
+                "candidate_sha256": self.candidate_sha256,
+                "run_state_sha256": self.run_state_sha256,
+            }
+        )
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.canonical_bytes).hexdigest()
+
+
+def verification_check_subject_digest(
+    verification_subject_sha256: str,
+    patch_sha256: str,
+) -> str:
+    """Bind command output evidence to one subject and pre-check patch."""
+
+    _require_sha256(
+        verification_subject_sha256,
+        "verification subject digest",
+    )
+    _require_sha256(patch_sha256, "verification patch digest")
+    return hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "schema_version": (
+                    "vista.world.daily-maintainer.verification-check-subject.v1"
+                ),
+                "verification_subject_sha256": verification_subject_sha256,
+                "patch_sha256": patch_sha256,
+            }
+        )
+    ).hexdigest()
+
+
+def isolation_evidence_digest(
+    *,
+    subject_sha256: str,
+    patch_sha256: str,
+    network_isolated: bool,
+    credentials_absent: bool,
+    observed_by: str,
+) -> str:
+    """Return the canonical digest for caller-issued isolation evidence."""
+
+    _require_sha256(subject_sha256, "isolation subject digest")
+    _require_sha256(patch_sha256, "isolation patch digest")
+    if network_isolated is not True or credentials_absent is not True:
+        raise ValueError("isolation evidence requires both isolation flags")
+    _validate_observer(observed_by)
+    return hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "schema_version": "vista.world.daily-maintainer.isolation-evidence.v1",
+                "subject_sha256": subject_sha256,
+                "patch_sha256": patch_sha256,
+                "network_isolated": network_isolated,
+                "credentials_absent": credentials_absent,
+                "observed_by": observed_by,
+            }
+        )
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -33,6 +187,8 @@ class IsolationEvidence:
     publication can exist.
     """
 
+    subject_sha256: str
+    patch_sha256: str
     network_isolated: bool
     credentials_absent: bool
     observed_by: str
@@ -43,21 +199,42 @@ class IsolationEvidence:
             raise ValueError(
                 "verifier requires network isolation and absent credentials"
             )
-        if (
-            not isinstance(self.observed_by, str)
-            or not self.observed_by
-            or any(character in self.observed_by for character in "\r\n\0")
-        ):
-            raise ValueError("isolation evidence observer is invalid")
-        if (
-            not isinstance(self.evidence_sha256, str)
-            or len(self.evidence_sha256) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in self.evidence_sha256
-            )
-        ):
-            raise ValueError("isolation evidence must be lowercase SHA-256")
+        _validate_observer(self.observed_by)
+        _require_sha256(self.subject_sha256, "isolation subject digest")
+        _require_sha256(self.patch_sha256, "isolation patch digest")
+        _require_sha256(self.evidence_sha256, "isolation evidence digest")
+        expected = isolation_evidence_digest(
+            subject_sha256=self.subject_sha256,
+            patch_sha256=self.patch_sha256,
+            network_isolated=self.network_isolated,
+            credentials_absent=self.credentials_absent,
+            observed_by=self.observed_by,
+        )
+        if self.evidence_sha256 != expected:
+            raise ValueError("isolation evidence digest does not match subject")
+
+    @classmethod
+    def attest(
+        cls,
+        subject_sha256: str,
+        patch_sha256: str,
+        *,
+        observed_by: str,
+    ) -> IsolationEvidence:
+        return cls(
+            subject_sha256=subject_sha256,
+            patch_sha256=patch_sha256,
+            network_isolated=True,
+            credentials_absent=True,
+            observed_by=observed_by,
+            evidence_sha256=isolation_evidence_digest(
+                subject_sha256=subject_sha256,
+                patch_sha256=patch_sha256,
+                network_isolated=True,
+                credentials_absent=True,
+                observed_by=observed_by,
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -66,7 +243,24 @@ class ValidationResult:
     exit_code: int
     output_sha256: str
     duration_ms: int
+    subject_sha256: str
     timed_out: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.command_id, str) or not _COMMAND_ID.fullmatch(
+            self.command_id
+        ):
+            raise ValueError("validation command ID is invalid")
+        if isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int):
+            raise ValueError("validation exit code is invalid")
+        if isinstance(self.duration_ms, bool) or not isinstance(self.duration_ms, int):
+            raise ValueError("validation duration is invalid")
+        if self.duration_ms < 0:
+            raise ValueError("validation duration must be non-negative")
+        if not isinstance(self.timed_out, bool):
+            raise ValueError("validation timeout flag is invalid")
+        _require_sha256(self.output_sha256, "validation output digest")
+        _require_sha256(self.subject_sha256, "validation subject digest")
 
     @property
     def ok(self) -> bool:
@@ -75,6 +269,8 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class VerificationReport:
+    subject: VerificationSubject
+    check_subject_sha256: str
     candidate_sha256: str
     guard: GuardReport
     final_guard: GuardReport
@@ -84,15 +280,12 @@ class VerificationReport:
     publication_authorized: bool = False
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.candidate_sha256, str)
-            or len(self.candidate_sha256) != 64
-            or any(
-                character not in "0123456789abcdef"
-                for character in self.candidate_sha256
-            )
-        ):
-            raise ValueError("verification candidate digest must be lowercase SHA-256")
+        if not isinstance(self.subject, VerificationSubject):
+            raise ValueError("verification subject must use the strict contract")
+        _require_sha256(self.check_subject_sha256, "verification check subject digest")
+        _require_sha256(self.candidate_sha256, "verification candidate digest")
+        if self.candidate_sha256 != self.subject.candidate_sha256:
+            raise ValueError("verification candidate digest does not match subject")
         if self.publication_authorized is not False:
             raise ValueError("core verification reports cannot authorize publication")
 
@@ -138,6 +331,7 @@ class Verifier:
         base_sha: str,
         candidate: Candidate,
         *,
+        subject: VerificationSubject,
         inherited_env: Mapping[str, str] | None = None,
         limits: GuardLimits | None = None,
     ) -> VerificationReport:
@@ -146,6 +340,16 @@ class Verifier:
         del inherited_env
         enforce_v1_candidate_policy(candidate)
         candidate_sha256 = candidate_authorization_digest(candidate)
+        repo = Path(repo_root).resolve(strict=True)
+        self._validate_subject_binding(
+            subject=subject,
+            repo=repo,
+            base_sha=base_sha,
+            candidate=candidate,
+            candidate_sha256=candidate_sha256,
+        )
+        if self._isolation_evidence.subject_sha256 != subject.sha256:
+            raise ValueError("isolation evidence describes another verifier subject")
         profiles = self._trusted_profiles(candidate)
         repo = Path(repo_root).resolve(strict=True)
         self._preflight_profile_executables(repo, profiles)
@@ -155,8 +359,16 @@ class Verifier:
             candidate,
             limits=limits,
         )
+        check_subject_sha256 = verification_check_subject_digest(
+            subject.sha256,
+            initial_guard.patch_sha256,
+        )
+        if self._isolation_evidence.patch_sha256 != initial_guard.patch_sha256:
+            raise ValueError("isolation evidence describes another verifier patch")
         if not initial_guard.ok:
             return VerificationReport(
+                subject=subject,
+                check_subject_sha256=check_subject_sha256,
                 candidate_sha256=candidate_sha256,
                 guard=initial_guard,
                 final_guard=initial_guard,
@@ -193,6 +405,7 @@ class Verifier:
                     result = self._synthetic_failure(
                         profile.profile_id,
                         f"profile cwd does not exist: {profile.cwd}",
+                        check_subject_sha256,
                     )
                     validation.append(result)
                     current_guard = self._guard.inspect(
@@ -202,6 +415,8 @@ class Verifier:
                         limits=limits,
                     )
                     return self._report(
+                        subject,
+                        check_subject_sha256,
                         candidate_sha256,
                         initial_guard,
                         current_guard,
@@ -229,6 +444,7 @@ class Verifier:
                         cwd=cwd,
                         timeout_seconds=timeout_seconds,
                         environment=environment,
+                        subject_sha256=check_subject_sha256,
                     )
                 )
                 current_guard = self._guard.inspect(
@@ -238,6 +454,8 @@ class Verifier:
                     limits=limits,
                 )
                 report = self._report(
+                    subject,
+                    check_subject_sha256,
                     candidate_sha256,
                     initial_guard,
                     current_guard,
@@ -247,6 +465,8 @@ class Verifier:
                 if report.mutation_detected or not validation[-1].ok:
                     return report
         return self._report(
+            subject,
+            check_subject_sha256,
             candidate_sha256,
             initial_guard,
             current_guard,
@@ -274,7 +494,29 @@ class Verifier:
                 )
 
     @staticmethod
+    def _validate_subject_binding(
+        *,
+        subject: VerificationSubject,
+        repo: Path,
+        base_sha: str,
+        candidate: Candidate,
+        candidate_sha256: str,
+    ) -> None:
+        if not isinstance(subject, VerificationSubject):
+            raise ValueError("exact verification subject is required")
+        if subject.worktree_path != str(repo):
+            raise ValueError("verification subject worktree does not match")
+        if subject.base_sha != base_sha:
+            raise ValueError("verification subject base SHA does not match")
+        if subject.candidate_id != candidate.candidate_id:
+            raise ValueError("verification subject candidate does not match")
+        if subject.candidate_sha256 != candidate_sha256:
+            raise ValueError("verification subject candidate digest does not match")
+
+    @staticmethod
     def _report(
+        subject: VerificationSubject,
+        check_subject_sha256: str,
         candidate_sha256: str,
         initial_guard: GuardReport,
         final_guard: GuardReport,
@@ -286,6 +528,8 @@ class Verifier:
             or initial_guard.changed_files != final_guard.changed_files
         )
         return VerificationReport(
+            subject=subject,
+            check_subject_sha256=check_subject_sha256,
             candidate_sha256=candidate_sha256,
             guard=initial_guard,
             final_guard=final_guard,
@@ -356,6 +600,7 @@ class Verifier:
         cwd: Path,
         timeout_seconds: int,
         environment: Mapping[str, str],
+        subject_sha256: str,
     ) -> ValidationResult:
         started = time.monotonic_ns()
         timed_out = False
@@ -371,7 +616,12 @@ class Verifier:
                 start_new_session=True,
             )
         except OSError as exc:
-            return Verifier._os_error_result(command_id, exc, started)
+            return Verifier._os_error_result(
+                command_id,
+                exc,
+                started,
+                subject_sha256,
+            )
         try:
             stdout, stderr = process.communicate(timeout=timeout_seconds)
             exit_code = process.returncode
@@ -391,6 +641,7 @@ class Verifier:
             exit_code=exit_code,
             output_sha256=digest.hexdigest(),
             duration_ms=duration_ms,
+            subject_sha256=subject_sha256,
             timed_out=timed_out,
         )
 
@@ -419,6 +670,7 @@ class Verifier:
         command_id: str,
         error: OSError,
         started: int,
+        subject_sha256: str,
     ) -> ValidationResult:
         reason = f"{error.__class__.__name__}:{error.errno}".encode(
             "ascii",
@@ -429,13 +681,49 @@ class Verifier:
             exit_code=127,
             output_sha256=hashlib.sha256(reason).hexdigest(),
             duration_ms=max(0, (time.monotonic_ns() - started) // 1_000_000),
+            subject_sha256=subject_sha256,
         )
 
     @staticmethod
-    def _synthetic_failure(command_id: str, reason: str) -> ValidationResult:
+    def _synthetic_failure(
+        command_id: str,
+        reason: str,
+        subject_sha256: str,
+    ) -> ValidationResult:
         return ValidationResult(
             command_id=command_id,
             exit_code=127,
             output_sha256=hashlib.sha256(reason.encode("utf-8")).hexdigest(),
             duration_ms=0,
+            subject_sha256=subject_sha256,
         )
+
+
+def _validate_observer(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 120
+        or any(character in value for character in "\r\n\0")
+    ):
+        raise ValueError("isolation evidence observer is invalid")
+    return value
+
+
+def _require_sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+        raise ValueError(f"{label} must be lowercase SHA-256")
+    return value
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8", "strict")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError("verification evidence is not canonical JSON") from exc

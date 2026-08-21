@@ -86,6 +86,13 @@ def candidate(
 
 def request(value: Candidate | None = None, **changes: object) -> PatcherRequest:
     selected = value or candidate()
+    backlog = Backlog(
+        schema_version="vista.world.daily-maintainer.backlog.v1",
+        manifest_revision=selected.source.manifest_revision,
+        approved_by=selected.source.approved_by,
+        sha256=BACKLOG_SHA,
+        candidates=(selected,),
+    )
     values: dict[str, object] = {
         "run_date": dt.date(2026, 8, 21),
         "repository": "IvesLiu1026/VISTA-World",
@@ -94,6 +101,7 @@ def request(value: Candidate | None = None, **changes: object) -> PatcherRequest
         "manifest_revision": selected.source.manifest_revision,
         "approved_by": selected.source.approved_by,
         "candidate": selected,
+        "backlog": backlog,
         "candidate_slug": "focused-contract-test",
         "candidate_sha256": candidate_authorization_digest(selected),
     }
@@ -242,15 +250,20 @@ def credential_binding(path: Path) -> CredentialBinding:
 
 
 class RequestBindingTests(unittest.TestCase):
-    def test_patcher_exports_the_central_candidate_authority_functions(self) -> None:
-        self.assertIs(
-            candidate_authorization_payload,
-            candidate_contract.candidate_authorization_payload,
+    def test_patcher_wraps_the_central_candidate_authority_functions(self) -> None:
+        selected = candidate()
+        self.assertEqual(
+            candidate_authorization_payload(selected),
+            candidate_contract.candidate_authorization_payload(selected),
         )
-        self.assertIs(
-            candidate_authorization_digest,
-            candidate_contract.candidate_authorization_digest,
+        self.assertEqual(
+            candidate_authorization_digest(selected),
+            candidate_contract.candidate_authorization_digest(selected),
         )
+        with self.assertRaises(PatcherContractError):
+            candidate_authorization_payload(object())  # type: ignore[arg-type]
+        with self.assertRaises(PatcherContractError):
+            candidate_authorization_digest(object())  # type: ignore[arg-type]
 
     def test_candidate_digest_covers_provenance_not_sent_by_normalized_candidate(
         self,
@@ -280,6 +293,25 @@ class RequestBindingTests(unittest.TestCase):
             request(approved_by="FakeApprover")
         with self.assertRaisesRegex(PatcherContractError, "candidate slug"):
             request(candidate_slug="not--canonical")
+
+    def test_request_requires_exact_candidate_membership_in_typed_backlog(self) -> None:
+        selected = candidate()
+        other = replace(
+            selected,
+            candidate_id="VW-DM-0002",
+            title="Another reviewed candidate",
+        )
+        other_backlog = Backlog(
+            schema_version="vista.world.daily-maintainer.backlog.v1",
+            manifest_revision=7,
+            approved_by="IvesLiu1026",
+            sha256=BACKLOG_SHA,
+            candidates=(other,),
+        )
+        with self.assertRaisesRegex(PatcherContractError, "exact member"):
+            request(backlog=other_backlog)
+        with self.assertRaisesRegex(PatcherContractError, "backlog authority"):
+            request(backlog_sha256="9" * 64)
 
     def test_v1_policy_rejects_hand_built_double_star(self) -> None:
         unsafe = candidate(allowed_paths=("**",))

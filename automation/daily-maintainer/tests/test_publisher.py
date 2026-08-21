@@ -10,9 +10,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from vista_daily_maintainer.candidate import (
+    BACKLOG_SCHEMA_VERSION,
     Candidate,
     CandidateContractError,
     CandidateSource,
+    backlog_authorization_digest_from_bindings,
     candidate_authorization_digest,
 )
 from vista_daily_maintainer.finalizer import verified_head_digest
@@ -52,6 +54,11 @@ from vista_daily_maintainer.state import (
     state_digest,
 )
 from vista_daily_maintainer.worktree import WorktreeManager
+from vista_daily_maintainer.verifier import (
+    VerificationSubject,
+    isolation_evidence_digest,
+    verification_check_subject_digest,
+)
 
 
 BASE_SHA = "a" * 40
@@ -60,7 +67,6 @@ OTHER_HEAD_SHA = "8" * 40
 MOVED_SHA = "f" * 40
 PATCH_SHA256 = "c" * 64
 FINAL_GUARD_SHA256 = "e" * 64
-ISOLATION_SHA256 = "1" * 64
 APP_ACTOR = "vista-world-maintainer[bot]"
 APP_COMMITTER = GitIdentity(
     "VISTA World Maintainer",
@@ -83,12 +89,14 @@ def canonical_json(value: object) -> bytes:
 class Check:
     command_id: str
     output_sha256: str
+    subject_sha256: str | None = None
     exit_code: int = 0
     timed_out: bool = False
 
 
 class Envelope:
     def __init__(self, **changes: object) -> None:
+        self._explicit_fields = frozenset(changes)
         values: dict[str, object] = {
             "schema_version": FINALIZED_ENVELOPE_SCHEMA,
             "finalized": True,
@@ -96,6 +104,9 @@ class Envelope:
             "repository": CANONICAL_REPOSITORY,
             "base_sha": BASE_SHA,
             "backlog_sha256": "4" * 64,
+            "backlog_schema_version": BACKLOG_SCHEMA_VERSION,
+            "backlog_manifest_revision": 7,
+            "backlog_approved_by": "IvesLiu1026",
             "run_remote": "origin",
             "run_remote_branch": "main",
             "run_lifecycle": "worktree_ready",
@@ -129,7 +140,6 @@ class Envelope:
             "isolation_network_isolated": True,
             "isolation_credentials_absent": True,
             "isolation_verified_by": "outer-sandbox-controller",
-            "isolation_evidence_sha256": ISOLATION_SHA256,
             "checks": (
                 Check("git-diff-check", "2" * 64),
                 Check("daily-maintainer-core-tests", "3" * 64),
@@ -163,6 +173,55 @@ class Envelope:
                 values["run_state_sha256"] = self._run_state_digest(values)
             except (StateContractError, TypeError, ValueError):
                 values["run_state_sha256"] = "5" * 64
+        values.setdefault(
+            "backlog_candidate_bindings",
+            (f"{values['candidate_id']}:{values['candidate_sha256']}",),
+        )
+        if "backlog_authorization_sha256" not in values:
+            try:
+                values["backlog_authorization_sha256"] = (
+                    self._backlog_authorization_digest(values)
+                )
+            except (CandidateContractError, TypeError, ValueError):
+                values["backlog_authorization_sha256"] = "6" * 64
+        if "verification_subject_sha256" not in values:
+            try:
+                values["verification_subject_sha256"] = self._verification_subject(
+                    values
+                ).sha256
+            except (TypeError, ValueError):
+                values["verification_subject_sha256"] = "7" * 64
+        values.setdefault(
+            "check_subject_sha256",
+            verification_check_subject_digest(
+                str(values["verification_subject_sha256"]),
+                str(values["guard_patch_sha256"]),
+            ),
+        )
+        values["checks"] = tuple(
+            replace(
+                item,
+                subject_sha256=(
+                    item.subject_sha256 or str(values["check_subject_sha256"])
+                ),
+            )
+            for item in values["checks"]  # type: ignore[union-attr]
+        )
+        values.setdefault(
+            "isolation_subject_sha256",
+            values["verification_subject_sha256"],
+        )
+        values.setdefault("isolation_patch_sha256", values["guard_patch_sha256"])
+        values.setdefault(
+            "isolation_evidence_sha256",
+            isolation_evidence_digest(
+                subject_sha256=str(values["isolation_subject_sha256"]),
+                patch_sha256=str(values["isolation_patch_sha256"]),
+                network_isolated=values["isolation_network_isolated"],  # type: ignore[arg-type]
+                credentials_absent=values["isolation_credentials_absent"],  # type: ignore[arg-type]
+                observed_by=str(values["isolation_verified_by"]),
+            ),
+        )
         for name, value in values.items():
             setattr(self, name, value)
         self.canonical_bytes = self._canonical_bytes()
@@ -223,33 +282,77 @@ class Envelope:
         )
         return state_digest(state)
 
+    @staticmethod
+    def _backlog_authorization_digest(values: dict[str, object]) -> str:
+        return backlog_authorization_digest_from_bindings(
+            schema_version=str(values["backlog_schema_version"]),
+            manifest_revision=values["backlog_manifest_revision"],  # type: ignore[arg-type]
+            approved_by=str(values["backlog_approved_by"]),
+            backlog_sha256=str(values["backlog_sha256"]),
+            candidate_bindings=values["backlog_candidate_bindings"],  # type: ignore[arg-type]
+        )
+
+    @staticmethod
+    def _verification_subject(values: dict[str, object]) -> VerificationSubject:
+        return VerificationSubject(
+            run_id=str(values["run_id"]),
+            run_date=str(values["run_date"]),
+            repository=str(values["repository"]),
+            base_sha=str(values["base_sha"]),
+            branch_name=str(values["branch_name"]),
+            worktree_path=str(values["run_worktree_path"]),
+            candidate_id=str(values["candidate_id"]),
+            candidate_slug=str(values["candidate_slug"]),
+            backlog_sha256=str(values["backlog_sha256"]),
+            backlog_authorization_sha256=str(values["backlog_authorization_sha256"]),
+            candidate_sha256=str(values["candidate_sha256"]),
+            run_state_sha256=str(values["run_state_sha256"]),
+        )
+
     def bind_worktree(self, path: Path) -> None:
+        old_check_subject = self.check_subject_sha256
         self.run_worktree_path = str(path)
-        values = {
-            name: getattr(self, name)
-            for name in (
-                "run_date",
-                "repository",
-                "base_sha",
-                "candidate_id",
-                "candidate_slug",
-                "backlog_sha256",
-                "candidate_sha256",
-                "run_remote",
-                "run_remote_branch",
-                "branch_name",
-                "run_lifecycle",
-                "run_branch_disposition",
-                "run_branch_head_sha",
-                "run_worktree_path",
-                "run_observed_remote_sha",
-                "run_publication_state",
-            )
-        }
+        values = dict(vars(self))
         try:
             self.run_state_sha256 = self._run_state_digest(values)
         except (StateContractError, TypeError, ValueError):
             self.run_state_sha256 = "5" * 64
+        values["run_state_sha256"] = self.run_state_sha256
+        if "verification_subject_sha256" not in self._explicit_fields:
+            try:
+                self.verification_subject_sha256 = self._verification_subject(
+                    values
+                ).sha256
+            except (TypeError, ValueError):
+                self.verification_subject_sha256 = "7" * 64
+        if "check_subject_sha256" not in self._explicit_fields:
+            self.check_subject_sha256 = verification_check_subject_digest(
+                self.verification_subject_sha256,
+                self.guard_patch_sha256,
+            )
+        self.checks = tuple(
+            replace(
+                item,
+                subject_sha256=(
+                    self.check_subject_sha256
+                    if item.subject_sha256 in {None, old_check_subject}
+                    else item.subject_sha256
+                ),
+            )
+            for item in self.checks
+        )
+        if "isolation_subject_sha256" not in self._explicit_fields:
+            self.isolation_subject_sha256 = self.verification_subject_sha256
+        if "isolation_patch_sha256" not in self._explicit_fields:
+            self.isolation_patch_sha256 = self.guard_patch_sha256
+        if "isolation_evidence_sha256" not in self._explicit_fields:
+            self.isolation_evidence_sha256 = isolation_evidence_digest(
+                subject_sha256=self.isolation_subject_sha256,
+                patch_sha256=self.isolation_patch_sha256,
+                network_isolated=self.isolation_network_isolated,
+                credentials_absent=self.isolation_credentials_absent,
+                observed_by=self.isolation_verified_by,
+            )
         self.canonical_bytes = self._canonical_bytes()
 
     def _canonical_bytes(self) -> bytes:
@@ -263,8 +366,15 @@ class Envelope:
                 "base_sha": self.base_sha,
                 "branch_name": self.branch_name,
                 "backlog_sha256": self.backlog_sha256,
+                "backlog_schema_version": self.backlog_schema_version,
+                "backlog_manifest_revision": self.backlog_manifest_revision,
+                "backlog_approved_by": self.backlog_approved_by,
+                "backlog_candidate_bindings": list(self.backlog_candidate_bindings),
+                "backlog_authorization_sha256": (self.backlog_authorization_sha256),
                 "candidate_sha256": self.candidate_sha256,
                 "run_state_sha256": self.run_state_sha256,
+                "verification_subject_sha256": self.verification_subject_sha256,
+                "check_subject_sha256": self.check_subject_sha256,
                 "run_remote": self.run_remote,
                 "run_remote_branch": self.run_remote_branch,
                 "run_lifecycle": self.run_lifecycle,
@@ -299,6 +409,8 @@ class Envelope:
                 "isolation_network_isolated": self.isolation_network_isolated,
                 "isolation_credentials_absent": self.isolation_credentials_absent,
                 "isolation_verified_by": self.isolation_verified_by,
+                "isolation_subject_sha256": self.isolation_subject_sha256,
+                "isolation_patch_sha256": self.isolation_patch_sha256,
                 "isolation_evidence_sha256": self.isolation_evidence_sha256,
                 "checks": [dataclasses.asdict(item) for item in self.checks],
             }
@@ -325,6 +437,7 @@ class Policy:
             "publisher_home": "/var/lib/vista-world-publisher",
             "environment_keys": PUBLISHER_ENVIRONMENT_ALLOWLIST,
             "runtime_attestor": "systemd-publisher-boundary",
+            "approved_backlog_sha256": "4" * 64,
         }
         values.update(changes)
         for name, value in values.items():
@@ -346,6 +459,7 @@ class Policy:
                 "publisher_home": self.publisher_home,
                 "environment_keys": list(self.environment_keys),
                 "runtime_attestor": self.runtime_attestor,
+                "approved_backlog_sha256": self.approved_backlog_sha256,
             }
         )
 
@@ -648,12 +762,27 @@ class PublisherContractTests(unittest.TestCase):
             commit.message,
         )
         self.assertIn(
+            (
+                "Backlog-Authorization-SHA256: "
+                f"{fixture.envelope.backlog_authorization_sha256}"
+            ),
+            commit.message,
+        )
+        self.assertIn(
             f"Run-State-SHA256: {fixture.envelope.run_state_sha256}",
             commit.message,
         )
         self.assertEqual(result.backlog_sha256, fixture.envelope.backlog_sha256)
+        self.assertEqual(
+            result.backlog_authorization_sha256,
+            fixture.envelope.backlog_authorization_sha256,
+        )
         self.assertEqual(result.candidate_sha256, fixture.envelope.candidate_sha256)
         self.assertEqual(result.run_state_sha256, fixture.envelope.run_state_sha256)
+        self.assertEqual(
+            result.verification_subject_sha256,
+            fixture.envelope.verification_subject_sha256,
+        )
 
     def test_unattended_app_is_exact_non_admin_repo_scoped_principal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -760,6 +889,72 @@ class PublisherContractTests(unittest.TestCase):
             other.mkdir()
             fixture.envelope.bind_worktree(other)
             with self.assertRaisesRegex(PublicationPreflightError, "worktree"):
+                fixture.publish()
+            self.assertEqual(fixture.git.create_calls, 0)
+
+    def test_synchronized_unapproved_backlog_replacement_is_policy_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(
+                Path(temporary),
+                envelope=Envelope(backlog_sha256="9" * 64),
+            )
+            with self.assertRaisesRegex(
+                PublicationPreflightError,
+                "not pinned by protected policy",
+            ):
+                fixture.publish()
+        self.assertEqual(fixture.git.create_calls, 0)
+
+    def test_check_and_isolation_subject_swaps_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            fixture.envelope.checks = (
+                replace(fixture.envelope.checks[0], subject_sha256="9" * 64),
+                fixture.envelope.checks[1],
+            )
+            fixture.envelope.canonical_bytes = fixture.envelope._canonical_bytes()
+            with self.assertRaisesRegex(
+                PublicationPreflightError,
+                "another run subject",
+            ):
+                fixture.publish()
+            self.assertEqual(fixture.git.create_calls, 0)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            fixture.envelope.isolation_subject_sha256 = "9" * 64
+            fixture.envelope.isolation_evidence_sha256 = isolation_evidence_digest(
+                subject_sha256="9" * 64,
+                patch_sha256=fixture.envelope.isolation_patch_sha256,
+                network_isolated=True,
+                credentials_absent=True,
+                observed_by=fixture.envelope.isolation_verified_by,
+            )
+            fixture.envelope.canonical_bytes = fixture.envelope._canonical_bytes()
+            with self.assertRaisesRegex(
+                PublicationPreflightError,
+                "another verification subject",
+            ):
+                fixture.publish()
+            self.assertEqual(fixture.git.create_calls, 0)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            fixture.envelope.isolation_patch_sha256 = "8" * 64
+            fixture.envelope.isolation_evidence_sha256 = isolation_evidence_digest(
+                subject_sha256=fixture.envelope.isolation_subject_sha256,
+                patch_sha256="8" * 64,
+                network_isolated=True,
+                credentials_absent=True,
+                observed_by=fixture.envelope.isolation_verified_by,
+            )
+            fixture.envelope.canonical_bytes = fixture.envelope._canonical_bytes()
+            with self.assertRaisesRegex(
+                PublicationPreflightError,
+                "another verified patch",
+            ):
                 fixture.publish()
             self.assertEqual(fixture.git.create_calls, 0)
 

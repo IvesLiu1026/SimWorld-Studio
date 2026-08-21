@@ -6,6 +6,8 @@ from .candidate import (
     Candidate,
     CandidateContractError,
     CandidateSource,
+    backlog_authorization_digest,
+    backlog_candidate_bindings,
     candidate_authorization_digest,
     candidate_authorization_payload,
     enforce_v1_candidate_policy,
@@ -17,6 +19,7 @@ from .finalizer import (
     FinalizedVerificationCheck,
     FinalizedVerifierEnvelope,
     VerificationFinalizer,
+    build_verification_subject,
     finalize_verification,
 )
 from .guard import DiffGuard, GuardLimits, GuardReport
@@ -28,7 +31,13 @@ from .receipt import (
     RunStatus,
     receipt_digest,
 )
-from .verifier import IsolationEvidence, VerificationReport, Verifier
+from .verifier import (
+    IsolationEvidence,
+    VerificationReport,
+    VerificationSubject,
+    Verifier,
+    verification_check_subject_digest,
+)
 
 __all__ = [
     "Backlog",
@@ -49,13 +58,18 @@ __all__ = [
     "RunStatus",
     "TrustedExecutables",
     "VerificationReport",
+    "VerificationSubject",
     "Verifier",
     "VerificationFinalizer",
     "candidate_authorization_digest",
     "candidate_authorization_payload",
+    "backlog_authorization_digest",
+    "backlog_candidate_bindings",
+    "build_verification_subject",
     "enforce_v1_candidate_policy",
     "load_trusted_backlog",
     "finalize_verification",
     "receipt_digest",
     "select_candidate",
+    "verification_check_subject_digest",
 ]

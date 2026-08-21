@@ -22,7 +22,8 @@ from .candidate import (
     BacklogTrust,
     Candidate,
     CandidateContractError,
-    candidate_authorization_digest,
+    backlog_authorization_digest,
+    candidate_authorization_digest as _candidate_authorization_digest,
     candidate_authorization_payload as _candidate_authorization_payload,
     load_trusted_backlog,
     path_matches_pattern,
@@ -238,13 +239,27 @@ _BLOCKERS = frozenset(
 )
 _BLOCKED_ONLY = _BLOCKERS - {"finding_not_reproduced"}
 
-# Backwards-compatible public import while candidate.py owns the one canonical
-# implementation used by every trust boundary.
-candidate_authorization_payload = _candidate_authorization_payload
-
 
 class PatcherContractError(ValueError):
     """The patcher boundary is incomplete or unsafe."""
+
+
+def candidate_authorization_payload(candidate: Candidate) -> dict[str, object]:
+    """Compatibility wrapper over the centralized candidate authority."""
+
+    try:
+        return _candidate_authorization_payload(candidate)
+    except CandidateContractError as exc:
+        raise PatcherContractError("candidate authority is invalid") from exc
+
+
+def candidate_authorization_digest(candidate: Candidate) -> str:
+    """Compatibility wrapper preserving patcher-specific contract errors."""
+
+    try:
+        return _candidate_authorization_digest(candidate)
+    except CandidateContractError as exc:
+        raise PatcherContractError("candidate authority is invalid") from exc
 
 
 @dataclass(frozen=True)
@@ -272,6 +287,7 @@ class PatcherRequest:
     manifest_revision: int
     approved_by: str
     candidate: Candidate
+    backlog: Backlog
     candidate_slug: str
     candidate_sha256: str
 
@@ -298,6 +314,12 @@ class PatcherRequest:
             raise PatcherContractError("manifest revision must be positive")
         if not isinstance(self.candidate, Candidate):
             raise PatcherContractError("patcher candidate must use the strict contract")
+        if not isinstance(self.backlog, Backlog):
+            raise PatcherContractError("patcher backlog must use the strict contract")
+        try:
+            backlog_authorization_digest(self.backlog)
+        except CandidateContractError as exc:
+            raise PatcherContractError("patcher backlog authority is invalid") from exc
         if not is_v1_candidate_slug(self.candidate_slug):
             raise PatcherContractError("candidate slug is invalid")
         if not self.candidate.eligible_on(self.run_date):
@@ -310,6 +332,21 @@ class PatcherRequest:
             raise PatcherContractError("candidate revision does not match the request")
         if self.candidate.source.approved_by != self.approved_by:
             raise PatcherContractError("candidate approver does not match the request")
+        if (
+            self.backlog.sha256 != self.backlog_sha256
+            or self.backlog.manifest_revision != self.manifest_revision
+            or self.backlog.approved_by != self.approved_by
+        ):
+            raise PatcherContractError("request backlog authority does not match")
+        matches = tuple(
+            item
+            for item in self.backlog.candidates
+            if item.candidate_id == self.candidate.candidate_id
+        )
+        if len(matches) != 1 or matches[0] != self.candidate:
+            raise PatcherContractError(
+                "candidate is not an exact member of the request backlog"
+            )
         unknown_profiles = sorted(
             set(self.candidate.validation_profiles) - BUILTIN_VALIDATION_PROFILES.ids
         )
@@ -1573,6 +1610,7 @@ def _bind_candidate_to_backlog(request: PatcherRequest, backlog: Backlog) -> Non
         backlog.sha256 != request.backlog_sha256
         or backlog.manifest_revision != request.manifest_revision
         or backlog.approved_by != request.approved_by
+        or backlog != request.backlog
     ):
         raise PatcherContractError(
             "request does not match the reviewed backlog identity"

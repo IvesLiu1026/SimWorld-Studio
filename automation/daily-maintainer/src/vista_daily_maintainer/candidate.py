@@ -523,6 +523,135 @@ class Backlog:
     sha256: str
     candidates: tuple[Candidate, ...]
 
+    def __post_init__(self) -> None:
+        _validate_backlog_authority(self)
+
+
+def backlog_candidate_bindings(backlog: Backlog) -> tuple[str, ...]:
+    """Return canonical candidate-ID/digest membership for one strict backlog."""
+
+    _validate_backlog_authority(backlog)
+    bindings = tuple(
+        sorted(
+            f"{candidate.candidate_id}:{candidate_authorization_digest(candidate)}"
+            for candidate in backlog.candidates
+        )
+    )
+    if len(set(bindings)) != len(bindings):
+        raise CandidateContractError("backlog candidate authority must be unique")
+    return bindings
+
+
+def backlog_authorization_digest(backlog: Backlog) -> str:
+    """Bind backlog identity to the complete canonical candidate membership."""
+
+    bindings = backlog_candidate_bindings(backlog)
+    return backlog_authorization_digest_from_bindings(
+        schema_version=backlog.schema_version,
+        manifest_revision=backlog.manifest_revision,
+        approved_by=backlog.approved_by,
+        backlog_sha256=backlog.sha256,
+        candidate_bindings=bindings,
+    )
+
+
+def backlog_authorization_digest_from_bindings(
+    *,
+    schema_version: str,
+    manifest_revision: int,
+    approved_by: str,
+    backlog_sha256: str,
+    candidate_bindings: tuple[str, ...],
+) -> str:
+    """Recompute backlog membership authority from a finalized projection."""
+
+    if schema_version != BACKLOG_SCHEMA_VERSION:
+        raise CandidateContractError("unsupported backlog authority schema")
+    if (
+        isinstance(manifest_revision, bool)
+        or not isinstance(manifest_revision, int)
+        or manifest_revision < 1
+    ):
+        raise CandidateContractError("backlog authority revision must be positive")
+    if not isinstance(approved_by, str) or not _APPROVER.fullmatch(approved_by):
+        raise CandidateContractError("backlog authority approver is invalid")
+    if not isinstance(backlog_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", backlog_sha256
+    ):
+        raise CandidateContractError("backlog authority digest must be SHA-256")
+    if (
+        not isinstance(candidate_bindings, tuple)
+        or not candidate_bindings
+        or candidate_bindings != tuple(sorted(set(candidate_bindings)))
+    ):
+        raise CandidateContractError(
+            "backlog candidate bindings must be sorted and unique"
+        )
+    binding_pattern = re.compile(r"^VW-DM-[0-9]{4,}:[0-9a-f]{64}$")
+    if any(
+        not isinstance(binding, str) or not binding_pattern.fullmatch(binding)
+        for binding in candidate_bindings
+    ):
+        raise CandidateContractError("backlog candidate binding is invalid")
+    candidate_ids = tuple(binding.split(":", 1)[0] for binding in candidate_bindings)
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise CandidateContractError("backlog candidate binding IDs must be unique")
+    payload = {
+        "schema_version": "vista.world.daily-maintainer.backlog-authority.v1",
+        "backlog_schema_version": schema_version,
+        "manifest_revision": manifest_revision,
+        "approved_by": approved_by,
+        "backlog_sha256": backlog_sha256,
+        "candidate_bindings": list(candidate_bindings),
+    }
+    try:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8", "strict")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise CandidateContractError("backlog authority is not canonical JSON") from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_backlog_authority(backlog: Backlog) -> None:
+    if not isinstance(backlog, Backlog):
+        raise CandidateContractError("backlog must use the strict contract")
+    if backlog.schema_version != BACKLOG_SCHEMA_VERSION:
+        raise CandidateContractError("unsupported backlog authority schema")
+    if (
+        isinstance(backlog.manifest_revision, bool)
+        or not isinstance(backlog.manifest_revision, int)
+        or backlog.manifest_revision < 1
+    ):
+        raise CandidateContractError("backlog authority revision must be positive")
+    if not isinstance(backlog.approved_by, str) or not _APPROVER.fullmatch(
+        backlog.approved_by
+    ):
+        raise CandidateContractError("backlog authority approver is invalid")
+    if not isinstance(backlog.sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", backlog.sha256
+    ):
+        raise CandidateContractError("backlog authority digest must be SHA-256")
+    if not isinstance(backlog.candidates, tuple) or not backlog.candidates:
+        raise CandidateContractError("backlog authority candidates must be non-empty")
+    if any(not isinstance(candidate, Candidate) for candidate in backlog.candidates):
+        raise CandidateContractError("backlog authority candidate is invalid")
+    ids = tuple(candidate.candidate_id for candidate in backlog.candidates)
+    if len(set(ids)) != len(ids):
+        raise CandidateContractError("backlog candidate IDs must be unique")
+    if any(
+        candidate.source.manifest_revision != backlog.manifest_revision
+        or candidate.source.approved_by != backlog.approved_by
+        for candidate in backlog.candidates
+    ):
+        raise CandidateContractError(
+            "backlog candidate provenance must match backlog authority"
+        )
+
 
 def _validate_text(value: object, label: str, *, minimum: int, maximum: int) -> None:
     if (

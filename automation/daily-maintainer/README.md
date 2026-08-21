@@ -35,14 +35,18 @@ deliberately unable to decide that these edits are safe.
 Validation accepts digest-bound `IsolationEvidence` only as caller-provided
 evidence. It is not a self-authenticating attestation: Python cannot establish
 the required network, credential, filesystem, UID, cgroup, or read-only-mount
-boundary from inside the verifier. The verifier report exposes `checks_passed`,
-carries the complete candidate authority SHA-256, fixes
+boundary from inside the verifier. Each isolation artifact is nevertheless
+bound to the exact run subject and pre-check patch, while every command result
+is bound to the derived run-subject/patch digest. The verifier report exposes
+`checks_passed`, carries the complete candidate authority SHA-256, fixes
 `publication_authorized` to `false`, and is never itself a publication
 authorization. `finalizer.py` accepts only an exact `PatcherRequest`,
 `RunState`, and `VerificationReport`; it rejects swapped candidate, backlog,
 slug, branch, base, patch, changed-path, check, or isolation evidence. The
-publisher reconstructs the complete candidate and run state, recomputes both
-digests, and requires the finalized worktree path to match its local target.
+publisher reconstructs the complete backlog membership, candidate, run state,
+verification subject, check subject, and isolation evidence; it recomputes all
+digests, requires the finalized worktree path to match its local target, and
+requires the backlog file digest to match the operator-owned protected policy.
 T13 must still add an immutable one-way spool and outer sandbox before
 unattended publication is enabled.
 

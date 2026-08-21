@@ -10,9 +10,11 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Protocol, TypeVar
 
 from .candidate import (
+    BACKLOG_SCHEMA_VERSION,
     Candidate,
     CandidateContractError,
     CandidateSource,
+    backlog_authorization_digest_from_bindings,
     candidate_authorization_digest,
     has_v1_forbidden_authority,
     is_v1_test_scope,
@@ -30,6 +32,11 @@ from .state import (
     RunState,
     StateContractError,
     state_digest,
+)
+from .verifier import (
+    VerificationSubject,
+    isolation_evidence_digest,
+    verification_check_subject_digest,
 )
 
 
@@ -51,6 +58,7 @@ PUBLISHER_ENVIRONMENT_ALLOWLIST = (
 _GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CANDIDATE_ID = re.compile(r"^VW-DM-[0-9]{4,}$")
+_BACKLOG_BINDING = re.compile(r"^VW-DM-[0-9]{4,}:[0-9a-f]{64}$")
 _COMMAND_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _PROFILE_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _PERMISSION = re.compile(r"^[a-z][a-z0-9_]*:(?:read|write)$")
@@ -203,6 +211,7 @@ class ProtectedPolicyReference:
 class VerificationCheckView(Protocol):
     command_id: str
     output_sha256: str
+    subject_sha256: str
     exit_code: int
     timed_out: bool
 
@@ -224,8 +233,15 @@ class FinalizedVerifierEnvelope(Protocol):
     base_sha: str
     branch_name: str
     backlog_sha256: str
+    backlog_schema_version: str
+    backlog_manifest_revision: int
+    backlog_approved_by: str
+    backlog_candidate_bindings: tuple[str, ...]
+    backlog_authorization_sha256: str
     candidate_sha256: str
     run_state_sha256: str
+    verification_subject_sha256: str
+    check_subject_sha256: str
     run_remote: str
     run_remote_branch: str
     run_lifecycle: str
@@ -260,6 +276,8 @@ class FinalizedVerifierEnvelope(Protocol):
     isolation_network_isolated: bool
     isolation_credentials_absent: bool
     isolation_verified_by: str
+    isolation_subject_sha256: str
+    isolation_patch_sha256: str
     isolation_evidence_sha256: str
     checks: tuple[VerificationCheckView, ...]
 
@@ -281,6 +299,7 @@ class ProtectedPublisherPolicy(Protocol):
     publisher_home: str
     environment_keys: tuple[str, ...]
     runtime_attestor: str
+    approved_backlog_sha256: str
 
 
 class TrustMaterialPort(Protocol):
@@ -526,8 +545,10 @@ class PublicationResult:
     patch_sha256: str
     verification_sha256: str
     backlog_sha256: str
+    backlog_authorization_sha256: str
     candidate_sha256: str
     run_state_sha256: str
+    verification_subject_sha256: str
     commit_author: GitIdentity
     commit_committer: GitIdentity
     pr_actor: str
@@ -575,6 +596,7 @@ class GitHubPort(Protocol):
 class _CheckState:
     command_id: str
     output_sha256: str
+    subject_sha256: str
     exit_code: int
     timed_out: bool
 
@@ -588,8 +610,15 @@ class _VerifierState:
     base_sha: str
     branch_name: str
     backlog_sha256: str
+    backlog_schema_version: str
+    backlog_manifest_revision: int
+    backlog_approved_by: str
+    backlog_candidate_bindings: tuple[str, ...]
+    backlog_authorization_sha256: str
     candidate_sha256: str
     run_state_sha256: str
+    verification_subject_sha256: str
+    check_subject_sha256: str
     run_remote: str
     run_remote_branch: str
     run_lifecycle: str
@@ -619,6 +648,8 @@ class _VerifierState:
     final_guard_sha256: str
     head_sha256: str
     isolation_verified_by: str
+    isolation_subject_sha256: str
+    isolation_patch_sha256: str
     isolation_evidence_sha256: str
     checks: tuple[_CheckState, ...]
 
@@ -643,6 +674,7 @@ class _PolicyState:
     publisher_home: str
     environment_keys: tuple[str, ...]
     runtime_attestor: str
+    approved_backlog_sha256: str
 
 
 @dataclass(frozen=True)
@@ -708,6 +740,7 @@ class Publisher:
                 "publisher worktree does not match finalized run state"
             )
         policy = self._read_policy(policy_reference)
+        self._validate_backlog_policy(evidence, policy)
         runtime = self._read_runtime(policy)
         principal = self._read_principal(policy)
         repository = self._read_repository(evidence)
@@ -1017,11 +1050,22 @@ class Publisher:
     ) -> None:
         if self._read_policy(policy_reference) != policy:
             raise PublicationPreflightError("protected publisher policy changed")
+        self._validate_backlog_policy(evidence, policy)
         if self._read_runtime(policy) != runtime:
             raise PublicationPreflightError("publisher runtime attestation changed")
         if self._read_principal(policy) != principal:
             raise PublicationPreflightError("publisher principal changed")
         self._require_remote_main(evidence.base_sha)
+
+    @staticmethod
+    def _validate_backlog_policy(
+        evidence: _VerifierState,
+        policy: _PolicyState,
+    ) -> None:
+        if evidence.backlog_sha256 != policy.approved_backlog_sha256:
+            raise PublicationPreflightError(
+                "finalized backlog is not pinned by protected policy"
+            )
 
     def _revalidate_envelope(
         self,
@@ -1231,8 +1275,10 @@ class Publisher:
             patch_sha256=evidence.final_guard_patch_sha256,
             verification_sha256=evidence.canonical_sha256,
             backlog_sha256=evidence.backlog_sha256,
+            backlog_authorization_sha256=evidence.backlog_authorization_sha256,
             candidate_sha256=evidence.candidate_sha256,
             run_state_sha256=evidence.run_state_sha256,
+            verification_subject_sha256=evidence.verification_subject_sha256,
             commit_author=commit.author,
             commit_committer=commit.committer,
             pr_actor=pull_request.actor,
@@ -1277,8 +1323,53 @@ def _freeze_verifier_envelope(
 
     branch_name = _copy_string(value.branch_name, "verifier branch")
     backlog_sha256 = _copy_sha256(value.backlog_sha256, "backlog digest")
+    backlog_schema_version = _copy_string(
+        value.backlog_schema_version,
+        "backlog schema version",
+    )
+    if backlog_schema_version != BACKLOG_SCHEMA_VERSION:
+        raise PublicationPreflightError("backlog schema is not supported")
+    backlog_manifest_revision = _copy_int(
+        value.backlog_manifest_revision,
+        "backlog manifest revision",
+        minimum=1,
+    )
+    backlog_approved_by = _copy_safe_line(
+        value.backlog_approved_by,
+        "backlog approver",
+        maximum=100,
+    )
+    backlog_candidate_bindings = _copy_candidate_bindings(
+        value.backlog_candidate_bindings
+    )
+    backlog_authorization_sha256 = _copy_sha256(
+        value.backlog_authorization_sha256,
+        "backlog authority digest",
+    )
+    try:
+        expected_backlog_authorization = backlog_authorization_digest_from_bindings(
+            schema_version=backlog_schema_version,
+            manifest_revision=backlog_manifest_revision,
+            approved_by=backlog_approved_by,
+            backlog_sha256=backlog_sha256,
+            candidate_bindings=backlog_candidate_bindings,
+        )
+    except CandidateContractError as exc:
+        raise PublicationPreflightError(
+            "backlog authority cannot be reconstructed"
+        ) from exc
+    if expected_backlog_authorization != backlog_authorization_sha256:
+        raise PublicationPreflightError("backlog authority digest does not match")
     candidate_sha256 = _copy_sha256(value.candidate_sha256, "candidate digest")
     run_state_sha256 = _copy_sha256(value.run_state_sha256, "run state digest")
+    verification_subject_sha256 = _copy_sha256(
+        value.verification_subject_sha256,
+        "verification subject digest",
+    )
+    check_subject_sha256 = _copy_sha256(
+        value.check_subject_sha256,
+        "verification check subject digest",
+    )
     run_remote = _copy_safe_line(value.run_remote, "run remote", maximum=64)
     run_remote_branch = _copy_safe_line(
         value.run_remote_branch, "run remote branch", maximum=128
@@ -1385,6 +1476,17 @@ def _freeze_verifier_envelope(
         ) from exc
     if candidate_authorization_digest(candidate) != candidate_sha256:
         raise PublicationPreflightError("candidate authority digest does not match")
+    if (
+        source_revision != backlog_manifest_revision
+        or source_approver != backlog_approved_by
+    ):
+        raise PublicationPreflightError(
+            "candidate provenance does not match backlog authority"
+        )
+    if f"{candidate_id}:{candidate_sha256}" not in backlog_candidate_bindings:
+        raise PublicationPreflightError(
+            "candidate is not a member of backlog authority"
+        )
     if not candidate.eligible_on(dt.date.fromisoformat(run_date)):
         raise PublicationPreflightError("candidate was not eligible on the run date")
     expected_branch = v1_daily_branch_name(run_date, slug, base_sha)
@@ -1423,6 +1525,27 @@ def _freeze_verifier_envelope(
         raise PublicationPreflightError("run state is not publishable V1 state")
     if state_digest(bound_state) != run_state_sha256:
         raise PublicationPreflightError("run state digest does not match")
+    try:
+        verification_subject = VerificationSubject(
+            run_id=run_id,
+            run_date=run_date,
+            repository=repository,
+            base_sha=base_sha,
+            branch_name=branch_name,
+            worktree_path=run_worktree_path,
+            candidate_id=candidate_id,
+            candidate_slug=slug,
+            backlog_sha256=backlog_sha256,
+            backlog_authorization_sha256=backlog_authorization_sha256,
+            candidate_sha256=candidate_sha256,
+            run_state_sha256=run_state_sha256,
+        )
+    except (TypeError, ValueError) as exc:
+        raise PublicationPreflightError(
+            "verification subject cannot be reconstructed"
+        ) from exc
+    if verification_subject.sha256 != verification_subject_sha256:
+        raise PublicationPreflightError("verification subject digest does not match")
     _validate_v1_candidate_authority(
         risk_tier=risk_tier,
         allowed_paths=allowed_paths,
@@ -1454,6 +1577,13 @@ def _freeze_verifier_envelope(
         raise PublicationPreflightError(
             "initial and final guard patch identities differ"
         )
+    if check_subject_sha256 != verification_check_subject_digest(
+        verification_subject_sha256,
+        guard_patch,
+    ):
+        raise PublicationPreflightError(
+            "verification check subject digest does not match"
+        )
     head_sha256 = _copy_sha256(value.head_sha256, "verified head digest")
     if head_sha256 != verified_head_digest(
         base_sha,
@@ -1464,9 +1594,33 @@ def _freeze_verifier_envelope(
     isolation_verified_by = _copy_safe_line(
         value.isolation_verified_by, "isolation verifier", maximum=120
     )
+    isolation_subject_sha256 = _copy_sha256(
+        value.isolation_subject_sha256,
+        "isolation subject digest",
+    )
+    if isolation_subject_sha256 != verification_subject_sha256:
+        raise PublicationPreflightError(
+            "isolation evidence describes another verification subject"
+        )
+    isolation_patch_sha256 = _copy_sha256(
+        value.isolation_patch_sha256,
+        "isolation patch digest",
+    )
+    if isolation_patch_sha256 != guard_patch:
+        raise PublicationPreflightError(
+            "isolation evidence describes another verified patch"
+        )
     isolation_evidence = _copy_sha256(
         value.isolation_evidence_sha256, "isolation evidence digest"
     )
+    if isolation_evidence != isolation_evidence_digest(
+        subject_sha256=isolation_subject_sha256,
+        patch_sha256=isolation_patch_sha256,
+        network_isolated=value.isolation_network_isolated,
+        credentials_absent=value.isolation_credentials_absent,
+        observed_by=isolation_verified_by,
+    ):
+        raise PublicationPreflightError("isolation evidence digest does not match")
 
     if not isinstance(value.checks, tuple) or not value.checks:
         raise PublicationPreflightError("verifier checks must be a non-empty tuple")
@@ -1476,6 +1630,14 @@ def _freeze_verifier_envelope(
         if not _COMMAND_ID.fullmatch(command_id):
             raise PublicationPreflightError("verification command ID is invalid")
         output_sha256 = _copy_sha256(item.output_sha256, "verification output digest")
+        subject_sha256 = _copy_sha256(
+            item.subject_sha256,
+            "verification check subject digest",
+        )
+        if subject_sha256 != check_subject_sha256:
+            raise PublicationPreflightError(
+                "verification check describes another run subject"
+            )
         exit_code = _copy_int(
             item.exit_code, "verification exit code", minimum=-(2**31)
         )
@@ -1483,7 +1645,15 @@ def _freeze_verifier_envelope(
             raise PublicationPreflightError("verification timeout flag is invalid")
         if exit_code != 0 or item.timed_out:
             raise PublicationPreflightError("verification did not pass")
-        checks.append(_CheckState(command_id, output_sha256, exit_code, item.timed_out))
+        checks.append(
+            _CheckState(
+                command_id,
+                output_sha256,
+                subject_sha256,
+                exit_code,
+                item.timed_out,
+            )
+        )
     if tuple(item.command_id for item in checks) != (
         "git-diff-check",
         *profiles,
@@ -1516,8 +1686,15 @@ def _freeze_verifier_envelope(
         base_sha=base_sha,
         branch_name=branch_name,
         backlog_sha256=backlog_sha256,
+        backlog_schema_version=backlog_schema_version,
+        backlog_manifest_revision=backlog_manifest_revision,
+        backlog_approved_by=backlog_approved_by,
+        backlog_candidate_bindings=backlog_candidate_bindings,
+        backlog_authorization_sha256=backlog_authorization_sha256,
         candidate_sha256=candidate_sha256,
         run_state_sha256=run_state_sha256,
+        verification_subject_sha256=verification_subject_sha256,
+        check_subject_sha256=check_subject_sha256,
         run_remote=run_remote,
         run_remote_branch=run_remote_branch,
         run_lifecycle=run_lifecycle,
@@ -1547,6 +1724,8 @@ def _freeze_verifier_envelope(
         final_guard_sha256=final_guard,
         head_sha256=head_sha256,
         isolation_verified_by=isolation_verified_by,
+        isolation_subject_sha256=isolation_subject_sha256,
+        isolation_patch_sha256=isolation_patch_sha256,
         isolation_evidence_sha256=isolation_evidence,
         checks=tuple(checks),
     )
@@ -1614,6 +1793,10 @@ def _freeze_policy(
     runtime_attestor = _copy_safe_line(
         value.runtime_attestor, "runtime attestor", maximum=120
     )
+    approved_backlog_sha256 = _copy_sha256(
+        value.approved_backlog_sha256,
+        "protected approved backlog digest",
+    )
     state = _PolicyState(
         canonical_sha256=digest,
         policy_id=policy_id,
@@ -1629,6 +1812,7 @@ def _freeze_policy(
         publisher_home=home,
         environment_keys=environment_keys,
         runtime_attestor=runtime_attestor,
+        approved_backlog_sha256=approved_backlog_sha256,
     )
     _require_policy_canonical_bytes(canonical, state, unattended=value.unattended)
     return state
@@ -1659,8 +1843,15 @@ def _require_verifier_canonical_bytes(canonical: bytes, state: _VerifierState) -
         "base_sha": state.base_sha,
         "branch_name": state.branch_name,
         "backlog_sha256": state.backlog_sha256,
+        "backlog_schema_version": state.backlog_schema_version,
+        "backlog_manifest_revision": state.backlog_manifest_revision,
+        "backlog_approved_by": state.backlog_approved_by,
+        "backlog_candidate_bindings": list(state.backlog_candidate_bindings),
+        "backlog_authorization_sha256": state.backlog_authorization_sha256,
         "candidate_sha256": state.candidate_sha256,
         "run_state_sha256": state.run_state_sha256,
+        "verification_subject_sha256": state.verification_subject_sha256,
+        "check_subject_sha256": state.check_subject_sha256,
         "run_remote": state.run_remote,
         "run_remote_branch": state.run_remote_branch,
         "run_lifecycle": state.run_lifecycle,
@@ -1695,11 +1886,14 @@ def _require_verifier_canonical_bytes(canonical: bytes, state: _VerifierState) -
         "isolation_network_isolated": True,
         "isolation_credentials_absent": True,
         "isolation_verified_by": state.isolation_verified_by,
+        "isolation_subject_sha256": state.isolation_subject_sha256,
+        "isolation_patch_sha256": state.isolation_patch_sha256,
         "isolation_evidence_sha256": state.isolation_evidence_sha256,
         "checks": [
             {
                 "command_id": item.command_id,
                 "output_sha256": item.output_sha256,
+                "subject_sha256": item.subject_sha256,
                 "exit_code": item.exit_code,
                 "timed_out": item.timed_out,
             }
@@ -1734,6 +1928,7 @@ def _require_policy_canonical_bytes(
         "publisher_home": state.publisher_home,
         "environment_keys": list(state.environment_keys),
         "runtime_attestor": state.runtime_attestor,
+        "approved_backlog_sha256": state.approved_backlog_sha256,
     }
     if canonical != _canonical_json_bytes(payload):
         raise PublicationPreflightError(
@@ -2012,8 +2207,10 @@ def _commit_message(evidence: _VerifierState) -> str:
         f"chore: address {evidence.candidate_id}\n\n"
         f"Candidate: {evidence.candidate_id}\n"
         f"Backlog-SHA256: {evidence.backlog_sha256}\n"
+        f"Backlog-Authorization-SHA256: {evidence.backlog_authorization_sha256}\n"
         f"Candidate-SHA256: {evidence.candidate_sha256}\n"
         f"Run-State-SHA256: {evidence.run_state_sha256}\n"
+        f"Verification-Subject-SHA256: {evidence.verification_subject_sha256}\n"
         f"Final-Guard-SHA256: {evidence.final_guard_sha256}\n"
         f"Patch-SHA256: {evidence.final_guard_patch_sha256}\n"
         f"Verification-SHA256: {evidence.canonical_sha256}\n\n"
@@ -2036,8 +2233,16 @@ def _pr_body(evidence: _VerifierState) -> str:
         f"- Risk tier: {tick}{evidence.risk_tier}{tick}",
         f"- Base SHA: {tick}{evidence.base_sha}{tick}",
         f"- Backlog SHA-256: {tick}{evidence.backlog_sha256}{tick}",
+        (
+            f"- Backlog authorization SHA-256: {tick}"
+            f"{evidence.backlog_authorization_sha256}{tick}"
+        ),
         f"- Candidate SHA-256: {tick}{evidence.candidate_sha256}{tick}",
         f"- Run state SHA-256: {tick}{evidence.run_state_sha256}{tick}",
+        (
+            f"- Verification subject SHA-256: {tick}"
+            f"{evidence.verification_subject_sha256}{tick}"
+        ),
         f"- Patch SHA-256: {tick}{evidence.final_guard_patch_sha256}{tick}",
         f"- Final guard SHA-256: {tick}{evidence.final_guard_sha256}{tick}",
         f"- Head SHA-256: {tick}{evidence.head_sha256}{tick}",
@@ -2221,6 +2426,18 @@ def _copy_identifiers(
         raise PublicationPreflightError(f"{label} must be sorted and unique")
     if any(not pattern.fullmatch(item) for item in result):
         raise PublicationPreflightError(f"{label} contains invalid value")
+    return result
+
+
+def _copy_candidate_bindings(value: object) -> tuple[str, ...]:
+    result = _copy_identifiers(
+        value,
+        _BACKLOG_BINDING,
+        "backlog candidate bindings",
+    )
+    candidate_ids = tuple(item.split(":", 1)[0] for item in result)
+    if len(set(candidate_ids)) != len(candidate_ids):
+        raise PublicationPreflightError("backlog candidate binding IDs must be unique")
     return result
 
 
