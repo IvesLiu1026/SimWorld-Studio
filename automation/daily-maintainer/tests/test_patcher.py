@@ -94,6 +94,7 @@ def request(value: Candidate | None = None, **changes: object) -> PatcherRequest
         "manifest_revision": selected.source.manifest_revision,
         "approved_by": selected.source.approved_by,
         "candidate": selected,
+        "candidate_slug": "focused-contract-test",
         "candidate_sha256": candidate_authorization_digest(selected),
     }
     values.update(changes)
@@ -241,6 +242,16 @@ def credential_binding(path: Path) -> CredentialBinding:
 
 
 class RequestBindingTests(unittest.TestCase):
+    def test_patcher_exports_the_central_candidate_authority_functions(self) -> None:
+        self.assertIs(
+            candidate_authorization_payload,
+            candidate_contract.candidate_authorization_payload,
+        )
+        self.assertIs(
+            candidate_authorization_digest,
+            candidate_contract.candidate_authorization_digest,
+        )
+
     def test_candidate_digest_covers_provenance_not_sent_by_normalized_candidate(
         self,
     ) -> None:
@@ -267,6 +278,8 @@ class RequestBindingTests(unittest.TestCase):
             request(candidate_sha256="d" * 64)
         with self.assertRaisesRegex(PatcherContractError, "approver"):
             request(approved_by="FakeApprover")
+        with self.assertRaisesRegex(PatcherContractError, "candidate slug"):
+            request(candidate_slug="not--canonical")
 
     def test_v1_policy_rejects_hand_built_double_star(self) -> None:
         unsafe = candidate(allowed_paths=("**",))

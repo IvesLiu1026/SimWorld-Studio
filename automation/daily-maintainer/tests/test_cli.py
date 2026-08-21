@@ -58,6 +58,12 @@ class CliTests(unittest.TestCase):
                 "2026-08-21",
                 "--candidate-slug",
                 "doc-link",
+                "--candidate-id",
+                "VW-DM-0001",
+                "--backlog-sha256",
+                "b" * 64,
+                "--candidate-sha256",
+                "c" * 64,
                 "--expected-base",
                 fixture.head,
             ]

@@ -108,6 +108,15 @@ def manager_for(root: Path, fixture: LocalRemoteFixture) -> WorktreeManager:
     )
 
 
+def prepare(manager: WorktreeManager, **kwargs: object):
+    return manager.prepare(
+        candidate_id="VW-DM-0001",
+        backlog_sha256="b" * 64,
+        candidate_sha256="c" * 64,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
 class WorktreeLifecycleTests(unittest.TestCase):
     def test_remote_url_must_match_pinned_repository_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -180,8 +189,10 @@ class WorktreeLifecycleTests(unittest.TestCase):
                 "VALUE = 999",
             )
 
-            prepared = manager_for(root, fixture).prepare(
-                run_date="2026-08-21", candidate_slug="doc-link"
+            prepared = prepare(
+                manager_for(root, fixture),
+                run_date="2026-08-21",
+                candidate_slug="doc-link",
             )
 
             worktree = Path(prepared.state.worktree_path or "")
@@ -384,8 +395,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
             root = Path(temporary)
             fixture = LocalRemoteFixture(root)
             manager = manager_for(root, fixture)
-            first = manager.prepare(run_date="2026-08-21", candidate_slug="doc-link")
-            second = manager.prepare(run_date="2026-08-21", candidate_slug="doc-link")
+            first = prepare(manager, run_date="2026-08-21", candidate_slug="doc-link")
+            second = prepare(manager, run_date="2026-08-21", candidate_slug="doc-link")
 
             self.assertFalse(first.idempotent_replay)
             self.assertTrue(second.idempotent_replay)
@@ -397,6 +408,48 @@ class WorktreeLifecycleTests(unittest.TestCase):
             branch_lines = git(fixture.checkout, "branch", "--list", "codex/daily/*")
             self.assertEqual(branch_lines.count("codex/daily/"), 1)
 
+    def test_replay_cannot_swap_candidate_or_backlog_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            manager = manager_for(root, fixture)
+            original = prepare(
+                manager,
+                run_date="2026-08-21",
+                candidate_slug="doc-link",
+            )
+            cases = (
+                {"candidate_id": "VW-DM-0002"},
+                {"backlog_sha256": "d" * 64},
+                {"candidate_sha256": "e" * 64},
+                {"candidate_slug": "other-link"},
+            )
+            for changes in cases:
+                with (
+                    self.subTest(changes=changes),
+                    self.assertRaisesRegex(
+                        StateContractError,
+                        "different candidate authority",
+                    ),
+                ):
+                    manager.prepare(
+                        run_date="2026-08-21",
+                        candidate_id=changes.get("candidate_id", "VW-DM-0001"),
+                        candidate_slug=changes.get("candidate_slug", "doc-link"),
+                        backlog_sha256=changes.get("backlog_sha256", "b" * 64),
+                        candidate_sha256=changes.get("candidate_sha256", "c" * 64),
+                    )
+            self.assertEqual(
+                manager.state_store.load(original.state.key),
+                original.state,
+            )
+            self.assertEqual(
+                git(fixture.checkout, "branch", "--list", "codex/daily/*").count(
+                    "codex/daily/"
+                ),
+                1,
+            )
+
     def test_dirty_source_checkout_is_rejected_before_worktree_creation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -404,7 +457,7 @@ class WorktreeLifecycleTests(unittest.TestCase):
             manager = manager_for(root, fixture)
             (fixture.checkout / "untracked.txt").write_text("dirty\n", encoding="utf-8")
             with self.assertRaisesRegex(DirtyRepositoryError, "source checkout"):
-                manager.prepare(run_date="2026-08-21", candidate_slug="doc-link")
+                prepare(manager, run_date="2026-08-21", candidate_slug="doc-link")
             self.assertEqual(list((root / "worktrees").iterdir()), [])
 
     def test_non_root_checkout_path_is_rejected(self) -> None:
@@ -430,7 +483,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
             new_head = fixture.advance_remote()
 
             with self.assertRaises(RemoteMainMovedError) as caught:
-                manager.prepare(
+                prepare(
+                    manager,
                     run_date="2026-08-21",
                     candidate_slug="doc-link",
                     expected_pin=old_pin,
@@ -451,7 +505,9 @@ class WorktreeLifecycleTests(unittest.TestCase):
             root = Path(temporary)
             fixture = LocalRemoteFixture(root)
             manager = manager_for(root, fixture)
-            prepared = manager.prepare(run_date="2026-08-21", candidate_slug="doc-link")
+            prepared = prepare(
+                manager, run_date="2026-08-21", candidate_slug="doc-link"
+            )
             worktree = Path(prepared.state.worktree_path or "")
             new_head = fixture.advance_remote()
 
@@ -469,7 +525,9 @@ class WorktreeLifecycleTests(unittest.TestCase):
             root = Path(temporary)
             fixture = LocalRemoteFixture(root)
             manager = manager_for(root, fixture)
-            prepared = manager.prepare(run_date="2026-08-21", candidate_slug="doc-link")
+            prepared = prepare(
+                manager, run_date="2026-08-21", candidate_slug="doc-link"
+            )
             replacement_remote = root / "replacement.git"
             git(
                 root,
@@ -502,7 +560,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
             reboot_time = dt.datetime.fromisoformat("2026-08-21T08:00:00+08:00")
             due = manager.state_store.due_period("IvesLiu1026/VISTA-World", reboot_time)
             self.assertEqual(due.run_date, "2026-08-20")
-            prepared = manager.prepare(
+            prepared = prepare(
+                manager,
                 run_date=due.run_date or "",
                 candidate_slug="doc-link",
             )
@@ -532,7 +591,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
                 head_sha=fixture.head,
             )
             with self.assertRaises(ExistingPublicationError) as caught:
-                manager.prepare(
+                prepare(
+                    manager,
                     run_date="2026-08-21",
                     candidate_slug="doc-link",
                     publication=publication,
@@ -549,8 +609,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
             root = Path(temporary)
             fixture = LocalRemoteFixture(root)
             manager = manager_for(root, fixture)
-            ready = manager.prepare(
-                run_date="2026-08-21", candidate_slug="doc-link"
+            ready = prepare(
+                manager, run_date="2026-08-21", candidate_slug="doc-link"
             ).state
             publication = PublicationSnapshot(
                 state=PullRequestState.DRAFT,
@@ -560,7 +620,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
             )
 
             with self.assertRaises(ExistingPublicationError) as first:
-                manager.prepare(
+                prepare(
+                    manager,
                     run_date="2026-08-21",
                     candidate_slug="doc-link",
                     publication=publication,
@@ -570,12 +631,14 @@ class WorktreeLifecycleTests(unittest.TestCase):
             self.assertEqual(first.exception.state.worktree_path, ready.worktree_path)
 
             with self.assertRaises(ExistingPublicationError):
-                manager.prepare(
+                prepare(
+                    manager,
                     run_date="2026-08-21",
                     candidate_slug="doc-link",
                 )
             with self.assertRaises(ExistingPublicationError):
-                manager.prepare(
+                prepare(
+                    manager,
                     run_date="2026-08-21",
                     candidate_slug="doc-link",
                     publication=PublicationSnapshot(state=PullRequestState.NONE),
@@ -591,7 +654,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
             git(fixture.checkout, "branch", branch, pin.sha)
 
             with self.assertRaises(ExistingDailyBranchError) as caught:
-                manager.prepare(
+                prepare(
+                    manager,
                     run_date="2026-08-21",
                     candidate_slug="doc-link",
                     expected_pin=pin,

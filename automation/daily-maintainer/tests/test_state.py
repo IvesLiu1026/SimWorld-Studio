@@ -23,6 +23,7 @@ from vista_daily_maintainer.state import (
     choose_due_period,
     parse_state,
     serialize_state,
+    state_digest,
 )
 
 
@@ -32,6 +33,10 @@ SHA_A = "a" * 40
 def make_state() -> RunState:
     return RunState(
         key=RunKey("2026-08-21", "IvesLiu1026/VISTA-World", SHA_A),
+        candidate_id="VW-DM-0001",
+        candidate_slug="doc-link",
+        backlog_sha256="b" * 64,
+        candidate_sha256="c" * 64,
         remote="origin",
         remote_branch="main",
         branch_name="codex/daily/2026-08-21-doc-link-aaaaaaaa",
@@ -58,6 +63,7 @@ class RunStateTests(unittest.TestCase):
         payload = serialize_state(state)
         self.assertEqual(parse_state(payload), state)
         self.assertEqual(serialize_state(parse_state(payload)), payload)
+        self.assertEqual(state_digest(state), state_digest(parse_state(payload)))
         mapping = json.loads(payload)
         mapping["run_id"] = "2026-08-21/IvesLiu1026/VISTA-World@" + "b" * 40
         with self.assertRaisesRegex(StateContractError, "run_id"):
@@ -68,6 +74,18 @@ class RunStateTests(unittest.TestCase):
         with self.assertRaisesRegex(StateContractError, "oversized"):
             parse_state(oversized)
 
+    def test_pre_authority_state_shape_is_not_accepted(self) -> None:
+        legacy = json.loads(serialize_state(make_state()))
+        for field in (
+            "candidate_id",
+            "candidate_slug",
+            "backlog_sha256",
+            "candidate_sha256",
+        ):
+            legacy.pop(field)
+        with self.assertRaisesRegex(StateContractError, "missing fields"):
+            parse_state(json.dumps(legacy))
+
     def test_state_parser_rejects_every_malformed_leaf_as_contract_error(self) -> None:
         base = json.loads(serialize_state(make_state()))
         mutations = {
@@ -76,6 +94,10 @@ class RunStateTests(unittest.TestCase):
             "run_date": ("run_date", []),
             "repository": ("repository", []),
             "base_sha": ("base_sha", []),
+            "candidate_id": ("candidate_id", []),
+            "candidate_slug": ("candidate_slug", []),
+            "backlog_sha256": ("backlog_sha256", []),
+            "candidate_sha256": ("candidate_sha256", []),
             "remote": ("remote", []),
             "remote_branch": ("remote_branch", []),
             "branch_name": ("branch_name", []),

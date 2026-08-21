@@ -22,9 +22,12 @@ from .candidate import (
     BacklogTrust,
     Candidate,
     CandidateContractError,
+    candidate_authorization_digest,
+    candidate_authorization_payload as _candidate_authorization_payload,
     load_trusted_backlog,
     path_matches_pattern,
 )
+from .naming import is_v1_candidate_slug
 from .profiles import BUILTIN_VALIDATION_PROFILES
 
 
@@ -235,6 +238,10 @@ _BLOCKERS = frozenset(
 )
 _BLOCKED_ONLY = _BLOCKERS - {"finding_not_reproduced"}
 
+# Backwards-compatible public import while candidate.py owns the one canonical
+# implementation used by every trust boundary.
+candidate_authorization_payload = _candidate_authorization_payload
+
 
 class PatcherContractError(ValueError):
     """The patcher boundary is incomplete or unsafe."""
@@ -256,41 +263,6 @@ class FileEvidence:
         return (self.device, self.inode, self.owner_uid, self.link_count)
 
 
-def candidate_authorization_payload(candidate: Candidate) -> dict[str, object]:
-    """Canonical backlog authority, including fields omitted from model input."""
-
-    if not isinstance(candidate, Candidate):
-        raise PatcherContractError("candidate must use the strict contract")
-    return {
-        "schema_version": "vista.world.daily-maintainer.candidate-authority.v1",
-        "candidate": candidate.normalized_payload(),
-        "state": candidate.state,
-        "not_before": (
-            candidate.not_before.isoformat() if candidate.not_before else None
-        ),
-        "expires_on": (
-            candidate.expires_on.isoformat() if candidate.expires_on else None
-        ),
-        "source": {
-            "kind": candidate.source.kind,
-            "manifest_revision": candidate.source.manifest_revision,
-            "approved_by": candidate.source.approved_by,
-            "issue_url": candidate.source.issue_url,
-        },
-    }
-
-
-def candidate_authorization_digest(candidate: Candidate) -> str:
-    payload = json.dumps(
-        candidate_authorization_payload(candidate),
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8", "strict")
-    return hashlib.sha256(payload).hexdigest()
-
-
 @dataclass(frozen=True)
 class PatcherRequest:
     run_date: dt.date
@@ -300,6 +272,7 @@ class PatcherRequest:
     manifest_revision: int
     approved_by: str
     candidate: Candidate
+    candidate_slug: str
     candidate_sha256: str
 
     def __post_init__(self) -> None:
@@ -325,6 +298,8 @@ class PatcherRequest:
             raise PatcherContractError("manifest revision must be positive")
         if not isinstance(self.candidate, Candidate):
             raise PatcherContractError("patcher candidate must use the strict contract")
+        if not is_v1_candidate_slug(self.candidate_slug):
+            raise PatcherContractError("candidate slug is invalid")
         if not self.candidate.eligible_on(self.run_date):
             raise PatcherContractError("candidate is not eligible on the run date")
         if self.candidate.risk_tier not in {0, 1}:
@@ -357,6 +332,7 @@ class PatcherRequest:
             "backlog_sha256": self.backlog_sha256,
             "manifest_revision": self.manifest_revision,
             "approved_by": self.approved_by,
+            "candidate_slug": self.candidate_slug,
             "candidate_sha256": self.candidate_sha256,
             "candidate": self.candidate.normalized_payload(),
         }

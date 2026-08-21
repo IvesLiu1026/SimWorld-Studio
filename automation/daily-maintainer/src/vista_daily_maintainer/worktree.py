@@ -23,6 +23,7 @@ from .state import (
     StateError,
     UnsafeStatePathError,
     ensure_private_directory,
+    validate_run_authority,
 )
 
 
@@ -726,21 +727,25 @@ class WorktreeManager:
 
     @staticmethod
     def _slug_from_state(state: RunState) -> str:
-        prefix = f"codex/daily/{state.key.run_date}-"
-        suffix = f"-{state.key.base_sha[:8]}"
-        if not state.branch_name.startswith(prefix) or not state.branch_name.endswith(
-            suffix
-        ):
-            raise StateContractError("state branch is not bound to date/base SHA")
-        slug = state.branch_name[len(prefix) : -len(suffix)]
-        if not is_v1_candidate_slug(slug):
-            raise StateContractError("state branch candidate slug is invalid")
-        return slug
+        expected = v1_daily_branch_name(
+            state.key.run_date,
+            state.candidate_slug,
+            state.key.base_sha,
+        )
+        if state.branch_name != expected:
+            raise StateContractError(
+                "state branch is not bound to date/candidate slug/base SHA"
+            )
+        return state.candidate_slug
 
     def _movement_state(
         self,
         *,
         key: RunKey,
+        candidate_id: str,
+        candidate_slug: str,
+        backlog_sha256: str,
+        candidate_sha256: str,
         branch_name: str,
         worktree_path: Path,
         current_sha: str,
@@ -757,6 +762,10 @@ class WorktreeManager:
             disposition, head = self._branch_snapshot(branch_name, key.base_sha)
             state = RunState(
                 key=key,
+                candidate_id=candidate_id,
+                candidate_slug=candidate_slug,
+                backlog_sha256=backlog_sha256,
+                candidate_sha256=candidate_sha256,
                 remote=self.remote,
                 remote_branch=self.remote_branch,
                 branch_name=branch_name,
@@ -787,6 +796,10 @@ class WorktreeManager:
         pin: RemotePin,
         *,
         key: RunKey,
+        candidate_id: str,
+        candidate_slug: str,
+        backlog_sha256: str,
+        candidate_sha256: str,
         branch_name: str,
         worktree_path: Path,
         publication: PublicationSnapshot,
@@ -796,6 +809,10 @@ class WorktreeManager:
         if current != pin.sha:
             moved = self._movement_state(
                 key=key,
+                candidate_id=candidate_id,
+                candidate_slug=candidate_slug,
+                backlog_sha256=backlog_sha256,
+                candidate_sha256=candidate_sha256,
                 branch_name=branch_name,
                 worktree_path=worktree_path,
                 current_sha=current,
@@ -808,6 +825,10 @@ class WorktreeManager:
         self,
         *,
         key: RunKey,
+        candidate_id: str,
+        candidate_slug: str,
+        backlog_sha256: str,
+        candidate_sha256: str,
         branch_name: str,
         worktree_path: Path,
         publication: PublicationSnapshot,
@@ -817,6 +838,10 @@ class WorktreeManager:
             raise StateContractError("existing branch state requires a local branch")
         state = RunState(
             key=key,
+            candidate_id=candidate_id,
+            candidate_slug=candidate_slug,
+            backlog_sha256=backlog_sha256,
+            candidate_sha256=candidate_sha256,
             remote=self.remote,
             remote_branch=self.remote_branch,
             branch_name=branch_name,
@@ -848,6 +873,10 @@ class WorktreeManager:
                 raise ExistingDailyBranchError(
                     self._state_for_existing_branch(
                         key=state.key,
+                        candidate_id=state.candidate_id,
+                        candidate_slug=state.candidate_slug,
+                        backlog_sha256=state.backlog_sha256,
+                        candidate_sha256=state.candidate_sha256,
                         branch_name=state.branch_name,
                         worktree_path=path,
                         publication=publication,
@@ -870,6 +899,10 @@ class WorktreeManager:
         if disposition is not BranchDisposition.ABSENT:
             blocked = self._state_for_existing_branch(
                 key=state.key,
+                candidate_id=state.candidate_id,
+                candidate_slug=state.candidate_slug,
+                backlog_sha256=state.backlog_sha256,
+                candidate_sha256=state.candidate_sha256,
                 branch_name=state.branch_name,
                 worktree_path=path or self.worktrees_root,
                 publication=publication,
@@ -881,10 +914,19 @@ class WorktreeManager:
         self,
         *,
         run_date: str,
+        candidate_id: str,
         candidate_slug: str,
+        backlog_sha256: str,
+        candidate_sha256: str,
         expected_pin: RemotePin | None = None,
         publication: PublicationSnapshot | None = None,
     ) -> PrepareResult:
+        validate_run_authority(
+            candidate_id,
+            candidate_slug,
+            backlog_sha256,
+            candidate_sha256,
+        )
         publication = publication or PublicationSnapshot()
         publication.validate_repository(self.repository)
         with self.state_store.lock(self.repository) as lease:
@@ -902,6 +944,10 @@ class WorktreeManager:
                 if current != pin.sha:
                     moved = self._movement_state(
                         key=key,
+                        candidate_id=candidate_id,
+                        candidate_slug=candidate_slug,
+                        backlog_sha256=backlog_sha256,
+                        candidate_sha256=candidate_sha256,
                         branch_name=branch_name,
                         worktree_path=worktree_path,
                         current_sha=current,
@@ -919,9 +965,23 @@ class WorktreeManager:
             worktree_path = self._worktree_path(key, candidate_slug)
             existing = self.state_store.load(key)
             if existing is not None:
-                if existing.branch_name != branch_name:
+                expected_authority = (
+                    candidate_id,
+                    candidate_slug,
+                    backlog_sha256,
+                    candidate_sha256,
+                    branch_name,
+                )
+                observed_authority = (
+                    existing.candidate_id,
+                    existing.candidate_slug,
+                    existing.backlog_sha256,
+                    existing.candidate_sha256,
+                    existing.branch_name,
+                )
+                if observed_authority != expected_authority:
                     raise StateContractError(
-                        "idempotency key is already bound to a different candidate slug"
+                        "idempotency key is already bound to different candidate authority"
                     )
                 if existing.publication.state not in {
                     PullRequestState.UNKNOWN,
@@ -942,6 +1002,10 @@ class WorktreeManager:
                 self._check_current_pin(
                     pin,
                     key=key,
+                    candidate_id=candidate_id,
+                    candidate_slug=candidate_slug,
+                    backlog_sha256=backlog_sha256,
+                    candidate_sha256=candidate_sha256,
                     branch_name=branch_name,
                     worktree_path=worktree_path,
                     publication=publication,
@@ -974,6 +1038,10 @@ class WorktreeManager:
             }:
                 blocked = RunState(
                     key=key,
+                    candidate_id=candidate_id,
+                    candidate_slug=candidate_slug,
+                    backlog_sha256=backlog_sha256,
+                    candidate_sha256=candidate_sha256,
                     remote=self.remote,
                     remote_branch=self.remote_branch,
                     branch_name=branch_name,
@@ -991,6 +1059,10 @@ class WorktreeManager:
             if disposition is not BranchDisposition.ABSENT:
                 blocked = self._state_for_existing_branch(
                     key=key,
+                    candidate_id=candidate_id,
+                    candidate_slug=candidate_slug,
+                    backlog_sha256=backlog_sha256,
+                    candidate_sha256=candidate_sha256,
                     branch_name=branch_name,
                     worktree_path=worktree_path,
                     publication=publication,
@@ -1003,6 +1075,10 @@ class WorktreeManager:
 
             pinned = RunState(
                 key=key,
+                candidate_id=candidate_id,
+                candidate_slug=candidate_slug,
+                backlog_sha256=backlog_sha256,
+                candidate_sha256=candidate_sha256,
                 remote=self.remote,
                 remote_branch=self.remote_branch,
                 branch_name=branch_name,
@@ -1017,6 +1093,10 @@ class WorktreeManager:
             self._check_current_pin(
                 pin,
                 key=key,
+                candidate_id=candidate_id,
+                candidate_slug=candidate_slug,
+                backlog_sha256=backlog_sha256,
+                candidate_sha256=candidate_sha256,
                 branch_name=branch_name,
                 worktree_path=worktree_path,
                 publication=publication,
@@ -1045,6 +1125,10 @@ class WorktreeManager:
             self._check_current_pin(
                 pin,
                 key=key,
+                candidate_id=candidate_id,
+                candidate_slug=candidate_slug,
+                backlog_sha256=backlog_sha256,
+                candidate_sha256=candidate_sha256,
                 branch_name=branch_name,
                 worktree_path=worktree_path,
                 publication=publication,
@@ -1072,6 +1156,10 @@ class WorktreeManager:
             self._check_current_pin(
                 pin,
                 key=state.key,
+                candidate_id=state.candidate_id,
+                candidate_slug=state.candidate_slug,
+                backlog_sha256=state.backlog_sha256,
+                candidate_sha256=state.candidate_sha256,
                 branch_name=state.branch_name,
                 worktree_path=(
                     Path(state.worktree_path)
