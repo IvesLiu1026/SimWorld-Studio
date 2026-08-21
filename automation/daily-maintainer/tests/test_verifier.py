@@ -391,6 +391,21 @@ class VerifierTests(unittest.TestCase):
                     make_candidate(profiles=("unknown",)),
                 )
 
+    def test_direct_tier_zero_source_authority_fails_at_verifier_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(repo)
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            with self.assertRaisesRegex(CandidateContractError, "Tier 0 path"):
+                Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(
+                    repo,
+                    base,
+                    make_candidate(risk_tier=0, allowed_paths=("src/**",)),
+                )
+
     def test_shell_dash_c_profile_is_rejected_by_registry(self) -> None:
         with self.assertRaisesRegex(ValueError, "shell -c"):
             ValidationProfile(
