@@ -76,6 +76,9 @@ Depends on: requirements.md, design.md
   - Validation: patcher runs under a dedicated UID/rootless container, receives only normalized
     candidate context/worktree/Codex credential, and cannot read operator home, `.ssh`, gh config,
     `SSH_AUTH_SOCK` or publisher state; adversarial text cannot expand allowlist/profile IDs.
+  - Blocker: the current personal ChatGPT-managed login is attended-only under official Codex
+    public/open-source automation guidance. Unattended activation requires a separately approved
+    dedicated credential; implementation and report-only tests can proceed without it.
 
 - [ ] T9. Implement deterministic guard and verifier
   - Files: `automation/daily-maintainer/guard.py`, `verifier.py`, tests

@@ -32,8 +32,9 @@ VISTA World 需要在使用者沒有主動開發的日子仍持續累積可驗�
 - Canonical target 是尚待建立的 standalone `IvesLiu1026/VISTA-World`，default branch
   為 `main`。
 - 主要 patcher 在這台常駐 server 的專用 service account/container 中透過 systemd 與
-  隔離的 Codex credential 執行；GitHub Actions 負責獨立 CI、合併門檻與 missed-run
-  監測。
+  隔離且獲准用於 public-repository automation 的 Codex credential 執行；GitHub Actions
+  負責獨立 CI、合併門檻與 missed-run 監測。現有個人 ChatGPT login 只用於 attended
+  test/canary，不會複製進 unattended service account。
 - GitHub CLI 或 GitHub App 必須以 `IvesLiu1026` 對目標 repo 取得最小必要權限。
 - 初期只有 docs、tests、contracts 與 pure Python/Node 模組可 unattended 修改。
 
@@ -155,8 +156,8 @@ Acceptance notes:
 ### R10. Cost and external side effects
 
 WHEN daily run 使用模型或外部服務 THEN 它 SHALL 遵守明確的每日 budget 與 provider
-設定；未核准 API key/付費服務時預設使用隔離 patcher account 的 Codex 登入，且不得
-自行呼叫 OpenRouter、Gemini、Claude、GPU generation、下載或上傳資產。
+設定；未核准適用於 public-repository automation 的專用 credential 時只能 report-only，
+且不得自行呼叫 OpenRouter、Gemini、Claude、GPU generation、下載或上傳資產。
 
 Acceptance notes:
 - 每天最多一個 patch attempt；retry 只處理暫時性 infrastructure failure。
@@ -190,9 +191,15 @@ Acceptance notes:
 - Resolved: only Tier 0 may auto-merge, and only after canary plus the two-week PR-only pilot.
 - Resolved: bootstrap uses correctly authenticated `gh` + SSH; unattended publication migrates to
   a repo-scoped GitHub App before auto-merge is enabled.
-- Resolved: existing Codex login, one patch attempt/day and no new paid API provider by default.
+- Resolved: one patch attempt/day and no new paid API provider by default. Existing personal
+  ChatGPT-managed Codex login is attended-only; official Codex guidance says not to use that
+  credential flow for public/open-source CI/CD, so unattended model execution remains disabled
+  until a dedicated compliant credential is separately approved.
 - Operational dependency: credential-separated service account/rootless container may require
   administrator help. Until present, the pipeline remains report-only or manually published.
+- Operational dependency: a dedicated API key, enterprise Codex access token, or managed short-lived
+  workload identity must be approved before unattended model execution. Reference:
+  <https://learn.chatgpt.com/docs/non-interactive-mode.md>.
 
 ## Approval
 

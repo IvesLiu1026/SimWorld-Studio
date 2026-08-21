@@ -60,7 +60,9 @@ update one incident issue but never fabricates a code commit when the server pro
 2. **Patcher** runs as a dedicated Unix UID or rootless container. It gets only a clean worktree,
    normalized candidate, allowlisted files and its scoped Codex credential. The sandbox does not
    mount the operator home, `~/.ssh`, gh config, `SSH_AUTH_SOCK`, publisher token/state, sudo,
-   production runtime ownership or paid keys. A worktree alone is not a credential boundary.
+   production runtime ownership or paid keys. A worktree alone is not a credential boundary. The
+   operator's personal ChatGPT-managed `auth.json` is never copied into this public-repository
+   unattended boundary; it is limited to attended canary work.
 3. **Guard/verifier** is deterministic, runs in a fresh process, and rejects protected paths,
    large/binary files, secret-like content, excessive diffs and test weakening.
 4. **Publisher** runs under a separate principal and receives only an immutable patch digest plus
@@ -260,6 +262,8 @@ systemd files after activation.
   mismatch blocks CLI bootstrap; a GitHub App run validates its installation instead.
 - No eligible candidate: emit `no_change`; do not commit.
 - Model timeout/budget exhaustion: discard incomplete worktree; no fallback commit.
+- No dedicated automation credential: run selector/report-only and emit a truthful blocker; never
+  fall back to the operator's personal ChatGPT-managed login.
 - Guard or tests fail: retain sanitized digest/summary, remove credentials, do not push.
 - Remote main moves: recreate from latest base and rerun; never force-push reviewed work.
 - Existing bot PR: finish/reconcile it or skip; do not open a queue of stale PRs.
