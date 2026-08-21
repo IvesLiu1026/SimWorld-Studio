@@ -1,6 +1,6 @@
 # Design: VISTA World Repository Extraction
 
-Status: Draft
+Status: Approved
 Updated: 2026-08-21
 Depends on: requirements.md
 
@@ -162,12 +162,13 @@ rollback pin. Runtime/GPU evidence remains append-only outside Git.
 
 ## Open Questions
 
-- Repository visibility and GitHub owner must be confirmed before remote creation.
-- Decide whether `git filter-repo` is available/approved or a scripted replay is required.
-- Branch protection settings depend on the account plan and repository visibility.
+- Resolved: public `IvesLiu1026/VISTA-World` with selected-path history.
+- Implementation decision: use `git filter-repo` when available and validated in a disposable clone;
+  otherwise use a scripted selected-path replay without rewriting the source fork.
+- Branch-protection settings depend on plan/visibility and will be capability-detected fail-closed.
 
 ## Approval
 
 - Requested by: Codex integrator
-- Approved by:
-- Date:
+- Approved by: IvesLiu1026
+- Date: 2026-08-21

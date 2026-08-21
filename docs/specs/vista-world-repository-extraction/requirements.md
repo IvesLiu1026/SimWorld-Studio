@@ -1,6 +1,6 @@
 # Requirements: VISTA World Repository Extraction
 
-Status: Draft
+Status: Approved
 Updated: 2026-08-21
 
 ## Problem
@@ -125,14 +125,12 @@ Acceptance notes:
 
 ## Open Questions
 
-- `VISTA-World` 要 public 還是 private？建議 public；若 private，使用者需啟用
-  GitHub private contribution 顯示。
-- 初期 owner 使用 `IvesLiu1026`，還是先建立 VISTA organization？建議先使用
-  `IvesLiu1026`，產品穩定後再 transfer。
-- 第一次 extraction 是否保留 selected-path history（建議），或採單一 import commit？
+- Resolved: public `IvesLiu1026/VISTA-World` standalone repository.
+- Resolved: initial owner is `IvesLiu1026`; organization transfer is a later migration.
+- Resolved: first extraction preserves selected-path history and excludes unreviewed WIP/quarantine.
 
 ## Approval
 
 - Requested by: Codex integrator
-- Approved by:
-- Date:
+- Approved by: IvesLiu1026
+- Date: 2026-08-21

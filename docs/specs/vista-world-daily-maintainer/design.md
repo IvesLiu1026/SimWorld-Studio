@@ -1,6 +1,6 @@
 # Design: VISTA World Daily Maintainer
 
-Status: Draft
+Status: Approved
 Updated: 2026-08-21
 Depends on: requirements.md
 
@@ -337,12 +337,15 @@ receipts but never substitutes a fake commit.
 
 ## Open Questions
 
-- Public/private and attribution mode must be approved before repository creation.
-- Branch-protection feature availability depends on repository plan/visibility.
-- GitHub App is preferred; CLI + SSH may be used only as an explicit bootstrap choice.
+- Resolved: public `IvesLiu1026/VISTA-World`, selected-path history, Ives author plus explicit
+  automation trailer, and Tier 0-only auto-merge after pilot.
+- Resolved: correctly authenticated CLI + SSH is the bootstrap publisher; repo-scoped GitHub App is
+  required before unattended auto-merge.
+- Branch-protection feature availability will be detected after repository creation; unsupported
+  protections fail closed and remain a documented blocker rather than being silently skipped.
 
 ## Approval
 
 - Requested by: Codex integrator
-- Approved by:
-- Date:
+- Approved by: IvesLiu1026
+- Date: 2026-08-21

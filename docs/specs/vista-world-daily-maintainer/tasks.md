@@ -1,6 +1,6 @@
 # Tasks: VISTA World Daily Maintainer
 
-Status: Draft
+Status: In Progress
 Updated: 2026-08-21
 Depends on: requirements.md, design.md
 
@@ -15,11 +15,13 @@ Depends on: requirements.md, design.md
 
 ## Task List
 
-- [ ] T1. Approve product and attribution choices
+- [x] T1. Approve product and attribution choices
   - Depends on: none
   - Requirements: R1-R11
   - Validation: record owner/name, public/private, bot/personal attribution, Tier 0 auto-merge and
     permitted model budget in the spec approval sections.
+  - Completed: 2026-08-21; public `IvesLiu1026/VISTA-World`, Ives author + automation trailer,
+    Tier 0 only after pilot, existing Codex login and no new paid provider.
 
 - [ ] T2. Create and protect standalone `VISTA-World`
   - Depends on: T1 and repository-extraction approval

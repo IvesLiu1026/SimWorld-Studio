@@ -1,6 +1,6 @@
 # Requirements: VISTA World Daily Maintainer
 
-Status: Draft
+Status: Approved
 Updated: 2026-08-21
 
 ## Problem
@@ -184,16 +184,18 @@ Acceptance notes:
 
 ## Open Questions
 
-- `VISTA-World` 使用 public（建議）或 private？
-- commits 使用專用 bot author（建議、最透明），還是使用已映射的 Ives author 並加
-  automation trailer（較可能顯示在個人 contribution graph，但需明確核准）？
-- 第一階段是否只允許 Tier 0 auto-merge（建議）？
-- 是否願意另外建立最小權限 GitHub App；若否，先使用正確登入的 `gh` CLI + SSH？
-- 是否能由管理者建立隔離 patcher service account/rootless container 與必要 systemd
-  units？在此隔離存在前只能 report-only，不能稱為 credential-separated unattended mode。
+- Resolved: `IvesLiu1026/VISTA-World` is public.
+- Resolved: automated commits use mapped Ives author identity plus
+  `Automated-by: Codex Daily Maintainer`; Git committer/PR actor remain separately recorded.
+- Resolved: only Tier 0 may auto-merge, and only after canary plus the two-week PR-only pilot.
+- Resolved: bootstrap uses correctly authenticated `gh` + SSH; unattended publication migrates to
+  a repo-scoped GitHub App before auto-merge is enabled.
+- Resolved: existing Codex login, one patch attempt/day and no new paid API provider by default.
+- Operational dependency: credential-separated service account/rootless container may require
+  administrator help. Until present, the pipeline remains report-only or manually published.
 
 ## Approval
 
 - Requested by: Codex integrator
-- Approved by:
-- Date:
+- Approved by: IvesLiu1026
+- Date: 2026-08-21

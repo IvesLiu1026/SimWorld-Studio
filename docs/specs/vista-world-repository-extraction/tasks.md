@@ -1,6 +1,6 @@
 # Tasks: VISTA World Repository Extraction
 
-Status: Draft
+Status: In Progress
 Updated: 2026-08-21
 Depends on: requirements.md, design.md
 
@@ -14,10 +14,11 @@ Depends on: requirements.md, design.md
 
 ## Task List
 
-- [ ] T1. Approve repository identity and migration spec
+- [x] T1. Approve repository identity and migration spec
   - Depends on: none
   - Requirements: R1-R8
   - Validation: user records repo name, owner, visibility and approval in the spec.
+  - Completed: 2026-08-21; public `IvesLiu1026/VISTA-World`, selected-path history.
 
 - [ ] T2. Audit and classify retained Git history
   - Depends on: T1
