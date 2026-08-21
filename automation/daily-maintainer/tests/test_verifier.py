@@ -425,6 +425,33 @@ class VerifierTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "identity changed"):
                 trusted.resolve("probe")
 
+    def test_unsafe_optional_system_tool_does_not_poison_safe_git(self) -> None:
+        real_git = shutil.which("git")
+        if not real_git:
+            raise unittest.SkipTest("git is required")
+        with tempfile.TemporaryDirectory() as tmp:
+            unsafe_node = Path(tmp) / "node"
+            unsafe_node.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            unsafe_node.chmod(0o777)
+
+            def fake_which(name: str, *, path: str | None = None) -> str | None:
+                del path
+                if name == "git":
+                    return real_git
+                if name == "node":
+                    return str(unsafe_node)
+                return None
+
+            with patch(
+                "vista_daily_maintainer.profiles.shutil.which",
+                side_effect=fake_which,
+            ):
+                trusted = TrustedExecutables.system_defaults()
+
+        self.assertEqual(trusted.resolve("git"), Path(real_git).resolve())
+        with self.assertRaisesRegex(ValueError, "allowlist"):
+            trusted.resolve("node")
+
     def test_verifier_refuses_missing_isolation_evidence(self) -> None:
         with self.assertRaisesRegex(ValueError, "isolation evidence"):
             Verifier(
