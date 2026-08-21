@@ -1,12 +1,36 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
 
+import yaml
+
+from vista_daily_maintainer.candidate import (
+    BacklogTrust,
+    enforce_v1_candidate_policy,
+    load_trusted_backlog,
+)
+from vista_daily_maintainer.receipt import parse_receipt
+
 
 ROOT = Path(__file__).resolve().parents[1]
+DESIGN_PATH: Path | None = (
+    ROOT.parents[1] / "docs/specs/vista-world-daily-maintainer/design.md"
+    if ROOT.parent.name == "automation"
+    else None
+)
+
+
+def _fenced_example(document: str, heading: str, language: str) -> str:
+    section = document.index(heading)
+    fence = f"```{language}\n"
+    start = document.index(fence, section) + len(fence)
+    end = document.index("\n```", start)
+    return document[start:end]
 
 
 class PublishedSchemaTests(unittest.TestCase):
@@ -85,6 +109,42 @@ class PublishedSchemaTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assertIn(filename, force_include)
                 self.assertIn(f"/{filename}", build["sdist"]["include"])
+
+    def test_design_candidate_example_matches_the_executable_contract(self) -> None:
+        if DESIGN_PATH is None or not DESIGN_PATH.is_file():
+            self.skipTest("repository design document is not part of the sdist")
+        document = DESIGN_PATH.read_text(encoding="utf-8")
+        candidate = yaml.safe_load(
+            _fenced_example(document, "### Candidate manifest", "yaml")
+        )
+        backlog = {
+            "schema_version": "vista.world.daily-maintainer.backlog.v1",
+            "manifest_revision": candidate["source"]["manifest_revision"],
+            "approved_by": candidate["source"]["approved_by"],
+            "candidates": [candidate],
+        }
+        encoded = yaml.safe_dump(backlog, sort_keys=False).encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "backlog.yaml"
+            path.write_bytes(encoded)
+            loaded = load_trusted_backlog(
+                BacklogTrust(
+                    path=path,
+                    sha256=hashlib.sha256(encoded).hexdigest(),
+                    manifest_revision=backlog["manifest_revision"],
+                    approved_by=backlog["approved_by"],
+                )
+            )
+        enforce_v1_candidate_policy(loaded.candidates[0])
+
+    def test_design_receipt_example_matches_the_executable_contract(self) -> None:
+        if DESIGN_PATH is None or not DESIGN_PATH.is_file():
+            self.skipTest("repository design document is not part of the sdist")
+        document = DESIGN_PATH.read_text(encoding="utf-8")
+        example = _fenced_example(document, "### Run receipt", "json")
+        receipt = parse_receipt(example)
+        self.assertEqual(receipt.status.value, "merged")
+        self.assertEqual(receipt.candidate_id, "VW-DM-0001")
 
 
 if __name__ == "__main__":

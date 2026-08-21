@@ -21,7 +21,7 @@ Depends on: requirements.md, design.md
   - Validation: record owner/name, public/private, bot/personal attribution, Tier 0 auto-merge and
     permitted model budget in the spec approval sections.
   - Completed: 2026-08-21; public `IvesLiu1026/VISTA-World`, Ives author + automation trailer,
-    Tier 0 only after pilot, existing Codex login and no new paid provider.
+    Tier 0 only after pilot, no new paid provider, and unattended Codex credential still pending.
 
 - [x] T2. Create and protect standalone `VISTA-World`
   - Depends on: T1 and repository-extraction approval
