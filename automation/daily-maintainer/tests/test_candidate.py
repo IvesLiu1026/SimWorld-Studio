@@ -243,6 +243,16 @@ class CandidateContractTests(unittest.TestCase):
                 b"allowed_paths: [packages/netw*rk/**, tests/**]",
                 1,
             ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [packages/auth*.py, tests/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [packages/secret-store.py, tests/**]",
+                1,
+            ),
         )
         for payload in payloads:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
@@ -252,6 +262,29 @@ class CandidateContractTests(unittest.TestCase):
                     "V1 candidate policy",
                 ):
                     load_trusted_backlog(trust)
+
+    def test_v1_policy_preserves_non_authority_names_and_test_files(self) -> None:
+        payloads = (
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [packages/authorization.py, tests/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [docs/networking.md, tests/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [tests/test_auth.py]",
+                1,
+            ),
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
+                backlog = load_trusted_backlog(self._write(Path(tmp), payload))
+                self.assertEqual(len(backlog.candidates), 2)
 
     def test_single_star_does_not_authorize_nested_directories(self) -> None:
         self.assertTrue(path_matches_pattern("src/app.py", "src/*.py"))
