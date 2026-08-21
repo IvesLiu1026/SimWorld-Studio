@@ -38,6 +38,7 @@ from vista_daily_maintainer.publisher import (
 
 BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
+OTHER_HEAD_SHA = "8" * 40
 MOVED_SHA = "f" * 40
 PATCH_SHA256 = "c" * 64
 HEAD_SHA256 = "d" * 64
@@ -257,9 +258,12 @@ class FakeGitHub:
         self.commits: dict[str, CommitRecord] = {}
         self.pull_requests: list[PullRequestSnapshot] = []
         self.open_calls = 0
+        self.list_pr_calls = 0
         self.fail_stage: str | None = None
         self.open_actor = policy.expected_actor
         self.open_draft = True
+        self.commit_read_head_override: str | None = None
+        self.final_pr_read_mode: str | None = None
 
     def inspect_principal(self, repository: str, mode: PrincipalMode):
         self._fail("principal")
@@ -275,13 +279,31 @@ class FakeGitHub:
 
     def read_commit(self, repository: str, head_sha: str):
         self._fail("commit")
-        return self.commits[head_sha]
+        commit = self.commits[head_sha]
+        if self.commit_read_head_override is not None:
+            return replace(commit, head_sha=self.commit_read_head_override)
+        return commit
 
     def list_pull_requests(self, repository: str, head_branch: str):
         self._fail("list-pr")
-        return tuple(
+        self.list_pr_calls += 1
+        values = tuple(
             item for item in self.pull_requests if item.head_branch == head_branch
         )
+        if self.list_pr_calls == 3 and values:
+            if self.final_pr_read_mode == "duplicate":
+                return (*values, values[0])
+            if self.final_pr_read_mode == "replacement":
+                replacement = replace(
+                    values[0],
+                    number=values[0].number + 1,
+                    url=(
+                        f"https://github.com/{CANONICAL_REPOSITORY}/pull/"
+                        f"{values[0].number + 1}"
+                    ),
+                )
+                return (replacement,)
+        return values
 
     def open_draft_pull_request(self, spec: DraftPullRequestSpec) -> None:
         self._fail("open-pr")
@@ -326,6 +348,7 @@ class FakeGit:
         self.create_calls = 0
         self.bad_commit: dict[str, object] = {}
         self.skip_remote_branch_write = False
+        self.commit_read_head_override: str | None = None
 
     def inspect_patch(self, worktree: Path, base_sha: str):
         return self.patch
@@ -354,7 +377,10 @@ class FakeGit:
         self.branches[branch] = LocalBranchSnapshot(branch, record.head_sha, True)
 
     def inspect_commit(self, worktree: Path, head_sha: str):
-        return self.commits[head_sha]
+        commit = self.commits[head_sha]
+        if self.commit_read_head_override is not None:
+            return replace(commit, head_sha=self.commit_read_head_override)
+        return commit
 
     def push_new_branch(self, worktree: Path, spec) -> None:
         self.push_calls += 1
@@ -469,6 +495,31 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(fixture.git.push_calls, 1)
         self.assertEqual(fixture.github.open_calls, 1)
 
+    def test_existing_pr_commit_readback_is_bound_to_queried_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            fixture.publish()
+            fixture.github.commit_read_head_override = OTHER_HEAD_SHA
+            with self.assertRaisesRegex(
+                PublicationPreflightError, "returned another commit"
+            ):
+                fixture.publish()
+        self.assertEqual(fixture.github.open_calls, 1)
+
+    def test_local_and_push_commit_readbacks_are_bound_to_queried_sha(self) -> None:
+        for stage in ("local", "push"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as tmp:
+                fixture = Fixture(Path(tmp))
+                if stage == "local":
+                    fixture.git.commit_read_head_override = OTHER_HEAD_SHA
+                else:
+                    fixture.github.commit_read_head_override = OTHER_HEAD_SHA
+                with self.assertRaisesRegex(
+                    PublicationPreflightError, "returned another commit"
+                ):
+                    fixture.publish()
+                self.assertEqual(fixture.github.open_calls, 0)
+
     def test_canonical_envelope_bytes_bind_every_field(self) -> None:
         envelope = Envelope()
         envelope.candidate_title = "tampered after finalization"
@@ -508,6 +559,32 @@ class PublisherContractTests(unittest.TestCase):
             with self.subTest(envelope=envelope), tempfile.TemporaryDirectory() as tmp:
                 fixture = Fixture(Path(tmp), envelope=envelope)
                 with self.assertRaises(PublicationPreflightError):
+                    fixture.publish()
+                self.assertEqual(fixture.git.create_calls, 0)
+
+    def test_changed_paths_cannot_glob_through_protected_components(self) -> None:
+        cases = (
+            ("docs/a?th/**", "docs/auth/config.md"),
+            ("docs/credentia?s/**", "docs/credentials/sample.md"),
+            ("docs/in?ra/**", "docs/infra/config.md"),
+            ("docs/net*ork/**", "docs/network/notes.md"),
+            ("docs/secr?t/**", "docs/secret/example.md"),
+        )
+        for allowed_path, changed_path in cases:
+            with (
+                self.subTest(changed_path=changed_path),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                fixture = Fixture(
+                    Path(tmp),
+                    envelope=Envelope(
+                        allowed_paths=(allowed_path,),
+                        changed_paths=(changed_path,),
+                    ),
+                )
+                with self.assertRaisesRegex(
+                    PublicationPreflightError, "protected in V1"
+                ):
                     fixture.publish()
                 self.assertEqual(fixture.git.create_calls, 0)
 
@@ -607,6 +684,26 @@ class PublisherContractTests(unittest.TestCase):
                     fixture.publish()
                 self.assertEqual(fixture.github.open_calls, 1)
 
+    def test_final_pr_readback_after_barrier_must_be_unique(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            fixture.github.final_pr_read_mode = "duplicate"
+            with self.assertRaisesRegex(
+                PublicationPreflightError, "final draft PR read-back is not unique"
+            ):
+                fixture.publish()
+        self.assertEqual(fixture.github.open_calls, 1)
+
+    def test_final_pr_snapshot_must_match_pre_barrier_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(Path(temporary))
+            fixture.github.final_pr_read_mode = "replacement"
+            with self.assertRaisesRegex(
+                PublicationPreflightError, "changed after final barrier"
+            ):
+                fixture.publish()
+        self.assertEqual(fixture.github.open_calls, 1)
+
     def test_control_secret_and_markdown_injection_fail_or_escape(self) -> None:
         invalid = (
             Envelope(acceptance=("line one\nline two",)),
@@ -629,6 +726,34 @@ class PublisherContractTests(unittest.TestCase):
             fixture.publish()
             body_hash = fixture.github.pull_requests[0].body_sha256
         self.assertEqual(len(body_hash), 64)
+
+    def test_acceptance_and_pr_body_reject_extended_secret_families(self) -> None:
+        secret_values = (
+            "AWS access key " + "AK" + "IA" + "A" * 16,
+            "npm credential " + "npm" + "_" + "n" * 36,
+            "Slack credential " + "xox" + "b-" + "1234567890-abcdefghij",
+            "pass" + "word = " + "correct-horse-battery-staple",
+            "to" + "ken: " + "abcdefghijklmnop123456",
+        )
+        for secret in secret_values:
+            with self.subTest(secret_family=secret[:8]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    fixture = Fixture(
+                        Path(tmp), envelope=Envelope(acceptance=(secret,))
+                    )
+                    with self.assertRaises(PublicationContractError):
+                        fixture.publish()
+                    self.assertEqual(fixture.git.create_calls, 0)
+
+                with self.assertRaises(PublicationContractError):
+                    DraftPullRequestSpec(
+                        repository=CANONICAL_REPOSITORY,
+                        base_branch=DEFAULT_BRANCH,
+                        head_branch=("codex/daily/2026-08-21-docs-contract-aaaaaaaa"),
+                        title="Daily maintenance",
+                        body="Acceptance: " + secret,
+                        draft=True,
+                    )
 
     def test_port_errors_are_redacted_and_no_write_follows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

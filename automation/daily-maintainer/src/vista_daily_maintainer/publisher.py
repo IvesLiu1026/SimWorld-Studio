@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Callable, Protocol, TypeVar
 
+from .guard import _SECRET_PATTERNS as _GUARD_SECRET_PATTERNS
+
 
 CANONICAL_REPOSITORY = "IvesLiu1026/VISTA-World"
 DEFAULT_BRANCH = "main"
@@ -41,17 +43,28 @@ _EMAIL = re.compile(r"^[^\s<>@]+@[^\s<>@]+$")
 _OPAQUE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _BODY_CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
-_SECRET_MATERIAL = re.compile(
-    r"(?i)(?:"
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
-    r"github_pat_[A-Za-z0-9_]{20,}|"
-    r"gh[opusr]_[A-Za-z0-9]{20,}|"
-    r"sk-[A-Za-z0-9_-]{20,}|"
-    r"(?:OPENAI|ANTHROPIC|CLAUDE|CODEX|GEMINI|OPENROUTER|REPLICATE|"
-    r"COHERE|MISTRAL|GROQ|XAI)_(?:API_)?(?:KEY|TOKEN|AUTH)|"
-    r"Bearer\s+[A-Za-z0-9._~+/=-]{20,}"
-    r")"
+_PUBLISHER_SECRET_PATTERNS = (
+    re.compile(r"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bgh[opusr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    re.compile(r"\bnpm_[A-Za-z0-9]{36,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(
+        r"(?i)(?:^|[^A-Za-z0-9])(?:"
+        r"(?:[A-Za-z0-9]+[_-])*(?:password|passwd|secret|"
+        r"secret[_-]?access[_-]?key|api[_-]?key|access[_-]?token|"
+        r"auth[_-]?token|token)|_?auth[_-]?token"
+        r")\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:@-]{16,}"
+    ),
+    re.compile(
+        r"(?i)(?:OPENAI|ANTHROPIC|CLAUDE|CODEX|GEMINI|OPENROUTER|"
+        r"REPLICATE|COHERE|MISTRAL|GROQ|XAI)_(?:API_)?(?:KEY|TOKEN|AUTH)"
+    ),
+    re.compile(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]{20,}"),
 )
+_SECRET_PATTERNS = (*_GUARD_SECRET_PATTERNS, *_PUBLISHER_SECRET_PATTERNS)
 _MODEL_ENVIRONMENT_KEYS = frozenset(
     {
         "ANTHROPIC_API_KEY",
@@ -91,23 +104,36 @@ _V1_PROFILE_IDS = frozenset(
 _V1_FORBIDDEN_AUTHORITY = frozenset(
     {
         ".agent",
+        ".agents",
         ".claude",
         ".codex",
         ".github",
+        "artifacts",
         "assets",
         "auth",
+        "credential",
         "credentials",
         "datasets",
         "deploy",
         "evidence",
+        "infra",
+        "infrastructure",
         "network",
         "ops",
+        "outputs",
+        "prompts",
+        "reports",
         "runtime",
+        "runs",
+        "scenes",
+        "secret",
         "secrets",
         "systemd",
         "ue",
         "unreal",
         "unreal_plugins",
+        "world-packs",
+        "world_packs",
     }
 )
 _V1_TIER1_PREFIXES = (
@@ -704,12 +730,23 @@ class Publisher:
                 principal,
             )
             self._require_remote_branch(evidence.branch, remote_head)
+            final_remote_commit = self._read_remote_commit(remote_head)
+            self._validate_commit(final_remote_commit, commit_spec, evidence)
+            if final_remote_commit != remote_commit:
+                raise PublicationPreflightError(
+                    "reconciled remote commit read-back changed"
+                )
             reread = self._read_pull_requests(evidence.branch)
             if len(reread) != 1:
                 raise PublicationPreflightError("reconciled PR read-back changed")
             self._validate_pull_request(reread[0], pr_spec, principal, remote_head)
+            if reread[0] != pull_requests[0]:
+                raise PublicationPreflightError("reconciled PR read-back changed")
             return self._result(
-                evidence, remote_commit, principal, reread[0], reconciled=True
+                evidence,
+                final_remote_commit,
+                reread[0],
+                reconciled=True,
             )
 
         commit: CommitRecord | None = None
@@ -833,7 +870,10 @@ class Publisher:
         pull_requests = self._read_pull_requests(evidence.branch)
         if len(pull_requests) != 1:
             raise PublicationPreflightError("draft PR creation read-back is not unique")
-        self._validate_pull_request(pull_requests[0], pr_spec, principal, remote_head)
+        created_pull_request = pull_requests[0]
+        self._validate_pull_request(
+            created_pull_request, pr_spec, principal, remote_head
+        )
         self._final_read_barrier(
             envelope_reference,
             evidence,
@@ -843,11 +883,21 @@ class Publisher:
             principal,
         )
         self._require_remote_branch(evidence.branch, remote_head)
+        final_remote_commit = self._read_remote_commit(remote_head)
+        self._validate_commit(final_remote_commit, commit_spec, evidence)
+        if final_remote_commit != remote_commit:
+            raise PublicationPreflightError("remote commit changed after PR creation")
+        final_pull_requests = self._read_pull_requests(evidence.branch)
+        if len(final_pull_requests) != 1:
+            raise PublicationPreflightError("final draft PR read-back is not unique")
+        final_pull_request = final_pull_requests[0]
+        self._validate_pull_request(final_pull_request, pr_spec, principal, remote_head)
+        if final_pull_request != created_pull_request:
+            raise PublicationPreflightError("draft PR changed after final barrier")
         return self._result(
             evidence,
-            remote_commit,
-            principal,
-            pull_requests[0],
+            final_remote_commit,
+            final_pull_request,
             reconciled=reconciled,
         )
 
@@ -1058,14 +1108,22 @@ class Publisher:
             "local commit read",
             lambda: self._git.inspect_commit(repo, head_sha),
         )
-        return _copy_commit(value)
+        commit = _copy_commit(value)
+        if commit.head_sha != head_sha:
+            raise PublicationPreflightError("local commit read returned another commit")
+        return commit
 
     def _read_remote_commit(self, head_sha: str) -> CommitRecord:
         value = self._port_call(
             "remote commit read",
             lambda: self._github.read_commit(CANONICAL_REPOSITORY, head_sha),
         )
-        return _copy_commit(value)
+        commit = _copy_commit(value)
+        if commit.head_sha != head_sha:
+            raise PublicationPreflightError(
+                "remote commit read returned another commit"
+            )
+        return commit
 
     @staticmethod
     def _validate_commit(
@@ -1132,7 +1190,6 @@ class Publisher:
     def _result(
         evidence: _VerifierState,
         commit: CommitRecord,
-        principal: _PrincipalState,
         pull_request: PullRequestSnapshot,
         *,
         reconciled: bool,
@@ -1146,10 +1203,10 @@ class Publisher:
             verification_sha256=evidence.canonical_sha256,
             commit_author=commit.author,
             commit_committer=commit.committer,
-            pr_actor=principal.actor,
+            pr_actor=pull_request.actor,
             pr_number=pull_request.number,
             pr_url=pull_request.url,
-            draft=True,
+            draft=pull_request.draft,
             reconciled=reconciled,
         )
 
@@ -1546,6 +1603,11 @@ def _validate_v1_candidate_authority(
         ):
             raise PublicationPreflightError("Tier 1 path is outside V1 authority")
     for path in changed_paths:
+        lowered_parts = tuple(
+            part.lower() for part in PurePosixPath(path).parts if part
+        )
+        if any(part in _V1_FORBIDDEN_AUTHORITY for part in lowered_parts):
+            raise PublicationPreflightError("verified changed path is protected in V1")
         if not any(_path_matches_pattern(path, pattern) for pattern in allowed_paths):
             raise PublicationPreflightError(
                 "verified changed path is outside candidate authority"
@@ -2021,7 +2083,7 @@ def _require_sha256(value: object, label: str) -> None:
 
 
 def _reject_secret_material(values: tuple[str, ...], label: str) -> None:
-    if any(_SECRET_MATERIAL.search(value) for value in values):
+    if any(pattern.search(value) for value in values for pattern in _SECRET_PATTERNS):
         raise PublicationContractError(f"{label} contains credential-like material")
 
 
