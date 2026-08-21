@@ -53,6 +53,9 @@ _V1_FORBIDDEN_AUTHORITY = frozenset(
         "unreal_plugins",
     }
 )
+_V1_FORBIDDEN_AUTHORITY_TOKENS = _V1_FORBIDDEN_AUTHORITY | frozenset(
+    {"credential", "secret"}
+)
 _V1_TIER1_PREFIXES = (
     "contracts/",
     "docs/",
@@ -319,11 +322,62 @@ def path_matches_pattern(path: str, pattern: str) -> bool:
     return re.fullmatch("".join(expression), path) is not None
 
 
-def has_v1_forbidden_authority(path: str) -> bool:
-    """Return whether an actual repository path crosses a V1 authority boundary."""
+def _is_v1_test_filename(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.startswith(("test_", "test-")) or lowered.endswith(
+        (
+            "_test.py",
+            ".test.cjs",
+            ".test.cts",
+            ".test.js",
+            ".test.jsx",
+            ".test.mjs",
+            ".test.mts",
+            ".test.ts",
+            ".test.tsx",
+            ".spec.cjs",
+            ".spec.cts",
+            ".spec.js",
+            ".spec.jsx",
+            ".spec.mjs",
+            ".spec.mts",
+            ".spec.ts",
+            ".spec.tsx",
+        )
+    )
+
+
+def has_v1_forbidden_authority(path: str, *, pattern: bool = False) -> bool:
+    """Return whether a path or scoped pattern crosses a V1 authority boundary.
+
+    Authority words are matched only on directory or filename token boundaries.
+    This blocks names such as ``auth-client.py`` without conflating them with
+    unrelated words such as ``authorization.py``. Recognized test filenames
+    may describe a protected subsystem, but protected parent directories still
+    fail closed.
+    """
 
     parts = tuple(part.lower() for part in path.split("/") if part)
-    return any(part in _V1_FORBIDDEN_AUTHORITY for part in parts)
+    for index, part in enumerate(parts):
+        if part in _V1_FORBIDDEN_AUTHORITY:
+            return True
+        if index == len(parts) - 1 and _is_v1_test_filename(part):
+            continue
+        tokens = tuple(token for token in re.split(r"[._-]+", part) if token)
+        for token in tokens:
+            if token in _V1_FORBIDDEN_AUTHORITY_TOKENS:
+                return True
+            if (
+                pattern
+                and token not in {"*", "**"}
+                and any(character in token for character in "*?")
+                and any(
+                    path_matches_pattern(authority, token)
+                    for authority in _V1_FORBIDDEN_AUTHORITY_TOKENS
+                )
+            ):
+                return True
+    return False
 
 
 def enforce_v1_candidate_policy(candidate: Candidate) -> None:
@@ -342,24 +396,7 @@ def enforce_v1_candidate_policy(candidate: Candidate) -> None:
     for pattern in candidate.allowed_paths:
         lowered = pattern.lower()
         parts = tuple(part for part in lowered.split("/") if part)
-        literal_parts = tuple(
-            part for part in parts if not any(character in part for character in "*?")
-        )
-        disguised_forbidden_parts = tuple(
-            part
-            for part in parts
-            if part not in {"*", "**"}
-            and any(character in part for character in "*?")
-            and any(
-                path_matches_pattern(authority, part)
-                for authority in _V1_FORBIDDEN_AUTHORITY
-            )
-        )
-        if (
-            pattern == "**"
-            or any(part in _V1_FORBIDDEN_AUTHORITY for part in literal_parts)
-            or disguised_forbidden_parts
-        ):
+        if pattern == "**" or has_v1_forbidden_authority(pattern, pattern=True):
             raise CandidateContractError(
                 f"V1 candidate policy forbids path authority: {pattern}"
             )
