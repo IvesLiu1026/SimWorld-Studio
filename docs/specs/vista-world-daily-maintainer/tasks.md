@@ -28,12 +28,17 @@ Depends on: requirements.md, design.md
   - Requirements: R6, R8
   - Validation: repo exists with `isFork=false`, `main` default, force-push/delete disabled and no
     automation bypass permission. Required-check contexts remain unset until T11 lands baseline CI.
+  - Progress: public non-fork repo, protected `main`, strict baseline checks and no
+    force-push/delete. Completion remains blocked on a non-bypass unattended principal; the
+    personal-admin CLI is bootstrap-only.
 
 - [ ] T3. Provision the publisher identity
   - Depends on: T1, T2
   - Requirements: R8, R10
   - Validation: headless preflight reports selected principal type, exact App installation or CLI
     login, repo and scopes; test branch/PR round-trip works. Wrong principal fails before mutation.
+  - Progress: `IvesLiu1026` CLI/SSH bootstrap and protected PR round-trip passed. A non-admin,
+    repo-scoped App/principal is still required before unattended publication.
 
 - [ ] T4. Define candidate and receipt contracts
   - Files: `automation/daily-maintainer/*.schema.json`, typed models
@@ -93,6 +98,8 @@ Depends on: requirements.md, design.md
   - Validation: reviewed CI first lands and succeeds without preconfigured required contexts; then
     exact contexts are enabled with minimal permissions. Separate promotion controller marks a draft
     ready only after digest/CI pass; bot-authored workflow changes are rejected; Tier 1+ do not merge.
+  - Progress: reviewed baseline CI landed and exact GitHub Actions check identities now gate `main`.
+    Daily-maintainer CI, promotion and risk-tier enforcement remain open.
 
 - [ ] T12. Implement receipt journal and heartbeat ingress
   - Files: receipt publisher, `.github/workflows/daily-maintainer-heartbeat.yml`, tests, runbook
@@ -131,8 +138,9 @@ Depends on: requirements.md, design.md
 
 ## Notes
 
-- Current GitHub connector is `IvesLiu1026`, but server `gh` remains `aN0NyMoUs0000`.
-- Git SSH can push to the existing fork, but cannot create the missing standalone repository.
-- `IvesLiu1026/VISTA-World` did not exist at the 2026-08-21 audit.
+- Public standalone `IvesLiu1026/VISTA-World` now exists; server `gh` and Git SSH both use
+  `IvesLiu1026`. The older stored CLI login is inactive and must never be selected by automation.
+- Baseline CI and required checks are live. Repository auto-merge and unattended publication remain
+  disabled while the deterministic core, isolated publisher and pilot are incomplete.
 - Tier 1 auto-merge, GitHub Actions-hosted model execution and UE/Blender maintenance require
   separate approvals after the initial pilot.

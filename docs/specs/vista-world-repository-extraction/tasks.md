@@ -26,15 +26,19 @@ Depends on: requirements.md, design.md
   - Validation: ledger covers selected paths and every unmerged/WIP/quarantine unique patch;
     no branch is bulk-merged or deleted.
 
-- [ ] T3. Authenticate the intended GitHub owner and create standalone remote
+- [x] T3. Authenticate the intended GitHub owner and create standalone remote
   - Depends on: T1
   - Requirements: R1, R6
   - Validation: `isFork=false`, owner/name/visibility exact, `main` default, author email mapped.
+  - Completed: 2026-08-21; active CLI/SSH identity `IvesLiu1026`, public non-fork repository,
+    default `main`, mapped Ives author identity.
 
-- [ ] T4. Extract contracts, world packs and pure compiler with history
+- [x] T4. Extract contracts, world packs and pure compiler with history
   - Depends on: T2, T3
   - Requirements: R2, R3, R8
   - Validation: focused unit tests pass without SimWorld imports; v1 schemas/receipts unchanged.
+  - Completed: 2026-08-21; selected-path history, 28 offline tests and deterministic world-pack
+    validation passed in standalone `VISTA-World`.
 
 - [ ] T5. Extract `VistaPlayableHome` UE plugin
   - Depends on: T4
@@ -61,6 +65,8 @@ Depends on: requirements.md, design.md
   - Requirements: R1, R2, R5-R7
   - Validation: required checks gate `main`; force push disabled; release manifest contains SHAs,
     schema versions, license inventory and rollback pin.
+  - Progress: baseline CI and strict app-bound checks gate `main`; force-push/delete are disabled.
+    Release metadata and the complete license inventory remain open.
 
 - [ ] T10. Establish daily issue-to-main workflow
   - Depends on: T3, T9
