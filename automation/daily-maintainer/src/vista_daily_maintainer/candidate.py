@@ -22,6 +22,47 @@ _APPROVER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 _PROFILE_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/*?-]+$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_V1_PROFILE_IDS = frozenset(
+    {
+        "daily-maintainer-core-tests",
+        "tools-python-offline",
+        "web-frontend-build",
+        "web-server-contracts",
+        "web-server-unit",
+    }
+)
+_V1_FORBIDDEN_AUTHORITY = frozenset(
+    {
+        ".agent",
+        ".claude",
+        ".codex",
+        ".github",
+        "assets",
+        "auth",
+        "credentials",
+        "datasets",
+        "deploy",
+        "evidence",
+        "network",
+        "ops",
+        "runtime",
+        "secrets",
+        "systemd",
+        "ue",
+        "unreal",
+        "unreal_plugins",
+    }
+)
+_V1_TIER1_PREFIXES = (
+    "contracts/",
+    "docs/",
+    "packages/",
+    "simworld_studio_workspace/web/server/",
+    "simworld_studio_workspace/web/src/",
+    "src/",
+    "tests/",
+    "tools/",
+)
 
 
 class CandidateContractError(ValueError):
@@ -277,6 +318,64 @@ def path_matches_pattern(path: str, pattern: str) -> bool:
     return re.fullmatch("".join(expression), path) is not None
 
 
+def enforce_v1_candidate_policy(candidate: Candidate) -> None:
+    """Apply the approved unattended Tier 0/1 authority envelope."""
+
+    if candidate.risk_tier not in {0, 1}:
+        raise CandidateContractError(
+            "V1 candidate policy permits only Tier 0 and Tier 1 candidates"
+        )
+    unknown_profiles = sorted(set(candidate.validation_profiles) - _V1_PROFILE_IDS)
+    if unknown_profiles:
+        raise CandidateContractError(
+            "V1 candidate policy forbids validation profiles: "
+            + ", ".join(unknown_profiles)
+        )
+    for pattern in candidate.allowed_paths:
+        lowered = pattern.lower()
+        parts = tuple(part for part in lowered.split("/") if part)
+        literal_parts = tuple(
+            part for part in parts if not any(character in part for character in "*?")
+        )
+        if pattern == "**" or any(
+            part in _V1_FORBIDDEN_AUTHORITY for part in literal_parts
+        ):
+            raise CandidateContractError(
+                f"V1 candidate policy forbids path authority: {pattern}"
+            )
+        is_test_scope = (
+            any(part in {"test", "tests", "fixtures"} for part in parts)
+            or parts[-1].startswith(("test_", "test-"))
+            or parts[-1].endswith(
+                (
+                    "_test.py",
+                    ".test.js",
+                    ".test.jsx",
+                    ".test.mjs",
+                    ".test.ts",
+                    ".test.tsx",
+                    ".spec.js",
+                    ".spec.jsx",
+                    ".spec.mjs",
+                    ".spec.ts",
+                    ".spec.tsx",
+                )
+            )
+        )
+        if candidate.risk_tier == 0:
+            if not (lowered.startswith("docs/") or is_test_scope):
+                raise CandidateContractError(
+                    f"V1 candidate policy restricts Tier 0 path: {pattern}"
+                )
+        elif not (
+            any(lowered.startswith(prefix) for prefix in _V1_TIER1_PREFIXES)
+            or is_test_scope
+        ):
+            raise CandidateContractError(
+                f"V1 candidate policy restricts Tier 1 path: {pattern}"
+            )
+
+
 def _require_mapping(value: object, label: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
         raise CandidateContractError(f"{label} must be a string-keyed mapping")
@@ -392,6 +491,7 @@ def _parse_candidate(
             "candidate references unknown validation profile: "
             + ", ".join(unknown_profiles)
         )
+    enforce_v1_candidate_policy(candidate)
     return candidate
 
 
@@ -512,6 +612,8 @@ def select_candidate(
         raise ValueError("selector date must be a date")
     completed = frozenset(completed_ids)
     tiers = frozenset(allowed_risk_tiers)
+    for candidate in backlog.candidates:
+        enforce_v1_candidate_policy(candidate)
     eligible = (
         candidate
         for candidate in backlog.candidates

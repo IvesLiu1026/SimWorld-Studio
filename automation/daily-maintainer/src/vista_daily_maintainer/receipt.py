@@ -16,6 +16,9 @@ _CANDIDATE_ID = re.compile(r"^VW-DM-[0-9]{4,}$")
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _COMMAND_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _FAILURE_CATEGORY = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
+_ACTOR_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$")
+_IDENTITY_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+$")
 
 
 class ReceiptContractError(ValueError):
@@ -113,6 +116,61 @@ class DiffSummary:
 
 
 @dataclass(frozen=True)
+class GitIdentity:
+    name: str
+    email: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.name, str)
+            or not 1 <= len(self.name) <= 128
+            or _IDENTITY_CONTROL.search(self.name)
+        ):
+            raise ReceiptContractError("Git identity name is invalid")
+        if (
+            not isinstance(self.email, str)
+            or not 3 <= len(self.email) <= 254
+            or not _EMAIL.fullmatch(self.email)
+            or _IDENTITY_CONTROL.search(self.email)
+        ):
+            raise ReceiptContractError("Git identity email is invalid")
+
+
+@dataclass(frozen=True)
+class ReceiptActors:
+    commit_author: GitIdentity | None = None
+    git_committer: GitIdentity | None = None
+    pr_actor: str | None = None
+    promotion_actor: str | None = None
+
+    def __post_init__(self) -> None:
+        for identity in (self.commit_author, self.git_committer):
+            if identity is not None and not isinstance(identity, GitIdentity):
+                raise ReceiptContractError("receipt Git actors must be Git identities")
+        for actor in (self.pr_actor, self.promotion_actor):
+            if actor is not None and (
+                not isinstance(actor, str) or not _ACTOR_LOGIN.fullmatch(actor)
+            ):
+                raise ReceiptContractError("receipt GitHub actor login is invalid")
+
+    @property
+    def empty(self) -> bool:
+        return all(
+            value is None
+            for value in (
+                self.commit_author,
+                self.git_committer,
+                self.pr_actor,
+                self.promotion_actor,
+            )
+        )
+
+    @property
+    def complete_for_pr(self) -> bool:
+        return bool(self.commit_author and self.git_committer and self.pr_actor)
+
+
+@dataclass(frozen=True)
 class RunReceipt:
     run_id: str
     run_date: str
@@ -128,6 +186,7 @@ class RunReceipt:
     merge_sha: str | None
     duration_ms: int
     failure_category: str | None
+    actors: ReceiptActors
     schema_version: str = RECEIPT_SCHEMA_VERSION
     automated: bool = True
 
@@ -148,10 +207,12 @@ class RunReceipt:
             self.repository
         ):
             raise ReceiptContractError("receipt repository must be owner/name")
-        expected_run_id = f"{run_date.isoformat()}/{self.repository}"
-        if self.run_id != expected_run_id:
-            raise ReceiptContractError("receipt run_id must bind date and repository")
         _require_sha(self.base_sha, "base SHA")
+        expected_run_id = f"{run_date.isoformat()}/{self.repository}@{self.base_sha}"
+        if self.run_id != expected_run_id:
+            raise ReceiptContractError(
+                "receipt run_id must bind date, repository, and base SHA"
+            )
         if self.head_sha is not None:
             _require_sha(self.head_sha, "head SHA")
         if self.candidate_id is not None:
@@ -191,6 +252,8 @@ class RunReceipt:
                 self.failure_category, str
             ) or not _FAILURE_CATEGORY.fullmatch(self.failure_category):
                 raise ReceiptContractError("receipt failure_category is invalid")
+        if not isinstance(self.actors, ReceiptActors):
+            raise ReceiptContractError("receipt actors contract is invalid")
         self._validate_status_shape()
 
     def _validate_status_shape(self) -> None:
@@ -217,6 +280,10 @@ class RunReceipt:
                 raise ReceiptContractError(
                     f"{self.status.value} receipt cannot claim a patch or PR"
                 )
+            if not self.actors.empty:
+                raise ReceiptContractError(
+                    f"{self.status.value} receipt cannot claim commit or PR actors"
+                )
             return
 
         if self.status in {RunStatus.PR_OPEN, RunStatus.MERGED}:
@@ -237,8 +304,14 @@ class RunReceipt:
                 raise ReceiptContractError(
                     f"{self.status.value} receipt cannot touch protected paths"
                 )
+            if not self.actors.complete_for_pr:
+                raise ReceiptContractError(
+                    f"{self.status.value} receipt requires commit and PR actors"
+                )
             if self.status is RunStatus.MERGED and self.merge_sha is None:
                 raise ReceiptContractError("merged receipt requires merge SHA")
+            if self.status is RunStatus.MERGED and self.actors.promotion_actor is None:
+                raise ReceiptContractError("merged receipt requires promotion actor")
             if self.status is RunStatus.PR_OPEN and self.merge_sha is not None:
                 raise ReceiptContractError("pr_open receipt cannot claim merge SHA")
             return
@@ -356,6 +429,54 @@ def _diff_from_mapping(value: object) -> DiffSummary | None:
     )
 
 
+def _identity_to_dict(identity: GitIdentity | None) -> dict[str, str] | None:
+    if identity is None:
+        return None
+    return {
+        "name": identity.name,
+        "email": identity.email,
+    }
+
+
+def _identity_from_mapping(value: object, label: str) -> GitIdentity | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ReceiptContractError(f"{label} must be an object or null")
+    _expect_fields(value, required={"name", "email"}, label=label)
+    return GitIdentity(
+        name=value["name"],  # type: ignore[arg-type]
+        email=value["email"],  # type: ignore[arg-type]
+    )
+
+
+def _actors_from_mapping(value: object) -> ReceiptActors:
+    if not isinstance(value, Mapping):
+        raise ReceiptContractError("receipt actors must be an object")
+    _expect_fields(
+        value,
+        required={
+            "commit_author",
+            "git_committer",
+            "pr_actor",
+            "promotion_actor",
+        },
+        label="receipt actors",
+    )
+    return ReceiptActors(
+        commit_author=_identity_from_mapping(
+            value["commit_author"],
+            "commit_author",
+        ),
+        git_committer=_identity_from_mapping(
+            value["git_committer"],
+            "git_committer",
+        ),
+        pr_actor=value["pr_actor"],  # type: ignore[arg-type]
+        promotion_actor=value["promotion_actor"],  # type: ignore[arg-type]
+    )
+
+
 def receipt_to_dict(receipt: RunReceipt) -> dict[str, object]:
     return {
         "schema_version": receipt.schema_version,
@@ -391,6 +512,12 @@ def receipt_to_dict(receipt: RunReceipt) -> dict[str, object]:
         "merge_sha": receipt.merge_sha,
         "duration_ms": receipt.duration_ms,
         "failure_category": receipt.failure_category,
+        "actors": {
+            "commit_author": _identity_to_dict(receipt.actors.commit_author),
+            "git_committer": _identity_to_dict(receipt.actors.git_committer),
+            "pr_actor": receipt.actors.pr_actor,
+            "promotion_actor": receipt.actors.promotion_actor,
+        },
         "automated": receipt.automated,
     }
 
@@ -434,6 +561,7 @@ def parse_receipt(payload: bytes | str) -> RunReceipt:
             "merge_sha",
             "duration_ms",
             "failure_category",
+            "actors",
             "automated",
         },
         label="receipt",
@@ -462,6 +590,7 @@ def parse_receipt(payload: bytes | str) -> RunReceipt:
         merge_sha=value["merge_sha"],  # type: ignore[arg-type]
         duration_ms=value["duration_ms"],  # type: ignore[arg-type]
         failure_category=value["failure_category"],  # type: ignore[arg-type]
+        actors=_actors_from_mapping(value["actors"]),
         automated=value["automated"],  # type: ignore[arg-type]
     )
 
@@ -486,6 +615,10 @@ def journal_entry(receipt: RunReceipt) -> str:
         f"candidate_id: {tick}{receipt.candidate_id or 'none'}{tick}",
         f"base_sha: {tick}{receipt.base_sha}{tick}",
         f"head_sha: {tick}{receipt.head_sha or 'none'}{tick}",
+        f"commit_author: {tick}{receipt.actors.commit_author.name if receipt.actors.commit_author else 'none'}{tick}",
+        f"git_committer: {tick}{receipt.actors.git_committer.name if receipt.actors.git_committer else 'none'}{tick}",
+        f"pr_actor: {tick}{receipt.actors.pr_actor or 'none'}{tick}",
+        f"promotion_actor: {tick}{receipt.actors.promotion_actor or 'none'}{tick}",
         f"receipt_sha256: {tick}{receipt_digest(receipt)}{tick}",
     ]
     return "\n".join(lines) + "\n"
