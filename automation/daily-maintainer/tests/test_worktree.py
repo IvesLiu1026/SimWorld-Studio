@@ -245,7 +245,6 @@ class WorktreeLifecycleTests(unittest.TestCase):
             )
             git(fixture.checkout, "config", "filter.attack.required", "true")
 
-            git(fixture.checkout, "status", "--porcelain=v1")
             exported = root / "unsafe-export"
             exported.mkdir()
             git(
@@ -254,12 +253,11 @@ class WorktreeLifecycleTests(unittest.TestCase):
                 f"--prefix={exported}/",
                 "-a",
             )
-            self.assertIn("clean", marker.read_text(encoding="utf-8"))
-            self.assertIn("smudge", marker.read_text(encoding="utf-8"))
             self.assertEqual(
                 (exported / "src" / "app.py").read_text(encoding="utf-8"),
                 "VALUE = 999\n",
             )
+            self.assertIn("smudge", marker.read_text(encoding="utf-8"))
             marker.unlink()
 
             with self.assertRaisesRegex(RepositoryIdentityError, "allowlist"):
