@@ -14,5 +14,22 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/vista_daily_maintainer"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"backlog.schema.json" = "vista_daily_maintainer/schemas/backlog.schema.json"
+"candidate.schema.json" = "vista_daily_maintainer/schemas/candidate.schema.json"
+"receipt.schema.json" = "vista_daily_maintainer/schemas/receipt.schema.json"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/README.md",
+  "/backlog.schema.json",
+  "/candidate.schema.json",
+  "/pyproject.toml",
+  "/receipt.schema.json",
+  "/src",
+  "/tests",
+  "/uv.lock",
+]
+
 [tool.uv]
 package = true

@@ -7,13 +7,15 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from vista_daily_maintainer.candidate import CandidateContractError
 from vista_daily_maintainer.profiles import (
     TrustedExecutables,
     ValidationProfile,
     ValidationProfileRegistry,
 )
-from vista_daily_maintainer.verifier import IsolationAttestation, Verifier
+from vista_daily_maintainer.verifier import IsolationEvidence, Verifier
 
 try:
     from .helpers import init_repo, make_candidate
@@ -35,11 +37,11 @@ class VerifierTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _isolation() -> IsolationAttestation:
-        return IsolationAttestation(
+    def _isolation() -> IsolationEvidence:
+        return IsolationEvidence(
             network_isolated=True,
             credentials_absent=True,
-            verified_by="unit-test-harness",
+            observed_by="unit-test-harness",
             evidence_sha256="d" * 64,
         )
 
@@ -60,7 +62,7 @@ class VerifierTests(unittest.TestCase):
             registry = ValidationProfileRegistry(
                 (
                     ValidationProfile(
-                        profile_id="safe-probe",
+                        profile_id="daily-maintainer-core-tests",
                         cwd=".",
                         argv=(sys.executable, "-c", probe),
                         timeout_seconds=10,
@@ -81,26 +83,34 @@ class VerifierTests(unittest.TestCase):
                 }
             )
 
-            report = Verifier(
-                registry=registry,
-                executables=self._trusted_tools(),
-                isolation=self._isolation(),
-            ).verify(
-                repo,
-                base,
-                make_candidate(profiles=("safe-probe",)),
-                inherited_env=inherited,
-            )
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(
+                    repo,
+                    base,
+                    make_candidate(),
+                    inherited_env=inherited,
+                )
 
-        self.assertTrue(report.ok, report)
+        self.assertTrue(report.checks_passed, report)
+        self.assertFalse(report.publication_authorized)
+        self.assertFalse(hasattr(report, "ok"))
         self.assertEqual(
             [item.command_id for item in report.validation],
-            ["git-diff-check", "safe-probe"],
+            ["git-diff-check", "daily-maintainer-core-tests"],
         )
         self.assertTrue(all(item.exit_code == 0 for item in report.validation))
         self.assertFalse(report.mutation_detected)
         self.assertEqual(report.guard.patch_sha256, report.final_guard.patch_sha256)
-        self.assertEqual(report.isolation.verified_by, "unit-test-harness")
+        self.assertEqual(
+            report.isolation_evidence.observed_by,
+            "unit-test-harness",
+        )
 
     def test_validation_mutation_is_detected_and_stops_later_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,7 +121,7 @@ class VerifierTests(unittest.TestCase):
             registry = ValidationProfileRegistry(
                 (
                     ValidationProfile(
-                        profile_id="mutate-patch",
+                        profile_id="daily-maintainer-core-tests",
                         cwd=".",
                         argv=(
                             sys.executable,
@@ -121,7 +131,7 @@ class VerifierTests(unittest.TestCase):
                         ),
                     ),
                     ValidationProfile(
-                        profile_id="later-profile",
+                        profile_id="tools-python-offline",
                         cwd=".",
                         argv=(
                             sys.executable,
@@ -131,22 +141,30 @@ class VerifierTests(unittest.TestCase):
                     ),
                 )
             )
-            report = Verifier(
-                registry=registry,
-                executables=self._trusted_tools(),
-                isolation=self._isolation(),
-            ).verify(
-                repo,
-                base,
-                make_candidate(profiles=("mutate-patch", "later-profile")),
-            )
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(
+                    repo,
+                    base,
+                    make_candidate(
+                        profiles=(
+                            "daily-maintainer-core-tests",
+                            "tools-python-offline",
+                        )
+                    ),
+                )
 
-        self.assertFalse(report.ok)
+        self.assertFalse(report.checks_passed)
         self.assertTrue(report.mutation_detected)
         self.assertNotEqual(report.guard.patch_sha256, report.final_guard.patch_sha256)
         self.assertEqual(
             [item.command_id for item in report.validation],
-            ["git-diff-check", "mutate-patch"],
+            ["git-diff-check", "daily-maintainer-core-tests"],
         )
         self.assertFalse(marker.exists())
 
@@ -160,7 +178,7 @@ class VerifierTests(unittest.TestCase):
             registry = ValidationProfileRegistry(
                 (
                     ValidationProfile(
-                        profile_id="mutate-mode",
+                        profile_id="daily-maintainer-core-tests",
                         cwd=".",
                         argv=(
                             sys.executable,
@@ -170,17 +188,16 @@ class VerifierTests(unittest.TestCase):
                     ),
                 )
             )
-            report = Verifier(
-                registry=registry,
-                executables=self._trusted_tools(),
-                isolation=self._isolation(),
-            ).verify(
-                repo,
-                base,
-                make_candidate(profiles=("mutate-mode",)),
-            )
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(repo, base, make_candidate())
 
-        self.assertFalse(report.ok)
+        self.assertFalse(report.checks_passed)
         self.assertTrue(report.mutation_detected)
         self.assertNotEqual(report.guard.patch_sha256, report.final_guard.patch_sha256)
 
@@ -206,31 +223,37 @@ class VerifierTests(unittest.TestCase):
             safe_registry = ValidationProfileRegistry(
                 (
                     ValidationProfile(
-                        profile_id="safe-probe",
+                        profile_id="daily-maintainer-core-tests",
                         cwd=".",
                         argv=(sys.executable, "-c", "raise SystemExit(0)"),
                     ),
                 )
             )
             inherited = {"PATH": str(fake_bin), "HOME": str(root / "attacker-home")}
-            report = Verifier(
-                registry=safe_registry,
-                executables=self._trusted_tools(),
-                isolation=self._isolation(),
-            ).verify(
-                repo,
-                base,
-                make_candidate(profiles=("safe-probe",)),
-                inherited_env=inherited,
-            )
-            self.assertTrue(report.ok)
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                safe_registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(
+                    repo,
+                    base,
+                    make_candidate(),
+                    inherited_env=inherited,
+                )
+            self.assertTrue(report.checks_passed)
             self.assertFalse(markers["git"].exists())
 
-            for tool in ("uv", "npm"):
+            for tool, profile_id in (
+                ("uv", "tools-python-offline"),
+                ("npm", "web-server-unit"),
+            ):
                 registry = ValidationProfileRegistry(
                     (
                         ValidationProfile(
-                            profile_id=f"fake-{tool}",
+                            profile_id=profile_id,
                             cwd=".",
                             argv=(tool, "--version"),
                         ),
@@ -240,16 +263,19 @@ class VerifierTests(unittest.TestCase):
                     self.subTest(tool=tool),
                     self.assertRaisesRegex(ValueError, "trusted executable"),
                 ):
-                    Verifier(
-                        registry=registry,
-                        executables=self._trusted_tools(),
-                        isolation=self._isolation(),
-                    ).verify(
-                        repo,
-                        base,
-                        make_candidate(profiles=(f"fake-{tool}",)),
-                        inherited_env=inherited,
-                    )
+                    with patch(
+                        "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                        registry,
+                    ):
+                        Verifier(
+                            executables=self._trusted_tools(),
+                            isolation_evidence=self._isolation(),
+                        ).verify(
+                            repo,
+                            base,
+                            make_candidate(profiles=(profile_id,)),
+                            inherited_env=inherited,
+                        )
                 self.assertFalse(markers[tool].exists())
 
     def test_timeout_kills_validation_process_group(self) -> None:
@@ -272,23 +298,22 @@ class VerifierTests(unittest.TestCase):
             registry = ValidationProfileRegistry(
                 (
                     ValidationProfile(
-                        profile_id="timeout-tree",
+                        profile_id="daily-maintainer-core-tests",
                         cwd=".",
                         argv=(sys.executable, "-c", parent),
                         timeout_seconds=1,
                     ),
                 )
             )
-            report = Verifier(
-                registry=registry,
-                executables=self._trusted_tools(),
-                isolation=self._isolation(),
-            ).verify(
-                repo,
-                base,
-                make_candidate(profiles=("timeout-tree",)),
-            )
-            self.assertFalse(report.ok)
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(repo, base, make_candidate())
+            self.assertFalse(report.checks_passed)
             self.assertTrue(report.validation[-1].timed_out)
             time.sleep(1.5)
             self.assertFalse(marker.exists())
@@ -312,23 +337,22 @@ class VerifierTests(unittest.TestCase):
             registry = ValidationProfileRegistry(
                 (
                     ValidationProfile(
-                        profile_id="exited-leader-tree",
+                        profile_id="daily-maintainer-core-tests",
                         cwd=".",
                         argv=(sys.executable, "-c", parent),
                         timeout_seconds=1,
                     ),
                 )
             )
-            report = Verifier(
-                registry=registry,
-                executables=self._trusted_tools(),
-                isolation=self._isolation(),
-            ).verify(
-                repo,
-                base,
-                make_candidate(profiles=("exited-leader-tree",)),
-            )
-            self.assertFalse(report.ok)
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(repo, base, make_candidate())
+            self.assertFalse(report.checks_passed)
             self.assertTrue(report.validation[-1].timed_out)
             time.sleep(1.5)
             self.assertFalse(marker.exists())
@@ -341,42 +365,26 @@ class VerifierTests(unittest.TestCase):
             workflow = repo / ".github/workflows/pwn.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text("name: pwn\n", encoding="utf-8")
-            registry = ValidationProfileRegistry(
-                (
-                    ValidationProfile(
-                        profile_id="write-marker",
-                        cwd=".",
-                        argv=(
-                            sys.executable,
-                            "-c",
-                            f"from pathlib import Path; Path({str(marker)!r}).touch()",
-                        ),
-                    ),
+            with self.assertRaisesRegex(CandidateContractError, "V1 candidate policy"):
+                Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=("**",)),
                 )
-            )
-            report = Verifier(
-                registry=registry,
-                executables=self._trusted_tools(),
-                isolation=self._isolation(),
-            ).verify(
-                repo,
-                base,
-                make_candidate(allowed_paths=("**",), profiles=("write-marker",)),
-            )
-        self.assertFalse(report.ok)
-        self.assertEqual(report.validation, ())
         self.assertFalse(marker.exists())
 
-    def test_unknown_profile_fails_before_process_execution(self) -> None:
+    def test_direct_custom_profile_fails_before_process_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             base = init_repo(repo)
             (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "validation profile"):
+            with self.assertRaisesRegex(CandidateContractError, "V1 candidate policy"):
                 Verifier(
-                    registry=ValidationProfileRegistry(()),
                     executables=self._trusted_tools(),
-                    isolation=self._isolation(),
+                    isolation_evidence=self._isolation(),
                 ).verify(
                     repo,
                     base,
@@ -391,18 +399,28 @@ class VerifierTests(unittest.TestCase):
                 argv=("sh", "-c", "touch /tmp/pwn"),
             )
 
-    def test_verifier_refuses_missing_isolation_attestation(self) -> None:
-        with self.assertRaisesRegex(ValueError, "isolation attestation"):
+    def test_trusted_executable_identity_is_revalidated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            executable = Path(tmp) / "probe"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            trusted = TrustedExecutables({"probe": executable})
+            self.assertEqual(trusted.resolve("probe"), executable)
+            executable.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                trusted.resolve("probe")
+
+    def test_verifier_refuses_missing_isolation_evidence(self) -> None:
+        with self.assertRaisesRegex(ValueError, "isolation evidence"):
             Verifier(
-                registry=ValidationProfileRegistry(()),
                 executables=self._trusted_tools(),
             )
 
         with self.assertRaisesRegex(ValueError, "network isolation"):
-            IsolationAttestation(
+            IsolationEvidence(
                 network_isolated=False,
                 credentials_absent=True,
-                verified_by="unit-test-harness",
+                observed_by="unit-test-harness",
                 evidence_sha256="d" * 64,
             )
 

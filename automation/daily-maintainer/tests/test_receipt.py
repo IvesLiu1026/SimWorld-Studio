@@ -4,6 +4,7 @@ import json
 import unittest
 
 from vista_daily_maintainer.receipt import (
+    MAX_RECEIPT_BYTES,
     DiffSummary,
     GitIdentity,
     ReceiptActors,
@@ -215,6 +216,133 @@ class ReceiptContractTests(unittest.TestCase):
     def test_invalid_repository_cannot_break_comment_marker(self) -> None:
         with self.assertRaisesRegex(ReceiptContractError, "repository"):
             journal_marker("2026-08-21", "owner/repo --> injected")
+
+    def test_every_status_has_an_explicit_valid_shape(self) -> None:
+        common = {
+            "run_id": f"2026-08-21/IvesLiu1026/VISTA-World@{HEX_A}",
+            "run_date": "2026-08-21",
+            "repository": "IvesLiu1026/VISTA-World",
+            "base_sha": HEX_A,
+            "duration_ms": 10,
+        }
+        empty = {
+            **common,
+            "head_sha": None,
+            "candidate_id": None,
+            "validation": (),
+            "diff_summary": None,
+            "protected_paths_touched": (),
+            "pr_url": None,
+            "merge_sha": None,
+            "actors": ReceiptActors(),
+        }
+        for status in (RunStatus.SKIPPED, RunStatus.NO_CHANGE):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    RunReceipt(
+                        **empty,
+                        status=status,
+                        failure_category=None,
+                    ).status,
+                    status,
+                )
+
+        diff = DiffSummary(
+            files_changed=1,
+            production_lines=2,
+            test_lines=3,
+            patch_sha256=HEX_C,
+        )
+        failed = ValidationReceipt(
+            command_id="focused-test",
+            exit_code=1,
+            output_sha256=HEX_C,
+            duration_ms=2,
+        )
+        patch_rejected = RunReceipt(
+            **common,
+            status=RunStatus.PATCH_REJECTED,
+            head_sha=None,
+            candidate_id="VW-DM-0001",
+            validation=(),
+            diff_summary=diff,
+            protected_paths_touched=("docs/.npmrc",),
+            pr_url=None,
+            merge_sha=None,
+            failure_category="policy_rejected",
+            actors=ReceiptActors(),
+        )
+        validation_failed = RunReceipt(
+            **common,
+            status=RunStatus.VALIDATION_FAILED,
+            head_sha=None,
+            candidate_id="VW-DM-0001",
+            validation=(failed,),
+            diff_summary=diff,
+            protected_paths_touched=(),
+            pr_url=None,
+            merge_sha=None,
+            failure_category="test_failed",
+            actors=ReceiptActors(),
+        )
+        infrastructure_failed = RunReceipt(
+            **empty,
+            status=RunStatus.INFRASTRUCTURE_FAILED,
+            failure_category="preflight_failed",
+        )
+        halted_values = dict(make_pr_receipt().__dict__)
+        halted_values.update(
+            status=RunStatus.HALTED,
+            failure_category="failure_threshold",
+        )
+        halted = RunReceipt(**halted_values)
+        self.assertEqual(patch_rejected.status, RunStatus.PATCH_REJECTED)
+        self.assertEqual(validation_failed.status, RunStatus.VALIDATION_FAILED)
+        self.assertEqual(infrastructure_failed.status, RunStatus.INFRASTRUCTURE_FAILED)
+        self.assertEqual(make_pr_receipt().status, RunStatus.PR_OPEN)
+        self.assertEqual(make_pr_receipt(RunStatus.MERGED).status, RunStatus.MERGED)
+        self.assertEqual(halted.status, RunStatus.HALTED)
+
+    def test_halted_cannot_retain_merge_sha(self) -> None:
+        values = dict(make_pr_receipt(RunStatus.MERGED).__dict__)
+        values.update(
+            status=RunStatus.HALTED,
+            failure_category="failure_threshold",
+        )
+        with self.assertRaisesRegex(ReceiptContractError, "cannot claim merge SHA"):
+            RunReceipt(**values)
+
+    def test_failure_post_pr_shape_must_be_coherent(self) -> None:
+        values = dict(make_pr_receipt().__dict__)
+        values.update(
+            status=RunStatus.INFRASTRUCTURE_FAILED,
+            failure_category="journal_failed",
+            head_sha=None,
+        )
+        with self.assertRaisesRegex(ReceiptContractError, "incoherent run stage"):
+            RunReceipt(**values)
+
+    def test_protected_paths_are_unique_safe_relative_paths(self) -> None:
+        base = {
+            **dict(make_pr_receipt().__dict__),
+            "status": RunStatus.PATCH_REJECTED,
+            "head_sha": None,
+            "validation": (),
+            "pr_url": None,
+            "merge_sha": None,
+            "failure_category": "policy_rejected",
+            "actors": ReceiptActors(),
+        }
+        for paths in (("docs/.npmrc", "docs/.npmrc"), ("../secret",), ("a//b",)):
+            with self.subTest(paths=paths), self.assertRaises(ReceiptContractError):
+                RunReceipt(**{**base, "protected_paths_touched": paths})
+
+    def test_parse_receipt_rejects_oversized_input_before_json(self) -> None:
+        payload = b"{" + b" " * MAX_RECEIPT_BYTES
+        with self.assertRaisesRegex(ReceiptContractError, "size limit"):
+            parse_receipt(payload)
+        with self.assertRaisesRegex(ReceiptContractError, "size limit"):
+            parse_receipt("{" + " " * MAX_RECEIPT_BYTES)
 
 
 if __name__ == "__main__":

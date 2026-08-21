@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,16 @@ class PublishedSchemaTests(unittest.TestCase):
                 "halted",
             },
         )
+        conditioned: set[str] = set()
+        for condition in schema["allOf"]:
+            status = condition["if"]["properties"]["status"]
+            conditioned.update(status.get("enum", ()))
+            if "const" in status:
+                conditioned.add(status["const"])
+        self.assertEqual(conditioned, set(schema["properties"]["status"]["enum"]))
+        protected = schema["properties"]["protected_paths_touched"]
+        self.assertTrue(protected["uniqueItems"])
+        self.assertIn("pattern", protected["items"])
         self.assertIn("actors", schema["required"])
         self.assertEqual(
             set(schema["$defs"]["actors"]["required"]),
@@ -61,6 +72,19 @@ class PublishedSchemaTests(unittest.TestCase):
                 "promotion_actor",
             },
         )
+
+    def test_contract_schemas_ship_in_wheel_and_sdist_configuration(self) -> None:
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        build = project["tool"]["hatch"]["build"]["targets"]
+        force_include = build["wheel"]["force-include"]
+        for filename in (
+            "candidate.schema.json",
+            "backlog.schema.json",
+            "receipt.schema.json",
+        ):
+            with self.subTest(filename=filename):
+                self.assertIn(filename, force_include)
+                self.assertIn(f"/{filename}", build["sdist"]["include"])
 
 
 if __name__ == "__main__":
