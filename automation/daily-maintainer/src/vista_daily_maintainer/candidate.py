@@ -43,6 +43,8 @@ _V1_FORBIDDEN_AUTHORITY = frozenset(
         "datasets",
         "deploy",
         "evidence",
+        "infra",
+        "infrastructure",
         "network",
         "ops",
         "runtime",

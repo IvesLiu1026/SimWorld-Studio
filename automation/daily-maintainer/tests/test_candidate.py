@@ -245,6 +245,11 @@ class CandidateContractTests(unittest.TestCase):
             ),
             VALID_BACKLOG.replace(
                 b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/in?ra/**", tests/**]',
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
                 b"allowed_paths: [packages/auth*.py, tests/**]",
                 1,
             ),
