@@ -5,8 +5,11 @@ import hashlib
 import json
 import os
 import re
+import selectors
+import signal
 import stat
 import subprocess
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -44,6 +47,9 @@ MAX_PATCHER_PROMPT_BYTES = 64 * 1024
 MAX_CONTROL_MANIFEST_BYTES = 64 * 1024
 MAX_PATCHER_OUTPUT_BYTES = 64 * 1024
 MAX_CREDENTIAL_BYTES = 1024 * 1024
+MAX_GIT_OUTPUT_BYTES = 1024 * 1024
+MAX_TRACKED_FILE_BYTES = 64 * 1024 * 1024
+GIT_TIMEOUT_SECONDS = 15.0
 CONTROL_OWNER_UID = 0
 CODEX_CREDENTIAL_NAME = "auth.json"
 
@@ -138,6 +144,22 @@ _FIXED_GIT_CONFIG = (
     "-c",
     "core.hooksPath=/dev/null",
     "-c",
+    "core.trustctime=true",
+    "-c",
+    "core.checkStat=default",
+    "-c",
+    "core.ignoreStat=false",
+    "-c",
+    "core.fileMode=true",
+    "-c",
+    "core.sparseCheckout=false",
+    "-c",
+    "core.sparseCheckoutCone=false",
+    "-c",
+    "index.sparse=false",
+    "-c",
+    "submodule.recurse=false",
+    "-c",
     "credential.helper=",
     "-c",
     "credential.interactive=never",
@@ -167,6 +189,7 @@ _UNSAFE_LOCAL_GIT_CONFIG_PREFIXES = (
     "include.",
     "includeif.",
     "protocol.",
+    "submodule.",
     "url.",
 )
 _UNSAFE_LOCAL_GIT_CONFIG_KEYS = frozenset(
@@ -178,6 +201,18 @@ _UNSAFE_LOCAL_GIT_CONFIG_KEYS = frozenset(
         "diff.external",
         "interactive.difffilter",
         "ssh.variant",
+    }
+)
+_PINNED_LOCAL_GIT_CONFIG = MappingProxyType(
+    {
+        "core.checkstat": "default",
+        "core.filemode": "true",
+        "core.ignorestat": "false",
+        "core.sparsecheckout": "false",
+        "core.sparsecheckoutcone": "false",
+        "core.trustctime": "true",
+        "index.sparse": "false",
+        "submodule.recurse": "false",
     }
 )
 _OUTPUT_FIELDS = frozenset(
@@ -215,9 +250,10 @@ class FileEvidence:
     owner_uid: int
     mode: int
     sha256: str
+    link_count: int = 1
 
-    def stable_identity(self) -> tuple[int, int, int]:
-        return (self.device, self.inode, self.owner_uid)
+    def stable_identity(self) -> tuple[int, int, int, int]:
+        return (self.device, self.inode, self.owner_uid, self.link_count)
 
 
 def candidate_authorization_payload(candidate: Candidate) -> dict[str, object]:
@@ -638,6 +674,7 @@ def _read_stable_file(
         before.st_ctime_ns,
         before.st_mode,
         before.st_uid,
+        before.st_nlink,
     )
     after_identity = (
         after.st_dev,
@@ -647,6 +684,7 @@ def _read_stable_file(
         after.st_ctime_ns,
         after.st_mode,
         after.st_uid,
+        after.st_nlink,
     )
     if before_identity != after_identity:
         raise PatcherContractError("trusted file changed while it was read")
@@ -662,6 +700,7 @@ def _read_stable_file(
         owner_uid=after.st_uid,
         mode=stat.S_IMODE(after.st_mode),
         sha256=digest,
+        link_count=after.st_nlink,
     )
 
 
@@ -918,6 +957,7 @@ def _verify_credential(
     )
     if (
         evidence.mode != 0o600
+        or evidence.link_count != 1
         or (evidence.device, evidence.inode) != (binding.device, binding.inode)
         or evidence.size != binding.size
         or evidence.mtime_ns != binding.mtime_ns
@@ -1168,8 +1208,9 @@ def _git(
     runtime_home: Path,
     *args: str,
 ) -> str:
+    process: subprocess.Popen[bytes] | None = None
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             (
                 str(git_binary),
                 *_FIXED_GIT_CONFIG,
@@ -1181,24 +1222,73 @@ def _git(
             env=_git_environment(runtime_home),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=15,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise PatcherContractError("trusted Git command timed out") from exc
     except OSError as exc:
         raise PatcherContractError("trusted Git command could not start") from exc
-    if result.returncode != 0:
+    if process.stdout is None:
+        _terminate_process_group(process)
+        raise PatcherContractError("trusted Git output pipe is unavailable")
+
+    chunks: list[bytes] = []
+    total = 0
+    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_group(process)
+                raise PatcherContractError("trusted Git command timed out")
+            if not selector.select(remaining):
+                _terminate_process_group(process)
+                raise PatcherContractError("trusted Git command timed out")
+            chunk = os.read(process.stdout.fileno(), 64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_GIT_OUTPUT_BYTES:
+                _terminate_process_group(process)
+                raise PatcherContractError("trusted Git output exceeds the size limit")
+            chunks.append(chunk)
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            _terminate_process_group(process)
+            raise PatcherContractError("trusted Git command timed out") from exc
+    finally:
+        selector.close()
+        process.stdout.close()
+    if returncode != 0:
         raise PatcherContractError("trusted Git preflight failed")
-    return result.stdout[: 1024 * 1024].decode("utf-8", "strict").rstrip("\n")
+    try:
+        return b"".join(chunks).decode("utf-8", "strict").rstrip("\n")
+    except UnicodeDecodeError as exc:
+        raise PatcherContractError("trusted Git output is not UTF-8") from exc
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 def _reject_unsafe_local_git_config(
     *, git_binary: Path, worktree: Path, runtime_home: Path
 ) -> None:
-    keys: list[str] = []
+    entries: list[tuple[str, str]] = []
     for scope in ("--local", "--worktree"):
         payload = _git(
             git_binary,
@@ -1208,23 +1298,245 @@ def _reject_unsafe_local_git_config(
             scope,
             "--no-includes",
             "--null",
-            "--name-only",
             "--list",
         )
-        keys.extend(item.lower() for item in payload.split("\x00") if item)
+        for item in payload.split("\x00"):
+            if not item:
+                continue
+            key, separator, value = item.partition("\n")
+            if not separator:
+                raise PatcherContractError("local Git configuration is malformed")
+            entries.append((key.lower(), value))
     unsafe = sorted(
         key
-        for key in keys
-        if key in _UNSAFE_LOCAL_GIT_CONFIG_KEYS
-        or any(key.startswith(prefix) for prefix in _UNSAFE_LOCAL_GIT_CONFIG_PREFIXES)
-        or (key.startswith("diff.") and key.endswith((".command", ".textconv")))
-        or key.startswith("merge.")
-        and key.endswith(".driver")
-        or key.startswith("submodule.")
-        and key.endswith(".update")
+        for key, value in entries
+        if (
+            key in _PINNED_LOCAL_GIT_CONFIG
+            and value.lower() != _PINNED_LOCAL_GIT_CONFIG[key]
+        )
+        or (
+            key not in _PINNED_LOCAL_GIT_CONFIG
+            and (
+                key in _UNSAFE_LOCAL_GIT_CONFIG_KEYS
+                or any(
+                    key.startswith(prefix)
+                    for prefix in _UNSAFE_LOCAL_GIT_CONFIG_PREFIXES
+                )
+                or (key.startswith("diff.") and key.endswith((".command", ".textconv")))
+                or key.startswith("merge.")
+                and key.endswith(".driver")
+            )
+        )
     )
     if unsafe:
         raise PatcherContractError("worktree has unsafe local Git configuration")
+
+
+def _safe_tracked_path(value: str) -> str:
+    path = PurePosixPath(value)
+    if (
+        not value
+        or value.startswith(("/", "\\"))
+        or "\\" in value
+        or _CONTROL.search(value)
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise PatcherContractError("Git index contains an unsafe path")
+    return value
+
+
+def _index_entries(payload: str) -> dict[str, tuple[str, str]]:
+    entries: dict[str, tuple[str, str]] = {}
+    for record in payload.split("\x00"):
+        if not record:
+            continue
+        header, separator, raw_path = record.partition("\t")
+        fields = header.split(" ")
+        if not separator or len(fields) != 3 or fields[2] != "0":
+            raise PatcherContractError("Git index contains an unresolved entry")
+        mode, object_id, _ = fields
+        path = _safe_tracked_path(raw_path)
+        if path in entries or mode not in {"100644", "100755"}:
+            raise PatcherContractError("Git index contains an unsupported entry")
+        if not _OBJECT_ID.fullmatch(object_id):
+            raise PatcherContractError("Git index object ID is invalid")
+        entries[path] = (mode, object_id)
+    return entries
+
+
+def _tree_entries(payload: str) -> dict[str, tuple[str, str]]:
+    entries: dict[str, tuple[str, str]] = {}
+    for record in payload.split("\x00"):
+        if not record:
+            continue
+        header, separator, raw_path = record.partition("\t")
+        fields = header.split(" ")
+        if not separator or len(fields) != 3:
+            raise PatcherContractError("authorized Git tree output is malformed")
+        mode, object_type, object_id = fields
+        path = _safe_tracked_path(raw_path)
+        if (
+            path in entries
+            or object_type != "blob"
+            or mode not in {"100644", "100755"}
+            or not _OBJECT_ID.fullmatch(object_id)
+        ):
+            raise PatcherContractError(
+                "authorized Git tree contains an unsupported entry"
+            )
+        entries[path] = (mode, object_id)
+    return entries
+
+
+def _reject_index_flags(
+    *, git_binary: Path, worktree: Path, runtime_home: Path
+) -> None:
+    payload = _git(
+        git_binary,
+        worktree,
+        runtime_home,
+        "ls-files",
+        "-v",
+        "-z",
+        "--",
+    )
+    for record in payload.split("\x00"):
+        if not record:
+            continue
+        if len(record) < 3 or record[1] != " ":
+            raise PatcherContractError("Git index flag output is malformed")
+        tag = record[0]
+        if tag == "S" or tag.islower():
+            raise PatcherContractError(
+                "Git index contains assume-unchanged or skip-worktree state"
+            )
+
+
+def _working_tree_blob_oid(path: Path, *, object_format: str, mode: str) -> str:
+    _assert_no_symlink_ancestors(path)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise PatcherContractError("tracked worktree file is unavailable") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise PatcherContractError("tracked worktree path is not a regular file")
+        if before.st_size > MAX_TRACKED_FILE_BYTES:
+            raise PatcherContractError("tracked worktree file exceeds the size limit")
+        executable = bool(before.st_mode & 0o111)
+        if executable != (mode == "100755"):
+            raise PatcherContractError(
+                "tracked worktree file mode differs from the index"
+            )
+        hasher = hashlib.new(object_format)
+        hasher.update(f"blob {before.st_size}\0".encode("ascii"))
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            hasher.update(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+        before.st_mode,
+        before.st_nlink,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+        after.st_mode,
+        after.st_nlink,
+    )
+    if total != before.st_size or before_identity != after_identity:
+        raise PatcherContractError("tracked worktree file changed while it was read")
+    return hasher.hexdigest()
+
+
+def _verify_index_and_worktree(
+    *,
+    git_binary: Path,
+    worktree: Path,
+    runtime_home: Path,
+    base_sha: str,
+    require_clean: bool,
+) -> None:
+    _reject_index_flags(
+        git_binary=git_binary, worktree=worktree, runtime_home=runtime_home
+    )
+    index = _index_entries(
+        _git(
+            git_binary,
+            worktree,
+            runtime_home,
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+        )
+    )
+    tree = _tree_entries(
+        _git(
+            git_binary,
+            worktree,
+            runtime_home,
+            "ls-tree",
+            "-r",
+            "-z",
+            "--full-tree",
+            base_sha,
+            "--",
+        )
+    )
+    if index != tree:
+        raise PatcherContractError("Git index does not match the authorized base tree")
+    if not require_clean:
+        return
+    object_format = _git(
+        git_binary,
+        worktree,
+        runtime_home,
+        "rev-parse",
+        "--show-object-format",
+    )
+    if object_format not in {"sha1", "sha256"}:
+        raise PatcherContractError("Git object format is unsupported")
+    for relative_path, (mode, expected_oid) in index.items():
+        actual_oid = _working_tree_blob_oid(
+            worktree / relative_path,
+            object_format=object_format,
+            mode=mode,
+        )
+        if actual_oid != expected_oid:
+            raise PatcherContractError(
+                "tracked worktree content differs from the index"
+            )
+    untracked = _git(
+        git_binary,
+        worktree,
+        runtime_home,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+    )
+    if untracked:
+        raise PatcherContractError("patcher worktree is not clean")
 
 
 def _verify_git_checkout(
@@ -1250,18 +1562,13 @@ def _verify_git_checkout(
     origin = _git(git_binary, worktree, runtime_home, "remote", "get-url", "origin")
     if origin != expected_origin:
         raise PatcherContractError("worktree origin is not the authorized repository")
-    if require_clean:
-        status_output = _git(
-            git_binary,
-            worktree,
-            runtime_home,
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--ignore-submodules=all",
-        )
-        if status_output:
-            raise PatcherContractError("patcher worktree is not clean")
+    _verify_index_and_worktree(
+        git_binary=git_binary,
+        worktree=worktree,
+        runtime_home=runtime_home,
+        base_sha=base_sha,
+        require_clean=require_clean,
+    )
 
 
 def _enforce_v1_candidate_policy(candidate: Candidate) -> None:
@@ -1326,6 +1633,7 @@ def _reserve_output(path: Path, *, owner_uid: int) -> FileEvidence:
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != owner_uid
         or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_nlink != 1
     ):
         try:
             path.unlink()
@@ -1341,6 +1649,7 @@ def _reserve_output(path: Path, *, owner_uid: int) -> FileEvidence:
         owner_uid=info.st_uid,
         mode=0o600,
         sha256=hashlib.sha256(b"").hexdigest(),
+        link_count=1,
     )
 
 
@@ -1457,6 +1766,7 @@ def _boundary_digest(
                 "path": str(item.path),
                 "device": item.device,
                 "inode": item.inode,
+                "link_count": item.link_count,
                 "sha256": item.sha256,
             }
             for item in evidence
@@ -1465,6 +1775,7 @@ def _boundary_digest(
             "path": str(output_evidence.path),
             "device": output_evidence.device,
             "inode": output_evidence.inode,
+            "link_count": output_evidence.link_count,
             "owner_uid": output_evidence.owner_uid,
             "mode": output_evidence.mode,
             "size": output_evidence.size,
@@ -1545,6 +1856,7 @@ def _assert_static_invocation_binding(invocation: PatcherInvocation) -> None:
             credential_evidence.mtime_ns,
             credential_evidence.owner_uid,
             credential_evidence.mode,
+            credential_evidence.link_count,
         )
         != (
             deployment.credential.device,
@@ -1553,6 +1865,7 @@ def _assert_static_invocation_binding(invocation: PatcherInvocation) -> None:
             deployment.credential.mtime_ns,
             deployment.patcher_uid,
             0o600,
+            1,
         )
     ):
         raise PatcherContractError("invocation credential/policy evidence is not exact")
@@ -1574,6 +1887,7 @@ def _assert_static_invocation_binding(invocation: PatcherInvocation) -> None:
     if (
         invocation.output_evidence.owner_uid != deployment.patcher_uid
         or invocation.output_evidence.mode != 0o600
+        or invocation.output_evidence.link_count != 1
         or invocation.output_evidence.size != 0
         or invocation.output_evidence.sha256 != hashlib.sha256(b"").hexdigest()
     ):
@@ -1768,7 +2082,12 @@ def _revalidate_file_evidence(
         raise PatcherContractError("bound file disappeared") from exc
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise PatcherContractError("bound file is no longer regular")
-    if (info.st_dev, info.st_ino, info.st_uid) != evidence.stable_identity():
+    if (
+        info.st_dev,
+        info.st_ino,
+        info.st_uid,
+        info.st_nlink,
+    ) != evidence.stable_identity():
         raise PatcherContractError("bound file identity changed")
     if stat.S_IMODE(info.st_mode) != evidence.mode:
         raise PatcherContractError("bound file mode changed")
@@ -1942,7 +2261,7 @@ def validate_patcher_output(invocation: PatcherInvocation) -> Mapping[str, objec
     if len(payload) > MAX_PATCHER_OUTPUT_BYTES:
         raise PatcherContractError("patcher output exceeds the size limit")
     if (
-        (before.st_dev, before.st_ino, before.st_uid)
+        (before.st_dev, before.st_ino, before.st_uid, before.st_nlink)
         != invocation.output_evidence.stable_identity()
         or before.st_size != after.st_size
         or before.st_mtime_ns != after.st_mtime_ns
