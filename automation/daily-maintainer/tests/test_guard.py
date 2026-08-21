@@ -106,6 +106,8 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             "packages/credentials.py",
             "packages/secret-store.py",
             "packages/deploy/release.py",
+            "packages/infra/config.py",
+            "packages/infrastructure/config.py",
         )
         for relative in paths:
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
