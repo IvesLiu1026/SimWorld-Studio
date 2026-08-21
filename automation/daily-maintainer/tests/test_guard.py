@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from vista_daily_maintainer.candidate import CandidateContractError
 from vista_daily_maintainer.guard import DiffGuard, GuardLimits
 
 try:
@@ -26,9 +27,7 @@ class DiffGuardIntegrationTests(unittest.TestCase):
         self.assertEqual(report.production_files, 1)
         self.assertRegex(report.patch_sha256, r"^[0-9a-f]{64}$")
 
-    def test_protected_path_is_rejected_even_when_candidate_allows_everything(
-        self,
-    ) -> None:
+    def test_public_guard_rejects_direct_candidate_policy_bypass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             base = init_repo(repo)
@@ -36,26 +35,31 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             workflow.parent.mkdir(parents=True)
             workflow.write_text("name: pwn\n", encoding="utf-8")
 
-            report = DiffGuard().inspect(
-                repo,
-                base,
-                make_candidate(allowed_paths=("**",)),
-            )
+            with self.assertRaisesRegex(CandidateContractError, "V1 candidate policy"):
+                DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=("**",)),
+                )
 
-        self.assertIn("protected_path", {item.code for item in report.violations})
+            with self.assertRaisesRegex(CandidateContractError, "Tier 0 path"):
+                DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(risk_tier=0, allowed_paths=("src/**",)),
+                )
 
     def test_self_modification_and_dependency_files_are_protected(self) -> None:
         paths = (
-            "automation/daily-maintainer/src/new.py",
             "packages/widget/pyproject.toml",
-            ".env.production",
-            ".gitignore",
-            ".coveragerc",
+            "src/.env.production",
+            "src/.gitignore",
+            "src/.coveragerc",
             "src/vitest.config.ts",
             "src/conftest.py",
             "src/runtime/launch.py",
             "src/unreal/launch.py",
-            "ops/user/vista.timer",
+            "src/vista.timer",
         )
         for relative in paths:
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
@@ -67,7 +71,13 @@ class DiffGuardIntegrationTests(unittest.TestCase):
                 report = DiffGuard().inspect(
                     repo,
                     base,
-                    make_candidate(allowed_paths=("**",)),
+                    make_candidate(
+                        allowed_paths=(
+                            "packages/**"
+                            if relative.startswith("packages/")
+                            else "src/**",
+                        )
+                    ),
                 )
                 self.assertIn(
                     "protected_path", {item.code for item in report.violations}
@@ -96,12 +106,12 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             outside = Path(tmp) / "outside"
             outside.mkdir()
             base = init_repo(repo)
-            (repo / "linked").symlink_to(outside, target_is_directory=True)
+            (repo / "src/linked").symlink_to(outside, target_is_directory=True)
             (outside / "escape.py").write_text("VALUE = 2\n", encoding="utf-8")
             report = DiffGuard().inspect(
                 repo,
                 base,
-                make_candidate(allowed_paths=("linked/**",)),
+                make_candidate(allowed_paths=("src/linked/**",)),
             )
             self.assertFalse(report.ok)
 
@@ -120,6 +130,43 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             (repo / "src/app.py").write_text(f'TOKEN = "{token}"\n', encoding="utf-8")
             report = DiffGuard().inspect(repo, base, make_candidate())
             self.assertIn("secret_detected", {item.code for item in report.violations})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(repo)
+            (repo / "src/app.py").write_text(
+                "//registry.npmjs.org/:_authToken=npm_" + "A" * 40 + "\n",
+                encoding="utf-8",
+            )
+            report = DiffGuard().inspect(repo, base, make_candidate())
+            self.assertIn("secret_detected", {item.code for item in report.violations})
+
+    def test_credential_basenames_and_auth_configs_are_protected(self) -> None:
+        paths = (
+            "docs/.npmrc",
+            "docs/.yarnrc.yml",
+            "docs/.pypirc",
+            "docs/.netrc",
+            "docs/.git-credentials",
+            "docs/.docker/config.json",
+            "docs/.config/gh/hosts.yml",
+            "docs/.config/gcloud/application_default_credentials.json",
+        )
+        for relative in paths:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp) / "repo"
+                base = init_repo(repo)
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("placeholder\n", encoding="utf-8")
+                report = DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=("docs/**",)),
+                )
+                self.assertIn(
+                    "protected_path", {item.code for item in report.violations}
+                )
 
     def test_untracked_whitespace_and_conflict_markers_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

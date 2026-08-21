@@ -19,7 +19,7 @@ from .receipt import (
     RunStatus,
     receipt_digest,
 )
-from .verifier import IsolationAttestation, VerificationReport, Verifier
+from .verifier import IsolationEvidence, VerificationReport, Verifier
 
 __all__ = [
     "Backlog",
@@ -31,7 +31,7 @@ __all__ = [
     "GuardLimits",
     "GuardReport",
     "GitIdentity",
-    "IsolationAttestation",
+    "IsolationEvidence",
     "ReceiptActors",
     "RunReceipt",
     "RunStatus",

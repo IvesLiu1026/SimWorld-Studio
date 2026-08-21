@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
-from .candidate import Candidate, path_matches_pattern
+from .candidate import Candidate, enforce_v1_candidate_policy, path_matches_pattern
 from .profiles import TrustedExecutables
 
 
@@ -37,10 +37,43 @@ _SECRET_PATTERNS = (
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{50,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
     re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b"),
+    re.compile(r"\bnpm_[A-Za-z0-9]{32,}\b"),
     re.compile(
-        r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token)\b\s*[:=]\s*"
+        r"(?i)(?:^|[^A-Za-z0-9])(?:_authToken|npmAuthToken|_auth)\s*[:=]\s*"
+        r"['\"]?[A-Za-z0-9_./+=-]{12,}"
+    ),
+    re.compile(r"(?i)\bAuthorization\s*[:=]\s*['\"]?Bearer\s+[A-Za-z0-9._~+/=-]{16,}"),
+    re.compile(
+        r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\b\s*[:=]\s*"
         r"['\"]?[A-Za-z0-9_./+=-]{16,}"
     ),
+)
+_CREDENTIAL_BASENAMES = frozenset(
+    {
+        ".authinfo",
+        ".authinfo.gpg",
+        ".git-credentials",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        "_netrc",
+        "application_default_credentials.json",
+        "auth.json",
+        "credentials.json",
+        "service-account.json",
+        "service_account.json",
+    }
+)
+_CREDENTIAL_PATH_SUFFIXES = (
+    (".aws", "config"),
+    (".aws", "credentials"),
+    (".azure", "accesstokens.json"),
+    (".config", "gcloud", "application_default_credentials.json"),
+    (".config", "gh", "hosts.yaml"),
+    (".config", "gh", "hosts.yml"),
+    (".config", "glab-cli", "config.yml"),
+    (".config", "pypoetry", "auth.toml"),
+    (".docker", "config.json"),
 )
 _BINARY_SUFFIXES = frozenset(
     {
@@ -202,9 +235,7 @@ class DiffGuard:
     def __init__(self, *, git_executable: Path | None = None) -> None:
         if git_executable is None:
             git_executable = TrustedExecutables.system_defaults().resolve("git")
-        self._git_executable = TrustedExecutables(
-            {"git": Path(git_executable)}
-        ).resolve("git")
+        self._executables = TrustedExecutables({"git": Path(git_executable)})
 
     def inspect(
         self,
@@ -214,6 +245,10 @@ class DiffGuard:
         *,
         limits: GuardLimits | None = None,
     ) -> GuardReport:
+        # Candidate instances are public Python objects, so callers can bypass
+        # the reviewed YAML loader.  Re-apply the complete unattended policy at
+        # every public trust-boundary entry point.
+        enforce_v1_candidate_policy(candidate)
         limits = limits or GuardLimits()
         repo = self._validated_repo(repo_root)
         self._validate_base(repo, base_sha)
@@ -345,8 +380,9 @@ class DiffGuard:
         )
 
     def _git(self, repo: Path, *args: str, check: bool = True) -> bytes:
+        git_executable = self._executables.resolve("git")
         result = subprocess.run(
-            (str(self._git_executable), "-c", "core.quotepath=false", *args),
+            (str(git_executable), "-c", "core.quotepath=false", *args),
             cwd=repo,
             env={
                 "PATH": "/nonexistent/vista-daily-maintainer",
@@ -379,9 +415,10 @@ class DiffGuard:
     def _validate_base(self, repo: Path, base_sha: str) -> None:
         if not isinstance(base_sha, str) or not _OBJECT_ID.fullmatch(base_sha):
             raise ValueError("base SHA must be an exact 40- or 64-character object ID")
+        git_executable = self._executables.resolve("git")
         result = subprocess.run(
             (
-                str(self._git_executable),
+                str(git_executable),
                 "cat-file",
                 "-e",
                 f"{base_sha}^{{commit}}",
@@ -488,6 +525,15 @@ class DiffGuard:
         if parts and parts[0].lower() in _PROTECTED_TOP_LEVEL:
             return True
         if path == ".mcp.json" or basename.startswith(".env"):
+            return True
+        if (
+            basename in _CREDENTIAL_BASENAMES
+            or basename.startswith(".yarnrc")
+            or any(
+                len(lowered) >= len(suffix) and lowered[-len(suffix) :] == suffix
+                for suffix in _CREDENTIAL_PATH_SUFFIXES
+            )
+        ):
             return True
         if basename in {".gitattributes", ".gitignore", ".gitmodules", ".mailmap"}:
             return True
