@@ -801,9 +801,17 @@ const VISTA_WORLD_MCP=createVistaWorldMcpTools({
 TOOL_DEFS.push(...VISTA_WORLD_MCP.toolDefinitions);
 Object.assign(TOOL_HANDLERS,VISTA_WORLD_MCP.handlers);
 
+const MCP_PROTOCOL_VERSIONS=new Set([
+  "2024-11-05",
+  "2025-03-26",
+  "2025-06-18",
+  "2025-11-25",
+]);
+const MCP_DEFAULT_PROTOCOL_VERSION="2025-11-25";
+
 function sendResponse(e,t){const s=JSON.stringify({jsonrpc:"2.0",id:e,result:t});process.stdout.write(s+`
 `)}function sendError(e,t,s){const n=JSON.stringify({jsonrpc:"2.0",id:e,error:{code:t,message:s}});process.stdout.write(n+`
-`)}async function handleRequest(e){const{id:t,method:s,params:n}=e;if(s==="initialize")return sendResponse(t,{protocolVersion:"2024-11-05",capabilities:{tools:{listChanged:!1}},serverInfo:{name:"simworld-arena-mcp",version:"1.0.0"}});if(s!=="notifications/initialized"){if(s==="tools/list")return sendResponse(t,{tools:TOOL_DEFS.filter(o=>productionMcpToolAllowed(o.name,process.env))});if(s==="tools/call"){const o=n?.name,r=n?.arguments||{},decision=productionMcpToolDecision(o,process.env);if(!decision.allowed)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:decision.message,code:decision.code})}],isError:!0});const c=TOOL_HANDLERS[o];if(!c)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:`Unknown tool: ${o}`})}],isError:!0});try{const a=await c(r);return sendResponse(t,{content:[{type:"text",text:JSON.stringify(a,null,2)}],isError:!1})}catch(a){return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:a.message,code:a.code})}],isError:!0})}}if(s==="resources/list")return sendResponse(t,{resources:[]});if(s==="prompts/list")return sendResponse(t,{prompts:[]});t!==void 0&&sendError(t,-32601,`Method not found: ${s}`)}}const rl=readline.createInterface({input:process.stdin,terminal:!1});rl.on("line",e=>{const t=e.trim();if(t)try{const s=JSON.parse(t);handleRequest(s).catch(n=>{process.stderr.write(`[mcp-server] Error: ${n.message}
+`)}async function handleRequest(e){const{id:t,method:s,params:n}=e;if(s==="initialize")return sendResponse(t,{protocolVersion:MCP_PROTOCOL_VERSIONS.has(n?.protocolVersion)?n.protocolVersion:MCP_DEFAULT_PROTOCOL_VERSION,capabilities:{tools:{listChanged:!1}},serverInfo:{name:"simworld-arena-mcp",version:"1.0.0"}});if(s!=="notifications/initialized"){if(s==="tools/list")return sendResponse(t,{tools:TOOL_DEFS.filter(o=>productionMcpToolAllowed(o.name,process.env))});if(s==="tools/call"){const o=n?.name,r=n?.arguments||{},decision=productionMcpToolDecision(o,process.env);if(!decision.allowed)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:decision.message,code:decision.code})}],isError:!0});const c=TOOL_HANDLERS[o];if(!c)return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:`Unknown tool: ${o}`})}],isError:!0});try{const a=await c(r);return sendResponse(t,{content:[{type:"text",text:JSON.stringify(a,null,2)}],isError:!1})}catch(a){return sendResponse(t,{content:[{type:"text",text:JSON.stringify({error:a.message,code:a.code})}],isError:!0})}}if(s==="resources/list")return sendResponse(t,{resources:[]});if(s==="prompts/list")return sendResponse(t,{prompts:[]});t!==void 0&&sendError(t,-32601,`Method not found: ${s}`)}}const rl=readline.createInterface({input:process.stdin,terminal:!1});rl.on("line",e=>{const t=e.trim();if(t)try{const s=JSON.parse(t);handleRequest(s).catch(n=>{process.stderr.write(`[mcp-server] Error: ${n.message}
 `),s.id!==void 0&&sendError(s.id,-32603,n.message)})}catch{process.stderr.write(`[mcp-server] Invalid JSON: ${t.slice(0,100)}
 `)}}),process.stderr.write(`[mcp-server] SimWorld Studio MCP server started (stdio)
 `);

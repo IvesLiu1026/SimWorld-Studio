@@ -152,6 +152,11 @@ test('tools/list keeps static tools and ignores caller-selected learned tool fil
   }
 
   try {
+    assert.equal(
+      responses.get(0)?.result?.protocolVersion,
+      '2025-11-25',
+      `Expected the MCP server to negotiate the client protocol. stderr=${stderrBuf}`
+    );
     assert.ok(responses.has(1), `Expected tools/list response. stderr=${stderrBuf}`);
     const listResp = responses.get(1);
     const tools = (listResp && listResp.result && Array.isArray(listResp.result.tools))
