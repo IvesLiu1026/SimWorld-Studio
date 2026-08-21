@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vista-world.invalid/schemas/daily-maintainer/candidate.v1.json",
+  "title": "VISTA World Daily Maintainer Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "risk_tier",
+    "allowed_paths",
+    "acceptance",
+    "validation_profiles",
+    "expected_external_side_effects",
+    "source"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^VW-DM-[0-9]{4,}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "risk_tier": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "allowed_paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._/*?-]+$"
+      }
+    },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "validation_profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{2,63}$"
+      }
+    },
+    "expected_external_side_effects": {
+      "const": "none"
+    },
+    "state": {
+      "enum": ["open", "closed"],
+      "default": "open"
+    },
+    "not_before": {
+      "type": "string",
+      "format": "date"
+    },
+    "expires_on": {
+      "type": "string",
+      "format": "date"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "manifest_revision", "approved_by"],
+      "properties": {
+        "kind": {
+          "const": "curated_backlog"
+        },
+        "manifest_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "approved_by": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+        },
+        "issue_url": {
+          "type": "string",
+          "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$"
+        }
+      }
+    }
+  }
+}

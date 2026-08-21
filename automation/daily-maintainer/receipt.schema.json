@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vista-world.invalid/schemas/daily-maintainer/receipt.v1.json",
+  "title": "VISTA World Daily Maintainer Run Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "run_date",
+    "repository",
+    "status",
+    "base_sha",
+    "head_sha",
+    "candidate_id",
+    "validation",
+    "diff_summary",
+    "protected_paths_touched",
+    "pr_url",
+    "merge_sha",
+    "duration_ms",
+    "failure_category",
+    "automated"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "vista.world.daily-maintainer.receipt.v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "status": {
+      "enum": [
+        "skipped",
+        "no_change",
+        "patch_rejected",
+        "validation_failed",
+        "pr_open",
+        "merged",
+        "infrastructure_failed",
+        "halted"
+      ]
+    },
+    "base_sha": {
+      "$ref": "#/$defs/object_id"
+    },
+    "head_sha": {
+      "oneOf": [
+        {"$ref": "#/$defs/object_id"},
+        {"type": "null"}
+      ]
+    },
+    "candidate_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^VW-DM-[0-9]{4,}$"},
+        {"type": "null"}
+      ]
+    },
+    "validation": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/validation"
+      }
+    },
+    "diff_summary": {
+      "oneOf": [
+        {"$ref": "#/$defs/diff_summary"},
+        {"type": "null"}
+      ]
+    },
+    "protected_paths_touched": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "pr_url": {
+      "oneOf": [
+        {"type": "string", "pattern": "^https://github\\.com/"},
+        {"type": "null"}
+      ]
+    },
+    "merge_sha": {
+      "oneOf": [
+        {"$ref": "#/$defs/object_id"},
+        {"type": "null"}
+      ]
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failure_category": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+        {"type": "null"}
+      ]
+    },
+    "automated": {
+      "const": true
+    }
+  },
+  "$defs": {
+    "object_id": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "exit_code",
+        "output_sha256",
+        "duration_ms",
+        "timed_out"
+      ],
+      "properties": {
+        "command_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,63}$"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "output_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
+      }
+    },
+    "diff_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files_changed",
+        "production_lines",
+        "test_lines",
+        "patch_sha256"
+      ],
+      "properties": {
+        "files_changed": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "production_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "test_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "patch_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}
