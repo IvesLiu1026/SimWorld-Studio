@@ -361,6 +361,14 @@ def _expect_fields(
 
 
 def parse_state(payload: bytes | str) -> RunState:
+    if isinstance(payload, bytes):
+        payload_size = len(payload)
+    elif isinstance(payload, str):
+        payload_size = len(payload.encode("utf-8", "strict"))
+    else:
+        raise StateContractError("state must be bytes or text")
+    if payload_size > _MAX_STATE_BYTES:
+        raise StateContractError("state is oversized")
     try:
         value = json.loads(payload, object_pairs_hook=_strict_json_pairs)
     except StateContractError:
