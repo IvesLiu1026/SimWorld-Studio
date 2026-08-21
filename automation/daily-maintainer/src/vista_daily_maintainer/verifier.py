@@ -132,8 +132,10 @@ class Verifier:
         del inherited_env
         enforce_v1_candidate_policy(candidate)
         profiles = self._trusted_profiles(candidate)
+        repo = Path(repo_root).resolve(strict=True)
+        self._preflight_profile_executables(repo, profiles)
         initial_guard = self._guard.inspect(
-            repo_root,
+            repo,
             base_sha,
             candidate,
             limits=limits,
@@ -146,7 +148,6 @@ class Verifier:
                 isolation_evidence=self._isolation_evidence,
             )
 
-        repo = Path(repo_root).resolve(strict=True)
         validation: list[ValidationResult] = []
         current_guard = initial_guard
         with tempfile.TemporaryDirectory(prefix="vista-dm-verifier-") as temp:
@@ -239,6 +240,19 @@ class Verifier:
         for profile_id in candidate.validation_profiles:
             profiles.append(BUILTIN_VALIDATION_PROFILES.resolve(profile_id))
         return tuple(profiles)
+
+    def _preflight_profile_executables(
+        self,
+        repo: Path,
+        profiles: tuple[ValidationProfile, ...],
+    ) -> None:
+        for profile in profiles:
+            executable = self._executables.resolve(profile.argv[0])
+            if executable == repo or repo in executable.parents:
+                raise ValueError(
+                    "validation executable must be pinned outside the repository: "
+                    f"{profile.profile_id}"
+                )
 
     @staticmethod
     def _report(
