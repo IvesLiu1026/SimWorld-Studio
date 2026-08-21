@@ -8,10 +8,6 @@ cwd     = "."
 startup_timeout_sec = 30
 tool_timeout_sec    = 120
 
-[mcp_servers.simworld_ue.env]
-UNREAL_HOST = "127.0.0.1"
-UNREAL_PORT = "55557"
-
 # Safe tools — inspect, spawn, and verify only
 enabled_tools = [
   "list_assets",
@@ -35,3 +31,7 @@ disabled_tools = [
   "execute_python_script",
   "delete_all_spawned",
 ]
+
+[mcp_servers.simworld_ue.env]
+UNREAL_HOST = "127.0.0.1"
+UNREAL_PORT = "55557"
