@@ -419,6 +419,7 @@ class Envelope:
 
 class Policy:
     def __init__(self, *, app: bool = False, **changes: object) -> None:
+        approved_backlog_authorization_sha256 = Envelope().backlog_authorization_sha256
         values: dict[str, object] = {
             "schema_version": PROTECTED_POLICY_SCHEMA,
             "policy_id": "publisher-v1",
@@ -438,6 +439,9 @@ class Policy:
             "environment_keys": PUBLISHER_ENVIRONMENT_ALLOWLIST,
             "runtime_attestor": "systemd-publisher-boundary",
             "approved_backlog_sha256": "4" * 64,
+            "approved_backlog_authorization_sha256": (
+                approved_backlog_authorization_sha256
+            ),
         }
         values.update(changes)
         for name, value in values.items():
@@ -460,6 +464,9 @@ class Policy:
                 "environment_keys": list(self.environment_keys),
                 "runtime_attestor": self.runtime_attestor,
                 "approved_backlog_sha256": self.approved_backlog_sha256,
+                "approved_backlog_authorization_sha256": (
+                    self.approved_backlog_authorization_sha256
+                ),
             }
         )
 
@@ -667,7 +674,12 @@ class Fixture:
         self.root = root
         self.envelope = envelope or Envelope()
         self.envelope.bind_worktree(root)
-        self.policy = policy or Policy()
+        self.policy = policy or Policy(
+            approved_backlog_sha256=self.envelope.backlog_sha256,
+            approved_backlog_authorization_sha256=(
+                self.envelope.backlog_authorization_sha256
+            ),
+        )
         self.trust = FakeTrust(self.envelope, self.policy)
         self.runtime = FakeRuntime(self.policy)
         self.github = FakeGitHub(self.envelope, self.policy)
@@ -899,10 +911,37 @@ class PublisherContractTests(unittest.TestCase):
             fixture = Fixture(
                 Path(temporary),
                 envelope=Envelope(backlog_sha256="9" * 64),
+                policy=Policy(),
             )
             with self.assertRaisesRegex(
                 PublicationPreflightError,
                 "not pinned by protected policy",
+            ):
+                fixture.publish()
+        self.assertEqual(fixture.git.create_calls, 0)
+
+    def test_forged_membership_with_pinned_raw_digest_is_policy_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(
+                Path(temporary),
+                envelope=Envelope(
+                    candidate_title="Different in-memory backlog membership"
+                ),
+                policy=Policy(),
+            )
+            self.assertEqual(
+                fixture.envelope.backlog_sha256,
+                fixture.policy.approved_backlog_sha256,
+            )
+            self.assertNotEqual(
+                fixture.envelope.backlog_authorization_sha256,
+                fixture.policy.approved_backlog_authorization_sha256,
+            )
+            with self.assertRaisesRegex(
+                PublicationPreflightError,
+                "membership is not pinned by protected policy",
             ):
                 fixture.publish()
         self.assertEqual(fixture.git.create_calls, 0)

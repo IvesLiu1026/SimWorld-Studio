@@ -46,9 +46,10 @@ slug, branch, base, patch, changed-path, check, or isolation evidence. The
 publisher reconstructs the complete backlog membership, candidate, run state,
 verification subject, check subject, and isolation evidence; it recomputes all
 digests, requires the finalized worktree path to match its local target, and
-requires the backlog file digest to match the operator-owned protected policy.
-T13 must still add an immutable one-way spool and outer sandbox before
-unattended publication is enabled.
+requires both the backlog file digest and full canonical membership authority
+digest to match the operator-owned protected policy. T13 must still add an
+immutable one-way spool and outer sandbox before unattended publication is
+enabled.
 
 The verifier additionally uses an explicit executable allowlist, ignores
 inherited PATH and HOME, creates empty XDG/npm/uv configuration roots, disables
