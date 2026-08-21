@@ -6,12 +6,20 @@ from .candidate import (
     Candidate,
     CandidateContractError,
     CandidateSource,
+    enforce_v1_candidate_policy,
     load_trusted_backlog,
     select_candidate,
 )
 from .guard import DiffGuard, GuardLimits, GuardReport
-from .receipt import RunReceipt, RunStatus, receipt_digest
-from .verifier import VerificationReport, Verifier
+from .profiles import TrustedExecutables
+from .receipt import (
+    GitIdentity,
+    ReceiptActors,
+    RunReceipt,
+    RunStatus,
+    receipt_digest,
+)
+from .verifier import IsolationAttestation, VerificationReport, Verifier
 
 __all__ = [
     "Backlog",
@@ -22,10 +30,15 @@ __all__ = [
     "DiffGuard",
     "GuardLimits",
     "GuardReport",
+    "GitIdentity",
+    "IsolationAttestation",
+    "ReceiptActors",
     "RunReceipt",
     "RunStatus",
+    "TrustedExecutables",
     "VerificationReport",
     "Verifier",
+    "enforce_v1_candidate_policy",
     "load_trusted_backlog",
     "receipt_digest",
     "select_candidate",

@@ -20,6 +20,7 @@
     "merge_sha",
     "duration_ms",
     "failure_category",
+    "actors",
     "automated"
   ],
   "properties": {
@@ -28,7 +29,7 @@
     },
     "run_id": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}(?:[0-9a-f]{24})?$"
     },
     "run_date": {
       "type": "string",
@@ -107,11 +108,74 @@
         {"type": "null"}
       ]
     },
+    "actors": {
+      "$ref": "#/$defs/actors"
+    },
     "automated": {
       "const": true
     }
   },
   "$defs": {
+    "git_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "email"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[^@\\s]+@[^@\\s]+$"
+        }
+      }
+    },
+    "actors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit_author",
+        "git_committer",
+        "pr_actor",
+        "promotion_actor"
+      ],
+      "properties": {
+        "commit_author": {
+          "oneOf": [
+            {"$ref": "#/$defs/git_identity"},
+            {"type": "null"}
+          ]
+        },
+        "git_committer": {
+          "oneOf": [
+            {"$ref": "#/$defs/git_identity"},
+            {"type": "null"}
+          ]
+        },
+        "pr_actor": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\\[bot\\])?$"
+            },
+            {"type": "null"}
+          ]
+        },
+        "promotion_actor": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\\[bot\\])?$"
+            },
+            {"type": "null"}
+          ]
+        }
+      }
+    },
     "object_id": {
       "type": "string",
       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"

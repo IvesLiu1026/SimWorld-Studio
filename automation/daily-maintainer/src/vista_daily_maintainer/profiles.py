@@ -2,13 +2,91 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import stat
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Iterable, Iterator, Mapping
 
 
 _PROFILE_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _SHELL_EXECUTABLES = frozenset({"sh", "bash", "dash", "zsh", "ksh"})
+_SYSTEM_EXECUTABLE_DIRS = (
+    Path("/usr/local/sbin"),
+    Path("/usr/local/bin"),
+    Path("/usr/sbin"),
+    Path("/usr/bin"),
+    Path("/sbin"),
+    Path("/bin"),
+)
+
+
+class TrustedExecutables:
+    """Immutable executable allowlist resolved independently of inherited PATH."""
+
+    def __init__(self, executables: Mapping[str, Path]) -> None:
+        resolved: dict[str, Path] = {}
+        for name, raw_path in executables.items():
+            if not re.fullmatch(r"[A-Za-z0-9._+-]+", name):
+                raise ValueError(f"invalid trusted executable name: {name!r}")
+            path = Path(raw_path)
+            if not path.is_absolute():
+                raise ValueError(f"trusted executable must be absolute: {name}")
+            try:
+                path = path.resolve(strict=True)
+                metadata = path.stat()
+            except OSError as exc:
+                raise ValueError(f"trusted executable does not exist: {name}") from exc
+            if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK):
+                raise ValueError(f"trusted executable is not executable: {name}")
+            resolved[name] = path
+        self._executables: Mapping[str, Path] = MappingProxyType(resolved)
+
+    @classmethod
+    def system_defaults(cls) -> TrustedExecutables:
+        search_path = os.pathsep.join(str(item) for item in _SYSTEM_EXECUTABLE_DIRS)
+        values: dict[str, Path] = {}
+        for name in ("git", "sh", "node", "npm", "uv"):
+            found = shutil.which(name, path=search_path)
+            if found:
+                values[name] = Path(found)
+        interpreter = Path(sys.executable).resolve(strict=True)
+        values["python"] = interpreter
+        values[interpreter.name] = interpreter
+        return cls(values)
+
+    def materialize_bin(self, directory: Path) -> Path:
+        directory.mkdir(mode=0o700)
+        for name, executable in self._executables.items():
+            target = directory / name
+            target.symlink_to(executable)
+        return directory
+
+    def resolve(self, requested: str) -> Path:
+        candidate = Path(requested)
+        if candidate.is_absolute():
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError as exc:
+                raise ValueError(
+                    f"trusted executable path does not exist: {requested}"
+                ) from exc
+            if resolved not in self._executables.values():
+                raise ValueError(
+                    f"executable is not in trusted executable allowlist: {requested}"
+                )
+            return resolved
+        try:
+            return self._executables[requested]
+        except KeyError as exc:
+            raise ValueError(
+                f"executable is not in trusted executable allowlist: {requested}"
+            ) from exc
+
+    def resolve_argv(self, argv: tuple[str, ...]) -> tuple[str, ...]:
+        return (str(self.resolve(argv[0])), *argv[1:])
 
 
 @dataclass(frozen=True)

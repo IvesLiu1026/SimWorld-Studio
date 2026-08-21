@@ -50,7 +50,11 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             "packages/widget/pyproject.toml",
             ".env.production",
             ".gitignore",
+            ".coveragerc",
+            "src/vitest.config.ts",
+            "src/conftest.py",
             "src/runtime/launch.py",
+            "src/unreal/launch.py",
             "ops/user/vista.timer",
         )
         for relative in paths:
@@ -203,6 +207,91 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             target.write_text("VALUE = 2\n", encoding="utf-8")
             second = DiffGuard().inspect(repo, base, make_candidate()).patch_sha256
         self.assertNotEqual(first, second)
+
+    def test_patch_digest_covers_untracked_executable_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(repo)
+            target = repo / "src/new.sh"
+            target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            target.chmod(0o644)
+            first = DiffGuard().inspect(repo, base, make_candidate()).patch_sha256
+            target.chmod(0o755)
+            second = DiffGuard().inspect(repo, base, make_candidate()).patch_sha256
+        self.assertNotEqual(first, second)
+
+    def test_nested_evidence_ledger_and_receipt_paths_are_protected(self) -> None:
+        paths = (
+            "docs/specs/home/evidence.md",
+            "docs/review/ledger/items.md",
+            "docs/maintenance/receipt-journal.md",
+        )
+        for relative in paths:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp) / "repo"
+                base = init_repo(repo)
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("protected\n", encoding="utf-8")
+                report = DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=("docs/**",)),
+                )
+                self.assertIn(
+                    "protected_path", {item.code for item in report.violations}
+                )
+
+    def test_json_schema_relaxation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(
+                repo,
+                {
+                    "contracts/scene.schema.json": (
+                        '{"type":"object","additionalProperties":false,'
+                        '"required":["name"],"properties":{"name":{"type":"string"}}}\n'
+                    )
+                },
+            )
+            (repo / "contracts/scene.schema.json").write_text(
+                '{"type":"object","additionalProperties":true,'
+                '"required":[],"properties":{"name":{}}}\n',
+                encoding="utf-8",
+            )
+            report = DiffGuard().inspect(
+                repo,
+                base,
+                make_candidate(allowed_paths=("contracts/**",)),
+            )
+        self.assertIn("schema_weakening", {item.code for item in report.violations})
+
+    def test_typescript_only_and_root_python_test_weakening_are_rejected(self) -> None:
+        fixtures = (
+            (
+                "unit.test.ts",
+                "test('value', () => expect(1).toBe(1));\n",
+                "test.only('value', () => expect(1).toBe(1));\n",
+                "test_focus_added",
+            ),
+            (
+                "widget_test.py",
+                "def test_value():\n    assert 1 == 1\n",
+                "def test_value():\n    pass\n",
+                "test_assertion_removed",
+            ),
+        )
+        for relative, before, after, expected in fixtures:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp) / "repo"
+                base = init_repo(repo, {relative: before})
+                (repo / relative).write_text(after, encoding="utf-8")
+                report = DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=(relative,)),
+                )
+                self.assertIn(expected, {item.code for item in report.violations})
 
     @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are required")
     def test_git_base_must_be_an_exact_object_id(self) -> None:
