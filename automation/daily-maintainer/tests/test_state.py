@@ -44,6 +44,15 @@ def make_state() -> RunState:
 
 
 class RunStateTests(unittest.TestCase):
+    def test_state_rejects_noncanonical_or_oversized_candidate_slug(self) -> None:
+        for invalid_slug in ("a--b", "a" * 49):
+            with self.subTest(invalid_slug=invalid_slug):
+                with self.assertRaisesRegex(StateContractError, "daily branch"):
+                    replace(
+                        make_state(),
+                        branch_name=(f"codex/daily/2026-08-21-{invalid_slug}-aaaaaaaa"),
+                    )
+
     def test_state_round_trip_is_canonical_and_digest_bound(self) -> None:
         state = make_state()
         payload = serialize_state(state)

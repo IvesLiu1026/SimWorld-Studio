@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping
 
+from .naming import is_v1_candidate_slug, v1_daily_branch_name
 from .state import (
     BranchDisposition,
     Lifecycle,
@@ -28,7 +29,6 @@ from .state import (
 _SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _REMOTE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _REMOTE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
-_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 _SYSTEM_EXECUTABLE_DIRS = (
     Path("/usr/local/sbin"),
     Path("/usr/local/bin"),
@@ -623,9 +623,13 @@ class WorktreeManager:
     @staticmethod
     def branch_name(run_date: str, candidate_slug: str, base_sha: str) -> str:
         key = RunKey(run_date, "owner/repository", base_sha)
-        if not _SLUG.fullmatch(candidate_slug):
+        if not is_v1_candidate_slug(candidate_slug):
             raise StateContractError("candidate slug is invalid")
-        return f"codex/daily/{key.run_date}-{candidate_slug}-{key.base_sha[:8]}"
+        return v1_daily_branch_name(
+            key.run_date,
+            candidate_slug,
+            key.base_sha,
+        )
 
     def _worktree_path(self, key: RunKey, candidate_slug: str) -> Path:
         name = f"{key.run_date}-{candidate_slug}-{key.base_sha[:12]}"
@@ -729,7 +733,7 @@ class WorktreeManager:
         ):
             raise StateContractError("state branch is not bound to date/base SHA")
         slug = state.branch_name[len(prefix) : -len(suffix)]
-        if not _SLUG.fullmatch(slug):
+        if not is_v1_candidate_slug(slug):
             raise StateContractError("state branch candidate slug is invalid")
         return slug
 

@@ -14,13 +14,12 @@ from pathlib import Path
 from typing import Any, Collection, Mapping
 from zoneinfo import ZoneInfo
 
+from .naming import is_v1_daily_branch_name
+
 
 STATE_SCHEMA_VERSION = "vista.world.daily-maintainer.state.v1"
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
-_BRANCH = re.compile(
-    r"^codex/daily/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]{0,95}$"
-)
 _PR_URL = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)$"
 )
@@ -242,7 +241,7 @@ class RunState:
             part in {"", ".", ".."} for part in self.remote_branch.split("/")
         ) or not isinstance(self.branch_name, str):
             raise StateContractError("daily branch name is invalid")
-        if not _BRANCH.fullmatch(self.branch_name):
+        if not is_v1_daily_branch_name(self.branch_name):
             raise StateContractError("daily branch name is invalid")
         if not isinstance(self.lifecycle, (str, Lifecycle)) or not isinstance(
             self.branch_disposition, (str, BranchDisposition)

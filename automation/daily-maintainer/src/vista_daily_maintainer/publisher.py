@@ -11,6 +11,11 @@ from typing import Callable, Protocol, TypeVar
 
 from .candidate import has_v1_forbidden_authority
 from .guard import _SECRET_PATTERNS as _GUARD_SECRET_PATTERNS
+from .naming import (
+    is_v1_candidate_slug,
+    is_v1_daily_branch_name,
+    v1_daily_branch_name,
+)
 
 
 CANONICAL_REPOSITORY = "IvesLiu1026/VISTA-World"
@@ -32,7 +37,6 @@ PUBLISHER_ENVIRONMENT_ALLOWLIST = (
 _GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CANDIDATE_ID = re.compile(r"^VW-DM-[0-9]{4,}$")
-_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _COMMAND_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _PROFILE_ID = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 _PERMISSION = re.compile(r"^[a-z][a-z0-9_]*:(?:read|write)$")
@@ -571,7 +575,11 @@ class _VerifierState:
 
     @property
     def branch(self) -> str:
-        return f"codex/daily/{self.run_date}-{self.candidate_slug}-{self.base_sha[:8]}"
+        return v1_daily_branch_name(
+            self.run_date,
+            self.candidate_slug,
+            self.base_sha,
+        )
 
 
 @dataclass(frozen=True)
@@ -1213,7 +1221,7 @@ def _freeze_verifier_envelope(
     if not _CANDIDATE_ID.fullmatch(candidate_id):
         raise PublicationPreflightError("candidate ID is invalid")
     slug = _copy_string(value.candidate_slug, "candidate slug")
-    if len(slug) > 48 or not _SLUG.fullmatch(slug):
+    if not is_v1_candidate_slug(slug):
         raise PublicationPreflightError("candidate slug is invalid")
     title = _copy_safe_line(value.candidate_title, "candidate title", maximum=160)
     risk_tier = _copy_int(value.risk_tier, "candidate risk tier", minimum=0)
@@ -2009,14 +2017,7 @@ def _validate_home(value: object) -> None:
 
 
 def _validate_branch(value: object) -> None:
-    if (
-        type(value) is not str
-        or not re.fullmatch(
-            r"codex/daily/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(?:-[a-z0-9]+)*",
-            value,
-        )
-        or len(value) > 128
-    ):
+    if not is_v1_daily_branch_name(value):
         raise PublicationContractError("publication branch is invalid")
 
 

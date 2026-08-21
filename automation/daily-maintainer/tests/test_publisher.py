@@ -34,6 +34,8 @@ from vista_daily_maintainer.publisher import (
     RepositorySnapshot,
     RuntimeAttestation,
 )
+from vista_daily_maintainer.state import StateContractError
+from vista_daily_maintainer.worktree import WorktreeManager
 
 
 BASE_SHA = "a" * 40
@@ -434,6 +436,40 @@ class Fixture:
 
 
 class PublisherContractTests(unittest.TestCase):
+    def test_run_manager_and_publisher_share_slug_and_branch_contract(self) -> None:
+        for invalid_slug in ("a--b", "a" * 49):
+            with self.subTest(invalid_slug=invalid_slug):
+                with self.assertRaisesRegex(StateContractError, "candidate slug"):
+                    WorktreeManager.branch_name(
+                        "2026-08-21",
+                        invalid_slug,
+                        BASE_SHA,
+                    )
+
+                with tempfile.TemporaryDirectory() as temporary:
+                    fixture = Fixture(
+                        Path(temporary),
+                        envelope=Envelope(candidate_slug=invalid_slug),
+                    )
+                    with self.assertRaisesRegex(
+                        PublicationPreflightError,
+                        "candidate slug",
+                    ):
+                        fixture.publish()
+
+        valid_branch = WorktreeManager.branch_name(
+            "2026-08-21",
+            "a" * 48,
+            BASE_SHA,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(
+                Path(temporary),
+                envelope=Envelope(candidate_slug="a" * 48),
+            )
+            result = fixture.publish()
+        self.assertEqual(result.branch, valid_branch)
+
     def test_cli_happy_path_is_draft_and_attributed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary))
