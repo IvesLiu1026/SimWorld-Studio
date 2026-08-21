@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import unittest
 from pathlib import Path
 
 from vista_daily_maintainer.candidate import (
     BacklogTrust,
+    has_v1_forbidden_authority,
     load_trusted_backlog,
     select_candidate,
 )
@@ -14,18 +14,30 @@ from vista_daily_maintainer.candidate import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 BACKLOG_PATH = REPOSITORY_ROOT / "docs" / "maintenance" / "backlog.yaml"
+PINNED_DRAFT_BACKLOG_SHA256 = (
+    "5e08d1f2f784aa5940e0606a58637e5006f0892b3c7971b2eb6fba669e2d4fa5"
+)
 
 
 class CuratedBacklogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        payload = BACKLOG_PATH.read_bytes()
         cls.backlog = load_trusted_backlog(
             BacklogTrust(
                 path=BACKLOG_PATH,
-                sha256=hashlib.sha256(payload).hexdigest(),
+                sha256=PINNED_DRAFT_BACKLOG_SHA256,
                 manifest_revision=1,
-                approved_by="IvesLiu1026",
+                approved_by="CodexDraft",
+            )
+        )
+
+    def test_manifest_remains_an_explicit_unapproved_draft(self) -> None:
+        self.assertEqual(self.backlog.sha256, PINNED_DRAFT_BACKLOG_SHA256)
+        self.assertEqual(self.backlog.approved_by, "CodexDraft")
+        self.assertTrue(
+            all(
+                candidate.source.approved_by == "CodexDraft"
+                for candidate in self.backlog.candidates
             )
         )
 
@@ -51,32 +63,31 @@ class CuratedBacklogTests(unittest.TestCase):
         self.assertEqual(len(selected), len(set(selected)))
         self.assertEqual(selected, sorted(selected))
 
-    def test_inventory_has_no_runtime_or_external_side_effect_authority(self) -> None:
-        forbidden = {
-            "assets",
-            "auth",
-            "datasets",
-            "deploy",
-            "network",
-            "ops",
-            "runtime",
-            "secrets",
-            "ue",
-            "unreal",
-            "world_packs",
-        }
+    def test_inventory_uses_canonical_projection_order(self) -> None:
+        for candidate in self.backlog.candidates:
+            with self.subTest(candidate=candidate.candidate_id):
+                self.assertEqual(
+                    candidate.allowed_paths,
+                    tuple(sorted(set(candidate.allowed_paths))),
+                )
+                self.assertEqual(
+                    candidate.validation_profiles,
+                    tuple(sorted(set(candidate.validation_profiles))),
+                )
+
+    def test_inventory_has_no_external_side_effect_or_forbidden_authority(self) -> None:
         for candidate in self.backlog.candidates:
             with self.subTest(candidate=candidate.candidate_id):
                 self.assertEqual(candidate.expected_external_side_effects, "none")
                 self.assertEqual(
                     candidate.validation_profiles, ("tools-python-offline",)
                 )
-                tokens = {
-                    token.lower()
-                    for pattern in candidate.allowed_paths
-                    for token in pattern.replace("-", "/").replace("_", "/").split("/")
-                }
-                self.assertTrue(tokens.isdisjoint(forbidden))
+                self.assertTrue(
+                    all(
+                        not has_v1_forbidden_authority(pattern, pattern=True)
+                        for pattern in candidate.allowed_paths
+                    )
+                )
 
 
 if __name__ == "__main__":
