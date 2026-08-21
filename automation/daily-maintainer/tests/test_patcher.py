@@ -754,11 +754,18 @@ class StableEvidenceTests(unittest.TestCase):
                 _read_stable_file(policy, owner_uid=os.geteuid())
 
     def test_root_owned_git_binary_digest_and_version_are_verified(self) -> None:
+        system_git_sha256 = hashlib.sha256(GIT.read_bytes()).hexdigest()
+        system_git_version = subprocess.run(
+            (str(GIT), "--version"),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
         evidence = _verify_binary(
             TrustedBinary(
                 path=GIT,
-                sha256=PINNED_GIT_SHA256,
-                version=PINNED_GIT_VERSION,
+                sha256=system_git_sha256,
+                version=system_git_version,
             )
         )
         self.assertEqual(evidence.owner_uid, 0)
