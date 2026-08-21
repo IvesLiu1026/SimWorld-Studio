@@ -292,6 +292,21 @@ class CandidateContractTests(unittest.TestCase):
                 b"allowed_paths: [packages/secret-store.py, tests/**]",
                 1,
             ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/se?up.py", tests/**]',
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/npm-*hrinkwrap.json", tests/**]',
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/*.toml", tests/**]',
+                1,
+            ),
         )
         for payload in payloads:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
@@ -319,11 +334,46 @@ class CandidateContractTests(unittest.TestCase):
                 b"allowed_paths: [tests/test_auth.py]",
                 1,
             ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [packages/setup_helper.py, tests/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [tests/test_setup.py]",
+                1,
+            ),
         )
         for payload in payloads:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
                 backlog = load_trusted_backlog(self._write(Path(tmp), payload))
                 self.assertEqual(len(backlog.candidates), 2)
+
+    def test_v1_policy_rejects_dependency_build_and_validation_authority(self) -> None:
+        basenames = (
+            ".flake8",
+            ".ruff.toml",
+            "Pipfile",
+            "Pipfile.lock",
+            "npm-shrinkwrap.json",
+            "ruff.toml",
+            "setup.cfg",
+            "setup.py",
+        )
+        for basename in basenames:
+            payload = VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                f"allowed_paths: [packages/widget/{basename}]".encode("ascii"),
+                1,
+            )
+            with self.subTest(basename=basename), tempfile.TemporaryDirectory() as tmp:
+                trust = self._write(Path(tmp), payload)
+                with self.assertRaisesRegex(
+                    CandidateContractError,
+                    "V1 candidate policy",
+                ):
+                    load_trusted_backlog(trust)
 
     def test_v1_policy_rejects_protected_roots_even_when_test_scoped(self) -> None:
         protected_patterns = (
