@@ -103,12 +103,16 @@ renaming would break import contracts. Layout normalization happens only after b
 
 ## Daily Delivery Loop
 
-1. 09:00 Asia/Taipei: select one issue with acceptance criterion and owned paths.
+The approved implementation contract lives in `../vista-world-daily-maintainer/`.
+
+1. 09:17 Asia/Taipei: select one trusted issue/finding with acceptance criterion and owned paths.
 2. Create a short branch/worktree from current `main`.
-3. Implement one reviewable logical unit and run focused validation.
-4. Stage named files, commit with Conventional Commit, open PR.
-5. Merge the same day after CI; verify the SHA is reachable from remote `main` by 21:30.
-6. If blocked, record evidence/issue status; never generate an empty or backdated commit.
+3. Implement one reviewable logical unit and run focused validation outside the model process.
+4. Stage named files, commit with transparent automation attribution, and open a draft PR.
+5. Merge only after required CI and the approved risk-tier policy; verify the SHA is reachable from
+   remote `main`.
+6. If blocked or no safe candidate exists, record truthful run status; never generate an empty,
+   timestamp-only or backdated commit.
 
 Suitable daily units include a schema invariant plus test, one verified VISTA event mapping,
 one interaction regression, one asset-license/provenance gate, one runtime hardening change,

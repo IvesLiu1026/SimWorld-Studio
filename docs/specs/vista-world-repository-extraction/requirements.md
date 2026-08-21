@@ -90,8 +90,10 @@ WHEN 每日開發結束 THEN 至少一個有 issue/acceptance criterion、通過
 logical change SHOULD 在當天經 PR 合併到 standalone repository 的 `main`。
 
 Acceptance notes:
-- commit author email 必須連結 `IvesLiu1026`。
-- automation 只能提醒與稽核，不得自動製造、回填或 push 假 commit。
+- automation 可以在已核准的 daily-maintainer spec、allowlist 與 PR/CI gate 內完成
+  低風險工作，但不得自動製造、回填或 push 假 commit。
+- 自動 commit 必須透明標記 automation identity；若要歸屬 `IvesLiu1026`，author/
+  committer/trailer 規則必須由使用者明確核准。
 - 若沒有通過 DoD 的變更，應記錄 blocker，而不是犧牲 history 品質。
 
 ### R7. Multi-agent isolation

@@ -63,8 +63,9 @@ Depends on: requirements.md, design.md
 - [ ] T10. Establish daily issue-to-main workflow
   - Depends on: T3, T9
   - Requirements: R6, R7
-  - Validation: one real vertical slice is implemented on a short worktree branch, reviewed,
-    validated and merged to remote `main`; audit confirms the SHA is default-branch reachable.
+  - Validation: approve and implement `../vista-world-daily-maintainer/`; one real vertical slice is
+    implemented on a short worktree branch, independently validated and merged under its risk-tier
+    policy; audit confirms the SHA is default-branch reachable and automation attribution is clear.
 
 - [ ] T11. Accept standalone packaged VISTA World
   - Depends on: T5-T9
