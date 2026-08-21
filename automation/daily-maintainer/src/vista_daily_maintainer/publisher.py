@@ -300,6 +300,7 @@ class ProtectedPublisherPolicy(Protocol):
     environment_keys: tuple[str, ...]
     runtime_attestor: str
     approved_backlog_sha256: str
+    approved_backlog_authorization_sha256: str
 
 
 class TrustMaterialPort(Protocol):
@@ -675,6 +676,7 @@ class _PolicyState:
     environment_keys: tuple[str, ...]
     runtime_attestor: str
     approved_backlog_sha256: str
+    approved_backlog_authorization_sha256: str
 
 
 @dataclass(frozen=True)
@@ -1065,6 +1067,12 @@ class Publisher:
         if evidence.backlog_sha256 != policy.approved_backlog_sha256:
             raise PublicationPreflightError(
                 "finalized backlog is not pinned by protected policy"
+            )
+        if evidence.backlog_authorization_sha256 != (
+            policy.approved_backlog_authorization_sha256
+        ):
+            raise PublicationPreflightError(
+                "finalized backlog membership is not pinned by protected policy"
             )
 
     def _revalidate_envelope(
@@ -1797,6 +1805,10 @@ def _freeze_policy(
         value.approved_backlog_sha256,
         "protected approved backlog digest",
     )
+    approved_backlog_authorization_sha256 = _copy_sha256(
+        value.approved_backlog_authorization_sha256,
+        "protected approved backlog authority digest",
+    )
     state = _PolicyState(
         canonical_sha256=digest,
         policy_id=policy_id,
@@ -1813,6 +1825,7 @@ def _freeze_policy(
         environment_keys=environment_keys,
         runtime_attestor=runtime_attestor,
         approved_backlog_sha256=approved_backlog_sha256,
+        approved_backlog_authorization_sha256=(approved_backlog_authorization_sha256),
     )
     _require_policy_canonical_bytes(canonical, state, unattended=value.unattended)
     return state
@@ -1929,6 +1942,9 @@ def _require_policy_canonical_bytes(
         "environment_keys": list(state.environment_keys),
         "runtime_attestor": state.runtime_attestor,
         "approved_backlog_sha256": state.approved_backlog_sha256,
+        "approved_backlog_authorization_sha256": (
+            state.approved_backlog_authorization_sha256
+        ),
     }
     if canonical != _canonical_json_bytes(payload):
         raise PublicationPreflightError(
