@@ -10,7 +10,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from vista_daily_maintainer.candidate import CandidateContractError
+from vista_daily_maintainer.candidate import (
+    CandidateContractError,
+    candidate_authorization_digest,
+)
 from vista_daily_maintainer.profiles import (
     TrustedExecutables,
     ValidationProfile,
@@ -145,6 +148,7 @@ class VerifierTests(unittest.TestCase):
                     "GIT_CONFIG_GLOBAL": "/tmp/malicious-gitconfig",
                 }
             )
+            selected = make_candidate()
 
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
@@ -156,12 +160,16 @@ class VerifierTests(unittest.TestCase):
                 ).verify(
                     repo,
                     base,
-                    make_candidate(),
+                    selected,
                     inherited_env=inherited,
                 )
 
         self.assertTrue(report.checks_passed, report)
         self.assertFalse(report.publication_authorized)
+        self.assertEqual(
+            report.candidate_sha256,
+            candidate_authorization_digest(selected),
+        )
         self.assertFalse(hasattr(report, "ok"))
         self.assertEqual(
             [item.command_id for item in report.validation],

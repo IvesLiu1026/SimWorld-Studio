@@ -56,7 +56,10 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare = commands.add_parser("prepare")
     _add_manager_arguments(prepare)
     prepare.add_argument("--date", required=True)
+    prepare.add_argument("--candidate-id", required=True)
     prepare.add_argument("--candidate-slug", required=True)
+    prepare.add_argument("--backlog-sha256", required=True)
+    prepare.add_argument("--candidate-sha256", required=True)
     prepare.add_argument("--expected-base")
     prepare.add_argument(
         "--pr-state",
@@ -146,7 +149,10 @@ def main(args: Sequence[str] | None = None) -> int:
             )
             result = manager.prepare(
                 run_date=arguments.date,
+                candidate_id=arguments.candidate_id,
                 candidate_slug=arguments.candidate_slug,
+                backlog_sha256=arguments.backlog_sha256,
+                candidate_sha256=arguments.candidate_sha256,
                 expected_pin=pin,
                 publication=publication,
             )

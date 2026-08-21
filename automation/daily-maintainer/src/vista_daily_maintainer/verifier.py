@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .candidate import Candidate, enforce_v1_candidate_policy
+from .candidate import (
+    Candidate,
+    candidate_authorization_digest,
+    enforce_v1_candidate_policy,
+)
 from .guard import DiffGuard, GuardLimits, GuardReport
 from .profiles import (
     BUILTIN_VALIDATION_PROFILES,
@@ -71,6 +75,7 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class VerificationReport:
+    candidate_sha256: str
     guard: GuardReport
     final_guard: GuardReport
     validation: tuple[ValidationResult, ...]
@@ -79,6 +84,15 @@ class VerificationReport:
     publication_authorized: bool = False
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.candidate_sha256, str)
+            or len(self.candidate_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.candidate_sha256
+            )
+        ):
+            raise ValueError("verification candidate digest must be lowercase SHA-256")
         if self.publication_authorized is not False:
             raise ValueError("core verification reports cannot authorize publication")
 
@@ -131,6 +145,7 @@ class Verifier:
         # copied into a validation process.
         del inherited_env
         enforce_v1_candidate_policy(candidate)
+        candidate_sha256 = candidate_authorization_digest(candidate)
         profiles = self._trusted_profiles(candidate)
         repo = Path(repo_root).resolve(strict=True)
         self._preflight_profile_executables(repo, profiles)
@@ -142,6 +157,7 @@ class Verifier:
         )
         if not initial_guard.ok:
             return VerificationReport(
+                candidate_sha256=candidate_sha256,
                 guard=initial_guard,
                 final_guard=initial_guard,
                 validation=(),
@@ -186,6 +202,7 @@ class Verifier:
                         limits=limits,
                     )
                     return self._report(
+                        candidate_sha256,
                         initial_guard,
                         current_guard,
                         validation,
@@ -221,6 +238,7 @@ class Verifier:
                     limits=limits,
                 )
                 report = self._report(
+                    candidate_sha256,
                     initial_guard,
                     current_guard,
                     validation,
@@ -229,6 +247,7 @@ class Verifier:
                 if report.mutation_detected or not validation[-1].ok:
                     return report
         return self._report(
+            candidate_sha256,
             initial_guard,
             current_guard,
             validation,
@@ -256,6 +275,7 @@ class Verifier:
 
     @staticmethod
     def _report(
+        candidate_sha256: str,
         initial_guard: GuardReport,
         final_guard: GuardReport,
         validation: list[ValidationResult],
@@ -266,6 +286,7 @@ class Verifier:
             or initial_guard.changed_files != final_guard.changed_files
         )
         return VerificationReport(
+            candidate_sha256=candidate_sha256,
             guard=initial_guard,
             final_guard=final_guard,
             validation=tuple(validation),

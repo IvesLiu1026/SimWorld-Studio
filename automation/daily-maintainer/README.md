@@ -11,10 +11,12 @@ The core provides:
 - a digest-bound, strict YAML contract for human-reviewed candidate backlogs;
 - code-owned validation profile IDs with fixed cwd and argv;
 - deterministic candidate selection;
-- replay-safe run/worktree state and canonical daily branch naming;
+- candidate/backlog-bound, replay-safe run/worktree state and canonical branch naming;
 - a Git diff guard for path, symlink, binary, secret, size, and test-weakening
   policy;
-- a credential-free verifier that never enables a subprocess shell; and
+- a credential-free verifier that never enables a subprocess shell;
+- a typed finalizer that joins exact candidate, run, patch, isolation, and
+  check evidence into immutable canonical publisher bytes;
 - fail-closed patcher and publisher protocols with no promotion or merge surface;
 - canonical receipt serialization, SHA-256 binding, and journal markers.
 
@@ -33,10 +35,16 @@ deliberately unable to decide that these edits are safe.
 Validation accepts digest-bound `IsolationEvidence` only as caller-provided
 evidence. It is not a self-authenticating attestation: Python cannot establish
 the required network, credential, filesystem, UID, cgroup, or read-only-mount
-boundary from inside the verifier. The verifier report exposes
-`checks_passed`, fixes `publication_authorized` to `false`, and is never itself
-a publication authorization. T13 must add an immutable outer sandbox and issue
-a separately authenticated artifact before unattended publication is enabled.
+boundary from inside the verifier. The verifier report exposes `checks_passed`,
+carries the complete candidate authority SHA-256, fixes
+`publication_authorized` to `false`, and is never itself a publication
+authorization. `finalizer.py` accepts only an exact `PatcherRequest`,
+`RunState`, and `VerificationReport`; it rejects swapped candidate, backlog,
+slug, branch, base, patch, changed-path, check, or isolation evidence. The
+publisher reconstructs the complete candidate and run state, recomputes both
+digests, and requires the finalized worktree path to match its local target.
+T13 must still add an immutable one-way spool and outer sandbox before
+unattended publication is enabled.
 
 The verifier additionally uses an explicit executable allowlist, ignores
 inherited PATH and HOME, creates empty XDG/npm/uv configuration roots, disables

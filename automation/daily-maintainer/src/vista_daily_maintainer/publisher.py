@@ -9,19 +9,33 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Callable, Protocol, TypeVar
 
-from .candidate import has_v1_forbidden_authority, is_v1_test_scope
+from .candidate import (
+    Candidate,
+    CandidateContractError,
+    CandidateSource,
+    candidate_authorization_digest,
+    has_v1_forbidden_authority,
+    is_v1_test_scope,
+)
+from .finalizer import FINALIZED_ENVELOPE_SCHEMA, verified_head_digest
 from .guard import _SECRET_PATTERNS as _GUARD_SECRET_PATTERNS
 from .naming import (
     is_v1_candidate_slug,
     is_v1_daily_branch_name,
     v1_daily_branch_name,
 )
+from .state import (
+    PublicationSnapshot,
+    RunKey,
+    RunState,
+    StateContractError,
+    state_digest,
+)
 
 
 CANONICAL_REPOSITORY = "IvesLiu1026/VISTA-World"
 DEFAULT_BRANCH = "main"
 AUTOMATION_TRAILER = "Automated-by: Codex Daily Maintainer"
-FINALIZED_ENVELOPE_SCHEMA = "vista.world.daily-maintainer.finalized-verification.v1"
 PROTECTED_POLICY_SCHEMA = "vista.world.daily-maintainer.publisher-policy.v1"
 PUBLISHER_ENVIRONMENT_ALLOWLIST = (
     "GIT_CONFIG_NOSYSTEM",
@@ -208,6 +222,18 @@ class FinalizedVerifierEnvelope(Protocol):
     run_date: str
     repository: str
     base_sha: str
+    branch_name: str
+    backlog_sha256: str
+    candidate_sha256: str
+    run_state_sha256: str
+    run_remote: str
+    run_remote_branch: str
+    run_lifecycle: str
+    run_branch_disposition: str
+    run_branch_head_sha: str
+    run_worktree_path: str
+    run_observed_remote_sha: str
+    run_publication_state: str
     candidate_id: str
     candidate_slug: str
     candidate_title: str
@@ -217,9 +243,13 @@ class FinalizedVerifierEnvelope(Protocol):
     changed_paths: tuple[str, ...]
     validation_profile_ids: tuple[str, ...]
     expected_external_side_effects: str
+    candidate_state: str
+    candidate_not_before: str | None
+    candidate_expires_on: str | None
     source_kind: str
     source_manifest_revision: int
     source_approved_by: str
+    source_issue_url: str | None
     guard_ok: bool
     guard_patch_sha256: str
     final_guard_ok: bool
@@ -495,6 +525,9 @@ class PublicationResult:
     branch: str
     patch_sha256: str
     verification_sha256: str
+    backlog_sha256: str
+    candidate_sha256: str
+    run_state_sha256: str
     commit_author: GitIdentity
     commit_committer: GitIdentity
     pr_actor: str
@@ -553,6 +586,18 @@ class _VerifierState:
     run_date: str
     repository: str
     base_sha: str
+    branch_name: str
+    backlog_sha256: str
+    candidate_sha256: str
+    run_state_sha256: str
+    run_remote: str
+    run_remote_branch: str
+    run_lifecycle: str
+    run_branch_disposition: str
+    run_branch_head_sha: str
+    run_worktree_path: str
+    run_observed_remote_sha: str
+    run_publication_state: str
     candidate_id: str
     candidate_slug: str
     candidate_title: str
@@ -562,9 +607,13 @@ class _VerifierState:
     changed_paths: tuple[str, ...]
     validation_profile_ids: tuple[str, ...]
     expected_external_side_effects: str
+    candidate_state: str
+    candidate_not_before: str | None
+    candidate_expires_on: str | None
     source_kind: str
     source_manifest_revision: int
     source_approved_by: str
+    source_issue_url: str | None
     guard_patch_sha256: str
     final_guard_patch_sha256: str
     final_guard_sha256: str
@@ -575,11 +624,7 @@ class _VerifierState:
 
     @property
     def branch(self) -> str:
-        return v1_daily_branch_name(
-            self.run_date,
-            self.candidate_slug,
-            self.base_sha,
-        )
+        return self.branch_name
 
 
 @dataclass(frozen=True)
@@ -652,6 +697,16 @@ class Publisher:
         repo = self._validated_worktree(worktree)
 
         evidence = self._read_envelope(envelope_reference)
+        try:
+            evidence_worktree = Path(evidence.run_worktree_path).resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise PublicationPreflightError(
+                "run state worktree no longer resolves"
+            ) from exc
+        if evidence_worktree != repo:
+            raise PublicationPreflightError(
+                "publisher worktree does not match finalized run state"
+            )
         policy = self._read_policy(policy_reference)
         runtime = self._read_runtime(policy)
         principal = self._read_principal(policy)
@@ -1175,6 +1230,9 @@ class Publisher:
             branch=evidence.branch,
             patch_sha256=evidence.final_guard_patch_sha256,
             verification_sha256=evidence.canonical_sha256,
+            backlog_sha256=evidence.backlog_sha256,
+            candidate_sha256=evidence.candidate_sha256,
+            run_state_sha256=evidence.run_state_sha256,
             commit_author=commit.author,
             commit_committer=commit.committer,
             pr_actor=pull_request.actor,
@@ -1217,12 +1275,48 @@ def _freeze_verifier_envelope(
     if run_id != expected_run_id:
         raise PublicationPreflightError("verifier run ID is not date/repo@base")
 
+    branch_name = _copy_string(value.branch_name, "verifier branch")
+    backlog_sha256 = _copy_sha256(value.backlog_sha256, "backlog digest")
+    candidate_sha256 = _copy_sha256(value.candidate_sha256, "candidate digest")
+    run_state_sha256 = _copy_sha256(value.run_state_sha256, "run state digest")
+    run_remote = _copy_safe_line(value.run_remote, "run remote", maximum=64)
+    run_remote_branch = _copy_safe_line(
+        value.run_remote_branch, "run remote branch", maximum=128
+    )
+    run_lifecycle = _copy_safe_line(value.run_lifecycle, "run lifecycle", maximum=32)
+    run_branch_disposition = _copy_safe_line(
+        value.run_branch_disposition,
+        "run branch disposition",
+        maximum=32,
+    )
+    run_branch_head_sha = _copy_git_oid(
+        value.run_branch_head_sha, "run branch head SHA"
+    )
+    run_worktree_path = _copy_safe_line(
+        value.run_worktree_path,
+        "run worktree path",
+        maximum=4096,
+    )
+    run_observed_remote_sha = _copy_git_oid(
+        value.run_observed_remote_sha,
+        "run observed remote SHA",
+    )
+    run_publication_state = _copy_safe_line(
+        value.run_publication_state,
+        "run publication state",
+        maximum=16,
+    )
+
     candidate_id = _copy_string(value.candidate_id, "candidate ID")
     if not _CANDIDATE_ID.fullmatch(candidate_id):
         raise PublicationPreflightError("candidate ID is invalid")
     slug = _copy_string(value.candidate_slug, "candidate slug")
     if not is_v1_candidate_slug(slug):
         raise PublicationPreflightError("candidate slug is invalid")
+    try:
+        _validate_branch(branch_name)
+    except PublicationContractError as exc:
+        raise PublicationPreflightError("verifier branch is invalid") from exc
     title = _copy_safe_line(value.candidate_title, "candidate title", maximum=160)
     risk_tier = _copy_int(value.risk_tier, "candidate risk tier", minimum=0)
     if risk_tier not in {0, 1}:
@@ -1246,6 +1340,89 @@ def _freeze_verifier_envelope(
     source_approver = _copy_safe_line(
         value.source_approved_by, "source approver", maximum=100
     )
+    candidate_state = _copy_string(value.candidate_state, "candidate state")
+    candidate_not_before = _copy_optional_date(
+        value.candidate_not_before, "candidate not_before"
+    )
+    candidate_expires_on = _copy_optional_date(
+        value.candidate_expires_on, "candidate expires_on"
+    )
+    source_issue_url = _copy_optional_string(
+        value.source_issue_url,
+        "candidate source issue URL",
+        maximum=512,
+    )
+    try:
+        candidate = Candidate(
+            candidate_id=candidate_id,
+            title=title,
+            risk_tier=risk_tier,
+            allowed_paths=allowed_paths,
+            acceptance=acceptance,
+            validation_profiles=profiles,
+            expected_external_side_effects="none",
+            source=CandidateSource(
+                kind=source_kind,
+                manifest_revision=source_revision,
+                approved_by=source_approver,
+                issue_url=source_issue_url,
+            ),
+            state=candidate_state,
+            not_before=(
+                dt.date.fromisoformat(candidate_not_before)
+                if candidate_not_before
+                else None
+            ),
+            expires_on=(
+                dt.date.fromisoformat(candidate_expires_on)
+                if candidate_expires_on
+                else None
+            ),
+        )
+    except (CandidateContractError, TypeError, ValueError) as exc:
+        raise PublicationPreflightError(
+            "candidate authority cannot be reconstructed"
+        ) from exc
+    if candidate_authorization_digest(candidate) != candidate_sha256:
+        raise PublicationPreflightError("candidate authority digest does not match")
+    if not candidate.eligible_on(dt.date.fromisoformat(run_date)):
+        raise PublicationPreflightError("candidate was not eligible on the run date")
+    expected_branch = v1_daily_branch_name(run_date, slug, base_sha)
+    if branch_name != expected_branch:
+        raise PublicationPreflightError(
+            "verifier branch is not bound to date/slug/base SHA"
+        )
+    try:
+        bound_state = RunState(
+            key=RunKey(run_date, repository, base_sha),
+            candidate_id=candidate_id,
+            candidate_slug=slug,
+            backlog_sha256=backlog_sha256,
+            candidate_sha256=candidate_sha256,
+            remote=run_remote,
+            remote_branch=run_remote_branch,
+            branch_name=branch_name,
+            lifecycle=run_lifecycle,
+            branch_disposition=run_branch_disposition,
+            branch_head_sha=run_branch_head_sha,
+            worktree_path=run_worktree_path,
+            observed_remote_sha=run_observed_remote_sha,
+            publication=PublicationSnapshot(state=run_publication_state),
+        )
+    except (StateContractError, TypeError, ValueError) as exc:
+        raise PublicationPreflightError("run state cannot be reconstructed") from exc
+    if (
+        run_remote != "origin"
+        or run_remote_branch != DEFAULT_BRANCH
+        or run_lifecycle != "worktree_ready"
+        or run_branch_disposition != "created"
+        or run_branch_head_sha != base_sha
+        or run_observed_remote_sha != base_sha
+        or run_publication_state not in {"unknown", "none"}
+    ):
+        raise PublicationPreflightError("run state is not publishable V1 state")
+    if state_digest(bound_state) != run_state_sha256:
+        raise PublicationPreflightError("run state digest does not match")
     _validate_v1_candidate_authority(
         risk_tier=risk_tier,
         allowed_paths=allowed_paths,
@@ -1278,6 +1455,12 @@ def _freeze_verifier_envelope(
             "initial and final guard patch identities differ"
         )
     head_sha256 = _copy_sha256(value.head_sha256, "verified head digest")
+    if head_sha256 != verified_head_digest(
+        base_sha,
+        final_guard_patch,
+        changed_paths,
+    ):
+        raise PublicationPreflightError("verified head digest cross-binding failed")
     isolation_verified_by = _copy_safe_line(
         value.isolation_verified_by, "isolation verifier", maximum=120
     )
@@ -1311,6 +1494,7 @@ def _freeze_verifier_envelope(
     _reject_secret_material(
         (
             run_id,
+            branch_name,
             candidate_id,
             slug,
             title,
@@ -1330,6 +1514,18 @@ def _freeze_verifier_envelope(
         run_date=run_date,
         repository=repository,
         base_sha=base_sha,
+        branch_name=branch_name,
+        backlog_sha256=backlog_sha256,
+        candidate_sha256=candidate_sha256,
+        run_state_sha256=run_state_sha256,
+        run_remote=run_remote,
+        run_remote_branch=run_remote_branch,
+        run_lifecycle=run_lifecycle,
+        run_branch_disposition=run_branch_disposition,
+        run_branch_head_sha=run_branch_head_sha,
+        run_worktree_path=run_worktree_path,
+        run_observed_remote_sha=run_observed_remote_sha,
+        run_publication_state=run_publication_state,
         candidate_id=candidate_id,
         candidate_slug=slug,
         candidate_title=title,
@@ -1339,9 +1535,13 @@ def _freeze_verifier_envelope(
         changed_paths=changed_paths,
         validation_profile_ids=profiles,
         expected_external_side_effects="none",
+        candidate_state=candidate_state,
+        candidate_not_before=candidate_not_before,
+        candidate_expires_on=candidate_expires_on,
         source_kind=source_kind,
         source_manifest_revision=source_revision,
         source_approved_by=source_approver,
+        source_issue_url=source_issue_url,
         guard_patch_sha256=guard_patch,
         final_guard_patch_sha256=final_guard_patch,
         final_guard_sha256=final_guard,
@@ -1457,6 +1657,18 @@ def _require_verifier_canonical_bytes(canonical: bytes, state: _VerifierState) -
         "run_date": state.run_date,
         "repository": state.repository,
         "base_sha": state.base_sha,
+        "branch_name": state.branch_name,
+        "backlog_sha256": state.backlog_sha256,
+        "candidate_sha256": state.candidate_sha256,
+        "run_state_sha256": state.run_state_sha256,
+        "run_remote": state.run_remote,
+        "run_remote_branch": state.run_remote_branch,
+        "run_lifecycle": state.run_lifecycle,
+        "run_branch_disposition": state.run_branch_disposition,
+        "run_branch_head_sha": state.run_branch_head_sha,
+        "run_worktree_path": state.run_worktree_path,
+        "run_observed_remote_sha": state.run_observed_remote_sha,
+        "run_publication_state": state.run_publication_state,
         "candidate_id": state.candidate_id,
         "candidate_slug": state.candidate_slug,
         "candidate_title": state.candidate_title,
@@ -1466,9 +1678,13 @@ def _require_verifier_canonical_bytes(canonical: bytes, state: _VerifierState) -
         "changed_paths": list(state.changed_paths),
         "validation_profile_ids": list(state.validation_profile_ids),
         "expected_external_side_effects": state.expected_external_side_effects,
+        "candidate_state": state.candidate_state,
+        "candidate_not_before": state.candidate_not_before,
+        "candidate_expires_on": state.candidate_expires_on,
         "source_kind": state.source_kind,
         "source_manifest_revision": state.source_manifest_revision,
         "source_approved_by": state.source_approved_by,
+        "source_issue_url": state.source_issue_url,
         "guard_ok": True,
         "guard_patch_sha256": state.guard_patch_sha256,
         "final_guard_ok": True,
@@ -1795,6 +2011,9 @@ def _commit_message(evidence: _VerifierState) -> str:
     return (
         f"chore: address {evidence.candidate_id}\n\n"
         f"Candidate: {evidence.candidate_id}\n"
+        f"Backlog-SHA256: {evidence.backlog_sha256}\n"
+        f"Candidate-SHA256: {evidence.candidate_sha256}\n"
+        f"Run-State-SHA256: {evidence.run_state_sha256}\n"
         f"Final-Guard-SHA256: {evidence.final_guard_sha256}\n"
         f"Patch-SHA256: {evidence.final_guard_patch_sha256}\n"
         f"Verification-SHA256: {evidence.canonical_sha256}\n\n"
@@ -1813,8 +2032,12 @@ def _pr_body(evidence: _VerifierState) -> str:
         "",
         f"- Run: {tick}{evidence.run_id}{tick}",
         f"- Candidate: {tick}{evidence.candidate_id}{tick}",
+        f"- Branch: {tick}{evidence.branch_name}{tick}",
         f"- Risk tier: {tick}{evidence.risk_tier}{tick}",
         f"- Base SHA: {tick}{evidence.base_sha}{tick}",
+        f"- Backlog SHA-256: {tick}{evidence.backlog_sha256}{tick}",
+        f"- Candidate SHA-256: {tick}{evidence.candidate_sha256}{tick}",
+        f"- Run state SHA-256: {tick}{evidence.run_state_sha256}{tick}",
         f"- Patch SHA-256: {tick}{evidence.final_guard_patch_sha256}{tick}",
         f"- Final guard SHA-256: {tick}{evidence.final_guard_sha256}{tick}",
         f"- Head SHA-256: {tick}{evidence.head_sha256}{tick}",
@@ -1900,6 +2123,33 @@ def _copy_string(value: object, label: str) -> str:
     if type(value) is not str or not value:
         raise PublicationPreflightError(f"{label} is invalid")
     return str(value)
+
+
+def _copy_optional_string(
+    value: object,
+    label: str,
+    *,
+    maximum: int,
+) -> str | None:
+    if value is None:
+        return None
+    text = _copy_string(value, label)
+    if len(text.encode("utf-8", "strict")) > maximum or _CONTROL.search(text):
+        raise PublicationPreflightError(f"{label} contains control or is oversized")
+    return text
+
+
+def _copy_optional_date(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    text = _copy_string(value, label)
+    try:
+        parsed = dt.date.fromisoformat(text)
+    except ValueError as exc:
+        raise PublicationPreflightError(f"{label} must be YYYY-MM-DD") from exc
+    if parsed.isoformat() != text:
+        raise PublicationPreflightError(f"{label} is not canonical")
+    return text
 
 
 def _copy_safe_line(value: object, label: str, *, maximum: int) -> str:

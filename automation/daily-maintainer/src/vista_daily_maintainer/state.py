@@ -14,12 +14,14 @@ from pathlib import Path
 from typing import Any, Collection, Mapping
 from zoneinfo import ZoneInfo
 
-from .naming import is_v1_daily_branch_name
+from .naming import is_v1_candidate_slug, v1_daily_branch_name
 
 
 STATE_SCHEMA_VERSION = "vista.world.daily-maintainer.state.v1"
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_CANDIDATE_ID = re.compile(r"^VW-DM-[0-9]{4,}$")
 _PR_URL = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)$"
 )
@@ -102,6 +104,28 @@ def _require_sha(value: object, label: str) -> str:
     if not isinstance(value, str) or not _SHA.fullmatch(value):
         raise StateContractError(f"{label} must be an exact lowercase object ID")
     return value
+
+
+def _require_sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+        raise StateContractError(f"{label} must be lowercase SHA-256")
+    return value
+
+
+def validate_run_authority(
+    candidate_id: object,
+    candidate_slug: object,
+    backlog_sha256: object,
+    candidate_sha256: object,
+) -> None:
+    """Validate the immutable candidate authority stored for one run."""
+
+    if not isinstance(candidate_id, str) or not _CANDIDATE_ID.fullmatch(candidate_id):
+        raise StateContractError("candidate ID is invalid")
+    if not is_v1_candidate_slug(candidate_slug):
+        raise StateContractError("candidate slug is invalid")
+    _require_sha256(backlog_sha256, "backlog digest")
+    _require_sha256(candidate_sha256, "candidate digest")
 
 
 def _require_text(
@@ -210,6 +234,10 @@ class PublicationSnapshot:
 @dataclass(frozen=True)
 class RunState:
     key: RunKey
+    candidate_id: str
+    candidate_slug: str
+    backlog_sha256: str
+    candidate_sha256: str
     remote: str
     remote_branch: str
     branch_name: str
@@ -224,6 +252,12 @@ class RunState:
     def __post_init__(self) -> None:
         if not isinstance(self.key, RunKey):
             raise StateContractError("run key is invalid")
+        validate_run_authority(
+            self.candidate_id,
+            self.candidate_slug,
+            self.backlog_sha256,
+            self.candidate_sha256,
+        )
         if (
             not isinstance(self.schema_version, str)
             or self.schema_version != STATE_SCHEMA_VERSION
@@ -241,8 +275,15 @@ class RunState:
             part in {"", ".", ".."} for part in self.remote_branch.split("/")
         ) or not isinstance(self.branch_name, str):
             raise StateContractError("daily branch name is invalid")
-        if not is_v1_daily_branch_name(self.branch_name):
-            raise StateContractError("daily branch name is invalid")
+        expected_branch = v1_daily_branch_name(
+            self.key.run_date,
+            self.candidate_slug,
+            self.key.base_sha,
+        )
+        if self.branch_name != expected_branch:
+            raise StateContractError(
+                "daily branch is not bound to run date/candidate slug/base SHA"
+            )
         if not isinstance(self.lifecycle, (str, Lifecycle)) or not isinstance(
             self.branch_disposition, (str, BranchDisposition)
         ):
@@ -389,6 +430,10 @@ def state_to_dict(state: RunState) -> dict[str, object]:
         "run_date": state.key.run_date,
         "repository": state.key.repository,
         "base_sha": state.key.base_sha,
+        "candidate_id": state.candidate_id,
+        "candidate_slug": state.candidate_slug,
+        "backlog_sha256": state.backlog_sha256,
+        "candidate_sha256": state.candidate_sha256,
         "remote": state.remote,
         "remote_branch": state.remote_branch,
         "branch_name": state.branch_name,
@@ -405,6 +450,12 @@ def serialize_state(state: RunState) -> bytes:
     return (
         json.dumps(state_to_dict(state), sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
+
+
+def state_digest(state: RunState) -> str:
+    """Digest the exact canonical state accepted by the run-state parser."""
+
+    return hashlib.sha256(serialize_state(state)).hexdigest()
 
 
 def _strict_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -469,6 +520,10 @@ def parse_state(payload: bytes | str) -> RunState:
             "run_date",
             "repository",
             "base_sha",
+            "candidate_id",
+            "candidate_slug",
+            "backlog_sha256",
+            "candidate_sha256",
             "remote",
             "remote_branch",
             "branch_name",
@@ -497,6 +552,16 @@ def parse_state(payload: bytes | str) -> RunState:
         run_date = _require_text(value["run_date"], "run date", maximum_bytes=10)
         repository = _require_text(value["repository"], "repository", maximum_bytes=201)
         base_sha = _require_sha(value["base_sha"], "base SHA")
+        candidate_id = _require_text(
+            value["candidate_id"], "candidate ID", maximum_bytes=64
+        )
+        candidate_slug = _require_text(
+            value["candidate_slug"], "candidate slug", maximum_bytes=48
+        )
+        backlog_sha256 = _require_sha256(value["backlog_sha256"], "backlog digest")
+        candidate_sha256 = _require_sha256(
+            value["candidate_sha256"], "candidate digest"
+        )
         remote = _require_text(value["remote"], "remote", maximum_bytes=64)
         remote_branch = _require_text(
             value["remote_branch"], "remote branch", maximum_bytes=128
@@ -544,6 +609,10 @@ def parse_state(payload: bytes | str) -> RunState:
             raise StateContractError("run_id is not bound to date/repository/base SHA")
         return RunState(
             key=key,
+            candidate_id=candidate_id,
+            candidate_slug=candidate_slug,
+            backlog_sha256=backlog_sha256,
+            candidate_sha256=candidate_sha256,
             remote=remote,
             remote_branch=remote_branch,
             branch_name=branch_name,
@@ -756,12 +825,20 @@ class RunStateStore:
         if existing is not None:
             immutable_existing = (
                 existing.key,
+                existing.candidate_id,
+                existing.candidate_slug,
+                existing.backlog_sha256,
+                existing.candidate_sha256,
                 existing.remote,
                 existing.remote_branch,
                 existing.branch_name,
             )
             immutable_new = (
                 state.key,
+                state.candidate_id,
+                state.candidate_slug,
+                state.backlog_sha256,
+                state.candidate_sha256,
                 state.remote,
                 state.remote_branch,
                 state.branch_name,

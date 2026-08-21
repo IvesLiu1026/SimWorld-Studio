@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import hashlib
 import json
 import tempfile
@@ -8,6 +9,13 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from vista_daily_maintainer.candidate import (
+    Candidate,
+    CandidateContractError,
+    CandidateSource,
+    candidate_authorization_digest,
+)
+from vista_daily_maintainer.finalizer import verified_head_digest
 from vista_daily_maintainer.publisher import (
     AUTOMATION_TRAILER,
     CANONICAL_REPOSITORY,
@@ -34,7 +42,15 @@ from vista_daily_maintainer.publisher import (
     RepositorySnapshot,
     RuntimeAttestation,
 )
-from vista_daily_maintainer.state import StateContractError
+from vista_daily_maintainer.state import (
+    BranchDisposition,
+    Lifecycle,
+    PublicationSnapshot,
+    RunKey,
+    RunState,
+    StateContractError,
+    state_digest,
+)
 from vista_daily_maintainer.worktree import WorktreeManager
 
 
@@ -43,7 +59,6 @@ HEAD_SHA = "b" * 40
 OTHER_HEAD_SHA = "8" * 40
 MOVED_SHA = "f" * 40
 PATCH_SHA256 = "c" * 64
-HEAD_SHA256 = "d" * 64
 FINAL_GUARD_SHA256 = "e" * 64
 ISOLATION_SHA256 = "1" * 64
 APP_ACTOR = "vista-world-maintainer[bot]"
@@ -80,6 +95,15 @@ class Envelope:
             "run_date": "2026-08-21",
             "repository": CANONICAL_REPOSITORY,
             "base_sha": BASE_SHA,
+            "backlog_sha256": "4" * 64,
+            "run_remote": "origin",
+            "run_remote_branch": "main",
+            "run_lifecycle": "worktree_ready",
+            "run_branch_disposition": "created",
+            "run_branch_head_sha": BASE_SHA,
+            "run_worktree_path": "/tmp/vista-world-publisher-fixture",
+            "run_observed_remote_sha": BASE_SHA,
+            "run_publication_state": "unknown",
             "candidate_id": "VW-DM-0001",
             "candidate_slug": "docs-contract",
             "candidate_title": "Correct one documented contract drift",
@@ -89,15 +113,18 @@ class Envelope:
             "changed_paths": ("docs/guide.md",),
             "validation_profile_ids": ("daily-maintainer-core-tests",),
             "expected_external_side_effects": "none",
+            "candidate_state": "open",
+            "candidate_not_before": None,
+            "candidate_expires_on": None,
             "source_kind": "curated_backlog",
             "source_manifest_revision": 7,
             "source_approved_by": "IvesLiu1026",
+            "source_issue_url": None,
             "guard_ok": True,
             "guard_patch_sha256": PATCH_SHA256,
             "final_guard_ok": True,
             "final_guard_patch_sha256": PATCH_SHA256,
             "final_guard_sha256": FINAL_GUARD_SHA256,
-            "head_sha256": HEAD_SHA256,
             "mutation_detected": False,
             "isolation_network_isolated": True,
             "isolation_credentials_absent": True,
@@ -113,8 +140,116 @@ class Envelope:
             "run_id",
             f"{values['run_date']}/{values['repository']}@{values['base_sha']}",
         )
+        values.setdefault(
+            "branch_name",
+            (
+                f"codex/daily/{values['run_date']}-{values['candidate_slug']}-"
+                f"{str(values['base_sha'])[:8]}"
+            ),
+        )
+        if "candidate_sha256" not in values:
+            try:
+                values["candidate_sha256"] = self._candidate_digest(values)
+            except CandidateContractError:
+                values["candidate_sha256"] = "0" * 64
+        if "head_sha256" not in values:
+            values["head_sha256"] = verified_head_digest(
+                str(values["base_sha"]),
+                str(values["final_guard_patch_sha256"]),
+                values["changed_paths"],  # type: ignore[arg-type]
+            )
+        if "run_state_sha256" not in values:
+            try:
+                values["run_state_sha256"] = self._run_state_digest(values)
+            except (StateContractError, TypeError, ValueError):
+                values["run_state_sha256"] = "5" * 64
         for name, value in values.items():
             setattr(self, name, value)
+        self.canonical_bytes = self._canonical_bytes()
+
+    @staticmethod
+    def _candidate_digest(values: dict[str, object]) -> str:
+        candidate = Candidate(
+            candidate_id=str(values["candidate_id"]),
+            title=str(values["candidate_title"]),
+            risk_tier=values["risk_tier"],  # type: ignore[arg-type]
+            allowed_paths=values["allowed_paths"],  # type: ignore[arg-type]
+            acceptance=values["acceptance"],  # type: ignore[arg-type]
+            validation_profiles=values["validation_profile_ids"],  # type: ignore[arg-type]
+            expected_external_side_effects=str(
+                values["expected_external_side_effects"]
+            ),
+            source=CandidateSource(
+                kind=str(values["source_kind"]),
+                manifest_revision=values["source_manifest_revision"],  # type: ignore[arg-type]
+                approved_by=str(values["source_approved_by"]),
+                issue_url=values["source_issue_url"],  # type: ignore[arg-type]
+            ),
+            state=str(values["candidate_state"]),
+            not_before=(
+                dt.date.fromisoformat(str(values["candidate_not_before"]))
+                if values["candidate_not_before"] is not None
+                else None
+            ),
+            expires_on=(
+                dt.date.fromisoformat(str(values["candidate_expires_on"]))
+                if values["candidate_expires_on"] is not None
+                else None
+            ),
+        )
+        return candidate_authorization_digest(candidate)
+
+    @staticmethod
+    def _run_state_digest(values: dict[str, object]) -> str:
+        state = RunState(
+            key=RunKey(
+                str(values["run_date"]),
+                str(values["repository"]),
+                str(values["base_sha"]),
+            ),
+            candidate_id=str(values["candidate_id"]),
+            candidate_slug=str(values["candidate_slug"]),
+            backlog_sha256=str(values["backlog_sha256"]),
+            candidate_sha256=str(values["candidate_sha256"]),
+            remote=str(values["run_remote"]),
+            remote_branch=str(values["run_remote_branch"]),
+            branch_name=str(values["branch_name"]),
+            lifecycle=Lifecycle(str(values["run_lifecycle"])),
+            branch_disposition=BranchDisposition(str(values["run_branch_disposition"])),
+            branch_head_sha=str(values["run_branch_head_sha"]),
+            worktree_path=str(values["run_worktree_path"]),
+            observed_remote_sha=str(values["run_observed_remote_sha"]),
+            publication=PublicationSnapshot(state=str(values["run_publication_state"])),
+        )
+        return state_digest(state)
+
+    def bind_worktree(self, path: Path) -> None:
+        self.run_worktree_path = str(path)
+        values = {
+            name: getattr(self, name)
+            for name in (
+                "run_date",
+                "repository",
+                "base_sha",
+                "candidate_id",
+                "candidate_slug",
+                "backlog_sha256",
+                "candidate_sha256",
+                "run_remote",
+                "run_remote_branch",
+                "branch_name",
+                "run_lifecycle",
+                "run_branch_disposition",
+                "run_branch_head_sha",
+                "run_worktree_path",
+                "run_observed_remote_sha",
+                "run_publication_state",
+            )
+        }
+        try:
+            self.run_state_sha256 = self._run_state_digest(values)
+        except (StateContractError, TypeError, ValueError):
+            self.run_state_sha256 = "5" * 64
         self.canonical_bytes = self._canonical_bytes()
 
     def _canonical_bytes(self) -> bytes:
@@ -126,6 +261,18 @@ class Envelope:
                 "run_date": self.run_date,
                 "repository": self.repository,
                 "base_sha": self.base_sha,
+                "branch_name": self.branch_name,
+                "backlog_sha256": self.backlog_sha256,
+                "candidate_sha256": self.candidate_sha256,
+                "run_state_sha256": self.run_state_sha256,
+                "run_remote": self.run_remote,
+                "run_remote_branch": self.run_remote_branch,
+                "run_lifecycle": self.run_lifecycle,
+                "run_branch_disposition": self.run_branch_disposition,
+                "run_branch_head_sha": self.run_branch_head_sha,
+                "run_worktree_path": self.run_worktree_path,
+                "run_observed_remote_sha": self.run_observed_remote_sha,
+                "run_publication_state": self.run_publication_state,
                 "candidate_id": self.candidate_id,
                 "candidate_slug": self.candidate_slug,
                 "candidate_title": self.candidate_title,
@@ -135,9 +282,13 @@ class Envelope:
                 "changed_paths": list(self.changed_paths),
                 "validation_profile_ids": list(self.validation_profile_ids),
                 "expected_external_side_effects": self.expected_external_side_effects,
+                "candidate_state": self.candidate_state,
+                "candidate_not_before": self.candidate_not_before,
+                "candidate_expires_on": self.candidate_expires_on,
                 "source_kind": self.source_kind,
                 "source_manifest_revision": self.source_manifest_revision,
                 "source_approved_by": self.source_approved_by,
+                "source_issue_url": self.source_issue_url,
                 "guard_ok": self.guard_ok,
                 "guard_patch_sha256": self.guard_patch_sha256,
                 "final_guard_ok": self.final_guard_ok,
@@ -401,6 +552,7 @@ class Fixture:
     ) -> None:
         self.root = root
         self.envelope = envelope or Envelope()
+        self.envelope.bind_worktree(root)
         self.policy = policy or Policy()
         self.trust = FakeTrust(self.envelope, self.policy)
         self.runtime = FakeRuntime(self.policy)
@@ -488,6 +640,20 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(fixture.github.open_calls, 1)
         commit = fixture.github.commits[result.head_sha]
         self.assertEqual(commit.message.count(AUTOMATION_TRAILER), 1)
+        self.assertIn(
+            f"Backlog-SHA256: {fixture.envelope.backlog_sha256}", commit.message
+        )
+        self.assertIn(
+            f"Candidate-SHA256: {fixture.envelope.candidate_sha256}",
+            commit.message,
+        )
+        self.assertIn(
+            f"Run-State-SHA256: {fixture.envelope.run_state_sha256}",
+            commit.message,
+        )
+        self.assertEqual(result.backlog_sha256, fixture.envelope.backlog_sha256)
+        self.assertEqual(result.candidate_sha256, fixture.envelope.candidate_sha256)
+        self.assertEqual(result.run_state_sha256, fixture.envelope.run_state_sha256)
 
     def test_unattended_app_is_exact_non_admin_repo_scoped_principal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -558,10 +724,13 @@ class PublisherContractTests(unittest.TestCase):
 
     def test_canonical_envelope_bytes_bind_every_field(self) -> None:
         envelope = Envelope()
-        envelope.candidate_title = "tampered after finalization"
         with tempfile.TemporaryDirectory() as temporary:
             fixture = Fixture(Path(temporary), envelope=envelope)
-            with self.assertRaisesRegex(PublicationPreflightError, "canonical bytes"):
+            envelope.candidate_title = "tampered after finalization"
+            with self.assertRaisesRegex(
+                PublicationPreflightError,
+                "canonical bytes|authority digest",
+            ):
                 fixture.publish()
         self.assertEqual(fixture.git.create_calls, 0)
 
@@ -573,6 +742,26 @@ class PublisherContractTests(unittest.TestCase):
             with self.assertRaisesRegex(PublicationPreflightError, "canonical bytes"):
                 fixture.publish()
         self.assertEqual(fixture.git.create_calls, 0)
+
+    def test_authority_digests_and_worktree_cross_bindings_fail_closed(self) -> None:
+        for field in ("backlog_sha256", "candidate_sha256", "run_state_sha256"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                fixture = Fixture(Path(temporary))
+                setattr(fixture.envelope, field, "9" * 64)
+                fixture.envelope.canonical_bytes = fixture.envelope._canonical_bytes()
+                with self.assertRaises(PublicationPreflightError):
+                    fixture.publish()
+                self.assertEqual(fixture.git.create_calls, 0)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = Fixture(root)
+            other = root / "other-worktree"
+            other.mkdir()
+            fixture.envelope.bind_worktree(other)
+            with self.assertRaisesRegex(PublicationPreflightError, "worktree"):
+                fixture.publish()
+            self.assertEqual(fixture.git.create_calls, 0)
 
     def test_v1_authority_rejects_scope_profile_and_path_bypasses(self) -> None:
         cases = (

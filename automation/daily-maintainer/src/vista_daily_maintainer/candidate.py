@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import os
 import re
 import stat
@@ -464,6 +465,54 @@ class Candidate:
             "validation_profile_ids": list(self.validation_profiles),
             "expected_external_side_effects": self.expected_external_side_effects,
         }
+
+
+def candidate_authorization_payload(candidate: Candidate) -> dict[str, object]:
+    """Return the canonical, complete authority projection for one candidate.
+
+    ``Candidate.normalized_payload`` is intentionally safe for the unprivileged
+    model and therefore omits scheduling and provenance fields.  Every trusted
+    stage uses this complete projection so the verifier, run state, finalizer,
+    and publisher bind the same reviewed authority.
+    """
+
+    if not isinstance(candidate, Candidate):
+        raise CandidateContractError("candidate must use the strict contract")
+    return {
+        "schema_version": "vista.world.daily-maintainer.candidate-authority.v1",
+        "candidate": candidate.normalized_payload(),
+        "state": candidate.state,
+        "not_before": (
+            candidate.not_before.isoformat() if candidate.not_before else None
+        ),
+        "expires_on": candidate.expires_on.isoformat()
+        if candidate.expires_on
+        else None,
+        "source": {
+            "kind": candidate.source.kind,
+            "manifest_revision": candidate.source.manifest_revision,
+            "approved_by": candidate.source.approved_by,
+            "issue_url": candidate.source.issue_url,
+        },
+    }
+
+
+def candidate_authorization_digest(candidate: Candidate) -> str:
+    """Return the lowercase SHA-256 of canonical candidate authority JSON."""
+
+    try:
+        payload = json.dumps(
+            candidate_authorization_payload(candidate),
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8", "strict")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise CandidateContractError(
+            "candidate authority is not canonical JSON"
+        ) from exc
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
