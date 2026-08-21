@@ -6,7 +6,12 @@ import re
 from dataclasses import asdict, dataclass
 
 from .candidate import (
+    BACKLOG_SCHEMA_VERSION,
     Candidate,
+    CandidateContractError,
+    backlog_authorization_digest,
+    backlog_authorization_digest_from_bindings,
+    backlog_candidate_bindings,
     candidate_authorization_digest,
     enforce_v1_candidate_policy,
     path_matches_pattern,
@@ -21,7 +26,13 @@ from .state import (
     RunState,
     state_digest,
 )
-from .verifier import IsolationEvidence, VerificationReport, ValidationResult
+from .verifier import (
+    IsolationEvidence,
+    ValidationResult,
+    VerificationReport,
+    VerificationSubject,
+    verification_check_subject_digest,
+)
 
 
 FINALIZED_ENVELOPE_SCHEMA = "vista.world.daily-maintainer.finalized-verification.v1"
@@ -37,6 +48,7 @@ class FinalizationError(ValueError):
 class FinalizedVerificationCheck:
     command_id: str
     output_sha256: str
+    subject_sha256: str
     exit_code: int
     timed_out: bool
 
@@ -46,6 +58,7 @@ class FinalizedVerificationCheck:
         ):
             raise FinalizationError("finalized command ID is invalid")
         _require_sha256(self.output_sha256, "verification output digest")
+        _require_sha256(self.subject_sha256, "verification check subject digest")
         if isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int):
             raise FinalizationError("verification exit code is invalid")
         if not isinstance(self.timed_out, bool):
@@ -62,8 +75,15 @@ class FinalizedVerifierEnvelope:
     base_sha: str
     branch_name: str
     backlog_sha256: str
+    backlog_schema_version: str
+    backlog_manifest_revision: int
+    backlog_approved_by: str
+    backlog_candidate_bindings: tuple[str, ...]
+    backlog_authorization_sha256: str
     candidate_sha256: str
     run_state_sha256: str
+    verification_subject_sha256: str
+    check_subject_sha256: str
     run_remote: str
     run_remote_branch: str
     run_lifecycle: str
@@ -98,6 +118,8 @@ class FinalizedVerifierEnvelope:
     isolation_network_isolated: bool
     isolation_credentials_absent: bool
     isolation_verified_by: str
+    isolation_subject_sha256: str
+    isolation_patch_sha256: str
     isolation_evidence_sha256: str
     checks: tuple[FinalizedVerificationCheck, ...]
     schema_version: str = FINALIZED_ENVELOPE_SCHEMA
@@ -111,17 +133,47 @@ class FinalizedVerifierEnvelope:
             raise FinalizationError("finalized envelope schema is invalid")
         for value, label in (
             (self.backlog_sha256, "backlog digest"),
+            (self.backlog_authorization_sha256, "backlog authority digest"),
             (self.candidate_sha256, "candidate digest"),
             (self.run_state_sha256, "run state digest"),
+            (self.verification_subject_sha256, "verification subject digest"),
+            (self.check_subject_sha256, "verification check subject digest"),
             (self.guard_patch_sha256, "guard patch digest"),
             (self.final_guard_patch_sha256, "final guard patch digest"),
             (self.final_guard_sha256, "final guard digest"),
             (self.head_sha256, "head digest"),
+            (self.isolation_subject_sha256, "isolation subject digest"),
+            (self.isolation_patch_sha256, "isolation patch digest"),
             (self.isolation_evidence_sha256, "isolation evidence digest"),
         ):
             _require_sha256(value, label)
+        try:
+            backlog_authorization = backlog_authorization_digest_from_bindings(
+                schema_version=self.backlog_schema_version,
+                manifest_revision=self.backlog_manifest_revision,
+                approved_by=self.backlog_approved_by,
+                backlog_sha256=self.backlog_sha256,
+                candidate_bindings=self.backlog_candidate_bindings,
+            )
+        except CandidateContractError as exc:
+            raise FinalizationError("finalized backlog authority is invalid") from exc
+        if backlog_authorization != self.backlog_authorization_sha256:
+            raise FinalizationError("finalized backlog authority digest does not match")
+        selected_binding = f"{self.candidate_id}:{self.candidate_sha256}"
+        if selected_binding not in self.backlog_candidate_bindings:
+            raise FinalizationError("finalized candidate is not in backlog authority")
         if not isinstance(self.checks, tuple) or not self.checks:
             raise FinalizationError("finalized checks must be non-empty")
+        if any(
+            item.subject_sha256 != self.check_subject_sha256 for item in self.checks
+        ):
+            raise FinalizationError("finalized check subject does not match envelope")
+        if self.isolation_subject_sha256 != self.verification_subject_sha256:
+            raise FinalizationError(
+                "finalized isolation subject does not match envelope"
+            )
+        if self.isolation_patch_sha256 != self.guard_patch_sha256:
+            raise FinalizationError("finalized isolation patch does not match envelope")
 
     @property
     def canonical_bytes(self) -> bytes:
@@ -144,6 +196,49 @@ class VerificationFinalizer:
         return finalize_verification(request, run_state, report)
 
 
+def build_verification_subject(
+    request: PatcherRequest,
+    run_state: RunState,
+) -> VerificationSubject:
+    """Build the only verifier subject authorized by a request/run join."""
+
+    if not isinstance(request, PatcherRequest):
+        raise FinalizationError("exact patcher request is required")
+    if not isinstance(run_state, RunState):
+        raise FinalizationError("exact run state is required")
+    candidate_sha256 = candidate_authorization_digest(request.candidate)
+    if request.candidate_sha256 != candidate_sha256:
+        raise FinalizationError("patcher request candidate digest changed")
+    _validate_run_binding(request, run_state, candidate_sha256)
+    try:
+        bindings = backlog_candidate_bindings(request.backlog)
+        backlog_authorization_sha256 = backlog_authorization_digest(request.backlog)
+    except CandidateContractError as exc:
+        raise FinalizationError("request backlog authority is invalid") from exc
+    if request.backlog.schema_version != BACKLOG_SCHEMA_VERSION:
+        raise FinalizationError("request backlog schema is not supported")
+    selected_binding = f"{request.candidate.candidate_id}:{candidate_sha256}"
+    if selected_binding not in bindings:
+        raise FinalizationError("request candidate is not in backlog authority")
+    try:
+        return VerificationSubject(
+            run_id=run_state.key.run_id,
+            run_date=run_state.key.run_date,
+            repository=run_state.key.repository,
+            base_sha=run_state.key.base_sha,
+            branch_name=run_state.branch_name,
+            worktree_path=run_state.worktree_path or "",
+            candidate_id=run_state.candidate_id,
+            candidate_slug=run_state.candidate_slug,
+            backlog_sha256=run_state.backlog_sha256,
+            backlog_authorization_sha256=backlog_authorization_sha256,
+            candidate_sha256=run_state.candidate_sha256,
+            run_state_sha256=state_digest(run_state),
+        )
+    except ValueError as exc:
+        raise FinalizationError("verification subject is invalid") from exc
+
+
 def finalize_verification(
     request: PatcherRequest,
     run_state: RunState,
@@ -162,8 +257,8 @@ def finalize_verification(
     if request.candidate_sha256 != candidate_sha256:
         raise FinalizationError("patcher request candidate digest changed")
 
-    _validate_run_binding(request, run_state, candidate_sha256)
-    _validate_report_binding(request, run_state, report, candidate)
+    subject = build_verification_subject(request, run_state)
+    _validate_report_binding(request, run_state, report, candidate, subject)
 
     changed_paths = tuple(item.path for item in report.final_guard.changed_files)
     checks = tuple(_copy_check(item) for item in report.validation)
@@ -174,6 +269,8 @@ def finalize_verification(
         changed_paths,
     )
     source = candidate.source
+    backlog_bindings = backlog_candidate_bindings(request.backlog)
+    backlog_authorization_sha256 = backlog_authorization_digest(request.backlog)
     envelope = FinalizedVerifierEnvelope(
         run_id=run_state.key.run_id,
         run_date=run_state.key.run_date,
@@ -181,8 +278,15 @@ def finalize_verification(
         base_sha=run_state.key.base_sha,
         branch_name=run_state.branch_name,
         backlog_sha256=request.backlog_sha256,
+        backlog_schema_version=request.backlog.schema_version,
+        backlog_manifest_revision=request.backlog.manifest_revision,
+        backlog_approved_by=request.backlog.approved_by,
+        backlog_candidate_bindings=backlog_bindings,
+        backlog_authorization_sha256=backlog_authorization_sha256,
         candidate_sha256=candidate_sha256,
         run_state_sha256=state_digest(run_state),
+        verification_subject_sha256=subject.sha256,
+        check_subject_sha256=report.check_subject_sha256,
         run_remote=run_state.remote,
         run_remote_branch=run_state.remote_branch,
         run_lifecycle=run_state.lifecycle.value,
@@ -221,6 +325,8 @@ def finalize_verification(
         isolation_network_isolated=report.isolation_evidence.network_isolated,
         isolation_credentials_absent=report.isolation_evidence.credentials_absent,
         isolation_verified_by=report.isolation_evidence.observed_by,
+        isolation_subject_sha256=report.isolation_evidence.subject_sha256,
+        isolation_patch_sha256=report.isolation_evidence.patch_sha256,
         isolation_evidence_sha256=report.isolation_evidence.evidence_sha256,
         checks=checks,
     )
@@ -280,6 +386,7 @@ def _validate_report_binding(
     run_state: RunState,
     report: VerificationReport,
     candidate: Candidate,
+    expected_subject: VerificationSubject,
 ) -> None:
     if not isinstance(report.guard, GuardReport) or not isinstance(
         report.final_guard, GuardReport
@@ -291,6 +398,10 @@ def _validate_report_binding(
         raise FinalizationError("verification checks have an invalid type")
     if not isinstance(report.isolation_evidence, IsolationEvidence):
         raise FinalizationError("verification isolation evidence has an invalid type")
+    if report.subject != expected_subject or report.subject.sha256 != (
+        expected_subject.sha256
+    ):
+        raise FinalizationError("verification report describes another run subject")
     if report.candidate_sha256 != request.candidate_sha256:
         raise FinalizationError("verification report candidate digest does not match")
     if report.publication_authorized is not False:
@@ -323,11 +434,23 @@ def _validate_report_binding(
         raise FinalizationError("verification checks do not match candidate profiles")
     if any(not item.ok for item in report.validation):
         raise FinalizationError("verification report contains a failed check")
+    expected_check_subject = verification_check_subject_digest(
+        expected_subject.sha256,
+        report.guard.patch_sha256,
+    )
+    if report.check_subject_sha256 != expected_check_subject:
+        raise FinalizationError("verification check subject does not match run")
+    if any(item.subject_sha256 != expected_check_subject for item in report.validation):
+        raise FinalizationError("verification check describes another run subject")
     if (
         report.isolation_evidence.network_isolated is not True
         or report.isolation_evidence.credentials_absent is not True
     ):
         raise FinalizationError("verification isolation evidence did not pass")
+    if report.isolation_evidence.subject_sha256 != expected_subject.sha256:
+        raise FinalizationError("isolation evidence describes another run subject")
+    if report.isolation_evidence.patch_sha256 != report.guard.patch_sha256:
+        raise FinalizationError("isolation evidence describes another patch")
     if run_state.candidate_sha256 != report.candidate_sha256:
         raise FinalizationError("run state and verification candidate digests differ")
 
@@ -338,6 +461,7 @@ def _copy_check(value: ValidationResult) -> FinalizedVerificationCheck:
     return FinalizedVerificationCheck(
         command_id=value.command_id,
         output_sha256=value.output_sha256,
+        subject_sha256=value.subject_sha256,
         exit_code=value.exit_code,
         timed_out=value.timed_out,
     )
@@ -387,8 +511,15 @@ def _envelope_payload(envelope: FinalizedVerifierEnvelope) -> dict[str, object]:
         "base_sha": envelope.base_sha,
         "branch_name": envelope.branch_name,
         "backlog_sha256": envelope.backlog_sha256,
+        "backlog_schema_version": envelope.backlog_schema_version,
+        "backlog_manifest_revision": envelope.backlog_manifest_revision,
+        "backlog_approved_by": envelope.backlog_approved_by,
+        "backlog_candidate_bindings": list(envelope.backlog_candidate_bindings),
+        "backlog_authorization_sha256": envelope.backlog_authorization_sha256,
         "candidate_sha256": envelope.candidate_sha256,
         "run_state_sha256": envelope.run_state_sha256,
+        "verification_subject_sha256": envelope.verification_subject_sha256,
+        "check_subject_sha256": envelope.check_subject_sha256,
         "run_remote": envelope.run_remote,
         "run_remote_branch": envelope.run_remote_branch,
         "run_lifecycle": envelope.run_lifecycle,
@@ -423,6 +554,8 @@ def _envelope_payload(envelope: FinalizedVerifierEnvelope) -> dict[str, object]:
         "isolation_network_isolated": envelope.isolation_network_isolated,
         "isolation_credentials_absent": envelope.isolation_credentials_absent,
         "isolation_verified_by": envelope.isolation_verified_by,
+        "isolation_subject_sha256": envelope.isolation_subject_sha256,
+        "isolation_patch_sha256": envelope.isolation_patch_sha256,
         "isolation_evidence_sha256": envelope.isolation_evidence_sha256,
         "checks": [asdict(item) for item in envelope.checks],
     }

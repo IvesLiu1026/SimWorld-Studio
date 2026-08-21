@@ -13,12 +13,17 @@ from vista_daily_maintainer.candidate import (
     CandidateContractError,
     candidate_authorization_digest,
 )
+from vista_daily_maintainer.guard import DiffGuard
 from vista_daily_maintainer.profiles import (
     TrustedExecutables,
     ValidationProfile,
     ValidationProfileRegistry,
 )
-from vista_daily_maintainer.verifier import IsolationEvidence, Verifier
+from vista_daily_maintainer.verifier import (
+    IsolationEvidence,
+    VerificationSubject,
+    Verifier,
+)
 
 try:
     from .helpers import init_repo, make_candidate
@@ -27,6 +32,8 @@ except ImportError:  # Support unittest discovery without an explicit top-level.
 
 
 class VerifierTests(unittest.TestCase):
+    _subject_patches: dict[str, str] = {}
+
     @staticmethod
     def _trusted_tools() -> TrustedExecutables:
         git = shutil.which("git")
@@ -39,13 +46,47 @@ class VerifierTests(unittest.TestCase):
             }
         )
 
-    @staticmethod
-    def _isolation() -> IsolationEvidence:
-        return IsolationEvidence(
-            network_isolated=True,
-            credentials_absent=True,
+    @classmethod
+    def _subject(cls, repo: Path, base: str, selected) -> VerificationSubject:
+        run_date = "2026-08-21"
+        repository = "IvesLiu1026/VISTA-World"
+        slug = "focused-contract-test"
+        subject = VerificationSubject(
+            run_id=f"{run_date}/{repository}@{base}",
+            run_date=run_date,
+            repository=repository,
+            base_sha=base,
+            branch_name=f"codex/daily/{run_date}-{slug}-{base[:8]}",
+            worktree_path=str(repo.resolve()),
+            candidate_id=selected.candidate_id,
+            candidate_slug=slug,
+            backlog_sha256="b" * 64,
+            backlog_authorization_sha256="c" * 64,
+            candidate_sha256=candidate_authorization_digest(selected),
+            run_state_sha256="d" * 64,
+        )
+        try:
+            patch_sha256 = (
+                DiffGuard()
+                .inspect(
+                    repo,
+                    base,
+                    selected,
+                )
+                .patch_sha256
+            )
+        except CandidateContractError:
+            # Entry-policy rejection occurs before the evidence patch is read.
+            patch_sha256 = "e" * 64
+        cls._subject_patches[subject.sha256] = patch_sha256
+        return subject
+
+    @classmethod
+    def _isolation(cls, subject: VerificationSubject) -> IsolationEvidence:
+        return IsolationEvidence.attest(
+            subject.sha256,
+            cls._subject_patches[subject.sha256],
             observed_by="unit-test-harness",
-            evidence_sha256="d" * 64,
         )
 
     def test_runs_fixed_argv_with_scrubbed_environment(self) -> None:
@@ -86,18 +127,19 @@ class VerifierTests(unittest.TestCase):
                 }
             )
             selected = make_candidate()
-
+            subject = self._subject(repo, base, selected)
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                 registry,
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
                     selected,
+                    subject=subject,
                     inherited_env=inherited,
                 )
 
@@ -149,22 +191,25 @@ class VerifierTests(unittest.TestCase):
                     ),
                 )
             )
+            selected = make_candidate(
+                profiles=(
+                    "daily-maintainer-core-tests",
+                    "tools-python-offline",
+                )
+            )
+            subject = self._subject(repo, base, selected)
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                 registry,
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
-                    make_candidate(
-                        profiles=(
-                            "daily-maintainer-core-tests",
-                            "tools-python-offline",
-                        )
-                    ),
+                    selected,
+                    subject=subject,
                 )
 
         self.assertFalse(report.checks_passed)
@@ -196,14 +241,16 @@ class VerifierTests(unittest.TestCase):
                     ),
                 )
             )
+            selected = make_candidate()
+            subject = self._subject(repo, base, selected)
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                 registry,
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
-                ).verify(repo, base, make_candidate())
+                    isolation_evidence=self._isolation(subject),
+                ).verify(repo, base, selected, subject=subject)
 
         self.assertFalse(report.checks_passed)
         self.assertTrue(report.mutation_detected)
@@ -238,17 +285,20 @@ class VerifierTests(unittest.TestCase):
                 )
             )
             inherited = {"PATH": str(fake_bin), "HOME": str(root / "attacker-home")}
+            selected = make_candidate()
+            subject = self._subject(repo, base, selected)
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                 safe_registry,
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
-                    make_candidate(),
+                    selected,
+                    subject=subject,
                     inherited_env=inherited,
                 )
             self.assertTrue(report.checks_passed)
@@ -271,17 +321,20 @@ class VerifierTests(unittest.TestCase):
                     self.subTest(tool=tool),
                     self.assertRaisesRegex(ValueError, "trusted executable"),
                 ):
+                    selected = make_candidate(profiles=(profile_id,))
+                    subject = self._subject(repo, base, selected)
                     with patch(
                         "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                         registry,
                     ):
                         Verifier(
                             executables=self._trusted_tools(),
-                            isolation_evidence=self._isolation(),
+                            isolation_evidence=self._isolation(subject),
                         ).verify(
                             repo,
                             base,
-                            make_candidate(profiles=(profile_id,)),
+                            selected,
+                            subject=subject,
                             inherited_env=inherited,
                         )
                 self.assertFalse(markers[tool].exists())
@@ -313,14 +366,16 @@ class VerifierTests(unittest.TestCase):
                     ),
                 )
             )
+            selected = make_candidate()
+            subject = self._subject(repo, base, selected)
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                 registry,
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
-                ).verify(repo, base, make_candidate())
+                    isolation_evidence=self._isolation(subject),
+                ).verify(repo, base, selected, subject=subject)
             self.assertFalse(report.checks_passed)
             self.assertTrue(report.validation[-1].timed_out)
             time.sleep(1.5)
@@ -352,14 +407,16 @@ class VerifierTests(unittest.TestCase):
                     ),
                 )
             )
+            selected = make_candidate()
+            subject = self._subject(repo, base, selected)
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                 registry,
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
-                ).verify(repo, base, make_candidate())
+                    isolation_evidence=self._isolation(subject),
+                ).verify(repo, base, selected, subject=subject)
             self.assertFalse(report.checks_passed)
             self.assertTrue(report.validation[-1].timed_out)
             time.sleep(1.5)
@@ -373,14 +430,17 @@ class VerifierTests(unittest.TestCase):
             workflow = repo / ".github/workflows/pwn.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text("name: pwn\n", encoding="utf-8")
+            selected = make_candidate(allowed_paths=("**",))
+            subject = self._subject(repo, base, selected)
             with self.assertRaisesRegex(CandidateContractError, "V1 candidate policy"):
                 Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
-                    make_candidate(allowed_paths=("**",)),
+                    selected,
+                    subject=subject,
                 )
         self.assertFalse(marker.exists())
 
@@ -389,14 +449,17 @@ class VerifierTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             base = init_repo(repo)
             (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            selected = make_candidate(profiles=("unknown",))
+            subject = self._subject(repo, base, selected)
             with self.assertRaisesRegex(CandidateContractError, "V1 candidate policy"):
                 Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
-                    make_candidate(profiles=("unknown",)),
+                    selected,
+                    subject=subject,
                 )
 
     def test_direct_tier_zero_source_authority_fails_at_verifier_entry(self) -> None:
@@ -404,14 +467,17 @@ class VerifierTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             base = init_repo(repo)
             (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            selected = make_candidate(risk_tier=0, allowed_paths=("src/**",))
+            subject = self._subject(repo, base, selected)
             with self.assertRaisesRegex(CandidateContractError, "Tier 0 path"):
                 Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
-                    make_candidate(risk_tier=0, allowed_paths=("src/**",)),
+                    selected,
+                    subject=subject,
                 )
 
     def test_shell_dash_c_profile_is_rejected_by_registry(self) -> None:
@@ -468,6 +534,8 @@ class VerifierTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "network isolation"):
             IsolationEvidence(
+                subject_sha256="a" * 64,
+                patch_sha256="b" * 64,
                 network_isolated=False,
                 credentials_absent=True,
                 observed_by="unit-test-harness",

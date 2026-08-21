@@ -6,19 +6,23 @@ import unittest
 from dataclasses import replace
 
 from vista_daily_maintainer.candidate import (
+    Backlog,
     Candidate,
     CandidateSource,
+    backlog_authorization_digest,
     candidate_authorization_digest,
 )
 from vista_daily_maintainer.finalizer import (
     FINALIZED_ENVELOPE_SCHEMA,
     FinalizationError,
+    build_verification_subject,
     finalize_verification,
     guard_report_digest,
     verified_head_digest,
 )
 from vista_daily_maintainer.guard import ChangedFile, GuardReport
 from vista_daily_maintainer.patcher import PatcherRequest
+from vista_daily_maintainer.patcher import PatcherContractError
 from vista_daily_maintainer.publisher import (
     FinalizedEnvelopeReference,
     _freeze_verifier_envelope,
@@ -35,6 +39,7 @@ from vista_daily_maintainer.verifier import (
     IsolationEvidence,
     ValidationResult,
     VerificationReport,
+    verification_check_subject_digest,
 )
 
 
@@ -66,6 +71,13 @@ def candidate(*, title: str = "Add one focused contract regression") -> Candidat
 
 def request(selected: Candidate | None = None) -> PatcherRequest:
     selected = selected or candidate()
+    backlog = Backlog(
+        schema_version="vista.world.daily-maintainer.backlog.v1",
+        manifest_revision=selected.source.manifest_revision,
+        approved_by=selected.source.approved_by,
+        sha256=BACKLOG_SHA256,
+        candidates=(selected,),
+    )
     return PatcherRequest(
         run_date=RUN_DATE,
         repository=REPOSITORY,
@@ -74,6 +86,7 @@ def request(selected: Candidate | None = None) -> PatcherRequest:
         manifest_revision=selected.source.manifest_revision,
         approved_by=selected.source.approved_by,
         candidate=selected,
+        backlog=backlog,
         candidate_slug=SLUG,
         candidate_sha256=candidate_authorization_digest(selected),
     )
@@ -128,19 +141,31 @@ def guard(*, patch_sha256: str = PATCH_SHA256) -> GuardReport:
 def report(value: PatcherRequest | None = None) -> VerificationReport:
     value = value or request()
     snapshot = guard()
+    subject = build_verification_subject(value, run_state(value))
+    check_subject = verification_check_subject_digest(
+        subject.sha256,
+        snapshot.patch_sha256,
+    )
     return VerificationReport(
+        subject=subject,
+        check_subject_sha256=check_subject,
         candidate_sha256=value.candidate_sha256,
         guard=snapshot,
         final_guard=snapshot,
         validation=(
-            ValidationResult("git-diff-check", 0, "d" * 64, 10),
-            ValidationResult("tools-python-offline", 0, "e" * 64, 20),
+            ValidationResult("git-diff-check", 0, "d" * 64, 10, check_subject),
+            ValidationResult(
+                "tools-python-offline",
+                0,
+                "e" * 64,
+                20,
+                check_subject,
+            ),
         ),
-        isolation_evidence=IsolationEvidence(
-            network_isolated=True,
-            credentials_absent=True,
+        isolation_evidence=IsolationEvidence.attest(
+            subject.sha256,
+            snapshot.patch_sha256,
             observed_by="outer-sandbox-controller",
-            evidence_sha256="f" * 64,
         ),
     )
 
@@ -157,6 +182,10 @@ class FinalizerTests(unittest.TestCase):
         self.assertEqual(envelope.schema_version, FINALIZED_ENVELOPE_SCHEMA)
         self.assertTrue(envelope.finalized)
         self.assertEqual(payload["backlog_sha256"], BACKLOG_SHA256)
+        self.assertEqual(
+            payload["backlog_authorization_sha256"],
+            backlog_authorization_digest(patcher_request.backlog),
+        )
         self.assertEqual(payload["candidate_sha256"], patcher_request.candidate_sha256)
         self.assertEqual(payload["run_state_sha256"], state_digest(state))
         self.assertEqual(payload["branch_name"], state.branch_name)
@@ -188,13 +217,9 @@ class FinalizerTests(unittest.TestCase):
         verification = report(original)
         changed_candidate = candidate(title="A different reviewed candidate title")
         changed_request = request(changed_candidate)
+        with self.assertRaisesRegex(PatcherContractError, "backlog authority"):
+            replace(original, backlog_sha256="9" * 64)
         cases = (
-            (
-                "backlog digest",
-                replace(original, backlog_sha256="9" * 64),
-                state,
-                verification,
-            ),
             ("candidate", changed_request, state, verification),
             (
                 "run state",
@@ -208,12 +233,7 @@ class FinalizerTests(unittest.TestCase):
                 state,
                 verification,
             ),
-            (
-                "verification report",
-                original,
-                state,
-                replace(verification, candidate_sha256="7" * 64),
-            ),
+            ("verification report", original, state, report(changed_request)),
         )
         for label, patcher_request, candidate_state, candidate_report in cases:
             with self.subTest(label=label), self.assertRaises(FinalizationError):
@@ -271,6 +291,42 @@ class FinalizerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(FinalizationError, "candidate profiles"):
             finalize_verification(patcher_request, state, changed)
+
+    def test_same_command_check_from_another_subject_fails_closed(self) -> None:
+        patcher_request = request()
+        state = run_state(patcher_request)
+        verification = report(patcher_request)
+        other_request = request(candidate(title="Another exact reviewed title"))
+        other_check = report(other_request).validation[0]
+        swapped = replace(
+            verification,
+            validation=(other_check, verification.validation[1]),
+        )
+        with self.assertRaisesRegex(FinalizationError, "another run subject"):
+            finalize_verification(patcher_request, state, swapped)
+
+    def test_isolation_evidence_from_another_subject_fails_closed(self) -> None:
+        patcher_request = request()
+        state = run_state(patcher_request)
+        verification = report(patcher_request)
+        other_request = request(candidate(title="Another exact reviewed title"))
+        swapped = replace(
+            verification,
+            isolation_evidence=report(other_request).isolation_evidence,
+        )
+        with self.assertRaisesRegex(FinalizationError, "another run subject"):
+            finalize_verification(patcher_request, state, swapped)
+
+        swapped_patch = replace(
+            verification,
+            isolation_evidence=IsolationEvidence.attest(
+                verification.subject.sha256,
+                "9" * 64,
+                observed_by="outer-sandbox-controller",
+            ),
+        )
+        with self.assertRaisesRegex(FinalizationError, "another patch"):
+            finalize_verification(patcher_request, state, swapped_patch)
 
 
 if __name__ == "__main__":
