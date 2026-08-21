@@ -29,8 +29,8 @@ VISTA World 需要在使用者沒有主動開發的日子仍持續累積可驗�
 
 ## Assumptions
 
-- Canonical target 是尚待建立的 standalone `IvesLiu1026/VISTA-World`，default branch
-  為 `main`。
+- Canonical target 是已建立的 public standalone `IvesLiu1026/VISTA-World`，default branch
+  為 `main`；`main` 已啟用 strict required checks，且禁止 force-push/delete。
 - 主要 patcher 在這台常駐 server 的專用 service account/container 中透過 systemd 與
   隔離且獲准用於 public-repository automation 的 Codex credential 執行；GitHub Actions
   負責獨立 CI、合併門檻與 missed-run 監測。現有個人 ChatGPT login 只用於 attended

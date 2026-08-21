@@ -1,17 +1,21 @@
 # VISTA World Daily Maintainer Safety Core
 
-This package implements the deterministic trust boundary used before a daily
-maintenance patch can be published. It does not schedule runs, invoke a model,
-write to GitHub, or manage production runtime.
+This package implements the deterministic trust boundaries used before a daily
+maintenance patch can be published. It includes contracts for isolated run
+management, patcher invocation and draft-only publication, but it does not yet
+schedule runs, invoke a model, provide concrete GitHub adapters, or manage
+production runtime.
 
 The core provides:
 
 - a digest-bound, strict YAML contract for human-reviewed candidate backlogs;
 - code-owned validation profile IDs with fixed cwd and argv;
 - deterministic candidate selection;
+- replay-safe run/worktree state and canonical daily branch naming;
 - a Git diff guard for path, symlink, binary, secret, size, and test-weakening
   policy;
 - a credential-free verifier that never enables a subprocess shell; and
+- fail-closed patcher and publisher protocols with no promotion or merge surface;
 - canonical receipt serialization, SHA-256 binding, and journal markers.
 
 ## V1 fail-closed boundaries

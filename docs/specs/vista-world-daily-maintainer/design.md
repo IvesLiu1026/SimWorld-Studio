@@ -196,7 +196,7 @@ entries correspond to these offline, isolated commands:
 git diff --check
 
 cd tools
-uv run --project .. --locked python -m unittest \
+python3 -m unittest \
   tests/test_vista_playable_home_contracts.py \
   tests/test_vista_playable_home_compiler.py
 
@@ -212,6 +212,10 @@ sh -n Scripts/build-plugin.sh
 
 Frontend changes also require the established build. Browser tests that reuse shared ports,
 integration/pipeline suites, commandlets and real runtime checks remain manual until isolated.
+The `python3` entry is resolved through the verifier's pinned executable registry. Production T13
+must inject a root-owned, immutable interpreter outside the patcher-writable worktree with the
+locked dependencies preinstalled offline; a repository `.venv` and inherited package cache are
+never validation authority.
 
 ## Data Model and Migration
 
