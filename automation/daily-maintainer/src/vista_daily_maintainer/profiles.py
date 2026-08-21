@@ -57,10 +57,23 @@ class TrustedExecutables:
         for name in ("git", "sh", "node", "npm", "uv"):
             found = shutil.which(name, path=search_path)
             if found:
-                values[name] = Path(found)
+                candidate = Path(found).resolve(strict=True)
+                try:
+                    _ExecutablePin.capture(candidate)
+                except (OSError, ValueError):
+                    # An unsafe optional tool must not poison unrelated guard
+                    # operations. Resolving a profile that needs it still
+                    # fails closed because it is absent from the allowlist.
+                    continue
+                values[name] = candidate
         interpreter = Path(sys.executable).resolve(strict=True)
-        values["python"] = interpreter
-        values[interpreter.name] = interpreter
+        try:
+            _ExecutablePin.capture(interpreter)
+        except (OSError, ValueError):
+            pass
+        else:
+            values["python"] = interpreter
+            values[interpreter.name] = interpreter
         return cls(values)
 
     def materialize_bin(self, directory: Path) -> Path:
