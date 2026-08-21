@@ -236,6 +236,18 @@ class CandidateContractTests(unittest.TestCase):
         self.assertFalse(path_matches_pattern("src/nested/app.py", "src/*.py"))
         self.assertTrue(path_matches_pattern("src/nested/app.py", "src/**/*.py"))
 
+    def test_double_star_must_be_a_complete_path_component(self) -> None:
+        invalid_patterns = ("docs/foo**", "docs/**bar", "docs/a**b", "docs/***.md")
+        for pattern in invalid_patterns:
+            payload = VALID_BACKLOG.replace(b"docs/**", pattern.encode("ascii"), 1)
+            with self.subTest(pattern=pattern), tempfile.TemporaryDirectory() as tmp:
+                trust = self._write(Path(tmp), payload)
+                with self.assertRaisesRegex(
+                    CandidateContractError,
+                    "invalid allowed path pattern",
+                ):
+                    load_trusted_backlog(trust)
+
 
 if __name__ == "__main__":
     unittest.main()

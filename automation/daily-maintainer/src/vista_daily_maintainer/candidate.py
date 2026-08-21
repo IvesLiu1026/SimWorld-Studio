@@ -282,6 +282,7 @@ def validate_allowed_path(pattern: object) -> None:
         or "//" in pattern
         or not _PATH_PATTERN.fullmatch(pattern)
         or any(part in {"", ".", ".."} for part in pattern.split("/"))
+        or any("**" in part and part != "**" for part in pattern.split("/"))
     ):
         raise CandidateContractError(f"invalid allowed path pattern: {pattern!r}")
 
