@@ -291,6 +291,30 @@ class CandidateContractTests(unittest.TestCase):
                 backlog = load_trusted_backlog(self._write(Path(tmp), payload))
                 self.assertEqual(len(backlog.candidates), 2)
 
+    def test_v1_policy_rejects_protected_roots_even_when_test_scoped(self) -> None:
+        protected_patterns = (
+            "automation/daily-maintainer/tests/test_x.py",
+            "runs/test_x.py",
+            "scenes/test_x.py",
+            "world-packs/test_x.py",
+            "world_packs/tests/test_contract.py",
+            "docs/maintenance/backlog.yaml",
+            "packages/widget/pyproject.toml",
+        )
+        for pattern in protected_patterns:
+            payload = VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                f"allowed_paths: [{pattern}, tests/**]".encode("ascii"),
+                1,
+            )
+            with self.subTest(pattern=pattern), tempfile.TemporaryDirectory() as tmp:
+                trust = self._write(Path(tmp), payload)
+                with self.assertRaisesRegex(
+                    CandidateContractError,
+                    "V1 candidate policy",
+                ):
+                    load_trusted_backlog(trust)
+
     def test_single_star_does_not_authorize_nested_directories(self) -> None:
         self.assertTrue(path_matches_pattern("src/app.py", "src/*.py"))
         self.assertFalse(path_matches_pattern("src/nested/app.py", "src/*.py"))

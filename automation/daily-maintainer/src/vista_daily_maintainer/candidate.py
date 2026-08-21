@@ -34,29 +34,74 @@ _V1_PROFILE_IDS = frozenset(
 _V1_FORBIDDEN_AUTHORITY = frozenset(
     {
         ".agent",
+        ".agents",
         ".claude",
         ".codex",
         ".github",
+        "accepted",
+        "artifacts",
         "assets",
         "auth",
+        "automation",
         "credentials",
         "datasets",
         "deploy",
         "evidence",
         "infra",
         "infrastructure",
+        "journal",
+        "ledger",
         "network",
         "ops",
+        "outputs",
+        "prompts",
+        "receipts",
+        "reports",
+        "runs",
         "runtime",
+        "scenes",
         "secrets",
         "systemd",
         "ue",
         "unreal",
         "unreal_plugins",
+        "world-packs",
+        "world_packs",
     }
 )
 _V1_FORBIDDEN_AUTHORITY_TOKENS = _V1_FORBIDDEN_AUTHORITY | frozenset(
     {"credential", "secret"}
+)
+_V1_FORBIDDEN_BASENAMES = frozenset(
+    {
+        ".gitattributes",
+        ".gitignore",
+        ".gitmodules",
+        ".mailmap",
+        ".mcp.json",
+        ".npmrc",
+        ".pypirc",
+        "backlog.yaml",
+        "cargo.lock",
+        "cargo.toml",
+        "composer.json",
+        "composer.lock",
+        "conftest.py",
+        "gemfile",
+        "gemfile.lock",
+        "go.mod",
+        "go.sum",
+        "package-lock.json",
+        "package.json",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "pyproject.toml",
+        "tox.ini",
+        "uv.lock",
+        "validation-profiles.yaml",
+        "validation_profiles.yaml",
+        "yarn.lock",
+    }
 )
 _V1_TIER1_PREFIXES = (
     "contracts/",
@@ -365,6 +410,12 @@ def has_v1_forbidden_authority(path: str, *, pattern: bool = False) -> bool:
             return True
         if index == len(parts) - 1 and _is_v1_test_filename(part):
             continue
+        if index == len(parts) - 1 and (
+            part in _V1_FORBIDDEN_BASENAMES
+            or part.startswith((".env", ".yarnrc", "requirements"))
+            or part.endswith((".service", ".socket", ".timer"))
+        ):
+            return True
         tokens = tuple(token for token in re.split(r"[._-]+", part) if token)
         for token in tokens:
             if token in _V1_FORBIDDEN_AUTHORITY_TOKENS:
