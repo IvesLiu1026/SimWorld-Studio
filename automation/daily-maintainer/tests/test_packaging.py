@@ -37,6 +37,21 @@ EXPECTED_FORCE_INCLUDE = {
     },
 }
 
+EXPECTED_SDIST_INPUTS = {
+    "/patcher-output.schema.json",
+    "/prompts/patcher.md",
+    "/requirements-build.txt",
+}
+
+PINNED_BUILD_REQUIREMENTS = {
+    "hatchling": "1.32.0",
+    "packaging": "26.3",
+    "pathspec": "1.1.1",
+    "pluggy": "1.6.0",
+    "tomlkit": "0.15.1",
+    "trove-classifiers": "2026.6.1.19",
+}
+
 
 class PackageContractTests(unittest.TestCase):
     @classmethod
@@ -66,6 +81,24 @@ class PackageContractTests(unittest.TestCase):
                     ROOT / "src" / "vista_daily_maintainer" / "resources" / source
                 )
                 self.assertEqual(packaged.read_bytes(), payload)
+
+        self.assertTrue(
+            EXPECTED_SDIST_INPUTS.issubset(set(targets["sdist"]["include"]))
+        )
+
+    def test_build_backend_and_complete_build_closure_are_pinned(self) -> None:
+        self.assertEqual(
+            self.pyproject["build-system"]["requires"],
+            ["hatchling==1.32.0"],
+        )
+        constraints = (ROOT / "requirements-build.txt").read_text(encoding="utf-8")
+        pins = {
+            line.split("==", 1)[0]: line.split("==", 1)[1].split()[0]
+            for line in constraints.splitlines()
+            if line and not line.startswith(("#", " ")) and "==" in line
+        }
+        self.assertEqual(pins, PINNED_BUILD_REQUIREMENTS)
+        self.assertEqual(constraints.count("--hash=sha256:"), 12)
 
 
 if __name__ == "__main__":

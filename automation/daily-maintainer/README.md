@@ -72,6 +72,12 @@ For package-local development:
     cd automation/daily-maintainer
     uv run --locked python -m unittest discover -s tests -t . -p 'test_*.py'
 
+Build artifacts only through the checksum-pinned PEP 517 closure:
+
+    uv build --build-constraints requirements-build.txt --require-hashes
+
+After those exact artifacts are present in the uv cache, the same command may add `--offline`.
+
 Both discovery forms are intentionally supported.
 
 ## Patcher activation boundary
