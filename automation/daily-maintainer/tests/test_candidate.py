@@ -231,6 +231,28 @@ class CandidateContractTests(unittest.TestCase):
                 ):
                     load_trusted_backlog(trust)
 
+    def test_v1_policy_rejects_globs_disguising_forbidden_authority(self) -> None:
+        payloads = (
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b'allowed_paths: ["packages/a?th/**", tests/**]',
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [packages/netw*rk/**, tests/**]",
+                1,
+            ),
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
+                trust = self._write(Path(tmp), payload)
+                with self.assertRaisesRegex(
+                    CandidateContractError,
+                    "V1 candidate policy",
+                ):
+                    load_trusted_backlog(trust)
+
     def test_single_star_does_not_authorize_nested_directories(self) -> None:
         self.assertTrue(path_matches_pattern("src/app.py", "src/*.py"))
         self.assertFalse(path_matches_pattern("src/nested/app.py", "src/*.py"))

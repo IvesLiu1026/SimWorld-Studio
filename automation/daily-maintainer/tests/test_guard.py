@@ -93,6 +93,29 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             report = DiffGuard().inspect(repo, base, make_candidate())
         self.assertIn("path_not_allowlisted", {item.code for item in report.violations})
 
+    def test_broad_allowlist_cannot_cross_forbidden_authority(self) -> None:
+        paths = (
+            "packages/auth/login.py",
+            "packages/network/client.py",
+            "packages/credentials/loader.py",
+            "packages/deploy/release.py",
+        )
+        for relative in paths:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp) / "repo"
+                base = init_repo(repo)
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("VALUE = 1\n", encoding="utf-8")
+                report = DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=("packages/**",)),
+                )
+                self.assertIn(
+                    "protected_path", {item.code for item in report.violations}
+                )
+
     def test_symlink_and_symlink_parent_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
