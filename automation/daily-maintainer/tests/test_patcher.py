@@ -16,6 +16,7 @@ from vista_daily_maintainer.candidate import Backlog, Candidate, CandidateSource
 from vista_daily_maintainer.patcher import (
     ALLOWED_PATCHER_TOOL_SURFACES,
     DISABLED_CODEX_FEATURES,
+    MAX_GIT_OUTPUT_BYTES,
     PATCHER_MODEL,
     PATCHER_OUTPUT_SCHEMA_SHA256,
     PATCHER_PERMISSION_PROFILE,
@@ -109,6 +110,7 @@ def file_evidence(
     mtime_ns: int = 1,
     device: int = 1,
     inode: int = 1,
+    link_count: int = 1,
 ) -> FileEvidence:
     return FileEvidence(
         path=path,
@@ -119,6 +121,7 @@ def file_evidence(
         owner_uid=owner_uid,
         mode=mode,
         sha256=sha256,
+        link_count=link_count,
     )
 
 
@@ -362,6 +365,25 @@ class ControlPlaneTests(unittest.TestCase):
         with self.assertRaisesRegex(PatcherContractError, "code-owned Codex"):
             _verify_credential(
                 credential_binding(decoy),
+                patcher_uid=os.geteuid(),
+                codex_home=codex_home,
+            )
+
+    def test_credential_hard_link_into_ignored_worktree_path_is_rejected(self) -> None:
+        codex_home = self.root / "codex-hardlink-home"
+        worktree = self.root / "worktree-hardlink"
+        codex_home.mkdir(mode=0o700)
+        worktree.mkdir(mode=0o700)
+        (worktree / ".gitignore").write_text(".credential-cache\n", encoding="utf-8")
+        credential = codex_home / "auth.json"
+        credential.write_bytes(b"approved-credential")
+        credential.chmod(0o600)
+        binding = credential_binding(credential)
+        os.link(credential, worktree / ".credential-cache")
+
+        with self.assertRaisesRegex(PatcherContractError, "content/metadata"):
+            _verify_credential(
+                binding,
                 patcher_uid=os.geteuid(),
                 codex_home=codex_home,
             )
@@ -794,6 +816,87 @@ class GitCheckoutTests(unittest.TestCase):
         with self.assertRaisesRegex(PatcherContractError, "unsafe local Git"):
             self.verify()
         self.assertFalse(marker.exists())
+
+    def test_oversized_local_config_fails_before_unsafe_tail_is_truncated(self) -> None:
+        marker = self.root / "oversized-config-callback"
+        hook = self.root / "oversized-config-hook"
+        hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+        hook.chmod(0o700)
+        padding_key = "padding" + "x" * 80
+        records = ["[review]\n"]
+        count = MAX_GIT_OUTPUT_BYTES // 90 + 2000
+        records.extend(f"\t{padding_key}{index} = true\n" for index in range(count))
+        records.append(f"[core]\n\tfsmonitor = {hook}\n")
+        config = self.repo / ".git" / "config"
+        with config.open("a", encoding="utf-8") as handle:
+            handle.writelines(records)
+
+        with self.assertRaisesRegex(PatcherContractError, "output exceeds"):
+            self.verify()
+        self.assertFalse(marker.exists())
+
+    def test_assume_unchanged_index_flag_is_rejected(self) -> None:
+        subprocess.run(
+            (
+                str(GIT),
+                "-C",
+                str(self.repo),
+                "update-index",
+                "--assume-unchanged",
+                "README.md",
+            ),
+            check=True,
+        )
+        (self.repo / "README.md").write_text("evil\n", encoding="utf-8")
+        with self.assertRaisesRegex(PatcherContractError, "assume-unchanged"):
+            self.verify()
+
+    def test_skip_worktree_index_flag_is_rejected(self) -> None:
+        subprocess.run(
+            (
+                str(GIT),
+                "-C",
+                str(self.repo),
+                "update-index",
+                "--skip-worktree",
+                "README.md",
+            ),
+            check=True,
+        )
+        with self.assertRaisesRegex(PatcherContractError, "skip-worktree"):
+            self.verify()
+
+    def test_same_size_content_with_restored_mtime_is_hashed(self) -> None:
+        readme = self.repo / "README.md"
+        before = readme.stat()
+        readme.write_text("evil\n", encoding="utf-8")
+        os.utime(readme, ns=(before.st_atime_ns, before.st_mtime_ns))
+        with self.assertRaisesRegex(PatcherContractError, "content differs"):
+            self.verify()
+
+    def test_content_weakening_and_sparse_or_submodule_config_is_rejected(self) -> None:
+        unsafe = (
+            ("core.trustctime", "false"),
+            ("core.checkStat", "minimal"),
+            ("core.ignoreStat", "true"),
+            ("core.fileMode", "false"),
+            ("core.sparseCheckout", "true"),
+            ("core.sparseCheckoutCone", "true"),
+            ("index.sparse", "true"),
+            ("submodule.demo.update", "!false"),
+        )
+        for key, value in unsafe:
+            with self.subTest(key=key):
+                subprocess.run(
+                    (str(GIT), "-C", str(self.repo), "config", key, value),
+                    check=True,
+                )
+                with self.assertRaisesRegex(PatcherContractError, "unsafe local Git"):
+                    self.verify()
+                subprocess.run(
+                    (str(GIT), "-C", str(self.repo), "config", "--unset-all", key),
+                    check=True,
+                )
 
 
 class OutputContractTests(unittest.TestCase):
