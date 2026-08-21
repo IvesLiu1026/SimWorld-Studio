@@ -54,6 +54,11 @@ class RunStateTests(unittest.TestCase):
         with self.assertRaisesRegex(StateContractError, "run_id"):
             parse_state(json.dumps(mapping))
 
+    def test_direct_state_parser_rejects_oversized_input_before_json(self) -> None:
+        oversized = b'"' + (b"a" * (64 * 1024)) + b'"'
+        with self.assertRaisesRegex(StateContractError, "oversized"):
+            parse_state(oversized)
+
     def test_publication_snapshot_is_repository_bound(self) -> None:
         snapshot = PublicationSnapshot(
             state=PullRequestState.DRAFT,
