@@ -26,13 +26,20 @@ Any deletion from an existing test and any modification to an existing schema
 or validation configuration requires human review. The unattended verifier is
 deliberately unable to decide that these edits are safe.
 
-Validation requires an operator-produced IsolationAttestation proving that
-network access is blocked and publisher/model credentials are absent. Python
-cannot establish that sandbox boundary itself. The verifier additionally uses
-an explicit executable allowlist, ignores inherited PATH and HOME, creates
-empty XDG/npm/uv configuration roots, disables global Git configuration, and
-kills the validation process group on timeout. A detached descendant still
-belongs to the outer UID/container/network-namespace containment boundary.
+Validation accepts digest-bound `IsolationEvidence` only as caller-provided
+evidence. It is not a self-authenticating attestation: Python cannot establish
+the required network, credential, filesystem, UID, cgroup, or read-only-mount
+boundary from inside the verifier. The verifier report exposes
+`checks_passed`, fixes `publication_authorized` to `false`, and is never itself
+a publication authorization. T13 must add an immutable outer sandbox and issue
+a separately authenticated artifact before unattended publication is enabled.
+
+The verifier additionally uses an explicit executable allowlist, ignores
+inherited PATH and HOME, creates empty XDG/npm/uv configuration roots, disables
+global Git configuration, and kills the validation process group on timeout.
+Executable path, owner, mode, inode, metadata, and content digest are pinned and
+revalidated before use. A final check-to-exec race and detached descendants
+still belong to the outer T13 UID/container/cgroup/mount/network boundary.
 
 The verifier re-runs the complete diff guard after every command. Exact patch
 digest and changed-file metadata must remain identical; validation-time

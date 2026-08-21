@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 
 RECEIPT_SCHEMA_VERSION = "vista.world.daily-maintainer.receipt.v1"
+MAX_RECEIPT_BYTES = 256 * 1024
 _SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CANDIDATE_ID = re.compile(r"^VW-DM-[0-9]{4,}$")
@@ -19,6 +20,7 @@ _FAILURE_CATEGORY = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 _ACTOR_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$")
 _IDENTITY_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+$")
+_PATH_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class ReceiptContractError(ValueError):
@@ -169,6 +171,15 @@ class ReceiptActors:
     def complete_for_pr(self) -> bool:
         return bool(self.commit_author and self.git_committer and self.pr_actor)
 
+    @property
+    def complete_for_commit(self) -> bool:
+        return bool(
+            self.commit_author
+            and self.git_committer
+            and self.pr_actor is None
+            and self.promotion_actor is None
+        )
+
 
 @dataclass(frozen=True)
 class RunReceipt:
@@ -227,12 +238,13 @@ class RunReceipt:
         if len({item.command_id for item in self.validation}) != len(self.validation):
             raise ReceiptContractError("receipt validation command IDs must be unique")
         if not isinstance(self.protected_paths_touched, tuple) or any(
-            not isinstance(path, str) or not path
-            for path in self.protected_paths_touched
+            not _safe_relative_path(path) for path in self.protected_paths_touched
         ):
             raise ReceiptContractError(
-                "protected_paths_touched must be a tuple of paths"
+                "protected_paths_touched must contain safe relative POSIX paths"
             )
+        if len(set(self.protected_paths_touched)) != len(self.protected_paths_touched):
+            raise ReceiptContractError("protected_paths_touched paths must be unique")
         if self.pr_url is not None:
             if not isinstance(self.pr_url, str) or not re.fullmatch(
                 rf"https://github\.com/{re.escape(self.repository)}/pull/[1-9][0-9]*",
@@ -264,26 +276,13 @@ class RunReceipt:
                 "successful receipt cannot include failure_category"
             )
 
-        if self.status in {RunStatus.SKIPPED, RunStatus.NO_CHANGE}:
-            patch_claims = (
-                self.head_sha,
-                self.candidate_id,
-                self.diff_summary,
-                self.pr_url,
-                self.merge_sha,
+        if self.status is not RunStatus.MERGED and self.merge_sha is not None:
+            raise ReceiptContractError(
+                f"{self.status.value} receipt cannot claim merge SHA"
             )
-            if any(value is not None for value in patch_claims) or self.validation:
-                raise ReceiptContractError(
-                    f"{self.status.value} receipt cannot claim a patch or PR"
-                )
-            if self.protected_paths_touched:
-                raise ReceiptContractError(
-                    f"{self.status.value} receipt cannot claim a patch or PR"
-                )
-            if not self.actors.empty:
-                raise ReceiptContractError(
-                    f"{self.status.value} receipt cannot claim commit or PR actors"
-                )
+
+        if self.status in {RunStatus.SKIPPED, RunStatus.NO_CHANGE}:
+            self._require_stage("empty")
             return
 
         if self.status in {RunStatus.PR_OPEN, RunStatus.MERGED}:
@@ -312,8 +311,6 @@ class RunReceipt:
                 raise ReceiptContractError("merged receipt requires merge SHA")
             if self.status is RunStatus.MERGED and self.actors.promotion_actor is None:
                 raise ReceiptContractError("merged receipt requires promotion actor")
-            if self.status is RunStatus.PR_OPEN and self.merge_sha is not None:
-                raise ReceiptContractError("pr_open receipt cannot claim merge SHA")
             return
 
         if self.status is RunStatus.PATCH_REJECTED:
@@ -325,6 +322,12 @@ class RunReceipt:
                 raise ReceiptContractError(
                     "patch_rejected receipt cannot claim validation, commit, or PR"
                 )
+            if not self.actors.empty:
+                raise ReceiptContractError(
+                    "patch_rejected receipt cannot claim commit or PR actors"
+                )
+            return
+
         if self.status is RunStatus.VALIDATION_FAILED:
             if not self.candidate_id or not self.diff_summary or not self.validation:
                 raise ReceiptContractError(
@@ -338,13 +341,95 @@ class RunReceipt:
                 raise ReceiptContractError(
                     "validation_failed receipt cannot claim a commit or PR"
                 )
-        if (
-            self.status is RunStatus.INFRASTRUCTURE_FAILED
-            and self.merge_sha is not None
-        ):
+            if self.protected_paths_touched or not self.actors.empty:
+                raise ReceiptContractError(
+                    "validation_failed receipt cannot claim protected paths or actors"
+                )
+            return
+
+        if self.status in {RunStatus.INFRASTRUCTURE_FAILED, RunStatus.HALTED}:
+            permitted = self._failure_stage()
+            if permitted is None:
+                raise ReceiptContractError(
+                    f"{self.status.value} receipt has an incoherent run stage"
+                )
+            return
+
+        raise ReceiptContractError("receipt status shape is not defined")
+
+    def _require_stage(self, expected: str) -> None:
+        actual = self._failure_stage()
+        if actual != expected:
             raise ReceiptContractError(
-                "infrastructure_failed receipt cannot claim merge SHA"
+                f"{self.status.value} receipt must have {expected} run stage"
             )
+
+    def _failure_stage(self) -> str | None:
+        """Classify coherent pre-merge state retained by failure/halt receipts."""
+
+        if self.merge_sha is not None or self.protected_paths_touched:
+            return None
+        if (
+            self.candidate_id is None
+            and self.head_sha is None
+            and not self.validation
+            and self.diff_summary is None
+            and self.pr_url is None
+            and self.actors.empty
+        ):
+            return "empty"
+        if (
+            self.candidate_id is not None
+            and self.head_sha is None
+            and not self.validation
+            and self.diff_summary is None
+            and self.pr_url is None
+            and self.actors.empty
+        ):
+            return "selected"
+        if (
+            self.candidate_id is not None
+            and self.head_sha is None
+            and self.diff_summary is not None
+            and self.pr_url is None
+            and self.actors.empty
+            and all(item.ok for item in self.validation)
+        ):
+            return "patch"
+        if (
+            self.candidate_id is not None
+            and self.head_sha is not None
+            and self.diff_summary is not None
+            and self.validation
+            and all(item.ok for item in self.validation)
+            and self.pr_url is None
+            and self.actors.complete_for_commit
+        ):
+            return "committed"
+        if (
+            self.candidate_id is not None
+            and self.head_sha is not None
+            and self.diff_summary is not None
+            and self.validation
+            and all(item.ok for item in self.validation)
+            and self.pr_url is not None
+            and self.actors.complete_for_pr
+        ):
+            return "pr"
+        return None
+
+
+def _safe_relative_path(value: object) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 1024
+        or value.startswith(("/", "\\"))
+        or "\\" in value
+        or _PATH_CONTROL.search(value)
+    ):
+        return False
+    return all(part not in {"", ".", ".."} for part in value.split("/"))
 
 
 def _parse_date(value: object) -> dt.date:
@@ -535,6 +620,16 @@ def serialize_receipt(receipt: RunReceipt) -> bytes:
 
 
 def parse_receipt(payload: bytes | str) -> RunReceipt:
+    if isinstance(payload, bytes):
+        payload_size = len(payload)
+    elif isinstance(payload, str):
+        if len(payload) > MAX_RECEIPT_BYTES:
+            raise ReceiptContractError("receipt exceeds the size limit")
+        payload_size = len(payload.encode("utf-8"))
+    else:
+        raise ReceiptContractError("receipt must be bytes or text")
+    if payload_size > MAX_RECEIPT_BYTES:
+        raise ReceiptContractError("receipt exceeds the size limit")
     try:
         value = json.loads(payload, object_pairs_hook=_strict_json_pairs)
     except ReceiptContractError:

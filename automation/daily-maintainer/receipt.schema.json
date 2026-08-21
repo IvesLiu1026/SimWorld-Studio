@@ -83,7 +83,15 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "maxLength": 1024,
+        "pattern": "^(?!/)(?!.*\\\\)(?!.*[\\u0000-\\u001f\\u007f]).+$",
+        "not": {
+          "anyOf": [
+            {"pattern": "(^|/)\\.{1,2}(/|$)"},
+            {"pattern": "//|/$"}
+          ]
+        }
       }
     },
     "pr_url": {
@@ -115,6 +123,60 @@
       "const": true
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "patch_rejected",
+              "validation_failed",
+              "infrastructure_failed",
+              "halted"
+            ]
+          }
+        }
+      },
+      "then": {"properties": {"failure_category": {"type": "string"}}},
+      "else": {"properties": {"failure_category": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["skipped", "no_change"]}}},
+      "then": {"$ref": "#/$defs/empty_stage"}
+    },
+    {
+      "if": {"properties": {"status": {"const": "patch_rejected"}}},
+      "then": {"$ref": "#/$defs/patch_rejected_stage"}
+    },
+    {
+      "if": {"properties": {"status": {"const": "validation_failed"}}},
+      "then": {"$ref": "#/$defs/validation_failed_stage"}
+    },
+    {
+      "if": {"properties": {"status": {"const": "pr_open"}}},
+      "then": {"$ref": "#/$defs/pr_stage"}
+    },
+    {
+      "if": {"properties": {"status": {"const": "merged"}}},
+      "then": {"$ref": "#/$defs/merged_stage"}
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"enum": ["infrastructure_failed", "halted"]}
+        }
+      },
+      "then": {
+        "oneOf": [
+          {"$ref": "#/$defs/empty_stage"},
+          {"$ref": "#/$defs/selected_stage"},
+          {"$ref": "#/$defs/patch_stage"},
+          {"$ref": "#/$defs/committed_stage"},
+          {"$ref": "#/$defs/pr_stage"}
+        ]
+      }
+    }
+  ],
   "$defs": {
     "git_identity": {
       "type": "object",
@@ -214,6 +276,17 @@
         }
       }
     },
+    "successful_validation": {
+      "allOf": [
+        {"$ref": "#/$defs/validation"},
+        {
+          "properties": {
+            "exit_code": {"const": 0},
+            "timed_out": {"const": false}
+          }
+        }
+      ]
+    },
     "diff_summary": {
       "type": "object",
       "additionalProperties": false,
@@ -239,6 +312,159 @@
         "patch_sha256": {
           "$ref": "#/$defs/sha256"
         }
+      }
+    },
+    "empty_actors": {
+      "properties": {
+        "commit_author": {"type": "null"},
+        "git_committer": {"type": "null"},
+        "pr_actor": {"type": "null"},
+        "promotion_actor": {"type": "null"}
+      }
+    },
+    "commit_actors": {
+      "properties": {
+        "commit_author": {"$ref": "#/$defs/git_identity"},
+        "git_committer": {"$ref": "#/$defs/git_identity"},
+        "pr_actor": {"type": "null"},
+        "promotion_actor": {"type": "null"}
+      }
+    },
+    "pr_actors": {
+      "properties": {
+        "commit_author": {"$ref": "#/$defs/git_identity"},
+        "git_committer": {"$ref": "#/$defs/git_identity"},
+        "pr_actor": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\\[bot\\])?$"
+        }
+      }
+    },
+    "merged_actors": {
+      "allOf": [
+        {"$ref": "#/$defs/pr_actors"},
+        {
+          "properties": {
+            "promotion_actor": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\\[bot\\])?$"
+            }
+          }
+        }
+      ]
+    },
+    "empty_stage": {
+      "properties": {
+        "head_sha": {"type": "null"},
+        "candidate_id": {"type": "null"},
+        "validation": {"maxItems": 0},
+        "diff_summary": {"type": "null"},
+        "protected_paths_touched": {"maxItems": 0},
+        "pr_url": {"type": "null"},
+        "merge_sha": {"type": "null"},
+        "actors": {"$ref": "#/$defs/empty_actors"}
+      }
+    },
+    "selected_stage": {
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "head_sha": {"type": "null"},
+        "validation": {"maxItems": 0},
+        "diff_summary": {"type": "null"},
+        "protected_paths_touched": {"maxItems": 0},
+        "pr_url": {"type": "null"},
+        "merge_sha": {"type": "null"},
+        "actors": {"$ref": "#/$defs/empty_actors"}
+      }
+    },
+    "patch_stage": {
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "head_sha": {"type": "null"},
+        "validation": {
+          "items": {"$ref": "#/$defs/successful_validation"}
+        },
+        "diff_summary": {"$ref": "#/$defs/diff_summary"},
+        "protected_paths_touched": {"maxItems": 0},
+        "pr_url": {"type": "null"},
+        "merge_sha": {"type": "null"},
+        "actors": {"$ref": "#/$defs/empty_actors"}
+      }
+    },
+    "committed_stage": {
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "head_sha": {"$ref": "#/$defs/object_id"},
+        "validation": {
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/successful_validation"}
+        },
+        "diff_summary": {"$ref": "#/$defs/diff_summary"},
+        "protected_paths_touched": {"maxItems": 0},
+        "pr_url": {"type": "null"},
+        "merge_sha": {"type": "null"},
+        "actors": {"$ref": "#/$defs/commit_actors"}
+      }
+    },
+    "pr_stage": {
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "head_sha": {"$ref": "#/$defs/object_id"},
+        "validation": {
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/successful_validation"}
+        },
+        "diff_summary": {"$ref": "#/$defs/diff_summary"},
+        "protected_paths_touched": {"maxItems": 0},
+        "pr_url": {"type": "string"},
+        "merge_sha": {"type": "null"},
+        "actors": {"$ref": "#/$defs/pr_actors"}
+      }
+    },
+    "merged_stage": {
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "head_sha": {"$ref": "#/$defs/object_id"},
+        "validation": {
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/successful_validation"}
+        },
+        "diff_summary": {"$ref": "#/$defs/diff_summary"},
+        "protected_paths_touched": {"maxItems": 0},
+        "pr_url": {"type": "string"},
+        "merge_sha": {"$ref": "#/$defs/object_id"},
+        "actors": {"$ref": "#/$defs/merged_actors"}
+      }
+    },
+    "patch_rejected_stage": {
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "head_sha": {"type": "null"},
+        "validation": {"maxItems": 0},
+        "diff_summary": {"$ref": "#/$defs/diff_summary"},
+        "pr_url": {"type": "null"},
+        "merge_sha": {"type": "null"},
+        "actors": {"$ref": "#/$defs/empty_actors"}
+      }
+    },
+    "validation_failed_stage": {
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "head_sha": {"type": "null"},
+        "validation": {
+          "minItems": 1,
+          "contains": {
+            "anyOf": [
+              {"properties": {"exit_code": {"not": {"const": 0}}}},
+              {"properties": {"timed_out": {"const": true}}}
+            ]
+          }
+        },
+        "diff_summary": {"$ref": "#/$defs/diff_summary"},
+        "protected_paths_touched": {"maxItems": 0},
+        "pr_url": {"type": "null"},
+        "merge_sha": {"type": "null"},
+        "actors": {"$ref": "#/$defs/empty_actors"}
       }
     }
   }

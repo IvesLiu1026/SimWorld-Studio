@@ -10,21 +10,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .candidate import Candidate
+from .candidate import Candidate, enforce_v1_candidate_policy
 from .guard import DiffGuard, GuardLimits, GuardReport
 from .profiles import (
     BUILTIN_VALIDATION_PROFILES,
     TrustedExecutables,
     ValidationProfile,
-    ValidationProfileRegistry,
 )
 
 
 @dataclass(frozen=True)
-class IsolationAttestation:
+class IsolationEvidence:
+    """Digest-bound caller evidence, not a self-authenticating sandbox proof.
+
+    The core cannot establish network, credential, filesystem, UID, cgroup, or
+    read-only-mount isolation from inside this Python process.  T13 must issue
+    and bind this evidence from an outer trusted boundary before unattended
+    publication can exist.
+    """
+
     network_isolated: bool
     credentials_absent: bool
-    verified_by: str
+    observed_by: str
     evidence_sha256: str
 
     def __post_init__(self) -> None:
@@ -33,11 +40,11 @@ class IsolationAttestation:
                 "verifier requires network isolation and absent credentials"
             )
         if (
-            not isinstance(self.verified_by, str)
-            or not self.verified_by
-            or any(character in self.verified_by for character in "\r\n\0")
+            not isinstance(self.observed_by, str)
+            or not self.observed_by
+            or any(character in self.observed_by for character in "\r\n\0")
         ):
-            raise ValueError("isolation verifier identity is invalid")
+            raise ValueError("isolation evidence observer is invalid")
         if (
             not isinstance(self.evidence_sha256, str)
             or len(self.evidence_sha256) != 64
@@ -67,11 +74,18 @@ class VerificationReport:
     guard: GuardReport
     final_guard: GuardReport
     validation: tuple[ValidationResult, ...]
-    isolation: IsolationAttestation
+    isolation_evidence: IsolationEvidence
     mutation_detected: bool = False
+    publication_authorized: bool = False
+
+    def __post_init__(self) -> None:
+        if self.publication_authorized is not False:
+            raise ValueError("core verification reports cannot authorize publication")
 
     @property
-    def ok(self) -> bool:
+    def checks_passed(self) -> bool:
+        """Return local deterministic check status, never publication authority."""
+
         return (
             self.guard.ok
             and self.final_guard.ok
@@ -82,23 +96,24 @@ class VerificationReport:
 
 
 class Verifier:
-    """Credential-free verifier with fixed tools and immutable patch identity."""
+    """Credential-free local checker with fixed tools and patch identity.
+
+    A returned report is deliberately not a publishable authorization.  The
+    outer T13 isolation service must bind this result into an immutable artifact
+    that a separate publisher can independently authenticate.
+    """
 
     def __init__(
         self,
         *,
-        registry: ValidationProfileRegistry = BUILTIN_VALIDATION_PROFILES,
         executables: TrustedExecutables | None = None,
         guard: DiffGuard | None = None,
-        isolation: IsolationAttestation | None = None,
+        isolation_evidence: IsolationEvidence | None = None,
     ) -> None:
-        if isolation is None:
-            raise ValueError(
-                "verified isolation attestation is required before validation"
-            )
-        self._registry = registry
+        if isolation_evidence is None:
+            raise ValueError("outer isolation evidence is required before validation")
         self._executables = executables or TrustedExecutables.system_defaults()
-        self._isolation = isolation
+        self._isolation_evidence = isolation_evidence
         self._guard = guard or DiffGuard(
             git_executable=self._executables.resolve("git")
         )
@@ -115,15 +130,8 @@ class Verifier:
         # inherited_env remains in the API for explicit proof that none of it is
         # copied into a validation process.
         del inherited_env
-        profiles = tuple(
-            (
-                profile,
-                self._executables.resolve_argv(profile.argv),
-            )
-            for profile in (
-                self._registry.resolve(item) for item in candidate.validation_profiles
-            )
-        )
+        enforce_v1_candidate_policy(candidate)
+        profiles = self._trusted_profiles(candidate)
         initial_guard = self._guard.inspect(
             repo_root,
             base_sha,
@@ -135,7 +143,7 @@ class Verifier:
                 guard=initial_guard,
                 final_guard=initial_guard,
                 validation=(),
-                isolation=self._isolation,
+                isolation_evidence=self._isolation_evidence,
             )
 
         repo = Path(repo_root).resolve(strict=True)
@@ -162,7 +170,7 @@ class Verifier:
                     60,
                 )
             ]
-            for profile, argv in profiles:
+            for profile in profiles:
                 cwd = self._profile_cwd(repo, profile)
                 if cwd is None:
                     result = self._synthetic_failure(
@@ -180,8 +188,9 @@ class Verifier:
                         initial_guard,
                         current_guard,
                         validation,
-                        self._isolation,
+                        self._isolation_evidence,
                     )
+                argv = profile.argv
                 commands.append(
                     (
                         profile.profile_id,
@@ -192,6 +201,9 @@ class Verifier:
                 )
 
             for command_id, argv, cwd, timeout_seconds in commands:
+                # Revalidate the executable identity immediately before every
+                # spawn.  T13 still owns the final check-to-exec race.
+                argv = self._executables.resolve_argv(argv)
                 validation.append(
                     self._run(
                         command_id=command_id,
@@ -211,7 +223,7 @@ class Verifier:
                     initial_guard,
                     current_guard,
                     validation,
-                    self._isolation,
+                    self._isolation_evidence,
                 )
                 if report.mutation_detected or not validation[-1].ok:
                     return report
@@ -219,15 +231,21 @@ class Verifier:
             initial_guard,
             current_guard,
             validation,
-            self._isolation,
+            self._isolation_evidence,
         )
+
+    def _trusted_profiles(self, candidate: Candidate) -> tuple[ValidationProfile, ...]:
+        profiles: list[ValidationProfile] = []
+        for profile_id in candidate.validation_profiles:
+            profiles.append(BUILTIN_VALIDATION_PROFILES.resolve(profile_id))
+        return tuple(profiles)
 
     @staticmethod
     def _report(
         initial_guard: GuardReport,
         final_guard: GuardReport,
         validation: list[ValidationResult],
-        isolation: IsolationAttestation,
+        isolation_evidence: IsolationEvidence,
     ) -> VerificationReport:
         mutation = (
             initial_guard.patch_sha256 != final_guard.patch_sha256
@@ -237,7 +255,7 @@ class Verifier:
             guard=initial_guard,
             final_guard=final_guard,
             validation=tuple(validation),
-            isolation=isolation,
+            isolation_evidence=isolation_evidence,
             mutation_detected=mutation,
         )
 
