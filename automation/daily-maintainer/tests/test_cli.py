@@ -26,6 +26,8 @@ class CliTests(unittest.TestCase):
             str(root / "worktrees"),
             "--repository",
             "IvesLiu1026/VISTA-World",
+            "--expected-remote-url",
+            str(fixture.remote),
         ]
 
     def test_importable_cli_preflight_and_idempotent_prepare(self) -> None:
