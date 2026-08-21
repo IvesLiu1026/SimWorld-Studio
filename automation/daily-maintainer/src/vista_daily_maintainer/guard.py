@@ -13,6 +13,7 @@ from .candidate import (
     Candidate,
     enforce_v1_candidate_policy,
     has_v1_forbidden_authority,
+    is_v1_test_scope,
     path_matches_pattern,
 )
 from .profiles import TrustedExecutables
@@ -615,36 +616,7 @@ class DiffGuard:
 
     @staticmethod
     def _is_test_path(path: str) -> bool:
-        pure = PurePosixPath(path)
-        lowered = tuple(part.lower() for part in pure.parts)
-        return (
-            any(
-                part in {"test", "tests", "fixtures", "__snapshots__"}
-                for part in lowered[:-1]
-            )
-            or pure.name.lower().startswith(("test_", "test-"))
-            or pure.name.lower().endswith("_test.py")
-            or pure.name.lower().endswith(
-                (
-                    ".test.cjs",
-                    ".test.cts",
-                    ".test.js",
-                    ".test.jsx",
-                    ".test.mjs",
-                    ".test.mts",
-                    ".test.ts",
-                    ".test.tsx",
-                    ".spec.cjs",
-                    ".spec.cts",
-                    ".spec.js",
-                    ".spec.jsx",
-                    ".spec.mjs",
-                    ".spec.mts",
-                    ".spec.ts",
-                    ".spec.tsx",
-                )
-            )
-        )
+        return is_v1_test_scope(path)
 
     def _check_current_file(
         self,

@@ -231,6 +231,40 @@ class CandidateContractTests(unittest.TestCase):
                 ):
                     load_trusted_backlog(trust)
 
+    def test_candidate_paths_and_profiles_must_be_canonically_sorted(self) -> None:
+        payloads = (
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [tests/**, src/**]",
+                1,
+            ),
+            VALID_BACKLOG.replace(
+                b"validation_profiles: [daily-maintainer-core-tests]",
+                b"validation_profiles: [tools-python-offline, daily-maintainer-core-tests]",
+                1,
+            ),
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
+                trust = self._write(Path(tmp), payload)
+                with self.assertRaisesRegex(
+                    CandidateContractError,
+                    "sorted and unique",
+                ):
+                    load_trusted_backlog(trust)
+
+    def test_v1_test_scope_suffixes_share_one_policy(self) -> None:
+        suffixes = (".test.cjs", ".test.cts", ".test.mts", ".spec.cjs")
+        for suffix in suffixes:
+            payload = VALID_BACKLOG.replace(
+                b"allowed_paths: [docs/**]",
+                f"allowed_paths: [packages/widget{suffix}]".encode("ascii"),
+                1,
+            )
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as tmp:
+                backlog = load_trusted_backlog(self._write(Path(tmp), payload))
+                self.assertEqual(backlog.candidates[1].risk_tier, 0)
+
     def test_v1_policy_rejects_globs_disguising_forbidden_authority(self) -> None:
         payloads = (
             VALID_BACKLOG.replace(
@@ -302,9 +336,10 @@ class CandidateContractTests(unittest.TestCase):
             "packages/widget/pyproject.toml",
         )
         for pattern in protected_patterns:
+            allowed = ", ".join(sorted((pattern, "tests/**")))
             payload = VALID_BACKLOG.replace(
                 b"allowed_paths: [src/**, tests/**]",
-                f"allowed_paths: [{pattern}, tests/**]".encode("ascii"),
+                f"allowed_paths: [{allowed}]".encode("ascii"),
                 1,
             )
             with self.subTest(pattern=pattern), tempfile.TemporaryDirectory() as tmp:
