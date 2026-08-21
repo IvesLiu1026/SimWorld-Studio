@@ -9,7 +9,7 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Callable, Protocol, TypeVar
 
-from .candidate import has_v1_forbidden_authority
+from .candidate import has_v1_forbidden_authority, is_v1_test_scope
 from .guard import _SECRET_PATTERNS as _GUARD_SECRET_PATTERNS
 from .naming import (
     is_v1_candidate_slug,
@@ -1541,28 +1541,9 @@ def _validate_v1_candidate_authority(
     for pattern in allowed_paths:
         _validate_allowed_pattern(pattern)
         lowered = pattern.lower()
-        parts = tuple(part for part in lowered.split("/") if part)
         if pattern == "**" or has_v1_forbidden_authority(pattern, pattern=True):
             raise PublicationPreflightError("candidate path is protected in V1")
-        is_test_scope = (
-            any(part in {"test", "tests", "fixtures"} for part in parts)
-            or parts[-1].startswith(("test_", "test-"))
-            or parts[-1].endswith(
-                (
-                    "_test.py",
-                    ".test.js",
-                    ".test.jsx",
-                    ".test.mjs",
-                    ".test.ts",
-                    ".test.tsx",
-                    ".spec.js",
-                    ".spec.jsx",
-                    ".spec.mjs",
-                    ".spec.ts",
-                    ".spec.tsx",
-                )
-            )
-        )
+        is_test_scope = is_v1_test_scope(pattern)
         if risk_tier == 0:
             if not (lowered.startswith("docs/") or is_test_scope):
                 raise PublicationPreflightError("Tier 0 path is outside V1 authority")

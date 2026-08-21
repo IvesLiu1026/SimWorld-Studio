@@ -688,6 +688,23 @@ class PublisherContractTests(unittest.TestCase):
                 result = fixture.publish()
                 self.assertEqual(result.head_sha, HEAD_SHA)
 
+    def test_publisher_uses_shared_v1_test_scope_suffixes(self) -> None:
+        for suffix in (".test.cjs", ".test.cts", ".test.mts", ".spec.cjs"):
+            path = f"packages/widget{suffix}"
+            with (
+                self.subTest(suffix=suffix),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                fixture = Fixture(
+                    Path(tmp),
+                    envelope=Envelope(
+                        allowed_paths=(path,),
+                        changed_paths=(path,),
+                    ),
+                )
+                result = fixture.publish()
+                self.assertEqual(result.head_sha, HEAD_SHA)
+
     def test_app_identity_installation_permissions_and_bypass_are_exact(self) -> None:
         policy = Policy(app=True)
         cases = (
