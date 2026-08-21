@@ -24,7 +24,8 @@
     "summary": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 500
+      "maxLength": 500,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
     },
     "paths_considered": {
       "type": "array",
@@ -32,7 +33,8 @@
       "uniqueItems": true,
       "items": {
         "type": "string",
-        "pattern": "^[A-Za-z0-9._/-]+$"
+        "minLength": 1,
+        "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._/-]+$"
       }
     },
     "blocker_category": {
@@ -49,5 +51,75 @@
         "safety_uncertain"
       ]
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "changed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "paths_considered": {
+            "minItems": 1
+          },
+          "blocker_category": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "no_change"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "blocker_category": {
+            "enum": [
+              null,
+              "finding_not_reproduced"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "blocked"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "blocker_category": {
+            "enum": [
+              "protected_surface_required",
+              "allowlist_insufficient",
+              "validation_unavailable",
+              "safety_uncertain"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

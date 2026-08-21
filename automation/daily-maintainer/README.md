@@ -59,16 +59,32 @@ Both discovery forms are intentionally supported.
 
 ## Patcher activation boundary
 
-`patcher.py` builds a shell-free `codex exec` invocation for `gpt-5.6-sol` with Ultra reasoning,
-ephemeral history, a pinned prompt/output schema, workspace-write sandboxing, no command network,
-and a fresh credential-separated worktree. It deliberately does not launch Codex or claim that an
-ordinary worktree is an isolation boundary.
+`patcher.py` describes a shell-free `codex exec` invocation for `gpt-5.6-sol` with Ultra reasoning,
+ephemeral history and pinned prompt, schema, Codex and Git builds. It does not launch Codex. It can
+return an executable invocation only after a root-owned deployment manifest agrees with live kernel,
+mount, cgroup, UID, credential-inode, managed-policy, reviewed-backlog and clean-Git evidence.
 
-Activation requires an outer dedicated UID/container that can attest all of the following: the
-operator home and publisher material are absent; model-generated commands have no network; Codex's
-own model transport has provider-only egress; policy files are mounted read-only; and the dedicated
-Codex credential is not the operator's personal login. Until that boundary and a credential approved
-for public-repository automation exist, the maintainer remains report-only or attended-canary only.
+The managed permission profile denies the filesystem root by default, permits only minimal runtime
+reads plus the worktree and a separate scratch mount, disables command network, and leaves credential
+and final-output state outside command authority. Fixed launch flags additionally disable web search,
+apps, browsers, Computer Use, plugins, hooks, MCP-related features and other hosted surfaces. This is
+intentional: command network controls do not govern hosted tools.
+
+Activation still requires administrator-provisioned, non-nested mounts; a dedicated non-root UID;
+`NoNewPrivileges`, seccomp, namespace and cgroup containment; a root-owned managed
+`requirements.toml`; a root-owned install of the pinned binaries; and separate scratch/state paths.
+The credential metadata must identify an explicitly approved API key, access token or workload
+identity for public-repository automation. Personal ChatGPT-managed auth is rejected. Unit tests
+prove that the ordinary developer login fails closed; they do not fabricate a successful UID or
+container boundary. A real positive sandbox acceptance test remains a deployment gate.
+Provider-only model egress is also an outer network-policy acceptance item; a namespace inode proves
+identity, not the destinations reachable through that namespace.
+
+The request is rebound to a root-owned, read-only backlog file by digest, revision, approver, exact
+canonical candidate payload and the built-in V1 profile registry. The final result path is reserved
+with `O_EXCL`/`O_NOFOLLOW`, revalidated around execution and parsed only after the subprocess exits.
+Until the real outer boundary and compliant credential exist, the maintainer remains report-only or
+attended-canary only; this implementation is a fail-closed contract, not deployment readiness.
 
 This follows the official Codex guidance for [non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode.md),
 which documents `codex exec`, `--ephemeral`, structured output, least-privilege sandboxing, and the
