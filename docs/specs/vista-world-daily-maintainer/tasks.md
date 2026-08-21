@@ -7,7 +7,8 @@ Depends on: requirements.md, design.md
 ## Rules
 
 - Do not implement or install automation until requirements/design/tasks are approved.
-- Do not publish while `gh` is authenticated as an account other than `IvesLiu1026`.
+- Validate the selected publisher principal before every write. A wrong `gh` login blocks `gh`
+  bootstrap mode; GitHub App mode validates its installation and does not depend on `gh` login.
 - Keep each task independently reviewable and test-first for security/state logic.
 - Do not touch GPU, Unreal/Sunshine/Tailscale runtime, production port 8000, datasets or evidence.
 - Stage named paths only; daily agent never edits its own policy/workflow after activation.
@@ -23,28 +24,29 @@ Depends on: requirements.md, design.md
 - [ ] T2. Create and protect standalone `VISTA-World`
   - Depends on: T1 and repository-extraction approval
   - Requirements: R6, R8
-  - Validation: repo exists with `isFork=false`, `main` default, required checks configured,
-    force-push/delete disabled, and no automation bypass permission.
+  - Validation: repo exists with `isFork=false`, `main` default, force-push/delete disabled and no
+    automation bypass permission. Required-check contexts remain unset until T11 lands baseline CI.
 
 - [ ] T3. Provision the publisher identity
   - Depends on: T1, T2
   - Requirements: R8, R10
-  - Validation: headless preflight reports exact owner/login/scopes; test branch/PR round-trip works;
-    wrong-account fixture and current wrong `gh` identity fail before remote mutation.
+  - Validation: headless preflight reports selected principal type, exact App installation or CLI
+    login, repo and scopes; test branch/PR round-trip works. Wrong principal fails before mutation.
 
 - [ ] T4. Define candidate and receipt contracts
   - Files: `automation/daily-maintainer/*.schema.json`, typed models
   - Depends on: T1
   - Requirements: R2, R9, R11
-  - Validation: schema positive/negative tests cover missing provenance, unsafe commands, invalid
-    status transitions and secret redaction.
+  - Validation: schema positive/negative tests cover missing provenance, non-allowlisted validation
+    profile, any candidate command/argv, invalid status transitions and secret redaction.
 
 - [ ] T5. Build the 133-day micro-task inventory
   - Files: `docs/maintenance/backlog.yaml`
   - Depends on: extraction path mapping, T4
   - Requirements: R2, R4, R11
-  - Validation: every item has stable ID, acceptance, allowlisted paths, risk tier and offline test;
-    protected surfaces absent; at least 14 eligible candidates survive a dry selector pass.
+  - Validation: every item has stable ID, acceptance, allowlisted paths, risk tier and allowlisted
+    offline validation profile ID; backlog/registry require human review and are protected from the
+    agent; at least 14 eligible candidates survive a dry selector pass.
 
 - [ ] T6. Implement selector and deterministic scouts
   - Files: `automation/daily-maintainer/candidate.py`, tests
@@ -64,8 +66,9 @@ Depends on: requirements.md, design.md
   - Files: `automation/daily-maintainer/prompts/patcher.md`, patcher adapter, tests
   - Depends on: T4, T6, T7
   - Requirements: R2-R4, R8, R10
-  - Validation: patcher receives only normalized candidate context and no publisher credentials;
-    adversarial repository text cannot expand allowlist or commands.
+  - Validation: patcher runs under a dedicated UID/rootless container, receives only normalized
+    candidate context/worktree/Codex credential, and cannot read operator home, `.ssh`, gh config,
+    `SSH_AUTH_SOCK` or publisher state; adversarial text cannot expand allowlist/profile IDs.
 
 - [ ] T9. Implement deterministic guard and verifier
   - Files: `automation/daily-maintainer/guard.py`, `verifier.py`, tests
@@ -78,37 +81,48 @@ Depends on: requirements.md, design.md
   - Files: `automation/daily-maintainer/publisher.py`, tests
   - Depends on: T3, T4, T9
   - Requirements: R5, R6, R8, R9
-  - Validation: fake-GitHub integration proves digest binding, draft PR body, no force-push,
-    no duplicate PR, attribution trailer and no model credential in publisher process.
+  - Validation: fake-GitHub integration proves digest binding, separate principal, draft PR body,
+    no force-push/duplicate PR, author/committer/PR actor attribution and no model credential.
 
 - [ ] T11. Add repo-owned CI and merge policy
   - Files: `.github/workflows/daily-maintainer-ci.yml`, policy docs
   - Depends on: T2, T9, T10
   - Requirements: R5, R6, R8-R10
-  - Validation: required checks run with minimal permissions; bot-authored workflow changes are
-    rejected; Tier 1+ never auto-merge.
+  - Validation: reviewed CI first lands and succeeds without preconfigured required contexts; then
+    exact contexts are enabled with minimal permissions. Separate promotion controller marks a draft
+    ready only after digest/CI pass; bot-authored workflow changes are rejected; Tier 1+ do not merge.
 
-- [ ] T12. Add systemd user service/timer and heartbeat
-  - Files: `ops/systemd/*`, `.github/workflows/daily-maintainer-heartbeat.yml`, runbook
+- [ ] T12. Implement receipt journal and heartbeat ingress
+  - Files: receipt publisher, `.github/workflows/daily-maintainer-heartbeat.yml`, tests, runbook
   - Depends on: T7-T11
-  - Requirements: R1, R7, R9, R10
-  - Validation: enable/disable/reboot/missed-run drill, Asia/Taipei schedule, singleton lock and
-    three-failure halt all produce expected receipts without touching runtime services.
+  - Requirements: R1, R7-R10
+  - Validation: local receipt retention is at least 180 days; selected publisher appends exact
+    date/repo marker + digest to one journal issue for merged/no-change; heartbeat detects wrong actor,
+    malformed/missing/duplicate receipts and updates only one incident issue.
 
-- [ ] T13. Run report-only and canary acceptance
-  - Depends on: T5-T12
+- [ ] T13. Add isolated systemd services/timer
+  - Files: `ops/systemd/*`, sandbox tests, runbook
+  - Depends on: T7-T12
+  - Requirements: R1, R3, R8-R10
+  - Validation: patcher and publisher use distinct credential boundaries; enable/disable/reboot/
+    missed-run drill, Asia/Taipei schedule, singleton lock and three-failure halt all pass without
+    touching runtime services.
+
+- [ ] T14. Run report-only and canary acceptance
+  - Depends on: T5-T13
   - Requirements: R1-R11
   - Validation: three report-only runs produce safe candidates/no-change truthfully, followed by
-    one explicitly approved real PR whose merge SHA is reachable from remote `main`.
+    one explicitly approved draft PR promoted by the independent controller; merge SHA is reachable
+    from remote `main`.
 
-- [ ] T14. Run two-week PR-only pilot
-  - Depends on: T13
+- [ ] T15. Run two-week PR-only pilot
+  - Depends on: T14
   - Requirements: R1-R11
   - Validation: 14 run receipts reviewed; zero protected-path escape, secret exposure, direct-main
     push or rollback incident; no-change and rejection reasons are actionable.
 
-- [ ] T15. Enable Tier 0 auto-merge
-  - Depends on: T14 and explicit user approval
+- [ ] T16. Enable Tier 0 auto-merge
+  - Depends on: T15 and explicit user approval
   - Requirements: R5-R9
   - Validation: one Tier 0 PR auto-merges only after required CI; simulated failure remains open;
     emergency disable/revert drill passes.

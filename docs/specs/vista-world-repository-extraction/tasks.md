@@ -9,7 +9,8 @@ Depends on: requirements.md, design.md
 - Do not edit production code until requirements/design/tasks are approved or explicitly waived.
 - Keep each task reviewable and map it to requirement IDs.
 - Do not touch GPU 1, VISTA production port 8000, canonical datasets or append-only evidence.
-- Never create/push the remote while GitHub CLI is authenticated as the wrong owner.
+- Never create/push with a mismatched selected publisher principal. Wrong GitHub CLI identity blocks
+  CLI bootstrap; an approved GitHub App validates its own installation independently.
 
 ## Task List
 

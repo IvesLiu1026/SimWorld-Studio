@@ -96,7 +96,8 @@ renaming would break import contracts. Layout normalization happens only after b
 - Seed history: filtered selected-path history from the realism lineage; no squash of meaningful
   authorship, and no unreviewed WIP/quarantine branches.
 - Development: short-lived `codex/YYYY-MM-DD-slug` or equivalent tool-prefixed branches.
-- Integration: required PR, CI and one integrator; prohibit force push on `main`.
+- Integration: required PR/CI and one human integrator; after an approved pilot, a no-bypass
+  controller may merge only Tier 0 daily-maintainer PRs. Prohibit force push on `main`.
 - Existing SimWorld fork becomes `simworld-compat` reference and remains pinned by commit SHA.
 - Preserve former upstream pin `7c03df9d`; add the current GitHub parent as a separate remote
   rather than overwriting legacy provenance.
@@ -114,9 +115,10 @@ The approved implementation contract lives in `../vista-world-daily-maintainer/`
 6. If blocked or no safe candidate exists, record truthful run status; never generate an empty,
    timestamp-only or backdated commit.
 
-Suitable daily units include a schema invariant plus test, one verified VISTA event mapping,
-one interaction regression, one asset-license/provenance gate, one runtime hardening change,
-or one experimentally verified runbook update.
+Suitable unattended units include a schema invariant plus test, a pure verified VISTA event-mapping
+test, an interaction regression that does not require runtime, or experimentally verified docs parity.
+Asset/license policy changes, runtime hardening and live UE/Blender work remain human-reviewed
+Tier 2/3 units and are not candidates for unattended daily merge.
 
 ## Failure Handling and Rollback
 

@@ -102,7 +102,8 @@ WHEN 多個 agents 同時工作 THEN 每個 writing worker SHALL 使用獨立 sh
 branch/worktree，並記錄 owned paths、runtime ownership、validation 與 handoff。
 
 Acceptance notes:
-- 只有 integrator 可以合併 `main`。
+- 人工合併只有 integrator 可以執行；另可在 daily-maintainer pilot 與明確核准後，由
+  無 bypass 權限的 promotion/merge controller 合併 Tier 0 PR。
 - GPU、Sunshine、Pixel Streaming 與 generated evidence 在同一時間只能有一位 owner。
 
 ### R8. Compatibility and rollback

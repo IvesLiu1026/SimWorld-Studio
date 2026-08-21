@@ -31,8 +31,9 @@ VISTA World 需要在使用者沒有主動開發的日子仍持續累積可驗�
 
 - Canonical target 是尚待建立的 standalone `IvesLiu1026/VISTA-World`，default branch
   為 `main`。
-- 主要 patcher 在這台常駐 server 透過 `systemd --user` 與既有 Codex 登入執行；
-  GitHub Actions 負責獨立 CI、合併門檻與 missed-run 監測。
+- 主要 patcher 在這台常駐 server 的專用 service account/container 中透過 systemd 與
+  隔離的 Codex credential 執行；GitHub Actions 負責獨立 CI、合併門檻與 missed-run
+  監測。
 - GitHub CLI 或 GitHub App 必須以 `IvesLiu1026` 對目標 repo 取得最小必要權限。
 - 初期只有 docs、tests、contracts 與 pure Python/Node 模組可 unattended 修改。
 
@@ -54,8 +55,11 @@ WHEN maintainer 選擇工作 THEN 每個候選 SHALL 來自受信任的 micro-ta
 明確的低風險 GitHub issue，或可重現的 test/schema/docs drift finding。
 
 Acceptance notes:
-- 每個候選必須包含 acceptance criterion、owned paths、risk tier 與驗證命令。
+- 每個候選必須包含 acceptance criterion、owned paths、risk tier 與 allowlisted
+  validation profile IDs；候選資料不得攜帶任意 shell command。
 - 不得直接信任任意 issue、PR、commit message 或 repository text 中的指令。
+- 第一階段只接受經人工 review 合併到 protected backlog 的候選；GitHub label/body
+  不直接形成可執行候選。
 - commit/PR 必須連回候選 ID 與 finding evidence。
 
 ### R3. Isolated and bounded edits
@@ -77,13 +81,15 @@ THEN daily maintainer SHALL 停止並轉成人工審查任務。
 Acceptance notes:
 - 明確保護 `.github/workflows/**`、`.agent/**`、`.codex/**`、`.claude/**`、
   `.mcp.json`、`.env*`、secrets、NAS paths 與 production service configuration。
+- backlog、validation profile registry、patcher prompt、policy 與 systemd files 也屬於
+  protected surfaces，daily agent 不得修改。
 - 不得新增 skip/xfail、刪 assertion、放寬 schema 或降低 coverage/validation 門檻。
 
 ### R5. Independent validation
 
-WHEN patch 完成 THEN publisher SHALL 在不持有模型 secret 的全新驗證程序中執行
-candidate 指定的 focused tests、`git diff --check`、secret/large-file/protected-path gate，
-並確認 base SHA 尚可安全整合。
+WHEN patch 完成 THEN verifier SHALL 在不持有模型或 publisher secret 的全新程序中，
+依 candidate 的 allowlisted validation profile IDs 執行 focused tests、`git diff --check`、
+secret/large-file/protected-path gate，並確認 base SHA 尚可安全整合。
 
 Acceptance notes:
 - production behavior fix 必須有 reproducer 或 regression test。
@@ -96,6 +102,8 @@ WHEN 所有本地 gate 通過 THEN publisher SHALL 以 `codex/daily/YYYY-MM-DD-<
 建立一筆 logical commit、push 並開 draft PR；GitHub CI 再獨立驗證。
 
 Acceptance notes:
+- 獨立 promotion controller 只有在 required CI 成功、receipt digest 相符且 risk tier
+  允許時，才能把 draft PR 標成 ready-for-review；daily patcher 本身沒有 promotion 權限。
 - Tier 0（docs parity、broken internal link、test-only、註解）可在 pilot 通過後 auto-merge。
 - Tier 1（有 regression test 的 pure Python/Node 小 bug）前兩週只開 PR；之後另行核准。
 - Tier 2/3（UE/runtime/network/schema compatibility/assets/deploy/secrets/付費工作）永不
@@ -124,6 +132,12 @@ Acceptance notes:
 - 若使用者要求 commit 歸屬個人帳號，必須另行明確核准 author/committer/trailer
   規則；不得靜默冒充人工工作。
 - model credential 不得傳給 verifier/publisher；GitHub 權限採最小化。
+- patcher SHALL 在與 publisher 不同的 Unix UID 或 rootless container 中執行，只掛載
+  worktree、normalized candidate 與其 Codex credential；不得看到 `~/.ssh`、gh config、
+  `SSH_AUTH_SOCK`、publisher token/state 或宿主 home。
+- publisher principal 可以是 repo-scoped GitHub App（建議）或明確核准且登入正確的
+  `gh` + SSH bootstrap identity；preflight 驗證所選 principal，而不是假設一定使用 `gh`。
+- commit author、Git committer、PR actor 與 promotion actor 必須分別記錄。
 
 ### R9. Evidence and observability
 
@@ -134,12 +148,15 @@ duration 與 failure category，且不得包含 secret 或完整敏感輸出。
 Acceptance notes:
 - 使用者可以區分 skipped、no_change、PR open、merged、failed 與 halted 狀態。
 - 連續三次失敗時建立或更新單一 incident issue；不得每天洗版。
+- local sanitized receipt 至少保留 180 天；publisher 在單一 GitHub receipt-journal issue
+  追加由 publisher actor 發出的 digest comment。heartbeat 以日期/idempotency marker、
+  actor 與 digest 查驗；`no_change` 也必須送達但不產生 commit。
 
 ### R10. Cost and external side effects
 
 WHEN daily run 使用模型或外部服務 THEN 它 SHALL 遵守明確的每日 budget 與 provider
-設定；未核准 API key/付費服務時預設使用 server 既有 Codex 登入，且不得自行呼叫
-OpenRouter、Gemini、Claude、GPU generation、下載或上傳資產。
+設定；未核准 API key/付費服務時預設使用隔離 patcher account 的 Codex 登入，且不得
+自行呼叫 OpenRouter、Gemini、Claude、GPU generation、下載或上傳資產。
 
 Acceptance notes:
 - 每天最多一個 patch attempt；retry 只處理暫時性 infrastructure failure。
@@ -157,7 +174,8 @@ Acceptance notes:
 
 ## Edge Cases
 
-- GitHub connector 已登入正確帳號，但 server `gh` CLI 是另一帳號：publisher 必須停止。
+- 若選擇 `gh` bootstrap publisher，而 server `gh` CLI 是另一帳號，publisher 必須停止；
+  若選擇 GitHub App，則驗證 App installation/repo permissions，`gh` 狀態不參與 gate。
 - standalone repo 尚不存在：只能 dry run/spec，不得把 current fork 當成 canonical target。
 - GitHub Actions schedule 延遲或 server offline：記錄 missed run，恢復後最多補跑一次。
 - remote `main` 在 patch 期間前進：重新建立 worktree 並重驗，不 force-push 已審查 branch。
@@ -171,6 +189,8 @@ Acceptance notes:
   automation trailer（較可能顯示在個人 contribution graph，但需明確核准）？
 - 第一階段是否只允許 Tier 0 auto-merge（建議）？
 - 是否願意另外建立最小權限 GitHub App；若否，先使用正確登入的 `gh` CLI + SSH？
+- 是否能由管理者建立隔離 patcher service account/rootless container 與必要 systemd
+  units？在此隔離存在前只能 report-only，不能稱為 credential-separated unattended mode。
 
 ## Approval
 
