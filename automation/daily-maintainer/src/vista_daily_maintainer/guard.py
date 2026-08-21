@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import selectors
+import signal
 import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -140,6 +143,10 @@ _PROTECTED_TOP_LEVEL = frozenset(
 _MAX_IGNORED_STATE_BYTES = 256 * 1024
 _MAX_IGNORED_STATE_PATHS = 128
 _MAX_IGNORED_FILE_HASH_BYTES = 1024 * 1024
+_MAX_GIT_STDOUT_BYTES = 16 * 1024 * 1024
+_MAX_GIT_STDERR_BYTES = 64 * 1024
+_GIT_READ_CHUNK_BYTES = 64 * 1024
+_GIT_TIMEOUT_SECONDS = 30.0
 
 
 class _Digest(Protocol):
@@ -199,6 +206,13 @@ class _IgnoredState:
     paths: tuple[str, ...]
     identity_sha256: bytes
     overflow: bool
+
+
+@dataclass(frozen=True)
+class _GitProcessResult:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
 
 
 class DiffGuard:
@@ -377,25 +391,124 @@ class DiffGuard:
             test_lines=test_lines,
         )
 
-    def _git(self, repo: Path, *args: str, check: bool = True) -> bytes:
+    @staticmethod
+    def _git_environment() -> dict[str, str]:
+        return {
+            "PATH": "/nonexistent/vista-daily-maintainer",
+            "HOME": "/nonexistent/vista-daily-maintainer",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_PAGER": "",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+
+    def _run_git(
+        self,
+        repo: Path,
+        *args: str,
+        stdout_limit: int | None = None,
+    ) -> _GitProcessResult:
+        if stdout_limit is None:
+            stdout_limit = _MAX_GIT_STDOUT_BYTES
+        if stdout_limit < 1:
+            raise ValueError("git stdout limit must be positive")
         git_executable = self._executables.resolve("git")
-        result = subprocess.run(
-            (str(git_executable), "-c", "core.quotepath=false", *args),
-            cwd=repo,
-            env={
-                "PATH": "/nonexistent/vista-daily-maintainer",
-                "HOME": "/nonexistent/vista-daily-maintainer",
-                "LANG": "C.UTF-8",
-                "LC_ALL": "C.UTF-8",
-                "GIT_CONFIG_GLOBAL": "/dev/null",
-                "GIT_CONFIG_SYSTEM": "/dev/null",
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_PAGER": "",
-                "GIT_TERMINAL_PROMPT": "0",
-            },
-            check=False,
-            capture_output=True,
-        )
+        try:
+            process = subprocess.Popen(
+                (str(git_executable), "-c", "core.quotepath=false", *args),
+                cwd=repo,
+                env=self._git_environment(),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise ValueError(f"git inspection could not start: {exc.errno}") from exc
+        if process.stdout is None or process.stderr is None:
+            self._kill_git_process_group(process)
+            raise ValueError("git inspection pipes are unavailable")
+
+        stdout = bytearray()
+        stderr = bytearray()
+        stream_limits = {
+            process.stdout.fileno(): ("stdout", stdout, stdout_limit),
+            process.stderr.fileno(): ("stderr", stderr, _MAX_GIT_STDERR_BYTES),
+        }
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        selector.register(process.stderr, selectors.EVENT_READ)
+        deadline = time.monotonic() + _GIT_TIMEOUT_SECONDS
+        failure: str | None = None
+        try:
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    failure = "git inspection timed out"
+                    break
+                events = selector.select(remaining)
+                if not events:
+                    failure = "git inspection timed out"
+                    break
+                for key, _mask in events:
+                    chunk = os.read(key.fd, _GIT_READ_CHUNK_BYTES)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    label, buffer, limit = stream_limits[key.fd]
+                    available = limit - len(buffer)
+                    if len(chunk) > available:
+                        if available > 0:
+                            buffer.extend(chunk[:available])
+                        failure = f"git inspection {label} exceeded output limit"
+                        break
+                    buffer.extend(chunk)
+                if failure:
+                    break
+            if failure is None:
+                remaining = max(0.001, deadline - time.monotonic())
+                try:
+                    returncode = process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    failure = "git inspection timed out"
+            if failure is not None:
+                self._kill_git_process_group(process)
+                raise ValueError(failure)
+            return _GitProcessResult(
+                returncode=returncode,
+                stdout=bytes(stdout),
+                stderr=bytes(stderr),
+            )
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+            if process.poll() is None:
+                self._kill_git_process_group(process)
+
+    @staticmethod
+    def _kill_git_process_group(process: subprocess.Popen[bytes]) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+    def _git(
+        self,
+        repo: Path,
+        *args: str,
+        check: bool = True,
+        stdout_limit: int | None = None,
+    ) -> bytes:
+        result = self._run_git(repo, *args, stdout_limit=stdout_limit)
         if check and result.returncode:
             stderr = result.stderr.decode("utf-8", "replace").strip()
             raise ValueError(f"git inspection failed: {stderr or result.returncode}")
@@ -413,27 +526,7 @@ class DiffGuard:
     def _validate_base(self, repo: Path, base_sha: str) -> None:
         if not isinstance(base_sha, str) or not _OBJECT_ID.fullmatch(base_sha):
             raise ValueError("base SHA must be an exact 40- or 64-character object ID")
-        git_executable = self._executables.resolve("git")
-        result = subprocess.run(
-            (
-                str(git_executable),
-                "cat-file",
-                "-e",
-                f"{base_sha}^{{commit}}",
-            ),
-            cwd=repo,
-            env={
-                "PATH": "/nonexistent/vista-daily-maintainer",
-                "HOME": "/nonexistent/vista-daily-maintainer",
-                "GIT_CONFIG_GLOBAL": "/dev/null",
-                "GIT_CONFIG_SYSTEM": "/dev/null",
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_PAGER": "",
-                "GIT_TERMINAL_PROMPT": "0",
-            },
-            check=False,
-            capture_output=True,
-        )
+        result = self._run_git(repo, "cat-file", "-e", f"{base_sha}^{{commit}}")
         if result.returncode:
             raise ValueError("base SHA is not a reachable commit object")
 
@@ -483,6 +576,7 @@ class DiffGuard:
             "--no-empty-directory",
             "-z",
             "--",
+            stdout_limit=_MAX_IGNORED_STATE_BYTES,
         )
         overflow = len(payload) > _MAX_IGNORED_STATE_BYTES
         paths: list[str] = []

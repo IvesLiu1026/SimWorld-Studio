@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -43,6 +44,68 @@ class VerifierTests(unittest.TestCase):
             credentials_absent=True,
             observed_by="unit-test-harness",
             evidence_sha256="d" * 64,
+        )
+
+    @staticmethod
+    def _external_validation_python(root: Path) -> Path:
+        environment = root / "validation-python"
+        system_python = shutil.which(
+            "python3",
+            path="/usr/local/bin:/usr/bin:/bin",
+        )
+        if not system_python:
+            raise unittest.SkipTest("system python3 is required")
+        subprocess.run(
+            (
+                system_python,
+                "-m",
+                "venv",
+                "--copies",
+                "--without-pip",
+                str(environment),
+            ),
+            check=True,
+            capture_output=True,
+        )
+        interpreter = environment / "bin/python3"
+        discovery = subprocess.run(
+            (
+                str(interpreter),
+                "-c",
+                "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+            ),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        site_packages = Path(discovery.stdout.strip())
+        site_packages.mkdir(parents=True, exist_ok=True)
+        (site_packages / "pinned_validation_dependency.py").write_text(
+            "FINGERPRINT = 'locked-offline-dependency'\n",
+            encoding="utf-8",
+        )
+        return interpreter
+
+    @staticmethod
+    def _init_tools_profile_repo(repo: Path) -> str:
+        test_source = (
+            "import unittest\n"
+            "import pinned_validation_dependency as dependency\n\n"
+            "class OfflineDependencyTests(unittest.TestCase):\n"
+            "    def test_dependency_is_available(self):\n"
+            "        self.assertEqual(\n"
+            "            dependency.FINGERPRINT,\n"
+            "            'locked-offline-dependency',\n"
+            "        )\n"
+        )
+        return init_repo(
+            repo,
+            {
+                ".gitignore": "__pycache__/\n*.pyc\n",
+                "src/app.py": "VALUE = 1\n",
+                "tools/tests/test_vista_playable_home_compiler.py": test_source,
+                "tools/tests/test_vista_playable_home_contracts.py": test_source,
+            },
         )
 
     def test_runs_fixed_argv_with_scrubbed_environment(self) -> None:
@@ -201,7 +264,7 @@ class VerifierTests(unittest.TestCase):
         self.assertTrue(report.mutation_detected)
         self.assertNotEqual(report.guard.patch_sha256, report.final_guard.patch_sha256)
 
-    def test_inherited_path_cannot_replace_git_uv_or_npm(self) -> None:
+    def test_inherited_path_cannot_replace_git_python3_or_npm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
@@ -210,7 +273,7 @@ class VerifierTests(unittest.TestCase):
             fake_bin = root / "fake-bin"
             fake_bin.mkdir()
             markers: dict[str, Path] = {}
-            for tool in ("git", "uv", "npm"):
+            for tool in ("git", "python3", "npm"):
                 marker = root / f"{tool}-invoked"
                 markers[tool] = marker
                 executable = fake_bin / tool
@@ -247,7 +310,7 @@ class VerifierTests(unittest.TestCase):
             self.assertFalse(markers["git"].exists())
 
             for tool, profile_id in (
-                ("uv", "tools-python-offline"),
+                ("python3", "tools-python-offline"),
                 ("npm", "web-server-unit"),
             ):
                 registry = ValidationProfileRegistry(
@@ -277,6 +340,89 @@ class VerifierTests(unittest.TestCase):
                             inherited_env=inherited,
                         )
                 self.assertFalse(markers[tool].exists())
+
+    def test_tools_profile_runs_with_pinned_python_outside_repository(self) -> None:
+        git = shutil.which("git")
+        if not git:
+            raise unittest.SkipTest("git is required")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            base = self._init_tools_profile_repo(repo)
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            interpreter = self._external_validation_python(root)
+            report = Verifier(
+                executables=TrustedExecutables(
+                    {
+                        "git": Path(git),
+                        "python3": interpreter,
+                    }
+                ),
+                isolation_evidence=self._isolation(),
+            ).verify(
+                repo,
+                base,
+                make_candidate(profiles=("tools-python-offline",)),
+            )
+
+            self.assertTrue(report.checks_passed, report)
+            self.assertEqual(
+                [item.command_id for item in report.validation],
+                ["git-diff-check", "tools-python-offline"],
+            )
+            self.assertFalse(list(repo.rglob("__pycache__")))
+
+    def test_tools_profile_fails_before_spawn_without_pinned_python(self) -> None:
+        git = shutil.which("git")
+        if not git:
+            raise unittest.SkipTest("git is required")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = self._init_tools_profile_repo(repo)
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "trusted executable"):
+                Verifier(
+                    executables=TrustedExecutables({"git": Path(git)}),
+                    isolation_evidence=self._isolation(),
+                ).verify(
+                    repo,
+                    base,
+                    make_candidate(profiles=("tools-python-offline",)),
+                )
+
+    def test_tools_profile_rejects_repository_local_python_before_spawn(self) -> None:
+        git = shutil.which("git")
+        if not git:
+            raise unittest.SkipTest("git is required")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = self._init_tools_profile_repo(repo)
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            local_python = repo / "tools/pinned-python3"
+            shutil.copy2(Path(sys.executable).resolve(strict=True), local_python)
+            local_python.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "outside the repository"):
+                Verifier(
+                    executables=TrustedExecutables(
+                        {
+                            "git": Path(git),
+                            "python3": local_python,
+                        }
+                    ),
+                    isolation_evidence=self._isolation(),
+                ).verify(
+                    repo,
+                    base,
+                    make_candidate(profiles=("tools-python-offline",)),
+                )
+
+    def test_system_defaults_discovers_a_separately_pinned_python3(self) -> None:
+        if not shutil.which("python3", path="/usr/local/bin:/usr/bin:/bin"):
+            raise unittest.SkipTest("system python3 is required")
+        trusted = TrustedExecutables.system_defaults()
+        python3 = trusted.resolve("python3")
+        self.assertTrue(python3.is_absolute())
+        self.assertNotIn(".venv", python3.parts)
 
     def test_timeout_kills_validation_process_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

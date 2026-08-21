@@ -344,6 +344,11 @@ class CandidateContractTests(unittest.TestCase):
                 b"allowed_paths: [tests/test_setup.py]",
                 1,
             ),
+            VALID_BACKLOG.replace(
+                b"allowed_paths: [src/**, tests/**]",
+                b"allowed_paths: [tests/test_sitecustomize.py]",
+                1,
+            ),
         )
         for payload in payloads:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
@@ -360,6 +365,8 @@ class CandidateContractTests(unittest.TestCase):
             "ruff.toml",
             "setup.cfg",
             "setup.py",
+            "sitecustomize.py",
+            "usercustomize.py",
         )
         for basename in basenames:
             payload = VALID_BACKLOG.replace(

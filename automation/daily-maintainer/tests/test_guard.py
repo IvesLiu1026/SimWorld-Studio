@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from vista_daily_maintainer.candidate import CandidateContractError
 from vista_daily_maintainer.guard import DiffGuard, GuardLimits
@@ -60,6 +62,8 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             "packages/widget/ruff.toml",
             "packages/widget/setup.cfg",
             "packages/widget/setup.py",
+            "packages/widget/sitecustomize.py",
+            "packages/widget/usercustomize.py",
             "src/.env.production",
             "src/.gitignore",
             "src/.coveragerc",
@@ -101,6 +105,8 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             "ruff.toml",
             "setup.cfg",
             "setup.py",
+            "sitecustomize.py",
+            "usercustomize.py",
         )
         for basename in basenames:
             with self.subTest(basename=basename), tempfile.TemporaryDirectory() as tmp:
@@ -186,6 +192,11 @@ class DiffGuardIntegrationTests(unittest.TestCase):
                 "tests/test_setup.py",
                 "tests/**",
                 "def test_setup_label_is_data():\n    assert 'setup' == 'setup'\n",
+            ),
+            (
+                "tests/test_sitecustomize.py",
+                "tests/**",
+                "def test_sitecustomize_label_is_data():\n    assert True\n",
             ),
         )
         for relative, allowed, contents in cases:
@@ -433,6 +444,50 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             "ignored_content_overflow",
             {item.code for item in report.violations},
         )
+
+    def test_ignored_git_output_cap_fails_during_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(
+                repo,
+                {
+                    ".gitignore": "*.cache\n",
+                    "src/app.py": "VALUE = 1\n",
+                },
+            )
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            for index in range(20):
+                (repo / f"ignored-{index:03}.cache").write_text(
+                    "ignored\n",
+                    encoding="utf-8",
+                )
+
+            with (
+                patch(
+                    "vista_daily_maintainer.guard._MAX_IGNORED_STATE_BYTES",
+                    64,
+                ),
+                self.assertRaisesRegex(ValueError, "stdout exceeded output limit"),
+            ):
+                DiffGuard().inspect(repo, base, make_candidate())
+
+    def test_git_subprocess_timeout_kills_the_bounded_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_git = root / "git"
+            fake_git.write_text(
+                "#!/usr/bin/python3\nimport time\ntime.sleep(5)\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+            guard = DiffGuard(git_executable=fake_git)
+            started = time.monotonic()
+            with (
+                patch("vista_daily_maintainer.guard._GIT_TIMEOUT_SECONDS", 0.05),
+                self.assertRaisesRegex(ValueError, "git inspection timed out"),
+            ):
+                guard._git(root, "probe")
+            self.assertLess(time.monotonic() - started, 1.0)
 
     def test_nested_evidence_ledger_and_receipt_paths_are_protected(self) -> None:
         paths = (
