@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vista-world.invalid/schemas/daily-maintainer/patcher-output.v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "summary",
+    "paths_considered",
+    "blocker_category"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "vista.world.daily-maintainer.patcher-output.v1"
+    },
+    "status": {
+      "enum": [
+        "changed",
+        "no_change",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "paths_considered": {
+      "type": "array",
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._/-]+$"
+      }
+    },
+    "blocker_category": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        null,
+        "finding_not_reproduced",
+        "protected_surface_required",
+        "allowlist_insufficient",
+        "validation_unavailable",
+        "safety_uncertain"
+      ]
+    }
+  }
+}
