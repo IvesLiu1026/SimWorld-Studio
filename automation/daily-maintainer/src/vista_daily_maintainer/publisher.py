@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Callable, Protocol, TypeVar
 
+from .candidate import has_v1_forbidden_authority
 from .guard import _SECRET_PATTERNS as _GUARD_SECRET_PATTERNS
 
 
@@ -99,41 +100,6 @@ _V1_PROFILE_IDS = frozenset(
         "web-frontend-build",
         "web-server-contracts",
         "web-server-unit",
-    }
-)
-_V1_FORBIDDEN_AUTHORITY = frozenset(
-    {
-        ".agent",
-        ".agents",
-        ".claude",
-        ".codex",
-        ".github",
-        "artifacts",
-        "assets",
-        "auth",
-        "credential",
-        "credentials",
-        "datasets",
-        "deploy",
-        "evidence",
-        "infra",
-        "infrastructure",
-        "network",
-        "ops",
-        "outputs",
-        "prompts",
-        "reports",
-        "runtime",
-        "runs",
-        "scenes",
-        "secret",
-        "secrets",
-        "systemd",
-        "ue",
-        "unreal",
-        "unreal_plugins",
-        "world-packs",
-        "world_packs",
     }
 )
 _V1_TIER1_PREFIXES = (
@@ -1568,12 +1534,7 @@ def _validate_v1_candidate_authority(
         _validate_allowed_pattern(pattern)
         lowered = pattern.lower()
         parts = tuple(part for part in lowered.split("/") if part)
-        literal_parts = tuple(
-            part for part in parts if not any(character in part for character in "*?")
-        )
-        if pattern == "**" or any(
-            part in _V1_FORBIDDEN_AUTHORITY for part in literal_parts
-        ):
+        if pattern == "**" or has_v1_forbidden_authority(pattern, pattern=True):
             raise PublicationPreflightError("candidate path is protected in V1")
         is_test_scope = (
             any(part in {"test", "tests", "fixtures"} for part in parts)
@@ -1603,10 +1564,7 @@ def _validate_v1_candidate_authority(
         ):
             raise PublicationPreflightError("Tier 1 path is outside V1 authority")
     for path in changed_paths:
-        lowered_parts = tuple(
-            part.lower() for part in PurePosixPath(path).parts if part
-        )
-        if any(part in _V1_FORBIDDEN_AUTHORITY for part in lowered_parts):
+        if has_v1_forbidden_authority(path):
             raise PublicationPreflightError("verified changed path is protected in V1")
         if not any(_path_matches_pattern(path, pattern) for pattern in allowed_paths):
             raise PublicationPreflightError(

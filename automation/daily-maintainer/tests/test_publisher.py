@@ -588,6 +588,70 @@ class PublisherContractTests(unittest.TestCase):
                     fixture.publish()
                 self.assertEqual(fixture.git.create_calls, 0)
 
+    def test_authority_filename_tokens_and_patterns_fail_closed(self) -> None:
+        changed_paths = (
+            "packages/auth-client.py",
+            "packages/auth.py",
+            "packages/auth_config.py",
+            "packages/credentials.py",
+            "packages/network-client.ts",
+            "packages/network.py",
+            "packages/secret-store.py",
+        )
+        for changed_path in changed_paths:
+            with (
+                self.subTest(changed_path=changed_path),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                fixture = Fixture(
+                    Path(tmp),
+                    envelope=Envelope(
+                        risk_tier=1,
+                        allowed_paths=("packages/**",),
+                        changed_paths=(changed_path,),
+                    ),
+                )
+                with self.assertRaisesRegex(
+                    PublicationPreflightError, "protected in V1"
+                ):
+                    fixture.publish()
+                self.assertEqual(fixture.git.create_calls, 0)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Fixture(
+                Path(temporary),
+                envelope=Envelope(
+                    risk_tier=1,
+                    allowed_paths=("packages/auth*.py",),
+                    changed_paths=("packages/auth.py",),
+                ),
+            )
+            with self.assertRaisesRegex(PublicationPreflightError, "protected in V1"):
+                fixture.publish()
+            self.assertEqual(fixture.git.create_calls, 0)
+
+    def test_authority_filename_near_misses_remain_allowed(self) -> None:
+        cases = (
+            (1, "packages/authorization.py"),
+            (0, "docs/networking.md"),
+            (0, "tests/test_auth.py"),
+        )
+        for risk_tier, changed_path in cases:
+            with (
+                self.subTest(changed_path=changed_path),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                fixture = Fixture(
+                    Path(tmp),
+                    envelope=Envelope(
+                        risk_tier=risk_tier,
+                        allowed_paths=(changed_path,),
+                        changed_paths=(changed_path,),
+                    ),
+                )
+                result = fixture.publish()
+                self.assertEqual(result.head_sha, HEAD_SHA)
+
     def test_app_identity_installation_permissions_and_bypass_are_exact(self) -> None:
         policy = Policy(app=True)
         cases = (
