@@ -12,8 +12,12 @@ from vista_daily_maintainer.candidate import (
 )
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-BACKLOG_PATH = REPOSITORY_ROOT / "docs" / "maintenance" / "backlog.yaml"
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+BACKLOG_PATH: Path | None = (
+    PACKAGE_ROOT.parents[1] / "docs" / "maintenance" / "backlog.yaml"
+    if PACKAGE_ROOT.parent.name == "automation"
+    else None
+)
 PINNED_DRAFT_BACKLOG_SHA256 = (
     "5e08d1f2f784aa5940e0606a58637e5006f0892b3c7971b2eb6fba669e2d4fa5"
 )
@@ -22,6 +26,10 @@ PINNED_DRAFT_BACKLOG_SHA256 = (
 class CuratedBacklogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if BACKLOG_PATH is None or not BACKLOG_PATH.is_file():
+            raise unittest.SkipTest(
+                "repository draft backlog is intentionally not part of the sdist"
+            )
         cls.backlog = load_trusted_backlog(
             BacklogTrust(
                 path=BACKLOG_PATH,
