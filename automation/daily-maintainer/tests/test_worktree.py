@@ -190,12 +190,18 @@ class WorktreeLifecycleTests(unittest.TestCase):
                 "VALUE = 1\n",
             )
 
-    def test_repository_local_transport_attack_config_is_rejected(self) -> None:
+    def test_repository_local_config_outside_v1_allowlist_is_rejected(self) -> None:
         attack_configs = (
             ("http.sslVerify", "false"),
             ("http.curloptResolve", "github.com:443:127.0.0.1"),
             ("http.extraHeader", "X-Attack: injected"),
             ("core.sshCommand", "/tmp/attacker-ssh"),
+            ("core.attributesFile", "/tmp/attacker-attributes"),
+            ("core.hooksPath", "/tmp/attacker-hooks"),
+            ("core.alternateRefsCommand", "/tmp/attacker-alternates"),
+            ("filter.attack.process", "/tmp/attacker-filter"),
+            ("filter.attack.required", "true"),
+            ("maintenance.auto", "false"),
             ("url.file:///tmp/attacker/.insteadOf", "https://github.com/"),
         )
         for key, value in attack_configs:
@@ -203,8 +209,111 @@ class WorktreeLifecycleTests(unittest.TestCase):
                 root = Path(temporary)
                 fixture = LocalRemoteFixture(root)
                 git(fixture.checkout, "config", key, value)
-                with self.assertRaisesRegex(RepositoryIdentityError, "unsafe"):
+                with self.assertRaisesRegex(RepositoryIdentityError, "allowlist"):
                     manager_for(root, fixture).preflight()
+
+    def test_real_clean_and_smudge_filter_is_rejected_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            attributes = fixture.checkout / ".gitattributes"
+            attributes.write_text("src/app.py filter=attack\n", encoding="utf-8")
+            git(fixture.checkout, "add", ".gitattributes")
+            git(fixture.checkout, "commit", "-qm", "test: add filter attributes")
+            git(fixture.checkout, "push", "-q", "origin", "main")
+
+            marker = root / "filter-ran"
+            filter_script = root / "malicious-filter.sh"
+            filter_script.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$1\" >> {marker}\n"
+                "printf 'VALUE = 999\\n'\n",
+                encoding="utf-8",
+            )
+            filter_script.chmod(0o755)
+            git(
+                fixture.checkout,
+                "config",
+                "filter.attack.clean",
+                f"{filter_script} clean",
+            )
+            git(
+                fixture.checkout,
+                "config",
+                "filter.attack.smudge",
+                f"{filter_script} smudge",
+            )
+            git(fixture.checkout, "config", "filter.attack.required", "true")
+
+            git(fixture.checkout, "status", "--porcelain=v1")
+            exported = root / "unsafe-export"
+            exported.mkdir()
+            git(
+                fixture.checkout,
+                "checkout-index",
+                f"--prefix={exported}/",
+                "-a",
+            )
+            self.assertIn("clean", marker.read_text(encoding="utf-8"))
+            self.assertIn("smudge", marker.read_text(encoding="utf-8"))
+            self.assertEqual(
+                (exported / "src" / "app.py").read_text(encoding="utf-8"),
+                "VALUE = 999\n",
+            )
+            marker.unlink()
+
+            with self.assertRaisesRegex(RepositoryIdentityError, "allowlist"):
+                manager_for(root, fixture).preflight()
+            self.assertFalse(marker.exists())
+
+    def test_effective_worktree_config_is_forbidden_before_filter_execution(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            attributes = fixture.checkout / ".gitattributes"
+            attributes.write_text("src/app.py filter=attack\n", encoding="utf-8")
+            git(fixture.checkout, "add", ".gitattributes")
+            git(fixture.checkout, "commit", "-qm", "test: add filter attributes")
+            git(fixture.checkout, "push", "-q", "origin", "main")
+
+            marker = root / "worktree-filter-ran"
+            filter_script = root / "worktree-filter.sh"
+            filter_script.write_text(
+                f"#!/bin/sh\nprintf pwned > {marker}\nprintf 'VALUE = 999\\n'\n",
+                encoding="utf-8",
+            )
+            filter_script.chmod(0o755)
+            git(fixture.checkout, "config", "core.repositoryformatversion", "1")
+            git(fixture.checkout, "config", "extensions.worktreeConfig", "true")
+            git(
+                fixture.checkout,
+                "config",
+                "--worktree",
+                "filter.attack.smudge",
+                str(filter_script),
+            )
+            self.assertTrue((fixture.checkout / ".git" / "config.worktree").is_file())
+
+            with self.assertRaisesRegex(RepositoryIdentityError, "config.worktree"):
+                manager_for(root, fixture).preflight()
+            self.assertFalse(marker.exists())
+
+    def test_worktree_config_extension_is_rejected_even_without_config_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            git(fixture.checkout, "config", "core.repositoryformatversion", "1")
+            git(fixture.checkout, "config", "extensions.worktreeConfig", "true")
+            self.assertFalse((fixture.checkout / ".git" / "config.worktree").exists())
+
+            with self.assertRaisesRegex(
+                RepositoryIdentityError, "extensions.worktreeConfig"
+            ):
+                manager_for(root, fixture).preflight()
 
     def test_manager_ignores_caller_path_and_fake_git(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -244,9 +353,8 @@ class WorktreeLifecycleTests(unittest.TestCase):
             monitor.chmod(0o755)
             git(fixture.checkout, "config", "core.fsmonitor", str(monitor))
 
-            pin = manager_for(root, fixture).pin_remote_main()
-
-            self.assertEqual(pin.sha, fixture.head)
+            with self.assertRaisesRegex(RepositoryIdentityError, "allowlist"):
+                manager_for(root, fixture).pin_remote_main()
             self.assertFalse(marker.exists())
 
     def test_timeout_terminates_command_process_group(self) -> None:

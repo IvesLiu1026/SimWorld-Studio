@@ -44,6 +44,8 @@ _FIXED_GIT_CONFIG = (
     "-c",
     "core.hooksPath=/dev/null",
     "-c",
+    "extensions.worktreeConfig=false",
+    "-c",
     "credential.helper=",
     "-c",
     "credential.interactive=never",
@@ -67,21 +69,20 @@ _FIXED_GIT_CONFIG = (
     "ssh.variant=simple",
 )
 
-_UNSAFE_LOCAL_CONFIG_PREFIXES = (
-    "credential.",
-    "http.",
-    "include.",
-    "includeif.",
-    "protocol.",
-    "url.",
-)
-_UNSAFE_LOCAL_CONFIG_KEYS = frozenset(
+_V1_REQUIRED_LOCAL_CONFIG = frozenset(
     {
-        "core.gitproxy",
-        "core.sshcommand",
-        "ssh.variant",
+        "core.bare",
+        "core.filemode",
+        "core.logallrefupdates",
+        "core.repositoryformatversion",
+        "remote.origin.fetch",
+        "remote.origin.url",
     }
 )
+_V1_BRANCH_CONFIG = re.compile(
+    r"^branch\.([a-z0-9][a-z0-9._/-]{0,127})\.(merge|remote)$"
+)
+_MAX_LOCAL_CONFIG_BYTES = 64 * 1024
 
 
 class WorktreeError(StateError):
@@ -339,6 +340,13 @@ class WorktreeManager:
         check: bool = True,
         operation: str = "git operation",
     ) -> subprocess.CompletedProcess[str]:
+        command_cwd = cwd or self.repository_root
+        sensitive_operation = bool(args) and (
+            args[0] in {"fetch", "status"}
+            or (args[0] == "worktree" and len(args) > 1 and args[1] == "add")
+        )
+        if sensitive_operation:
+            self._validate_effective_git_config(command_cwd)
         result = _run_fixed_command(
             (
                 str(self._git_executable),
@@ -347,7 +355,7 @@ class WorktreeManager:
                 f"remote.{self.remote}.proxy=",
                 *args,
             ),
-            cwd=cwd or self.repository_root,
+            cwd=command_cwd,
             environment=_safe_git_environment(),
             timeout_seconds=60,
             operation=operation,
@@ -389,38 +397,130 @@ class WorktreeManager:
 
         return self.expected_remote_url
 
-    def _validate_local_transport_config(self) -> None:
+    @staticmethod
+    def _parse_local_config_records(payload: str) -> tuple[tuple[str, str], ...]:
+        if len(payload.encode("utf-8", "strict")) > _MAX_LOCAL_CONFIG_BYTES:
+            raise RepositoryIdentityError(
+                "repository-local Git configuration is too large"
+            )
+        records: list[tuple[str, str]] = []
+        for record in payload.split("\0"):
+            if not record:
+                continue
+            name, separator, value = record.partition("\n")
+            if not separator or not name or "\0" in value:
+                raise RepositoryIdentityError(
+                    "repository-local Git configuration is malformed"
+                )
+            records.append((name.casefold(), value))
+        return tuple(records)
+
+    def _validate_v1_config_record(self, name: str, value: str) -> None:
+        exact_values: dict[str, frozenset[str]] = {
+            "core.bare": frozenset({"false"}),
+            "core.filemode": frozenset({"false", "true"}),
+            "core.logallrefupdates": frozenset({"true"}),
+            "core.repositoryformatversion": frozenset({"0", "1"}),
+            "remote.origin.fetch": frozenset({"+refs/heads/*:refs/remotes/origin/*"}),
+            "remote.origin.url": frozenset({self._transport_url()}),
+        }
+        if name == "extensions.worktreeconfig":
+            raise RepositoryIdentityError(
+                "extensions.worktreeConfig is forbidden for unattended runs"
+            )
+        if name in exact_values:
+            if value not in exact_values[name]:
+                if name == "remote.origin.url":
+                    raise RepositoryIdentityError(
+                        "repository remote URL does not match the pinned target"
+                    )
+                raise RepositoryIdentityError(
+                    "repository-local Git configuration is outside the V1 allowlist"
+                )
+            return
+        if name in {"user.email", "user.name"}:
+            if not value or len(value.encode("utf-8", "strict")) > 256 or "\n" in value:
+                raise RepositoryIdentityError(
+                    "repository-local Git identity configuration is invalid"
+                )
+            return
+        branch_match = _V1_BRANCH_CONFIG.fullmatch(name)
+        if branch_match:
+            branch, field = branch_match.groups()
+            if any(part in {"", ".", ".."} for part in branch.split("/")):
+                raise RepositoryIdentityError(
+                    "repository-local branch configuration is invalid"
+                )
+            if field == "remote" and value == "origin":
+                return
+            if field == "merge" and value.startswith("refs/heads/"):
+                merge_branch = value.removeprefix("refs/heads/")
+                if _REMOTE_BRANCH.fullmatch(merge_branch) and not any(
+                    part in {"", ".", ".."} for part in merge_branch.split("/")
+                ):
+                    return
+            raise RepositoryIdentityError(
+                "repository-local branch configuration is invalid"
+            )
+        raise RepositoryIdentityError(
+            "repository-local Git configuration is outside the V1 allowlist"
+        )
+
+    def _reject_worktree_config(self, cwd: Path) -> None:
+        result = self._git(
+            "rev-parse",
+            "--absolute-git-dir",
+            cwd=cwd,
+            check=False,
+            operation="repository Git directory check",
+        )
+        git_dir = Path(result.stdout.strip()) if result.returncode == 0 else None
+        if git_dir is None or not git_dir.is_absolute():
+            raise RepositoryIdentityError("repository Git directory is invalid")
+        worktree_config = git_dir / "config.worktree"
+        try:
+            worktree_config.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise RepositoryIdentityError(
+                "per-worktree Git configuration could not be audited"
+            ) from exc
+        raise RepositoryIdentityError(
+            "per-worktree config.worktree is forbidden for unattended runs"
+        )
+
+    def _validate_effective_git_config(self, cwd: Path) -> None:
+        self._reject_worktree_config(cwd)
         result = self._git(
             "config",
             "--local",
-            "--name-only",
             "--null",
             "--list",
+            cwd=cwd,
             check=False,
-            operation="repository transport configuration check",
+            operation="repository configuration allowlist check",
         )
         if result.returncode != 0:
             raise RepositoryIdentityError(
                 "repository-local Git configuration could not be audited"
             )
-        names = tuple(name for name in result.stdout.split("\0") if name)
-        remote_prefix = f"remote.{self.remote.casefold()}."
-        for name in names:
-            normalized = name.casefold()
-            unsafe_remote_setting = normalized.startswith(remote_prefix) and (
-                normalized.removeprefix(remote_prefix) not in {"fetch", "url"}
+        records = self._parse_local_config_records(result.stdout)
+        names = [name for name, _ in records]
+        if len(names) != len(set(names)):
+            raise RepositoryIdentityError(
+                "repository-local Git configuration contains duplicate keys"
             )
-            if (
-                normalized in _UNSAFE_LOCAL_CONFIG_KEYS
-                or normalized.startswith(_UNSAFE_LOCAL_CONFIG_PREFIXES)
-                or unsafe_remote_setting
-            ):
-                raise RepositoryIdentityError(
-                    "repository-local Git transport configuration is unsafe"
-                )
+        for name, value in records:
+            self._validate_v1_config_record(name, value)
+        missing = sorted(_V1_REQUIRED_LOCAL_CONFIG - set(names))
+        if missing:
+            raise RepositoryIdentityError(
+                "repository-local Git configuration is missing V1 keys"
+            )
 
     def _validate_remote_identity(self) -> None:
-        self._validate_local_transport_config()
+        self._validate_effective_git_config(self.repository_root)
         result = self._git(
             "remote",
             "get-url",
@@ -436,6 +536,7 @@ class WorktreeManager:
             )
 
     def _require_clean(self, path: Path, label: str) -> None:
+        self._validate_effective_git_config(path)
         result = self._git(
             "status",
             "--porcelain=v1",
@@ -601,6 +702,7 @@ class WorktreeManager:
             or stat.S_IMODE(info.st_mode) & 0o077
         ):
             raise UnsafeStatePathError("managed worktree must be owner-only directory")
+        self._validate_effective_git_config(path)
         branch = self._git(
             "symbolic-ref",
             "--quiet",
@@ -916,6 +1018,7 @@ class WorktreeManager:
                 publication=publication,
                 existing=pinned,
             )
+            self._validate_effective_git_config(self.repository_root)
             self._git(
                 "worktree",
                 "add",
