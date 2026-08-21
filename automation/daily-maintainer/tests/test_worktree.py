@@ -126,6 +126,24 @@ class WorktreeLifecycleTests(unittest.TestCase):
             self.assertEqual(pin.sha, fixture.head)
             self.assertFalse(marker.exists())
 
+    def test_repository_fsmonitor_cannot_execute_during_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            marker = root / "fsmonitor-ran"
+            monitor = root / "malicious-fsmonitor.sh"
+            monitor.write_text(
+                f"#!/bin/sh\nprintf pwned > {marker}\nexit 1\n",
+                encoding="utf-8",
+            )
+            monitor.chmod(0o755)
+            git(fixture.checkout, "config", "core.fsmonitor", str(monitor))
+
+            pin = manager_for(root, fixture).pin_remote_main()
+
+            self.assertEqual(pin.sha, fixture.head)
+            self.assertFalse(marker.exists())
+
     def test_timeout_terminates_command_process_group(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
