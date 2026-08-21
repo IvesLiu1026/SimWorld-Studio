@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
-from .candidate import Candidate, enforce_v1_candidate_policy, path_matches_pattern
+from .candidate import (
+    Candidate,
+    enforce_v1_candidate_policy,
+    has_v1_forbidden_authority,
+    path_matches_pattern,
+)
 from .profiles import TrustedExecutables
 
 
@@ -522,6 +527,8 @@ class DiffGuard:
         parts = pure.parts
         lowered = tuple(part.lower() for part in parts)
         basename = lowered[-1] if lowered else ""
+        if has_v1_forbidden_authority(path):
+            return True
         if parts and parts[0].lower() in _PROTECTED_TOP_LEVEL:
             return True
         if path == ".mcp.json" or basename.startswith(".env"):
