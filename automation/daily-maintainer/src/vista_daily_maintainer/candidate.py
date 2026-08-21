@@ -239,8 +239,10 @@ class Candidate:
             raise CandidateContractError("candidate risk tier must be 0, 1, 2, or 3")
         if not isinstance(self.allowed_paths, tuple) or not self.allowed_paths:
             raise CandidateContractError("candidate must own at least one allowed path")
-        if len(set(self.allowed_paths)) != len(self.allowed_paths):
-            raise CandidateContractError("candidate allowed paths must be unique")
+        if tuple(sorted(set(self.allowed_paths))) != self.allowed_paths:
+            raise CandidateContractError(
+                "candidate allowed paths must be sorted and unique"
+            )
         for pattern in self.allowed_paths:
             validate_allowed_path(pattern)
         if not isinstance(self.acceptance, tuple) or not self.acceptance:
@@ -254,8 +256,10 @@ class Candidate:
             raise CandidateContractError(
                 "candidate must reference a validation profile"
             )
-        if len(set(self.validation_profiles)) != len(self.validation_profiles):
-            raise CandidateContractError("candidate validation profiles must be unique")
+        if tuple(sorted(set(self.validation_profiles))) != self.validation_profiles:
+            raise CandidateContractError(
+                "candidate validation profiles must be sorted and unique"
+            )
         for profile_id in self.validation_profiles:
             if not isinstance(profile_id, str) or not _PROFILE_ID.fullmatch(profile_id):
                 raise CandidateContractError(
@@ -394,6 +398,16 @@ def _is_v1_test_filename(name: str) -> bool:
     )
 
 
+def is_v1_test_scope(path: str) -> bool:
+    """Return whether an actual path or allowlist pattern is test-only in V1."""
+
+    parts = tuple(part.lower() for part in path.split("/") if part)
+    return bool(parts) and (
+        any(part in {"test", "tests", "fixtures", "__snapshots__"} for part in parts)
+        or _is_v1_test_filename(parts[-1])
+    )
+
+
 def has_v1_forbidden_authority(path: str, *, pattern: bool = False) -> bool:
     """Return whether a path or scoped pattern crosses a V1 authority boundary.
 
@@ -448,30 +462,11 @@ def enforce_v1_candidate_policy(candidate: Candidate) -> None:
         )
     for pattern in candidate.allowed_paths:
         lowered = pattern.lower()
-        parts = tuple(part for part in lowered.split("/") if part)
         if pattern == "**" or has_v1_forbidden_authority(pattern, pattern=True):
             raise CandidateContractError(
                 f"V1 candidate policy forbids path authority: {pattern}"
             )
-        is_test_scope = (
-            any(part in {"test", "tests", "fixtures"} for part in parts)
-            or parts[-1].startswith(("test_", "test-"))
-            or parts[-1].endswith(
-                (
-                    "_test.py",
-                    ".test.js",
-                    ".test.jsx",
-                    ".test.mjs",
-                    ".test.ts",
-                    ".test.tsx",
-                    ".spec.js",
-                    ".spec.jsx",
-                    ".spec.mjs",
-                    ".spec.ts",
-                    ".spec.tsx",
-                )
-            )
-        )
+        is_test_scope = is_v1_test_scope(pattern)
         if candidate.risk_tier == 0:
             if not (lowered.startswith("docs/") or is_test_scope):
                 raise CandidateContractError(
