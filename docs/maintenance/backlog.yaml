@@ -1,6 +1,7 @@
+# Draft manifest: pending explicit approval of these exact bytes by IvesLiu1026.
 schema_version: vista.world.daily-maintainer.backlog.v1
 manifest_revision: 1
-approved_by: IvesLiu1026
+approved_by: CodexDraft
 candidates:
   - id: VW-DM-0101
     title: Cover strict loader rejection of non-object top-level JSON values
@@ -10,7 +11,7 @@ candidates:
       - A table-driven offline regression proves arrays, strings, numbers, booleans and null fail with the stable top-level JSON error.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0102
@@ -21,7 +22,7 @@ candidates:
       - Offline regressions cover malformed UTF-8 and a UTF-8 BOM without leaking source bytes or host paths in the error.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0103
@@ -32,7 +33,7 @@ candidates:
       - A bounded temporary fixture proves the maximum supported nesting validates and the next level fails with VISTA_HOME_JSON_TOO_DEEP.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0104
@@ -43,7 +44,7 @@ candidates:
       - Temporary-file tests prove an oversized document is rejected before JSON parsing and no large fixture is committed.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0105
@@ -54,7 +55,7 @@ candidates:
       - Regression cases prove semantically identical Unicode mappings produce identical UTF-8 canonical bytes and digests.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0106
@@ -65,29 +66,29 @@ candidates:
       - Tests prove sealing does not mutate its input and always replaces a stale content_digest with the canonical value.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0107
-    title: Expand safe bundle URI negative-matrix coverage
+    title: Cover unsupported asset URI schemes and metadata components
     risk_tier: 0
     allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
     acceptance:
-      - Table-driven tests cover authority, query, fragment, empty path and traversal variants while retaining one valid bundle URI control.
+      - Table-driven regressions prove unsupported or missing schemes, missing authority, queries and fragments fail with VISTA_HOME_SCHEMA_INVALID while one valid bundle URI remains accepted.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0108
-    title: Cover encoded and repeated-separator asset URI traversal variants
+    title: Cover encoded and backslash asset URI traversal evasions
     risk_tier: 0
     allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
     acceptance:
-      - Regression cases document whether percent-encoded dot segments and repeated separators are rejected consistently and without network access.
+      - Focused regressions prove percent-encoded dot segments and backslash path variants fail with VISTA_HOME_SCHEMA_INVALID before URI normalization and without network access.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0109
@@ -98,7 +99,7 @@ candidates:
       - A focused fixture duplicates one portal ID and asserts the stable duplicate-ID error and JSON path.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0110
@@ -109,7 +110,7 @@ candidates:
       - Separate focused fixtures prove entity and asset duplicate IDs fail closed with deterministic diagnostics.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0111
@@ -120,7 +121,7 @@ candidates:
       - Nested mapping and list fixtures prove private or executable keys fail closed regardless of their depth.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0112
@@ -131,18 +132,18 @@ candidates:
       - Focused tests cover duplicate op_id values across transform, state and NPC queue operations with stable rejection.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0113
-    title: Cover duplicate event IDs and deterministic event ordering in compilation
+    title: Cover duplicate goal and cross-section condition identifiers
     risk_tier: 0
-    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
     acceptance:
-      - Tests prove duplicate event IDs fail closed and unique shuffled inputs produce the same canonical event-plan order.
+      - Separate fixtures prove duplicate goal_id values and duplicate condition_id values across trigger, success and failure sections fail with deterministic duplicate-ID diagnostics.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0114
@@ -153,150 +154,150 @@ candidates:
       - A temporary-directory CLI regression proves failed compilation leaves neither a partial destination nor a leaked temporary file.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0115
     title: Make JSON-schema error paths deterministic for escaped property names
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
       - A reproducer with punctuation in a property name yields one stable, value-sanitized JSON path across repeated runs.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0116
     title: Reject symlinked event files before reading outside the event directory
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
       - A temporary-directory reproducer proves load_events rejects symlinked JSON inputs without reading their targets and still loads regular files deterministically.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0117
     title: Normalize lone-surrogate canonical JSON failures
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
       - A compact string reproducer raises VISTA_HOME_CANONICAL_JSON_INVALID instead of leaking a raw UnicodeEncodeError, while valid Unicode stays byte-stable.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0118
     title: Reject Windows-style and embedded private filesystem references
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
       - Focused fixtures prove Windows absolute paths and embedded host-home references fail with value-sanitized diagnostics while ordinary public prose remains valid.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0119
     title: Tighten portal door and initial-state coherence checks
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
       - Negative fixtures cover missing, unrelated and mismatched door references while the verified home remains valid.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0120
-    title: Tighten entity affordance and event-action cross-validation
+    title: Enforce placement affordances for NPC queue actions
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
-      - A reproducer proves an event cannot request an affordance absent from its target entity and valid verified events still pass.
+      - A set_npc_queue action that asks an NPC to place a non-placeable entity fails with VISTA_HOME_EVENT_AFFORDANCE_INVALID while a pickup entity exposing place remains valid.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0121
     title: Validate public event source references as inert VISTA identifiers
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
       - Negative tests reject executable, file and network-like source references while all verified vista identifiers remain unchanged.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0122
     title: Preserve overlay transactional behavior for late-operation failures
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py, tools/worlds/playable_home.py]
     acceptance:
       - A multi-operation reproducer fails on the final operation and proves the baseline input and returned state are never partially mutated.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0123
-    title: Validate transform-operation room and asset references before resolution
+    title: Validate spawn-fixture room and asset bindings before compilation
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py, tools/worlds/playable_home.py]
     acceptance:
-      - Minimal invalid references fail with stable contract errors before a partial build plan can be emitted.
+      - Unknown room and asset_ref values on spawn_fixture operations fail with stable EventSpec errors before build-plan assembly, while a valid spawn compiles with the exact catalog binding.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0124
     title: Stabilize quaternion composition around negative zero and full turns
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py, tools/worlds/playable_home.py]
     acceptance:
       - Reproducers for negative zero, 360-degree turns and equivalent rotations produce identical canonical transforms and digests.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0125
     title: Cover rotated room bounds in navigation-bound aggregation
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py, tools/worlds/playable_home.py]
     acceptance:
       - A rotated non-square room reproducer yields conservative deterministic world bounds containing every transformed corner.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0126
-    title: Reject duplicate event identifiers before build-plan assembly
+    title: Bind provenance event-digest order to build-plan event order
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py, tools/worlds/playable_home.py]
     acceptance:
-      - A duplicate-ID reproducer fails before sorting or digest generation and a shuffled unique control stays deterministic.
+      - The compiler emits provenance event_digests in exact event_plans order and validation rejects a sealed plan whose two inventories contain the same IDs in different orders.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0127
     title: Harden atomic JSON output replacement and cleanup semantics
     risk_tier: 1
-    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py, tools/worlds/playable_home.py]
     acceptance:
       - Fault-injection tests prove a write or replace failure preserves any prior destination and removes the temporary file.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
 
   - id: VW-DM-0128
@@ -307,5 +308,5 @@ candidates:
       - Documentation names only public allowlisted fields and an offline parity assertion prevents the projection list from drifting.
     validation_profiles: [tools-python-offline]
     expected_external_side_effects: none
-    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: CodexDraft}
     expires_on: 2026-12-31
