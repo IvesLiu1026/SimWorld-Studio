@@ -412,6 +412,8 @@ class VerifierTests(unittest.TestCase):
             base = self._init_tools_profile_repo(repo)
             (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
             interpreter = self._external_validation_python(root)
+            selected = make_candidate(profiles=("tools-python-offline",))
+            subject = self._subject(repo, base, selected)
             report = Verifier(
                 executables=TrustedExecutables(
                     {
@@ -419,11 +421,12 @@ class VerifierTests(unittest.TestCase):
                         "python3": interpreter,
                     }
                 ),
-                isolation_evidence=self._isolation(),
+                isolation_evidence=self._isolation(subject),
             ).verify(
                 repo,
                 base,
-                make_candidate(profiles=("tools-python-offline",)),
+                selected,
+                subject=subject,
             )
 
             self.assertTrue(report.checks_passed, report)
@@ -441,14 +444,17 @@ class VerifierTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             base = self._init_tools_profile_repo(repo)
             (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            selected = make_candidate(profiles=("tools-python-offline",))
+            subject = self._subject(repo, base, selected)
             with self.assertRaisesRegex(ValueError, "trusted executable"):
                 Verifier(
                     executables=TrustedExecutables({"git": Path(git)}),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
-                    make_candidate(profiles=("tools-python-offline",)),
+                    selected,
+                    subject=subject,
                 )
 
     def test_tools_profile_rejects_repository_local_python_before_spawn(self) -> None:
@@ -462,6 +468,8 @@ class VerifierTests(unittest.TestCase):
             local_python = repo / "tools/pinned-python3"
             shutil.copy2(Path(sys.executable).resolve(strict=True), local_python)
             local_python.chmod(0o755)
+            selected = make_candidate(profiles=("tools-python-offline",))
+            subject = self._subject(repo, base, selected)
             with self.assertRaisesRegex(ValueError, "outside the repository"):
                 Verifier(
                     executables=TrustedExecutables(
@@ -470,11 +478,12 @@ class VerifierTests(unittest.TestCase):
                             "python3": local_python,
                         }
                     ),
-                    isolation_evidence=self._isolation(),
+                    isolation_evidence=self._isolation(subject),
                 ).verify(
                     repo,
                     base,
-                    make_candidate(profiles=("tools-python-offline",)),
+                    selected,
+                    subject=subject,
                 )
 
     def test_system_defaults_discovers_a_separately_pinned_python3(self) -> None:
@@ -611,6 +620,8 @@ class VerifierTests(unittest.TestCase):
                 f"Path({str(sitecustomize_marker)!r}).touch()\n",
                 encoding="utf-8",
             )
+            selected = make_candidate()
+            subject = self._subject(repo, base, selected)
             registry = ValidationProfileRegistry(
                 (
                     ValidationProfile(
@@ -630,8 +641,8 @@ class VerifierTests(unittest.TestCase):
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
-                ).verify(repo, base, make_candidate())
+                    isolation_evidence=self._isolation(subject),
+                ).verify(repo, base, selected, subject=subject)
 
         self.assertFalse(report.checks_passed)
         self.assertEqual(report.validation, ())
@@ -666,14 +677,16 @@ class VerifierTests(unittest.TestCase):
                     ),
                 )
             )
+            selected = make_candidate()
+            subject = self._subject(repo, base, selected)
             with patch(
                 "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
                 registry,
             ):
                 report = Verifier(
                     executables=self._trusted_tools(),
-                    isolation_evidence=self._isolation(),
-                ).verify(repo, base, make_candidate())
+                    isolation_evidence=self._isolation(subject),
+                ).verify(repo, base, selected, subject=subject)
 
         self.assertFalse(report.checks_passed)
         self.assertTrue(report.mutation_detected)
