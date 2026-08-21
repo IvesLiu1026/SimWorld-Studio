@@ -2,7 +2,7 @@
 name = "vista-world-daily-maintainer"
 version = "0.1.0"
 description = "Deterministic safety core for the VISTA World Daily Maintainer"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
   "PyYAML>=6.0.2,<7",
 ]
@@ -18,6 +18,8 @@ packages = ["src/vista_daily_maintainer"]
 "backlog.schema.json" = "vista_daily_maintainer/schemas/backlog.schema.json"
 "candidate.schema.json" = "vista_daily_maintainer/schemas/candidate.schema.json"
 "receipt.schema.json" = "vista_daily_maintainer/schemas/receipt.schema.json"
+"src/vista_daily_maintainer/resources/prompts/patcher.md" = "vista_daily_maintainer/resources/prompts/patcher.md"
+"src/vista_daily_maintainer/resources/patcher-output.schema.json" = "vista_daily_maintainer/resources/patcher-output.schema.json"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -30,6 +32,10 @@ include = [
   "/tests",
   "/uv.lock",
 ]
+
+[tool.hatch.build.targets.sdist.force-include]
+"src/vista_daily_maintainer/resources/prompts/patcher.md" = "src/vista_daily_maintainer/resources/prompts/patcher.md"
+"src/vista_daily_maintainer/resources/patcher-output.schema.json" = "src/vista_daily_maintainer/resources/patcher-output.schema.json"
 
 [tool.uv]
 package = true
