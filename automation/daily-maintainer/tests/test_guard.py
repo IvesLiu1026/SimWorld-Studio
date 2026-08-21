@@ -11,9 +11,9 @@ from vista_daily_maintainer.candidate import CandidateContractError
 from vista_daily_maintainer.guard import DiffGuard, GuardLimits
 
 try:
-    from .helpers import init_repo, make_candidate
+    from .helpers import init_repo, make_candidate, run_git
 except ImportError:  # Support unittest discovery without an explicit top-level.
-    from helpers import init_repo, make_candidate
+    from helpers import init_repo, make_candidate, run_git
 
 
 class DiffGuardIntegrationTests(unittest.TestCase):
@@ -409,6 +409,37 @@ class DiffGuardIntegrationTests(unittest.TestCase):
                 make_candidate(allowed_paths=("tests/**",)),
             )
             self.assertIn("test_skip_added", {item.code for item in report.violations})
+
+    def test_replacement_refs_cannot_rewrite_the_guard_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(
+                repo,
+                {"tests/test_target.py": "def test_target():\n    assert True\n"},
+            )
+            target = repo / "tests/test_target.py"
+            target.write_text("def test_target():\n    pass\n", encoding="utf-8")
+            run_git(repo, "add", "tests/test_target.py")
+            run_git(repo, "commit", "-qm", "test: replacement fixture")
+            replacement = run_git(repo, "rev-parse", "HEAD")
+            target.write_text(
+                "def test_target():\n    pass\n    # bounded addition\n",
+                encoding="utf-8",
+            )
+            run_git(repo, "replace", base, replacement)
+
+            with self.assertRaisesRegex(ValueError, "replacement refs are forbidden"):
+                DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=("tests/**",)),
+                )
+
+    def test_git_environment_disables_replacement_objects(self) -> None:
+        self.assertEqual(
+            DiffGuard._git_environment()["GIT_NO_REPLACE_OBJECTS"],
+            "1",
+        )
 
     def test_patch_digest_covers_untracked_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

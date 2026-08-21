@@ -145,6 +145,7 @@ _MAX_IGNORED_STATE_PATHS = 128
 _MAX_IGNORED_FILE_HASH_BYTES = 1024 * 1024
 _MAX_GIT_STDOUT_BYTES = 16 * 1024 * 1024
 _MAX_GIT_STDERR_BYTES = 64 * 1024
+_MAX_REPLACEMENT_REF_BYTES = 64 * 1024
 _GIT_READ_CHUNK_BYTES = 64 * 1024
 _GIT_TIMEOUT_SECONDS = 30.0
 
@@ -237,6 +238,7 @@ class DiffGuard:
         enforce_v1_candidate_policy(candidate)
         limits = limits or GuardLimits()
         repo = self._validated_repo(repo_root)
+        self._reject_replacement_refs(repo)
         self._validate_base(repo, base_sha)
 
         statuses = self._changed_statuses(repo, base_sha)
@@ -401,6 +403,7 @@ class DiffGuard:
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_SYSTEM": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_PAGER": "",
             "GIT_TERMINAL_PROMPT": "0",
         }
@@ -522,6 +525,17 @@ class DiffGuard:
         if Path(reported).resolve() != repo:
             raise ValueError("repository root must be the Git worktree root")
         return repo
+
+    def _reject_replacement_refs(self, repo: Path) -> None:
+        payload = self._git(
+            repo,
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/replace/",
+            stdout_limit=_MAX_REPLACEMENT_REF_BYTES,
+        )
+        if payload:
+            raise ValueError("repository replacement refs are forbidden")
 
     def _validate_base(self, repo: Path, base_sha: str) -> None:
         if not isinstance(base_sha, str) or not _OBJECT_ID.fullmatch(base_sha):
