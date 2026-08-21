@@ -5,14 +5,16 @@ import io
 import json
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
+from unittest.mock import patch
 
 from vista_daily_maintainer.cli import main
 
 try:
-    from .test_worktree import LocalRemoteFixture
+    from .test_worktree import LocalRemoteFixture, LocalRemoteWorktreeManager
 except ImportError:  # Root-level unittest discovery imports test modules directly.
-    from test_worktree import LocalRemoteFixture
+    from test_worktree import LocalRemoteFixture, LocalRemoteWorktreeManager
 
 
 class CliTests(unittest.TestCase):
@@ -26,8 +28,6 @@ class CliTests(unittest.TestCase):
             str(root / "worktrees"),
             "--repository",
             "IvesLiu1026/VISTA-World",
-            "--expected-remote-url",
-            str(fixture.remote),
         ]
 
     def test_importable_cli_preflight_and_idempotent_prepare(self) -> None:
@@ -35,7 +35,17 @@ class CliTests(unittest.TestCase):
             root = Path(temporary)
             fixture = LocalRemoteFixture(root)
             output = io.StringIO()
-            with contextlib.redirect_stdout(output):
+            local_manager = partial(
+                LocalRemoteWorktreeManager,
+                local_remote_url=str(fixture.remote),
+            )
+            with (
+                patch(
+                    "vista_daily_maintainer.cli.WorktreeManager",
+                    new=local_manager,
+                ),
+                contextlib.redirect_stdout(output),
+            ):
                 code = main(["preflight", *self._manager_args(root, fixture)])
             self.assertEqual(code, 0)
             preflight = json.loads(output.getvalue())
@@ -52,12 +62,24 @@ class CliTests(unittest.TestCase):
                 fixture.head,
             ]
             first_output = io.StringIO()
-            with contextlib.redirect_stdout(first_output):
+            with (
+                patch(
+                    "vista_daily_maintainer.cli.WorktreeManager",
+                    new=local_manager,
+                ),
+                contextlib.redirect_stdout(first_output),
+            ):
                 self.assertEqual(main(command), 0)
             self.assertFalse(json.loads(first_output.getvalue())["idempotent_replay"])
 
             second_output = io.StringIO()
-            with contextlib.redirect_stdout(second_output):
+            with (
+                patch(
+                    "vista_daily_maintainer.cli.WorktreeManager",
+                    new=local_manager,
+                ),
+                contextlib.redirect_stdout(second_output),
+            ):
                 self.assertEqual(main(command), 0)
             self.assertTrue(json.loads(second_output.getvalue())["idempotent_replay"])
 
