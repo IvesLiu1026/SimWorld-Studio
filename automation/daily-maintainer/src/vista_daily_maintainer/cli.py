@@ -43,6 +43,7 @@ def _add_manager_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--remote", default="origin")
     parser.add_argument("--remote-branch", default="main")
+    parser.add_argument("--expected-remote-url")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -92,6 +93,7 @@ def _manager(arguments: argparse.Namespace, store: RunStateStore) -> WorktreeMan
         repository=arguments.repository,
         remote=arguments.remote,
         remote_branch=arguments.remote_branch,
+        expected_remote_url=arguments.expected_remote_url,
     )
 
 

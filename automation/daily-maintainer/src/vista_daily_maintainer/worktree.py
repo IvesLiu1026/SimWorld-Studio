@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import signal
 import stat
 import subprocess
 from dataclasses import dataclass, replace
@@ -27,6 +29,15 @@ _SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _REMOTE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _REMOTE_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 _SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
+_SYSTEM_EXECUTABLE_DIRS = (
+    Path("/usr/local/sbin"),
+    Path("/usr/local/bin"),
+    Path("/usr/sbin"),
+    Path("/usr/bin"),
+    Path("/sbin"),
+    Path("/bin"),
+)
+_SYSTEM_PATH = os.pathsep.join(str(path) for path in _SYSTEM_EXECUTABLE_DIRS)
 
 
 class WorktreeError(StateError):
@@ -39,6 +50,10 @@ class GitOperationError(WorktreeError):
 
 class RepositoryRootError(WorktreeError):
     """The configured checkout is not the exact non-bare repository root."""
+
+
+class RepositoryIdentityError(WorktreeError):
+    """The configured Git remote is not the pinned repository transport."""
 
 
 class DirtyRepositoryError(WorktreeError):
@@ -111,16 +126,106 @@ class PrepareResult:
     recovered_stale_lock: bool
 
 
+def _trusted_git_executable() -> Path:
+    """Resolve Git without consulting the caller-controlled environment."""
+
+    found = shutil.which("git", path=_SYSTEM_PATH)
+    if found is None:
+        raise GitOperationError("trusted Git executable is unavailable")
+    try:
+        executable = Path(found).resolve(strict=True)
+        info = executable.stat()
+    except OSError as exc:
+        raise GitOperationError("trusted Git executable is unavailable") from exc
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != 0
+        or info.st_mode & 0o022
+        or not os.access(executable, os.X_OK)
+    ):
+        raise GitOperationError("trusted Git executable is invalid")
+    for directory in (executable.parent, *executable.parents):
+        directory_info = directory.stat()
+        if directory_info.st_uid != 0 or directory_info.st_mode & 0o022:
+            raise GitOperationError("trusted Git path has a writable ancestor")
+    return executable
+
+
 def _safe_git_environment() -> Mapping[str, str]:
-    path = os.environ.get("PATH", "/usr/bin:/bin")
     return {
-        "PATH": path,
+        "PATH": _SYSTEM_PATH,
+        "HOME": "/nonexistent",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_COUNT": "0",
         "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "Never",
     }
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Terminate every non-detached descendant in the command's session."""
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _run_fixed_command(
+    argv: tuple[str, ...],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    timeout_seconds: float,
+    operation: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run a shell-free command and reap its process group on timeout."""
+
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            env=dict(environment),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise GitOperationError(f"{operation} could not start") from exc
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_group(process)
+        try:
+            process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            # A deliberately detached descendant can retain inherited pipe FDs.
+            # The deployment service must additionally use KillMode=control-group;
+            # close our readers so this function still fails boundedly.
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+        raise GitOperationError(f"{operation} timed out") from exc
+    return subprocess.CompletedProcess(
+        argv,
+        process.returncode,
+        stdout,
+        stderr,
+    )
 
 
 class WorktreeManager:
@@ -135,12 +240,23 @@ class WorktreeManager:
         repository: str,
         remote: str = "origin",
         remote_branch: str = "main",
+        expected_remote_url: str | None = None,
     ) -> None:
         self.repository_root = Path(repository_root).absolute()
         self.state_store = state_store
         self.repository = repository
         self.remote = remote
         self.remote_branch = remote_branch
+        self.expected_remote_url = expected_remote_url or (
+            f"https://github.com/{repository}.git"
+        )
+        if (
+            not isinstance(self.expected_remote_url, str)
+            or not self.expected_remote_url
+            or any(character in self.expected_remote_url for character in "\0\r\n")
+        ):
+            raise StateContractError("expected remote URL is invalid")
+        self._git_executable = _trusted_git_executable()
         RemotePin(repository, remote, remote_branch, "0" * 40)
         worktrees_path = Path(worktrees_root).absolute()
         repo_resolved = self.repository_root.resolve(strict=False)
@@ -175,18 +291,13 @@ class WorktreeManager:
         check: bool = True,
         operation: str = "git operation",
     ) -> subprocess.CompletedProcess[str]:
-        try:
-            result = subprocess.run(
-                ("git", *args),
-                cwd=cwd or self.repository_root,
-                env=_safe_git_environment(),
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise GitOperationError(f"{operation} could not complete") from exc
+        result = _run_fixed_command(
+            (str(self._git_executable), *args),
+            cwd=cwd or self.repository_root,
+            environment=_safe_git_environment(),
+            timeout_seconds=60,
+            operation=operation,
+        )
         if check and result.returncode != 0:
             raise GitOperationError(f"{operation} failed")
         return result
@@ -211,6 +322,22 @@ class WorktreeManager:
         if bare != "false" or Path(top).absolute() != self.repository_root:
             raise RepositoryRootError(
                 "repository_root must be the exact non-bare checkout root"
+            )
+        self._validate_remote_identity()
+
+    def _validate_remote_identity(self) -> None:
+        result = self._git(
+            "remote",
+            "get-url",
+            "--all",
+            self.remote,
+            check=False,
+            operation="repository remote identity check",
+        )
+        urls = tuple(line for line in result.stdout.splitlines() if line)
+        if result.returncode != 0 or urls != (self.expected_remote_url,):
+            raise RepositoryIdentityError(
+                "repository remote URL does not match the pinned target"
             )
 
     def _require_clean(self, path: Path, label: str) -> None:

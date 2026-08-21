@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -17,9 +19,12 @@ from vista_daily_maintainer.worktree import (
     DirtyRepositoryError,
     ExistingDailyBranchError,
     ExistingPublicationError,
+    GitOperationError,
     RemoteMainMovedError,
+    RepositoryIdentityError,
     RepositoryRootError,
     WorktreeManager,
+    _run_fixed_command,
 )
 
 
@@ -74,10 +79,77 @@ def manager_for(root: Path, fixture: LocalRemoteFixture) -> WorktreeManager:
         state_store=RunStateStore(root / "state"),
         worktrees_root=root / "worktrees",
         repository="IvesLiu1026/VISTA-World",
+        expected_remote_url=str(fixture.remote),
     )
 
 
 class WorktreeLifecycleTests(unittest.TestCase):
+    def test_remote_url_must_match_pinned_repository_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            manager = WorktreeManager(
+                repository_root=fixture.checkout,
+                state_store=RunStateStore(root / "state"),
+                worktrees_root=root / "worktrees",
+                repository="IvesLiu1026/VISTA-World",
+                expected_remote_url=str(root / "different.git"),
+            )
+            with self.assertRaisesRegex(RepositoryIdentityError, "pinned target"):
+                manager.preflight()
+            self.assertEqual(
+                git(fixture.checkout, "branch", "--list", "codex/daily/*"), ""
+            )
+
+    def test_manager_ignores_caller_path_and_fake_git(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            marker = root / "fake-git-ran"
+            fake_git = fake_bin / "git"
+            fake_git.write_text(
+                f"#!/bin/sh\nprintf pwned > {marker}\nexit 99\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+            old_path = os.environ.get("PATH")
+            os.environ["PATH"] = str(fake_bin)
+            try:
+                pin = manager_for(root, fixture).pin_remote_main()
+            finally:
+                if old_path is None:
+                    os.environ.pop("PATH", None)
+                else:
+                    os.environ["PATH"] = old_path
+            self.assertEqual(pin.sha, fixture.head)
+            self.assertFalse(marker.exists())
+
+    def test_timeout_terminates_command_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pid_file = root / "child.pid"
+            script = root / "hang.sh"
+            script.write_text(
+                f"#!/bin/sh\nsleep 30 &\nprintf '%s' \"$!\" > {pid_file}\nwait\n",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+            with self.assertRaisesRegex(GitOperationError, "timed out"):
+                _run_fixed_command(
+                    (str(script),),
+                    cwd=root,
+                    environment={"PATH": "/usr/bin:/bin"},
+                    timeout_seconds=0.2,
+                    operation="timeout fixture",
+                )
+            child_pid = int(pid_file.read_text(encoding="utf-8"))
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and Path(f"/proc/{child_pid}").exists():
+                time.sleep(0.02)
+            self.assertFalse(Path(f"/proc/{child_pid}").exists())
+
     def test_duplicate_date_repository_base_is_an_idempotent_replay(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -115,6 +187,7 @@ class WorktreeLifecycleTests(unittest.TestCase):
                 state_store=RunStateStore(root / "state"),
                 worktrees_root=root / "worktrees",
                 repository="IvesLiu1026/VISTA-World",
+                expected_remote_url=str(fixture.remote),
             )
             with self.assertRaisesRegex(RepositoryRootError, "exact"):
                 manager.preflight()
