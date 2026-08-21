@@ -38,6 +38,22 @@ _SYSTEM_EXECUTABLE_DIRS = (
     Path("/bin"),
 )
 _SYSTEM_PATH = os.pathsep.join(str(path) for path in _SYSTEM_EXECUTABLE_DIRS)
+_FIXED_GIT_CONFIG = (
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "credential.interactive=never",
+    "-c",
+    "protocol.ext.allow=never",
+    "-c",
+    "http.proxy=",
+    "-c",
+    "http.https://github.com/.proxy=",
+)
 
 
 class WorktreeError(StateError):
@@ -161,6 +177,7 @@ def _safe_git_environment() -> Mapping[str, str]:
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_COUNT": "0",
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
         "GCM_INTERACTIVE": "Never",
     }
 
@@ -292,7 +309,13 @@ class WorktreeManager:
         operation: str = "git operation",
     ) -> subprocess.CompletedProcess[str]:
         result = _run_fixed_command(
-            (str(self._git_executable), *args),
+            (
+                str(self._git_executable),
+                *_FIXED_GIT_CONFIG,
+                "-c",
+                f"remote.{self.remote}.proxy=",
+                *args,
+            ),
             cwd=cwd or self.repository_root,
             environment=_safe_git_environment(),
             timeout_seconds=60,
