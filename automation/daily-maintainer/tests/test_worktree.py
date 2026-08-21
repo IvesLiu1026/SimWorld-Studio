@@ -14,6 +14,7 @@ from vista_daily_maintainer.state import (
     PublicationSnapshot,
     PullRequestState,
     RunStateStore,
+    StateContractError,
 )
 from vista_daily_maintainer.worktree import (
     DirtyRepositoryError,
@@ -35,6 +36,18 @@ def git(cwd: Path, *args: str) -> str:
         check=True,
         capture_output=True,
         text=True,
+    )
+    return result.stdout.strip()
+
+
+def git_input(cwd: Path, input_text: str, *args: str) -> str:
+    result = subprocess.run(
+        ("git", *args),
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        input=input_text,
     )
     return result.stdout.strip()
 
@@ -73,13 +86,25 @@ class LocalRemoteFixture:
         return self.head
 
 
+class LocalRemoteWorktreeManager(WorktreeManager):
+    """Test-only transport override for an isolated local bare repository."""
+
+    def __init__(self, *, local_remote_url: str, **kwargs: object) -> None:
+        self._local_remote_url = local_remote_url
+        kwargs.pop("expected_remote_url", None)
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+
+    def _transport_url(self) -> str:
+        return self._local_remote_url
+
+
 def manager_for(root: Path, fixture: LocalRemoteFixture) -> WorktreeManager:
-    return WorktreeManager(
+    return LocalRemoteWorktreeManager(
+        local_remote_url=str(fixture.remote),
         repository_root=fixture.checkout,
         state_store=RunStateStore(root / "state"),
         worktrees_root=root / "worktrees",
         repository="IvesLiu1026/VISTA-World",
-        expected_remote_url=str(fixture.remote),
     )
 
 
@@ -88,18 +113,98 @@ class WorktreeLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fixture = LocalRemoteFixture(root)
-            manager = WorktreeManager(
+            manager = LocalRemoteWorktreeManager(
+                local_remote_url=str(root / "different.git"),
                 repository_root=fixture.checkout,
                 state_store=RunStateStore(root / "state"),
                 worktrees_root=root / "worktrees",
                 repository="IvesLiu1026/VISTA-World",
-                expected_remote_url=str(root / "different.git"),
             )
             with self.assertRaisesRegex(RepositoryIdentityError, "pinned target"):
                 manager.preflight()
             self.assertEqual(
                 git(fixture.checkout, "branch", "--list", "codex/daily/*"), ""
             )
+
+    def test_unattended_constructor_rejects_noncanonical_transport_or_remote(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            common = {
+                "repository_root": fixture.checkout,
+                "state_store": RunStateStore(root / "state"),
+                "worktrees_root": root / "worktrees",
+                "repository": "IvesLiu1026/VISTA-World",
+            }
+            with self.assertRaisesRegex(StateContractError, "canonical"):
+                WorktreeManager(
+                    **common,
+                    expected_remote_url=str(fixture.remote),
+                )
+            with self.assertRaisesRegex(StateContractError, "named origin"):
+                WorktreeManager(**common, remote="upstream")
+
+    def test_git_replace_ref_cannot_change_managed_worktree_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            malicious_blob = git_input(
+                fixture.checkout,
+                "VALUE = 999\n",
+                "hash-object",
+                "-w",
+                "--stdin",
+            )
+            malicious_src_tree = git_input(
+                fixture.checkout,
+                f"100644 blob {malicious_blob}\tapp.py\n",
+                "mktree",
+            )
+            malicious_root_tree = git_input(
+                fixture.checkout,
+                f"040000 tree {malicious_src_tree}\tsrc\n",
+                "mktree",
+            )
+            replacement = git(
+                fixture.checkout,
+                "commit-tree",
+                malicious_root_tree,
+                "-m",
+                "attacker replacement",
+            )
+            git(fixture.checkout, "replace", fixture.head, replacement)
+            self.assertEqual(
+                git(fixture.checkout, "show", "HEAD:src/app.py"),
+                "VALUE = 999",
+            )
+
+            prepared = manager_for(root, fixture).prepare(
+                run_date="2026-08-21", candidate_slug="doc-link"
+            )
+
+            worktree = Path(prepared.state.worktree_path or "")
+            self.assertEqual(
+                (worktree / "src" / "app.py").read_text(encoding="utf-8"),
+                "VALUE = 1\n",
+            )
+
+    def test_repository_local_transport_attack_config_is_rejected(self) -> None:
+        attack_configs = (
+            ("http.sslVerify", "false"),
+            ("http.curloptResolve", "github.com:443:127.0.0.1"),
+            ("http.extraHeader", "X-Attack: injected"),
+            ("core.sshCommand", "/tmp/attacker-ssh"),
+            ("url.file:///tmp/attacker/.insteadOf", "https://github.com/"),
+        )
+        for key, value in attack_configs:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture = LocalRemoteFixture(root)
+                git(fixture.checkout, "config", key, value)
+                with self.assertRaisesRegex(RepositoryIdentityError, "unsafe"):
+                    manager_for(root, fixture).preflight()
 
     def test_manager_ignores_caller_path_and_fake_git(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -200,12 +305,12 @@ class WorktreeLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fixture = LocalRemoteFixture(root)
-            manager = WorktreeManager(
+            manager = LocalRemoteWorktreeManager(
+                local_remote_url=str(fixture.remote),
                 repository_root=fixture.checkout / "src",
                 state_store=RunStateStore(root / "state"),
                 worktrees_root=root / "worktrees",
                 repository="IvesLiu1026/VISTA-World",
-                expected_remote_url=str(fixture.remote),
             )
             with self.assertRaisesRegex(RepositoryRootError, "exact"):
                 manager.preflight()
@@ -252,6 +357,33 @@ class WorktreeLifecycleTests(unittest.TestCase):
                 git(fixture.checkout, "rev-parse", prepared.state.branch_name),
                 prepared.state.key.base_sha,
             )
+
+    def test_final_remote_check_revalidates_origin_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            manager = manager_for(root, fixture)
+            prepared = manager.prepare(run_date="2026-08-21", candidate_slug="doc-link")
+            replacement_remote = root / "replacement.git"
+            git(
+                root,
+                "init",
+                "-q",
+                "--bare",
+                "--initial-branch=main",
+                str(replacement_remote),
+            )
+            git(fixture.checkout, "push", "-q", str(replacement_remote), "main")
+            git(
+                fixture.checkout,
+                "remote",
+                "set-url",
+                "origin",
+                str(replacement_remote),
+            )
+
+            with self.assertRaisesRegex(RepositoryIdentityError, "pinned target"):
+                manager.assert_remote_unchanged(prepared.state)
 
     def test_stale_lock_and_reboot_catch_up_are_safe_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -305,6 +437,43 @@ class WorktreeLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 git(fixture.checkout, "branch", "--list", "codex/daily/*"), ""
             )
+
+    def test_ready_worktree_replay_with_known_pr_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = LocalRemoteFixture(root)
+            manager = manager_for(root, fixture)
+            ready = manager.prepare(
+                run_date="2026-08-21", candidate_slug="doc-link"
+            ).state
+            publication = PublicationSnapshot(
+                state=PullRequestState.DRAFT,
+                number=7,
+                url="https://github.com/IvesLiu1026/VISTA-World/pull/7",
+                head_sha=fixture.head,
+            )
+
+            with self.assertRaises(ExistingPublicationError) as first:
+                manager.prepare(
+                    run_date="2026-08-21",
+                    candidate_slug="doc-link",
+                    publication=publication,
+                )
+            self.assertEqual(first.exception.state.publication, publication)
+            self.assertEqual(first.exception.state.lifecycle, Lifecycle.WORKTREE_READY)
+            self.assertEqual(first.exception.state.worktree_path, ready.worktree_path)
+
+            with self.assertRaises(ExistingPublicationError):
+                manager.prepare(
+                    run_date="2026-08-21",
+                    candidate_slug="doc-link",
+                )
+            with self.assertRaises(ExistingPublicationError):
+                manager.prepare(
+                    run_date="2026-08-21",
+                    candidate_slug="doc-link",
+                    publication=PublicationSnapshot(state=PullRequestState.NONE),
+                )
 
     def test_existing_daily_branch_is_observed_without_deletion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -59,6 +59,70 @@ class RunStateTests(unittest.TestCase):
         with self.assertRaisesRegex(StateContractError, "oversized"):
             parse_state(oversized)
 
+    def test_state_parser_rejects_every_malformed_leaf_as_contract_error(self) -> None:
+        base = json.loads(serialize_state(make_state()))
+        mutations = {
+            "schema_version": ("schema_version", []),
+            "run_id": ("run_id", []),
+            "run_date": ("run_date", []),
+            "repository": ("repository", []),
+            "base_sha": ("base_sha", []),
+            "remote": ("remote", []),
+            "remote_branch": ("remote_branch", []),
+            "branch_name": ("branch_name", []),
+            "lifecycle": ("lifecycle", []),
+            "branch_disposition": ("branch_disposition", []),
+            "branch_head_sha": ("branch_head_sha", []),
+            "worktree_path": ("worktree_path", []),
+            "observed_remote_sha": ("observed_remote_sha", []),
+            "publication.state": ("publication.state", []),
+            "publication.number": ("publication.number", True),
+            "publication.url": ("publication.url", []),
+            "publication.head_sha": ("publication.head_sha", []),
+        }
+        for label, (path, invalid) in mutations.items():
+            with self.subTest(label=label):
+                value = json.loads(json.dumps(base))
+                if path.startswith("publication."):
+                    value["publication"][path.removeprefix("publication.")] = invalid
+                else:
+                    value[path] = invalid
+                with self.assertRaises(StateContractError):
+                    parse_state(json.dumps(value))
+
+    def test_worktree_path_array_regression_never_leaks_type_error(self) -> None:
+        value = json.loads(serialize_state(make_state()))
+        value["worktree_path"] = []
+        with self.assertRaisesRegex(StateContractError, "worktree path"):
+            parse_state(json.dumps(value))
+
+    def test_state_parser_enforces_leaf_ranges_and_strict_numbers(self) -> None:
+        value = json.loads(serialize_state(make_state()))
+        value["worktree_path"] = "/" + ("a" * 4097)
+        with self.assertRaisesRegex(StateContractError, "worktree path"):
+            parse_state(json.dumps(value))
+
+        value = json.loads(serialize_state(make_state()))
+        value["publication"] = {
+            "state": "draft",
+            "number": 2**63,
+            "url": "https://github.com/IvesLiu1026/VISTA-World/pull/1",
+            "head_sha": SHA_A,
+        }
+        with self.assertRaisesRegex(StateContractError, "number"):
+            parse_state(json.dumps(value))
+
+        non_finite = (
+            serialize_state(make_state())
+            .decode("utf-8")
+            .replace('"number":null', '"number":NaN')
+        )
+        with self.assertRaisesRegex(StateContractError, "non-finite"):
+            parse_state(non_finite)
+
+        with self.assertRaisesRegex(StateContractError, "Unicode"):
+            parse_state("\ud800")
+
     def test_publication_snapshot_is_repository_bound(self) -> None:
         snapshot = PublicationSnapshot(
             state=PullRequestState.DRAFT,

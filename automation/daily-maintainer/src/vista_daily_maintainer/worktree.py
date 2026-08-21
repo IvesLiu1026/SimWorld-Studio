@@ -50,9 +50,37 @@ _FIXED_GIT_CONFIG = (
     "-c",
     "protocol.ext.allow=never",
     "-c",
+    "http.sslVerify=true",
+    "-c",
+    "http.curloptResolve=",
+    "-c",
+    "http.extraHeader=",
+    "-c",
+    "http.followRedirects=initial",
+    "-c",
     "http.proxy=",
     "-c",
     "http.https://github.com/.proxy=",
+    "-c",
+    "core.sshCommand=/bin/false",
+    "-c",
+    "ssh.variant=simple",
+)
+
+_UNSAFE_LOCAL_CONFIG_PREFIXES = (
+    "credential.",
+    "http.",
+    "include.",
+    "includeif.",
+    "protocol.",
+    "url.",
+)
+_UNSAFE_LOCAL_CONFIG_KEYS = frozenset(
+    {
+        "core.gitproxy",
+        "core.sshcommand",
+        "ssh.variant",
+    }
 )
 
 
@@ -176,6 +204,7 @@ def _safe_git_environment() -> Mapping[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_COUNT": "0",
+        "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_OPTIONAL_LOCKS": "0",
         "GCM_INTERACTIVE": "Never",
@@ -264,17 +293,19 @@ class WorktreeManager:
         self.repository = repository
         self.remote = remote
         self.remote_branch = remote_branch
-        self.expected_remote_url = expected_remote_url or (
-            f"https://github.com/{repository}.git"
-        )
-        if (
-            not isinstance(self.expected_remote_url, str)
-            or not self.expected_remote_url
-            or any(character in self.expected_remote_url for character in "\0\r\n")
-        ):
-            raise StateContractError("expected remote URL is invalid")
         self._git_executable = _trusted_git_executable()
         RemotePin(repository, remote, remote_branch, "0" * 40)
+        canonical_remote_url = f"https://github.com/{repository}.git"
+        if self.remote != "origin":
+            raise StateContractError("unattended remote must be named origin")
+        if expected_remote_url is not None and (
+            not isinstance(expected_remote_url, str)
+            or expected_remote_url != canonical_remote_url
+        ):
+            raise StateContractError(
+                "unattended remote URL must be the exact canonical GitHub HTTPS URL"
+            )
+        self.expected_remote_url = canonical_remote_url
         worktrees_path = Path(worktrees_root).absolute()
         repo_resolved = self.repository_root.resolve(strict=False)
         state_resolved = state_store.root.resolve(strict=False)
@@ -348,7 +379,48 @@ class WorktreeManager:
             )
         self._validate_remote_identity()
 
+    def _transport_url(self) -> str:
+        """Return the code-owned canonical transport target.
+
+        Tests may override this method to exercise the lifecycle against an
+        isolated local bare repository.  The production constructor itself
+        accepts only the canonical GitHub HTTPS identity.
+        """
+
+        return self.expected_remote_url
+
+    def _validate_local_transport_config(self) -> None:
+        result = self._git(
+            "config",
+            "--local",
+            "--name-only",
+            "--null",
+            "--list",
+            check=False,
+            operation="repository transport configuration check",
+        )
+        if result.returncode != 0:
+            raise RepositoryIdentityError(
+                "repository-local Git configuration could not be audited"
+            )
+        names = tuple(name for name in result.stdout.split("\0") if name)
+        remote_prefix = f"remote.{self.remote.casefold()}."
+        for name in names:
+            normalized = name.casefold()
+            unsafe_remote_setting = normalized.startswith(remote_prefix) and (
+                normalized.removeprefix(remote_prefix) not in {"fetch", "url"}
+            )
+            if (
+                normalized in _UNSAFE_LOCAL_CONFIG_KEYS
+                or normalized.startswith(_UNSAFE_LOCAL_CONFIG_PREFIXES)
+                or unsafe_remote_setting
+            ):
+                raise RepositoryIdentityError(
+                    "repository-local Git transport configuration is unsafe"
+                )
+
     def _validate_remote_identity(self) -> None:
+        self._validate_local_transport_config()
         result = self._git(
             "remote",
             "get-url",
@@ -358,7 +430,7 @@ class WorktreeManager:
             operation="repository remote identity check",
         )
         urls = tuple(line for line in result.stdout.splitlines() if line)
-        if result.returncode != 0 or urls != (self.expected_remote_url,):
+        if result.returncode != 0 or urls != (self._transport_url(),):
             raise RepositoryIdentityError(
                 "repository remote URL does not match the pinned target"
             )
@@ -375,11 +447,12 @@ class WorktreeManager:
             raise DirtyRepositoryError(f"{label} is dirty; refusing to reuse it")
 
     def _observe_remote(self) -> str:
+        self._validate_remote_identity()
         result = self._git(
             "ls-remote",
             "--exit-code",
             "--refs",
-            self.remote,
+            self._transport_url(),
             f"refs/heads/{self.remote_branch}",
             check=False,
             operation="remote branch observation",
@@ -398,11 +471,12 @@ class WorktreeManager:
         return fields[0]
 
     def _fetch_remote_branch(self) -> None:
+        self._validate_remote_identity()
         self._git(
             "fetch",
             "--no-tags",
             "--no-write-fetch-head",
-            self.remote,
+            self._transport_url(),
             f"refs/heads/{self.remote_branch}",
             operation="remote branch fetch",
         )
@@ -743,7 +817,12 @@ class WorktreeManager:
                     raise StateContractError(
                         "idempotency key is already bound to a different candidate slug"
                     )
-                if publication != PublicationSnapshot():
+                if existing.publication.state not in {
+                    PullRequestState.UNKNOWN,
+                    PullRequestState.NONE,
+                }:
+                    publication = existing.publication
+                elif publication != PublicationSnapshot():
                     if existing.publication != PublicationSnapshot() and (
                         existing.publication != publication
                     ):
@@ -762,6 +841,11 @@ class WorktreeManager:
                     publication=publication,
                     existing=existing,
                 )
+                if publication.state not in {
+                    PullRequestState.UNKNOWN,
+                    PullRequestState.NONE,
+                }:
+                    raise ExistingPublicationError(existing)
                 if existing.lifecycle is Lifecycle.WORKTREE_READY:
                     self._validate_ready_worktree(existing)
                     return PrepareResult(existing, True, lease.recovered_stale)
@@ -865,8 +949,13 @@ class WorktreeManager:
         """Recheck the pinned base without mutating or removing an existing run."""
 
         with self.state_store.lock(self.repository):
-            if state.key.repository != self.repository:
+            if (
+                state.key.repository != self.repository
+                or state.remote != self.remote
+                or state.remote_branch != self.remote_branch
+            ):
                 raise StateContractError("run state belongs to a different repository")
+            self._validate_repository_root()
             pin = RemotePin(
                 repository=self.repository,
                 remote=self.remote,

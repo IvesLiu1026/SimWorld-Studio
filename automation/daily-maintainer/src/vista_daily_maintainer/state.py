@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 
 STATE_SCHEMA_VERSION = "vista.world.daily-maintainer.state.v1"
-_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _BRANCH = re.compile(
     r"^codex/daily/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]{0,95}$"
@@ -25,6 +25,9 @@ _PR_URL = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)$"
 )
 _MAX_STATE_BYTES = 64 * 1024
+_MAX_WORKTREE_PATH_BYTES = 4096
+_MAX_PR_URL_BYTES = 512
+_MAX_PR_NUMBER = 2**63 - 1
 
 
 class StateError(RuntimeError):
@@ -102,6 +105,44 @@ def _require_sha(value: object, label: str) -> str:
     return value
 
 
+def _require_text(
+    value: object,
+    label: str,
+    *,
+    maximum_bytes: int,
+    nullable: bool = False,
+) -> str | None:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, str):
+        raise StateContractError(f"{label} must be text")
+    try:
+        size = len(value.encode("utf-8", "strict"))
+    except UnicodeEncodeError as exc:
+        raise StateContractError(f"{label} must be valid Unicode text") from exc
+    if not value or size > maximum_bytes or "\0" in value:
+        raise StateContractError(f"{label} is outside its allowed range")
+    return value
+
+
+def _require_optional_sha(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    return _require_sha(value, label)
+
+
+def _require_optional_pr_number(value: object) -> int | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= _MAX_PR_NUMBER
+    ):
+        raise StateContractError("pull request number is outside its allowed range")
+    return value
+
+
 @dataclass(frozen=True)
 class RunKey:
     run_date: str
@@ -126,17 +167,14 @@ class PublicationSnapshot:
     head_sha: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.state, (str, PullRequestState)):
+            raise StateContractError("pull request state is invalid")
         try:
             state_value = PullRequestState(self.state)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise StateContractError("pull request state is invalid") from exc
         object.__setattr__(self, "state", state_value)
-        if self.number is not None and (
-            isinstance(self.number, bool)
-            or not isinstance(self.number, int)
-            or self.number < 1
-        ):
-            raise StateContractError("pull request number must be positive")
+        _require_optional_pr_number(self.number)
         if self.head_sha is not None:
             _require_sha(self.head_sha, "pull request head SHA")
         if state_value in {PullRequestState.UNKNOWN, PullRequestState.NONE}:
@@ -153,7 +191,12 @@ class PublicationSnapshot:
             raise StateContractError(
                 "known pull request state requires number and canonical URL"
             )
-        match = _PR_URL.fullmatch(self.url) if isinstance(self.url, str) else None
+        url = _require_text(
+            self.url,
+            "pull request URL",
+            maximum_bytes=_MAX_PR_URL_BYTES,
+        )
+        match = _PR_URL.fullmatch(url)
         if not match or int(match.group(2)) != self.number:
             raise StateContractError("pull request URL does not match its number")
 
@@ -180,7 +223,12 @@ class RunState:
     schema_version: str = STATE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.schema_version != STATE_SCHEMA_VERSION:
+        if not isinstance(self.key, RunKey):
+            raise StateContractError("run key is invalid")
+        if (
+            not isinstance(self.schema_version, str)
+            or self.schema_version != STATE_SCHEMA_VERSION
+        ):
             raise StateContractError("unsupported run state schema version")
         if not isinstance(self.remote, str) or not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", self.remote
@@ -196,10 +244,14 @@ class RunState:
             raise StateContractError("daily branch name is invalid")
         if not _BRANCH.fullmatch(self.branch_name):
             raise StateContractError("daily branch name is invalid")
+        if not isinstance(self.lifecycle, (str, Lifecycle)) or not isinstance(
+            self.branch_disposition, (str, BranchDisposition)
+        ):
+            raise StateContractError("run lifecycle or branch disposition is invalid")
         try:
             lifecycle = Lifecycle(self.lifecycle)
             disposition = BranchDisposition(self.branch_disposition)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise StateContractError(
                 "run lifecycle or branch disposition is invalid"
             ) from exc
@@ -210,11 +262,27 @@ class RunState:
         if self.observed_remote_sha is not None:
             _require_sha(self.observed_remote_sha, "observed remote SHA")
         if self.worktree_path is not None:
-            path = Path(self.worktree_path)
-            if not path.is_absolute() or ".." in path.parts:
+            worktree_path = _require_text(
+                self.worktree_path,
+                "worktree path",
+                maximum_bytes=_MAX_WORKTREE_PATH_BYTES,
+            )
+            assert worktree_path is not None
+            if worktree_path.startswith("//"):
                 raise StateContractError(
                     "worktree path must be absolute and normalized"
                 )
+            path = Path(self.worktree_path)
+            if (
+                not path.is_absolute()
+                or ".." in path.parts
+                or str(path) != worktree_path
+            ):
+                raise StateContractError(
+                    "worktree path must be absolute and normalized"
+                )
+        if not isinstance(self.publication, PublicationSnapshot):
+            raise StateContractError("publication snapshot is invalid")
         self.publication.validate_repository(self.key.repository)
         if disposition is BranchDisposition.ABSENT and self.branch_head_sha is not None:
             raise StateContractError("absent branch cannot claim a head SHA")
@@ -349,6 +417,10 @@ def _strict_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_json_constant(value: str) -> None:
+    raise StateContractError(f"non-finite JSON number is forbidden: {value}")
+
+
 def _expect_fields(
     mapping: Mapping[str, object], *, required: set[str], label: str
 ) -> None:
@@ -361,19 +433,32 @@ def _expect_fields(
 
 
 def parse_state(payload: bytes | str) -> RunState:
-    if isinstance(payload, bytes):
-        payload_size = len(payload)
-    elif isinstance(payload, str):
-        payload_size = len(payload.encode("utf-8", "strict"))
-    else:
-        raise StateContractError("state must be bytes or text")
+    try:
+        if isinstance(payload, bytes):
+            payload_size = len(payload)
+        elif isinstance(payload, str):
+            payload_size = len(payload.encode("utf-8", "strict"))
+        else:
+            raise StateContractError("state must be bytes or text")
+    except UnicodeEncodeError as exc:
+        raise StateContractError("state must be valid Unicode text") from exc
     if payload_size > _MAX_STATE_BYTES:
         raise StateContractError("state is oversized")
     try:
-        value = json.loads(payload, object_pairs_hook=_strict_json_pairs)
+        value = json.loads(
+            payload,
+            object_pairs_hook=_strict_json_pairs,
+            parse_constant=_reject_json_constant,
+        )
     except StateContractError:
         raise
-    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+    except (
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+    ) as exc:
         raise StateContractError("state is not valid strict JSON") from exc
     if not isinstance(value, Mapping):
         raise StateContractError("state must be a JSON object")
@@ -405,31 +490,81 @@ def parse_state(payload: bytes | str) -> RunState:
         required={"state", "number", "url", "head_sha"},
         label="publication",
     )
-    key = RunKey(
-        run_date=value["run_date"],  # type: ignore[arg-type]
-        repository=value["repository"],  # type: ignore[arg-type]
-        base_sha=value["base_sha"],  # type: ignore[arg-type]
-    )
-    if value["run_id"] != key.run_id:
-        raise StateContractError("run_id is not bound to date/repository/base SHA")
-    return RunState(
-        key=key,
-        remote=value["remote"],  # type: ignore[arg-type]
-        remote_branch=value["remote_branch"],  # type: ignore[arg-type]
-        branch_name=value["branch_name"],  # type: ignore[arg-type]
-        lifecycle=value["lifecycle"],  # type: ignore[arg-type]
-        branch_disposition=value["branch_disposition"],  # type: ignore[arg-type]
-        branch_head_sha=value["branch_head_sha"],  # type: ignore[arg-type]
-        worktree_path=value["worktree_path"],  # type: ignore[arg-type]
-        observed_remote_sha=value["observed_remote_sha"],  # type: ignore[arg-type]
-        publication=PublicationSnapshot(
-            state=publication["state"],  # type: ignore[arg-type]
-            number=publication["number"],  # type: ignore[arg-type]
-            url=publication["url"],  # type: ignore[arg-type]
-            head_sha=publication["head_sha"],  # type: ignore[arg-type]
-        ),
-        schema_version=value["schema_version"],  # type: ignore[arg-type]
-    )
+    try:
+        schema_version = _require_text(
+            value["schema_version"], "schema version", maximum_bytes=128
+        )
+        run_id = _require_text(value["run_id"], "run_id", maximum_bytes=512)
+        run_date = _require_text(value["run_date"], "run date", maximum_bytes=10)
+        repository = _require_text(value["repository"], "repository", maximum_bytes=201)
+        base_sha = _require_sha(value["base_sha"], "base SHA")
+        remote = _require_text(value["remote"], "remote", maximum_bytes=64)
+        remote_branch = _require_text(
+            value["remote_branch"], "remote branch", maximum_bytes=128
+        )
+        branch_name = _require_text(
+            value["branch_name"], "daily branch name", maximum_bytes=128
+        )
+        lifecycle = _require_text(value["lifecycle"], "run lifecycle", maximum_bytes=32)
+        branch_disposition = _require_text(
+            value["branch_disposition"],
+            "branch disposition",
+            maximum_bytes=32,
+        )
+        branch_head_sha = _require_optional_sha(
+            value["branch_head_sha"], "branch head SHA"
+        )
+        worktree_path = _require_text(
+            value["worktree_path"],
+            "worktree path",
+            maximum_bytes=_MAX_WORKTREE_PATH_BYTES,
+            nullable=True,
+        )
+        observed_remote_sha = _require_optional_sha(
+            value["observed_remote_sha"], "observed remote SHA"
+        )
+        publication_state = _require_text(
+            publication["state"], "pull request state", maximum_bytes=16
+        )
+        publication_number = _require_optional_pr_number(publication["number"])
+        publication_url = _require_text(
+            publication["url"],
+            "pull request URL",
+            maximum_bytes=_MAX_PR_URL_BYTES,
+            nullable=True,
+        )
+        publication_head_sha = _require_optional_sha(
+            publication["head_sha"], "pull request head SHA"
+        )
+        key = RunKey(
+            run_date=run_date,
+            repository=repository,
+            base_sha=base_sha,
+        )
+        if run_id != key.run_id:
+            raise StateContractError("run_id is not bound to date/repository/base SHA")
+        return RunState(
+            key=key,
+            remote=remote,
+            remote_branch=remote_branch,
+            branch_name=branch_name,
+            lifecycle=lifecycle,
+            branch_disposition=branch_disposition,
+            branch_head_sha=branch_head_sha,
+            worktree_path=worktree_path,
+            observed_remote_sha=observed_remote_sha,
+            publication=PublicationSnapshot(
+                state=publication_state,
+                number=publication_number,
+                url=publication_url,
+                head_sha=publication_head_sha,
+            ),
+            schema_version=schema_version,
+        )
+    except StateContractError:
+        raise
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise StateContractError("state violates the strict contract") from exc
 
 
 def _assert_no_symlink_components(path: Path) -> None:
