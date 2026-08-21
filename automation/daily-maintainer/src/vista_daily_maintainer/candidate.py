@@ -319,6 +319,13 @@ def path_matches_pattern(path: str, pattern: str) -> bool:
     return re.fullmatch("".join(expression), path) is not None
 
 
+def has_v1_forbidden_authority(path: str) -> bool:
+    """Return whether an actual repository path crosses a V1 authority boundary."""
+
+    parts = tuple(part.lower() for part in path.split("/") if part)
+    return any(part in _V1_FORBIDDEN_AUTHORITY for part in parts)
+
+
 def enforce_v1_candidate_policy(candidate: Candidate) -> None:
     """Apply the approved unattended Tier 0/1 authority envelope."""
 
@@ -338,8 +345,20 @@ def enforce_v1_candidate_policy(candidate: Candidate) -> None:
         literal_parts = tuple(
             part for part in parts if not any(character in part for character in "*?")
         )
-        if pattern == "**" or any(
-            part in _V1_FORBIDDEN_AUTHORITY for part in literal_parts
+        disguised_forbidden_parts = tuple(
+            part
+            for part in parts
+            if part not in {"*", "**"}
+            and any(character in part for character in "*?")
+            and any(
+                path_matches_pattern(authority, part)
+                for authority in _V1_FORBIDDEN_AUTHORITY
+            )
+        )
+        if (
+            pattern == "**"
+            or any(part in _V1_FORBIDDEN_AUTHORITY for part in literal_parts)
+            or disguised_forbidden_parts
         ):
             raise CandidateContractError(
                 f"V1 candidate policy forbids path authority: {pattern}"
