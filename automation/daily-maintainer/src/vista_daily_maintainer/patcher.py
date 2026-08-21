@@ -6,43 +6,98 @@ import json
 import os
 import re
 import stat
+import subprocess
+import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Mapping
 
-from .candidate import Candidate
+from . import candidate as candidate_contract
+from .candidate import (
+    Backlog,
+    BacklogTrust,
+    Candidate,
+    CandidateContractError,
+    load_trusted_backlog,
+    path_matches_pattern,
+)
+from .profiles import BUILTIN_VALIDATION_PROFILES
 
 
+# Prompt/schema hashes are updated with the files in the same reviewed commit.
 PATCHER_PROMPT_SHA256 = (
-    "a6b55328e59a017156df3ae8644ec4635181c758466d7c937d118ae9a7076bfd"
+    "88e2ecb639f9466fbbabeab71d74348c8b3705a03b84b1f67de8e4eff0a1598e"
 )
 PATCHER_OUTPUT_SCHEMA_SHA256 = (
-    "d65ef05b457c38c2192c4b6eb0db2acce7c9d095578239f963934e579e96fc78"
+    "b41c1cba4171999b7f9bd907811e5f153e812a48897117118432cbc511809a5e"
 )
 PATCHER_MODEL = "gpt-5.6-sol"
 PATCHER_REASONING_EFFORT = "ultra"
 PATCHER_REPOSITORY = "IvesLiu1026/VISTA-World"
+PATCHER_PERMISSION_PROFILE = "vista-daily-patcher"
+PINNED_CODEX_VERSION = "codex-cli 0.144.4"
+PINNED_CODEX_SHA256 = (
+    "2b3edc9cdfd1717fba3dbc92817205a8a2c7511d459e456d4817eeff6f78ed7a"
+)
+PINNED_GIT_VERSION = "git version 2.34.1"
+PINNED_GIT_SHA256 = (
+    "587ef21868c948b883993e23209b86a72a6ddc06aab1545c697ffc31075acd4a"
+)
 MAX_PATCHER_PROMPT_BYTES = 64 * 1024
+MAX_CONTROL_MANIFEST_BYTES = 64 * 1024
+MAX_PATCHER_OUTPUT_BYTES = 64 * 1024
+CONTROL_OWNER_UID = 0
+
+APPROVED_PUBLIC_REPOSITORY_AUTH_KINDS = frozenset(
+    {"api_key", "codex_access_token", "workload_identity"}
+)
+DISABLED_CODEX_FEATURES = (
+    "apps",
+    "artifact",
+    "auth_elicitation",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "code_mode",
+    "code_mode_host",
+    "code_mode_only",
+    "computer_use",
+    "current_time_reminder",
+    "default_mode_request_user_input",
+    "enable_mcp_apps",
+    "enable_fanout",
+    "goals",
+    "guardian_approval",
+    "hooks",
+    "image_generation",
+    "in_app_browser",
+    "memories",
+    "multi_agent",
+    "multi_agent_v2",
+    "network_proxy",
+    "plugin_sharing",
+    "plugins",
+    "realtime_conversation",
+    "remote_plugin",
+    "request_permissions_tool",
+    "skill_mcp_dependency_install",
+    "standalone_web_search",
+    "tool_call_mcp_elicitation",
+    "tool_suggest",
+    "unavailable_dummy_tools",
+    "workspace_dependencies",
+)
+ALLOWED_PATCHER_TOOL_SURFACES = ("apply_patch", "local_shell")
 
 _OBJECT_ID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_SECRET_ENV_NAMES = frozenset(
-    {
-        "ANTHROPIC_API_KEY",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AZURE_OPENAI_API_KEY",
-        "CODEX_ACCESS_TOKEN",
-        "CODEX_API_KEY",
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "GOOGLE_API_KEY",
-        "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
-        "SSH_AUTH_SOCK",
-    }
-)
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+_NAMESPACE_ID = re.compile(r"^(?:mnt|net|pid|user):\[[1-9][0-9]*\]$")
+_CGROUP = re.compile(r"^/[A-Za-z0-9_.@:/-]+$")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_SAFE_RELATIVE_PATH = re.compile(r"^[A-Za-z0-9._/-]+$")
+
 _PATCHER_ENV_NAMES = frozenset(
     {
         "PATH",
@@ -63,10 +118,95 @@ _PATCHER_ENV_NAMES = frozenset(
         "UV_NO_CONFIG",
     }
 )
+_SECRET_ENV_NAMES = frozenset(
+    {
+        "ANTHROPIC_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_API_KEY",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GOOGLE_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "SSH_AUTH_SOCK",
+    }
+)
+_OUTPUT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "summary",
+        "paths_considered",
+        "blocker_category",
+    }
+)
+_BLOCKERS = frozenset(
+    {
+        "finding_not_reproduced",
+        "protected_surface_required",
+        "allowlist_insufficient",
+        "validation_unavailable",
+        "safety_uncertain",
+    }
+)
+_BLOCKED_ONLY = _BLOCKERS - {"finding_not_reproduced"}
 
 
 class PatcherContractError(ValueError):
     """The patcher boundary is incomplete or unsafe."""
+
+
+@dataclass(frozen=True)
+class FileEvidence:
+    path: Path
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    owner_uid: int
+    mode: int
+    sha256: str
+
+    def stable_identity(self) -> tuple[int, int, int]:
+        return (self.device, self.inode, self.owner_uid)
+
+
+def candidate_authorization_payload(candidate: Candidate) -> dict[str, object]:
+    """Canonical backlog authority, including fields omitted from model input."""
+
+    if not isinstance(candidate, Candidate):
+        raise PatcherContractError("candidate must use the strict contract")
+    return {
+        "schema_version": "vista.world.daily-maintainer.candidate-authority.v1",
+        "candidate": candidate.normalized_payload(),
+        "state": candidate.state,
+        "not_before": (
+            candidate.not_before.isoformat() if candidate.not_before else None
+        ),
+        "expires_on": (
+            candidate.expires_on.isoformat() if candidate.expires_on else None
+        ),
+        "source": {
+            "kind": candidate.source.kind,
+            "manifest_revision": candidate.source.manifest_revision,
+            "approved_by": candidate.source.approved_by,
+            "issue_url": candidate.source.issue_url,
+        },
+    }
+
+
+def candidate_authorization_digest(candidate: Candidate) -> str:
+    payload = json.dumps(
+        candidate_authorization_payload(candidate),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8", "strict")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -75,7 +215,10 @@ class PatcherRequest:
     repository: str
     base_sha: str
     backlog_sha256: str
+    manifest_revision: int
+    approved_by: str
     candidate: Candidate
+    candidate_sha256: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_date, dt.date) or isinstance(
@@ -92,6 +235,12 @@ class PatcherRequest:
             self.backlog_sha256
         ):
             raise PatcherContractError("backlog digest must be SHA-256")
+        if (
+            isinstance(self.manifest_revision, bool)
+            or not isinstance(self.manifest_revision, int)
+            or self.manifest_revision < 1
+        ):
+            raise PatcherContractError("manifest revision must be positive")
         if not isinstance(self.candidate, Candidate):
             raise PatcherContractError("patcher candidate must use the strict contract")
         if not self.candidate.eligible_on(self.run_date):
@@ -100,6 +249,24 @@ class PatcherRequest:
             raise PatcherContractError(
                 "patcher accepts only Tier 0 or Tier 1 candidates"
             )
+        if self.candidate.source.manifest_revision != self.manifest_revision:
+            raise PatcherContractError("candidate revision does not match the request")
+        if self.candidate.source.approved_by != self.approved_by:
+            raise PatcherContractError("candidate approver does not match the request")
+        unknown_profiles = sorted(
+            set(self.candidate.validation_profiles)
+            - BUILTIN_VALIDATION_PROFILES.ids
+        )
+        if unknown_profiles:
+            raise PatcherContractError(
+                "candidate references an unknown validation profile: "
+                + ", ".join(unknown_profiles)
+            )
+        if (
+            not isinstance(self.candidate_sha256, str)
+            or self.candidate_sha256 != candidate_authorization_digest(self.candidate)
+        ):
+            raise PatcherContractError("candidate authority digest mismatch")
 
     def normalized_payload(self) -> dict[str, object]:
         return {
@@ -108,124 +275,126 @@ class PatcherRequest:
             "repository": self.repository,
             "base_sha": self.base_sha,
             "backlog_sha256": self.backlog_sha256,
+            "manifest_revision": self.manifest_revision,
+            "approved_by": self.approved_by,
+            "candidate_sha256": self.candidate_sha256,
             "candidate": self.candidate.normalized_payload(),
         }
 
 
 @dataclass(frozen=True)
-class IsolationAttestation:
-    """Facts the outer service/container must establish before invoking Codex.
+class TrustedBinary:
+    path: Path
+    sha256: str
+    version: str
 
-    This structure is not a sandbox by itself. The privileged launcher must derive
-    these values from its namespace, mounts, UIDs, and policy installation.
-    """
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, Path) or not self.path.is_absolute():
+            raise PatcherContractError("trusted binary path must be absolute")
+        if not isinstance(self.sha256, str) or not _SHA256.fullmatch(self.sha256):
+            raise PatcherContractError("trusted binary digest must be SHA-256")
+        if (
+            not isinstance(self.version, str)
+            or not self.version
+            or "\n" in self.version
+            or "\r" in self.version
+        ):
+            raise PatcherContractError("trusted binary version is invalid")
 
+
+@dataclass(frozen=True)
+class CredentialBinding:
+    auth_kind: str
+    binding_id: str
+    credential_path: Path
+    device: int
+    inode: int
+
+    def __post_init__(self) -> None:
+        if self.auth_kind not in APPROVED_PUBLIC_REPOSITORY_AUTH_KINDS:
+            raise PatcherContractError(
+                "public-repository automation auth kind is not approved"
+            )
+        if not isinstance(self.binding_id, str) or not _IDENTIFIER.fullmatch(
+            self.binding_id
+        ):
+            raise PatcherContractError("credential binding ID is invalid")
+        if not isinstance(self.credential_path, Path) or not self.credential_path.is_absolute():
+            raise PatcherContractError("credential path must be absolute")
+        for value in (self.device, self.inode):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise PatcherContractError("credential inode binding is invalid")
+
+
+@dataclass(frozen=True)
+class KernelBoundary:
+    mount_namespace: str
+    network_namespace: str
+    pid_namespace: str
+    user_namespace: str
+    cgroup_path: str
+    supplementary_gids: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        values = (
+            (self.mount_namespace, "mnt"),
+            (self.network_namespace, "net"),
+            (self.pid_namespace, "pid"),
+            (self.user_namespace, "user"),
+        )
+        for value, prefix in values:
+            if (
+                not isinstance(value, str)
+                or not _NAMESPACE_ID.fullmatch(value)
+                or not value.startswith(prefix + ":[")
+            ):
+                raise PatcherContractError("kernel namespace binding is invalid")
+        if (
+            not isinstance(self.cgroup_path, str)
+            or self.cgroup_path == "/"
+            or not _CGROUP.fullmatch(self.cgroup_path)
+        ):
+            raise PatcherContractError("dedicated cgroup path is invalid")
+        if (
+            not isinstance(self.supplementary_gids, tuple)
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in self.supplementary_gids
+            )
+            or tuple(sorted(set(self.supplementary_gids)))
+            != self.supplementary_gids
+        ):
+            raise PatcherContractError("supplementary group binding is invalid")
+
+
+@dataclass(frozen=True)
+class DeploymentManifest:
+    control_path: Path
+    control_evidence: FileEvidence
+    repository: str
+    expected_origin: str
     patcher_uid: int
     operator_uid: int
-    worktree_owner_uid: int
-    credential_owner_uid: int
+    patcher_gid: int
+    operator_gid: int
     worktree_root: Path
     runtime_home: Path
     codex_home: Path
     state_root: Path
+    scratch_root: Path
     policy_root: Path
-    codex_binary: Path
+    backlog_path: Path
+    backlog_sha256: str
+    manifest_revision: int
+    approved_by: str
+    requirements_path: Path
+    requirements_sha256: str
+    permission_profile: str
+    credential: CredentialBinding
+    codex_binary: TrustedBinary
+    git_binary: TrustedBinary
     trusted_path: tuple[Path, ...]
-    command_network_isolated: bool
-    model_egress_restricted: bool
-    policy_read_only_mount: bool
-    operator_home_mounted: bool
-    publisher_material_mounted: bool
-    publisher_socket_exposed: bool
-
-    def validate(self) -> None:
-        integer_fields = (
-            self.patcher_uid,
-            self.operator_uid,
-            self.worktree_owner_uid,
-            self.credential_owner_uid,
-        )
-        if any(
-            isinstance(value, bool) or not isinstance(value, int)
-            for value in integer_fields
-        ):
-            raise PatcherContractError("isolation UIDs must be integers")
-        if self.patcher_uid <= 0 or self.patcher_uid == self.operator_uid:
-            raise PatcherContractError(
-                "patcher must be a distinct non-root Unix identity"
-            )
-        if self.worktree_owner_uid != self.patcher_uid:
-            raise PatcherContractError("patcher must own its isolated worktree")
-        if self.credential_owner_uid != self.patcher_uid:
-            raise PatcherContractError(
-                "patcher credential must be owned by the patcher UID"
-            )
-        boolean_fields = (
-            self.command_network_isolated,
-            self.model_egress_restricted,
-            self.policy_read_only_mount,
-            self.operator_home_mounted,
-            self.publisher_material_mounted,
-            self.publisher_socket_exposed,
-        )
-        if any(not isinstance(value, bool) for value in boolean_fields):
-            raise PatcherContractError("isolation flags must be booleans")
-        if not self.command_network_isolated:
-            raise PatcherContractError("patcher commands must have no network access")
-        if not self.model_egress_restricted:
-            raise PatcherContractError(
-                "Codex model transport must use restricted provider egress"
-            )
-        if not self.policy_read_only_mount:
-            raise PatcherContractError("patcher policy must be mounted read-only")
-        if (
-            self.operator_home_mounted
-            or self.publisher_material_mounted
-            or self.publisher_socket_exposed
-        ):
-            raise PatcherContractError(
-                "forbidden operator or publisher material is exposed"
-            )
-
-        roots = {
-            "worktree": _absolute_directory(self.worktree_root),
-            "runtime home": _absolute_directory(self.runtime_home),
-            "Codex home": _absolute_directory(self.codex_home),
-            "state root": _absolute_directory(self.state_root),
-            "policy root": _absolute_directory(self.policy_root),
-        }
-        worktree = roots["worktree"]
-        if not (worktree / ".git").exists():
-            raise PatcherContractError("patcher worktree is not a Git worktree")
-        if worktree.stat().st_uid != self.patcher_uid:
-            raise PatcherContractError(
-                "patcher UID does not own the worktree directory"
-            )
-        for label in ("runtime home", "Codex home", "state root", "policy root"):
-            path = roots[label]
-            if path == worktree or worktree in path.parents or path in worktree.parents:
-                raise PatcherContractError(f"{label} must be outside the worktree tree")
-        if len(set(roots.values())) != len(roots):
-            raise PatcherContractError("isolation roots must be distinct")
-
-        _require_private_directory(roots["runtime home"], self.patcher_uid)
-        _require_private_directory(roots["Codex home"], self.patcher_uid)
-        _require_private_directory(roots["state root"], self.patcher_uid)
-        policy_info = roots["policy root"].stat()
-        if policy_info.st_mode & 0o022:
-            raise PatcherContractError("installed policy directory is mutable")
-        _require_trusted_executable(self.codex_binary, forbidden_owner=self.patcher_uid)
-        if not self.trusted_path:
-            raise PatcherContractError(
-                "trusted PATH must contain at least one directory"
-            )
-        for directory in self.trusted_path:
-            trusted = _absolute_directory(directory)
-            info = trusted.stat()
-            if info.st_uid == self.patcher_uid or info.st_mode & 0o022:
-                raise PatcherContractError(
-                    "trusted PATH is writable by the patcher boundary"
-                )
+    kernel: KernelBoundary
 
 
 @dataclass(frozen=True)
@@ -235,8 +404,11 @@ class PatcherInvocation:
     environment: Mapping[str, str]
     stdin: bytes
     final_output_path: Path
-    policy_prompt_sha256: str
-    policy_schema_sha256: str
+    output_evidence: FileEvidence
+    control_evidence: tuple[FileEvidence, ...]
+    boundary_sha256: str
+    request: PatcherRequest
+    deployment: DeploymentManifest
 
     def __post_init__(self) -> None:
         if not self.argv or not Path(self.argv[0]).is_absolute():
@@ -257,106 +429,752 @@ class PatcherInvocation:
         )
 
 
-def _absolute_directory(value: Path) -> Path:
-    if not isinstance(value, Path) or not value.is_absolute():
-        raise PatcherContractError("isolation path must be absolute")
+def _strict_mapping(
+    value: object, *, required: frozenset[str], label: str
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        raise PatcherContractError(f"{label} must be a string-keyed object")
+    missing = sorted(required - set(value))
+    unknown = sorted(set(value) - required)
+    if missing or unknown:
+        detail = []
+        if missing:
+            detail.append("missing " + ", ".join(missing))
+        if unknown:
+            detail.append("unknown " + ", ".join(unknown))
+        raise PatcherContractError(f"{label} fields are invalid: {'; '.join(detail)}")
+    return value
+
+
+def _absolute_path(value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value.startswith("/") or _CONTROL.search(value):
+        raise PatcherContractError(f"{label} must be an absolute safe path")
+    path = Path(value)
+    if any(part in {"", ".", ".."} for part in path.parts[1:]):
+        raise PatcherContractError(f"{label} cannot traverse")
+    return path
+
+
+def _positive_integer(value: object, label: str, *, allow_zero: bool = False) -> int:
+    minimum = 0 if allow_zero else 1
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise PatcherContractError(f"{label} must be an integer >= {minimum}")
+    return value
+
+
+def _sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or not _SHA256.fullmatch(value):
+        raise PatcherContractError(f"{label} must be SHA-256")
+    return value
+
+
+def _assert_no_symlink_ancestors(path: Path) -> None:
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            info = current.lstat()
+        except OSError as exc:
+            raise PatcherContractError(f"path is unavailable: {path}") from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise PatcherContractError(f"trusted path contains a symlink: {path}")
+
+
+def _assert_trusted_ancestors(path: Path, *, owner_uid: int) -> None:
+    _assert_no_symlink_ancestors(path)
+    current = Path(path.anchor)
+    for part in path.parts[1:-1]:
+        current /= part
+        info = current.stat()
+        if info.st_uid != owner_uid or info.st_mode & 0o022:
+            raise PatcherContractError(
+                f"trusted ancestor is not control-owned and read-only: {current}"
+            )
+
+
+def _read_stable_file(
+    path: Path,
+    *,
+    owner_uid: int,
+    expected_sha256: str | None = None,
+    max_bytes: int = MAX_CONTROL_MANIFEST_BYTES,
+    require_executable: bool = False,
+    capture_payload: bool = True,
+) -> tuple[bytes, FileEvidence]:
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise PatcherContractError("trusted file path must be absolute")
+    _assert_no_symlink_ancestors(path)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        resolved = value.resolve(strict=True)
+        descriptor = os.open(path, flags)
     except OSError as exc:
-        raise PatcherContractError("isolation directory is unavailable") from exc
-    if not resolved.is_dir():
-        raise PatcherContractError("isolation path must be a directory")
+        raise PatcherContractError(f"trusted file is unavailable: {path}") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise PatcherContractError("trusted file must be regular")
+        if before.st_uid != owner_uid or before.st_mode & 0o022:
+            raise PatcherContractError("trusted file is not control-owned/read-only")
+        if require_executable and not before.st_mode & 0o111:
+            raise PatcherContractError("trusted binary is not executable")
+        if before.st_size > max_bytes:
+            raise PatcherContractError("trusted file exceeds the size limit")
+        chunks: list[bytes] = []
+        hasher = hashlib.sha256()
+        total = 0
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            hasher.update(chunk)
+            total += len(chunk)
+            if capture_payload:
+                chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks) if capture_payload else b""
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if total > max_bytes:
+        raise PatcherContractError("trusted file exceeds the size limit")
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+        before.st_mode,
+        before.st_uid,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+        after.st_mode,
+        after.st_uid,
+    )
+    if before_identity != after_identity:
+        raise PatcherContractError("trusted file changed while it was read")
+    digest = hasher.hexdigest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise PatcherContractError("trusted file digest mismatch")
+    return payload, FileEvidence(
+        path=path,
+        device=after.st_dev,
+        inode=after.st_ino,
+        size=after.st_size,
+        mtime_ns=after.st_mtime_ns,
+        owner_uid=after.st_uid,
+        mode=stat.S_IMODE(after.st_mode),
+        sha256=digest,
+    )
+
+
+def _parse_control_manifest(
+    payload: bytes, *, path: Path, evidence: FileEvidence
+) -> DeploymentManifest:
+    try:
+        raw = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PatcherContractError("control manifest must be strict UTF-8 JSON") from exc
+    root = _strict_mapping(
+        raw,
+        required=frozenset(
+            {
+                "schema_version",
+                "repository",
+                "expected_origin",
+                "patcher_uid",
+                "operator_uid",
+                "patcher_gid",
+                "operator_gid",
+                "paths",
+                "backlog",
+                "auth",
+                "binaries",
+                "kernel",
+                "permission_profile",
+            }
+        ),
+        label="control manifest",
+    )
+    if root["schema_version"] != "vista.world.daily-maintainer.deployment.v1":
+        raise PatcherContractError("unsupported control manifest schema")
+    if root["repository"] != PATCHER_REPOSITORY:
+        raise PatcherContractError("control manifest repository is not canonical")
+    expected_origin = root["expected_origin"]
+    if expected_origin not in {
+        "git@github.com:IvesLiu1026/VISTA-World.git",
+        "https://github.com/IvesLiu1026/VISTA-World.git",
+    }:
+        raise PatcherContractError("control manifest origin is not canonical")
+    paths = _strict_mapping(
+        root["paths"],
+        required=frozenset(
+            {
+                "worktree_root",
+                "runtime_home",
+                "codex_home",
+                "state_root",
+                "scratch_root",
+                "policy_root",
+                "requirements_path",
+            }
+        ),
+        label="control paths",
+    )
+    backlog = _strict_mapping(
+        root["backlog"],
+        required=frozenset(
+            {"path", "sha256", "manifest_revision", "approved_by"}
+        ),
+        label="backlog binding",
+    )
+    auth = _strict_mapping(
+        root["auth"],
+        required=frozenset(
+            {"kind", "binding_id", "credential_path", "device", "inode"}
+        ),
+        label="auth binding",
+    )
+    binaries = _strict_mapping(
+        root["binaries"],
+        required=frozenset({"codex", "git", "trusted_path"}),
+        label="binary bindings",
+    )
+    codex = _strict_mapping(
+        binaries["codex"],
+        required=frozenset({"path", "sha256", "version"}),
+        label="Codex binding",
+    )
+    git = _strict_mapping(
+        binaries["git"],
+        required=frozenset({"path", "sha256", "version"}),
+        label="Git binding",
+    )
+    trusted_path_raw = binaries["trusted_path"]
+    if (
+        not isinstance(trusted_path_raw, list)
+        or not trusted_path_raw
+        or len(trusted_path_raw) > 8
+    ):
+        raise PatcherContractError("trusted PATH must be a bounded non-empty list")
+    trusted_path = tuple(
+        _absolute_path(item, "trusted PATH entry") for item in trusted_path_raw
+    )
+    kernel = _strict_mapping(
+        root["kernel"],
+        required=frozenset(
+            {
+                "mount_namespace",
+                "network_namespace",
+                "pid_namespace",
+                "user_namespace",
+                "cgroup_path",
+                "supplementary_gids",
+            }
+        ),
+        label="kernel binding",
+    )
+    gids = kernel["supplementary_gids"]
+    if not isinstance(gids, list):
+        raise PatcherContractError("supplementary groups must be a list")
+    permission = _strict_mapping(
+        root["permission_profile"],
+        required=frozenset({"name", "requirements_sha256"}),
+        label="permission profile binding",
+    )
+    if permission["name"] != PATCHER_PERMISSION_PROFILE:
+        raise PatcherContractError("unexpected patcher permission profile")
+
+    codex_binary = TrustedBinary(
+        path=_absolute_path(codex["path"], "Codex binary"),
+        sha256=_sha256(codex["sha256"], "Codex binary digest"),
+        version=codex["version"],  # type: ignore[arg-type]
+    )
+    if (
+        codex_binary.sha256 != PINNED_CODEX_SHA256
+        or codex_binary.version != PINNED_CODEX_VERSION
+    ):
+        raise PatcherContractError("Codex binary is not the code-pinned build")
+    git_binary = TrustedBinary(
+        path=_absolute_path(git["path"], "Git binary"),
+        sha256=_sha256(git["sha256"], "Git binary digest"),
+        version=git["version"],  # type: ignore[arg-type]
+    )
+    if (
+        git_binary.sha256 != PINNED_GIT_SHA256
+        or git_binary.version != PINNED_GIT_VERSION
+    ):
+        raise PatcherContractError("Git binary is not the code-pinned build")
+    return DeploymentManifest(
+        control_path=path,
+        control_evidence=evidence,
+        repository=PATCHER_REPOSITORY,
+        expected_origin=expected_origin,  # type: ignore[arg-type]
+        patcher_uid=_positive_integer(root["patcher_uid"], "patcher UID"),
+        operator_uid=_positive_integer(root["operator_uid"], "operator UID"),
+        patcher_gid=_positive_integer(root["patcher_gid"], "patcher GID"),
+        operator_gid=_positive_integer(root["operator_gid"], "operator GID"),
+        worktree_root=_absolute_path(paths["worktree_root"], "worktree root"),
+        runtime_home=_absolute_path(paths["runtime_home"], "runtime home"),
+        codex_home=_absolute_path(paths["codex_home"], "Codex home"),
+        state_root=_absolute_path(paths["state_root"], "state root"),
+        scratch_root=_absolute_path(paths["scratch_root"], "scratch root"),
+        policy_root=_absolute_path(paths["policy_root"], "policy root"),
+        backlog_path=_absolute_path(backlog["path"], "backlog path"),
+        backlog_sha256=_sha256(backlog["sha256"], "backlog digest"),
+        manifest_revision=_positive_integer(
+            backlog["manifest_revision"], "manifest revision"
+        ),
+        approved_by=backlog["approved_by"],  # type: ignore[arg-type]
+        requirements_path=_absolute_path(
+            paths["requirements_path"], "managed requirements path"
+        ),
+        requirements_sha256=_sha256(
+            permission["requirements_sha256"], "managed requirements digest"
+        ),
+        permission_profile=PATCHER_PERMISSION_PROFILE,
+        credential=CredentialBinding(
+            auth_kind=auth["kind"],  # type: ignore[arg-type]
+            binding_id=auth["binding_id"],  # type: ignore[arg-type]
+            credential_path=_absolute_path(
+                auth["credential_path"], "credential path"
+            ),
+            device=_positive_integer(auth["device"], "credential device"),
+            inode=_positive_integer(auth["inode"], "credential inode"),
+        ),
+        codex_binary=codex_binary,
+        git_binary=git_binary,
+        trusted_path=trusted_path,
+        kernel=KernelBoundary(
+            mount_namespace=kernel["mount_namespace"],  # type: ignore[arg-type]
+            network_namespace=kernel["network_namespace"],  # type: ignore[arg-type]
+            pid_namespace=kernel["pid_namespace"],  # type: ignore[arg-type]
+            user_namespace=kernel["user_namespace"],  # type: ignore[arg-type]
+            cgroup_path=kernel["cgroup_path"],  # type: ignore[arg-type]
+            supplementary_gids=tuple(gids),  # type: ignore[arg-type]
+        ),
+    )
+
+
+def load_control_manifest(path: Path) -> DeploymentManifest:
+    """Load authority only from an immutable root-owned deployment manifest."""
+
+    _assert_trusted_ancestors(path, owner_uid=CONTROL_OWNER_UID)
+    payload, evidence = _read_stable_file(path, owner_uid=CONTROL_OWNER_UID)
+    return _parse_control_manifest(payload, path=path, evidence=evidence)
+
+
+def _absolute_directory(path: Path, *, owner_uid: int, private: bool) -> Path:
+    _assert_no_symlink_ancestors(path)
+    try:
+        resolved = path.resolve(strict=True)
+        info = resolved.stat()
+    except OSError as exc:
+        raise PatcherContractError(f"isolation directory is unavailable: {path}") from exc
+    if resolved != path or not resolved.is_dir():
+        raise PatcherContractError("isolation path must be a canonical directory")
+    if info.st_uid != owner_uid or info.st_mode & 0o022:
+        raise PatcherContractError("isolation directory has unsafe ownership or mode")
+    if private and info.st_mode & 0o077:
+        raise PatcherContractError("private isolation directory is not mode 0700")
     return resolved
 
 
-def _require_private_directory(path: Path, owner_uid: int) -> None:
-    info = path.stat()
-    if info.st_uid != owner_uid or info.st_mode & 0o077:
-        raise PatcherContractError(
-            "private isolation directory has unsafe ownership or mode"
-        )
-
-
-def _require_trusted_executable(path: Path, *, forbidden_owner: int) -> Path:
-    if not isinstance(path, Path) or not path.is_absolute():
-        raise PatcherContractError("Codex executable must be an absolute path")
+def _verify_credential(binding: CredentialBinding, *, patcher_uid: int, codex_home: Path) -> None:
+    path = binding.credential_path
+    if codex_home not in path.parents:
+        raise PatcherContractError("credential must be inside the isolated Codex home")
+    _assert_no_symlink_ancestors(path)
     try:
         info = path.lstat()
     except OSError as exc:
-        raise PatcherContractError("Codex executable is unavailable") from exc
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        raise PatcherContractError(
-            "Codex executable must be a regular non-symlink file"
-        )
+        raise PatcherContractError("credential binding is unavailable") from exc
     if (
-        info.st_uid == forbidden_owner
-        or info.st_mode & 0o022
-        or not os.access(path, os.X_OK)
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != patcher_uid
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or (info.st_dev, info.st_ino) != (binding.device, binding.inode)
     ):
-        raise PatcherContractError("Codex executable is writable or not executable")
-    return path.resolve(strict=True)
+        raise PatcherContractError("credential inode/owner/mode binding failed")
 
 
-def _load_policy_file(path: Path, expected_sha256: str) -> bytes:
-    try:
-        info = path.lstat()
-    except OSError as exc:
-        raise PatcherContractError("installed patcher policy is unavailable") from exc
-    if (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_mode & 0o022
-    ):
-        raise PatcherContractError(
-            "installed patcher policy is mutable or not a regular file"
-        )
-    payload = path.read_bytes()
-    if hashlib.sha256(payload).hexdigest() != expected_sha256:
-        raise PatcherContractError(
-            "installed patcher policy digest does not match code"
-        )
-    return payload
-
-
-def build_patcher_invocation(
-    request: PatcherRequest,
-    isolation: IsolationAttestation,
-) -> PatcherInvocation:
-    """Build a shell-free Codex command after validating the outer boundary."""
-
-    if not isinstance(request, PatcherRequest):
-        raise PatcherContractError("patcher request must use the strict contract")
-    if not isinstance(isolation, IsolationAttestation):
-        raise PatcherContractError("patcher isolation attestation is required")
-    isolation.validate()
-
-    worktree = isolation.worktree_root.resolve(strict=True)
-    policy_root = isolation.policy_root.resolve(strict=True)
-    prompt_bytes = _load_policy_file(
-        policy_root / "prompts" / "patcher.md", PATCHER_PROMPT_SHA256
+def _verify_binary(binary: TrustedBinary) -> FileEvidence:
+    _assert_trusted_ancestors(binary.path, owner_uid=CONTROL_OWNER_UID)
+    _, evidence = _read_stable_file(
+        binary.path,
+        owner_uid=CONTROL_OWNER_UID,
+        expected_sha256=binary.sha256,
+        max_bytes=512 * 1024 * 1024,
+        require_executable=True,
+        capture_payload=False,
     )
-    schema_path = policy_root / "patcher-output.schema.json"
-    _load_policy_file(schema_path, PATCHER_OUTPUT_SCHEMA_SHA256)
+    environment = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/nonexistent",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+    try:
+        result = subprocess.run(
+            (str(binary.path), "--version"),
+            cwd="/",
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=10,
+            start_new_session=True,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PatcherContractError("trusted binary version probe failed") from exc
+    output = result.stdout[:1024].decode("utf-8", "replace").strip()
+    if result.returncode != 0 or output != binary.version:
+        raise PatcherContractError("trusted binary version binding failed")
+    return evidence
 
-    normalized = json.dumps(
-        request.normalized_payload(),
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8", "strict")
-    stdin = prompt_bytes + normalized + b"\nEND_NORMALIZED_CANDIDATE\n"
-    if len(stdin) > MAX_PATCHER_PROMPT_BYTES:
-        raise PatcherContractError("normalized patcher prompt exceeds the byte limit")
 
-    state_root = isolation.state_root.resolve(strict=True)
-    final_output = state_root / "patcher-final.json"
-    if final_output.exists() or final_output.is_symlink():
-        raise PatcherContractError("patcher final output path must not already exist")
-    command_environment = {
-        "PATH": os.pathsep.join(
-            str(path.resolve(strict=True)) for path in isolation.trusted_path
-        ),
+def _proc_status() -> Mapping[str, str]:
+    values: dict[str, str] = {}
+    for line in Path("/proc/self/status").read_text(encoding="ascii").splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            values[key] = value.strip()
+    return MappingProxyType(values)
+
+
+def _namespace(name: str) -> str:
+    try:
+        value = os.readlink(f"/proc/self/ns/{name}")
+    except OSError as exc:
+        raise PatcherContractError("kernel namespace evidence is unavailable") from exc
+    return f"{name}:{value[value.index('['):]}" if "[" in value else value
+
+
+def _current_cgroup() -> str:
+    try:
+        lines = Path("/proc/self/cgroup").read_text(encoding="ascii").splitlines()
+    except OSError as exc:
+        raise PatcherContractError("cgroup evidence is unavailable") from exc
+    unified = [line.split(":", 2)[2] for line in lines if line.startswith("0::")]
+    if len(unified) != 1:
+        raise PatcherContractError("a dedicated cgroup-v2 boundary is required")
+    return unified[0]
+
+
+def _verify_kernel_boundary(deployment: DeploymentManifest) -> None:
+    if os.geteuid() != deployment.patcher_uid or deployment.patcher_uid <= 0:
+        raise PatcherContractError("effective UID is not the dedicated patcher UID")
+    if os.getegid() != deployment.patcher_gid:
+        raise PatcherContractError("effective GID is not the dedicated patcher GID")
+    if (
+        deployment.patcher_uid == deployment.operator_uid
+        or deployment.patcher_gid == deployment.operator_gid
+    ):
+        raise PatcherContractError("patcher and operator identities must be distinct")
+    status = _proc_status()
+    try:
+        uids = tuple(int(value) for value in status["Uid"].split())
+        gids = tuple(int(value) for value in status["Gid"].split())
+        groups = tuple(sorted(int(value) for value in status["Groups"].split()))
+    except (KeyError, ValueError) as exc:
+        raise PatcherContractError("process credential evidence is malformed") from exc
+    if uids != (deployment.patcher_uid,) * 4:
+        raise PatcherContractError("real/saved/filesystem UIDs are not pinned")
+    if gids != (deployment.patcher_gid,) * 4:
+        raise PatcherContractError("real/saved/filesystem GIDs are not pinned")
+    if groups != deployment.kernel.supplementary_gids:
+        raise PatcherContractError("supplementary groups are not pinned")
+    if status.get("CapEff") != "0000000000000000":
+        raise PatcherContractError("patcher process retains effective capabilities")
+    if status.get("NoNewPrivs") != "1":
+        raise PatcherContractError("NoNewPrivileges is not active")
+    if status.get("Seccomp") != "2":
+        raise PatcherContractError("seccomp filter mode is not active")
+    actual_namespaces = (
+        _namespace("mnt"),
+        _namespace("net"),
+        _namespace("pid"),
+        _namespace("user"),
+    )
+    expected_namespaces = (
+        deployment.kernel.mount_namespace,
+        deployment.kernel.network_namespace,
+        deployment.kernel.pid_namespace,
+        deployment.kernel.user_namespace,
+    )
+    if actual_namespaces != expected_namespaces:
+        raise PatcherContractError("kernel namespace identity changed")
+    if _current_cgroup() != deployment.kernel.cgroup_path:
+        raise PatcherContractError("dedicated cgroup identity changed")
+    cgroup_fs = Path("/sys/fs/cgroup") / deployment.kernel.cgroup_path.lstrip("/")
+    if not cgroup_fs.is_dir() or cgroup_fs == Path("/sys/fs/cgroup"):
+        raise PatcherContractError("dedicated cgroup filesystem entry is unavailable")
+
+
+def _unescape_mount_path(value: str) -> Path:
+    for encoded, decoded in (
+        ("\\040", " "),
+        ("\\011", "\t"),
+        ("\\012", "\n"),
+        ("\\134", "\\"),
+    ):
+        value = value.replace(encoded, decoded)
+    return Path(value)
+
+
+def _mount_evidence_for(path: Path) -> tuple[int, Path, frozenset[str]]:
+    try:
+        lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise PatcherContractError("mount namespace evidence is unavailable") from exc
+    matches: list[tuple[int, int, Path, frozenset[str]]] = []
+    for line in lines:
+        before, separator, after = line.partition(" - ")
+        if not separator:
+            continue
+        fields = before.split()
+        if len(fields) < 6:
+            continue
+        mountpoint = _unescape_mount_path(fields[4])
+        try:
+            path.relative_to(mountpoint)
+        except ValueError:
+            continue
+        super_options = after.split()[2].split(",") if len(after.split()) >= 3 else []
+        options = frozenset(fields[5].split(",")) | frozenset(super_options)
+        matches.append((len(mountpoint.parts), int(fields[0]), mountpoint, options))
+    if not matches:
+        raise PatcherContractError(f"path has no mount evidence: {path}")
+    _, mount_id, mountpoint, options = max(matches, key=lambda item: item[0])
+    return mount_id, mountpoint, options
+
+
+def _verify_mount_boundaries(deployment: DeploymentManifest) -> None:
+    policy_mount_id, policy_mountpoint, policy_options = _mount_evidence_for(
+        deployment.policy_root
+    )
+    if policy_mountpoint != deployment.policy_root or "ro" not in policy_options:
+        raise PatcherContractError("policy root must be a dedicated read-only mount")
+    for path in (deployment.control_path, deployment.backlog_path):
+        mount_id, _, options = _mount_evidence_for(path)
+        if mount_id != policy_mount_id or "ro" not in options:
+            raise PatcherContractError("control manifest/backlog escaped the policy mount")
+    _, _, requirements_options = _mount_evidence_for(deployment.requirements_path)
+    if "ro" not in requirements_options:
+        raise PatcherContractError("managed requirements are not read-only mounted")
+    writable_paths = (
+        deployment.worktree_root,
+        deployment.runtime_home,
+        deployment.codex_home,
+        deployment.state_root,
+        deployment.scratch_root,
+    )
+    writable_mount_ids: set[int] = set()
+    for path in writable_paths:
+        mount_id, mountpoint, options = _mount_evidence_for(path)
+        if mountpoint != path or "rw" not in options:
+            raise PatcherContractError(
+                f"patcher path is not a dedicated writable mount: {path}"
+            )
+        if mount_id in writable_mount_ids:
+            raise PatcherContractError("patcher writable mounts are not distinct")
+        writable_mount_ids.add(mount_id)
+
+
+def _verify_managed_requirements(payload: bytes) -> None:
+    try:
+        parsed = tomllib.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise PatcherContractError("managed requirements are not valid TOML") from exc
+    if parsed.get("default_permissions") != PATCHER_PERMISSION_PROFILE:
+        raise PatcherContractError("managed default permission profile is not pinned")
+    if parsed.get("allowed_permission_profiles") != {
+        PATCHER_PERMISSION_PROFILE: True
+    }:
+        raise PatcherContractError("managed permission profile allowlist is not exact")
+    if parsed.get("allowed_approval_policies") != ["never"]:
+        raise PatcherContractError("managed approval policy is not pinned")
+    if parsed.get("allowed_web_search_modes") not in ([], ["disabled"]):
+        raise PatcherContractError("managed web-search policy is not disabled")
+    if parsed.get("allow_login_shell") is not False:
+        raise PatcherContractError("managed login-shell policy is not disabled")
+    if parsed.get("allow_managed_hooks_only") is not True:
+        raise PatcherContractError("managed hook policy is not fail-closed")
+    if parsed.get("mcp_servers") != {}:
+        raise PatcherContractError("managed MCP allowlist must be empty")
+    features = parsed.get("features")
+    if not isinstance(features, Mapping):
+        raise PatcherContractError("managed feature policy is missing")
+    missing_disabled = [
+        name for name in DISABLED_CODEX_FEATURES if features.get(name) is not False
+    ]
+    if missing_disabled:
+        raise PatcherContractError(
+            "managed feature policy does not disable: " + ", ".join(missing_disabled)
+        )
+
+
+def _git_environment(runtime_home: Path) -> dict[str, str]:
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(runtime_home),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def _git(
+    git_binary: Path,
+    worktree: Path,
+    runtime_home: Path,
+    *args: str,
+) -> str:
+    try:
+        result = subprocess.run(
+            (str(git_binary), "-C", str(worktree), *args),
+            cwd=worktree,
+            env=_git_environment(runtime_home),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=15,
+            start_new_session=True,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PatcherContractError("trusted Git command timed out") from exc
+    except OSError as exc:
+        raise PatcherContractError("trusted Git command could not start") from exc
+    if result.returncode != 0:
+        raise PatcherContractError("trusted Git preflight failed")
+    return result.stdout[: 1024 * 1024].decode("utf-8", "strict").rstrip("\n")
+
+
+def _verify_git_checkout(
+    *,
+    git_binary: Path,
+    worktree: Path,
+    runtime_home: Path,
+    expected_origin: str,
+    base_sha: str,
+    require_clean: bool = True,
+) -> None:
+    top = _git(git_binary, worktree, runtime_home, "rev-parse", "--show-toplevel")
+    if Path(top).resolve(strict=True) != worktree:
+        raise PatcherContractError("Git top-level does not match the isolated worktree")
+    head = _git(git_binary, worktree, runtime_home, "rev-parse", "--verify", "HEAD")
+    if head != base_sha:
+        raise PatcherContractError("worktree HEAD does not match the authorized base")
+    origin = _git(git_binary, worktree, runtime_home, "remote", "get-url", "origin")
+    if origin != expected_origin:
+        raise PatcherContractError("worktree origin is not the authorized repository")
+    if require_clean:
+        status_output = _git(
+            git_binary,
+            worktree,
+            runtime_home,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        )
+        if status_output:
+            raise PatcherContractError("patcher worktree is not clean")
+
+
+def _enforce_v1_candidate_policy(candidate: Candidate) -> None:
+    enforce = getattr(candidate_contract, "enforce_v1_candidate_policy", None)
+    if not callable(enforce):
+        raise PatcherContractError(
+            "V1 candidate policy API is unavailable; integrate the hardened core first"
+        )
+    try:
+        enforce(candidate)
+    except CandidateContractError as exc:
+        raise PatcherContractError("candidate is outside the V1 authority envelope") from exc
+    unknown = sorted(
+        set(candidate.validation_profiles) - BUILTIN_VALIDATION_PROFILES.ids
+    )
+    if unknown:
+        raise PatcherContractError(
+            "candidate references unknown validation profiles: " + ", ".join(unknown)
+        )
+
+
+def _bind_candidate_to_backlog(request: PatcherRequest, backlog: Backlog) -> None:
+    if (
+        backlog.sha256 != request.backlog_sha256
+        or backlog.manifest_revision != request.manifest_revision
+        or backlog.approved_by != request.approved_by
+    ):
+        raise PatcherContractError("request does not match the reviewed backlog identity")
+    matches = [
+        candidate
+        for candidate in backlog.candidates
+        if candidate.candidate_id == request.candidate.candidate_id
+    ]
+    if len(matches) != 1 or matches[0] != request.candidate:
+        raise PatcherContractError("candidate is not an exact member of the reviewed backlog")
+    if candidate_authorization_digest(matches[0]) != request.candidate_sha256:
+        raise PatcherContractError("reviewed candidate digest mismatch")
+    _enforce_v1_candidate_policy(matches[0])
+
+
+def _reserve_output(path: Path, *, owner_uid: int) -> FileEvidence:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError as exc:
+        raise PatcherContractError("patcher output path must be fresh") from exc
+    except OSError as exc:
+        raise PatcherContractError("patcher output cannot be reserved safely") from exc
+    try:
+        info = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != owner_uid
+        or stat.S_IMODE(info.st_mode) != 0o600
+    ):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise PatcherContractError("reserved output has unsafe ownership or mode")
+    return FileEvidence(
+        path=path,
+        device=info.st_dev,
+        inode=info.st_ino,
+        size=0,
+        mtime_ns=info.st_mtime_ns,
+        owner_uid=info.st_uid,
+        mode=0o600,
+        sha256=hashlib.sha256(b"").hexdigest(),
+    )
+
+
+def _command_environment(deployment: DeploymentManifest) -> dict[str, str]:
+    return {
+        "PATH": os.pathsep.join(str(path) for path in deployment.trusted_path),
+        "HOME": str(deployment.runtime_home),
+        "CODEX_HOME": str(deployment.codex_home),
+        "XDG_CONFIG_HOME": str(deployment.runtime_home / ".config"),
+        "TMPDIR": str(deployment.scratch_root),
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "TZ": "UTC",
@@ -369,7 +1187,18 @@ def build_patcher_invocation(
         "UV_OFFLINE": "1",
         "UV_NO_CONFIG": "1",
     }
-    command_environment_toml = (
+
+
+def _fixed_codex_argv(
+    *,
+    codex_binary: Path,
+    worktree: Path,
+    scratch_root: Path,
+    schema_path: Path,
+    output_path: Path,
+    command_environment: Mapping[str, str],
+) -> tuple[str, ...]:
+    environment_toml = (
         "shell_environment_policy.set={"
         + ",".join(
             f"{key}={json.dumps(value)}"
@@ -377,20 +1206,38 @@ def build_patcher_invocation(
         )
         + "}"
     )
-    argv = (
-        str(
-            _require_trusted_executable(
-                isolation.codex_binary, forbidden_owner=isolation.patcher_uid
-            )
-        ),
+    profile = PATCHER_PERMISSION_PROFILE
+    permission_toml = (
+        "permissions={"
+        + json.dumps(profile)
+        + "={extends=\":workspace\",workspace_roots={"
+        + json.dumps(str(scratch_root))
+        + "=true},filesystem={\":root\"=\"deny\",\":minimal\"=\"read\","
+        + "\":tmpdir\"=\"deny\",\":slash_tmp\"=\"deny\","
+        + "\":workspace_roots\"={\".\"=\"write\"}},network={enabled=false}}}"
+    )
+    configs = (
+        permission_toml,
+        f"default_permissions={json.dumps(profile)}",
+        f'model_reasoning_effort="{PATCHER_REASONING_EFFORT}"',
+        'approval_policy="never"',
+        "allow_login_shell=false",
+        'web_search="disabled"',
+        "mcp_servers={}",
+        "notify=[]",
+        'shell_environment_policy.inherit="none"',
+        environment_toml,
+        'history.persistence="none"',
+        'otel.exporter="none"',
+    )
+    argv: list[str] = [
+        str(codex_binary),
         "exec",
         "-",
         "--strict-config",
         "--ephemeral",
         "--ignore-user-config",
         "--ignore-rules",
-        "--sandbox",
-        "workspace-write",
         "--model",
         PATCHER_MODEL,
         "--cd",
@@ -399,37 +1246,386 @@ def build_patcher_invocation(
         "--color",
         "never",
         "--output-schema",
-        str(schema_path.resolve(strict=True)),
+        str(schema_path),
         "--output-last-message",
-        str(final_output),
-        "--config",
-        f'model_reasoning_effort="{PATCHER_REASONING_EFFORT}"',
-        "--config",
-        'approval_policy="never"',
-        "--config",
-        "allow_login_shell=false",
-        "--config",
-        "sandbox_workspace_write.network_access=false",
-        "--config",
-        'shell_environment_policy.inherit="none"',
-        "--config",
-        command_environment_toml,
-        "--config",
-        'history.persistence="none"',
-    )
-    environment = {
-        **command_environment,
-        "HOME": str(isolation.runtime_home.resolve(strict=True)),
-        "CODEX_HOME": str(isolation.codex_home.resolve(strict=True)),
-        "XDG_CONFIG_HOME": str(isolation.runtime_home.resolve(strict=True) / ".config"),
-        "TMPDIR": str(state_root),
+        str(output_path),
+    ]
+    for feature in DISABLED_CODEX_FEATURES:
+        argv.extend(("--disable", feature))
+    for config in configs:
+        argv.extend(("--config", config))
+    return tuple(argv)
+
+
+def _boundary_digest(
+    request: PatcherRequest,
+    deployment: DeploymentManifest,
+    evidence: tuple[FileEvidence, ...],
+) -> str:
+    payload = {
+        "request": request.normalized_payload(),
+        "deployment_manifest_sha256": deployment.control_evidence.sha256,
+        "auth_kind": deployment.credential.auth_kind,
+        "auth_binding_id": deployment.credential.binding_id,
+        "permission_profile": deployment.permission_profile,
+        "kernel": {
+            "mount": deployment.kernel.mount_namespace,
+            "network": deployment.kernel.network_namespace,
+            "pid": deployment.kernel.pid_namespace,
+            "user": deployment.kernel.user_namespace,
+            "cgroup": deployment.kernel.cgroup_path,
+        },
+        "files": [
+            {
+                "path": str(item.path),
+                "device": item.device,
+                "inode": item.inode,
+                "sha256": item.sha256,
+            }
+            for item in evidence
+        ],
+        "disabled_features": list(DISABLED_CODEX_FEATURES),
+        "allowed_tool_surfaces": list(ALLOWED_PATCHER_TOOL_SURFACES),
     }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def build_patcher_invocation(
+    request: PatcherRequest,
+    control_manifest_path: Path,
+) -> PatcherInvocation:
+    """Fail closed unless the real kernel and root-owned deployment agree.
+
+    This function reserves but does not execute the output file. The caller must
+    revalidate immediately before launch and validate the returned output after
+    the process exits. It cannot be activated from an ordinary developer login.
+    """
+
+    if not isinstance(request, PatcherRequest):
+        raise PatcherContractError("patcher request must use the strict contract")
+    deployment = load_control_manifest(control_manifest_path)
+    if (
+        request.repository != deployment.repository
+        or request.backlog_sha256 != deployment.backlog_sha256
+        or request.manifest_revision != deployment.manifest_revision
+        or request.approved_by != deployment.approved_by
+    ):
+        raise PatcherContractError("request is not authorized by the control manifest")
+    _verify_kernel_boundary(deployment)
+
+    worktree = _absolute_directory(
+        deployment.worktree_root, owner_uid=deployment.patcher_uid, private=False
+    )
+    runtime_home = _absolute_directory(
+        deployment.runtime_home, owner_uid=deployment.patcher_uid, private=True
+    )
+    codex_home = _absolute_directory(
+        deployment.codex_home, owner_uid=deployment.patcher_uid, private=True
+    )
+    state_root = _absolute_directory(
+        deployment.state_root, owner_uid=deployment.patcher_uid, private=True
+    )
+    scratch_root = _absolute_directory(
+        deployment.scratch_root, owner_uid=deployment.patcher_uid, private=True
+    )
+    policy_root = _absolute_directory(
+        deployment.policy_root, owner_uid=CONTROL_OWNER_UID, private=False
+    )
+    roots = (worktree, runtime_home, codex_home, state_root, scratch_root, policy_root)
+    if len(set(roots)) != len(roots) or any(
+        left in right.parents or right in left.parents
+        for index, left in enumerate(roots)
+        for right in roots[index + 1 :]
+    ):
+        raise PatcherContractError("isolation roots must be distinct, non-nested mounts")
+    _verify_credential(
+        deployment.credential,
+        patcher_uid=deployment.patcher_uid,
+        codex_home=codex_home,
+    )
+    for directory in deployment.trusted_path:
+        _assert_trusted_ancestors(directory, owner_uid=CONTROL_OWNER_UID)
+        _absolute_directory(directory, owner_uid=CONTROL_OWNER_UID, private=False)
+    _verify_mount_boundaries(deployment)
+
+    prompt_path = policy_root / "prompts" / "patcher.md"
+    schema_path = policy_root / "patcher-output.schema.json"
+    _assert_trusted_ancestors(prompt_path, owner_uid=CONTROL_OWNER_UID)
+    _assert_trusted_ancestors(schema_path, owner_uid=CONTROL_OWNER_UID)
+    prompt_bytes, prompt_evidence = _read_stable_file(
+        prompt_path,
+        owner_uid=CONTROL_OWNER_UID,
+        expected_sha256=PATCHER_PROMPT_SHA256,
+    )
+    _, schema_evidence = _read_stable_file(
+        schema_path,
+        owner_uid=CONTROL_OWNER_UID,
+        expected_sha256=PATCHER_OUTPUT_SCHEMA_SHA256,
+    )
+    backlog_payload, backlog_evidence = _read_stable_file(
+        deployment.backlog_path,
+        owner_uid=CONTROL_OWNER_UID,
+        expected_sha256=deployment.backlog_sha256,
+        max_bytes=1024 * 1024,
+    )
+    _assert_trusted_ancestors(
+        deployment.requirements_path, owner_uid=CONTROL_OWNER_UID
+    )
+    requirements_payload, requirements_evidence = _read_stable_file(
+        deployment.requirements_path,
+        owner_uid=CONTROL_OWNER_UID,
+        expected_sha256=deployment.requirements_sha256,
+    )
+    _verify_managed_requirements(requirements_payload)
+    codex_evidence = _verify_binary(deployment.codex_binary)
+    git_evidence = _verify_binary(deployment.git_binary)
+
+    trust = BacklogTrust(
+        path=deployment.backlog_path,
+        sha256=deployment.backlog_sha256,
+        manifest_revision=deployment.manifest_revision,
+        approved_by=deployment.approved_by,
+    )
+    try:
+        backlog = load_trusted_backlog(trust)
+    except CandidateContractError as exc:
+        raise PatcherContractError("reviewed backlog failed strict validation") from exc
+    # Detect a control-plane race around candidate parsing. The read-only mount is
+    # required too; digest equality alone is not considered a mount boundary.
+    after_backlog, after_backlog_evidence = _read_stable_file(
+        deployment.backlog_path,
+        owner_uid=CONTROL_OWNER_UID,
+        expected_sha256=deployment.backlog_sha256,
+        max_bytes=1024 * 1024,
+    )
+    if backlog_payload != after_backlog or backlog_evidence != after_backlog_evidence:
+        raise PatcherContractError("reviewed backlog changed during authorization")
+    _bind_candidate_to_backlog(request, backlog)
+    _verify_git_checkout(
+        git_binary=deployment.git_binary.path,
+        worktree=worktree,
+        runtime_home=runtime_home,
+        expected_origin=deployment.expected_origin,
+        base_sha=request.base_sha,
+    )
+
+    normalized = json.dumps(
+        request.normalized_payload(),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8", "strict")
+    stdin = prompt_bytes + normalized + b"\nEND_NORMALIZED_CANDIDATE\n"
+    if len(stdin) > MAX_PATCHER_PROMPT_BYTES:
+        raise PatcherContractError("normalized patcher prompt exceeds the byte limit")
+
+    output_name = (
+        f"patcher-{request.run_date.isoformat()}-"
+        f"{request.candidate.candidate_id.lower()}-{request.base_sha[:8]}.json"
+    )
+    final_output = state_root / output_name
+    output_evidence = _reserve_output(
+        final_output, owner_uid=deployment.patcher_uid
+    )
+    environment = _command_environment(deployment)
+    argv = _fixed_codex_argv(
+        codex_binary=deployment.codex_binary.path,
+        worktree=worktree,
+        scratch_root=scratch_root,
+        schema_path=schema_path,
+        output_path=final_output,
+        command_environment=environment,
+    )
+    control_evidence = (
+        deployment.control_evidence,
+        prompt_evidence,
+        schema_evidence,
+        backlog_evidence,
+        requirements_evidence,
+        codex_evidence,
+        git_evidence,
+    )
     return PatcherInvocation(
         argv=argv,
         cwd=worktree,
         environment=environment,
         stdin=stdin,
         final_output_path=final_output,
-        policy_prompt_sha256=PATCHER_PROMPT_SHA256,
-        policy_schema_sha256=PATCHER_OUTPUT_SCHEMA_SHA256,
+        output_evidence=output_evidence,
+        control_evidence=control_evidence,
+        boundary_sha256=_boundary_digest(request, deployment, control_evidence),
+        request=request,
+        deployment=deployment,
     )
+
+
+def _revalidate_file_evidence(evidence: FileEvidence, *, allow_size_change: bool) -> None:
+    try:
+        info = evidence.path.lstat()
+    except OSError as exc:
+        raise PatcherContractError("bound file disappeared") from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise PatcherContractError("bound file is no longer regular")
+    if (info.st_dev, info.st_ino, info.st_uid) != evidence.stable_identity():
+        raise PatcherContractError("bound file identity changed")
+    if stat.S_IMODE(info.st_mode) != evidence.mode:
+        raise PatcherContractError("bound file mode changed")
+    if not allow_size_change:
+        _, current = _read_stable_file(
+            evidence.path,
+            owner_uid=evidence.owner_uid,
+            expected_sha256=evidence.sha256,
+            max_bytes=max(evidence.size, 1),
+            require_executable=bool(evidence.mode & 0o111),
+            capture_payload=False,
+        )
+        if current != evidence:
+            raise PatcherContractError("bound file evidence changed")
+
+
+def revalidate_patcher_invocation(
+    invocation: PatcherInvocation, *, phase: str = "pre_launch"
+) -> None:
+    """Re-check mutable kernel/Git/file facts immediately around execution."""
+
+    if not isinstance(invocation, PatcherInvocation):
+        raise PatcherContractError("patcher invocation contract is required")
+    if phase not in {"pre_launch", "post_run"}:
+        raise PatcherContractError("unknown invocation validation phase")
+    _verify_kernel_boundary(invocation.deployment)
+    _verify_mount_boundaries(invocation.deployment)
+    for evidence in invocation.control_evidence:
+        _revalidate_file_evidence(evidence, allow_size_change=False)
+    _verify_credential(
+        invocation.deployment.credential,
+        patcher_uid=invocation.deployment.patcher_uid,
+        codex_home=invocation.deployment.codex_home,
+    )
+    _verify_git_checkout(
+        git_binary=invocation.deployment.git_binary.path,
+        worktree=invocation.cwd,
+        runtime_home=invocation.deployment.runtime_home,
+        expected_origin=invocation.deployment.expected_origin,
+        base_sha=invocation.request.base_sha,
+        require_clean=phase == "pre_launch",
+    )
+    _revalidate_file_evidence(
+        invocation.output_evidence, allow_size_change=phase == "post_run"
+    )
+    if phase == "pre_launch" and invocation.final_output_path.stat().st_size != 0:
+        raise PatcherContractError("reserved output changed before launch")
+    if (
+        phase == "post_run"
+        and invocation.final_output_path.stat().st_size > MAX_PATCHER_OUTPUT_BYTES
+    ):
+        raise PatcherContractError("patcher output exceeds the size limit")
+
+
+def _safe_relative_output_path(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or value.startswith(("/", "\\"))
+        or "\\" in value
+        or "//" in value
+        or _CONTROL.search(value)
+        or not _SAFE_RELATIVE_PATH.fullmatch(value)
+    ):
+        raise PatcherContractError("patcher output contains an unsafe path")
+    path = PurePosixPath(value)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise PatcherContractError("patcher output path cannot traverse")
+    return value
+
+
+def _validate_output_payload(
+    payload: object, candidate: Candidate
+) -> Mapping[str, object]:
+    mapping = _strict_mapping(payload, required=_OUTPUT_FIELDS, label="patcher output")
+    if mapping["schema_version"] != "vista.world.daily-maintainer.patcher-output.v1":
+        raise PatcherContractError("unsupported patcher output schema")
+    status_value = mapping["status"]
+    if status_value not in {"changed", "no_change", "blocked"}:
+        raise PatcherContractError("patcher output status is invalid")
+    summary = mapping["summary"]
+    if (
+        not isinstance(summary, str)
+        or not 1 <= len(summary) <= 500
+        or _CONTROL.search(summary)
+    ):
+        raise PatcherContractError("patcher output summary is invalid")
+    raw_paths = mapping["paths_considered"]
+    if (
+        not isinstance(raw_paths, list)
+        or len(raw_paths) > 12
+        or any(not isinstance(item, str) for item in raw_paths)
+    ):
+        raise PatcherContractError("patcher output paths are invalid")
+    paths = tuple(_safe_relative_output_path(item) for item in raw_paths)
+    if len(set(paths)) != len(paths):
+        raise PatcherContractError("patcher output paths must be unique")
+    for path in paths:
+        if not any(
+            path_matches_pattern(path, pattern)
+            for pattern in candidate.allowed_paths
+        ):
+            raise PatcherContractError("patcher output path exceeds candidate authority")
+    blocker = mapping["blocker_category"]
+    if blocker is not None and blocker not in _BLOCKERS:
+        raise PatcherContractError("patcher output blocker category is invalid")
+    if status_value == "changed" and (not paths or blocker is not None):
+        raise PatcherContractError("changed output requires paths and no blocker")
+    if status_value == "no_change" and blocker not in {
+        None,
+        "finding_not_reproduced",
+    }:
+        raise PatcherContractError("no_change output has an incompatible blocker")
+    if status_value == "blocked" and blocker not in _BLOCKED_ONLY:
+        raise PatcherContractError("blocked output requires an actionable blocker")
+    return MappingProxyType(
+        {
+            "schema_version": mapping["schema_version"],
+            "status": status_value,
+            "summary": summary,
+            "paths_considered": paths,
+            "blocker_category": blocker,
+        }
+    )
+
+
+def validate_patcher_output(invocation: PatcherInvocation) -> Mapping[str, object]:
+    """Validate the reserved model result only after the subprocess exits."""
+
+    revalidate_patcher_invocation(invocation, phase="post_run")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(invocation.final_output_path, flags)
+    except OSError as exc:
+        raise PatcherContractError("patcher output cannot be opened safely") from exc
+    try:
+        before = os.fstat(descriptor)
+        payload = os.read(descriptor, MAX_PATCHER_OUTPUT_BYTES + 1)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if len(payload) > MAX_PATCHER_OUTPUT_BYTES:
+        raise PatcherContractError("patcher output exceeds the size limit")
+    if (
+        (before.st_dev, before.st_ino, before.st_uid)
+        != invocation.output_evidence.stable_identity()
+        or before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+    ):
+        raise PatcherContractError("patcher output changed while it was read")
+    try:
+        decoded = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PatcherContractError("patcher output is not strict UTF-8 JSON") from exc
+    return _validate_output_payload(decoded, invocation.request.candidate)
