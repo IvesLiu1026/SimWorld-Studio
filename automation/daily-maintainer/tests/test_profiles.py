@@ -14,6 +14,8 @@ class BuiltinProfileTests(unittest.TestCase):
             (
                 "uv",
                 "run",
+                "--isolated",
+                "--offline",
                 "--project",
                 "..",
                 "--locked",

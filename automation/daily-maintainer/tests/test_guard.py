@@ -51,7 +51,15 @@ class DiffGuardIntegrationTests(unittest.TestCase):
 
     def test_self_modification_and_dependency_files_are_protected(self) -> None:
         paths = (
+            "packages/widget/.flake8",
+            "packages/widget/.ruff.toml",
+            "packages/widget/Pipfile",
+            "packages/widget/Pipfile.lock",
+            "packages/widget/npm-shrinkwrap.json",
             "packages/widget/pyproject.toml",
+            "packages/widget/ruff.toml",
+            "packages/widget/setup.cfg",
+            "packages/widget/setup.py",
             "src/.env.production",
             "src/.gitignore",
             "src/.coveragerc",
@@ -82,6 +90,45 @@ class DiffGuardIntegrationTests(unittest.TestCase):
                 self.assertIn(
                     "protected_path", {item.code for item in report.violations}
                 )
+
+    def test_candidate_and_guard_share_protected_basename_policy(self) -> None:
+        basenames = (
+            ".flake8",
+            ".ruff.toml",
+            "Pipfile",
+            "Pipfile.lock",
+            "npm-shrinkwrap.json",
+            "ruff.toml",
+            "setup.cfg",
+            "setup.py",
+        )
+        for basename in basenames:
+            with self.subTest(basename=basename), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp) / "repo"
+                base = init_repo(repo)
+                relative = f"packages/widget/{basename}"
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("placeholder\n", encoding="utf-8")
+
+                report = DiffGuard().inspect(
+                    repo,
+                    base,
+                    make_candidate(allowed_paths=("packages/**",)),
+                )
+                self.assertIn(
+                    "protected_path",
+                    {item.code for item in report.violations},
+                )
+                with self.assertRaisesRegex(
+                    CandidateContractError,
+                    "V1 candidate policy",
+                ):
+                    DiffGuard().inspect(
+                        repo,
+                        base,
+                        make_candidate(allowed_paths=(relative,)),
+                    )
 
     def test_allowlist_escape_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,11 +175,17 @@ class DiffGuardIntegrationTests(unittest.TestCase):
     def test_authority_token_policy_preserves_safe_names_and_test_files(self) -> None:
         cases = (
             ("packages/authorization.py", "packages/**", "VALUE = 1\n"),
+            ("packages/setup_helper.py", "packages/**", "VALUE = 1\n"),
             ("docs/networking.md", "docs/**", "# Networking concepts\n"),
             (
                 "tests/test_auth.py",
                 "tests/**",
                 "def test_auth_label_is_data():\n    assert 'auth' == 'auth'\n",
+            ),
+            (
+                "tests/test_setup.py",
+                "tests/**",
+                "def test_setup_label_is_data():\n    assert 'setup' == 'setup'\n",
             ),
         )
         for relative, allowed, contents in cases:
@@ -325,6 +378,61 @@ class DiffGuardIntegrationTests(unittest.TestCase):
             target.chmod(0o755)
             second = DiffGuard().inspect(repo, base, make_candidate()).patch_sha256
         self.assertNotEqual(first, second)
+
+    def test_ignored_tree_is_collapsed_rejected_and_digest_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(
+                repo,
+                {
+                    ".gitignore": ".venv/\n",
+                    "src/app.py": "VALUE = 1\n",
+                },
+            )
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            clean_digest = (
+                DiffGuard().inspect(repo, base, make_candidate()).patch_sha256
+            )
+            ignored = repo / ".venv/lib/python/sitecustomize.py"
+            ignored.parent.mkdir(parents=True)
+            ignored.write_text("raise SystemExit('pwned')\n", encoding="utf-8")
+
+            report = DiffGuard().inspect(repo, base, make_candidate())
+
+        ignored_violations = [
+            item for item in report.violations if item.code == "ignored_content"
+        ]
+        self.assertEqual([item.path for item in ignored_violations], [".venv/"])
+        self.assertNotEqual(clean_digest, report.patch_sha256)
+        self.assertFalse(report.ok)
+
+    def test_ignored_enumeration_reporting_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(
+                repo,
+                {
+                    ".gitignore": "*.cache\n",
+                    "src/app.py": "VALUE = 1\n",
+                },
+            )
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            for index in range(140):
+                (repo / "src" / f"{index:03}.cache").write_text(
+                    "ignored\n",
+                    encoding="utf-8",
+                )
+
+            report = DiffGuard().inspect(repo, base, make_candidate())
+
+        ignored_violations = [
+            item for item in report.violations if item.code == "ignored_content"
+        ]
+        self.assertLessEqual(len(ignored_violations), 128)
+        self.assertIn(
+            "ignored_content_overflow",
+            {item.code for item in report.violations},
+        )
 
     def test_nested_evidence_ledger_and_receipt_paths_are_protected(self) -> None:
         paths = (

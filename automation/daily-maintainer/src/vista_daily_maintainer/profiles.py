@@ -284,6 +284,8 @@ BUILTIN_VALIDATION_PROFILES = ValidationProfileRegistry(
             argv=(
                 "uv",
                 "run",
+                "--isolated",
+                "--offline",
                 "--project",
                 "..",
                 "--locked",

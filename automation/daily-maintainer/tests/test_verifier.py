@@ -376,6 +376,104 @@ class VerifierTests(unittest.TestCase):
                 )
         self.assertFalse(marker.exists())
 
+    def test_ignored_venv_sitecustomize_blocks_all_validation_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            base = init_repo(
+                repo,
+                {
+                    ".gitignore": ".venv/\n",
+                    "src/app.py": "VALUE = 1\n",
+                },
+            )
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            sitecustomize_marker = root / "sitecustomize-ran"
+            profile_marker = root / "profile-ran"
+            sitecustomize = repo / ".venv/lib/python/sitecustomize.py"
+            sitecustomize.parent.mkdir(parents=True)
+            sitecustomize.write_text(
+                "from pathlib import Path\n"
+                f"Path({str(sitecustomize_marker)!r}).touch()\n",
+                encoding="utf-8",
+            )
+            registry = ValidationProfileRegistry(
+                (
+                    ValidationProfile(
+                        profile_id="daily-maintainer-core-tests",
+                        cwd=".",
+                        argv=(
+                            sys.executable,
+                            "-c",
+                            f"from pathlib import Path; Path({str(profile_marker)!r}).touch()",
+                        ),
+                    ),
+                )
+            )
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(repo, base, make_candidate())
+
+        self.assertFalse(report.checks_passed)
+        self.assertEqual(report.validation, ())
+        self.assertIn(
+            "ignored_content",
+            {item.code for item in report.guard.violations},
+        )
+        self.assertFalse(sitecustomize_marker.exists())
+        self.assertFalse(profile_marker.exists())
+
+    def test_validation_created_ignored_content_is_detected_after_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            base = init_repo(
+                repo,
+                {
+                    ".gitignore": "*.cache\n",
+                    "src/app.py": "VALUE = 1\n",
+                },
+            )
+            (repo / "src/app.py").write_text("VALUE = 2\n", encoding="utf-8")
+            registry = ValidationProfileRegistry(
+                (
+                    ValidationProfile(
+                        profile_id="daily-maintainer-core-tests",
+                        cwd=".",
+                        argv=(
+                            sys.executable,
+                            "-c",
+                            "from pathlib import Path; Path('src/probe.cache').touch()",
+                        ),
+                    ),
+                )
+            )
+            with patch(
+                "vista_daily_maintainer.verifier.BUILTIN_VALIDATION_PROFILES",
+                registry,
+            ):
+                report = Verifier(
+                    executables=self._trusted_tools(),
+                    isolation_evidence=self._isolation(),
+                ).verify(repo, base, make_candidate())
+
+        self.assertFalse(report.checks_passed)
+        self.assertTrue(report.mutation_detected)
+        self.assertEqual(
+            [item.command_id for item in report.validation],
+            ["git-diff-check", "daily-maintainer-core-tests"],
+        )
+        self.assertTrue(all(item.ok for item in report.validation))
+        self.assertIn(
+            "ignored_content",
+            {item.code for item in report.final_guard.violations},
+        )
+        self.assertNotEqual(report.guard.patch_sha256, report.final_guard.patch_sha256)
+
     def test_direct_custom_profile_fails_before_process_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"

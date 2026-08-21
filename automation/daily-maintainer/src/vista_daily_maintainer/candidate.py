@@ -72,35 +72,151 @@ _V1_FORBIDDEN_AUTHORITY = frozenset(
 _V1_FORBIDDEN_AUTHORITY_TOKENS = _V1_FORBIDDEN_AUTHORITY | frozenset(
     {"credential", "secret"}
 )
-_V1_FORBIDDEN_BASENAMES = frozenset(
+_V1_PROTECTED_AUTHORITY_BASENAMES = frozenset(
     {
+        ".babelrc",
+        ".coveragerc",
+        ".eslintignore",
+        ".eslintrc",
+        ".flake8",
         ".gitattributes",
         ".gitignore",
         ".gitmodules",
         ".mailmap",
         ".mcp.json",
+        ".nycrc",
         ".npmrc",
+        ".prettierignore",
+        ".prettierrc",
         ".pypirc",
+        ".pylintrc",
+        ".ruff.toml",
         "backlog.yaml",
+        "biome.json",
+        "biome.jsonc",
+        "build.gradle",
+        "build.gradle.kts",
+        "bun.lock",
+        "bun.lockb",
         "cargo.lock",
         "cargo.toml",
+        "cmakelists.txt",
+        "codecov.yaml",
+        "codecov.yml",
         "composer.json",
         "composer.lock",
         "conftest.py",
+        "deno.json",
+        "deno.jsonc",
+        "docker-compose.yaml",
+        "docker-compose.yml",
+        "dockerfile",
         "gemfile",
         "gemfile.lock",
         "go.mod",
         "go.sum",
+        "gradle.properties",
+        "gradle-wrapper.properties",
+        "jest.config.cjs",
+        "jest.config.js",
+        "jest.config.mjs",
+        "jest.config.ts",
+        "justfile",
+        "makefile",
+        "meson.build",
+        "meson_options.txt",
+        "mkdocs.yaml",
+        "mkdocs.yml",
+        "mypy.ini",
+        "noxfile.py",
+        "npm-shrinkwrap.json",
+        "nx.json",
         "package-lock.json",
         "package.json",
+        "pdm.lock",
+        "pipfile",
+        "pipfile.lock",
         "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
         "poetry.lock",
+        "pom.xml",
         "pyproject.toml",
+        "pyrightconfig.json",
+        "pytest.ini",
+        "requirements.in",
+        "requirements.txt",
+        "ruff.toml",
+        "setup.cfg",
+        "setup.py",
+        "taskfile.yaml",
+        "taskfile.yml",
+        "tsconfig.json",
+        "turbo.json",
         "tox.ini",
         "uv.lock",
         "validation-profiles.yaml",
         "validation_profiles.yaml",
+        "vite.config.cjs",
+        "vite.config.js",
+        "vite.config.mjs",
+        "vite.config.ts",
+        "vitest.config.cjs",
+        "vitest.config.js",
+        "vitest.config.mjs",
+        "vitest.config.ts",
+        "webpack.config.cjs",
+        "webpack.config.js",
+        "webpack.config.mjs",
+        "webpack.config.ts",
         "yarn.lock",
+    }
+)
+_V1_PROTECTED_AUTHORITY_BASENAME_PREFIXES = (
+    ".babelrc.",
+    ".coveragerc.",
+    ".eslintrc.",
+    ".nycrc.",
+    ".prettierrc.",
+    ".stylelintrc",
+    ".yarnrc",
+    "babel.config.",
+    "codecov.",
+    "coverage.",
+    "cypress.config.",
+    "docker-compose.",
+    "dockerfile.",
+    "eslint.config.",
+    "jest.config.",
+    "karma.conf.",
+    "makefile.",
+    "playwright.config.",
+    "prettier.config.",
+    "requirements",
+    "ruff.",
+    "taskfile.",
+    "tsconfig.",
+    "vite.config.",
+    "vitest.config.",
+    "webpack.config.",
+)
+_V1_PROTECTED_AUTHORITY_PATTERN_WITNESSES = frozenset(
+    {
+        ".coveragerc.local",
+        ".eslintrc.json",
+        ".prettierrc.yaml",
+        "cypress.config.ts",
+        "dockerfile.dev",
+        "eslint.config.mjs",
+        "jest.config.ts",
+        "makefile.inc",
+        "playwright.config.ts",
+        "requirements-dev.txt",
+        "ruff.local.toml",
+        "taskfile.local.yaml",
+        "tsconfig.build.json",
+        "vite.config.ts",
+        "vitest.config.ts",
+        "webpack.config.ts",
     }
 )
 _V1_TIER1_PREFIXES = (
@@ -408,6 +524,30 @@ def is_v1_test_scope(path: str) -> bool:
     )
 
 
+def is_v1_protected_authority_basename(
+    name: str,
+    *,
+    pattern: bool = False,
+) -> bool:
+    """Share dependency, build, and validation authority policy across gates."""
+
+    lowered = name.lower()
+    if lowered in _V1_PROTECTED_AUTHORITY_BASENAMES or lowered.startswith(
+        _V1_PROTECTED_AUTHORITY_BASENAME_PREFIXES
+    ):
+        return True
+    if (
+        not pattern
+        or lowered in {"*", "**"}
+        or not any(character in lowered for character in "*?")
+    ):
+        return False
+    witnesses = (
+        _V1_PROTECTED_AUTHORITY_BASENAMES | _V1_PROTECTED_AUTHORITY_PATTERN_WITNESSES
+    )
+    return any(path_matches_pattern(witness, lowered) for witness in witnesses)
+
+
 def has_v1_forbidden_authority(path: str, *, pattern: bool = False) -> bool:
     """Return whether a path or scoped pattern crosses a V1 authority boundary.
 
@@ -425,8 +565,8 @@ def has_v1_forbidden_authority(path: str, *, pattern: bool = False) -> bool:
         if index == len(parts) - 1 and _is_v1_test_filename(part):
             continue
         if index == len(parts) - 1 and (
-            part in _V1_FORBIDDEN_BASENAMES
-            or part.startswith((".env", ".yarnrc", "requirements"))
+            is_v1_protected_authority_basename(part, pattern=pattern)
+            or part.startswith(".env")
             or part.endswith((".service", ".socket", ".timer"))
         ):
             return True

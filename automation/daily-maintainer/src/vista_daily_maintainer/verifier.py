@@ -273,6 +273,7 @@ class Verifier:
             path.mkdir(mode=0o700)
         npm_config = temp_root / "empty-npmrc"
         uv_config = temp_root / "empty-uv.toml"
+        uv_environment = temp_root / "uv-environment"
         trusted_bin = executables.materialize_bin(temp_root / "trusted-bin")
         npm_config.write_text("", encoding="utf-8")
         uv_config.write_text("", encoding="utf-8")
@@ -289,6 +290,7 @@ class Verifier:
             "NPM_CONFIG_CACHE": str(cache / "npm"),
             "UV_CONFIG_FILE": str(uv_config),
             "UV_NO_CONFIG": "1",
+            "UV_PROJECT_ENVIRONMENT": str(uv_environment),
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "TZ": "UTC",

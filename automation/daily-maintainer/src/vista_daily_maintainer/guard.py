@@ -13,6 +13,7 @@ from .candidate import (
     Candidate,
     enforce_v1_candidate_policy,
     has_v1_forbidden_authority,
+    is_v1_protected_authority_basename,
     is_v1_test_scope,
     path_matches_pattern,
 )
@@ -113,52 +114,6 @@ _BINARY_SUFFIXES = frozenset(
         ".zip",
     }
 )
-_DEPENDENCY_FILES = frozenset(
-    {
-        "cargo.lock",
-        "cargo.toml",
-        "composer.json",
-        "composer.lock",
-        "gemfile",
-        "gemfile.lock",
-        "go.mod",
-        "go.sum",
-        "package-lock.json",
-        "package.json",
-        "pnpm-lock.yaml",
-        "poetry.lock",
-        "pyproject.toml",
-        "requirements.txt",
-        "uv.lock",
-        "yarn.lock",
-    }
-)
-_VALIDATION_CONFIG_FILES = frozenset(
-    {
-        ".coveragerc",
-        ".nycrc",
-        "codecov.yml",
-        "codecov.yaml",
-        "conftest.py",
-        "jest.config.js",
-        "jest.config.mjs",
-        "noxfile.py",
-        "pytest.ini",
-        "tox.ini",
-        "vitest.config.js",
-        "vitest.config.mjs",
-    }
-)
-_VALIDATION_CONFIG_PREFIXES = (
-    ".coveragerc.",
-    ".nycrc.",
-    "coverage.",
-    "cypress.config.",
-    "jest.config.",
-    "karma.conf.",
-    "playwright.config.",
-    "vitest.config.",
-)
 _PROTECTED_TOP_LEVEL = frozenset(
     {
         ".agent",
@@ -182,6 +137,9 @@ _PROTECTED_TOP_LEVEL = frozenset(
         "world_packs",
     }
 )
+_MAX_IGNORED_STATE_BYTES = 256 * 1024
+_MAX_IGNORED_STATE_PATHS = 128
+_MAX_IGNORED_FILE_HASH_BYTES = 1024 * 1024
 
 
 class _Digest(Protocol):
@@ -235,6 +193,14 @@ class GuardReport:
         return not self.violations
 
 
+@dataclass(frozen=True)
+class _IgnoredState:
+    present: bool
+    paths: tuple[str, ...]
+    identity_sha256: bytes
+    overflow: bool
+
+
 class DiffGuard:
     """Deterministically reject a patch before any candidate test executes."""
 
@@ -263,9 +229,35 @@ class DiffGuard:
         untracked = self._untracked_paths(repo)
         for path in untracked:
             statuses.setdefault(path, "?")
+        ignored = self._ignored_state(repo)
         numstat = self._numstat(repo, base_sha)
         changed: list[ChangedFile] = []
         violations: list[GuardViolation] = []
+
+        for path in ignored.paths:
+            violations.append(
+                GuardViolation(
+                    "ignored_content",
+                    path,
+                    "ignored worktree content is forbidden during validation",
+                )
+            )
+        if ignored.present and not ignored.paths:
+            violations.append(
+                GuardViolation(
+                    "ignored_content",
+                    None,
+                    "ignored worktree content is forbidden during validation",
+                )
+            )
+        if ignored.overflow:
+            violations.append(
+                GuardViolation(
+                    "ignored_content_overflow",
+                    None,
+                    "ignored worktree enumeration exceeded its reporting bound",
+                )
+            )
 
         for path in sorted(statuses):
             status_code = statuses[path]
@@ -376,7 +368,7 @@ class DiffGuard:
 
         return GuardReport(
             base_sha=base_sha,
-            patch_sha256=self._patch_digest(repo, base_sha, untracked),
+            patch_sha256=self._patch_digest(repo, base_sha, untracked, ignored),
             changed_files=tuple(changed),
             violations=tuple(self._deduplicate_violations(violations)),
             production_files=len(production),
@@ -477,6 +469,96 @@ class DiffGuard:
             item.decode("utf-8", "strict") for item in payload.split(b"\0") if item
         )
 
+    def _ignored_state(self, repo: Path) -> _IgnoredState:
+        # ``--directory`` collapses wholly ignored trees such as ``.venv/`` so
+        # a dependency environment cannot explode the report. The byte and
+        # path caps bound retained evidence; overflow is itself a violation.
+        payload = self._git(
+            repo,
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "--no-empty-directory",
+            "-z",
+            "--",
+        )
+        overflow = len(payload) > _MAX_IGNORED_STATE_BYTES
+        paths: list[str] = []
+        cursor = 0
+        retained_bytes = min(len(payload), _MAX_IGNORED_STATE_BYTES)
+        while cursor < retained_bytes and len(paths) < _MAX_IGNORED_STATE_PATHS:
+            end = payload.find(b"\0", cursor, retained_bytes)
+            if end < 0:
+                overflow = True
+                break
+            raw_path = payload[cursor:end]
+            cursor = end + 1
+            if not raw_path:
+                continue
+            try:
+                path = raw_path.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise ValueError("ignored path is not valid UTF-8") from exc
+            normalized = path.rstrip("/")
+            if not normalized:
+                raise ValueError("ignored path is not a safe relative path")
+            shape_violations: list[GuardViolation] = []
+            self._check_path_shape(normalized, shape_violations)
+            if shape_violations:
+                raise ValueError("ignored path is not a safe relative POSIX path")
+            paths.append(path)
+        if cursor < len(payload):
+            overflow = True
+        retained = tuple(sorted(set(paths)))
+        identity = hashlib.sha256()
+        self._digest_frame(
+            identity,
+            b"domain",
+            b"vista-world-daily-maintainer-ignored-state-v1",
+        )
+        self._digest_frame(
+            identity,
+            b"listing-sha256",
+            hashlib.sha256(payload).digest(),
+        )
+        self._digest_frame(identity, b"overflow", b"1" if overflow else b"0")
+        for path in retained:
+            self._digest_ignored_path(identity, repo, path)
+        return _IgnoredState(
+            present=bool(payload),
+            paths=retained,
+            identity_sha256=identity.digest(),
+            overflow=overflow,
+        )
+
+    def _digest_ignored_path(self, digest: _Digest, repo: Path, path: str) -> None:
+        self._digest_frame(digest, b"path", path.encode("utf-8"))
+        current = repo / path.rstrip("/")
+        try:
+            metadata = current.lstat()
+        except OSError:
+            self._digest_frame(digest, b"type", b"missing")
+            return
+        normalized_mode = stat.S_IFMT(metadata.st_mode) | (metadata.st_mode & 0o7777)
+        self._digest_frame(digest, b"mode", normalized_mode.to_bytes(4, "big"))
+        if stat.S_ISLNK(metadata.st_mode):
+            target = os.readlink(current).encode("utf-8", "surrogateescape")
+            self._digest_frame(digest, b"type", b"symlink")
+            self._digest_frame(digest, b"target", target)
+        elif stat.S_ISREG(metadata.st_mode):
+            self._digest_frame(digest, b"type", b"file")
+            self._digest_frame(digest, b"size", metadata.st_size.to_bytes(8, "big"))
+            if metadata.st_size <= _MAX_IGNORED_FILE_HASH_BYTES:
+                self._digest_frame(digest, b"content", self._file_sha256(current))
+            else:
+                self._digest_frame(digest, b"content", b"oversized")
+        elif stat.S_ISDIR(metadata.st_mode):
+            self._digest_frame(digest, b"type", b"directory")
+        else:
+            self._digest_frame(digest, b"type", b"other")
+
     def _numstat(self, repo: Path, base_sha: str) -> dict[str, tuple[int, int, bool]]:
         payload = self._git(
             repo,
@@ -552,12 +634,7 @@ class DiffGuard:
             return True
         if path.startswith("ops/systemd/") or path == "ops/systemd":
             return True
-        if (
-            basename in _DEPENDENCY_FILES
-            or DiffGuard._is_validation_config(basename)
-            or basename.startswith("requirements")
-            and basename.endswith(".txt")
-        ):
+        if is_v1_protected_authority_basename(basename):
             return True
         if basename in {
             "backlog.yaml",
@@ -607,12 +684,6 @@ class DiffGuard:
         if pure.suffix.lower() in {".service", ".socket", ".timer"}:
             return True
         return pure.suffix.lower() in _BINARY_SUFFIXES
-
-    @staticmethod
-    def _is_validation_config(basename: str) -> bool:
-        return basename in _VALIDATION_CONFIG_FILES or basename.startswith(
-            _VALIDATION_CONFIG_PREFIXES
-        )
 
     @staticmethod
     def _is_test_path(path: str) -> bool:
@@ -860,15 +931,20 @@ class DiffGuard:
             )
 
     def _patch_digest(
-        self, repo: Path, base_sha: str, untracked: tuple[str, ...]
+        self,
+        repo: Path,
+        base_sha: str,
+        untracked: tuple[str, ...],
+        ignored: _IgnoredState,
     ) -> str:
         digest = hashlib.sha256()
         self._digest_frame(
             digest,
             b"domain",
-            b"vista-world-daily-maintainer-patch-v2",
+            b"vista-world-daily-maintainer-patch-v3",
         )
         self._digest_frame(digest, b"base-sha", base_sha.encode("ascii"))
+        self._digest_frame(digest, b"ignored-state", ignored.identity_sha256)
         self._digest_frame(
             digest,
             b"tracked-diff",
