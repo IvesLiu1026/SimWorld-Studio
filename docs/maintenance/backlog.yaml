@@ -1,0 +1,311 @@
+schema_version: vista.world.daily-maintainer.backlog.v1
+manifest_revision: 1
+approved_by: IvesLiu1026
+candidates:
+  - id: VW-DM-0101
+    title: Cover strict loader rejection of non-object top-level JSON values
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A table-driven offline regression proves arrays, strings, numbers, booleans and null fail with the stable top-level JSON error.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0102
+    title: Cover strict UTF-8 and byte-order-mark input failures
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Offline regressions cover malformed UTF-8 and a UTF-8 BOM without leaking source bytes or host paths in the error.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0103
+    title: Cover the JSON nesting-depth boundary on both sides
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A bounded temporary fixture proves the maximum supported nesting validates and the next level fails with VISTA_HOME_JSON_TOO_DEEP.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0104
+    title: Cover the input document byte-limit boundary without repository artifacts
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Temporary-file tests prove an oversized document is rejected before JSON parsing and no large fixture is committed.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0105
+    title: Cover canonical JSON stability for Unicode and key ordering
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Regression cases prove semantically identical Unicode mappings produce identical UTF-8 canonical bytes and digests.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0106
+    title: Cover seal_document immutability and content-digest replacement
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Tests prove sealing does not mutate its input and always replaces a stale content_digest with the canonical value.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0107
+    title: Expand safe bundle URI negative-matrix coverage
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Table-driven tests cover authority, query, fragment, empty path and traversal variants while retaining one valid bundle URI control.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0108
+    title: Cover encoded and repeated-separator asset URI traversal variants
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Regression cases document whether percent-encoded dot segments and repeated separators are rejected consistently and without network access.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0109
+    title: Cover duplicate portal identifiers independently of duplicate rooms
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A focused fixture duplicates one portal ID and asserts the stable duplicate-ID error and JSON path.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0110
+    title: Cover duplicate entity and asset identifiers independently
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Separate focused fixtures prove entity and asset duplicate IDs fail closed with deterministic diagnostics.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0111
+    title: Cover prohibited private keys at every nested container shape
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Nested mapping and list fixtures prove private or executable keys fail closed regardless of their depth.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0112
+    title: Cover duplicate event operation identifiers across operation families
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Focused tests cover duplicate op_id values across transform, state and NPC queue operations with stable rejection.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0113
+    title: Cover duplicate event IDs and deterministic event ordering in compilation
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - Tests prove duplicate event IDs fail closed and unique shuffled inputs produce the same canonical event-plan order.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0114
+    title: Cover atomic compile-output cleanup after a validation failure
+    risk_tier: 0
+    allowed_paths: [tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - A temporary-directory CLI regression proves failed compilation leaves neither a partial destination nor a leaked temporary file.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0115
+    title: Make JSON-schema error paths deterministic for escaped property names
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A reproducer with punctuation in a property name yields one stable, value-sanitized JSON path across repeated runs.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0116
+    title: Reject symlinked event files before reading outside the event directory
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A temporary-directory reproducer proves load_events rejects symlinked JSON inputs without reading their targets and still loads regular files deterministically.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0117
+    title: Normalize lone-surrogate canonical JSON failures
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A compact string reproducer raises VISTA_HOME_CANONICAL_JSON_INVALID instead of leaking a raw UnicodeEncodeError, while valid Unicode stays byte-stable.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0118
+    title: Reject Windows-style and embedded private filesystem references
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Focused fixtures prove Windows absolute paths and embedded host-home references fail with value-sanitized diagnostics while ordinary public prose remains valid.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0119
+    title: Tighten portal door and initial-state coherence checks
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Negative fixtures cover missing, unrelated and mismatched door references while the verified home remains valid.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0120
+    title: Tighten entity affordance and event-action cross-validation
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A reproducer proves an event cannot request an affordance absent from its target entity and valid verified events still pass.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0121
+    title: Validate public event source references as inert VISTA identifiers
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - Negative tests reject executable, file and network-like source references while all verified vista identifiers remain unchanged.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0122
+    title: Preserve overlay transactional behavior for late-operation failures
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_contracts.py]
+    acceptance:
+      - A multi-operation reproducer fails on the final operation and proves the baseline input and returned state are never partially mutated.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0123
+    title: Validate transform-operation room and asset references before resolution
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - Minimal invalid references fail with stable contract errors before a partial build plan can be emitted.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0124
+    title: Stabilize quaternion composition around negative zero and full turns
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - Reproducers for negative zero, 360-degree turns and equivalent rotations produce identical canonical transforms and digests.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0125
+    title: Cover rotated room bounds in navigation-bound aggregation
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - A rotated non-square room reproducer yields conservative deterministic world bounds containing every transformed corner.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0126
+    title: Reject duplicate event identifiers before build-plan assembly
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - A duplicate-ID reproducer fails before sorting or digest generation and a shuffled unique control stays deterministic.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0127
+    title: Harden atomic JSON output replacement and cleanup semantics
+    risk_tier: 1
+    allowed_paths: [tools/worlds/playable_home.py, tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - Fault-injection tests prove a write or replace failure preserves any prior destination and removes the temporary file.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
+
+  - id: VW-DM-0128
+    title: Document the public event projection contract with compiler parity checks
+    risk_tier: 0
+    allowed_paths: [docs/provenance/event-projections.md, tools/tests/test_vista_playable_home_compiler.py]
+    acceptance:
+      - Documentation names only public allowlisted fields and an offline parity assertion prevents the projection list from drifting.
+    validation_profiles: [tools-python-offline]
+    expected_external_side_effects: none
+    source: {kind: curated_backlog, manifest_revision: 1, approved_by: IvesLiu1026}
+    expires_on: 2026-12-31
