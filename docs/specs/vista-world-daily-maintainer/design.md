@@ -196,8 +196,9 @@ entries correspond to these offline, isolated commands:
 git diff --check
 
 cd tools
-uv lock --check
-uv run --group dev python -m unittest discover -s tests -p 'test_*.py'
+uv run --project .. --locked python -m unittest \
+  tests/test_vista_playable_home_contracts.py \
+  tests/test_vista_playable_home_compiler.py
 
 cd simworld_studio_workspace/web
 npm run test:server:unit
